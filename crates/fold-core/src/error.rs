@@ -23,6 +23,9 @@ define_codes! {
     OBJECT_CORRUPT = "object_corrupt",
     OBJECT_IO = "object_io",
     SCHEMA_TOO_NEW = "schema_too_new",
+    INVALID_PATH = "invalid_path",
+    TARGET_NOT_EMPTY = "target_not_empty",
+    WORKSPACE_IO = "workspace_io",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

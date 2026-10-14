@@ -10,3 +10,6 @@ object_missing
 object_corrupt
 object_io
 schema_too_new
+invalid_path
+target_not_empty
+workspace_io
