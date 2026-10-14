@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO counters (kind, next) VALUES (?, 2)\n           ON CONFLICT (kind) DO UPDATE SET next = next + 1\n           RETURNING next - 1 AS \"number!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "f0820e9f0e09889cb4e5eade7f7edcb9df9e6e4a8436a9e74b8f0f8bb8eaf152"
+}

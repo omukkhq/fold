@@ -22,6 +22,7 @@ define_codes! {
     OBJECT_MISSING = "object_missing",
     OBJECT_CORRUPT = "object_corrupt",
     OBJECT_IO = "object_io",
+    SCHEMA_TOO_NEW = "schema_too_new",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

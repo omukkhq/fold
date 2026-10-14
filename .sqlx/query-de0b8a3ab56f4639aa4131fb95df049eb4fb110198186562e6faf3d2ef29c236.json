@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO events (type, actor, task_id, proposal_id, workspace_id, revision_id, data, created_at)\n           VALUES (?, ?, ?, ?, ?, ?, ?, ?)\n           RETURNING seq AS \"seq!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "seq!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "events",
+            "name": "seq"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 8
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "de0b8a3ab56f4639aa4131fb95df049eb4fb110198186562e6faf3d2ef29c236"
+}

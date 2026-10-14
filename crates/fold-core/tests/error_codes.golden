@@ -9,3 +9,4 @@ revision_invalid
 object_missing
 object_corrupt
 object_io
+schema_too_new
