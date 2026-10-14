@@ -63,7 +63,7 @@ pub struct FoldError {
     code: &'static str,
     message: String,
     hint: Option<String>,
-    details: Option<serde_json::Value>,
+    details: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl FoldError {
@@ -82,9 +82,18 @@ impl FoldError {
         self
     }
 
+    /// Details are named fields, so every transport sends them as one JSON object.
     #[must_use]
-    pub fn with_details(mut self, details: serde_json::Value) -> Self {
-        self.details = Some(details);
+    pub fn with_details(
+        mut self,
+        details: impl IntoIterator<Item = (&'static str, serde_json::Value)>,
+    ) -> Self {
+        self.details = Some(
+            details
+                .into_iter()
+                .map(|(name, value)| (name.to_owned(), value))
+                .collect(),
+        );
         self
     }
 
@@ -100,7 +109,7 @@ impl FoldError {
         self.hint.as_deref()
     }
 
-    pub fn details(&self) -> Option<&serde_json::Value> {
+    pub fn details(&self) -> Option<&serde_json::Map<String, serde_json::Value>> {
         self.details.as_ref()
     }
 }
@@ -121,12 +130,15 @@ mod tests {
     fn builders_set_every_field() {
         let error = FoldError::new(codes::ALREADY_CLAIMED, "T-1 is claimed")
             .with_hint("call task_list")
-            .with_details(serde_json::json!({"task": "T-1"}));
+            .with_details([("task", serde_json::json!("T-1"))]);
         assert_eq!(error.code(), "already_claimed");
         assert_eq!(error.message(), "T-1 is claimed");
         assert_eq!(error.to_string(), "T-1 is claimed");
         assert_eq!(error.hint(), Some("call task_list"));
-        assert_eq!(error.details(), Some(&serde_json::json!({"task": "T-1"})));
+        assert_eq!(
+            error.details().cloned().map(serde_json::Value::Object),
+            Some(serde_json::json!({"task": "T-1"}))
+        );
         let bare = FoldError::new(codes::DEPENDENCY_CYCLE, "cycle");
         assert_eq!(bare.hint(), None);
         assert_eq!(bare.details(), None);

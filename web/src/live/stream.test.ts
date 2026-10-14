@@ -18,9 +18,36 @@ afterEach(() => {
 });
 
 const frame = (seq: number, type = "task.created") =>
-  `id: ${String(seq)}\ndata: ${JSON.stringify({ seq, type })}\n\n`;
-const live = (seq: number) =>
-  `data: ${JSON.stringify({ seq, type: "workspace.changed", workspace: 1, data: { state: {} } })}\n\n`;
+  `id: ${String(seq)}\ndata: ${JSON.stringify({
+    kind: "event",
+    seq,
+    type,
+    actor: "frontend/ui",
+    task: "T-1",
+    proposal: null,
+    workspace: null,
+    revision: null,
+    data: {},
+    created_at: 1_760_000_000_000,
+  })}\n\n`;
+/** A `workspace_changed` frame has no `seq` and no `id` line, because the daemon never stores it. */
+const live = () =>
+  `data: ${JSON.stringify({
+    kind: "workspace_changed",
+    workspace: "ws-1",
+    task: "T-1",
+    worker: "frontend/ui",
+    base: "r1",
+    files: [],
+    summary: "no changes",
+    last_activity_at: 1_760_000_000_000,
+    checkpoints: [],
+    proposal: null,
+  })}\n\n`;
+const snap = (seq: number) =>
+  `data: ${JSON.stringify({ kind: "snapshot", seq, workspaces: [] })}\n\n`;
+const label = (e: EventEnvelope) =>
+  e.kind === "workspace_changed" ? "live" : `event ${String(e.seq)}`;
 
 /** An in-memory connection the test feeds by hand. */
 class Pipe {
@@ -95,7 +122,7 @@ function harness(opts: { failOpens?: number; failWith?: Error } = {}) {
       onOpen: () => log.push("open"),
       onEvent: (e) => {
         events.push(e);
-        log.push(`event ${String(e.seq)}`);
+        log.push(label(e));
       },
       onDrop: () => log.push("drop"),
       onResync: () => log.push("resync"),
@@ -127,7 +154,7 @@ describe("startStream", () => {
     expect(h.cursors).toEqual([null, 5]);
     h.pipes[1]?.push(frame(5) + frame(6));
     await vi.advanceTimersByTimeAsync(0);
-    expect(h.events.map((e) => e.seq)).toEqual([4, 5, 6]);
+    expect(h.events.map(label)).toEqual(["event 4", "event 5", "event 6"]);
     expect(h.log).toEqual([
       "open",
       "event 4",
@@ -197,16 +224,14 @@ describe("startStream", () => {
   it("applies a snapshot every time and ignores garbage frames", async () => {
     const h = harness();
     await vi.advanceTimersByTimeAsync(0);
-    const snap = (seq: number) =>
-      `data: ${JSON.stringify({ seq, type: "snapshot", workspaces: [] })}\n\n`;
-    h.pipes[0]?.push('data: not json\n\ndata: {"seq":1}\n\n');
+    h.pipes[0]?.push(
+      'data: not json\n\ndata: {"seq":1}\n\ndata: {"seq":2,"type":"task.created"}\n\n',
+    );
     h.pipes[0]?.push(frame(3) + snap(3) + snap(3));
     await vi.advanceTimersByTimeAsync(0);
-    expect(h.events.map((e) => e.type)).toEqual([
-      "task.created",
-      "snapshot",
-      "snapshot",
-    ]);
+    expect(h.events.map((e) => (e.kind === "event" ? e.type : e.kind))).toEqual(
+      ["task.created", "snapshot", "snapshot"],
+    );
     h.pipes[0]?.end();
     await vi.advanceTimersByTimeAsync(1000);
     expect(h.cursors.at(-1)).toBe(3);
@@ -267,22 +292,29 @@ describe("startStream", () => {
     handle.stop();
   });
 
-  it("delivers live frames whatever their seq, and only a snapshot moves the cursor", async () => {
+  it("delivers every workspace_changed frame, which has no seq and never moves the cursor", async () => {
     const h = harness();
     await vi.advanceTimersByTimeAsync(0);
-    h.pipes[0]?.push(frame(4) + live(4) + live(2) + live(9) + frame(5));
+    h.pipes[0]?.push(live());
+    await vi.advanceTimersByTimeAsync(0);
+    h.pipes[0]?.end();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(h.cursors).toEqual([null, null]);
+    h.pipes[1]?.push(frame(4) + live() + live() + frame(5));
     await vi.advanceTimersByTimeAsync(0);
     expect(h.log).toEqual([
       "open",
+      "live",
+      "drop",
+      "open",
       "event 4",
-      "event 4",
-      "event 2",
-      "event 9",
+      "live",
+      "live",
       "event 5",
     ]);
-    h.pipes[0]?.end();
+    h.pipes[1]?.end();
     await vi.advanceTimersByTimeAsync(1000);
-    expect(h.cursors).toEqual([null, 5]);
+    expect(h.cursors).toEqual([null, null, 5]);
     h.handle.stop();
   });
 
@@ -305,8 +337,7 @@ describe("startStream", () => {
   it("measures a gap from the cursor a snapshot set", async () => {
     const h = harness();
     await vi.advanceTimersByTimeAsync(0);
-    const snap = `data: ${JSON.stringify({ seq: 7, type: "snapshot", workspaces: [] })}\n\n`;
-    h.pipes[0]?.push(snap + frame(8) + frame(10));
+    h.pipes[0]?.push(snap(7) + frame(8) + frame(10));
     await vi.advanceTimersByTimeAsync(0);
     expect(h.log).toEqual(["open", "event 7", "event 8", "resync", "event 10"]);
     h.handle.stop();
@@ -358,8 +389,8 @@ describe("fixture transport", () => {
     })();
     await vi.advanceTimersByTimeAsync(20);
     expect(chunks).toHaveLength(3);
-    expect(chunks[0]).toContain('"type":"snapshot"');
-    expect(chunks[1]).toContain('"type":"workspace.changed"');
+    expect(chunks[0]).toContain('"kind":"snapshot"');
+    expect(chunks[1]).toContain('"kind":"workspace_changed"');
     expect(chunks[1]).not.toContain("id:");
     expect(chunks[2]).toContain('"seq":2');
     expect(chunks[2]).toContain("id: 2");

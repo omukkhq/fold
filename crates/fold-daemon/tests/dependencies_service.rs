@@ -104,7 +104,7 @@ fn refusal(error: TaskError) -> (&'static str, Value) {
             assert!(error.hint().is_some(), "{} has no hint", error.code());
             (
                 error.code(),
-                error.details().cloned().unwrap_or(Value::Null),
+                error.details().cloned().map_or(Value::Null, Value::Object),
             )
         }
         other => panic!("internal failure: {other}"),

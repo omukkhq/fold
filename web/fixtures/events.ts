@@ -1,33 +1,82 @@
-import { isLive, type EventEnvelope } from "../src/live/envelope";
+import type {
+  EventEnvelope,
+  LiveWorkspace,
+  StoredEvent,
+} from "../src/live/envelope";
 
 const KEEP_ALIVE_MS = 15_000;
 const STEP_MS = 1_500;
+const T0 = Date.UTC(2026, 9, 1, 9, 0, 0);
 
-/** Stored events are numbered without holes; a live `workspace.changed` repeats the number of the newest stored event before it. */
-const script: EventEnvelope[] = [
+function workspace(
+  id: string,
+  task: string,
+  changed: number,
+  at: number,
+): LiveWorkspace {
+  return {
+    workspace: id,
+    task,
+    worker: "frontend/ui",
+    base: "r1",
+    files: Array.from({ length: changed }, (_, i) => ({
+      path: `src/board/part${String(i + 1)}.ts`,
+      previous_path: null,
+      change: "modified" as const,
+      added_lines: 3,
+      removed_lines: 1,
+      binary: false,
+    })),
+    summary: `${String(changed)} files, +${String(changed * 3)} -${String(changed)}`,
+    last_activity_at: at,
+    checkpoints: [],
+    proposal: null,
+  };
+}
+
+function stored(
+  seq: number,
+  type: StoredEvent["type"],
+  task: string,
+  data: StoredEvent["data"],
+): StoredEvent {
+  return {
+    kind: "event",
+    seq,
+    type,
+    actor: "frontend/ui",
+    task,
+    proposal: null,
+    workspace: null,
+    revision: null,
+    data,
+    created_at: T0 + seq * STEP_MS,
+  };
+}
+
+/** Each frame follows the stored event numbered `after`; stored events are numbered without holes. */
+const script: { after: number; frame: EventEnvelope }[] = [
   {
-    seq: 0,
-    type: "workspace.changed",
-    workspace: 1,
-    data: { state: { changed: 2, conflicts: 0 } },
+    after: 0,
+    frame: {
+      kind: "workspace_changed",
+      ...workspace("ws-1", "T-1", 2, T0),
+    },
   },
   {
-    seq: 1,
-    type: "task.status_changed",
-    task: 1,
-    data: { status: "in_progress" },
+    after: 1,
+    frame: stored(1, "task.status_changed", "T-1", { status: "in_progress" }),
   },
   {
-    seq: 1,
-    type: "workspace.changed",
-    workspace: 1,
-    data: { state: { changed: 5, conflicts: 0 } },
+    after: 1,
+    frame: {
+      kind: "workspace_changed",
+      ...workspace("ws-1", "T-1", 5, T0 + STEP_MS),
+    },
   },
   {
-    seq: 2,
-    type: "task.status_changed",
-    task: 1,
-    data: { status: "in_review" },
+    after: 2,
+    frame: stored(2, "task.status_changed", "T-1", { status: "in_review" }),
   },
 ];
 
@@ -62,25 +111,23 @@ export function fixtureEventTransport(
   return (lastSeq: number | null, signal: AbortSignal) => {
     async function* chunks(): AsyncGenerator<string> {
       const cursor = lastSeq ?? 0;
-      yield frame(
-        {
-          seq: cursor,
-          type: "snapshot",
-          workspaces: [
-            { workspace: 1, state: { changed: 1, conflicts: 0 } },
-            { workspace: 2, state: { changed: 0, conflicts: 0 } },
-          ],
-        },
-        cursor,
+      const snapshot: EventEnvelope = {
+        kind: "snapshot",
+        seq: cursor,
+        workspaces: [
+          workspace("ws-1", "T-1", 1, T0),
+          workspace("ws-2", "T-2", 0, T0),
+        ],
+      };
+      yield frame(snapshot, cursor);
+      const after = script.filter(({ after, frame }) =>
+        frame.kind === "event" ? frame.seq > cursor : after >= cursor,
       );
-      const after = script.filter((e) =>
-        isLive(e) ? e.seq >= cursor : e.seq > cursor,
-      );
-      for (const event of after) {
+      for (const { frame: event } of after) {
         if (!(await pause(stepMs, signal))) {
           return;
         }
-        yield frame(event, isLive(event) ? null : event.seq);
+        yield frame(event, event.kind === "event" ? event.seq : null);
       }
       while (await pause(keepAliveMs, signal)) {
         yield ": keep-alive\n\n";

@@ -1,79 +1,129 @@
-export type LiveState = Record<string, unknown>;
+import type { components } from "../api/schema";
 
-export interface WorkspaceLive {
-  workspace: number;
-  state: LiveState;
-}
-
-/** The one declaration of the stream's frame shape in web/src, holding only the fields the stream and the cache rules read. */
-export interface EventEnvelope {
-  seq: number;
-  type: string;
-  task?: number;
-  proposal?: number;
-  workspace?: number;
-  data?: Record<string, unknown>;
-  workspaces?: WorkspaceLive[];
-}
-
-export type SnapshotEnvelope = EventEnvelope & {
-  type: "snapshot";
-  workspaces: WorkspaceLive[];
-};
+export type EventEnvelope = components["schemas"]["EventEnvelope"];
+export type LiveWorkspace = components["schemas"]["LiveWorkspace"];
+export type Snapshot = components["schemas"]["Snapshot"];
+export type StoredEvent = Extract<EventEnvelope, { kind: "event" }>;
+export type WorkspaceChanged = Extract<
+  EventEnvelope,
+  { kind: "workspace_changed" }
+>;
+export type SnapshotFrame = Extract<EventEnvelope, { kind: "snapshot" }>;
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isWorkspaceLive(value: unknown): value is WorkspaceLive {
+function isSeq(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function isCount(value: unknown): boolean {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function isNullableString(value: unknown): boolean {
+  return value === null || typeof value === "string";
+}
+
+const CHANGE_KINDS: readonly unknown[] = [
+  "added",
+  "modified",
+  "deleted",
+  "renamed",
+] satisfies components["schemas"]["ChangeKind"][];
+
+function isChangedFile(value: unknown): boolean {
   return (
     isRecord(value) &&
-    typeof value.workspace === "number" &&
-    isRecord(value.state)
+    typeof value.path === "string" &&
+    isNullableString(value.previous_path) &&
+    CHANGE_KINDS.includes(value.change) &&
+    isCount(value.added_lines) &&
+    isCount(value.removed_lines) &&
+    typeof value.binary === "boolean"
   );
 }
 
-function optionalNumber(value: unknown): boolean {
-  return value === undefined || typeof value === "number";
+function isCheckpoint(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    isNullableString(value.label) &&
+    typeof value.automatic === "boolean" &&
+    typeof value.created_at === "number"
+  );
 }
 
-/** An event of an unknown type passes; `apply.ts` ignores it while its `seq` still advances the cursor. */
+export function isLiveWorkspace(value: unknown): value is LiveWorkspace {
+  return (
+    isRecord(value) &&
+    typeof value.workspace === "string" &&
+    typeof value.task === "string" &&
+    typeof value.worker === "string" &&
+    typeof value.base === "string" &&
+    Array.isArray(value.files) &&
+    value.files.every(isChangedFile) &&
+    typeof value.summary === "string" &&
+    typeof value.last_activity_at === "number" &&
+    Array.isArray(value.checkpoints) &&
+    value.checkpoints.every(isCheckpoint) &&
+    isNullableString(value.proposal)
+  );
+}
+
+/** A `type` this build does not know passes, because the daemon can be newer than the web build: its `seq` still moves the cursor, and `apply.ts` refreshes the activity list and, when the domain is known, that domain's keys. */
+function isStoredEvent(value: Record<string, unknown>): boolean {
+  return (
+    isSeq(value.seq) &&
+    typeof value.type === "string" &&
+    value.type !== "" &&
+    typeof value.actor === "string" &&
+    isNullableString(value.task) &&
+    isNullableString(value.proposal) &&
+    isNullableString(value.workspace) &&
+    isNullableString(value.revision) &&
+    isRecord(value.data) &&
+    typeof value.created_at === "number"
+  );
+}
+
+/** Checks a parsed frame against the generated `EventEnvelope`: a `kind` this build does not know is refused. */
 export function isEventEnvelope(value: unknown): value is EventEnvelope {
   if (!isRecord(value)) {
     return false;
   }
-  if (
-    typeof value.seq !== "number" ||
-    !Number.isInteger(value.seq) ||
-    value.seq < 0 ||
-    typeof value.type !== "string" ||
-    value.type === ""
-  ) {
-    return false;
+  switch (value.kind) {
+    case "event":
+      return isStoredEvent(value);
+    case "workspace_changed":
+      return isLiveWorkspace(value);
+    case "snapshot":
+      return (
+        isSeq(value.seq) &&
+        Array.isArray(value.workspaces) &&
+        value.workspaces.every(isLiveWorkspace)
+      );
+    default:
+      return false;
   }
-  if (
-    !optionalNumber(value.task) ||
-    !optionalNumber(value.proposal) ||
-    !optionalNumber(value.workspace)
-  ) {
-    return false;
-  }
-  if (value.data !== undefined && !isRecord(value.data)) {
-    return false;
-  }
-  if (value.type === "snapshot") {
-    return (
-      Array.isArray(value.workspaces) && value.workspaces.every(isWorkspaceLive)
-    );
-  }
-  return true;
 }
 
-/** `workspace.changed` and `snapshot` carry live workspace state, which the daemon never stores. */
-export function isLive(event: EventEnvelope): boolean {
-  return event.type === "workspace.changed" || event.type === "snapshot";
+export function isSnapshot(frame: EventEnvelope): frame is SnapshotFrame {
+  return frame.kind === "snapshot";
 }
 
-export function isSnapshot(event: EventEnvelope): event is SnapshotEnvelope {
-  return event.type === "snapshot" && Array.isArray(event.workspaces);
+/** The live state of a `workspace_changed` frame without its tag, the same value a snapshot entry holds. */
+export function liveWorkspaceOf(frame: WorkspaceChanged): LiveWorkspace {
+  return {
+    workspace: frame.workspace,
+    task: frame.task,
+    worker: frame.worker,
+    base: frame.base,
+    files: frame.files,
+    summary: frame.summary,
+    last_activity_at: frame.last_activity_at,
+    checkpoints: frame.checkpoints,
+    proposal: frame.proposal,
+  };
 }

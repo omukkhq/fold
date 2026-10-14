@@ -155,6 +155,6 @@ describe("openEventStream", () => {
       chunks.push(chunk);
     }
     expect(chunks).toHaveLength(1);
-    expect(chunks[0]).toContain('"type":"snapshot"');
+    expect(chunks[0]).toContain('"kind":"snapshot"');
   });
 });

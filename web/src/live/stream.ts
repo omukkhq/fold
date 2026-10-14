@@ -1,6 +1,6 @@
-import { hasErrorCode } from "../api/errors";
+import { isApiError } from "../api/errors";
 import { nextDelay } from "./backoff";
-import { isEventEnvelope, isLive, type EventEnvelope } from "./envelope";
+import { isEventEnvelope, type EventEnvelope } from "./envelope";
 import { createSseParser } from "./sse-parse";
 
 /** Three keep-alive periods of 15 seconds. */
@@ -34,7 +34,7 @@ export interface StreamHandle {
 
 /**
  * Stored events are numbered without holes, so a jump past `lastSeq + 1` means one was lost. Live frames are not stored:
- * they are never dropped as duplicates and never start a resync, and only a snapshot moves the cursor, to the newest stored event it reports.
+ * a `workspace_changed` frame has no `seq` and never moves the cursor, and a snapshot moves it to the newest stored event it reports.
  */
 export function startStream(options: StreamOptions): StreamHandle {
   const { transport, handlers } = options;
@@ -55,10 +55,12 @@ export function startStream(options: StreamOptions): StreamHandle {
     if (!isEventEnvelope(parsed)) {
       return;
     }
-    if (isLive(parsed)) {
-      if (parsed.type === "snapshot") {
-        lastSeq = Math.max(lastSeq ?? 0, parsed.seq);
-      }
+    if (parsed.kind === "snapshot") {
+      lastSeq = Math.max(lastSeq ?? 0, parsed.seq);
+      handlers.onEvent(parsed);
+      return;
+    }
+    if (parsed.kind === "workspace_changed") {
       handlers.onEvent(parsed);
       return;
     }
@@ -120,7 +122,7 @@ export function startStream(options: StreamOptions): StreamHandle {
         void iterator.return?.().catch(() => undefined);
       }
     } catch (error) {
-      if (hasErrorCode(error, "invalid_last_event_id") && !isStopped()) {
+      if (isApiError(error, "invalid_last_event_id") && !isStopped()) {
         lastSeq = null;
         handlers.onResync();
       }

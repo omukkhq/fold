@@ -64,12 +64,11 @@ fn known_keys() -> Vec<String> {
 
 fn refused(key: &str, problem: &str) -> FoldError {
     FoldError::new(codes::INVALID_CONFIG, format!("config key {key} {problem}"))
-        .with_details(serde_json::json!({ "key": key }))
+        .with_details([("key", serde_json::json!(key))])
 }
 
 fn invalid(message: &str, reason: &str) -> FoldError {
-    FoldError::new(codes::INVALID_CONFIG, format!("{message}: {reason}"))
-        .with_details(serde_json::json!({}))
+    FoldError::new(codes::INVALID_CONFIG, format!("{message}: {reason}")).with_details([])
 }
 
 #[cfg(test)]
@@ -107,14 +106,14 @@ mod tests {
         let unknown = ProjectConfig::from_toml("lease_minute = 3").unwrap_err();
         assert_eq!(unknown.code(), "invalid_config");
         assert_eq!(
-            unknown.details(),
-            Some(&serde_json::json!({"key": "lease_minute"}))
+            unknown.details().cloned().map(serde_json::Value::Object),
+            Some(serde_json::json!({"key": "lease_minute"}))
         );
         let zero = ProjectConfig::from_toml("debounce_ms = 0").unwrap_err();
         assert_eq!(zero.code(), "invalid_config");
         assert_eq!(
-            zero.details(),
-            Some(&serde_json::json!({"key": "debounce_ms"}))
+            zero.details().cloned().map(serde_json::Value::Object),
+            Some(serde_json::json!({"key": "debounce_ms"}))
         );
         for bad in [
             "stall_minutes = -1",
@@ -123,8 +122,8 @@ mod tests {
         ] {
             let error = ProjectConfig::from_toml(bad).unwrap_err();
             assert_eq!(
-                error.details(),
-                Some(&serde_json::json!({"key": "stall_minutes"}))
+                error.details().cloned().map(serde_json::Value::Object),
+                Some(serde_json::json!({"key": "stall_minutes"}))
             );
         }
         assert_eq!(

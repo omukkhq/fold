@@ -246,7 +246,7 @@ async fn require_labels(tx: &mut WriteTx, names: &[LabelName]) -> Result<(), Tas
     let names: Vec<&str> = missing.iter().map(LabelName::as_str).collect();
     Err(TaskError::Fold(
         FoldError::new(codes::LABEL_NOT_FOUND, "a label does not exist")
-            .with_details(json!({"labels": names}))
+            .with_details([("labels", json!(names))])
             .with_hint("call create_label for each missing label, then retry"),
     ))
 }

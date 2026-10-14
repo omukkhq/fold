@@ -1,3 +1,4 @@
+mod commands;
 mod init;
 mod output;
 mod serve;
@@ -20,6 +21,8 @@ enum Command {
     Init(init::InitArgs),
     /// Run the daemon in the foreground
     Serve(serve::ServeArgs),
+    /// Print the OpenAPI document of the HTTP API
+    Openapi,
 }
 
 /// clap prints a parse outcome, including `--help` and `--version`, and exits with its own code; a failed write is a runtime error with exit code 1.
@@ -37,6 +40,7 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
             init::run(&args, &serve::Dirs::from_env(), out).map_err(Failure::Init)
         }
         Some(Command::Serve(args)) => serve::run(&args).map_err(Failure::Serve),
+        Some(Command::Openapi) => commands::openapi::run(out).map_err(Failure::Write),
         None => output::line(out, &output::version_line()).map_err(Failure::Write),
     }
 }
@@ -99,6 +103,25 @@ mod tests {
         let (result, out) = run_with(&["fold", "--bogus"]);
         assert_eq!(parse_kind(result), ErrorKind::UnknownArgument);
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn openapi_subcommand_prints_valid_json() {
+        let (result, out) = run_with(&["fold", "openapi"]);
+        assert!(result.is_ok());
+        assert!(out.ends_with("}\n"));
+        let doc: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(doc["openapi"], "3.1.0");
+        assert_eq!(doc["info"]["title"], "fold");
+        assert_eq!(doc["info"]["version"], env!("CARGO_PKG_VERSION"));
+        assert!(doc["paths"]["/api/v1/projects"]["get"].is_object());
+    }
+
+    #[test]
+    fn openapi_reports_a_failed_write() {
+        let mut full: &mut [u8] = &mut [];
+        let result = run(["fold", "openapi"].map(OsString::from), &mut full);
+        assert!(matches!(result, Err(Failure::Write(_))));
     }
 
     #[test]

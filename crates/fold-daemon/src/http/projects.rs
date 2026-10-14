@@ -1,18 +1,19 @@
+use axum::Json;
 use axum::extract::State;
-use axum::routing::get;
-use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+use utoipa_axum::router::OpenApiRouter;
+use utoipa_axum::routes;
 
 use super::error::{ApiError, ApiJson, ErrorEnvelope};
 use super::{Project, SocketOnly};
 use crate::daemon::AppState;
 use crate::services::projects;
 
-pub fn routes() -> Router<AppState> {
-    Router::new()
-        .route("/api/v1/projects", get(list).post(open))
-        .route("/api/v1/projects/{slug}", get(show))
+pub fn routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(list, open))
+        .routes(routes!(show))
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -44,6 +45,7 @@ pub struct OpenedProject {
 #[utoipa::path(
     get,
     path = "/api/v1/projects",
+    operation_id = "list_projects",
     responses(
         (status = 200, description = "The registered projects", body = ProjectList),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
@@ -66,6 +68,7 @@ pub async fn list(State(state): State<AppState>) -> Result<Json<ProjectList>, Ap
 #[utoipa::path(
     get,
     path = "/api/v1/projects/{slug}",
+    operation_id = "show_project",
     params(("slug" = String, Path, description = "The project slug")),
     responses(
         (status = 200, description = "The project", body = ProjectSummary),
@@ -85,12 +88,14 @@ pub async fn show(Project(handle): Project) -> Json<ProjectSummary> {
 #[utoipa::path(
     post,
     path = "/api/v1/projects",
+    operation_id = "open_project",
     request_body = OpenProject,
     responses(
         (status = 200, description = "The project is open", body = OpenedProject),
         (status = 400, description = "The body is not valid", body = ErrorEnvelope),
         (status = 404, description = "Not on the socket, or the slug is not registered", body = ErrorEnvelope),
         (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
     )
 )]
 pub async fn open(

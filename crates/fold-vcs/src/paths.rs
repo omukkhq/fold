@@ -50,9 +50,9 @@ impl From<WorkspaceError> for FoldError {
         let folded = FoldError::new(error.code(), error.to_string());
         match &error {
             WorkspaceError::InvalidPath(path) | WorkspaceError::TargetNotEmpty(path) => {
-                folded.with_details(json!({ "path": path }))
+                folded.with_details([("path", json!(path))])
             }
-            WorkspaceError::Unrecorded(paths) => folded.with_details(json!({ "paths": paths })),
+            WorkspaceError::Unrecorded(paths) => folded.with_details([("paths", json!(paths))]),
             _ => folded,
         }
     }

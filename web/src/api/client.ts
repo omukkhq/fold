@@ -1,4 +1,6 @@
-import { ApiError } from "./errors";
+import createClient from "openapi-fetch";
+import { toApiError } from "./errors";
+import type { paths } from "./schema";
 
 export const API_BASE = "/api/v1";
 
@@ -20,23 +22,13 @@ export function eventStreamRequest(
   return new Request(url, { headers, signal });
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 /** An `ApiError` when the body is the daemon's error envelope, otherwise a plain `Error`: a proxy or network failure has no code to branch on. */
 async function streamFailure(response: Response): Promise<Error> {
   const body: unknown = await response.json().catch(() => null);
-  if (
-    isRecord(body) &&
-    isRecord(body.error) &&
-    typeof body.error.code === "string"
-  ) {
-    const message =
-      typeof body.error.message === "string" ? body.error.message : "";
-    return new ApiError(body.error.code, message);
-  }
-  return new Error(`the event stream answered ${String(response.status)}`);
+  return (
+    toApiError(body) ??
+    new Error(`the event stream answered ${String(response.status)}`)
+  );
 }
 
 async function* decodeBody(
@@ -76,3 +68,6 @@ export async function fetchEventStream(
   }
   return decodeBody(response.body);
 }
+
+/** The one way the web application reaches the daemon. Paths and bodies are typed by the generated schema. */
+export const api = createClient<paths>({ baseUrl: "/" });

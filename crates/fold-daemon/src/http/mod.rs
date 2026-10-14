@@ -1,4 +1,6 @@
 pub mod error;
+pub mod events;
+pub mod openapi;
 pub mod projects;
 
 use axum::extract::{FromRequestParts, MatchedPath, RawPathParams, Request};
@@ -6,6 +8,7 @@ use axum::http::request::Parts;
 use axum::{Extension, Router};
 use tower_http::trace::{DefaultOnResponse, TraceLayer};
 use tracing::Level;
+use utoipa_axum::router::OpenApiRouter;
 
 use crate::daemon::AppState;
 use crate::projects::{ProjectHandle, Slot};
@@ -19,10 +22,20 @@ pub enum Transport {
     Socket,
 }
 
+/// Every `/api` route with its declaration, so a route and its schema cannot drift apart.
+pub fn api_router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::with_openapi(openapi::base()).merge(projects::routes())
+}
+
+/// The OpenAPI document. It needs no state, socket or project.
+pub fn openapi() -> utoipa::openapi::OpenApi {
+    api_router().split_for_parts().1
+}
+
 /// The router the TCP listener serves.
 pub fn router(state: AppState) -> Router {
-    Router::new()
-        .merge(projects::routes())
+    let (routes, _) = api_router().split_for_parts();
+    routes
         .fallback(unmatched)
         .method_not_allowed_fallback(unmatched)
         .layer(

@@ -7,7 +7,7 @@ use fold_core::{FoldError, codes};
 use fold_store::StoreError;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use serde_json::{Value, json};
+use serde_json::{Map, Value};
 use utoipa::ToSchema;
 
 use crate::services::projects::ProjectError;
@@ -23,8 +23,8 @@ pub struct ErrorBody {
     /// A stable code; branch on it, never on the message.
     pub code: String,
     pub message: String,
-    #[schema(value_type = Object)]
-    pub details: Value,
+    #[schema(value_type = std::collections::BTreeMap<String, serde_json::Value>)]
+    pub details: Map<String, Value>,
 }
 
 /// The status of each code that has one. Every other code is an internal failure: it answers 500 `internal_error` and the code goes to the log only.
@@ -84,7 +84,7 @@ impl IntoResponse for ApiError {
                 ErrorBody {
                     code: error.code().to_owned(),
                     message: error.message().to_owned(),
-                    details: error.details().cloned().unwrap_or_else(|| json!({})),
+                    details: error.details().cloned().unwrap_or_default(),
                 },
             ),
             None => {
@@ -94,7 +94,7 @@ impl IntoResponse for ApiError {
                     ErrorBody {
                         code: codes::INTERNAL_ERROR.to_owned(),
                         message: "internal error".to_owned(),
-                        details: json!({}),
+                        details: Map::new(),
                     },
                 )
             }

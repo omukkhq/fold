@@ -5,6 +5,35 @@ import { connectProject } from "./connect";
 import { createLiveStatusStore } from "./status";
 import type { Transport } from "./stream";
 
+function workspace(summary: string) {
+  return {
+    workspace: "ws-1",
+    task: "T-1",
+    worker: "frontend/ui",
+    base: "r1",
+    files: [],
+    summary,
+    last_activity_at: 1_760_000_000_000,
+    checkpoints: [],
+    proposal: null,
+  };
+}
+
+function stored(seq: number, type: string): string {
+  return `data: ${JSON.stringify({
+    kind: "event",
+    seq,
+    type,
+    actor: "frontend/ui",
+    task: null,
+    proposal: null,
+    workspace: null,
+    revision: null,
+    data: {},
+    created_at: 1_760_000_000_000,
+  })}\n\n`;
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
 });
@@ -22,8 +51,8 @@ describe("connectProject", () => {
       Promise.resolve(
         (async function* () {
           await Promise.resolve();
-          yield `data: ${JSON.stringify({ seq: 1, type: "snapshot", workspaces: [{ workspace: 1, state: { a: 1 } }] })}\n\n`;
-          yield `data: ${JSON.stringify({ seq: 2, type: "workspace.changed", workspace: 1, data: { state: { a: 2 } } })}\n\n`;
+          yield `data: ${JSON.stringify({ kind: "snapshot", seq: 1, workspaces: [workspace("one")] })}\n\n`;
+          yield `data: ${JSON.stringify({ kind: "workspace_changed", ...workspace("two") })}\n\n`;
           await new Promise<void>((resolve) => {
             release = resolve;
           });
@@ -38,9 +67,9 @@ describe("connectProject", () => {
       lastEventAt: 42,
       stateAsOf: 42,
     });
-    expect(client.getQueryData(keys.workspaceLive("demo", 1))).toEqual({
-      a: 2,
-    });
+    expect(client.getQueryData(keys.workspaceLive("demo", "ws-1"))).toEqual(
+      workspace("two"),
+    );
     release();
     await vi.advanceTimersByTimeAsync(0);
     expect(status.getSnapshot().state).toBe("reconnecting");
@@ -56,7 +85,7 @@ describe("connectProject", () => {
         Promise.resolve(
           (async function* () {
             await Promise.resolve();
-            yield `data: {"seq":1,"type":"x.y"}\n\n`;
+            yield stored(1, "x.y");
           })(),
         ),
       status,
@@ -81,7 +110,7 @@ describe("connectProject", () => {
         Promise.resolve(
           (async function* () {
             await Promise.resolve();
-            yield `data: {"seq":1,"type":"task.created"}\n\ndata: {"seq":3,"type":"task.created"}\n\n`;
+            yield stored(1, "task.created") + stored(3, "task.created");
             await new Promise<void>(() => undefined);
           })(),
         ),

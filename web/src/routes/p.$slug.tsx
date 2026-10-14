@@ -1,5 +1,5 @@
 import { createFileRoute, notFound } from "@tanstack/react-router";
-import { hasErrorCode } from "../api/errors";
+import { isApiError } from "../api/errors";
 import { projectQuery } from "../api/queries";
 import { Shell } from "../app/Shell";
 import { LiveProvider } from "../live/LiveProvider";
@@ -18,7 +18,7 @@ export const Route = createFileRoute("/p/$slug")({
         staleTime: "static",
       });
     } catch (error) {
-      if (hasErrorCode(error, "not_found")) {
+      if (isApiError(error, "project_not_found")) {
         notFound({ throw: true });
       }
       throw error;

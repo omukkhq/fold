@@ -20,6 +20,7 @@ tokio = { version = "1.53.3", features = ["fs", "macros", "net", "rt-multi-threa
 tower-http = { version = "0.7.1", features = ["trace"] }
 tracing = "0.1.44"
 utoipa = "6.0.0"
+utoipa-axum = "0.3.0"
 
 [lints]
 workspace = true

@@ -1,6 +1,12 @@
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { keys } from "../api/keys";
-import { isRecord, isSnapshot, type EventEnvelope } from "./envelope";
+import {
+  isRecord,
+  liveWorkspaceOf,
+  type EventEnvelope,
+  type LiveWorkspace,
+  type StoredEvent,
+} from "./envelope";
 
 const DOMAINS = new Set([
   "agent",
@@ -58,7 +64,7 @@ function isBoard(value: unknown): value is BoardShape {
 /** Returns the board with the card patched and moved to the column of its new status, or null when the cache cannot place it. */
 export function patchBoard(
   board: unknown,
-  task: number,
+  task: string,
   patch: CardPatch,
 ): BoardShape | null {
   if (!isBoard(board)) {
@@ -97,10 +103,10 @@ function patchRecord(value: unknown, patch: CardPatch): unknown {
 function patchTask(
   queryClient: QueryClient,
   slug: string,
-  event: EventEnvelope,
+  event: StoredEvent,
   patch: CardPatch,
 ): void {
-  if (event.task === undefined) {
+  if (event.task === null) {
     return;
   }
   const board = queryClient.getQueryData(keys.board(slug));
@@ -120,19 +126,22 @@ function patchTask(
 function applySnapshot(
   queryClient: QueryClient,
   slug: string,
-  workspaces: { workspace: number; state: Record<string, unknown> }[],
+  workspaces: LiveWorkspace[],
 ): void {
   const present = new Set(workspaces.map((w) => w.workspace));
   for (const query of queryClient
     .getQueryCache()
     .findAll({ queryKey: keys.workspaceLiveAll(slug) })) {
     const id = query.queryKey[2];
-    if (typeof id === "number" && !present.has(id)) {
+    if (typeof id === "string" && !present.has(id)) {
       queryClient.removeQueries({ queryKey: query.queryKey, exact: true });
     }
   }
-  for (const { workspace, state } of workspaces) {
-    queryClient.setQueryData(keys.workspaceLive(slug, workspace), state);
+  for (const workspace of workspaces) {
+    queryClient.setQueryData(
+      keys.workspaceLive(slug, workspace.workspace),
+      workspace,
+    );
   }
 }
 
@@ -140,14 +149,13 @@ function invalidationKeys(
   slug: string,
   type: string,
   domain: string,
-  event: EventEnvelope,
+  event: StoredEvent,
 ): QueryKey[] {
   const { task, proposal, workspace } = event;
-  const taskKey = task === undefined ? [] : [keys.task(slug, task)];
-  const proposalKey =
-    proposal === undefined ? [] : [keys.proposal(slug, proposal)];
+  const taskKey = task === null ? [] : [keys.task(slug, task)];
+  const proposalKey = proposal === null ? [] : [keys.proposal(slug, proposal)];
   const workspaceKey =
-    workspace === undefined ? [] : [keys.workspace(slug, workspace)];
+    workspace === null ? [] : [keys.workspace(slug, workspace)];
   const board = keys.board(slug);
   const repository = keys.repository(slug);
 
@@ -181,9 +189,7 @@ function invalidationKeys(
       return [keys.proposals(slug), ...proposalKey, board];
     case "integration":
       return [
-        ...(proposal === undefined
-          ? []
-          : [keys.proposals(slug), ...proposalKey]),
+        ...(proposal === null ? [] : [keys.proposals(slug), ...proposalKey]),
         ...taskKey,
         repository,
         board,
@@ -213,17 +219,17 @@ function applyStored(
   queryClient: QueryClient,
   slug: string,
   domain: string,
-  event: EventEnvelope,
+  event: StoredEvent,
 ): void {
   if (event.type === "task.status_changed") {
-    const status = event.data?.status;
+    const status = event.data.status;
     if (typeof status === "string") {
       patchTask(queryClient, slug, event, { status });
       return;
     }
   }
   if (event.type === "task.blocked_changed") {
-    const blocked = event.data?.blocked;
+    const blocked = event.data.blocked;
     if (typeof blocked === "boolean") {
       patchTask(queryClient, slug, event, { blocked });
       return;
@@ -232,7 +238,7 @@ function applyStored(
   if (
     (event.type === "workspace.abandoned" ||
       event.type === "workspace.archived") &&
-    event.workspace !== undefined
+    event.workspace !== null
   ) {
     queryClient.removeQueries({
       queryKey: keys.workspaceLive(slug, event.workspace),
@@ -246,7 +252,7 @@ function applyStored(
 
 /**
  * Patches the cache where the event carries the new state and invalidates the keys of its domain otherwise.
- * Every stored event is a row of the activity list, so the activity key is invalidated even for a type this build does not know; such an event touches nothing else.
+ * Every stored event is a row of the activity list, so the activity key is invalidated even for a type this build does not know. A type this build does not know is handled by its domain, and a type of an unknown domain touches nothing else.
  * An integration of kind `pull` carries no proposal or task id, so it touches no proposal key.
  */
 export function applyEvent(
@@ -254,18 +260,15 @@ export function applyEvent(
   slug: string,
   event: EventEnvelope,
 ): void {
-  if (isSnapshot(event)) {
+  if (event.kind === "snapshot") {
     applySnapshot(queryClient, slug, event.workspaces);
     return;
   }
-  if (event.type === "workspace.changed") {
-    const state = event.data?.state;
-    if (event.workspace !== undefined && isRecord(state)) {
-      queryClient.setQueryData(
-        keys.workspaceLive(slug, event.workspace),
-        state,
-      );
-    }
+  if (event.kind === "workspace_changed") {
+    queryClient.setQueryData(
+      keys.workspaceLive(slug, event.workspace),
+      liveWorkspaceOf(event),
+    );
     return;
   }
   const domain = domainOf(event.type);

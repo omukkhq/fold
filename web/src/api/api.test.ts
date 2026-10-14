@@ -1,6 +1,6 @@
 import { QueryClient } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError, hasErrorCode } from "./errors";
+import { isApiError } from "./errors";
 import { FIXTURE_DELAY_MS, fromFixture } from "./fixture";
 import { keys } from "./keys";
 import { getProject, listProjects } from "./projects";
@@ -55,7 +55,7 @@ describe("a production build", () => {
     await expect(projects.listProjects()).resolves.toEqual([]);
     await expect(session.getSession()).resolves.toBeNull();
     await expect(projects.getProject("demo")).rejects.toSatisfy((e: unknown) =>
-      errors.hasErrorCode(e, "not_found"),
+      errors.isApiError(e, "project_not_found"),
     );
   });
 });
@@ -73,10 +73,19 @@ describe("projects", () => {
     expect((await found).slug).toBe("demo");
   });
 
-  it("rejects an unknown slug with the not_found code", async () => {
+  it("rejects an unknown slug with the project_not_found code", async () => {
     const missing = getProject("nope");
     const check = expect(missing).rejects.toSatisfy((e: unknown) =>
-      hasErrorCode(e, "not_found"),
+      isApiError(e, "project_not_found"),
+    );
+    await vi.runAllTimersAsync();
+    await check;
+  });
+
+  it("rejects a project that failed to open with the project_unavailable code", async () => {
+    const closed = getProject("archive");
+    const check = expect(closed).rejects.toSatisfy((e: unknown) =>
+      isApiError(e, "project_unavailable"),
     );
     await vi.runAllTimersAsync();
     await check;
@@ -108,29 +117,21 @@ describe("queries", () => {
   });
 });
 
-describe("hasErrorCode", () => {
-  it("matches only an ApiError with the code", () => {
-    expect(hasErrorCode(new ApiError("x", "m"), "x")).toBe(true);
-    expect(hasErrorCode(new ApiError("x", "m"), "y")).toBe(false);
-    expect(hasErrorCode(new Error("x"), "x")).toBe(false);
-  });
-});
-
 describe("keys", () => {
   it("starts every project key with the slug", () => {
     const projectKeys = [
       keys.project("s"),
       keys.board("s"),
-      keys.task("s", 1),
+      keys.task("s", "T-1"),
       keys.activity("s"),
       keys.proposals("s"),
-      keys.proposal("s", 2),
+      keys.proposal("s", "P-2"),
       keys.agents("s"),
       keys.messages("s"),
       keys.repository("s"),
       keys.workspaces("s"),
-      keys.workspace("s", 3),
-      keys.workspaceLive("s", 3),
+      keys.workspace("s", "ws-3"),
+      keys.workspaceLive("s", "ws-3"),
       keys.workspaceLiveAll("s"),
     ];
     for (const key of projectKeys) {

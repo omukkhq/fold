@@ -38,6 +38,21 @@ export default defineConfig(
           message: "web/ never reads from crates/.",
         },
       ],
+      "no-restricted-globals": [
+        "error",
+        {
+          name: "fetch",
+          message: "Call the API through src/api/client.ts.",
+        },
+      ],
+      "no-restricted-properties": [
+        "error",
+        ...["window", "globalThis", "self"].map((object) => ({
+          object,
+          property: "fetch",
+          message: "Call the API through src/api/client.ts.",
+        })),
+      ],
       "no-restricted-imports": [
         "error",
         {
@@ -49,6 +64,13 @@ export default defineConfig(
           ],
         },
       ],
+    },
+  },
+  {
+    files: ["src/api/client.ts", "**/*.test.ts"],
+    rules: {
+      "no-restricted-globals": "off",
+      "no-restricted-properties": "off",
     },
   },
 );

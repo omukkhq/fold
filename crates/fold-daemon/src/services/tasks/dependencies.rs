@@ -85,7 +85,10 @@ impl TaskService {
                         refusal(
                             codes::DEPENDENCY_NOT_FOUND,
                             format!("{task} does not need {needs}"),
-                            json!({"task": task.to_string(), "needs": needs.to_string()}),
+                            [
+                                ("task", json!(task.to_string())),
+                                ("needs", json!(needs.to_string())),
+                            ],
                             "call get_task to see its dependencies",
                         )
                     })?;
@@ -93,11 +96,11 @@ impl TaskService {
                     return Err(refusal(
                         codes::INVALID_REQUEST,
                         format!("the edge from {task} to {needs} belongs to a checklist item"),
-                        json!({
-                            "reason": "checklist_origin",
-                            "task": task.to_string(),
-                            "needs": needs.to_string(),
-                        }),
+                        [
+                            ("reason", json!("checklist_origin")),
+                            ("task", json!(task.to_string())),
+                            ("needs", json!(needs.to_string())),
+                        ],
                         "remove the linked checklist item with remove_checklist_item instead",
                     ));
                 }
@@ -147,7 +150,10 @@ pub async fn add_edge_in_tx(
             return Err(refusal(
                 codes::INVALID_REQUEST,
                 format!("{task} cannot need itself"),
-                json!({"reason": "self_dependency", "task": task.to_string()}),
+                [
+                    ("reason", json!("self_dependency")),
+                    ("task", json!(task.to_string())),
+                ],
                 "name two different tasks",
             ));
         }
@@ -156,7 +162,11 @@ pub async fn add_edge_in_tx(
             return Err(refusal(
                 codes::DEPENDENCY_CYCLE,
                 format!("{task} needing {needs} would close a cycle"),
-                json!({"path": path, "task": task.to_string(), "needs": needs.to_string()}),
+                [
+                    ("path", json!(path)),
+                    ("task", json!(task.to_string())),
+                    ("needs", json!(needs.to_string())),
+                ],
                 "remove an edge on the path with remove_dependency first",
             ));
         }
@@ -172,12 +182,12 @@ pub async fn add_edge_in_tx(
             return Err(refusal(
                 codes::TASK_CLOSED,
                 format!("{} is archived", closed.id),
-                json!({
-                    "reason": "archived",
-                    "task": task.to_string(),
-                    "needs": needs.to_string(),
-                    "archived": closed.id.to_string(),
-                }),
+                [
+                    ("reason", json!("archived")),
+                    ("task", json!(task.to_string())),
+                    ("needs", json!(needs.to_string())),
+                    ("archived", json!(closed.id.to_string())),
+                ],
                 "an archived task takes no dependencies; call get_task_graph to pick an open task",
             ));
         }
@@ -186,7 +196,11 @@ pub async fn add_edge_in_tx(
         return Err(refusal(
             codes::TASK_CLOSED,
             format!("{task} is done"),
-            json!({"reason": "done", "task": task.to_string(), "needs": needs.to_string()}),
+            [
+                ("reason", json!("done")),
+                ("task", json!(task.to_string())),
+                ("needs", json!(needs.to_string())),
+            ],
             "a Done task takes no new dependencies; call create_task for the follow-up work",
         ));
     }
@@ -194,7 +208,10 @@ pub async fn add_edge_in_tx(
         return Err(refusal(
             codes::DEPENDENCY_EXISTS,
             format!("{task} already needs {needs}"),
-            json!({"task": task.to_string(), "needs": needs.to_string()}),
+            [
+                ("task", json!(task.to_string())),
+                ("needs", json!(needs.to_string())),
+            ],
             "the edge exists; call get_task to see its dependencies",
         ));
     }
@@ -209,7 +226,7 @@ pub async fn add_edge_in_tx(
 fn refusal(
     code: &'static str,
     message: String,
-    details: serde_json::Value,
+    details: impl IntoIterator<Item = (&'static str, serde_json::Value)>,
     hint: &str,
 ) -> TaskError {
     TaskError::Fold(

@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help setup build fmt dev dev-daemon dev-web fmt-check-rust fmt-check-web fmt-check check-inner-allow clippy test test-fast test-web coverage check-rust check-web check acceptance clean clean-keep-cargo
+.PHONY: help setup build fmt dev dev-daemon dev-web fmt-check-rust fmt-check-web fmt-check check-inner-allow clippy test test-fast test-web coverage check-rust check-web check acceptance clean clean-keep-cargo gen-api check-api
 
 help: ## List the targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-18s %s\n", $$1, $$2}'
@@ -114,7 +114,21 @@ check-web: ## Run the web install, typecheck, lint, format check, coverage and b
 	cd web && bun run coverage
 	cd web && bun run build
 
-check: check-rust check-web ## Run every check
+GEN_DIR := target/gen
+
+# openapi-typescript runs from web/ so bunx uses the version pinned in bun.lock.
+gen-api: ## Regenerate web/src/api/schema.d.ts from `fold openapi` (no daemon needed)
+	mkdir -p $(GEN_DIR)
+	cargo run -q -p fold-cli -- openapi > $(GEN_DIR)/openapi.json
+	cd web && bunx openapi-typescript ../$(GEN_DIR)/openapi.json -o src/api/schema.d.ts
+
+check-api: ## Fail when web/src/api/schema.d.ts differs from the daemon's OpenAPI document
+	mkdir -p $(GEN_DIR)
+	cargo run -q -p fold-cli -- openapi > $(GEN_DIR)/openapi.json
+	cd web && bunx openapi-typescript ../$(GEN_DIR)/openapi.json -o ../$(GEN_DIR)/schema.d.ts
+	@cmp -s $(GEN_DIR)/schema.d.ts web/src/api/schema.d.ts || { echo "web/src/api/schema.d.ts is stale: run make gen-api" >&2; exit 1; }
+
+check: check-api check-rust check-web ## Run every check
 
 clean: clean-keep-cargo ## Delete build output and dev projects
 	cargo clean
