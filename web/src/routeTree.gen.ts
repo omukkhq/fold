@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as PSlugRouteImport } from './routes/p.$slug'
 import { Route as PSlugActivityRouteImport } from './routes/p.$slug.activity'
 import { Route as PSlugBoardRouteImport } from './routes/p.$slug.board'
+import { Route as PSlugDiffRouteImport } from './routes/p.$slug.diff'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -34,18 +35,25 @@ const PSlugBoardRoute = PSlugBoardRouteImport.update({
   path: '/board',
   getParentRoute: () => PSlugRoute,
 } as any)
+const PSlugDiffRoute = PSlugDiffRouteImport.update({
+  id: '/diff',
+  path: '/diff',
+  getParentRoute: () => PSlugRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/p/$slug': typeof PSlugRouteWithChildren
   '/p/$slug/activity': typeof PSlugActivityRoute
   '/p/$slug/board': typeof PSlugBoardRoute
+  '/p/$slug/diff': typeof PSlugDiffRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/p/$slug': typeof PSlugRouteWithChildren
   '/p/$slug/activity': typeof PSlugActivityRoute
   '/p/$slug/board': typeof PSlugBoardRoute
+  '/p/$slug/diff': typeof PSlugDiffRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -53,13 +61,22 @@ export interface FileRoutesById {
   '/p/$slug': typeof PSlugRouteWithChildren
   '/p/$slug/activity': typeof PSlugActivityRoute
   '/p/$slug/board': typeof PSlugBoardRoute
+  '/p/$slug/diff': typeof PSlugDiffRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/p/$slug' | '/p/$slug/activity' | '/p/$slug/board'
+  fullPaths:
+    '/' | '/p/$slug' | '/p/$slug/activity' | '/p/$slug/board' | '/p/$slug/diff'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/p/$slug' | '/p/$slug/activity' | '/p/$slug/board'
-  id: '__root__' | '/' | '/p/$slug' | '/p/$slug/activity' | '/p/$slug/board'
+  to:
+    '/' | '/p/$slug' | '/p/$slug/activity' | '/p/$slug/board' | '/p/$slug/diff'
+  id:
+    | '__root__'
+    | '/'
+    | '/p/$slug'
+    | '/p/$slug/activity'
+    | '/p/$slug/board'
+    | '/p/$slug/diff'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -97,17 +114,26 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PSlugBoardRouteImport
       parentRoute: typeof PSlugRoute
     }
+    '/p/$slug/diff': {
+      id: '/p/$slug/diff'
+      path: '/diff'
+      fullPath: '/p/$slug/diff'
+      preLoaderRoute: typeof PSlugDiffRouteImport
+      parentRoute: typeof PSlugRoute
+    }
   }
 }
 
 interface PSlugRouteChildren {
   PSlugActivityRoute: typeof PSlugActivityRoute
   PSlugBoardRoute: typeof PSlugBoardRoute
+  PSlugDiffRoute: typeof PSlugDiffRoute
 }
 
 const PSlugRouteChildren: PSlugRouteChildren = {
   PSlugActivityRoute: PSlugActivityRoute,
   PSlugBoardRoute: PSlugBoardRoute,
+  PSlugDiffRoute: PSlugDiffRoute,
 }
 
 const PSlugRouteWithChildren = PSlugRoute._addFileChildren(PSlugRouteChildren)

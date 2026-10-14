@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { diffLineStyle, diffRowClass, type DiffLineKind } from "./diffLine";
+import {
+  diffLineStyle,
+  diffNumberClass,
+  diffRowClass,
+  type DiffLineKind,
+} from "./diffLine";
 
 const KINDS: DiffLineKind[] = ["add", "remove", "context", "hunk"];
 
@@ -34,9 +39,21 @@ describe("diffRowClass", () => {
     expect(diffRowClass(kind, false)).toMatch(/^bg-diff-/);
   });
 
-  it("uses the selected fill for every kind when selected", () => {
+  it("uses the selected fill and the primary left edge for every kind when selected", () => {
     for (const kind of KINDS) {
-      expect(diffRowClass(kind, true)).toBe("bg-diff-selected");
+      const classes = diffRowClass(kind, true).split(" ");
+      expect(classes).toContain("bg-diff-selected");
+      expect(classes).toContain("before:w-3");
+      expect(classes).toContain("before:bg-primary");
+      expect(classes).toContain("before:left-0");
+      expect(classes).toContain("relative");
     }
+  });
+});
+
+describe("diffNumberClass", () => {
+  it("writes a selected row's numbers in semibold primary text and the others muted", () => {
+    expect(diffNumberClass(true)).toBe("font-semibold text-primary-text");
+    expect(diffNumberClass(false)).toBe("text-text-muted");
   });
 });

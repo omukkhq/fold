@@ -1,6 +1,11 @@
 import type { ComponentProps, ReactNode } from "react";
 import { cn } from "@/lib/cn";
-import { diffLineStyle, diffRowClass, type DiffLineKind } from "./diffLine";
+import {
+  diffLineStyle,
+  diffNumberClass,
+  diffRowClass,
+  type DiffLineKind,
+} from "./diffLine";
 
 interface DiffLineProps extends Omit<ComponentProps<"div">, "children"> {
   kind: DiffLineKind;
@@ -16,7 +21,7 @@ interface DiffLineProps extends Omit<ComponentProps<"div">, "children"> {
 }
 
 const NUMBER_CLASSES =
-  "w-diff-number shrink-0 select-none text-right font-mono text-label text-text-muted";
+  "w-diff-number shrink-0 select-none text-right font-mono text-label";
 
 export function DiffLine({
   kind,
@@ -47,10 +52,16 @@ export function DiffLine({
         </code>
       ) : (
         <>
-          <span aria-hidden="true" className={NUMBER_CLASSES}>
+          <span
+            aria-hidden="true"
+            className={cn(NUMBER_CLASSES, diffNumberClass(selected))}
+          >
             {oldNo}
           </span>
-          <span aria-hidden="true" className={NUMBER_CLASSES}>
+          <span
+            aria-hidden="true"
+            className={cn(NUMBER_CLASSES, diffNumberClass(selected))}
+          >
             {newNo}
           </span>
           <span

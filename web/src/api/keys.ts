@@ -10,6 +10,15 @@ export const keys = {
   board: (slug: string) => [slug, "board"] as const,
   task: (slug: string, task: string) => [slug, "task", task] as const,
   activity: (slug: string) => [slug, "activity"] as const,
+  /** A comparison without `from` is `to` against its recorded base. */
+  comparison: (slug: string, from: string | undefined, to: string) =>
+    [slug, "comparison", from ?? null, to] as const,
+  fileDiff: (
+    slug: string,
+    from: string | undefined,
+    to: string,
+    path: string,
+  ) => [slug, "file-diff", from ?? null, to, path] as const,
   proposals: (slug: string) => [slug, "proposals"] as const,
   proposal: (slug: string, proposal: string) =>
     [slug, "proposal", proposal] as const,

@@ -63,6 +63,8 @@
   --width-skeleton-l: 120px;
   --width-diff-number: 44px;
   --width-search: 240px;
+  --width-file-list: 280px;
+  --width-side-panel: 300px;
 }
 
 :root {

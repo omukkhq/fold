@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { composite, contrastRatio, parseHex } from "../theme/contrast";
 import fontsCss from "./fonts.css?raw";
+import themeCss from "./index.css?raw";
 import tokensCss from "./tokens.css?raw";
 
 const sources = import.meta.glob<string>("/src/**/*.{ts,tsx,css}", {
@@ -91,6 +92,8 @@ const W00_OTHER = [
   "width-skeleton-l",
   "width-diff-number",
   "width-search",
+  "width-file-list",
+  "width-side-panel",
   ...[
     0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 16, 18, 20, 22, 24, 28, 32, 40,
   ].map((n) => `space-${String(n)}`),
@@ -164,6 +167,13 @@ describe("fonts", () => {
       ...fontsCss.matchAll(/jetbrains-mono\/latin-(\d+)\.css/g),
     ].map((m) => m[1]);
     expect(weights).toEqual(["400", "600", "700"]);
+  });
+  it("turns the mono face's ligatures and contextual alternates off, so code reads as typed", () => {
+    const theme = /@theme[^{]*\{([^}]*)\}/.exec(themeCss)?.[1] ?? "";
+    const settings =
+      /--font-mono--font-feature-settings:\s*([^;]+);/.exec(theme)?.[1] ?? "";
+    expect(settings).toMatch(/"calt" 0/);
+    expect(settings).toMatch(/"liga" 0/);
   });
 });
 

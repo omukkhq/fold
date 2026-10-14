@@ -18,6 +18,7 @@ describe("DiffLine", () => {
     expect(screen.getByText("Added line")).toBeTruthy();
     expect(screen.getByText("+")).toBeTruthy();
     expect(screen.getByText("12").className).toContain("w-diff-number");
+    expect(screen.getByText("12").className).toContain("text-text-muted");
     expect(screen.getByText("let a = 1;").className).toContain("font-mono");
   });
 
@@ -34,7 +35,9 @@ describe("DiffLine", () => {
     );
     const row = container.firstElementChild;
     expect(row?.className).toContain("bg-diff-selected");
+    expect(row?.className).toContain("before:bg-primary");
     expect(row?.hasAttribute("data-selected")).toBe(true);
+    expect(screen.getByText("3").className).toContain("text-primary-text");
     expect(screen.getByRole("button", { name: "Comment" })).toBeTruthy();
   });
 

@@ -46,7 +46,19 @@ export function diffLineStyle(kind: DiffLineKind): DiffLineStyle {
   return STYLES[kind];
 }
 
+/**
+ * W08 marks a selected row with a 3px primary edge on its left, drawn inside the row like the frame's inner stroke so the number columns
+ * keep their place.
+ */
+const SELECTED_ROW =
+  "relative bg-diff-selected before:absolute before:inset-y-0 before:left-0 before:w-3 before:bg-primary";
+
 /** The row fill: a selected row overrides the kind's fill. */
 export function diffRowClass(kind: DiffLineKind, selected: boolean): string {
-  return selected ? "bg-diff-selected" : STYLES[kind].row;
+  return selected ? SELECTED_ROW : STYLES[kind].row;
+}
+
+/** A selected row's line numbers are in primary text and semibold, as W08 draws them. */
+export function diffNumberClass(selected: boolean): string {
+  return selected ? "font-semibold text-primary-text" : "text-text-muted";
 }

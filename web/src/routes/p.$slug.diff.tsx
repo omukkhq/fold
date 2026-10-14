@@ -1,0 +1,40 @@
+import { useSuspenseQuery } from "@tanstack/react-query";
+import { createFileRoute, notFound } from "@tanstack/react-router";
+import { comparisonQuery } from "../api/queries";
+import { DiffScreen } from "../features/diff/DiffScreen";
+import { namesComparison, parseDiffSearch } from "../features/diff/search";
+
+export const Route = createFileRoute("/p/$slug/diff")({
+  validateSearch: parseDiffSearch,
+  beforeLoad: ({ search }) => {
+    if (!namesComparison(search)) {
+      notFound({ throw: true });
+    }
+  },
+  loaderDeps: ({ search }) => ({ from: search.from, to: search.to }),
+  loader: async ({ context, params, deps }) => {
+    await context.queryClient.query(
+      comparisonQuery(params.slug, deps.from, deps.to),
+    );
+  },
+  component: DiffRoute,
+});
+
+function DiffRoute() {
+  const { slug } = Route.useParams();
+  const search = Route.useSearch();
+  const navigate = Route.useNavigate();
+  const { data } = useSuspenseQuery(
+    comparisonQuery(slug, search.from, search.to),
+  );
+  return (
+    <DiffScreen
+      slug={slug}
+      search={search}
+      comparison={data}
+      onSelectFile={(path) => {
+        void navigate({ search: (old) => ({ ...old, path }), replace: true });
+      }}
+    />
+  );
+}

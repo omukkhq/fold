@@ -74,6 +74,8 @@
   --font-*: initial;
   --font-ui: var(--font-ui);
   --font-mono: var(--font-mono);
+  /* JetBrains Mono's contextual alternates draw `=>` and `!=` as one glyph; mono text shows code, ids and paths as typed. */
+  --font-mono--font-feature-settings: "calt" 0, "liga" 0;
 
   --radius-*: initial;
   --radius-xs: var(--radius-xs);
@@ -143,6 +145,8 @@
   --width-skeleton-l: var(--width-skeleton-l);
   --width-diff-number: var(--width-diff-number);
   --width-search: var(--width-search);
+  --width-file-list: var(--width-file-list);
+  --width-side-panel: var(--width-side-panel);
 
   --height-*: initial;
   --height-bar: var(--height-bar);
