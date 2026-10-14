@@ -199,7 +199,7 @@ pub struct TreeBuild {
     pub new_trees: Vec<(ObjectHash, Vec<u8>)>,
 }
 
-/// A change maps a path to its new entry, or to `None` to delete it. Only the ancestors of changed paths are rebuilt; every other subtree keeps its base hash, and a directory left empty is dropped.
+/// A change maps a path to its new entry, or to `None` to delete it. The result is validated, not the change map: a directory becomes a file only when every path under it is deleted, and a file becomes a directory only when the file itself is deleted. Deleting a path that holds no file, such as a directory or a path below a file, changes nothing. Only the ancestors of changed paths are rebuilt; every other subtree keeps its base hash, and a directory left empty is dropped.
 pub fn apply_changes(
     base_root: Option<ObjectHash>,
     changes: &BTreeMap<Vec<u8>, Option<FlatEntry>>,
@@ -263,12 +263,28 @@ fn build_dir(
         let existing = entries.get(name).cloned();
         let deeper = groups.get(name);
         let replacement = match (whole.get(name), deeper) {
-            (Some(Some(_)), Some(_)) => return Err(TreeError::PathConflict.into()),
-            (Some(Some(entry)), None) => Some(TreeEntry {
-                name: name.to_vec(),
-                kind: entry.kind,
-                hash: entry.hash,
-            }),
+            (Some(Some(entry)), deeper) => {
+                if let Some(entry_dir) = existing.filter(|e| e.kind == EntryKind::Directory) {
+                    let emptied = match deeper {
+                        Some(deeper) => {
+                            sub_entry(name, Some(entry_dir.hash), deeper, load, new_trees)?
+                        }
+                        None => Some(entry_dir),
+                    };
+                    if emptied.is_some() {
+                        return Err(TreeError::PathConflict.into());
+                    }
+                } else if let Some(deeper) = deeper
+                    && sub_entry(name, None, deeper, load, new_trees)?.is_some()
+                {
+                    return Err(TreeError::PathConflict.into());
+                }
+                Some(TreeEntry {
+                    name: name.to_vec(),
+                    kind: entry.kind,
+                    hash: entry.hash,
+                })
+            }
             (Some(None), None) => existing.filter(|entry| entry.kind == EntryKind::Directory),
             (Some(None), Some(deeper)) => {
                 let base_dir = existing
@@ -276,14 +292,18 @@ fn build_dir(
                     .map(|entry| entry.hash);
                 sub_entry(name, base_dir, deeper, load, new_trees)?
             }
-            (None, Some(deeper)) => {
-                let base_dir = match existing {
-                    Some(entry) if entry.kind == EntryKind::Directory => Some(entry.hash),
-                    Some(_) => return Err(TreeError::PathConflict.into()),
-                    None => None,
-                };
-                sub_entry(name, base_dir, deeper, load, new_trees)?
-            }
+            (None, Some(deeper)) => match existing {
+                Some(entry) if entry.kind == EntryKind::Directory => {
+                    sub_entry(name, Some(entry.hash), deeper, load, new_trees)?
+                }
+                Some(entry) => {
+                    if sub_entry(name, None, deeper, load, new_trees)?.is_some() {
+                        return Err(TreeError::PathConflict.into());
+                    }
+                    Some(entry)
+                }
+                None => sub_entry(name, None, deeper, load, new_trees)?,
+            },
             (None, None) => existing,
         };
         match replacement {
@@ -673,8 +693,177 @@ mod tests {
             flat.keys().map(Vec::as_slice).collect::<Vec<_>>(),
             [&b"a/b"[..]]
         );
-        let map = to_changes(&[("a", Some(file("a2"))), ("a/b", None)]);
+        let map = to_changes(&[("a", Some(file("a2"))), ("a/b", Some(file("b")))]);
         assert!(apply_changes(Some(swapped.root), &map, &|hash| store.load(hash)).is_err());
+    }
+
+    #[test]
+    fn directory_to_file_swaps_need_every_delete() {
+        let mut store = Store::default();
+        let base = store.build(
+            None,
+            &[
+                ("a/b", Some(file("b"))),
+                ("a/c", Some(file("c"))),
+                ("a/d/e", Some(file("e"))),
+                ("z", Some(file("z"))),
+            ],
+        );
+        let load = |hash: &ObjectHash| store.load(hash);
+        for map in [
+            to_changes(&[("a", Some(file("a")))]),
+            to_changes(&[("a", Some(file("a"))), ("a/b", None)]),
+            to_changes(&[("a", Some(file("a"))), ("a/b", None), ("a/c", None)]),
+            to_changes(&[("a", Some(file("a"))), ("a/b", Some(file("b2")))]),
+        ] {
+            let error = apply_changes(Some(base.root), &map, &load).unwrap_err();
+            assert_eq!(error.code(), "tree_invalid");
+        }
+        let all = to_changes(&[
+            ("a", Some(file("a"))),
+            ("a/b", None),
+            ("a/c", None),
+            ("a/d/e", None),
+        ]);
+        let swapped = apply_changes(Some(base.root), &all, &load).unwrap();
+        store.add(&swapped);
+        let flat = store.flat(&swapped.root);
+        assert_eq!(
+            flat.keys().map(Vec::as_slice).collect::<Vec<_>>(),
+            [&b"a"[..], b"z"]
+        );
+        assert_eq!(flat[&b"a"[..]], file("a"));
+    }
+
+    #[test]
+    fn a_file_replaced_by_a_file_tolerates_deletes_below_it() {
+        let mut store = Store::default();
+        let base = store.build(None, &[("a", Some(file("a")))]);
+        let next = store.build(Some(base.root), &[("a", Some(file("a2"))), ("a/b", None)]);
+        assert_eq!(store.flat(&next.root)[&b"a"[..]], file("a2"));
+        let same = store.build(Some(base.root), &[("a/b", None), ("a/b/c", None)]);
+        assert_eq!(same.root, base.root);
+        assert!(same.new_trees.is_empty());
+    }
+
+    #[test]
+    fn both_swap_spellings_agree_with_the_acceptance_cases() {
+        let mut store = Store::default();
+        let dir = store.build(None, &[("a/b", Some(file("b"))), ("a/c", Some(file("c")))]);
+        let file_base = store.build(None, &[("a", Some(file("a")))]);
+        let paths = |store: &mut Store, base: &TreeBuild, changes: &[(&str, Option<FlatEntry>)]| {
+            let map = to_changes(changes);
+            match apply_changes(Some(base.root), &map, &|hash| store.load(hash)) {
+                Ok(build) => {
+                    store.add(&build);
+                    let flat = store.flat(&build.root);
+                    Ok(flat.into_keys().collect::<Vec<_>>())
+                }
+                Err(error) => Err(error.code()),
+            }
+        };
+        let to_file = [("a", Some(file("a"))), ("a/b", None), ("a/c", None)];
+        assert_eq!(paths(&mut store, &dir, &to_file), Ok(vec![b"a".to_vec()]));
+        let bare = [("a", Some(file("a")))];
+        assert_eq!(paths(&mut store, &dir, &bare), Err("tree_invalid"));
+        let to_dir = [("a", None), ("a/b", Some(file("b")))];
+        assert_eq!(
+            paths(&mut store, &file_base, &to_dir),
+            Ok(vec![b"a/b".to_vec()])
+        );
+        let bare = [("a/b", Some(file("b")))];
+        assert_eq!(paths(&mut store, &file_base, &bare), Err("tree_invalid"));
+    }
+
+    fn arb_path() -> impl Strategy<Value = Vec<u8>> {
+        proptest::collection::vec(prop_oneof![Just("a"), Just("b"), Just("c")], 1..=3)
+            .prop_map(|names| names.join("/").into_bytes())
+    }
+
+    fn arb_leaf() -> impl Strategy<Value = FlatEntry> {
+        (
+            prop_oneof![Just(EntryKind::File), Just(EntryKind::Symlink)],
+            0u8..3,
+        )
+            .prop_map(|(kind, content)| FlatEntry {
+                kind,
+                hash: hash_object(ObjectKind::Blob, &[content]),
+            })
+    }
+
+    fn has_parent_in(path: &[u8], flat: &FlatTree) -> bool {
+        flat.keys()
+            .any(|other| path.starts_with(other) && path.get(other.len()) == Some(&b'/'))
+    }
+
+    fn is_prefix_free(flat: &FlatTree) -> bool {
+        flat.keys().all(|path| !has_parent_in(path, flat))
+    }
+
+    fn arb_flat() -> impl Strategy<Value = FlatTree> {
+        proptest::collection::btree_map(arb_path(), arb_leaf(), 0..8).prop_map(|flat| {
+            flat.iter()
+                .filter(|(path, _)| !has_parent_in(path, &flat))
+                .map(|(path, entry)| (path.clone(), *entry))
+                .collect()
+        })
+    }
+
+    fn build_flat(store: &mut Store, flat: &FlatTree) -> TreeBuild {
+        let changes = flat
+            .iter()
+            .map(|(path, e)| (path.clone(), Some(*e)))
+            .collect();
+        let build = apply_changes(None, &changes, &|hash| store.load(hash)).unwrap();
+        store.add(&build);
+        build
+    }
+
+    proptest! {
+        #[test]
+        fn changes_are_refused_only_when_the_result_is_invalid(
+            base in arb_flat(),
+            changes in proptest::collection::btree_map(
+                arb_path(),
+                proptest::option::of(arb_leaf()),
+                0..8,
+            ),
+        ) {
+            let mut store = Store::default();
+            let base_build = build_flat(&mut store, &base);
+            let mut expected = base.clone();
+            for (path, change) in &changes {
+                match change {
+                    Some(entry) => expected.insert(path.clone(), *entry),
+                    None => expected.remove(path),
+                };
+            }
+            let result = apply_changes(Some(base_build.root), &changes, &|hash| store.load(hash));
+            prop_assert_eq!(result.is_ok(), is_prefix_free(&expected));
+            if let Ok(build) = result {
+                store.add(&build);
+                prop_assert_eq!(&store.flat(&build.root), &expected);
+                prop_assert_eq!(build.root, build_flat(&mut store, &expected).root);
+            }
+        }
+
+        #[test]
+        fn applying_a_snapshot_diff_gives_the_target(base in arb_flat(), target in arb_flat()) {
+            let mut store = Store::default();
+            let base_build = build_flat(&mut store, &base);
+            let mut diff: BTreeMap<Vec<u8>, Option<FlatEntry>> = base
+                .keys()
+                .filter(|path| !target.contains_key(*path))
+                .map(|path| (path.clone(), None))
+                .collect();
+            for (path, entry) in &target {
+                if base.get(path) != Some(entry) {
+                    diff.insert(path.clone(), Some(*entry));
+                }
+            }
+            let build = apply_changes(Some(base_build.root), &diff, &|hash| store.load(hash)).unwrap();
+            prop_assert_eq!(build.root, build_flat(&mut store, &target).root);
+        }
     }
 
     #[test]
