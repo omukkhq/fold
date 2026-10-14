@@ -36,3 +36,5 @@ task_not_found
 task_closed
 label_not_found
 label_exists
+dependency_exists
+dependency_not_found

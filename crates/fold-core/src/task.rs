@@ -150,6 +150,38 @@ define_names!(
     }
 );
 
+/// How an edge came to exist. A checklist edge belongs to a linked checklist item and goes away only with that item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DependencyOrigin {
+    Direct,
+    Checklist,
+}
+
+impl DependencyOrigin {
+    pub const ALL: &'static [DependencyOrigin] =
+        &[DependencyOrigin::Direct, DependencyOrigin::Checklist];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DependencyOrigin::Direct => "direct",
+            DependencyOrigin::Checklist => "checklist",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<DependencyOrigin> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|origin| origin.as_str() == text)
+    }
+}
+
+impl fmt::Display for DependencyOrigin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,6 +229,17 @@ mod tests {
                 Err(TaskValueError::InvalidLabelColor)
             );
         }
+    }
+
+    #[test]
+    fn dependency_origins_round_trip() {
+        for origin in DependencyOrigin::ALL {
+            assert_eq!(DependencyOrigin::parse(origin.as_str()), Some(*origin));
+            assert_eq!(origin.to_string(), origin.as_str());
+        }
+        assert_eq!(DependencyOrigin::Checklist.as_str(), "checklist");
+        assert_eq!(DependencyOrigin::parse("Direct"), None);
+        assert_eq!(DependencyOrigin::parse(""), None);
     }
 
     #[test]

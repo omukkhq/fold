@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT t.number AS \"task!: i64\", n.number AS \"needs!: i64\", d.origin, d.created_by,\n                  d.created_at\n           FROM dependencies d\n           JOIN tasks t ON t.id = d.task_id\n           JOIN tasks n ON n.id = d.needs_task_id\n           ORDER BY t.number, n.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "task!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "needs!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "origin",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "dependencies",
+            "name": "origin"
+          }
+        }
+      },
+      {
+        "name": "created_by",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "dependencies",
+            "name": "created_by"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "dependencies",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "93c2707b0a7d3c3614035d67fd3e31976dd708965aa872670b48c8a78a83ec9b"
+}

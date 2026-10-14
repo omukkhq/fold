@@ -13,6 +13,10 @@ use thiserror::Error;
 
 use super::events::{EventBuffer, EventBus};
 
+mod dependencies;
+
+pub use dependencies::{Edge, add_edge_in_tx};
+
 /// Refusals carry a stable code; anything else is a database failure.
 #[derive(Debug, Error)]
 pub enum TaskError {

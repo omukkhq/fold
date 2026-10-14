@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO dependencies (task_id, needs_task_id, origin, created_by, created_at)\n         SELECT t.id, n.id, ?3, ?4, ?5 FROM tasks t, tasks n WHERE t.number = ?1 AND n.number = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "6c384dda9e2d9b112b8d5c2e560f4acb71734ffb84a5f4af80eac5a999793265"
+}

@@ -24,5 +24,7 @@ pub use ids::{
 };
 pub use layout::ProjectPaths;
 pub use status::TaskStatus;
-pub use task::{LabelColor, LabelName, TaskDescription, TaskTitle, TaskValueError};
+pub use task::{
+    DependencyOrigin, LabelColor, LabelName, TaskDescription, TaskTitle, TaskValueError,
+};
 pub use time::{TimeError, Timestamp};

@@ -49,6 +49,8 @@ define_codes! {
     TASK_CLOSED = "task_closed",
     LABEL_NOT_FOUND = "label_not_found",
     LABEL_EXISTS = "label_exists",
+    DEPENDENCY_EXISTS = "dependency_exists",
+    DEPENDENCY_NOT_FOUND = "dependency_not_found",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

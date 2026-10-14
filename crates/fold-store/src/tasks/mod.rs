@@ -4,6 +4,10 @@ use sqlx::{SqliteConnection, SqlitePool};
 use crate::error::StoreError;
 use crate::store::WriteTx;
 
+mod dependencies;
+
+pub use dependencies::{EdgeRow, delete_edge, edges, edges_conn, fetch_edge, insert_edge};
+
 /// A task as stored. The row id stays inside this crate; callers address a task by its public number.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskRow {
