@@ -259,6 +259,100 @@ fn corruption_is_object_corrupt() {
 }
 
 #[test]
+fn any_changed_byte_is_object_corrupt() {
+    let (_dir, store) = store();
+    let packed_data = compressible(2000);
+    let packed = store.write(ObjectKind::Blob, &packed_data).unwrap();
+    let plain = store.write(ObjectKind::Blob, b"hello world").unwrap();
+    assert_eq!(flag(&store, &packed), 1);
+    assert_eq!(flag(&store, &plain), 0);
+    for hash in [packed, plain] {
+        let path = store.path(&hash);
+        let original = fs::read(&path).unwrap();
+        for index in 0..original.len() {
+            let mut damaged = original.clone();
+            damaged[index] ^= 0x01;
+            fs::write(&path, damaged).unwrap();
+            let read = store.read(&hash).unwrap_err();
+            assert_eq!(read.code(), "object_corrupt", "read, byte {index}");
+            let streamed = store
+                .open_blob(&hash)
+                .and_then(|mut reader| {
+                    let mut sink = Vec::new();
+                    reader.read_to_end(&mut sink).map_err(ObjectError::from)
+                })
+                .unwrap_err();
+            assert_eq!(streamed.code(), "object_corrupt", "stream, byte {index}");
+        }
+        fs::write(&path, original).unwrap();
+        assert!(store.read(&hash).is_ok());
+    }
+}
+
+#[test]
+fn a_reader_that_stops_at_the_last_byte_still_checks_the_hash() {
+    let (_dir, store) = store();
+    let packed_data = compressible(2000);
+    let packed = store.write(ObjectKind::Blob, &packed_data).unwrap();
+    let plain_data = b"hello world".to_vec();
+    let plain = store.write(ObjectKind::Blob, &plain_data).unwrap();
+    for (hash, data) in [(packed, packed_data), (plain, plain_data)] {
+        let mut whole = vec![0u8; data.len()];
+        store
+            .open_blob(&hash)
+            .unwrap()
+            .read_exact(&mut whole)
+            .unwrap();
+        assert_eq!(whole, data);
+        let path = store.path(&hash);
+        let original = fs::read(&path).unwrap();
+        let mut damaged = original.clone();
+        *damaged.last_mut().unwrap() ^= 0x01;
+        fs::write(&path, damaged).unwrap();
+        let mut reader = store.open_blob(&hash).unwrap();
+        let error = reader.read_exact(&mut whole).unwrap_err();
+        assert_eq!(ObjectError::from(error).code(), "object_corrupt");
+        for _ in 0..2 {
+            let again = reader.read(&mut whole).unwrap_err();
+            assert_eq!(ObjectError::from(again).code(), "object_corrupt");
+        }
+        fs::write(&path, original).unwrap();
+    }
+}
+
+#[test]
+fn an_empty_blob_is_checked_on_its_first_read() {
+    let (_dir, store) = store();
+    let empty = store.write(ObjectKind::Blob, b"").unwrap();
+    let mut sink = Vec::new();
+    store
+        .open_blob(&empty)
+        .unwrap()
+        .read_to_end(&mut sink)
+        .unwrap();
+    assert!(sink.is_empty());
+    let other = hash_object(ObjectKind::Blob, b"not empty");
+    let path = store.path(&other);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::copy(store.path(&empty), &path).unwrap();
+    let error = store
+        .open_blob(&other)
+        .unwrap()
+        .read(&mut [0u8; 8])
+        .unwrap_err();
+    assert_eq!(ObjectError::from(error).code(), "object_corrupt");
+    assert_eq!(store.read(&other).unwrap_err().code(), "object_corrupt");
+}
+
+#[test]
+fn io_errors_other_than_corruption_stay_io() {
+    let error = ObjectError::from(std::io::Error::other("disk"));
+    assert_eq!(error.code(), "object_io");
+    let permission = ObjectError::from(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+    assert_eq!(permission.code(), "object_io");
+}
+
+#[test]
 fn wrong_kind_is_corrupt() {
     let (_dir, store) = store();
     let hash = store.write(ObjectKind::Tree, b"t").unwrap();

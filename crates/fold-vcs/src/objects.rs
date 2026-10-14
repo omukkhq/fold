@@ -34,7 +34,14 @@ pub enum ObjectError {
         reason: &'static str,
     },
     #[error("object store I/O failed: {0}")]
-    Io(#[from] io::Error),
+    Io(#[source] io::Error),
+}
+
+/// A [`BlobReader`] returns its `ObjectError` through `std::io::Read`, so the conversion recovers it and `?` keeps its code; any other I/O error becomes `Io`.
+impl From<io::Error> for ObjectError {
+    fn from(error: io::Error) -> Self {
+        error.downcast::<Self>().unwrap_or_else(Self::Io)
+    }
 }
 
 impl ObjectError {
@@ -196,19 +203,25 @@ impl ObjectStore {
         if payload.len() as u64 != header.raw_len {
             return Err(corrupt(hash, "payload length differs from the header"));
         }
+        if hash_object(header.kind, &payload) != *hash {
+            return Err(corrupt(hash, "content does not match its hash"));
+        }
         Ok(Object {
             kind: header.kind,
             payload,
         })
     }
 
-    /// Streams a blob, decompressing on the fly. A length mismatch surfaces as an `InvalidData` error at the end of the stream.
+    /// Streams a blob, decompressing on the fly. A hash mismatch surfaces on the read that delivers the last byte, and a length mismatch at the end of the stream, each as an `InvalidData` error that carries an [`ObjectError`]; `ObjectError::from` recovers it.
     pub fn open_blob(&self, hash: &ObjectHash) -> Result<BlobReader, ObjectError> {
         let (header, inner) = self.open_stream(hash, Some(ObjectKind::Blob))?;
         Ok(BlobReader {
             inner,
+            hash: *hash,
             expected: header.raw_len,
             seen: 0,
+            hasher: Some(ObjectHasher::new(ObjectKind::Blob)),
+            failure: None,
         })
     }
 
@@ -347,23 +360,54 @@ impl ObjectStore {
     }
 }
 
-/// Reads a blob's decompressed bytes and checks their count against the header at the end of the stream.
+/// Reads a blob's decompressed bytes and checks their hash once the last byte is read and their count at the end of the stream, so a damaged object never reads back as valid content, even to a caller that stops at the header's length. A corruption error repeats on every later read, so a retry never sees a clean end.
 pub struct BlobReader {
     inner: Box<dyn Read + Send>,
+    hash: ObjectHash,
     expected: u64,
     seen: u64,
+    hasher: Option<ObjectHasher>,
+    failure: Option<&'static str>,
+}
+
+impl BlobReader {
+    fn fail(&mut self, reason: &'static str) -> io::Error {
+        self.failure = Some(reason);
+        io::Error::new(io::ErrorKind::InvalidData, corrupt(&self.hash, reason))
+    }
 }
 
 impl Read for BlobReader {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let read = self.inner.read(buf)?;
+        if let Some(reason) = self.failure {
+            return Err(self.fail(reason));
+        }
+        let read = match self.inner.read(buf) {
+            Ok(read) => read,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::InvalidData
+                        | io::ErrorKind::UnexpectedEof
+                        | io::ErrorKind::Other
+                ) =>
+            {
+                return Err(self.fail("payload cannot be decoded"));
+            }
+            Err(error) => return Err(error),
+        };
         self.seen += read as u64;
         if self.seen > self.expected || (read == 0 && !buf.is_empty() && self.seen != self.expected)
         {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "blob length differs from the header",
-            ));
+            return Err(self.fail("blob length differs from the header"));
+        }
+        if let Some(hasher) = self.hasher.as_mut() {
+            hasher.update(&buf[..read]);
+            if self.seen == self.expected
+                && self.hasher.take().map(ObjectHasher::finish) != Some(self.hash)
+            {
+                return Err(self.fail("content does not match its hash"));
+            }
         }
         Ok(read)
     }
@@ -503,5 +547,43 @@ mod tests {
         let io = ObjectError::from(io::Error::other("x"));
         assert_eq!(io.code(), "object_io");
         assert_eq!(FoldError::from(io).code(), "object_io");
+    }
+
+    /// Fails once with `Interrupted`, then yields its bytes.
+    struct InterruptedOnce {
+        interrupted: bool,
+        bytes: io::Cursor<Vec<u8>>,
+    }
+
+    impl Read for InterruptedOnce {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if !self.interrupted {
+                self.interrupted = true;
+                return Err(io::ErrorKind::Interrupted.into());
+            }
+            self.bytes.read(buf)
+        }
+    }
+
+    #[test]
+    fn a_passing_stream_error_is_not_corruption_and_does_not_stick() {
+        let bytes = b"retry".to_vec();
+        let mut reader = BlobReader {
+            inner: Box::new(InterruptedOnce {
+                interrupted: false,
+                bytes: io::Cursor::new(bytes.clone()),
+            }),
+            hash: hash_object(ObjectKind::Blob, &bytes),
+            expected: bytes.len() as u64,
+            seen: 0,
+            hasher: Some(ObjectHasher::new(ObjectKind::Blob)),
+            failure: None,
+        };
+        let mut buf = [0u8; 16];
+        let error = reader.read(&mut buf).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        let mut sink = Vec::new();
+        reader.read_to_end(&mut sink).unwrap();
+        assert_eq!(sink, bytes);
     }
 }

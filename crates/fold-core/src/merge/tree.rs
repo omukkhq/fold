@@ -37,6 +37,8 @@ pub struct Conflict {
     pub base: Option<FlatEntry>,
     pub ours: Option<FlatEntry>,
     pub theirs: Option<FlatEntry>,
+    /// Main's entries below `path`, keyed by their path relative to it: main's side of `path` when main has a directory there, which sync writes as the directory `<path>.fold-main`. Empty when main has a file, a symlink or nothing at `path`.
+    pub theirs_below: FlatTree,
     /// Non-empty only for `BothModifiedText`.
     pub hunks: Vec<ConflictHunk>,
 }
@@ -90,6 +92,7 @@ pub fn merge_trees(
         }
     }
     resolve_file_directory_clashes(base, ours, theirs, &mut result);
+    collapse_nested_conflicts(theirs, &mut result);
     Ok(result)
 }
 
@@ -108,6 +111,7 @@ impl Triple {
             base: self.base,
             ours: self.ours,
             theirs: self.theirs,
+            theirs_below: FlatTree::new(),
             hunks,
         }
     }
@@ -232,40 +236,97 @@ fn as_text(bytes: &[u8]) -> Option<&str> {
     std::str::from_utf8(bytes).ok()
 }
 
-/// A resolved file that is also the directory of another resolved path cannot be written as a tree, so the file's path becomes a `TypeChange` conflict.
+/// Conflict files are written beside their path, and a merged file is written at its path, so a path and one of its parent directories can never both be a file. Whichever resolved file sits on the other side of such a clash becomes a `TypeChange` conflict, until no merged path is a parent or a child of another merged path or of a conflict path. Demoting is the only direction a path moves, so the loop ends.
 fn resolve_file_directory_clashes(
     base: &FlatTree,
     ours: &FlatTree,
     theirs: &FlatTree,
     result: &mut TreeMerge,
 ) {
-    let mut clashes = BTreeSet::new();
-    for path in result.merged.keys() {
-        for (index, byte) in path.iter().enumerate() {
-            if *byte == b'/' && result.merged.contains_key(&path[..index]) {
-                clashes.insert(path[..index].to_vec());
+    let mut demoted_any = false;
+    loop {
+        let conflicted: BTreeSet<&[u8]> =
+            result.conflicts.iter().map(|c| c.path.as_slice()).collect();
+        let mut demote = BTreeSet::new();
+        for path in result.merged.keys() {
+            for index in directory_prefixes(path) {
+                if result.merged.contains_key(&path[..index]) {
+                    demote.insert(path[..index].to_vec());
+                }
+                if conflicted.contains(&path[..index]) {
+                    demote.insert(path.clone());
+                }
             }
         }
+        for path in &conflicted {
+            for index in directory_prefixes(path) {
+                if result.merged.contains_key(&path[..index]) {
+                    demote.insert(path[..index].to_vec());
+                }
+            }
+        }
+        if demote.is_empty() {
+            break;
+        }
+        demoted_any = true;
+        for path in demote {
+            result.merged.remove(&path);
+            let triple = Triple {
+                base: base.get(&path).copied(),
+                ours: ours.get(&path).copied(),
+                theirs: theirs.get(&path).copied(),
+            };
+            result
+                .conflicts
+                .push(triple.conflict(&path, ConflictKind::TypeChange, Vec::new()));
+        }
     }
-    if clashes.is_empty() {
+    if !demoted_any {
         return;
-    }
-    for path in clashes {
-        result.merged.remove(&path);
-        let triple = Triple {
-            base: base.get(&path).copied(),
-            ours: ours.get(&path).copied(),
-            theirs: theirs.get(&path).copied(),
-        };
-        result
-            .conflicts
-            .push(triple.conflict(&path, ConflictKind::TypeChange, Vec::new()));
     }
     result.conflicts.sort_by(|a, b| a.path.cmp(&b.path));
     let merged = &result.merged;
     result
         .new_blobs
         .retain(|(hash, _)| merged.values().any(|entry| entry.hash == *hash));
+}
+
+/// A conflict keeps the workspace's side at its path and writes main's side beside it, so a conflict below another conflict would have to be written inside the other's file. Only the top conflict of a nested set stays: it becomes a `TypeChange`, since one side has a file there and another a directory, and every conflict carries main's whole side of its path.
+fn collapse_nested_conflicts(theirs: &FlatTree, result: &mut TreeMerge) {
+    let paths: BTreeSet<Vec<u8>> = result.conflicts.iter().map(|c| c.path.clone()).collect();
+    let mut tops = BTreeSet::new();
+    result.conflicts.retain(|conflict| {
+        let top = directory_prefixes(&conflict.path)
+            .find(|&index| paths.contains(&conflict.path[..index]));
+        if let Some(index) = top {
+            tops.insert(conflict.path[..index].to_vec());
+        }
+        top.is_none()
+    });
+    for conflict in &mut result.conflicts {
+        if tops.contains(&conflict.path) {
+            conflict.kind = ConflictKind::TypeChange;
+            conflict.hunks.clear();
+        }
+        conflict.theirs_below = entries_below(theirs, &conflict.path);
+    }
+}
+
+/// The entries of `tree` below `path`, keyed relative to it.
+fn entries_below(tree: &FlatTree, path: &[u8]) -> FlatTree {
+    let mut prefix = path.to_vec();
+    prefix.push(b'/');
+    tree.range(prefix.clone()..)
+        .take_while(|(other, _)| other.starts_with(&prefix))
+        .map(|(other, entry)| (other[prefix.len()..].to_vec(), *entry))
+        .collect()
+}
+
+/// The lengths of the proper directory prefixes of `path`.
+fn directory_prefixes(path: &[u8]) -> impl Iterator<Item = usize> + '_ {
+    path.iter()
+        .enumerate()
+        .filter_map(|(index, byte)| (*byte == b'/').then_some(index))
 }
 
 #[cfg(test)]
@@ -416,9 +477,105 @@ mod tests {
         let merge = blobs.merge(&base, &ours, &theirs).unwrap();
         assert_eq!(kinds(&merge), [(b"a".as_slice(), ConflictKind::TypeChange)]);
         let paths: Vec<_> = merge.merged.keys().map(|p| p.as_slice()).collect();
-        assert_eq!(paths, [b"a/b".as_slice(), b"z".as_slice()]);
+        assert_eq!(paths, [b"z".as_slice()]);
         assert_eq!(merge.conflicts[0].ours, ours.get(b"a".as_slice()).copied());
         assert_eq!(merge.conflicts[0].theirs, None);
+        assert_eq!(
+            merge.conflicts[0].theirs_below,
+            tree(&[("b", theirs.get(b"a/b".as_slice()).copied())])
+        );
+        assert_writable(&merge);
+    }
+
+    /// No conflict path or merged path is below a merged file or another conflict, so sync can write every merged file and every `.fold-main` side.
+    fn assert_writable(merge: &TreeMerge) {
+        for conflict in &merge.conflicts {
+            for index in directory_prefixes(&conflict.path) {
+                assert!(!merge.merged.contains_key(&conflict.path[..index]));
+                assert!(
+                    !merge
+                        .conflicts
+                        .iter()
+                        .any(|other| other.path == conflict.path[..index])
+                );
+            }
+            assert!(!has_child(&merge.merged, &conflict.path));
+        }
+    }
+
+    /// Checks the one conflict at `a` that each side order gives: main's side is `theirs` at `a` when main has a file there, otherwise `theirs_below`.
+    fn assert_collapsed(merge: &TreeMerge, theirs: &FlatTree, below: &[(&str, &str)]) {
+        assert_eq!(kinds(merge), [(b"a".as_slice(), ConflictKind::TypeChange)]);
+        let conflict = &merge.conflicts[0];
+        assert_eq!(conflict.theirs, theirs.get(b"a".as_slice()).copied());
+        let expected: FlatTree = below
+            .iter()
+            .map(|(relative, full)| (relative.as_bytes().to_vec(), theirs[full.as_bytes()]))
+            .collect();
+        assert_eq!(conflict.theirs_below, expected);
+        assert!(conflict.hunks.is_empty());
+        assert_writable(merge);
+    }
+
+    #[test]
+    fn a_conflict_below_a_merged_file_collapses_into_a_conflict_at_the_file() {
+        let blobs = Blobs::default();
+        let base = tree(&[("a/b", Some(blobs.file("1\n")))]);
+        let ours = tree(&[("a", Some(blobs.file("file\n")))]);
+        let theirs = tree(&[("a/b", Some(blobs.file("2\n")))]);
+        let merge = blobs.merge(&base, &ours, &theirs).unwrap();
+        assert!(merge.merged.is_empty() && merge.new_blobs.is_empty());
+        assert_collapsed(&merge, &theirs, &[("b", "a/b")]);
+        let swapped = blobs.merge(&base, &theirs, &ours).unwrap();
+        assert!(swapped.merged.is_empty());
+        assert_collapsed(&swapped, &ours, &[]);
+    }
+
+    #[test]
+    fn a_merged_path_below_a_conflicted_file_collapses_into_that_conflict() {
+        let blobs = Blobs::default();
+        let base = tree(&[("a", Some(blobs.file("1\n")))]);
+        let edited = tree(&[("a", Some(blobs.file("2\n")))]);
+        let nested = tree(&[("a/b", Some(blobs.file("x\n")))]);
+        let merge = blobs.merge(&base, &edited, &nested).unwrap();
+        assert!(merge.merged.is_empty());
+        assert_collapsed(&merge, &nested, &[("b", "a/b")]);
+        let swapped = blobs.merge(&base, &nested, &edited).unwrap();
+        assert!(swapped.merged.is_empty());
+        assert_collapsed(&swapped, &edited, &[]);
+    }
+
+    #[test]
+    fn a_deeper_chain_collapses_into_its_top_conflict_with_main_s_whole_subtree() {
+        let blobs = Blobs::default();
+        let z = Some(blobs.file("z\n"));
+        let base = tree(&[("x/a/b/c", Some(blobs.file("1\n"))), ("x/z", z)]);
+        let ours = tree(&[("x/a", Some(blobs.file("file\n"))), ("x/z", z)]);
+        let theirs = tree(&[
+            ("x/a/b/c", Some(blobs.file("2\n"))),
+            ("x/a/d", Some(blobs.file("d\n"))),
+            ("x/z", z),
+        ]);
+        for (o, t, below) in [
+            (&ours, &theirs, vec![("b/c", "x/a/b/c"), ("d", "x/a/d")]),
+            (&theirs, &ours, vec![]),
+        ] {
+            let merge = blobs.merge(&base, o, t).unwrap();
+            assert_eq!(
+                kinds(&merge),
+                [(b"x/a".as_slice(), ConflictKind::TypeChange)]
+            );
+            let paths: Vec<_> = merge.merged.keys().map(|p| p.as_slice()).collect();
+            assert_eq!(paths, [b"x/z".as_slice()]);
+            let conflict = &merge.conflicts[0];
+            assert_eq!(conflict.theirs, t.get(b"x/a".as_slice()).copied());
+            let expected: FlatTree = below
+                .iter()
+                .map(|(relative, full)| (relative.as_bytes().to_vec(), t[full.as_bytes()]))
+                .collect();
+            assert_eq!(conflict.theirs_below, expected);
+            assert_writable(&merge);
+        }
     }
 
     #[test]
@@ -735,8 +892,8 @@ mod tests {
         );
     }
 
-    /// `d` is also the directory of `d/x` and `d/y`, so merges over these names can produce file-directory clashes.
-    const NAMES: [&str; 7] = ["a", "b", "c", "d", "d/x", "d/y", "e/f/g"];
+    /// `d` is also the directory of `d/x` and `d/y`, and `e` and `e/f` are directories of `e/f/g`, so merges over these names can produce file-directory clashes, including ones that a demotion carries more than one level down.
+    const NAMES: [&str; 9] = ["a", "b", "c", "d", "d/x", "d/y", "e/f/g", "e", "e/f"];
     /// No name here is the directory of another, so trees over them never clash.
     const DISJOINT: [&str; 6] = ["a", "b", "c", "d/x", "d/y", "e/f/g"];
 
@@ -794,7 +951,7 @@ mod tests {
         })
     }
 
-    fn matches_entries(conflict: &Conflict, merged: &FlatTree) -> bool {
+    fn matches_entries(conflict: &Conflict, sides: [&FlatTree; 3]) -> bool {
         let regular = |e: &Option<FlatEntry>| e.is_some_and(|e| is_regular(e.kind));
         match conflict.kind {
             ConflictKind::AddAdd => {
@@ -814,7 +971,7 @@ mod tests {
                     && (conflict.ours.is_some()
                         && conflict.theirs.is_some()
                         && regular(&conflict.ours) != regular(&conflict.theirs)
-                        || has_child(merged, &conflict.path))
+                        || sides.iter().any(|side| has_child(side, &conflict.path)))
             }
             ConflictKind::BothModifiedText => {
                 !conflict.hunks.is_empty()
@@ -1046,8 +1203,30 @@ mod tests {
             let merge = merged_of(&blobs, &base, &ours, &theirs);
             let mut previous: Option<&Vec<u8>> = None;
             for conflict in &merge.conflicts {
-                prop_assert!(matches_entries(conflict, &merge.merged), "{conflict:?}");
+                prop_assert!(matches_entries(conflict, [&base, &ours, &theirs]), "{conflict:?}");
                 prop_assert!(!merge.merged.contains_key(&conflict.path));
+                for index in directory_prefixes(&conflict.path) {
+                    prop_assert!(!merge.merged.contains_key(&conflict.path[..index]), "{conflict:?}");
+                }
+                prop_assert!(!has_child(&merge.merged, &conflict.path), "{conflict:?}");
+                for other in &merge.conflicts {
+                    prop_assert!(
+                        !(other.path.len() > conflict.path.len()
+                            && other.path.starts_with(&conflict.path)
+                            && other.path[conflict.path.len()] == b'/'),
+                        "{conflict:?} above {other:?}"
+                    );
+                }
+                let below: FlatTree = theirs
+                    .iter()
+                    .filter(|(path, _)| {
+                        path.len() > conflict.path.len()
+                            && path.starts_with(&conflict.path)
+                            && path[conflict.path.len()] == b'/'
+                    })
+                    .map(|(path, entry)| (path[conflict.path.len() + 1..].to_vec(), *entry))
+                    .collect();
+                prop_assert_eq!(&conflict.theirs_below, &below);
                 prop_assert!(previous.is_none_or(|p| *p < conflict.path));
                 previous = Some(&conflict.path);
                 prop_assert_eq!(conflict.base, base.get(&conflict.path).copied());
