@@ -38,6 +38,7 @@ make acceptance            # the acceptance tests only
 make seed-dev              # development only: a throwaway project with agents, tasks, workspaces and a proposal
 make release               # web build, then fold for x86_64 and aarch64 Linux into dist/
 make clean                 # delete build output and dev projects
+make clean-keep-cargo      # the same, but keep the cargo target directory
 ```
 
 Before declaring Rust work done, run `make check-rust`; for web work, `make check-web`. A change to an HTTP route also runs `make gen-api` and commits the regenerated types. A change to a query also runs `make sqlx-prepare`.
@@ -47,11 +48,11 @@ Before declaring Rust work done, run `make check-rust`; for web work, `make chec
 1. **No `unsafe` without a `// SAFETY:` comment** that explains why the invariants hold. The workspace lints warn on `unsafe_code` and `clippy::undocumented_unsafe_blocks` is denied.
 2. **No `unwrap`, `expect`, `panic!`, `todo!`, `dbg!` or `println!` outside tests.** clippy denies them. `fold-cli` alone writes to stdout, through its output helpers.
 3. **Suppress a lint only with `#[expect(lint, reason = "...")]`.** Never `#[allow]`, never a crate-wide relaxation.
-8. **Pin the toolchain and version once.** `rust-toolchain.toml` pins the channel with the `minimal` profile, `rustfmt` and `clippy`; move it in its own change with every check green. The workspace uses `resolver = "3"` and edition 2024. Every crate takes `version.workspace = true`, so one number versions the binary. The release profile sets `lto = true` and `codegen-units = 1`; a `ci` profile inherits it with `lto = false` so checks run fast.
 4. **Library errors are `thiserror` enums; `FoldError` carries a stable `code` string.** Never change a shipped code. `anyhow` only in `fold-cli`'s `main`.
 5. **Blocking work never runs on the async runtime.** File I/O on workspaces, hashing, compression and merging go through `spawn_blocking`. Never hold a `std::sync::Mutex` guard across an `.await`.
 6. **Time and randomness are inputs.** `fold-core` takes `now` as an argument. `fold-core` defines the `Clock` trait and `ManualClock` for tests; `fold-daemon` provides `SystemClock`. Services and jobs read time only through a `Clock`. Timestamps are UTC milliseconds in the `Timestamp` newtype; never a local time.
 7. **Public ids are the prefixed numbers** (`T-12`, `P-3`, `C-40`, `r17`, `ws-9`, `ck-88`, `m-210`), parsed and printed by the id types in `fold-core`. A SQLite row id never leaves the daemon.
+8. **Pin the toolchain and version once.** `rust-toolchain.toml` pins the channel with the `minimal` profile, `rustfmt` and `clippy`; move it in its own change with every check green. The workspace uses `resolver = "3"` and edition 2024. Every crate takes `version.workspace = true`, so one number versions the binary. The release profile sets `lto = true` and `codegen-units = 1`; a `ci` profile inherits it with `lto = false` so checks run fast.
 
 ## Database
 
