@@ -29,13 +29,18 @@ impl Sandbox {
 
     /// The environment holds no real home, so no run touches the user's registry or a real daemon.
     fn fold(&self, args: &[&str]) -> Output {
+        self.fold_with(args, &[])
+    }
+
+    fn fold_with(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fold"));
         command
             .args(args)
             .current_dir(self.dir.path())
             .env_clear()
             .env("HOME", self.path("home"))
-            .env("XDG_DATA_HOME", self.path("data"));
+            .env("XDG_DATA_HOME", self.path("data"))
+            .envs(env.iter().copied());
         // Coverage runs name the profile file through this variable. `env_clear` drops every variable set before it, so this comes after.
         if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
             command.env("LLVM_PROFILE_FILE", profile);
@@ -152,6 +157,94 @@ fn init_without_a_daemon_skips_the_call() {
     let output = sandbox.fold(&["init", second.to_str().unwrap()]);
     assert!(output.status.success(), "{output:?}");
     assert!(!stdout(&output).contains("daemon"));
+}
+
+/// Answers one request with `201 Created` and returns the request as it arrived.
+#[cfg(test)]
+async fn accept_one(listener: &tokio::net::UnixListener) -> String {
+    let (mut stream, _) = listener.accept().await.unwrap();
+    let mut request = Vec::new();
+    let mut chunk = [0_u8; 1024];
+    loop {
+        let read = stream.read(&mut chunk).await.unwrap();
+        assert!(read > 0, "the client closed before its request ended");
+        request.extend_from_slice(&chunk[..read]);
+        let text = String::from_utf8_lossy(&request);
+        if let Some((head, body)) = text.split_once("\r\n\r\n") {
+            let length = head
+                .lines()
+                .find_map(|line| line.strip_prefix("content-length: "))
+                .map_or(0, |value| value.parse::<usize>().unwrap());
+            if body.len() >= length {
+                break;
+            }
+        }
+    }
+    stream
+        .write_all(b"HTTP/1.1 201 Created\r\ncontent-length: 2\r\n\r\n{}")
+        .await
+        .unwrap();
+    String::from_utf8(request).unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn init_names_its_human_in_the_request() {
+    use std::os::unix::fs::MetadataExt;
+
+    let sandbox = Arc::new(Sandbox::new());
+    let socket = sandbox.path("fake.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    let uid = std::fs::metadata("/proc/self").unwrap().uid();
+    let passwd = std::fs::read_to_string("/etc/passwd").unwrap();
+    let account = fold_cli::daemon_client::account_name(&passwd, uid).unwrap();
+    for (project, env, human) in [
+        (
+            "lead-project",
+            vec![("FOLD_HUMAN", "lead"), ("USER", "ana")],
+            "lead",
+        ),
+        ("user-project", vec![("USER", "ana")], "ana"),
+        ("account-project", vec![], account.as_str()),
+    ] {
+        let args = [
+            "init".to_owned(),
+            sandbox.path(project).to_string_lossy().into_owned(),
+            "--socket".to_owned(),
+            socket.to_string_lossy().into_owned(),
+        ];
+        let env: Vec<(String, String)> = env
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value.to_owned()))
+            .collect();
+        let run = {
+            let sandbox = sandbox.clone();
+            tokio::task::spawn_blocking(move || {
+                let args: Vec<&str> = args.iter().map(String::as_str).collect();
+                let env: Vec<(&str, &str)> = env
+                    .iter()
+                    .map(|(key, value)| (key.as_str(), value.as_str()))
+                    .collect();
+                sandbox.fold_with(&args, &env)
+            })
+        };
+        let request = accept_one(&listener).await;
+        let output = run.await.unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert!(stdout(&output).ends_with("opened by the running daemon\n"));
+        assert!(
+            request.starts_with("POST /api/v1/projects HTTP/1.1\r\n"),
+            "{request}"
+        );
+        assert!(
+            request.contains(&format!("x-fold-human: {human}\r\n")),
+            "{request}"
+        );
+        let slug = project.to_owned();
+        assert!(
+            request.ends_with(&format!("{{\"slug\":\"{slug}\"}}")),
+            "{request}"
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

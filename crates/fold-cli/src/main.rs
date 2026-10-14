@@ -1,5 +1,6 @@
 mod commands;
 mod init;
+mod mcp;
 mod output;
 mod serve;
 
@@ -23,6 +24,8 @@ enum Command {
     Serve(serve::ServeArgs),
     /// Print the OpenAPI document of the HTTP API
     Openapi,
+    /// Connect a Claude Code session to the daemon over stdio, starting the daemon when needed
+    Mcp(mcp::McpArgs),
 }
 
 /// clap prints a parse outcome, including `--help` and `--version`, and exits with its own code; a failed write is a runtime error with exit code 1.
@@ -32,6 +35,7 @@ enum Failure {
     Write(io::Error),
     Serve(serve::ServeError),
     Init(init::InitError),
+    Mcp(mcp::McpError),
 }
 
 fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result<(), Failure> {
@@ -41,12 +45,14 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         }
         Some(Command::Serve(args)) => serve::run(&args).map_err(Failure::Serve),
         Some(Command::Openapi) => commands::openapi::run(out).map_err(Failure::Write),
+        Some(Command::Mcp(args)) => mcp::run(&args).map_err(Failure::Mcp),
         None => output::line(out, &output::version_line()).map_err(Failure::Write),
     }
 }
 
 fn main() -> anyhow::Result<()> {
-    match run(std::env::args_os(), &mut io::stdout().lock()) {
+    // Not locked here: `fold mcp` writes stdout from a tokio blocking thread, which would wait forever for a lock that this thread holds.
+    match run(std::env::args_os(), &mut io::stdout()) {
         Ok(()) => Ok(()),
         Err(Failure::Parse(error)) => error.exit(),
         Err(Failure::Write(error)) => Err(error.into()),
@@ -58,6 +64,10 @@ fn main() -> anyhow::Result<()> {
             Some(code) => anyhow::anyhow!("{code}: {error}"),
             None => error.into(),
         }),
+        Err(Failure::Mcp(error)) => {
+            let _ = output::line(&mut io::stderr().lock(), &format!("fold mcp: {error}"));
+            std::process::exit(1)
+        }
     }
 }
 

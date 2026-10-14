@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use fold_core::events::types;
@@ -36,6 +37,15 @@ pub struct Registered {
     pub main_worker: WorkerName,
     /// True when this call created the agent.
     pub created: bool,
+}
+
+/// One line of the agent directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentSummary {
+    pub agent: AgentName,
+    pub tags: Vec<Tag>,
+    /// The main worker first, then the children by name.
+    pub workers: Vec<WorkerName>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -153,6 +163,35 @@ impl AgentService {
             .await?;
         self.bus.publish(buffer);
         Ok(registered)
+    }
+
+    /// Every agent with its tags and workers, ordered by name. The three reads share one read transaction, so they see one state.
+    pub async fn list_agents(&self) -> Result<Vec<AgentSummary>, AgentError> {
+        let mut tx = self.store.read().begin().await.map_err(StoreError::from)?;
+        let rows = agents::list_agents(&mut *tx).await?;
+        let tags = agents::all_tags(&mut *tx).await?;
+        let mut workers = agents::all_workers(&mut *tx).await?;
+        tx.commit().await.map_err(StoreError::from)?;
+        workers.sort_by(|a, b| (!a.name.is_main(), &a.name).cmp(&(!b.name.is_main(), &b.name)));
+        let mut tags_of: HashMap<i64, Vec<Tag>> = HashMap::new();
+        for (agent_id, tag) in tags {
+            tags_of.entry(agent_id).or_default().push(tag);
+        }
+        let mut workers_of: HashMap<i64, Vec<WorkerName>> = HashMap::new();
+        for worker in workers {
+            workers_of
+                .entry(worker.agent_id)
+                .or_default()
+                .push(worker.name);
+        }
+        Ok(rows
+            .into_iter()
+            .map(|row| AgentSummary {
+                tags: tags_of.remove(&row.id).unwrap_or_default(),
+                workers: workers_of.remove(&row.id).unwrap_or_default(),
+                agent: row.name,
+            })
+            .collect())
     }
 
     /// The agent the session is bound to, or `agent_not_registered`.

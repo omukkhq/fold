@@ -346,3 +346,57 @@ pub async fn end_open_sessions(
     .await?;
     Ok(result.rows_affected())
 }
+
+/// Every agent, ordered by name.
+pub async fn list_agents(executor: impl SqliteExecutor<'_>) -> Result<Vec<AgentRow>, StoreError> {
+    let rows =
+        sqlx::query!(r#"SELECT id AS "id!: i64", name, created_at FROM agents ORDER BY name"#)
+            .fetch_all(executor)
+            .await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(AgentRow {
+                id: row.id,
+                name: AgentName::parse(&row.name)
+                    .map_err(|_| StoreError::Corrupt("agents.name"))?,
+                created_at: time(row.created_at, "agents.created_at")?,
+            })
+        })
+        .collect()
+}
+
+/// Every tag of every agent as `(agent_id, tag)`, ordered by agent and tag.
+pub async fn all_tags(executor: impl SqliteExecutor<'_>) -> Result<Vec<(i64, Tag)>, StoreError> {
+    let rows = sqlx::query!("SELECT agent_id, tag FROM agent_tags ORDER BY agent_id, tag")
+        .fetch_all(executor)
+        .await?;
+    rows.into_iter()
+        .map(|row| {
+            let tag = Tag::parse(&row.tag).map_err(|_| StoreError::Corrupt("agent_tags.tag"))?;
+            Ok((row.agent_id, tag))
+        })
+        .collect()
+}
+
+/// Every worker of every agent, ordered by name.
+pub async fn all_workers(executor: impl SqliteExecutor<'_>) -> Result<Vec<WorkerRow>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT id AS "id!: i64", agent_id, name, parent_worker_id, last_call_at, activity
+           FROM workers ORDER BY name"#
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(WorkerRow {
+                id: row.id,
+                agent_id: row.agent_id,
+                name: WorkerName::parse(&row.name)
+                    .map_err(|_| StoreError::Corrupt("workers.name"))?,
+                parent_id: row.parent_worker_id,
+                last_call_at: optional_time(row.last_call_at, "workers.last_call_at")?,
+                activity: row.activity,
+            })
+        })
+        .collect()
+}

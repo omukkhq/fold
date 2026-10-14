@@ -95,23 +95,51 @@ impl Dirs {
     }
 }
 
+/// `$XDG_RUNTIME_DIR/fold`, which holds the daemon lock, the start lock and the default socket.
+pub(crate) fn runtime_dir(dirs: &Dirs) -> Result<PathBuf, ServeError> {
+    let base = dirs
+        .runtime_dir
+        .clone()
+        .ok_or(DaemonError::RuntimeDirMissing)?;
+    Ok(base.join("fold"))
+}
+
+/// The socket of every command: the `--socket` flag, else `socket` from `daemon.toml`, else `fold.sock` in the runtime directory. `None` when none of the three is known, so no daemon can be listening.
+pub(crate) fn socket_path(flag: Option<&Path>, dirs: &Dirs) -> Result<Option<PathBuf>, ServeError> {
+    if let Some(flag) = flag {
+        return Ok(Some(flag.to_owned()));
+    }
+    let file = match dirs.config_file() {
+        Ok(path) => read_file_config(&path)?,
+        Err(_) => FileConfig::default(),
+    };
+    Ok(resolve_socket(
+        None,
+        &file,
+        runtime_dir(dirs).ok().as_deref(),
+    ))
+}
+
+fn resolve_socket(
+    flag: Option<&Path>,
+    file: &FileConfig,
+    runtime_dir: Option<&Path>,
+) -> Option<PathBuf> {
+    flag.map(Path::to_path_buf)
+        .or_else(|| file.socket.clone())
+        .or_else(|| runtime_dir.map(|dir| dir.join("fold.sock")))
+}
+
 /// Flags win over the file, the file wins over the defaults.
 fn build_config(
     args: &ServeArgs,
     dirs: &Dirs,
     file: &FileConfig,
 ) -> Result<DaemonConfig, ServeError> {
-    let runtime_base = dirs
-        .runtime_dir
-        .clone()
-        .ok_or(DaemonError::RuntimeDirMissing)?;
-    let runtime_dir = runtime_base.join("fold");
+    let runtime_dir = runtime_dir(dirs)?;
     let data_dir = dirs.base(&dirs.data_home, ".local/share")?.join("fold");
     let listen = args.listen.or(file.listen).unwrap_or(DEFAULT_LISTEN);
-    let socket = args
-        .socket
-        .clone()
-        .or_else(|| file.socket.clone())
+    let socket = resolve_socket(args.socket.as_deref(), file, Some(&runtime_dir))
         .unwrap_or_else(|| runtime_dir.join("fold.sock"));
     Ok(DaemonConfig {
         listen,
@@ -144,7 +172,9 @@ pub fn run(args: &ServeArgs) -> Result<(), ServeError> {
         .json()
         .with_writer(std::io::stderr)
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+            // rmcp logs the notifications it receives at info, and a notification can carry an agent's text.
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "info,rmcp=warn".into()),
         )
         .init();
     let dirs = Dirs::from_env();
@@ -280,5 +310,18 @@ mod tests {
             Some("127.0.0.1:1".parse().unwrap())
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_runtime_directory_is_the_fold_directory_under_xdg_runtime_dir() {
+        assert_eq!(
+            runtime_dir(&dirs()).unwrap(),
+            Path::new("/run/user/1000/fold")
+        );
+        let no_runtime = Dirs {
+            runtime_dir: None,
+            ..dirs()
+        };
+        assert!(runtime_dir(&no_runtime).is_err());
     }
 }

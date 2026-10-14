@@ -15,6 +15,7 @@ use tokio::task::JoinHandle;
 
 use crate::config::DaemonConfig;
 use crate::http;
+use crate::mcp;
 use crate::projects::Projects;
 use crate::services::agents::AgentService;
 use crate::socket::SocketServer;
@@ -129,6 +130,7 @@ impl Daemon {
         let socket = SocketServer::bind(
             &config.socket,
             http::socket_router(state.clone()),
+            mcp::handshake::handler(state.clone()),
             stopped.clone(),
         )
         .await

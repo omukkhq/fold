@@ -2,17 +2,15 @@ use std::future::Future;
 use std::io;
 use std::path::Path;
 use std::pin::Pin;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
 use axum::Router;
-use fold_core::codes;
 use hyper::server::conn::http1;
 use hyper_util::rt::TokioIo;
 use hyper_util::service::TowerToHyperService;
 use rustix::net::RecvFlags;
-use serde_json::json;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, Interest};
+use tokio::io::Interest;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::watch;
 use tokio::task::{JoinHandle, JoinSet};
@@ -25,7 +23,7 @@ const ACCEPT_BACKOFF: Duration = Duration::from_millis(50);
 
 /// The Unix socket listener. One socket carries two protocols, told apart by the first byte of a connection: `{` starts the JSON handshake, anything else is HTTP/1.1.
 pub struct SocketServer {
-    handler: Arc<RwLock<Option<HandshakeHandler>>>,
+    handler: Arc<RwLock<HandshakeHandler>>,
     task: JoinHandle<()>,
 }
 
@@ -36,24 +34,23 @@ impl std::fmt::Debug for SocketServer {
 }
 
 impl SocketServer {
-    /// Binds `path`, restricts it to its owner and starts accepting. A stale file at `path` must already be gone.
+    /// Binds `path`, restricts it to its owner and starts accepting. A stale file at `path` must already be gone. The handshake handler comes with the bind, so no connection is ever accepted without one.
     pub async fn bind(
         path: &Path,
         router: Router,
+        handshake: HandshakeHandler,
         shutdown: watch::Receiver<bool>,
     ) -> io::Result<Self> {
         let listener = UnixListener::bind(path)?;
         restrict(path).await?;
-        let handler = Arc::new(RwLock::new(None));
+        let handler = Arc::new(RwLock::new(handshake));
         let task = tokio::spawn(accept_loop(listener, router, handler.clone(), shutdown));
         Ok(Self { handler, task })
     }
 
-    /// Installs the handshake handler; connections that arrive later use it.
+    /// Replaces the handshake handler; connections that arrive later use it.
     pub fn on_handshake(&self, handler: HandshakeHandler) {
-        if let Ok(mut slot) = self.handler.write() {
-            *slot = Some(handler);
-        }
+        *self.handler.write().unwrap_or_else(PoisonError::into_inner) = handler;
     }
 
     /// Waits until the accept loop has stopped and open connections are closed.
@@ -70,7 +67,7 @@ async fn restrict(path: &Path) -> io::Result<()> {
 async fn accept_loop(
     listener: UnixListener,
     router: Router,
-    handler: Arc<RwLock<Option<HandshakeHandler>>>,
+    handler: Arc<RwLock<HandshakeHandler>>,
     mut shutdown: watch::Receiver<bool>,
 ) {
     let mut connections = JoinSet::new();
@@ -81,7 +78,7 @@ async fn accept_loop(
             _ = shutdown.changed() => break,
             accepted = listener.accept() => match accepted {
                 Ok((stream, _)) => {
-                    let handler = handler.read().ok().and_then(|slot| slot.clone());
+                    let handler = handler.read().unwrap_or_else(PoisonError::into_inner).clone();
                     connections.spawn(serve_connection(stream, router.clone(), handler));
                 }
                 Err(error) => {
@@ -95,12 +92,9 @@ async fn accept_loop(
     connections.shutdown().await;
 }
 
-async fn serve_connection(stream: UnixStream, router: Router, handler: Option<HandshakeHandler>) {
+async fn serve_connection(stream: UnixStream, router: Router, handler: HandshakeHandler) {
     match first_byte(&stream).await {
-        Some(b'{') => match handler {
-            Some(handler) => handler(stream).await,
-            None => refuse_handshake(stream).await,
-        },
+        Some(b'{') => handler(stream).await,
         Some(_) => serve_http(stream, router).await,
         None => {}
     }
@@ -130,23 +124,5 @@ async fn serve_http(stream: UnixStream, router: Router) {
     let connection = http1::Builder::new().serve_connection(TokioIo::new(stream), service);
     if let Err(error) = connection.with_upgrades().await {
         tracing::debug!(%error, "socket connection ended with an error");
-    }
-}
-
-async fn refuse_handshake(mut stream: UnixStream) {
-    // Unread bytes at close would turn the reply into a connection reset for the client.
-    let mut sent = [0_u8; 4096];
-    let _ = stream.read(&mut sent).await;
-    let line = json!({
-        "error": {
-            "code": codes::HANDSHAKE_UNAVAILABLE,
-            "message": "this daemon does not accept the handshake yet",
-            "details": {},
-        }
-    });
-    let mut bytes = line.to_string().into_bytes();
-    bytes.push(b'\n');
-    if stream.write_all(&bytes).await.is_ok() {
-        let _ = stream.shutdown().await;
     }
 }

@@ -3,15 +3,15 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use clap::Args;
+use fold_cli::daemon_client::{self, ClientConfig, ClientError, DaemonClient, Response};
 use fold_core::{FoldError, HostPaths, codes};
 use fold_daemon::SystemClock;
 use fold_daemon::services::projects::{ProjectError, init_project_from};
+use hyper::Method;
 use thiserror::Error;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::UnixStream;
 
 use crate::output;
-use crate::serve::{Dirs, FileConfig, ServeError, read_file_config};
+use crate::serve::{Dirs, socket_path};
 
 /// How long a daemon gets to accept the connection and answer the open request.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(10);
@@ -94,7 +94,7 @@ pub fn run(args: &InitArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), Ini
         )?;
     }
     let note = match socket {
-        Ok(Some(socket)) => match runtime.block_on(register(&socket, &project.slug)) {
+        Ok(Some(socket)) => match runtime.block_on(register(&client(socket), &project.slug)) {
             Registration::NoDaemon => None,
             Registration::Opened => Some("opened by the running daemon".to_owned()),
             Registration::Refused(reason) => Some(format!(
@@ -110,6 +110,16 @@ pub fn run(args: &InitArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), Ini
         output::line(out, &note)?;
     }
     Ok(())
+}
+
+/// Init uses a running daemon and never starts one.
+fn client(socket: PathBuf) -> DaemonClient {
+    let config = ClientConfig {
+        socket,
+        runtime_dir: None,
+        fold_exe: None,
+    };
+    DaemonClient::new(config, daemon_client::human_from_env().ok())
 }
 
 fn host_paths(dirs: &Dirs) -> Result<HostPaths, InitError> {
@@ -131,76 +141,30 @@ fn utf8<'a>(path: Option<&'a Path>, name: &str) -> Result<Option<&'a str>, InitE
     }
 }
 
-/// The flag wins over `daemon.toml`, which wins over the runtime directory. `None` means no daemon can be listening.
-fn socket_path(flag: Option<&Path>, dirs: &Dirs) -> Result<Option<PathBuf>, ServeError> {
-    if let Some(flag) = flag {
-        return Ok(Some(flag.to_owned()));
+async fn register(client: &DaemonClient, slug: &str) -> Registration {
+    let body = serde_json::json!({ "slug": slug });
+    let request = client.request(Method::POST, "/api/v1/projects", Some(&body));
+    match tokio::time::timeout(ANSWER_TIMEOUT, request).await {
+        Ok(answer) => interpret(answer),
+        Err(_) => Registration::Refused("no answer".to_owned()),
     }
-    let file = match dirs.config_file() {
-        Ok(path) => read_file_config(&path)?,
-        Err(_) => FileConfig::default(),
-    };
-    Ok(file.socket.or_else(|| {
-        dirs.runtime_dir
-            .as_ref()
-            .map(|runtime| runtime.join("fold").join("fold.sock"))
-    }))
-}
-
-async fn register(socket: &Path, slug: &str) -> Registration {
-    tokio::time::timeout(ANSWER_TIMEOUT, ask_daemon(socket, slug))
-        .await
-        .unwrap_or_else(|_| Registration::Refused("no answer".to_owned()))
 }
 
 /// A missing socket file or a refused connection means no daemon runs, which is not an error: the daemon opens every registered project when it starts.
-async fn ask_daemon(socket: &Path, slug: &str) -> Registration {
-    let stream = match UnixStream::connect(socket).await {
-        Ok(stream) => stream,
-        Err(error)
-            if matches!(
-                error.kind(),
-                io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
-            ) =>
-        {
-            return Registration::NoDaemon;
-        }
-        Err(error) => return Registration::Refused(error.kind().to_string()),
-    };
-    let body = serde_json::json!({ "slug": slug }).to_string();
-    match post_projects(stream, &body).await {
-        Ok(reply) => interpret(&reply),
-        Err(error) => Registration::Refused(error.kind().to_string()),
+fn interpret(answer: Result<Response, ClientError>) -> Registration {
+    match answer {
+        Ok(response) if (200..300).contains(&response.status) => Registration::Opened,
+        Ok(response) => Registration::Refused(
+            response.body["error"]["code"]
+                .as_str()
+                .unwrap_or("unknown")
+                .to_owned(),
+        ),
+        Err(ClientError::NoDaemon { .. }) => Registration::NoDaemon,
+        Err(ClientError::Body) => Registration::Refused("unknown".to_owned()),
+        Err(ClientError::Io { source, .. }) => Registration::Refused(source.kind().to_string()),
+        Err(error) => Registration::Refused(error.to_string()),
     }
-}
-
-async fn post_projects(mut stream: UnixStream, body: &str) -> io::Result<Vec<u8>> {
-    let request = format!(
-        "POST /api/v1/projects HTTP/1.1\r\nHost: fold\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    stream.write_all(request.as_bytes()).await?;
-    let mut reply = Vec::new();
-    stream.read_to_end(&mut reply).await?;
-    Ok(reply)
-}
-
-fn interpret(reply: &[u8]) -> Registration {
-    let text = String::from_utf8_lossy(reply);
-    let (head, body) = text.split_once("\r\n\r\n").unwrap_or((&text, ""));
-    let status = head
-        .lines()
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .and_then(|code| code.parse::<u16>().ok());
-    if status.is_some_and(|status| (200..300).contains(&status)) {
-        return Registration::Opened;
-    }
-    let code = serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|value| value["error"]["code"].as_str().map(str::to_owned))
-        .unwrap_or_else(|| "unknown".to_owned());
-    Registration::Refused(code)
 }
 
 #[cfg(test)]
@@ -240,20 +204,39 @@ mod tests {
         assert!(Wrapper::try_parse_from(["fold"]).is_err());
     }
 
+    fn reply(status: u16, body: serde_json::Value) -> Result<Response, ClientError> {
+        Ok(Response { status, body })
+    }
+
     #[test]
     fn replies_are_read_by_status_and_error_code() {
-        let ok = b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\n{}";
-        assert_eq!(interpret(ok), Registration::Opened);
-        let created = b"HTTP/1.1 201 Created\r\n\r\n{}";
-        assert_eq!(interpret(created), Registration::Opened);
-        let refused = b"HTTP/1.1 404 Not Found\r\n\r\n{\"error\":{\"code\":\"project_not_found\",\"message\":\"m\",\"details\":{}}}";
         assert_eq!(
-            interpret(refused),
-            Registration::Refused("project_not_found".to_owned())
+            interpret(reply(200, serde_json::json!({}))),
+            Registration::Opened
         );
         assert_eq!(
-            interpret(b"garbage"),
-            Registration::Refused("unknown".to_owned())
+            interpret(reply(201, serde_json::Value::Null)),
+            Registration::Opened
+        );
+        let refused = serde_json::json!({"error": {"code": "project_not_found", "message": "m"}});
+        assert_eq!(
+            interpret(reply(404, refused)),
+            Registration::Refused("project_not_found".to_owned())
+        );
+        let unknown = Registration::Refused("unknown".to_owned());
+        assert_eq!(interpret(reply(500, serde_json::Value::Null)), unknown);
+        assert_eq!(interpret(Err(ClientError::Body)), unknown);
+        let reset = ClientError::Io {
+            context: "connect to the daemon socket",
+            source: io::Error::from(io::ErrorKind::PermissionDenied),
+        };
+        assert_eq!(
+            interpret(Err(reset)),
+            Registration::Refused("permission denied".to_owned())
+        );
+        assert_eq!(
+            interpret(Err(ClientError::HumanUnknown)),
+            Registration::Refused("cannot tell who you are: set FOLD_HUMAN".to_owned())
         );
     }
 
@@ -341,9 +324,12 @@ mod tests {
     async fn a_socket_path_with_no_listener_is_no_daemon() {
         let dir = tempfile::TempDir::new().unwrap();
         let missing = dir.path().join("missing.sock");
-        assert_eq!(register(&missing, "s").await, Registration::NoDaemon);
+        assert_eq!(
+            register(&client(missing), "s").await,
+            Registration::NoDaemon
+        );
         let stale = dir.path().join("stale.sock");
         drop(std::os::unix::net::UnixListener::bind(&stale).unwrap());
-        assert_eq!(register(&stale, "s").await, Registration::NoDaemon);
+        assert_eq!(register(&client(stale), "s").await, Registration::NoDaemon);
     }
 }

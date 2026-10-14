@@ -34,6 +34,7 @@ define_codes! {
     RUNTIME_DIR_MISSING = "runtime_dir_missing",
     DAEMON_ALREADY_RUNNING = "daemon_already_running",
     AUTH_REQUIRED = "auth_required",
+    // Nothing raises it: the socket server takes its handshake handler at bind. It stays so that no other error reuses a shipped code.
     HANDSHAKE_UNAVAILABLE = "handshake_unavailable",
     INVALID_NAME = "invalid_name",
     HUMAN_REQUIRED = "human_required",
@@ -57,6 +58,8 @@ define_codes! {
     INVALID_CONFIG = "invalid_config",
     ALREADY_CURRENT = "already_current",
     WORKSPACE_CHANGED_DURING_SYNC = "workspace_changed_during_sync",
+    PROTOCOL_VERSION_UNSUPPORTED = "protocol_version_unsupported",
+    INVALID_HANDSHAKE = "invalid_handshake",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

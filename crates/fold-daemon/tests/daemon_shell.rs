@@ -444,7 +444,8 @@ async fn the_socket_tells_a_handshake_from_http_by_the_first_byte() {
     handshake.read_to_string(&mut reply).await.unwrap();
     assert!(reply.ends_with('\n'));
     let line: Value = serde_json::from_str(&reply).unwrap();
-    assert_eq!(code(&line), "handshake_unavailable");
+    assert_eq!(line["ok"], json!(false));
+    assert_eq!(code(&line), "invalid_handshake");
 
     let http = UnixStream::connect(daemon.socket_path()).await.unwrap();
     let (status, body) = raw_http(http, "GET", "/api/v1/projects", "").await;

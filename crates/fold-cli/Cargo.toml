@@ -14,10 +14,13 @@ anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
 fold-core = { version = "0.1.0", path = "../fold-core" }
 fold-daemon = { version = "0.1.0", path = "../fold-daemon" }
+http-body-util = "0.1.5"
+hyper = { version = "1.12.0", features = ["client", "http1"] }
+hyper-util = { version = "0.1.21", features = ["tokio"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 thiserror = "2.0.21"
-tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "rt"] }
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "rt", "io-std"] }
 toml = "1.1.8"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["json", "env-filter"] }
@@ -26,5 +29,8 @@ tracing-subscriber = { version = "0.3.23", features = ["json", "env-filter"] }
 workspace = true
 
 [dev-dependencies]
-fold-store = { path = "../fold-store" }
+fold-store = { path = "../fold-store", features = ["testing"] }
+rmcp = { version = "3.5.1", features = ["client"] }
+rustix = { version = "1.1.5", features = ["process"] }
 tempfile = "3.27.0"
+tokio = { version = "1.53.3", features = ["macros", "rt-multi-thread", "process"] }

@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::path::{Component, Path};
 
 /// A lowercase name of ASCII letters, digits and single hyphens. Every other run of characters becomes one `-`; the result is never empty.
 pub fn slugify(name: &str) -> String {
@@ -31,6 +32,27 @@ pub fn choose_slug(base: &str, existing: &BTreeSet<String>) -> String {
         .map(|n| format!("{base}-{n}"))
         .find(|candidate| !existing.contains(candidate))
         .unwrap_or_else(|| base.to_owned())
+}
+
+/// The registered root that holds `cwd`: the nearest one when roots nest. Roots match whole path components, so `/src/app-2` is not inside `/src/app`. A `cwd` that is relative or holds `..` matches nothing, because `/src/app/../etc` starts with `/src/app` component by component but is not inside it.
+pub fn find_root<'a, I>(cwd: &Path, roots: I) -> Option<&'a Path>
+where
+    I: IntoIterator<Item = &'a Path>,
+{
+    if !is_canonical(cwd) {
+        return None;
+    }
+    roots
+        .into_iter()
+        .filter(|root| is_canonical(root) && cwd.starts_with(root))
+        .max_by_key(|root| root.components().count())
+}
+
+fn is_canonical(path: &Path) -> bool {
+    path.is_absolute()
+        && path
+            .components()
+            .all(|component| matches!(component, Component::RootDir | Component::Normal(_)))
 }
 
 #[cfg(test)]

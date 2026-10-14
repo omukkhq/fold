@@ -1,0 +1,169 @@
+pub mod error;
+pub mod footer;
+pub mod handshake;
+pub mod identity;
+
+use std::sync::Arc;
+
+use fold_core::{FoldError, WorkerName, codes};
+use fold_store::agents::WorkerRow;
+use rmcp::model::{
+    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
+    JsonObject, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig,
+};
+use rmcp::service::RequestContext;
+use rmcp::{ErrorData, RoleServer, ServerHandler};
+use serde_json::Value;
+use tokio::sync::Mutex;
+
+use crate::services::agents::{AgentService, SessionContext};
+use error::{from_agent, tool_error};
+pub use footer::{FooterCounts, FooterPart, FooterSource, footer};
+
+/// The short workflow every session receives in the `initialize` answer.
+pub const INSTRUCTIONS: &str = "fold coordinates the agents of one project. Work in this order: 1. Call register_agent with your agent name once per session. 2. Read the work that is ready. 3. Claim one task before you change files for it. 4. Work only in your own task workspace. 5. Send a proposal when the work is ready for review. A line that starts with \"fold:\" at the end of a result tells you what waits for you.";
+
+/// The MCP server of one adapter session. Every tool call passes through [`FoldServer::call_tool`], which checks the agent, resolves `as`, records the call and adds the footer, so a tool only parses its input and calls its service.
+pub struct FoldServer {
+    agents: AgentService,
+    /// Held across the `register_agent` command, which binds the session.
+    session: Mutex<SessionContext>,
+    footer: Vec<Arc<dyn FooterSource>>,
+}
+
+impl std::fmt::Debug for FoldServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FoldServer").finish_non_exhaustive()
+    }
+}
+
+impl FoldServer {
+    pub fn new(agents: AgentService, session: SessionContext) -> Self {
+        Self {
+            agents,
+            session: Mutex::new(session),
+            footer: Vec::new(),
+        }
+    }
+
+    /// Adds a count to the footer of every result.
+    #[must_use]
+    pub fn with_footer_source(mut self, source: Arc<dyn FooterSource>) -> Self {
+        self.footer.push(source);
+        self
+    }
+
+    async fn session(&self) -> SessionContext {
+        self.session.lock().await.clone()
+    }
+
+    async fn run(&self, request: &CallToolRequestParams) -> Result<Option<Value>, FoldError> {
+        let tool = request.name.as_ref();
+        let arguments = request.arguments.clone().unwrap_or_default();
+        let as_worker = as_worker(&arguments)?;
+        let before = self.session().await;
+        if !identity::is_identity_tool(tool) {
+            self.agents
+                .require_agent(&before)
+                .await
+                .map_err(from_agent)?;
+        }
+        // `register_agent` binds the session, so its `as` can only be resolved after the call.
+        let resolved = match &as_worker {
+            Some(name) if before.agent.is_some() || tool != identity::REGISTER_AGENT => {
+                Some(self.resolve(&before, Some(name)).await?)
+            }
+            _ => None,
+        };
+        let value = match tool {
+            identity::REGISTER_AGENT => identity::register_agent(self, &arguments).await?,
+            identity::REGISTER_WORKER => identity::register_worker(self, &arguments).await?,
+            identity::LIST_AGENTS => identity::list_agents(self, &arguments).await?,
+            _ => return Ok(None),
+        };
+        let after = self.session().await;
+        if after.agent.is_some() {
+            let worker = match resolved {
+                Some(worker) => worker,
+                None => self.resolve(&after, as_worker.as_ref()).await?,
+            };
+            if let Err(error) = self.agents.record_call(&after, &worker, tool, None).await {
+                tracing::warn!(
+                    tool,
+                    code = from_agent(error).code(),
+                    "could not record a tool call"
+                );
+            }
+        }
+        Ok(Some(value))
+    }
+
+    async fn resolve(
+        &self,
+        session: &SessionContext,
+        as_worker: Option<&WorkerName>,
+    ) -> Result<WorkerRow, FoldError> {
+        self.agents
+            .resolve_worker(session, as_worker)
+            .await
+            .map_err(from_agent)
+    }
+
+    async fn counts(&self) -> FooterCounts {
+        let session = self.session().await;
+        let mut counts = FooterCounts::default();
+        for source in &self.footer {
+            let part = source.part();
+            counts = counts.with(part, counts.get(part) + source.count(&session).await);
+        }
+        counts
+    }
+}
+
+fn as_worker(arguments: &JsonObject) -> Result<Option<WorkerName>, FoldError> {
+    match arguments.get("as") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(name)) => Ok(Some(WorkerName::parse(name)?)),
+        Some(_) => Err(FoldError::new(
+            codes::INVALID_REQUEST,
+            "as must be a worker name",
+        )),
+    }
+}
+
+impl ServerHandler for FoldServer {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::new("fold", env!("CARGO_PKG_VERSION")))
+            .with_instructions(INSTRUCTIONS)
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, ErrorData> {
+        Ok(ListToolsResult::with_all_items(identity::tools()))
+    }
+
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, ErrorData> {
+        let mut result = match self.run(&request).await {
+            Ok(Some(value)) => CallToolResult::success(vec![ContentBlock::text(value.to_string())]),
+            Ok(None) => {
+                return Err(ErrorData::invalid_params(
+                    format!("there is no tool named {}", request.name),
+                    None,
+                ));
+            }
+            Err(error) => tool_error(&error),
+        };
+        if let Some(line) = footer(&self.counts().await) {
+            result.content.push(ContentBlock::text(line));
+        }
+        Ok(result.into())
+    }
+}

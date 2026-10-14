@@ -44,3 +44,5 @@ invalid_host_paths
 invalid_config
 already_current
 workspace_changed_during_sync
+protocol_version_unsupported
+invalid_handshake

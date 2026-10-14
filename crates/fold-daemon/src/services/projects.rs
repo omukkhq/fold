@@ -3,6 +3,7 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
+use fold_core::projects::find_root;
 use fold_core::tree::FlatTree;
 use fold_core::{
     CONFIG_TEMPLATE, Clock, FoldError, HostPaths, ProjectConfig, ProjectPaths, RevisionId,
@@ -463,4 +464,22 @@ pub async fn open(state: &DaemonState, slug: &str) -> Result<Arc<ProjectHandle>,
             )
         })?;
     Ok(state.projects.open(&row, state.clock.clone()).await?)
+}
+
+/// Opens the project whose registered root holds `cwd`, the nearest one when roots nest, so a session started in a task workspace finds its project.
+pub async fn open_for_dir(
+    state: &DaemonState,
+    cwd: &Path,
+) -> Result<Arc<ProjectHandle>, ProjectError> {
+    let rows = projects::list_projects(state.registry.read()).await?;
+    let root = find_root(cwd, rows.iter().map(|row| Path::new(&row.root)));
+    let row = root
+        .and_then(|root| rows.iter().find(|row| Path::new(&row.root) == root))
+        .ok_or_else(|| {
+            FoldError::new(
+                codes::PROJECT_NOT_FOUND,
+                "no registered project holds this directory",
+            )
+        })?;
+    open(state, &row.slug).await
 }
