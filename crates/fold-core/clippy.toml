@@ -1,0 +1,17 @@
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-dbg-in-tests = true
+allow-print-in-tests = true
+
+disallowed-methods = [
+    { path = "std::time::SystemTime::now", reason = "fold-core is pure: time is an input, services read it through a Clock" },
+    { path = "std::time::Instant::now", reason = "fold-core is pure: time is an input, services read it through a Clock" },
+    { path = "time::OffsetDateTime::now_utc", reason = "fold-core is pure: time is an input, services read it through a Clock" },
+    { path = "std::env::var", reason = "fold-core is pure: it never reads the environment" },
+    { path = "std::env::var_os", reason = "fold-core is pure: it never reads the environment" },
+    { path = "std::fs::read", reason = "fold-core is pure: it does no file I/O" },
+    { path = "std::fs::read_to_string", reason = "fold-core is pure: it does no file I/O" },
+    { path = "std::fs::write", reason = "fold-core is pure: it does no file I/O" },
+    { path = "std::fs::File::open", reason = "fold-core is pure: it does no file I/O" },
+]
