@@ -55,6 +55,8 @@ define_codes! {
     PROJECT_EXISTS = "project_exists",
     INVALID_HOST_PATHS = "invalid_host_paths",
     INVALID_CONFIG = "invalid_config",
+    ALREADY_CURRENT = "already_current",
+    WORKSPACE_CHANGED_DURING_SYNC = "workspace_changed_during_sync",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

@@ -1,6 +1,7 @@
 mod changesets;
 mod checkpoints;
 mod columns;
+mod conflicts;
 mod refs;
 mod revisions;
 
@@ -11,6 +12,7 @@ pub use checkpoints::{
     AUTO_CHECKPOINTS_KEPT, Checkpoint, CheckpointKind, CheckpointReason, get_checkpoint,
     insert_checkpoint, list_checkpoints, prune_auto, prune_workspace,
 };
+pub use conflicts::{ConflictRow, clear_conflict, list_conflicts, set_conflicts};
 pub use refs::{advance_main, create_main};
 pub use revisions::{
     IntegratedProposal, IntegrationInfo, IntegrationKind, MAX_PAGE, RevisionRow, ancestors,

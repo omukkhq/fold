@@ -159,7 +159,7 @@ struct Walk<'a, 'o> {
     seen: BTreeSet<RepoPath>,
 }
 
-enum Reading {
+pub(crate) enum Reading {
     Hashed(ObjectHash, Box<Metadata>),
     Unstable,
     Gone,
@@ -413,7 +413,7 @@ pub(crate) fn open_regular(path: &Path) -> io::Result<Option<(File, Metadata)>> 
 }
 
 /// Hashes the file as a blob. The read counts only when the size and modification time are the same before and after it, and the path is still a regular file; otherwise it is read again, up to three times in all.
-fn hash_stable(path: &Path) -> io::Result<Reading> {
+pub(crate) fn hash_stable(path: &Path) -> io::Result<Reading> {
     for _ in 0..READ_TRIES {
         let (mut file, before) = match open_regular(path) {
             Ok(Some(opened)) => opened,

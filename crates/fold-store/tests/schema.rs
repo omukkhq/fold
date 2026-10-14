@@ -85,6 +85,7 @@ async fn baseline_creates_every_table_of_the_data_model() {
         "task_labels",
         "tasks",
         "workers",
+        "workspace_conflicts",
         "workspaces",
     ]
     .into_iter()

@@ -26,6 +26,9 @@ pub enum WorkspaceError {
     /// The paths hold content that no object records, so replacing them would lose it.
     #[error("{} paths hold changes no checkpoint records", .0.len())]
     Unrecorded(Vec<String>),
+    /// The paths a sync would overwrite or remove that no longer match the checkpoint taken before it.
+    #[error("{} workspace paths changed since the checkpoint", .0.len())]
+    ChangedDuringSync(Vec<String>),
 }
 
 impl WorkspaceError {
@@ -37,6 +40,7 @@ impl WorkspaceError {
             Self::Tree(error) => error.code(),
             Self::Io(_) => codes::WORKSPACE_IO,
             Self::Unrecorded(_) => codes::UNRECORDED_CHANGES,
+            Self::ChangedDuringSync(_) => codes::WORKSPACE_CHANGED_DURING_SYNC,
         }
     }
 
@@ -52,7 +56,9 @@ impl From<WorkspaceError> for FoldError {
             WorkspaceError::InvalidPath(path) | WorkspaceError::TargetNotEmpty(path) => {
                 folded.with_details([("path", json!(path))])
             }
-            WorkspaceError::Unrecorded(paths) => folded.with_details([("paths", json!(paths))]),
+            WorkspaceError::Unrecorded(paths) | WorkspaceError::ChangedDuringSync(paths) => {
+                folded.with_details([("paths", json!(paths))])
+            }
             _ => folded,
         }
     }
@@ -192,5 +198,12 @@ mod tests {
         );
         let tree = WorkspaceError::from(TreeError::Unsorted);
         assert_eq!(tree.code(), "tree_invalid");
+        let changed = FoldError::from(WorkspaceError::ChangedDuringSync(vec!["a".into()]));
+        assert_eq!(changed.code(), "workspace_changed_during_sync");
+        assert_eq!(changed.details().unwrap()["paths"][0], "a");
+        assert_eq!(
+            changed.message(),
+            "1 workspace paths changed since the checkpoint"
+        );
     }
 }

@@ -28,6 +28,19 @@ impl ConflictKind {
             Self::TypeChange => "type_change",
         }
     }
+
+    /// The inverse of [`ConflictKind::as_str`].
+    pub fn parse(text: &str) -> Option<Self> {
+        [
+            Self::BothModifiedText,
+            Self::BothModifiedBinary,
+            Self::ModifyDelete,
+            Self::AddAdd,
+            Self::TypeChange,
+        ]
+        .into_iter()
+        .find(|kind| kind.as_str() == text)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -890,6 +903,14 @@ mod tests {
                 "type_change"
             ]
         );
+        for name in names {
+            assert_eq!(
+                ConflictKind::parse(name).map(ConflictKind::as_str),
+                Some(name)
+            );
+        }
+        assert_eq!(ConflictKind::parse("Type_change"), None);
+        assert_eq!(ConflictKind::parse(""), None);
     }
 
     /// `d` is also the directory of `d/x` and `d/y`, and `e` and `e/f` are directories of `e/f/g`, so merges over these names can produce file-directory clashes, including ones that a demotion carries more than one level down.

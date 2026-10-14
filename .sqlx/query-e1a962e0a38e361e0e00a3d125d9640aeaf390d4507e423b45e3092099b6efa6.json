@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM workspace_conflicts WHERE workspace_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "e1a962e0a38e361e0e00a3d125d9640aeaf390d4507e423b45e3092099b6efa6"
+}

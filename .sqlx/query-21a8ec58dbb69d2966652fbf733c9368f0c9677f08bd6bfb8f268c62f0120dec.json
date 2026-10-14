@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT c.path AS \"path!: Vec<u8>\", c.kind\n           FROM workspace_conflicts c JOIN workspaces w ON w.id = c.workspace_id\n           WHERE w.number = ?\n           ORDER BY c.path",
+  "describe": {
+    "columns": [
+      {
+        "name": "path!: Vec<u8>",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "workspace_conflicts",
+            "name": "path"
+          }
+        }
+      },
+      {
+        "name": "kind",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workspace_conflicts",
+            "name": "kind"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "21a8ec58dbb69d2966652fbf733c9368f0c9677f08bd6bfb8f268c62f0120dec"
+}

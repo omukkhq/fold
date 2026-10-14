@@ -196,7 +196,7 @@ fn holds_only(dir: &Path, prefix: &RepoPath, removing: &BTreeSet<&RepoPath>) -> 
 }
 
 /// Removes `dir` and the empty directories below it, never following a link. Anything else below makes the removal fail.
-fn remove_empty_dirs(dir: &Path) -> io::Result<()> {
+pub(crate) fn remove_empty_dirs(dir: &Path) -> io::Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         if entry.file_type()?.is_dir() {

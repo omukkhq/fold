@@ -42,3 +42,5 @@ unrecorded_changes
 project_exists
 invalid_host_paths
 invalid_config
+already_current
+workspace_changed_during_sync

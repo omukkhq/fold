@@ -219,13 +219,31 @@ impl Batch {
         Ok(())
     }
 
-    /// A changed directory that a later removal pruned is skipped.
+    /// Removes whatever is at `path`, a directory with everything below it included, never following a link. Unlike [`Batch::remove_entry`] it leaves the parent directory in place. A path that is already absent is not an error.
+    pub fn remove_tree(&mut self, path: &RepoPath) -> Result<(), WorkspaceError> {
+        let dest = resolve(&self.root, path)?;
+        match fs::symlink_metadata(&dest) {
+            Ok(meta) if meta.is_dir() => fs::remove_dir_all(&dest)?,
+            Ok(_) => fs::remove_file(&dest)?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
+        }
+        self.dirs
+            .insert(dest.parent().unwrap_or(&self.root).to_path_buf());
+        Ok(())
+    }
+
+    /// A changed directory that a later removal pruned is skipped, also when a file written later took the place of it or of a parent.
     pub fn finish(mut self) -> Result<Synced, WorkspaceError> {
         self.sync_files()?;
         for dir in &self.dirs {
             match sync_dir(dir) {
                 Ok(()) => self.synced.dirs += 1,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+                    ) => {}
                 Err(error) => return Err(error.into()),
             }
         }
