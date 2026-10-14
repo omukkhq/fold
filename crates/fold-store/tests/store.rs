@@ -6,6 +6,20 @@ use fold_core::codes;
 use fold_store::{Store, StoreError};
 use sqlx::{Connection, Row};
 
+/// The version of every `.sql` file in `migrations/project`, the files sqlx loads, so the test follows the migrations as they are added.
+#[cfg(test)]
+fn project_migration_versions() -> Vec<i64> {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/migrations/project");
+    let mut versions: Vec<i64> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .filter(|name| name.ends_with(".sql"))
+        .map(|name| name.split('_').next().unwrap().parse().unwrap())
+        .collect();
+    versions.sort_unstable();
+    versions
+}
+
 #[tokio::test]
 async fn opens_in_wal_mode_with_full_sync_and_foreign_keys() {
     let (_dir, paths, store) = open().await;
@@ -191,7 +205,7 @@ async fn reopen_does_not_reapply_migrations() {
     let before = applied(store.clone()).await;
     assert_eq!(
         before.iter().map(|row| row.0).collect::<Vec<_>>(),
-        [1, 2, 3]
+        project_migration_versions()
     );
     store.close().await.unwrap();
 

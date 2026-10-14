@@ -10,6 +10,7 @@ pub mod object;
 pub mod readiness;
 pub mod revision;
 pub mod status;
+pub mod task;
 pub mod time;
 pub mod tree;
 
@@ -22,4 +23,6 @@ pub use ids::{
     ProposalId, RevisionId, TaskId, WorkspaceId,
 };
 pub use layout::ProjectPaths;
+pub use status::TaskStatus;
+pub use task::{LabelColor, LabelName, TaskDescription, TaskTitle, TaskValueError};
 pub use time::{TimeError, Timestamp};

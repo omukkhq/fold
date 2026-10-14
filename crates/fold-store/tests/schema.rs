@@ -618,3 +618,85 @@ async fn status_and_flags_are_checked_columns() {
     .await;
     assert_eq!(defaults, 1);
 }
+
+#[tokio::test]
+async fn label_links_go_with_their_task_or_their_label() {
+    let (_dir, store) = seeded().await;
+    for sql in [
+        "INSERT INTO labels (id, name, color, created_at) VALUES (1, 'a', 'sage', 0), (2, 'b', 'teal', 0)",
+        "INSERT INTO task_labels (task_id, label_id) VALUES (1, 1), (1, 2), (2, 1), (2, 2)",
+        "DELETE FROM labels WHERE id = 1",
+    ] {
+        exec(&store, sql).await.unwrap();
+    }
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM task_labels").await, 2);
+    exec(&store, "DELETE FROM tasks WHERE id = 2")
+        .await
+        .unwrap();
+    assert_eq!(
+        count(
+            &store,
+            "SELECT COUNT(*) FROM task_labels WHERE task_id = 1 AND label_id = 2"
+        )
+        .await,
+        1
+    );
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM task_labels").await, 1);
+}
+
+#[tokio::test]
+async fn task_titles_label_names_and_colours_are_checked() {
+    let (_dir, store) = seeded().await;
+    exec(
+        &store,
+        "INSERT INTO labels (name, color, created_at) VALUES ('a', 'sage', 0)",
+    )
+    .await
+    .unwrap();
+    for (sql, rule) in [
+        (
+            "INSERT INTO tasks (number, title, created_by, created_at, updated_at) VALUES (9, '  ', 'x', 0, 0)",
+            "tasks_title_single_line",
+        ),
+        (
+            "UPDATE tasks SET title = 'a' || char(10) || 'b' WHERE id = 1",
+            "tasks_title_single_line",
+        ),
+        (
+            "UPDATE tasks SET title = 'a' || char(13) WHERE id = 1",
+            "tasks_title_single_line",
+        ),
+        (
+            "INSERT INTO labels (name, color, created_at) VALUES ('', 'sage', 0)",
+            "labels_name_single_line",
+        ),
+        (
+            "UPDATE labels SET name = 'x' || char(10) WHERE name = 'a'",
+            "labels_name_single_line",
+        ),
+        (
+            "INSERT INTO labels (name, color, created_at) VALUES ('b', 'green', 0)",
+            "labels_color_values",
+        ),
+        (
+            "UPDATE labels SET color = 'Sage' WHERE name = 'a'",
+            "labels_color_values",
+        ),
+    ] {
+        let message = refused(&store, sql).await.to_string();
+        assert!(message.contains(rule), "{sql}: {message}");
+    }
+    for color in [
+        "sage", "slate", "teal", "ink", "gold", "moss", "plum", "stone",
+    ] {
+        exec(
+            &store,
+            &format!("UPDATE labels SET color = '{color}' WHERE name = 'a'"),
+        )
+        .await
+        .unwrap();
+    }
+    exec(&store, "UPDATE tasks SET title = 'renamed' WHERE id = 1")
+        .await
+        .unwrap();
+}

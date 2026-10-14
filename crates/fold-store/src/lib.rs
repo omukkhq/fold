@@ -4,6 +4,7 @@ pub mod error;
 pub mod events;
 pub mod projects;
 pub mod store;
+pub mod tasks;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 pub mod workspaces;

@@ -6,6 +6,20 @@ use fold_core::Clock;
 use fold_store::StoreError;
 use fold_store::testing::{TestProject, assert_append_only, eventually};
 
+/// The version of every `.sql` file in `migrations/project`, the files sqlx loads, so the test follows the migrations as they are added.
+#[cfg(test)]
+fn project_migration_versions() -> Vec<i64> {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/migrations/project");
+    let mut versions: Vec<i64> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .filter(|name| name.ends_with(".sql"))
+        .map(|name| name.split('_').next().unwrap().parse().unwrap())
+        .collect();
+    versions.sort_unstable();
+    versions
+}
+
 #[cfg(test)]
 async fn insert_agent(project: &TestProject, name: &'static str) -> Result<(), StoreError> {
     project
@@ -34,11 +48,12 @@ async fn new_project_has_a_migrated_database() {
     assert!(project.paths().db().is_file());
     assert!(project.paths().fold_dir().is_dir());
     assert!(!project.paths().objects().exists(), "no object store yet");
-    let versions: Vec<i64> = sqlx::query_scalar("SELECT version FROM _sqlx_migrations")
-        .fetch_all(project.store().read())
-        .await
-        .unwrap();
-    assert_eq!(versions, vec![1, 2, 3]);
+    let versions: Vec<i64> =
+        sqlx::query_scalar("SELECT version FROM _sqlx_migrations ORDER BY version")
+            .fetch_all(project.store().read())
+            .await
+            .unwrap();
+    assert_eq!(versions, project_migration_versions());
     let registry_tables: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'projects'",
     )

@@ -10,11 +10,16 @@ pub fn is_ready(status: TaskStatus, has_unreleased_implementation_claim: bool) -
     status == TaskStatus::Todo && !has_unreleased_implementation_claim
 }
 
-/// How many direct dependents become Todo when `task` reaches Done: those in Backlog whose every other prerequisite is Done. A task missing from `statuses` counts as not Done and not Backlog.
+/// How many direct dependents only `task` holds back: those in Backlog, In Progress or Review whose every other prerequisite is Done. A started dependent counts because an agent already waits on it. A task missing from `statuses` counts as not Done and not started.
 pub fn unblock_count(task: TaskId, dag: &Dag, statuses: &BTreeMap<TaskId, TaskStatus>) -> usize {
     dag.dependents(task)
         .into_iter()
-        .filter(|dependent| statuses.get(dependent) == Some(&TaskStatus::Backlog))
+        .filter(|dependent| {
+            matches!(
+                statuses.get(dependent),
+                Some(TaskStatus::Backlog | TaskStatus::InProgress | TaskStatus::Review)
+            )
+        })
         .filter(|dependent| {
             dag.prerequisites(*dependent)
                 .into_iter()
@@ -97,6 +102,31 @@ mod tests {
         assert_eq!(unblock_count(t(9), &dag, &s), 0);
     }
 
+    #[test]
+    fn unblock_count_counts_started_dependents_held_back_only_by_this_task() {
+        for status in [Backlog, InProgress, Review] {
+            let dag = Dag::from_edges([(t(2), t(1))]);
+            let s = statuses(&[(1, Todo), (2, status)]);
+            assert_eq!(unblock_count(t(1), &dag, &s), 1, "{status:?}");
+        }
+        let dag = Dag::from_edges([(t(2), t(1))]);
+        assert_eq!(
+            unblock_count(t(1), &dag, &statuses(&[(1, Todo), (2, Done)])),
+            0
+        );
+        let dag = Dag::from_edges(
+            [(2, 1), (2, 3), (4, 1), (4, 3), (5, 1), (5, 3)].map(|(a, b)| (t(a), t(b))),
+        );
+        let s = statuses(&[
+            (1, Todo),
+            (3, Todo),
+            (2, Backlog),
+            (4, InProgress),
+            (5, Review),
+        ]);
+        assert_eq!(unblock_count(t(1), &dag, &s), 0);
+    }
+
     fn cand(task: u32, unblock: usize, created: i64) -> Candidate {
         Candidate {
             task: t(task),
@@ -120,6 +150,17 @@ mod tests {
             cand(1, 1, 30),
         ]);
         assert_eq!(order, vec![t(2), t(3), t(4), t(1)]);
+    }
+
+    #[test]
+    fn ready_order_puts_a_task_with_a_started_dependent_first() {
+        // 3 is In Progress and waits only on 2; 1 holds nothing back and is older.
+        let dag = Dag::from_edges([(t(3), t(2))]);
+        let s = statuses(&[(1, Todo), (2, Todo), (3, InProgress)]);
+        let candidates: Vec<Candidate> = [(1, 1), (2, 5)]
+            .map(|(task, created)| cand(task, unblock_count(t(task), &dag, &s), created))
+            .to_vec();
+        assert_eq!(ready_order(&candidates), vec![t(2), t(1)]);
     }
 
     #[test]

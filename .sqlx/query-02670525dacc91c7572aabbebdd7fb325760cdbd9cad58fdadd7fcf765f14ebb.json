@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM task_labels WHERE task_id = (SELECT id FROM tasks WHERE number = ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "02670525dacc91c7572aabbebdd7fb325760cdbd9cad58fdadd7fcf765f14ebb"
+}

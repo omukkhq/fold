@@ -41,6 +41,14 @@ define_codes! {
     WORKER_NOT_FOUND = "worker_not_found",
     REVISION_NOT_FOUND = "revision_not_found",
     HEAD_MOVED = "head_moved",
+    INVALID_TASK_TITLE = "invalid_task_title",
+    INVALID_LABEL_NAME = "invalid_label_name",
+    INVALID_LABEL_COLOR = "invalid_label_color",
+    INVALID_TASK_STATUS = "invalid_task_status",
+    TASK_NOT_FOUND = "task_not_found",
+    TASK_CLOSED = "task_closed",
+    LABEL_NOT_FOUND = "label_not_found",
+    LABEL_EXISTS = "label_exists",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

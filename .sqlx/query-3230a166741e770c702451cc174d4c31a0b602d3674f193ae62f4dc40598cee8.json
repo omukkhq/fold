@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO task_labels (task_id, label_id)\n             SELECT t.id, l.id FROM tasks t, labels l WHERE t.number = ? AND l.name = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "3230a166741e770c702451cc174d4c31a0b602d3674f193ae62f4dc40598cee8"
+}

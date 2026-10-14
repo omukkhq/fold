@@ -28,3 +28,11 @@ agent_already_bound
 worker_not_found
 revision_not_found
 head_moved
+invalid_task_title
+invalid_label_name
+invalid_label_color
+invalid_task_status
+task_not_found
+task_closed
+label_not_found
+label_exists
