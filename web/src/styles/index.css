@@ -111,6 +111,7 @@
 
   --shadow-*: initial;
   --shadow-card: var(--elevation-card);
+  --shadow-dialog: var(--elevation-dialog);
 
   --spacing-*: initial;
   --spacing-0: var(--space-0);
@@ -140,6 +141,7 @@
   --width-*: initial;
   --width-skeleton-s: var(--width-skeleton-s);
   --width-skeleton-l: var(--width-skeleton-l);
+  --width-diff-number: var(--width-diff-number);
 
   --height-*: initial;
   --height-bar: var(--height-bar);

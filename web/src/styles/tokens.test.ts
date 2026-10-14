@@ -89,6 +89,7 @@ const W00_OTHER = [
   "height-bar",
   "width-skeleton-s",
   "width-skeleton-l",
+  "width-diff-number",
   ...[
     0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 16, 18, 20, 22, 24, 28, 32, 40,
   ].map((n) => `space-${String(n)}`),
@@ -136,6 +137,14 @@ describe("token contract", () => {
   it("carries every W00 variable", () => {
     for (const n of W00_COLOURS) expect(light.has(n), n).toBe(true);
     for (const n of W00_OTHER) expect(root.has(n), n).toBe(true);
+  });
+  it("defines the elevations once, outside the theme blocks, as W00 draws them for both themes", () => {
+    expect(root.get("elevation-card")).toBe("0 1px 2px #1a1a1f14");
+    expect(root.get("elevation-dialog")).toBe("0 16px 48px #0a0a0b40");
+    for (const set of [light, dark, auto]) {
+      expect(set.has("elevation-card")).toBe(false);
+      expect(set.has("elevation-dialog")).toBe(false);
+    }
   });
   it("keeps system-dark values equal to the explicit dark values", () => {
     expect(auto).toEqual(dark);

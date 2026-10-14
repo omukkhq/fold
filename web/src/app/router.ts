@@ -2,8 +2,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { createRouter } from "@tanstack/react-router";
 import { routeTree } from "../routeTree.gen";
 import { NotFound } from "./NotFound";
-import { RouteError } from "./RouteError";
-import { RoutePending } from "./RoutePending";
+import { RouteError, RoutePending } from "./routeStates";
 
 export function createAppRouter(queryClient: QueryClient) {
   return createRouter({

@@ -1,3 +1,5 @@
+import { cn } from "../lib/cn";
+import { focusRing } from "../lib/focus";
 import { SunMoon } from "lucide-react";
 import { useTheme } from "../theme/ThemeProvider";
 import { toggledTheme } from "./toggledTheme";
@@ -14,7 +16,10 @@ export function ThemeToggle() {
         ).matches;
         setChoice(toggledTheme(choice, systemDark));
       }}
-      className="flex items-center gap-6 rounded-m px-10 py-7 text-text-muted outline-primary hover:bg-sunken focus-visible:outline-2"
+      className={cn(
+        "flex items-center gap-6 rounded-m px-10 py-7 text-text-muted hover:bg-sunken",
+        focusRing,
+      )}
     >
       <SunMoon size={15} aria-hidden />
     </button>

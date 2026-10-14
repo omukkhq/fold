@@ -34,6 +34,7 @@
   --weight-bold: 700;
 
   --elevation-card: 0 1px 2px #1a1a1f14;
+  --elevation-dialog: 0 16px 48px #0a0a0b40;
 
   --space-0: 0px;
   --space-2: 2px;
@@ -60,6 +61,7 @@
   --height-bar: 52px;
   --width-skeleton-s: 70px;
   --width-skeleton-l: 120px;
+  --width-diff-number: 44px;
 }
 
 :root {

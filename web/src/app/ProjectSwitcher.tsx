@@ -1,10 +1,12 @@
+import { cn } from "../lib/cn";
+import { focusRing } from "../lib/focus";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter, useRouterState } from "@tanstack/react-router";
 import { ChevronDown, FolderGit2 } from "lucide-react";
 import { projectsQuery } from "../api/queries";
 import { switchProjectPath } from "../routes/nav";
-import { menuContent, menuItem } from "./menuStyles";
+import { menuContent, menuItem } from "../components/overlay/menuStyles";
 
 export function ProjectSwitcher({ slug }: { slug: string }) {
   const router = useRouter();
@@ -15,7 +17,10 @@ export function ProjectSwitcher({ slug }: { slug: string }) {
     <Menu.Root>
       <Menu.Trigger
         aria-label={`Project ${slug}, switch project`}
-        className="flex items-center gap-6 rounded-m px-8 py-5 outline-primary hover:bg-sunken focus-visible:outline-2"
+        className={cn(
+          "flex items-center gap-6 rounded-m px-8 py-5 hover:bg-sunken",
+          focusRing,
+        )}
       >
         <FolderGit2 size={15} className="text-text-muted" aria-hidden />
         <span className="text-card font-semibold text-text">{slug}</span>

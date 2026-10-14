@@ -1,3 +1,5 @@
+import { cn } from "../lib/cn";
+import { focusRing } from "../lib/focus";
 import { HrefLink } from "./HrefLink";
 
 export function NotFound() {
@@ -9,7 +11,10 @@ export function NotFound() {
       </p>
       <HrefLink
         href="/projects"
-        className="text-body font-medium text-primary-text outline-primary hover:underline focus-visible:outline-2"
+        className={cn(
+          "text-body font-medium text-primary-text hover:underline",
+          focusRing,
+        )}
       >
         Back to projects
       </HrefLink>
