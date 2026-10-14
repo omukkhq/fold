@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 2c9d55dd6ca26cd0b469f8af37443ee1b92834a81b5473edb882b82cae71470f # shrinks to b = [None, None, None, None, None, Some((Symlink, [0, 1, 2]))], o = [None, None, None, None, None, Some((Executable, []))], t = [None, None, None, None, None, Some((File, [0, 1, 2]))]
+cc ffc5c09b2529e75be5c2b1a093819de02f5ca89b933aee4f21b063c7e3385918 # shrinks to ours_ops = [Delete], theirs_ops = [], len = 1

@@ -19,6 +19,9 @@ define_codes! {
     INVALID_HASH = "invalid_hash",
     TREE_INVALID = "tree_invalid",
     REVISION_INVALID = "revision_invalid",
+    OBJECT_MISSING = "object_missing",
+    OBJECT_CORRUPT = "object_corrupt",
+    OBJECT_IO = "object_io",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

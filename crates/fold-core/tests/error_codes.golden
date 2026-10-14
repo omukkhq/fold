@@ -6,3 +6,6 @@ already_claimed
 invalid_hash
 tree_invalid
 revision_invalid
+object_missing
+object_corrupt
+object_io
