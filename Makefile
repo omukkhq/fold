@@ -69,6 +69,8 @@ test-fast: ## Run the Rust tests without the acceptance tests and failpoint test
 test-web: ## Run the web tests
 	cd web && bun run test
 
+# The instrumented build lives in the worktree so parallel coverage runs in several worktrees do not rebuild each other's test binaries; ordinary builds keep the shared target directory.
+coverage: export CARGO_LLVM_COV_TARGET_DIR := $(CURDIR)/target/llvm-cov-target
 coverage: ## Run every Rust test and fail under 85% line coverage
 	cargo llvm-cov nextest --workspace --all-features --cargo-profile ci --ignore-filename-regex '/tests/' --fail-under-lines 85
 
@@ -118,4 +120,4 @@ clean: clean-keep-cargo ## Delete build output and dev projects
 	cargo clean
 
 clean-keep-cargo: ## Delete build output and dev projects, but keep the cargo target directory
-	rm -rf dist .dev target/dev web/dist web/coverage
+	rm -rf dist .dev target/dev web/dist web/coverage target/llvm-cov-target

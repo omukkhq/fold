@@ -45,7 +45,7 @@ Before declaring Rust work done, run `make check-rust`; for web work, `make chec
 
 ## Rust
 
-1. **No `unsafe` without a `// SAFETY:` comment** that explains why the invariants hold. The workspace lints warn on `unsafe_code` and `clippy::undocumented_unsafe_blocks` is denied.
+1. **No `unsafe` without a `// SAFETY:` comment** that explains why the invariants hold. `unsafe_code` is allowed and `clippy::undocumented_unsafe_blocks` is denied, so the comment is what lets an `unsafe` block pass.
 2. **No `unwrap`, `expect`, `panic!`, `todo!`, `dbg!` or `println!` outside tests.** clippy denies them. `fold-cli` alone writes to stdout, through its output helpers.
 3. **Suppress a lint only with `#[expect(lint, reason = "...")]`.** Never `#[allow]`, never a crate-wide relaxation.
 4. **Library errors are `thiserror` enums; `FoldError` carries a stable `code` string.** Never change a shipped code. `anyhow` only in `fold-cli`'s `main`.
