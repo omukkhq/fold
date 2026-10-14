@@ -5,8 +5,8 @@ pub mod common;
 use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, SystemTime};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::{Duration, Instant, SystemTime};
 
 use fold_core::object::{ObjectHash, ObjectKind};
 use fold_core::tree::{EntryKind, Tree, flatten};
@@ -263,17 +263,23 @@ fn an_unstable_file_keeps_its_base_entry_and_adds_a_warning() {
         .unwrap();
     write(&fx.root, "steady", b"edited");
     let stop = AtomicBool::new(false);
+    let ticks = AtomicU64::new(0);
     let path = fx.root.join("moving");
     let next = std::thread::scope(|scope| {
         scope.spawn(|| {
             let file = fs::OpenOptions::new().write(true).open(&path).unwrap();
-            let mut tick = 0u64;
             while !stop.load(Ordering::Relaxed) {
-                tick += 1;
+                let tick = ticks.fetch_add(1, Ordering::Relaxed) + 1;
                 file.set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000 + tick))
                     .unwrap();
             }
         });
+        // On a loaded host the writer can start after every read is done, and then the file looks stable.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while ticks.load(Ordering::Relaxed) == 0 {
+            assert!(Instant::now() < deadline, "the writer thread never ran");
+            std::thread::yield_now();
+        }
         let next = fx.snap_max(Some(first.tree), 64 << 20);
         stop.store(true, Ordering::Relaxed);
         next

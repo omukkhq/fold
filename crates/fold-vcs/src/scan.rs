@@ -33,6 +33,17 @@ pub enum SkipReason {
     Unreadable,
 }
 
+impl SkipReason {
+    /// The name the command line prints next to a skipped path.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::TooLarge => "too_large",
+            Self::Special => "special",
+            Self::Unreadable => "unreadable",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Skipped {
     pub path: RepoPath,

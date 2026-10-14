@@ -5,7 +5,7 @@ use std::time::Duration;
 use clap::Args;
 use fold_core::{FoldError, HostPaths, codes};
 use fold_daemon::SystemClock;
-use fold_daemon::services::projects::{ProjectError, init_project};
+use fold_daemon::services::projects::{ProjectError, init_project_from};
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
@@ -23,6 +23,9 @@ pub struct InitArgs {
     /// The project name; defaults to the directory name
     #[arg(long)]
     name: Option<String>,
+    /// A directory whose files become the first revision, honouring its .gitignore and .foldignore files; the directory is only read
+    #[arg(long, value_name = "PATH")]
+    from: Option<PathBuf>,
     /// Unix socket of the running daemon; overrides daemon.toml (default $XDG_RUNTIME_DIR/fold/fold.sock)
     #[arg(long)]
     socket: Option<PathBuf>,
@@ -67,10 +70,11 @@ pub fn run(args: &InitArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), Ini
         .enable_all()
         .build()
         .map_err(InitError::Runtime)?;
-    let project = runtime.block_on(init_project(
+    let project = runtime.block_on(init_project_from(
         &host,
         &args.dir,
         args.name.as_deref(),
+        args.from.as_deref(),
         &SystemClock,
     ))?;
     let root = project.root.display();
@@ -78,6 +82,17 @@ pub fn run(args: &InitArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), Ini
         out,
         &format!("initialised project {} at {root}", project.slug),
     )?;
+    let imported = &project.imported;
+    output::line(
+        out,
+        &output::revision_summary(&project.revision, imported.files, imported.bytes),
+    )?;
+    for skipped in &imported.skipped {
+        output::line(
+            out,
+            &output::skipped_line(&skipped.path, skipped.reason.as_str()),
+        )?;
+    }
     let note = match socket {
         Ok(Some(socket)) => match runtime.block_on(register(&socket, &project.slug)) {
             Registration::NoDaemon => None,
@@ -209,8 +224,11 @@ mod tests {
             "Scratch",
             "--socket",
             "/tmp/f.sock",
+            "--from",
+            "../src",
         ])
         .unwrap();
+        assert_eq!(parsed.args.from.as_deref(), Some(Path::new("../src")));
         assert_eq!(parsed.args.dir, Path::new("~/scratch"));
         assert_eq!(parsed.args.name.as_deref(), Some("Scratch"));
         assert_eq!(
@@ -218,7 +236,7 @@ mod tests {
             Some(Path::new("/tmp/f.sock"))
         );
         let bare = Wrapper::try_parse_from(["fold", "dir"]).unwrap();
-        assert!(bare.args.name.is_none() && bare.args.socket.is_none());
+        assert!(bare.args.name.is_none() && bare.args.socket.is_none() && bare.args.from.is_none());
         assert!(Wrapper::try_parse_from(["fold"]).is_err());
     }
 
@@ -274,6 +292,7 @@ mod tests {
         let args = InitArgs {
             dir: dir.path().join("p"),
             name: None,
+            from: None,
             socket: None,
         };
         let mut out = Vec::new();

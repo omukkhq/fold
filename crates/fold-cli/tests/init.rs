@@ -140,7 +140,7 @@ fn init_without_a_daemon_skips_the_call() {
     assert_eq!(
         stdout(&output),
         format!(
-            "initialised project scratch at {}\n",
+            "initialised project scratch at {}\nr1: 0 files, 0 bytes\n",
             project.canonicalize().unwrap().display()
         )
     );
@@ -214,5 +214,4 @@ fn name_sets_the_slug_and_no_ignore_files_are_written() {
     assert!(stdout(&output).starts_with("initialised project big-shop at "));
     assert!(!project.join(".gitignore").exists());
     assert!(!project.join(".foldignore").exists());
-    assert!(!project.join("main").exists());
 }

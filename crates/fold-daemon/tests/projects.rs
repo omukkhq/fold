@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use fold_core::{Clock, HostPaths, ManualClock, ProjectConfig, ProjectPaths};
-use fold_daemon::services::projects::{ProjectError, init_project, load_config};
+use fold_daemon::services::projects::{ProjectError, init_project, init_project_from, load_config};
 use fold_store::projects;
 use fold_store::{Store, StoreError};
 use tempfile::TempDir;
@@ -64,14 +64,16 @@ async fn init_creates_the_layout_and_registers_the_project() {
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     entries.sort();
-    assert_eq!(entries, [".fold"]);
+    assert_eq!(entries, [".fold", "main"]);
     let mut inside: Vec<_> = std::fs::read_dir(paths.fold_dir())
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     inside.retain(|name| !name.starts_with("fold.db-"));
     inside.sort();
-    assert_eq!(inside, ["config.toml", "fold.db"]);
+    assert_eq!(inside, ["config.toml", "fold.db", "objects"]);
+    assert_eq!(project.revision.to_string(), "r1");
+    assert_eq!(project.imported.files, 0);
 
     let registry = host.registry().await;
     let rows = projects::list_projects(registry.read()).await.unwrap();
@@ -230,4 +232,155 @@ async fn a_file_in_place_of_the_directory_is_an_io_error() {
         .unwrap_err();
     assert_eq!(code(&error), Some("workspace_io"));
     assert!(Path::new(&file).is_file());
+}
+
+#[tokio::test]
+async fn init_from_records_the_source_as_r1_and_fills_main() {
+    let host = Host::new();
+    let source = host.root("source");
+    std::fs::create_dir_all(source.join("src")).unwrap();
+    std::fs::write(source.join("src/lib.rs"), "pub fn x() {}\n").unwrap();
+    let root = host.root("app");
+    let project = init_project_from(&host.paths, &root, None, Some(&source), &host.clock)
+        .await
+        .unwrap();
+    assert_eq!(project.revision.to_string(), "r1");
+    assert_eq!(project.imported.files, 1);
+    assert_eq!(project.imported.bytes, 14);
+    let main = root.join("main/src/lib.rs");
+    assert_eq!(std::fs::read(&main).unwrap(), b"pub fn x() {}\n");
+    assert!(std::fs::metadata(&main).unwrap().permissions().readonly());
+}
+
+#[tokio::test]
+async fn a_main_dir_that_init_did_not_make_survives_a_failed_init() {
+    let host = Host::new();
+    let root = host.root("app");
+    std::fs::create_dir_all(root.join("main")).unwrap();
+    std::fs::write(root.join("main/notes.txt"), "mine").unwrap();
+    let error = init_project(&host.paths, &root, None, &host.clock)
+        .await
+        .unwrap_err();
+    assert_eq!(code(&error), Some("target_not_empty"));
+    assert!(!root.join(".fold").exists());
+    assert_eq!(
+        std::fs::read_to_string(root.join("main/notes.txt")).unwrap(),
+        "mine"
+    );
+    let registry = host.registry().await;
+    assert!(
+        projects::list_projects(registry.read())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    registry.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_source_that_is_not_a_directory_is_an_invalid_request() {
+    let host = Host::new();
+    let file = host.root("file.txt");
+    std::fs::write(&file, "x").unwrap();
+    let root = host.root("app");
+    for source in [file, host.root("absent")] {
+        let error = init_project_from(&host.paths, &root, None, Some(&source), &host.clock)
+            .await
+            .unwrap_err();
+        assert_eq!(code(&error), Some("invalid_request"));
+        assert!(!root.exists());
+    }
+}
+
+#[cfg(test)]
+async fn refuse_registrations(host: &Host, refuse: bool) {
+    let sql = if refuse {
+        "CREATE TRIGGER refuse BEFORE INSERT ON projects BEGIN SELECT RAISE(ABORT, 'refused'); END"
+    } else {
+        "DROP TRIGGER refuse"
+    };
+    let registry = host.registry().await;
+    registry
+        .write(async |tx| {
+            sqlx::query(sql).execute(tx.conn()).await?;
+            Ok::<_, StoreError>(())
+        })
+        .await
+        .unwrap();
+    registry.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_failure_after_main_is_filled_puts_main_back_and_a_rerun_succeeds() {
+    let host = Host::new();
+    let source = host.root("source");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(source.join("a.txt"), "a").unwrap();
+    let made = host.root("made");
+    let kept = host.root("kept");
+    std::fs::create_dir_all(kept.join("main")).unwrap();
+    refuse_registrations(&host, true).await;
+    for root in [&made, &kept] {
+        let error = init_project_from(&host.paths, root, None, Some(&source), &host.clock)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ProjectError::Store(_)), "{error:?}");
+        assert!(!root.join(".fold").exists());
+    }
+    assert!(!made.join("main").exists());
+    assert_eq!(std::fs::read_dir(kept.join("main")).unwrap().count(), 0);
+
+    refuse_registrations(&host, false).await;
+    for root in [&made, &kept] {
+        init_project_from(&host.paths, root, None, Some(&source), &host.clock)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(root.join("main/a.txt")).unwrap(), b"a");
+    }
+}
+
+#[tokio::test]
+async fn a_project_directory_at_or_below_the_source_is_refused_before_anything_is_created() {
+    let host = Host::new();
+    let source = host.root("source");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(source.join("a.txt"), "a").unwrap();
+    let inside = source.join("absent/../app/deeper");
+    for root in [source.clone(), inside, source.join("./app")] {
+        let error = init_project_from(&host.paths, &root, None, Some(&source), &host.clock)
+            .await
+            .unwrap_err();
+        assert_eq!(code(&error), Some("invalid_request"), "{root:?}");
+    }
+    let entries: Vec<_> = std::fs::read_dir(&source)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(entries, ["a.txt"]);
+
+    let beside = host.root("absent/../beside");
+    init_project_from(&host.paths, &beside, None, Some(&source), &host.clock)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_symlink_or_a_file_in_place_of_main_is_refused() {
+    let host = Host::new();
+    let elsewhere = host.root("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let linked = host.root("linked");
+    std::fs::create_dir_all(&linked).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, linked.join("main")).unwrap();
+    let file = host.root("file");
+    std::fs::create_dir_all(&file).unwrap();
+    std::fs::write(file.join("main"), "x").unwrap();
+    for root in [&linked, &file] {
+        let error = init_project(&host.paths, root, None, &host.clock)
+            .await
+            .unwrap_err();
+        assert_eq!(code(&error), Some("target_not_empty"));
+        assert!(!root.join(".fold").exists());
+    }
+    assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
 }

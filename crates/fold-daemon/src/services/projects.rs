@@ -1,14 +1,23 @@
 use std::collections::BTreeSet;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
+use fold_core::tree::FlatTree;
 use fold_core::{
-    CONFIG_TEMPLATE, Clock, FoldError, HostPaths, ProjectConfig, ProjectPaths, choose_slug, codes,
-    slugify,
+    CONFIG_TEMPLATE, Clock, FoldError, HostPaths, ProjectConfig, ProjectPaths, RevisionId,
+    Timestamp, choose_slug, codes, slugify,
 };
 use fold_store::projects::{self, ProjectRow};
+use fold_store::workspaces::{create_initial_revision, initial_revision};
 use fold_store::{Store, StoreError};
+use fold_vcs::ignore::IgnoreRules;
+use fold_vcs::import::{ImportOptions, ImportResult, import_dir};
+use fold_vcs::materialise::{MaterialiseOptions, materialise};
+use fold_vcs::objects::ObjectStore;
+use fold_vcs::paths::WorkspaceError;
+use fold_vcs::platform::Capabilities;
+use fold_vcs::revision_store::{write_initial_tree, write_revision};
 use thiserror::Error;
 
 use crate::daemon::DaemonState;
@@ -39,15 +48,44 @@ pub struct InitializedProject {
     pub name: String,
     /// The canonical project directory.
     pub root: PathBuf,
+    /// `r1`, which `main` names.
+    pub revision: RevisionId,
+    /// What `r1` holds: the empty tree when nothing was imported.
+    pub imported: ImportResult,
 }
 
-/// Creates `.fold/` in `root`, migrates the project database, writes the commented config and registers the project under a free slug. Init is a host command, so it has no actor and appends no event. A failure after `.fold/` exists removes the directory this call made.
+/// An import source that passed the checks: an existing directory, canonical, with a UTF-8 path.
+struct Source {
+    path: PathBuf,
+    text: String,
+}
+
+/// [`init_project_from`] with no import source, so `r1` is the empty tree.
 pub async fn init_project(
     host: &HostPaths,
     root: &Path,
     name: Option<&str>,
     clock: &dyn Clock,
 ) -> Result<InitializedProject, ProjectError> {
+    init_project_from(host, root, name, None, clock).await
+}
+
+/// Creates `.fold/` in `root`, migrates the project database, writes the commented config, records `r1` from `source` (or the empty tree) as `main`, fills `main/` read-only and only then registers the project under a free slug. Init is a host command, so it has no actor and appends no event. A failure after `.fold/` exists removes the directory this call made and puts `main/` back as it was: absent or empty, the only states init accepts. `source` is only read, so a project directory at or below it is refused.
+pub async fn init_project_from(
+    host: &HostPaths,
+    root: &Path,
+    name: Option<&str>,
+    source: Option<&Path>,
+    clock: &dyn Clock,
+) -> Result<InitializedProject, ProjectError> {
+    let source = match source {
+        Some(source) => {
+            let source = check_source(source).await?;
+            check_apart(&source, root).await?;
+            Some(source)
+        }
+        None => None,
+    };
     let root = prepare_root(root).await?;
     let root_text = root
         .to_str()
@@ -66,7 +104,8 @@ pub async fn init_project(
             .unwrap_or_default(),
     };
     let registry = Store::open_registry(&host.registry_db()).await?;
-    let outcome = create_and_register(&registry, &root, &root_text, name, clock).await;
+    let outcome =
+        create_and_register(&registry, &root, &root_text, name, source.as_ref(), clock).await;
     // The outcome is what the caller needs; a failed close only delays the WAL checkpoint.
     let _ = registry.close().await;
     outcome
@@ -77,6 +116,7 @@ async fn create_and_register(
     root: &Path,
     root_text: &str,
     name: String,
+    source: Option<&Source>,
     clock: &dyn Clock,
 ) -> Result<InitializedProject, ProjectError> {
     if projects::find_by_root(registry.read(), root_text)
@@ -87,10 +127,17 @@ async fn create_and_register(
     }
     let paths = ProjectPaths::new(root);
     create_fold_dir(&paths).await?;
-    match populate_and_register(registry, &paths, root_text, name, clock).await {
+    let main = match check_main(&paths).await {
+        Ok(main) => main,
+        Err(error) => {
+            remove_created(&paths, None).await;
+            return Err(error);
+        }
+    };
+    match populate_and_register(registry, &paths, root_text, name, source, clock).await {
         Ok(project) => Ok(project),
         Err(error) => {
-            remove_fold_dir(&paths).await;
+            remove_created(&paths, Some(main)).await;
             Err(error)
         }
     }
@@ -101,13 +148,20 @@ async fn populate_and_register(
     paths: &ProjectPaths,
     root_text: &str,
     name: String,
+    source: Option<&Source>,
     clock: &dyn Clock,
 ) -> Result<InitializedProject, ProjectError> {
-    let project_store = Store::open_project(paths).await?;
-    let closed = project_store.close().await;
-    write_config(paths).await?;
-    closed?;
     let now = clock.now();
+    let project_store = Store::open_project(paths).await?;
+    let first = async {
+        write_config(paths).await?;
+        let config = load_config(paths).await?;
+        create_first_revision(&project_store, paths, source, config.max_file_bytes, now).await
+    }
+    .await;
+    let closed = project_store.close().await;
+    let (revision, imported) = first?;
+    closed?;
     let base = slugify(&name);
     let row = registry
         .write(async |tx| -> Result<ProjectRow, ProjectError> {
@@ -128,7 +182,135 @@ async fn populate_and_register(
         slug: row.slug,
         name: row.name,
         root: PathBuf::from(row.root),
+        revision,
+        imported,
     })
+}
+
+/// Objects first, then the one transaction that inserts `r1` and creates `main`, then `main/`.
+async fn create_first_revision(
+    store: &Store,
+    paths: &ProjectPaths,
+    source: Option<&Source>,
+    max_file_bytes: u64,
+    now: Timestamp,
+) -> Result<(RevisionId, ImportResult), ProjectError> {
+    let fold_dir = paths.fold_dir();
+    let source_path = source.map(|source| source.path.clone());
+    let (objects, caps, imported, stored) = blocking(move || {
+        let objects = ObjectStore::open(&fold_dir).map_err(FoldError::from)?;
+        let caps = Capabilities::probe(&fold_dir).map_err(|error| io_error(&error))?;
+        let imported = match source_path {
+            Some(source) => {
+                let opts = ImportOptions {
+                    max_file_bytes,
+                    caps,
+                };
+                import_dir(&objects, &source, &IgnoreRules::new(&source), &opts)?
+            }
+            None => ImportResult {
+                tree: write_initial_tree(&objects, FlatTree::new())?,
+                files: 0,
+                bytes: 0,
+                skipped: Vec::new(),
+            },
+        };
+        let revision = initial_revision(imported.tree, now)?;
+        let stored = write_revision(&objects, &revision).map_err(FoldError::from)?;
+        Ok((objects, caps, imported, stored))
+    })
+    .await?;
+    let import_source = source.map(|source| source.text.as_str());
+    let row = create_initial_revision(store, &stored, import_source).await?;
+    let main = paths.main_dir();
+    let tree = imported.tree;
+    blocking(move || {
+        let opts = MaterialiseOptions {
+            read_only: true,
+            caps,
+        };
+        materialise(&objects, &tree, &main, &opts).map_err(FoldError::from)?;
+        Ok(())
+    })
+    .await?;
+    Ok((row.number, imported))
+}
+
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, ProjectError> + Send + 'static,
+) -> Result<T, ProjectError> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .unwrap_or_else(|error| Err(io_error(&io::Error::other(error))))
+}
+
+/// Init writes `.fold/` and `main/` into the project directory, so one at or below the source would change the source.
+async fn check_apart(source: &Source, root: &Path) -> Result<(), ProjectError> {
+    let given = root.to_owned();
+    let planned = tokio::task::spawn_blocking(move || planned_path(&given)).await;
+    let planned = flatten(planned).map_err(|error| io_error(&error))?;
+    if planned.starts_with(&source.path) {
+        return Err(FoldError::new(
+            codes::INVALID_REQUEST,
+            format!(
+                "the project directory {} is inside the import source {}",
+                root.display(),
+                source.path.display()
+            ),
+        )
+        .with_hint("create the project in a directory outside the source")
+        .into());
+    }
+    Ok(())
+}
+
+/// The canonical path `root` has once `create_dir_all` makes it: its deepest existing part canonicalised, then the rest with `.` and `..` applied in order, as the kernel applies them once the parents exist.
+fn planned_path(root: &Path) -> io::Result<PathBuf> {
+    let absolute = std::path::absolute(root)?;
+    let parts: Vec<Component<'_>> = absolute.components().collect();
+    for split in (1..=parts.len()).rev() {
+        let existing: PathBuf = parts[..split].iter().collect();
+        let mut planned = match std::fs::canonicalize(&existing) {
+            Ok(found) => found,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        for part in &parts[split..] {
+            match part {
+                Component::ParentDir => {
+                    planned.pop();
+                }
+                Component::Normal(name) => planned.push(name),
+                Component::CurDir | Component::RootDir | Component::Prefix(_) => {}
+            }
+        }
+        return Ok(planned);
+    }
+    Err(io::ErrorKind::NotFound.into())
+}
+
+async fn check_source(source: &Path) -> Result<Source, ProjectError> {
+    let given = source.to_owned();
+    let found = tokio::task::spawn_blocking(move || {
+        let path = std::fs::canonicalize(&given).ok()?;
+        std::fs::metadata(&path).ok()?.is_dir().then_some(path)
+    })
+    .await
+    .ok()
+    .flatten();
+    let refused = |reason: &str| {
+        FoldError::new(
+            codes::INVALID_REQUEST,
+            format!("the import source {} {reason}", source.display()),
+        )
+        .with_hint("pass an existing directory to --from")
+    };
+    let path = found.ok_or_else(|| refused("is not an existing directory"))?;
+    let text = path
+        .to_str()
+        .ok_or_else(|| refused("is not a valid UTF-8 path"))?
+        .to_owned();
+    Ok(Source { path, text })
 }
 
 /// The settings of a project, or the defaults when `.fold/config.toml` does not exist.
@@ -171,10 +353,63 @@ async fn write_config(paths: &ProjectPaths) -> Result<(), ProjectError> {
     flatten(wrote).map_err(|error| io_error(&error))
 }
 
-async fn remove_fold_dir(paths: &ProjectPaths) {
-    let dir = paths.fold_dir();
-    // The original error is what the caller needs; a directory that stays behind makes the next init refuse with `project_exists`.
-    let _ = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(dir)).await;
+/// What `main/` was before this init filled it.
+#[derive(Debug, Clone, Copy)]
+enum MainDir {
+    Absent,
+    Empty,
+}
+
+/// `main/` must be absent or an empty directory. Checked before any import, so a large source is not read only to be refused; a symlink in its place is refused too, so nothing is written through it.
+async fn check_main(paths: &ProjectPaths) -> Result<MainDir, ProjectError> {
+    let main = paths.main_dir();
+    let found = tokio::task::spawn_blocking(move || -> io::Result<Option<MainDir>> {
+        match std::fs::symlink_metadata(&main) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Some(MainDir::Absent)),
+            Err(error) => Err(error),
+            Ok(meta) if meta.is_dir() && std::fs::read_dir(&main)?.next().is_none() => {
+                Ok(Some(MainDir::Empty))
+            }
+            Ok(_) => Ok(None),
+        }
+    })
+    .await;
+    match flatten(found) {
+        Ok(Some(main)) => Ok(main),
+        Ok(None) => {
+            let main = paths.main_dir().to_string_lossy().into_owned();
+            Err(FoldError::from(WorkspaceError::TargetNotEmpty(main)).into())
+        }
+        Err(error) => Err(io_error(&error)),
+    }
+}
+
+/// `main/` is the read-only view of `r1`, never a workspace: no agent wrote to it and no checkpoint refers to it, so the files this failed run put there are the only ones removed.
+async fn remove_created(paths: &ProjectPaths, main: Option<MainDir>) {
+    let fold = paths.fold_dir();
+    let main_dir = paths.main_dir();
+    // The original error is what the caller needs; a `.fold/` that stays behind makes the next init refuse with `project_exists`.
+    let _ = tokio::task::spawn_blocking(move || {
+        let _ = std::fs::remove_dir_all(fold);
+        let _ = match main {
+            None => Ok(()),
+            Some(MainDir::Absent) => std::fs::remove_dir_all(main_dir),
+            Some(MainDir::Empty) => empty_dir(&main_dir),
+        };
+    })
+    .await;
+}
+
+fn empty_dir(dir: &Path) -> io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            std::fs::remove_dir_all(entry.path())?;
+        } else {
+            std::fs::remove_file(entry.path())?;
+        }
+    }
+    Ok(())
 }
 
 fn flatten<T>(joined: Result<io::Result<T>, tokio::task::JoinError>) -> io::Result<T> {
