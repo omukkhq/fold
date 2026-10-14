@@ -7,3 +7,4 @@ pub mod platform;
 pub mod revision_store;
 pub mod scan;
 pub mod snapshot;
+pub mod watch;

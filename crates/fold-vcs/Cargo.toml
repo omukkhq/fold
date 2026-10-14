@@ -9,8 +9,10 @@ publish.workspace = true
 blake3 = "1.8.7"
 fold-core = { version = "0.1.0", path = "../fold-core" }
 ignore = "0.4.33"
+notify = "8.2.0"
 serde_json = "1.0.154"
 thiserror = "2.0.21"
+tracing = "0.1.44"
 zstd = "0.14.2"
 
 [lints]
