@@ -15,4 +15,11 @@ export const keys = {
   agents: (slug: string) => [slug, "agents"] as const,
   messages: (slug: string) => [slug, "messages"] as const,
   repository: (slug: string) => [slug, "repository"] as const,
+  workspaces: (slug: string) => [slug, "workspaces"] as const,
+  workspace: (slug: string, workspace: number) =>
+    [slug, "workspace", workspace] as const,
+  /** Live working state, written only by the event stream. */
+  workspaceLive: (slug: string, workspace: number) =>
+    [slug, "workspace-live", workspace] as const,
+  workspaceLiveAll: (slug: string) => [slug, "workspace-live"] as const,
 };

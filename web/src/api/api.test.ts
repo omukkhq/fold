@@ -128,6 +128,10 @@ describe("keys", () => {
       keys.agents("s"),
       keys.messages("s"),
       keys.repository("s"),
+      keys.workspaces("s"),
+      keys.workspace("s", 3),
+      keys.workspaceLive("s", 3),
+      keys.workspaceLiveAll("s"),
     ];
     for (const key of projectKeys) {
       expect(key[0]).toBe("s");

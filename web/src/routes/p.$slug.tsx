@@ -2,6 +2,7 @@ import { createFileRoute, notFound } from "@tanstack/react-router";
 import { hasErrorCode } from "../api/errors";
 import { projectQuery } from "../api/queries";
 import { Shell } from "../app/Shell";
+import { LiveProvider } from "../live/LiveProvider";
 import { parseSlug } from "./params";
 
 export const Route = createFileRoute("/p/$slug")({
@@ -28,5 +29,9 @@ export const Route = createFileRoute("/p/$slug")({
 
 function ProjectLayout() {
   const { slug } = Route.useParams();
-  return <Shell slug={slug} />;
+  return (
+    <LiveProvider slug={slug}>
+      <Shell slug={slug} />
+    </LiveProvider>
+  );
 }
