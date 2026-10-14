@@ -581,8 +581,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "fold-core",
  "fold-daemon",
+ "fold-store",
  "serde",
+ "serde_json",
+ "tempfile",
  "thiserror",
  "tokio",
  "toml",
@@ -601,6 +605,7 @@ dependencies = [
  "similar",
  "thiserror",
  "time",
+ "toml",
 ]
 
 [[package]]

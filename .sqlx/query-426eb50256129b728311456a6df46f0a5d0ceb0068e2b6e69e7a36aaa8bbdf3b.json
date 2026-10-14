@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT slug FROM projects",
+  "describe": {
+    "columns": [
+      {
+        "name": "slug",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "projects",
+            "name": "slug"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "426eb50256129b728311456a6df46f0a5d0ceb0068e2b6e69e7a36aaa8bbdf3b"
+}

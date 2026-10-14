@@ -1,0 +1,16 @@
+# How many minutes a claim lasts without a heartbeat before it expires.
+# lease_minutes = 30
+# How many milliseconds the watcher waits after a file change before it scans.
+# debounce_ms = 500
+# How many seconds pass between full workspace rescans.
+# rescan_seconds = 60
+# How many quiet seconds pass before a workspace gets an automatic checkpoint.
+# auto_checkpoint_quiet_seconds = 120
+# How many automatic checkpoints each workspace keeps.
+# auto_checkpoints_kept = 20
+# The largest file size in bytes that fold tracks.
+# max_file_bytes = 52428800
+# How many minutes without activity before a claimed task counts as stalled.
+# stall_minutes = 5
+# How many days a closed workspace directory stays before garbage collection.
+# closed_workspace_days = 14

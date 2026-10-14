@@ -16,6 +16,8 @@ static REGISTRY_MIGRATIONS: Migrator = sqlx::migrate!("./migrations/registry");
 
 const READ_CONNECTIONS: u32 = 4;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+const BUSY_RETRY: Duration = Duration::from_millis(10);
+const SQLITE_BUSY: i32 = 5;
 
 /// One SQLite database: a single writer connection and a pool of read-only connections. Clones share both pools.
 #[derive(Debug, Clone)]
@@ -51,13 +53,10 @@ impl Store {
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
-        let writer = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(connect_options(path).create_if_missing(true))
-            .await?;
-        if let Err(error) = migrations.run(&writer).await {
+        let writer = connect_writer(path).await?;
+        if let Err(error) = migrate(&writer, migrations).await {
             writer.close().await;
-            return Err(error.into());
+            return Err(error);
         }
         let readers = SqlitePoolOptions::new()
             .max_connections(READ_CONNECTIONS)
@@ -107,6 +106,41 @@ impl Store {
         checkpoint?;
         Ok(())
     }
+}
+
+/// Switching a new file to WAL takes the exclusive lock without waiting on the busy timeout, so a second process that opens the same new file at that moment is refused with `SQLITE_BUSY`. It tries again until the busy timeout has passed.
+async fn connect_writer(path: &Path) -> Result<SqlitePool, StoreError> {
+    let deadline = tokio::time::Instant::now() + BUSY_TIMEOUT;
+    loop {
+        let connected = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(connect_options(path).create_if_missing(true))
+            .await;
+        match connected {
+            Err(error) if is_busy(&error) && tokio::time::Instant::now() < deadline => {
+                tokio::time::sleep(BUSY_RETRY).await;
+            }
+            other => return Ok(other?),
+        }
+    }
+}
+
+fn is_busy(error: &sqlx::Error) -> bool {
+    let code = match error {
+        sqlx::Error::Database(error) => error.code(),
+        _ => None,
+    };
+    // Extended codes keep the primary code in the low byte.
+    code.and_then(|code| code.parse::<i32>().ok())
+        .is_some_and(|code| code & 0xff == SQLITE_BUSY)
+}
+
+/// SQLite gives sqlx no migration lock, so two processes that open a new file at once would both apply the first migration. Holding the write lock for the whole run makes the second one wait and then find every migration applied.
+async fn migrate(writer: &SqlitePool, migrations: &Migrator) -> Result<(), StoreError> {
+    let mut tx = writer.begin_with("BEGIN IMMEDIATE").await?;
+    migrations.run_direct(None, &mut *tx, false).await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 fn connect_options(path: &Path) -> SqliteConnectOptions {

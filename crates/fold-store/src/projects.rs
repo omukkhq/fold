@@ -32,6 +32,24 @@ pub async fn find_project(pool: &SqlitePool, slug: &str) -> Result<Option<Projec
     .await?)
 }
 
+/// The project registered at `root`, which must be the canonical path `insert_project` stored.
+pub async fn find_by_root(pool: &SqlitePool, root: &str) -> Result<Option<ProjectRow>, StoreError> {
+    Ok(sqlx::query_as!(
+        ProjectRow,
+        "SELECT slug, name, root FROM projects WHERE root = ?",
+        root
+    )
+    .fetch_optional(pool)
+    .await?)
+}
+
+/// Every registered slug, read inside the write that is about to choose a new one.
+pub async fn slugs(tx: &mut WriteTx) -> Result<Vec<String>, StoreError> {
+    Ok(sqlx::query_scalar!("SELECT slug FROM projects")
+        .fetch_all(tx.conn())
+        .await?)
+}
+
 /// Registers a project. A repeated slug or root fails with a unique violation.
 pub async fn insert_project(
     tx: &mut WriteTx,

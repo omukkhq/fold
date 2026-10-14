@@ -215,6 +215,27 @@ async fn reopen_does_not_reapply_migrations() {
 }
 
 #[tokio::test]
+async fn opens_of_a_new_file_at_once_apply_each_migration_once() {
+    for _ in 0..8 {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("registry.db");
+        let (first, second, third) = tokio::join!(
+            Store::open_registry(&path),
+            Store::open_registry(&path),
+            Store::open_registry(&path),
+        );
+        let stores = [first.unwrap(), second.unwrap(), third.unwrap()];
+        assert_eq!(
+            count(&stores[0], "SELECT COUNT(*) FROM _sqlx_migrations").await,
+            1
+        );
+        for store in stores {
+            store.close().await.unwrap();
+        }
+    }
+}
+
+#[tokio::test]
 async fn registry_opens_with_its_own_migrations() {
     let dir = tempfile::tempdir().unwrap();
     let registry = Store::open_registry(&dir.path().join("nested").join("registry.db"))

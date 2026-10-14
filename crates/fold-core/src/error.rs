@@ -52,6 +52,9 @@ define_codes! {
     DEPENDENCY_EXISTS = "dependency_exists",
     DEPENDENCY_NOT_FOUND = "dependency_not_found",
     UNRECORDED_CHANGES = "unrecorded_changes",
+    PROJECT_EXISTS = "project_exists",
+    INVALID_HOST_PATHS = "invalid_host_paths",
+    INVALID_CONFIG = "invalid_config",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

@@ -12,6 +12,7 @@ serde_json = "1.0.154"
 similar = "3.2.0"
 thiserror = "2.0.21"
 time = { version = "0.3.55", features = ["formatting", "parsing"] }
+toml = "1.1.8"
 
 [lints]
 workspace = true

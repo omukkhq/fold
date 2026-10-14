@@ -41,6 +41,14 @@ async fn projects_are_registered_listed_by_slug_and_found() {
         projects::find_project(store.read(), "none").await.unwrap(),
         None
     );
+    assert_eq!(
+        projects::find_by_root(store.read(), "/a").await.unwrap(),
+        Some(row("alpha", "/a"))
+    );
+    assert_eq!(
+        projects::find_by_root(store.read(), "/none").await.unwrap(),
+        None
+    );
 }
 
 #[tokio::test]

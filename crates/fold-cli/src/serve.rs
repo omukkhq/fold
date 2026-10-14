@@ -52,22 +52,22 @@ impl ServeError {
 /// `$XDG_CONFIG_HOME/fold/daemon.toml`.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct FileConfig {
+pub(crate) struct FileConfig {
     listen: Option<SocketAddr>,
-    socket: Option<PathBuf>,
+    pub(crate) socket: Option<PathBuf>,
 }
 
 /// The directories the daemon uses, read from the environment once so the rules below stay pure.
 #[derive(Debug, Default, Clone)]
-struct Dirs {
-    home: Option<PathBuf>,
-    config_home: Option<PathBuf>,
-    data_home: Option<PathBuf>,
-    runtime_dir: Option<PathBuf>,
+pub(crate) struct Dirs {
+    pub(crate) home: Option<PathBuf>,
+    pub(crate) config_home: Option<PathBuf>,
+    pub(crate) data_home: Option<PathBuf>,
+    pub(crate) runtime_dir: Option<PathBuf>,
 }
 
 impl Dirs {
-    fn from_env() -> Self {
+    pub(crate) fn from_env() -> Self {
         let var = |name: &str| {
             std::env::var_os(name)
                 .map(PathBuf::from)
@@ -81,7 +81,7 @@ impl Dirs {
         }
     }
 
-    fn config_file(&self) -> Result<PathBuf, ServeError> {
+    pub(crate) fn config_file(&self) -> Result<PathBuf, ServeError> {
         let base = self.base(&self.config_home, ".config")?;
         Ok(base.join("fold").join("daemon.toml"))
     }
@@ -121,7 +121,7 @@ fn build_config(
     })
 }
 
-fn read_file_config(path: &Path) -> Result<FileConfig, ServeError> {
+pub(crate) fn read_file_config(path: &Path) -> Result<FileConfig, ServeError> {
     match std::fs::read_to_string(path) {
         Ok(text) => parse_file_config(&text).map_err(|source| ServeError::InvalidConfig {
             path: path.to_owned(),

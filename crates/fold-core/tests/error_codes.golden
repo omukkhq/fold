@@ -39,3 +39,6 @@ label_exists
 dependency_exists
 dependency_not_found
 unrecorded_changes
+project_exists
+invalid_host_paths
+invalid_config

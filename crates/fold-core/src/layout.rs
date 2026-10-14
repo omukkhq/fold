@@ -1,5 +1,39 @@
 use std::path::{Path, PathBuf};
 
+use crate::error::{FoldError, codes};
+
+/// Where the host-wide files live: `<data home>/fold/`. The data home is `XDG_DATA_HOME`, else `<home>/.local/share`. An empty or relative value counts as unset, as the XDG base directory rules require.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostPaths {
+    fold_dir: PathBuf,
+}
+
+impl HostPaths {
+    pub fn new(xdg_data_home: Option<&str>, home: Option<&str>) -> Result<Self, FoldError> {
+        let data_home = match (absolute(xdg_data_home), absolute(home)) {
+            (Some(data), _) => PathBuf::from(data),
+            (None, Some(home)) => Path::new(home).join(".local").join("share"),
+            (None, None) => {
+                return Err(FoldError::new(
+                    codes::INVALID_HOST_PATHS,
+                    "neither XDG_DATA_HOME nor HOME is set to an absolute path",
+                ));
+            }
+        };
+        Ok(Self {
+            fold_dir: data_home.join("fold"),
+        })
+    }
+
+    pub fn registry_db(&self) -> PathBuf {
+        self.fold_dir.join("registry.db")
+    }
+}
+
+fn absolute(value: Option<&str>) -> Option<&str> {
+    value.filter(|text| Path::new(text).is_absolute())
+}
+
 /// Where the files of one project live. Every method only joins names onto the root; nothing here touches the disk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectPaths {
@@ -49,6 +83,25 @@ impl ProjectPaths {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_paths_fall_back_to_home() {
+        let xdg = HostPaths::new(Some("/data"), Some("/home/ana")).unwrap();
+        assert_eq!(xdg.registry_db(), Path::new("/data/fold/registry.db"));
+        let home = HostPaths::new(None, Some("/home/ana")).unwrap();
+        assert_eq!(
+            home.registry_db(),
+            Path::new("/home/ana/.local/share/fold/registry.db")
+        );
+        let empty = HostPaths::new(Some(""), Some("/home/ana")).unwrap();
+        assert_eq!(empty, home);
+        let error = HostPaths::new(None, None).unwrap_err();
+        assert_eq!(error.code(), "invalid_host_paths");
+        assert!(HostPaths::new(Some(""), Some("")).is_err());
+        let relative = HostPaths::new(Some("data"), Some("/home/ana")).unwrap();
+        assert_eq!(relative, home);
+        assert!(HostPaths::new(None, Some("home/ana")).is_err());
+    }
 
     #[test]
     fn every_path_hangs_off_the_root() {
