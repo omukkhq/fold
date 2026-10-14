@@ -17,7 +17,7 @@ INSERT INTO proposals (id, number, task_id, author_worker_id, title, created_at,
 INSERT INTO proposal_versions (id, proposal_id, version, base_revision_id, tree_hash, head_changeset_id, created_at) VALUES (1, 1, 1, 1, 't2', 1, 0);
 INSERT INTO reviews (id, version_id, reviewer_worker_id, verdict, body, created_at) VALUES (1, 1, 1, 'comment', 'b', 0);
 INSERT INTO review_comments (id, number, version_id, review_id, author_worker_id, body, created_at) VALUES (1, 1, 1, 1, 1, 'b', 0);
-INSERT INTO integrations (id, kind, proposal_id, version_id, result, actor, created_at) VALUES (1, 'proposal', 1, 1, 'succeeded', 'fold', 0);
+INSERT INTO integrations (id, number, kind, proposal_id, version_id, result, actor, created_at) VALUES (1, 1, 'proposal', 1, 1, 'succeeded', 'fold', 0);
 INSERT INTO completions (task_id, kind, integration_id, created_at) VALUES (1, 'integration', 1, 0);
 INSERT INTO messages (id, number, thread_id, sender_kind, body, created_at) VALUES (1, 1, 1, 'fold', 'b', 0);
 INSERT INTO events (type, actor, data, created_at) VALUES ('task.created', 'fold', '{}', 0);
@@ -441,7 +441,7 @@ async fn integration_columns_match_their_kind() {
     let (_dir, store) = seeded().await;
     let integration = |kind: &str, proposal: &str, version: &str, remote: &str| {
         format!(
-            "INSERT INTO integrations (kind, proposal_id, version_id, remote_commit, result, actor, created_at) VALUES ('{kind}', {proposal}, {version}, {remote}, 'succeeded', 'fold', 0)"
+            "INSERT INTO integrations (number, kind, proposal_id, version_id, remote_commit, result, actor, created_at) VALUES ((SELECT MAX(number) + 1 FROM integrations), '{kind}', {proposal}, {version}, {remote}, 'succeeded', 'fold', 0)"
         )
     };
     for sql in [
@@ -512,7 +512,7 @@ async fn import_source_is_only_on_the_first_revision() {
     exec(&store, &revision(2, "NULL")).await.unwrap();
     let duplicate_hash = refused(
         &store,
-        "INSERT INTO revisions (number, hash, tree_hash, created_at) VALUES (3, 'h2', 't', 0)",
+        "INSERT INTO revisions (number, hash, tree_hash, parent_id, created_at) VALUES (3, 'h2', 't', 1, 0)",
     )
     .await;
     assert_eq!(

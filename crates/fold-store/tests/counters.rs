@@ -70,3 +70,26 @@ async fn a_counter_below_one_is_refused() {
         Some("counters_next_positive")
     );
 }
+
+#[tokio::test]
+async fn integration_numbers_come_from_their_own_counter() {
+    let (_dir, _paths, store) = open().await;
+    let numbers = store
+        .write(async |tx| {
+            let first = counters::allocate(tx, IdKind::Integration).await?;
+            let revision = counters::allocate(tx, IdKind::Revision).await?;
+            let second = counters::allocate(tx, IdKind::Integration).await?;
+            Ok::<_, StoreError>((first, revision, second))
+        })
+        .await
+        .unwrap();
+    assert_eq!(numbers, (1, 1, 2));
+    assert_eq!(
+        count(
+            &store,
+            "SELECT COUNT(*) FROM counters WHERE kind = 'integration'"
+        )
+        .await,
+        1
+    );
+}

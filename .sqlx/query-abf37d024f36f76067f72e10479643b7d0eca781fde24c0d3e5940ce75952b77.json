@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT number AS \"number!: i64\" FROM revisions WHERE hash = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "revisions",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "abf37d024f36f76067f72e10479643b7d0eca781fde24c0d3e5940ce75952b77"
+}

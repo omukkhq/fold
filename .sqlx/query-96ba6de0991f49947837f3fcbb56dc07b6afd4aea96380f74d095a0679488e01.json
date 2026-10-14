@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT tag FROM agent_tags WHERE agent_id = ? ORDER BY tag",
+  "describe": {
+    "columns": [
+      {
+        "name": "tag",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agent_tags",
+            "name": "tag"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "96ba6de0991f49947837f3fcbb56dc07b6afd4aea96380f74d095a0679488e01"
+}

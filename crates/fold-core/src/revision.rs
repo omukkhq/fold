@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 use crate::error::{FoldError, codes};
-use crate::ids::RevisionId;
+use crate::ids::{IntegrationId, RevisionId};
 use crate::object::{ObjectHash, ObjectKind, hash_object, varint};
 use crate::time::Timestamp;
 
@@ -11,9 +11,9 @@ pub enum RevisionError {
     Truncated,
     #[error("revision has a flag byte other than 0 or 1")]
     BadFlag,
-    #[error("revision has a number or integration id that is not a valid varint")]
+    #[error("revision has a number or integration number that is not a valid varint")]
     BadVarint,
-    #[error("revision number is zero or larger than 4294967295")]
+    #[error("revision number or integration number is zero or larger than 4294967295")]
     BadNumber,
     #[error("revision creation time is out of range")]
     BadTime,
@@ -39,8 +39,8 @@ pub struct Revision {
     /// `None` only for `r1`.
     pub parent: Option<ObjectHash>,
     pub number: RevisionId,
-    /// `None` only for `r1`.
-    pub integration: Option<u64>,
+    /// The number of the integration that made this revision; never a row id. `None` for `r1`.
+    pub integration: Option<IntegrationId>,
     pub created_at: Timestamp,
 }
 
@@ -57,9 +57,9 @@ impl Revision {
         }
         varint::encode(u64::from(self.number.number()), &mut out);
         match self.integration {
-            Some(id) => {
+            Some(integration) => {
                 out.push(1);
-                varint::encode(id, &mut out);
+                varint::encode(u64::from(integration.number()), &mut out);
             }
             None => out.push(0),
         }
@@ -81,7 +81,12 @@ impl Revision {
             .ok_or(RevisionError::BadNumber)?;
         let integration = match reader.byte()? {
             0 => None,
-            1 => Some(reader.varint()?),
+            1 => Some(
+                u32::try_from(reader.varint()?)
+                    .ok()
+                    .and_then(IntegrationId::from_number)
+                    .ok_or(RevisionError::BadNumber)?,
+            ),
             _ => return Err(RevisionError::BadFlag),
         };
         let millis = i64::from_be_bytes(reader.take::<8>()?);
@@ -100,6 +105,31 @@ impl Revision {
 
     pub fn hash(&self) -> ObjectHash {
         hash_object(ObjectKind::Revision, &self.encode())
+    }
+}
+
+/// A revision whose object the object store holds. The revision row functions take this instead of a bare hash, so a row can only be inserted for a stored object; the object store builds it after writing or finding the object.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StoredRevision {
+    revision: Revision,
+    hash: ObjectHash,
+}
+
+impl StoredRevision {
+    /// Called by the object store once it holds the object of `revision`.
+    pub fn confirmed(revision: Revision) -> Self {
+        Self {
+            hash: revision.hash(),
+            revision,
+        }
+    }
+
+    pub fn revision(&self) -> &Revision {
+        &self.revision
+    }
+
+    pub fn hash(&self) -> ObjectHash {
+        self.hash
     }
 }
 
@@ -156,7 +186,7 @@ mod tests {
             tree: hash(1),
             parent: Some(hash(2)),
             number: number(300),
-            integration: Some(5),
+            integration: IntegrationId::from_number(5),
             created_at: Timestamp::from_millis(1_700_000_000_123).unwrap(),
         }
     }
@@ -247,6 +277,21 @@ mod tests {
         .encode();
         big.splice(33..35, [0x80, 0x80, 0x80, 0x80, 0x10]);
         assert_eq!(Revision::decode(&big), Err(RevisionError::BadNumber));
+        // The integration number is the single varint byte before the 8 time bytes.
+        let integrated = fixed().encode();
+        let at = integrated.len() - 9;
+        let mut zero_integration = integrated.clone();
+        zero_integration[at] = 0;
+        assert_eq!(
+            Revision::decode(&zero_integration),
+            Err(RevisionError::BadNumber)
+        );
+        let mut big_integration = integrated.clone();
+        big_integration.splice(at..=at, [0x80, 0x80, 0x80, 0x80, 0x10]);
+        assert_eq!(
+            Revision::decode(&big_integration),
+            Err(RevisionError::BadNumber)
+        );
         let mut late = Revision {
             parent: None,
             integration: None,
@@ -268,14 +313,14 @@ mod tests {
             tree in any::<[u8; 32]>(),
             parent in proptest::option::of(any::<[u8; 32]>()),
             number in 1u32..,
-            integration in proptest::option::of(any::<u64>()),
+            integration in proptest::option::of(1u32..),
             millis in -62_167_219_200_000i64..=253_402_300_799_999,
         ) {
             let revision = Revision {
                 tree: ObjectHash::from_bytes(tree),
                 parent: parent.map(ObjectHash::from_bytes),
                 number: RevisionId::from_number(number).unwrap(),
-                integration,
+                integration: integration.and_then(IntegrationId::from_number),
                 created_at: Timestamp::from_millis(millis).unwrap(),
             };
             prop_assert_eq!(Revision::decode(&revision.encode()), Ok(revision));

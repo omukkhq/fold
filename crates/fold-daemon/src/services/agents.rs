@@ -1,0 +1,334 @@
+use std::sync::Arc;
+
+use fold_core::events::types;
+use fold_core::{
+    AgentName, Clock, EventActor, EventError, FoldError, NewEvent, Tag, TaskId, Timestamp,
+    WorkerName, codes,
+};
+use fold_store::agents::{self, AgentRow, WorkerRow};
+use fold_store::{Store, StoreError, WriteTx};
+use serde_json::json;
+use thiserror::Error;
+
+use crate::services::events::{EventBuffer, EventBus};
+
+#[derive(Debug, Error)]
+pub enum AgentError {
+    #[error(transparent)]
+    Fold(#[from] FoldError),
+    #[error(transparent)]
+    Store(#[from] StoreError),
+    #[error(transparent)]
+    Event(#[from] EventError),
+}
+
+/// What one adapter connection knows about itself. `session_id` is a database row id and stays inside the daemon.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionContext {
+    pub session_id: i64,
+    pub agent: Option<AgentName>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Registered {
+    pub agent: AgentName,
+    pub tags: Vec<Tag>,
+    pub main_worker: WorkerName,
+    /// True when this call created the agent.
+    pub created: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisteredWorker {
+    pub worker: WorkerRow,
+    /// True when this call created the worker.
+    pub created: bool,
+}
+
+/// Commands and lookups for agents, sessions and workers. A command reads the time from `clock`, appends its events in its write transaction and publishes them after the commit.
+#[derive(Clone)]
+pub struct AgentService {
+    store: Store,
+    bus: EventBus,
+    clock: Arc<dyn Clock>,
+}
+
+impl std::fmt::Debug for AgentService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentService").finish_non_exhaustive()
+    }
+}
+
+impl AgentService {
+    pub fn new(store: Store, bus: EventBus, clock: Arc<dyn Clock>) -> Self {
+        Self { store, bus, clock }
+    }
+
+    /// Inserts the session row when an adapter connects. The session has no agent until `register_agent` binds it, and no event is stored until then.
+    pub async fn start_session(&self, pid: u32) -> Result<SessionContext, AgentError> {
+        let now = self.clock.now();
+        let session_id = self
+            .store
+            .write(async |tx| agents::insert_session(tx.conn(), pid, now).await)
+            .await?;
+        Ok(SessionContext {
+            session_id,
+            agent: None,
+        })
+    }
+
+    /// Creates the agent and its main worker on first use, merges `tags` and binds the session. A repeat call changes nothing except the tags it adds.
+    pub async fn register_agent(
+        &self,
+        ctx: &mut SessionContext,
+        name: &AgentName,
+        tags: &[Tag],
+    ) -> Result<Registered, AgentError> {
+        if tags.iter().any(Tag::is_integrator) {
+            return Err(FoldError::new(
+                codes::HUMAN_REQUIRED,
+                "the integrator tag can only be granted by a human",
+            )
+            .with_hint("ask a human to grant the integrator tag")
+            .into());
+        }
+        let session_id = ctx.session_id;
+        let now = self.clock.now();
+        let mut buffer = EventBuffer::new();
+        let registered = self
+            .store
+            .write(async |tx| register_agent_in(tx, &mut buffer, session_id, name, tags, now).await)
+            .await?;
+        self.bus.publish(buffer);
+        ctx.agent = Some(name.clone());
+        Ok(registered)
+    }
+
+    /// Creates the child worker `<parent>/<segment>` of the caller's agent. `parent` defaults to the main worker. A repeat call returns the existing worker.
+    pub async fn register_worker(
+        &self,
+        ctx: &SessionContext,
+        segment: &str,
+        parent: Option<&WorkerName>,
+    ) -> Result<RegisteredWorker, AgentError> {
+        let agent = self.require_agent(ctx).await?;
+        let now = self.clock.now();
+        let mut buffer = EventBuffer::new();
+        let registered = self
+            .store
+            .write(async |tx| {
+                let parent = match parent {
+                    Some(name) => agents::find_worker(tx.conn(), agent.id, name).await?,
+                    None => agents::main_worker(tx.conn(), agent.id).await?,
+                }
+                .ok_or_else(worker_not_found)?;
+                let name = parent.name.child(segment).map_err(FoldError::from)?;
+                if let Some(existing) = agents::find_worker(tx.conn(), agent.id, &name).await? {
+                    return Ok::<_, AgentError>(RegisteredWorker {
+                        worker: existing,
+                        created: false,
+                    });
+                }
+                let id =
+                    agents::insert_worker(tx.conn(), agent.id, &name, Some(parent.id), now).await?;
+                let event =
+                    NewEvent::new(types::WORKER_REGISTERED, actor(&agent.name)?)?.data(json!({
+                        "agent": agent.name.as_str(),
+                        "worker": name.as_str(),
+                        "parent": parent.name.as_str(),
+                    }))?;
+                buffer.append(tx, &event, now).await?;
+                Ok(RegisteredWorker {
+                    worker: WorkerRow {
+                        id,
+                        agent_id: agent.id,
+                        name,
+                        parent_id: Some(parent.id),
+                        last_call_at: None,
+                        activity: None,
+                    },
+                    created: true,
+                })
+            })
+            .await?;
+        self.bus.publish(buffer);
+        Ok(registered)
+    }
+
+    /// The agent the session is bound to, or `agent_not_registered`.
+    pub async fn require_agent(&self, ctx: &SessionContext) -> Result<AgentRow, AgentError> {
+        let missing = || {
+            FoldError::new(
+                codes::AGENT_NOT_REGISTERED,
+                "this session has no registered agent",
+            )
+            .with_hint("call register_agent")
+        };
+        let name = ctx.agent.as_ref().ok_or_else(missing)?;
+        let agent = agents::find_agent(self.store.read(), name)
+            .await?
+            .ok_or_else(missing)?;
+        Ok(agent)
+    }
+
+    /// The worker named by `as_worker`, or the agent's main worker when it is absent. A worker of another agent is reported as `worker_not_found`, so its existence is never revealed.
+    pub async fn resolve_worker(
+        &self,
+        ctx: &SessionContext,
+        as_worker: Option<&WorkerName>,
+    ) -> Result<WorkerRow, AgentError> {
+        let agent = self.require_agent(ctx).await?;
+        let worker = match as_worker {
+            Some(name) => agents::find_worker(self.store.read(), agent.id, name).await?,
+            None => agents::main_worker(self.store.read(), agent.id).await?,
+        };
+        Ok(worker.ok_or_else(worker_not_found)?)
+    }
+
+    /// Stamps the session and the worker with the time of a tool call. The worker's activity is the tool name, followed by the task id when there is one.
+    pub async fn record_call(
+        &self,
+        ctx: &SessionContext,
+        worker: &WorkerRow,
+        tool: &str,
+        task: Option<TaskId>,
+    ) -> Result<(), AgentError> {
+        let now = self.clock.now();
+        let activity = match task {
+            Some(task) => format!("{tool} {task}"),
+            None => tool.to_owned(),
+        };
+        self.store
+            .write(async |tx| {
+                agents::touch_session(tx.conn(), ctx.session_id, now).await?;
+                agents::touch_worker(tx.conn(), worker.id, now, &activity).await
+            })
+            .await?;
+        Ok(())
+    }
+
+    /// Ends the session. A second call does nothing. `session.ended` is stored only for a session that was bound.
+    pub async fn end_session(&self, ctx: &SessionContext) -> Result<(), AgentError> {
+        let now = self.clock.now();
+        let mut buffer = EventBuffer::new();
+        self.store
+            .write(async |tx| {
+                let Some(session) = agents::find_session(tx.conn(), ctx.session_id).await? else {
+                    return Ok::<_, AgentError>(());
+                };
+                if !agents::end_session(tx.conn(), ctx.session_id, now).await? {
+                    return Ok(());
+                }
+                let Some(agent_id) = session.agent_id else {
+                    return Ok(());
+                };
+                let name = agents::agent_name(tx.conn(), agent_id)
+                    .await?
+                    .ok_or(StoreError::Corrupt("sessions.agent_id"))?;
+                let event = NewEvent::new(types::SESSION_ENDED, actor(&name)?)?
+                    .data(json!({"agent": name.as_str()}))?;
+                buffer.append(tx, &event, now).await?;
+                Ok(())
+            })
+            .await?;
+        self.bus.publish(buffer);
+        Ok(())
+    }
+
+    /// Ends every session still open at daemon start, because no adapter survives a restart. Returns how many sessions it ended.
+    pub async fn close_orphan_sessions(&self) -> Result<u64, AgentError> {
+        self.close_open_sessions("daemon_restart").await
+    }
+
+    /// Ends every session still open when the daemon stops. The `session.ended` events carry `reason = "daemon_stop"`.
+    pub async fn close_sessions_at_shutdown(&self) -> Result<u64, AgentError> {
+        self.close_open_sessions("daemon_stop").await
+    }
+
+    async fn close_open_sessions(&self, reason: &str) -> Result<u64, AgentError> {
+        let now = self.clock.now();
+        let mut buffer = EventBuffer::new();
+        let ended = self
+            .store
+            .write(async |tx| {
+                let bound = agents::open_bound_sessions(tx.conn()).await?;
+                let ended = agents::end_open_sessions(tx.conn(), now).await?;
+                for session in bound {
+                    let event = NewEvent::new(types::SESSION_ENDED, EventActor::fold())?
+                        .data(json!({"agent": session.agent.as_str(), "reason": reason}))?;
+                    buffer.append(tx, &event, now).await?;
+                }
+                Ok::<_, AgentError>(ended)
+            })
+            .await?;
+        self.bus.publish(buffer);
+        Ok(ended)
+    }
+}
+
+async fn register_agent_in(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    session_id: i64,
+    name: &AgentName,
+    tags: &[Tag],
+    now: Timestamp,
+) -> Result<Registered, AgentError> {
+    let session = agents::find_session(tx.conn(), session_id)
+        .await?
+        .ok_or(StoreError::Invalid("the session does not exist"))?;
+    if session.ended_at.is_some() {
+        return Err(StoreError::Invalid("the session has ended").into());
+    }
+    let existing = agents::find_agent(tx.conn(), name).await?;
+    if let Some(bound) = session.agent_id
+        && existing.as_ref().map(|agent| agent.id) != Some(bound)
+    {
+        return Err(FoldError::new(
+            codes::AGENT_ALREADY_BOUND,
+            "this session is already bound to another agent",
+        )
+        .with_hint("start a new session to act as another agent")
+        .into());
+    }
+    let actor = actor(name)?;
+    let (agent_id, created) = match existing {
+        Some(agent) => (agent.id, false),
+        None => {
+            let id = agents::insert_agent(tx.conn(), name, now).await?;
+            let main = WorkerName::main(name);
+            agents::insert_worker(tx.conn(), id, &main, None, now).await?;
+            let registered = NewEvent::new(types::AGENT_REGISTERED, actor.clone())?
+                .data(json!({"agent": name.as_str()}))?;
+            buffer.append(tx, &registered, now).await?;
+            let worker = NewEvent::new(types::WORKER_REGISTERED, actor.clone())?
+                .data(json!({"agent": name.as_str(), "worker": main.as_str()}))?;
+            buffer.append(tx, &worker, now).await?;
+            (id, true)
+        }
+    };
+    for tag in tags {
+        agents::add_tag(tx.conn(), agent_id, tag, now).await?;
+    }
+    if session.agent_id.is_none() {
+        agents::bind_session(tx.conn(), session_id, agent_id).await?;
+        let started = NewEvent::new(types::SESSION_STARTED, actor)?
+            .data(json!({"agent": name.as_str(), "pid": session.pid}))?;
+        buffer.append(tx, &started, now).await?;
+    }
+    Ok(Registered {
+        agent: name.clone(),
+        tags: agents::tags(tx.conn(), agent_id).await?,
+        main_worker: WorkerName::main(name),
+        created,
+    })
+}
+
+fn actor(agent: &AgentName) -> Result<EventActor, EventError> {
+    EventActor::parse(agent.as_str())
+}
+
+fn worker_not_found() -> FoldError {
+    FoldError::new(codes::WORKER_NOT_FOUND, "the worker does not exist")
+        .with_hint("call register_worker")
+}

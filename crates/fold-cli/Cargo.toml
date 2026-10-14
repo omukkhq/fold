@@ -13,6 +13,12 @@ path = "src/main.rs"
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
 fold-daemon = { version = "0.1.0", path = "../fold-daemon" }
+serde = { version = "1.0.229", features = ["derive"] }
+thiserror = "2.0.21"
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros"] }
+toml = "1.1.8"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["json", "env-filter"] }
 
 [lints]
 workspace = true

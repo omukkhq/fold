@@ -1,24 +1,37 @@
 mod output;
+mod serve;
 
 use std::ffi::OsString;
 use std::io::{self, Write};
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "fold", version)]
-struct Cli {}
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Run the daemon in the foreground
+    Serve(serve::ServeArgs),
+}
 
 /// clap prints a parse outcome, including `--help` and `--version`, and exits with its own code; a failed write is a runtime error with exit code 1.
 #[derive(Debug)]
 enum Failure {
     Parse(clap::Error),
     Write(io::Error),
+    Serve(serve::ServeError),
 }
 
 fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result<(), Failure> {
-    Cli::try_parse_from(args).map_err(Failure::Parse)?;
-    output::line(out, &output::version_line()).map_err(Failure::Write)
+    match Cli::try_parse_from(args).map_err(Failure::Parse)?.command {
+        Some(Command::Serve(args)) => serve::run(&args).map_err(Failure::Serve),
+        None => output::line(out, &output::version_line()).map_err(Failure::Write),
+    }
 }
 
 fn main() -> anyhow::Result<()> {
@@ -26,6 +39,10 @@ fn main() -> anyhow::Result<()> {
         Ok(()) => Ok(()),
         Err(Failure::Parse(error)) => error.exit(),
         Err(Failure::Write(error)) => Err(error.into()),
+        Err(Failure::Serve(error)) => Err(match error.code() {
+            Some(code) => anyhow::anyhow!("{code}: {error}"),
+            None => error.into(),
+        }),
     }
 }
 

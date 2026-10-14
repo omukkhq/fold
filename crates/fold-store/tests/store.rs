@@ -189,8 +189,10 @@ async fn reopen_does_not_reapply_migrations() {
         .collect::<Vec<_>>()
     };
     let before = applied(store.clone()).await;
-    assert_eq!(before.len(), 1);
-    assert_eq!(before[0].0, 1);
+    assert_eq!(
+        before.iter().map(|row| row.0).collect::<Vec<_>>(),
+        [1, 2, 3]
+    );
     store.close().await.unwrap();
 
     let reopened = Store::open_project(&paths).await.unwrap();

@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help setup build fmt dev-web fmt-check-rust fmt-check-web fmt-check check-inner-allow clippy test test-fast test-web coverage check-rust check-web check acceptance clean clean-keep-cargo
+.PHONY: help setup build fmt dev dev-daemon dev-web fmt-check-rust fmt-check-web fmt-check check-inner-allow clippy test test-fast test-web coverage check-rust check-web check acceptance clean clean-keep-cargo
 
 help: ## List the targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-18s %s\n", $$1, $$2}'
@@ -22,6 +22,17 @@ fmt: ## Format the Rust code, fix lint findings and format the web sources
 	cargo fmt --all
 	cd web && bun run lint --fix
 	cd web && bun run format
+
+DEV_DIR := $(CURDIR)/target/dev
+
+dev: ## Run the daemon on :7420 and the Vite dev server on :5173; Ctrl-C stops both
+	$(MAKE) -j2 dev-daemon dev-web
+
+dev-daemon: ## Run the daemon on 127.0.0.1:7420, rebuilt on every change; its data lives under target/dev/
+	mkdir -p $(DEV_DIR)/data $(DEV_DIR)/config $(DEV_DIR)/runtime
+	chmod 700 $(DEV_DIR)/runtime
+	XDG_DATA_HOME=$(DEV_DIR)/data XDG_CONFIG_HOME=$(DEV_DIR)/config XDG_RUNTIME_DIR=$(DEV_DIR)/runtime \
+		cargo watch -w crates -w Cargo.toml -w Cargo.lock -x 'run -p fold-cli -- serve --listen 127.0.0.1:7420'
 
 dev-web: ## Run the Vite dev server on :5173
 	cd web && bun run dev
@@ -107,4 +118,4 @@ clean: clean-keep-cargo ## Delete build output and dev projects
 	cargo clean
 
 clean-keep-cargo: ## Delete build output and dev projects, but keep the cargo target directory
-	rm -rf dist .dev web/dist web/coverage
+	rm -rf dist .dev target/dev web/dist web/coverage

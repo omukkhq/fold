@@ -38,7 +38,7 @@ async fn new_project_has_a_migrated_database() {
         .fetch_all(project.store().read())
         .await
         .unwrap();
-    assert_eq!(versions, vec![1]);
+    assert_eq!(versions, vec![1, 2, 3]);
     let registry_tables: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'projects'",
     )

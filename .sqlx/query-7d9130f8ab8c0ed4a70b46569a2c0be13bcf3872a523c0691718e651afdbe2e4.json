@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE sessions SET agent_id = ? WHERE id = ? AND agent_id IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "7d9130f8ab8c0ed4a70b46569a2c0be13bcf3872a523c0691718e651afdbe2e4"
+}

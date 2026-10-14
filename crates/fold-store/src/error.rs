@@ -1,4 +1,4 @@
-use fold_core::codes;
+use fold_core::{RevisionId, codes};
 use sqlx::migrate::MigrateError;
 use thiserror::Error;
 
@@ -17,6 +17,10 @@ pub enum StoreError {
     /// A stored value no longer parses. The message names the column, never the value.
     #[error("stored data is corrupt: {0}")]
     Corrupt(&'static str),
+    #[error("revision {0} does not exist")]
+    RevisionNotFound(RevisionId),
+    #[error("main is no longer at {expected}")]
+    HeadMoved { expected: RevisionId },
     #[error("i/o error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -37,6 +41,8 @@ impl StoreError {
     pub fn code(&self) -> Option<&'static str> {
         match self {
             StoreError::SchemaTooNew { .. } => Some(codes::SCHEMA_TOO_NEW),
+            StoreError::RevisionNotFound(_) => Some(codes::REVISION_NOT_FOUND),
+            StoreError::HeadMoved { .. } => Some(codes::HEAD_MOVED),
             _ => None,
         }
     }

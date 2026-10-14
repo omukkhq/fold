@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE sessions SET ended_at = ? WHERE ended_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "d9f18056804c74052dd5dd104d1efe66b92e0c763d5075d8eeff5c353127caae"
+}

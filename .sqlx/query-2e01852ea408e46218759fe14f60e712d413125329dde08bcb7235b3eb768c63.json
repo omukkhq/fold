@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO revisions (number, hash, tree_hash, parent_id, integration_id, import_source, created_at)\n         VALUES (?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "2e01852ea408e46218759fe14f60e712d413125329dde08bcb7235b3eb768c63"
+}

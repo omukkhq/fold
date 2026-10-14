@@ -45,10 +45,11 @@ pub enum IdKind {
     Checkpoint,
     Message,
     Comment,
+    Integration,
 }
 
 impl IdKind {
-    pub const ALL: [IdKind; 8] = [
+    pub const ALL: [IdKind; 9] = [
         IdKind::Task,
         IdKind::Proposal,
         IdKind::Changeset,
@@ -57,6 +58,7 @@ impl IdKind {
         IdKind::Checkpoint,
         IdKind::Message,
         IdKind::Comment,
+        IdKind::Integration,
     ];
 
     pub fn prefix(self) -> &'static str {
@@ -69,6 +71,7 @@ impl IdKind {
             IdKind::Checkpoint => "ck-",
             IdKind::Message => "m-",
             IdKind::Comment => "rc-",
+            IdKind::Integration => "i-",
         }
     }
 
@@ -82,6 +85,7 @@ impl IdKind {
             IdKind::Checkpoint => "checkpoint",
             IdKind::Message => "message",
             IdKind::Comment => "comment",
+            IdKind::Integration => "integration",
         }
     }
 }
@@ -178,6 +182,11 @@ define_id!(
     CommentId,
     IdKind::Comment
 );
+define_id!(
+    /// The public integration number that a revision records; the `integration` counter numbers them.
+    IntegrationId,
+    IdKind::Integration
+);
 
 #[cfg(test)]
 mod tests {
@@ -208,6 +217,7 @@ mod tests {
             round_trip!(CheckpointId, n);
             round_trip!(MessageId, n);
             round_trip!(CommentId, n);
+            round_trip!(IntegrationId, n);
         }
     }
 
@@ -229,6 +239,12 @@ mod tests {
             assert_eq!(text.parse::<TaskId>(), Err(expected), "{text:?}");
         }
         assert_eq!("rc-0".parse::<CommentId>(), Err(IdParseError::Zero));
+        assert_eq!("i-0".parse::<IntegrationId>(), Err(IdParseError::Zero));
+        assert_eq!(
+            "r3".parse::<IntegrationId>(),
+            Err(IdParseError::WrongPrefix)
+        );
+        assert_eq!(IdKind::Integration.counter_key(), "integration");
         assert_eq!("rc-5".parse::<RevisionId>(), Err(IdParseError::NotANumber));
         assert_eq!("T-1 ".parse::<TaskId>(), Err(IdParseError::NotANumber));
         assert_eq!(
@@ -254,6 +270,8 @@ mod tests {
         assert!(serde_json::from_str::<TaskId>("\"P-12\"").is_err());
         let comment = CommentId::from_number(5).unwrap();
         assert_eq!(serde_json::to_string(&comment).unwrap(), "\"rc-5\"");
+        let integration = IntegrationId::from_number(7).unwrap();
+        assert_eq!(serde_json::to_string(&integration).unwrap(), "\"i-7\"");
     }
 
     #[test]
@@ -264,8 +282,8 @@ mod tests {
         prefixes.dedup();
         keys.sort_unstable();
         keys.dedup();
-        assert_eq!(prefixes.len(), 8);
-        assert_eq!(keys.len(), 8);
+        assert_eq!(prefixes.len(), 9);
+        assert_eq!(keys.len(), 9);
     }
 
     #[test]

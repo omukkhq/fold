@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE refs\n         SET revision_id = (SELECT id FROM revisions WHERE number = ?1)\n         WHERE name = 'main'\n           AND revision_id = (SELECT id FROM revisions WHERE number = ?2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "00ea702c082884a4423c2c3e10be0d35ce056f3de8a117a64cff5f8805624dda"
+}

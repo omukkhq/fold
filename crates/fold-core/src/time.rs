@@ -38,6 +38,9 @@ impl From<TimeError> for FoldError {
 pub struct Timestamp(i64);
 
 impl Timestamp {
+    /// `1970-01-01T00:00:00.000Z`.
+    pub const EPOCH: Timestamp = Timestamp(0);
+
     pub fn from_millis(millis: i64) -> Result<Self, TimeError> {
         if (MIN_MILLIS..=MAX_MILLIS).contains(&millis) {
             Ok(Self(millis))

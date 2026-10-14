@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO refs (name, revision_id)\n         SELECT 'main', id FROM revisions WHERE number = ?\n         ON CONFLICT (name) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "3a61320ed6f3276c46d9bbe02755cfb73ecc42228c07f4a3939e6d2fcfc94c25"
+}

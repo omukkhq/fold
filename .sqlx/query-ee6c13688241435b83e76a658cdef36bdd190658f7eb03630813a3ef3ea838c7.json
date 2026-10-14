@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE workers SET last_call_at = ?, activity = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "ee6c13688241435b83e76a658cdef36bdd190658f7eb03630813a3ef3ea838c7"
+}

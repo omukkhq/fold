@@ -26,6 +26,21 @@ define_codes! {
     INVALID_PATH = "invalid_path",
     TARGET_NOT_EMPTY = "target_not_empty",
     WORKSPACE_IO = "workspace_io",
+    NOT_FOUND = "not_found",
+    PROJECT_NOT_FOUND = "project_not_found",
+    INVALID_REQUEST = "invalid_request",
+    PROJECT_UNAVAILABLE = "project_unavailable",
+    INTERNAL_ERROR = "internal_error",
+    RUNTIME_DIR_MISSING = "runtime_dir_missing",
+    DAEMON_ALREADY_RUNNING = "daemon_already_running",
+    AUTH_REQUIRED = "auth_required",
+    HANDSHAKE_UNAVAILABLE = "handshake_unavailable",
+    INVALID_NAME = "invalid_name",
+    HUMAN_REQUIRED = "human_required",
+    AGENT_ALREADY_BOUND = "agent_already_bound",
+    WORKER_NOT_FOUND = "worker_not_found",
+    REVISION_NOT_FOUND = "revision_not_found",
+    HEAD_MOVED = "head_moved",
 }
 
 /// The error every transport reports. The message and details name ids, never content.
