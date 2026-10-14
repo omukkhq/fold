@@ -66,6 +66,7 @@ describe("connectProject", () => {
       state: "live",
       lastEventAt: 42,
       stateAsOf: 42,
+      retryAt: null,
     });
     expect(client.getQueryData(keys.workspaceLive("demo", "ws-1"))).toEqual(
       workspace("two"),
@@ -73,6 +74,16 @@ describe("connectProject", () => {
     release();
     await vi.advanceTimersByTimeAsync(0);
     expect(status.getSnapshot().state).toBe("reconnecting");
+    // The first delay after a healthy connection is between half a second and a second.
+    const retryAt = status.getSnapshot().retryAt ?? 0;
+    expect(retryAt).toBeGreaterThanOrEqual(42 + 500);
+    expect(retryAt).toBeLessThanOrEqual(42 + 1000);
+    handle.retry();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(status.getSnapshot()).toMatchObject({
+      state: "live",
+      retryAt: null,
+    });
     handle.stop();
   });
 

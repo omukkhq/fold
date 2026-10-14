@@ -14,6 +14,8 @@ export const keys = {
   proposal: (slug: string, proposal: string) =>
     [slug, "proposal", proposal] as const,
   agents: (slug: string) => [slug, "agents"] as const,
+  /** Under the agents prefix, so every event that invalidates the agents also refreshes the board's agent bar. */
+  agentBar: (slug: string) => [slug, "agents", "bar"] as const,
   messages: (slug: string) => [slug, "messages"] as const,
   repository: (slug: string) => [slug, "repository"] as const,
   workspaces: (slug: string) => [slug, "workspaces"] as const,

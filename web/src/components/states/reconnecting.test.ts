@@ -23,4 +23,10 @@ describe("reconnectingText", () => {
       "Reconnecting now.",
     );
   });
+
+  it("names what the screen shows", () => {
+    expect(reconnectingText(now, asOf, undefined, "the board")).toContain(
+      "Showing the board as of 14:12:31;",
+    );
+  });
 });

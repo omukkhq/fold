@@ -104,6 +104,7 @@ function harness(opts: { failOpens?: number; failWith?: Error } = {}) {
   const cursors: (number | null)[] = [];
   const log: string[] = [];
   const events: EventEnvelope[] = [];
+  const delays: number[] = [];
   let failOpens = opts.failOpens ?? 0;
   const transport: Transport = (last) => {
     cursors.push(last);
@@ -124,11 +125,14 @@ function harness(opts: { failOpens?: number; failWith?: Error } = {}) {
         events.push(e);
         log.push(label(e));
       },
-      onDrop: () => log.push("drop"),
+      onDrop: (delayMs) => {
+        log.push("drop");
+        delays.push(delayMs);
+      },
       onResync: () => log.push("resync"),
     },
   });
-  return { pipes, cursors, log, events, handle };
+  return { pipes, cursors, log, events, delays, handle };
 }
 
 describe("startStream", () => {
@@ -163,6 +167,27 @@ describe("startStream", () => {
       "open",
       "event 6",
     ]);
+    h.handle.stop();
+  });
+
+  it("reports each backoff delay with the drop, and retry starts the next attempt at once", async () => {
+    const h = harness({ failOpens: 3 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.delays).toEqual([nextDelay(0, () => 0)]);
+    await vi.advanceTimersByTimeAsync(nextDelay(0, () => 0));
+    expect(h.delays).toEqual([nextDelay(0, () => 0), nextDelay(1, () => 0)]);
+    h.handle.retry();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.cursors).toHaveLength(3);
+    expect(h.delays.at(-1)).toBe(nextDelay(2, () => 0));
+    h.handle.retry();
+    await vi.advanceTimersByTimeAsync(0);
+    h.pipes[0]?.push(frame(1));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.log.at(-1)).toBe("event 1");
+    h.handle.retry();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.cursors).toHaveLength(4);
     h.handle.stop();
   });
 

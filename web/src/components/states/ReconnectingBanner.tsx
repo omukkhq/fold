@@ -10,6 +10,8 @@ interface ReconnectingBannerProps {
   now: number;
   /** When the next connection attempt starts, in UTC milliseconds; the banner then counts down to it. */
   retryAt?: number;
+  /** What the screen shows, `the board`; the banner says `the state` without it. */
+  shown?: string;
   onRetry?: () => void;
   className?: string;
 }
@@ -18,6 +20,7 @@ export function ReconnectingBanner({
   asOf,
   now,
   retryAt,
+  shown,
   onRetry,
   className,
 }: ReconnectingBannerProps) {
@@ -36,7 +39,7 @@ export function ReconnectingBanner({
         className="shrink-0 text-secondary-text"
       />
       <p className="min-w-0 flex-1 text-bar leading-snug text-text">
-        {reconnectingText(now, asOf, retryAt)}
+        {reconnectingText(now, asOf, retryAt, shown)}
       </p>
       {onRetry ? (
         <Button

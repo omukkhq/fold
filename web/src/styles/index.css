@@ -142,6 +142,7 @@
   --width-skeleton-s: var(--width-skeleton-s);
   --width-skeleton-l: var(--width-skeleton-l);
   --width-diff-number: var(--width-diff-number);
+  --width-search: var(--width-search);
 
   --height-*: initial;
   --height-bar: var(--height-bar);

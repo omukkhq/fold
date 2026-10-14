@@ -16,8 +16,8 @@ export interface StreamHandlers {
   /** The first frame of a connection arrived. */
   onOpen(): void;
   onEvent(event: EventEnvelope): void;
-  /** The connection ended or went silent; a new attempt follows. */
-  onDrop(): void;
+  /** The connection ended or went silent; a new attempt follows after `delayMs` unless `retry` comes first. */
+  onDrop(delayMs: number): void;
   /** Stored events may be missing from what was applied: a sequence number was skipped, or the daemon refused the cursor. */
   onResync(): void;
 }
@@ -30,6 +30,8 @@ export interface StreamOptions {
 
 export interface StreamHandle {
   stop(): void;
+  /** Starts the next attempt now instead of at the end of the backoff delay; does nothing while a connection is open. */
+  retry(): void;
 }
 
 /**
@@ -147,7 +149,7 @@ export function startStream(options: StreamOptions): StreamHandle {
       }
       const delay = nextDelay(attempt, random);
       attempt += 1;
-      handlers.onDrop();
+      handlers.onDrop(delay);
       await new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, delay);
         wake = () => {
@@ -165,6 +167,9 @@ export function startStream(options: StreamOptions): StreamHandle {
     stop() {
       stopped = true;
       current?.abort();
+      wake?.();
+    },
+    retry() {
       wake?.();
     },
   };

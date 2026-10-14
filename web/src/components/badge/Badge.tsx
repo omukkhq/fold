@@ -1,3 +1,4 @@
+import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { badgeSpec, badgeText, type BadgeTone } from "./badges";
 
@@ -5,12 +6,14 @@ interface BadgeProps {
   tone: BadgeTone;
   /** Replaces the tone's text, for example `Blocked by T-9`. */
   children?: string;
+  /** Replaces the tone's icon, for example the attention mark's icon for its leading kind. */
+  icon?: LucideIcon;
   className?: string;
 }
 
-export function Badge({ tone, children, className }: BadgeProps) {
+export function Badge({ tone, children, icon, className }: BadgeProps) {
   const spec = badgeSpec(tone);
-  const Icon = spec.icon;
+  const Icon = icon ?? spec.icon;
   return (
     <span
       data-tone={tone}

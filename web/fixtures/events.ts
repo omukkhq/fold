@@ -80,7 +80,7 @@ const script: { after: number; frame: EventEnvelope }[] = [
   },
   {
     after: 2,
-    frame: stored(2, "task.status_changed", "T-1", { status: "in_review" }),
+    frame: stored(2, "task.status_changed", "T-1", { status: "review" }),
   },
 ];
 

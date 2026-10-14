@@ -8,12 +8,15 @@ export interface LiveStatus {
   lastEventAt: number | null;
   /** When the last snapshot of the live workspace states arrived. */
   stateAsOf: number | null;
+  /** While reconnecting, when the next attempt starts, from the stream's backoff delay. */
+  retryAt: number | null;
 }
 
 export const INITIAL_STATUS: LiveStatus = {
   state: "connecting",
   lastEventAt: null,
   stateAsOf: null,
+  retryAt: null,
 };
 
 export interface LiveStatusStore {
@@ -47,7 +50,8 @@ export function createLiveStatusStore(): LiveStatusStore {
       if (
         next.state !== current.state ||
         next.lastEventAt !== current.lastEventAt ||
-        next.stateAsOf !== current.stateAsOf
+        next.stateAsOf !== current.stateAsOf ||
+        next.retryAt !== current.retryAt
       ) {
         replace(next);
       }

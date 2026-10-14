@@ -19,14 +19,17 @@ describe("live status store", () => {
     expect(listener).toHaveBeenCalledTimes(1);
     store.set({ lastEventAt: 5 });
     store.set({ stateAsOf: 6 });
+    store.set({ retryAt: 7 });
+    store.set({ retryAt: 7 });
     expect(store.getSnapshot()).toEqual({
       state: "live",
       lastEventAt: 5,
       stateAsOf: 6,
+      retryAt: 7,
     });
     off();
     store.reset();
-    expect(listener).toHaveBeenCalledTimes(3);
+    expect(listener).toHaveBeenCalledTimes(4);
     expect(store.getSnapshot()).toEqual(INITIAL_STATUS);
   });
 

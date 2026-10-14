@@ -90,6 +90,7 @@ const W00_OTHER = [
   "width-skeleton-s",
   "width-skeleton-l",
   "width-diff-number",
+  "width-search",
   ...[
     0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 16, 18, 20, 22, 24, 28, 32, 40,
   ].map((n) => `space-${String(n)}`),

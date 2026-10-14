@@ -17,7 +17,7 @@ export function connectProject(
     transport,
     handlers: {
       onOpen: () => {
-        status.set({ state: "live" });
+        status.set({ state: "live", retryAt: null });
       },
       onEvent: (event) => {
         applyEvent(queryClient, slug, event);
@@ -28,8 +28,8 @@ export function connectProject(
             : { lastEventAt: at },
         );
       },
-      onDrop: () => {
-        status.set({ state: "reconnecting" });
+      onDrop: (delayMs) => {
+        status.set({ state: "reconnecting", retryAt: now() + delayMs });
       },
       onResync: () => {
         invalidateProject(queryClient, slug);

@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as PSlugRouteImport } from './routes/p.$slug'
 import { Route as PSlugActivityRouteImport } from './routes/p.$slug.activity'
+import { Route as PSlugBoardRouteImport } from './routes/p.$slug.board'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -28,29 +29,37 @@ const PSlugActivityRoute = PSlugActivityRouteImport.update({
   path: '/activity',
   getParentRoute: () => PSlugRoute,
 } as any)
+const PSlugBoardRoute = PSlugBoardRouteImport.update({
+  id: '/board',
+  path: '/board',
+  getParentRoute: () => PSlugRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/p/$slug': typeof PSlugRouteWithChildren
   '/p/$slug/activity': typeof PSlugActivityRoute
+  '/p/$slug/board': typeof PSlugBoardRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/p/$slug': typeof PSlugRouteWithChildren
   '/p/$slug/activity': typeof PSlugActivityRoute
+  '/p/$slug/board': typeof PSlugBoardRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/p/$slug': typeof PSlugRouteWithChildren
   '/p/$slug/activity': typeof PSlugActivityRoute
+  '/p/$slug/board': typeof PSlugBoardRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/p/$slug' | '/p/$slug/activity'
+  fullPaths: '/' | '/p/$slug' | '/p/$slug/activity' | '/p/$slug/board'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/p/$slug' | '/p/$slug/activity'
-  id: '__root__' | '/' | '/p/$slug' | '/p/$slug/activity'
+  to: '/' | '/p/$slug' | '/p/$slug/activity' | '/p/$slug/board'
+  id: '__root__' | '/' | '/p/$slug' | '/p/$slug/activity' | '/p/$slug/board'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -81,15 +90,24 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PSlugActivityRouteImport
       parentRoute: typeof PSlugRoute
     }
+    '/p/$slug/board': {
+      id: '/p/$slug/board'
+      path: '/board'
+      fullPath: '/p/$slug/board'
+      preLoaderRoute: typeof PSlugBoardRouteImport
+      parentRoute: typeof PSlugRoute
+    }
   }
 }
 
 interface PSlugRouteChildren {
   PSlugActivityRoute: typeof PSlugActivityRoute
+  PSlugBoardRoute: typeof PSlugBoardRoute
 }
 
 const PSlugRouteChildren: PSlugRouteChildren = {
   PSlugActivityRoute: PSlugActivityRoute,
+  PSlugBoardRoute: PSlugBoardRoute,
 }
 
 const PSlugRouteWithChildren = PSlugRoute._addFileChildren(PSlugRouteChildren)
