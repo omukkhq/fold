@@ -4,7 +4,9 @@ pub mod error;
 pub mod ids;
 pub mod merge;
 pub mod object;
+pub mod readiness;
 pub mod revision;
+pub mod status;
 pub mod time;
 pub mod tree;
 
