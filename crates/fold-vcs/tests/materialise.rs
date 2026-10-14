@@ -155,10 +155,18 @@ fn every_written_path_is_fresh() {
     let (dir, store) = store();
     let root = dir.path().join("ws");
     let done = materialise(&store, &sample(&store), &root, &opts(HOST, true)).unwrap();
+    assert!(done.index.boundary_ns() > 0);
     for (path, entry) in done.index.iter() {
         let meta = fs::symlink_metadata(resolve(&root, path).unwrap()).unwrap();
-        assert_eq!(done.index.is_fresh(path, &meta), Some(entry.hash), "{path}");
+        let expected = (entry.mtime_ns < done.index.boundary_ns()).then_some(entry.hash);
+        assert_eq!(done.index.is_fresh(path, &meta), expected, "{path}");
     }
+    assert!(
+        fs::read_dir(root.join(".fold/tmp"))
+            .unwrap()
+            .next()
+            .is_none()
+    );
 }
 
 #[test]
@@ -346,7 +354,7 @@ fn user_files_named_like_temp_files_write_normally_and_stay() {
         "4242-0",
         "x.tmp",
         "tmp/1-0",
-        "a/.fold/tmp/1-0",
+        "a/fold/tmp/1-0",
     ] {
         let path = RepoPath::parse(name.as_bytes()).unwrap();
         write_entry(
@@ -366,8 +374,8 @@ fn user_files_named_like_temp_files_write_normally_and_stay() {
     assert_eq!(fs::read(root.join("x.tmp")).unwrap(), b"x.tmp");
     assert_eq!(fs::read(root.join("tmp/1-0")).unwrap(), b"tmp/1-0");
     assert_eq!(
-        fs::read(root.join("a/.fold/tmp/1-0")).unwrap(),
-        b"a/.fold/tmp/1-0"
+        fs::read(root.join("a/fold/tmp/1-0")).unwrap(),
+        b"a/fold/tmp/1-0"
     );
 }
 

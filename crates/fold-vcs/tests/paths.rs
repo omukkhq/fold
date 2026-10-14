@@ -12,7 +12,7 @@ use common::*;
 
 #[test]
 fn bad_paths_are_refused() {
-    let cases: [&[u8]; 11] = [
+    let cases: [&[u8]; 15] = [
         b"../x",
         b"/abs",
         b"a//b",
@@ -24,6 +24,10 @@ fn bad_paths_are_refused() {
         b".",
         b".fold",
         b".fold/tmp/1-0",
+        b"a/.fold",
+        b"a/.fold/state",
+        b".git",
+        b"src/.git/config",
     ];
     for case in cases {
         let error = RepoPath::parse(case).unwrap_err();
@@ -33,7 +37,8 @@ fn bad_paths_are_refused() {
 
 #[test]
 fn good_paths_parse() {
-    assert!(RepoPath::parse(b".folder/a/.fold").is_ok());
+    assert!(RepoPath::parse(b".folder/a/.foldignore").is_ok());
+    assert!(RepoPath::parse(b".github/.gitignore/.fold-tmp-1-0").is_ok());
     let path = RepoPath::parse(b"a/b.c/.hidden").unwrap();
     assert_eq!(path.components().count(), 3);
     assert_eq!(path.to_string(), "a/b.c/.hidden");

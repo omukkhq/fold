@@ -53,19 +53,21 @@ impl From<WorkspaceError> for FoldError {
     }
 }
 
-const FOLD_DIR: &[u8] = b".fold";
+/// Names never tracked at any depth, as a file or a directory: Git's and fold's metadata, which hold fold's staging directory among other things.
+pub fn is_reserved_name(name: &[u8]) -> bool {
+    name == b".git" || name == b".fold"
+}
 
-/// A workspace-relative path held as bytes: slash-joined, with no empty, `.` or `..` component, no NUL, no leading `/`, and not inside a top-level `.fold`, which is never tracked and holds fold's staging directory. The ordering is bytewise, which is the order trees and the stat index use.
+/// A workspace-relative path held as bytes: slash-joined, with no empty, `.` or `..` component, no NUL, no leading `/`, and no `.git` or `.fold` component, so no tree can hold one. The ordering is bytewise, which is the order trees and the stat index use.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RepoPath(Vec<u8>);
 
 impl RepoPath {
     pub fn parse(bytes: &[u8]) -> Result<Self, WorkspaceError> {
         let valid = !bytes.is_empty()
-            && bytes.split(|&byte| byte == b'/').next() != Some(FOLD_DIR)
             && bytes
                 .split(|&byte| byte == b'/')
-                .all(|name| validate_name(name).is_ok());
+                .all(|name| validate_name(name).is_ok() && !is_reserved_name(name));
         if valid {
             Ok(Self(bytes.to_vec()))
         } else {
@@ -113,6 +115,26 @@ fn os_component(name: &[u8]) -> Result<OsString, WorkspaceError> {
     match std::str::from_utf8(name) {
         Ok(text) if !text.contains(['\\', ':']) => Ok(OsString::from(text)),
         _ => Err(WorkspaceError::invalid(name)),
+    }
+}
+
+/// The path as relative OS components, with no check against the file system.
+pub(crate) fn os_path(path: &RepoPath) -> Result<PathBuf, WorkspaceError> {
+    path.components()
+        .map(os_component)
+        .collect::<Result<PathBuf, _>>()
+}
+
+/// The bytes of one file name or link target, or `None` where the platform cannot name them as bytes.
+pub(crate) fn os_bytes(name: &std::ffi::OsStr) -> Option<Vec<u8>> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        Some(name.as_bytes().to_vec())
+    }
+    #[cfg(not(unix))]
+    {
+        name.to_str().map(|text| text.as_bytes().to_vec())
     }
 }
 

@@ -19,6 +19,7 @@ const KIND_SHIFT: u32 = 16;
 const MODE_MASK: u32 = 0xFFFF;
 
 static SAVE_COUNTER: AtomicU64 = AtomicU64::new(0);
+static PROBE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// What the last scan or write saw of one file, and the hash it had then.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,7 +69,8 @@ pub struct StatIndex {
     entries: BTreeMap<RepoPath, StatEntry>,
     caps: Capabilities,
     rebuilt: bool,
-    saved_at_ns: Option<u64>,
+    /// A file-system time taken after the last write the entries describe: the last save, or [`StatIndex::mark_boundary`]. `0` until either happens, so nothing is fresh.
+    boundary_ns: u64,
 }
 
 impl StatIndex {
@@ -77,7 +79,7 @@ impl StatIndex {
             entries: BTreeMap::new(),
             caps,
             rebuilt: false,
-            saved_at_ns: None,
+            boundary_ns: 0,
         }
     }
 
@@ -93,7 +95,7 @@ impl StatIndex {
         };
         index.entries = entries;
         index.rebuilt = false;
-        index.saved_at_ns = fs::metadata(path).ok().map(|meta| mtime_ns(&meta));
+        index.boundary_ns = fs::metadata(path).map_or(0, |meta| mtime_ns(&meta));
         index
     }
 
@@ -119,7 +121,7 @@ impl StatIndex {
             return Err(error);
         }
         sync_dir(dir)?;
-        self.saved_at_ns = Some(mtime_ns(&fs::metadata(path)?));
+        self.boundary_ns = mtime_ns(&fs::metadata(path)?);
         self.rebuilt = false;
         Ok(())
     }
@@ -133,9 +135,21 @@ impl StatIndex {
         &self.caps
     }
 
-    /// Nanoseconds of the last save, `None` for an index never saved.
-    pub fn saved_at_ns(&self) -> Option<u64> {
-        self.saved_at_ns
+    /// Nanoseconds of the boundary; `0` for an index never saved or marked.
+    pub fn boundary_ns(&self) -> u64 {
+        self.boundary_ns
+    }
+
+    /// Takes the boundary from the file system clock: the modification time of a probe file written in `dir` and removed again. Call it after the last write that the entries describe, so an entry from the same clock tick is not fresh.
+    pub fn mark_boundary(&mut self, dir: &Path) -> io::Result<()> {
+        let number = PROBE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let probe = dir.join(format!("boundary-{}-{number}", std::process::id()));
+        let file = File::create(&probe)?;
+        let marked = file.metadata().map(|meta| mtime_ns(&meta));
+        drop(file);
+        fs::remove_file(&probe)?;
+        self.boundary_ns = marked?;
+        Ok(())
     }
 
     pub fn len(&self) -> usize {
@@ -162,7 +176,7 @@ impl StatIndex {
         self.entries.iter()
     }
 
-    /// The stored hash, only when the file type fits the recorded kind and size, modification time and mode match, and the inode too when both sides have one. An entry whose modification time is not older than the last save is never fresh: an edit in the same clock tick as the save would otherwise go unseen. Without symlink support a symlink entry is a regular file on disk.
+    /// The stored hash, only when the file type fits the recorded kind and size, modification time and mode match, and the inode too when both sides have one. An entry whose modification time is not older than the boundary is never fresh: an edit in the same clock tick as the last recorded write would otherwise go unseen. Without symlink support a symlink entry is a regular file on disk.
     pub fn is_fresh(&self, path: &RepoPath, meta: &Metadata) -> Option<ObjectHash> {
         let entry = self.entries.get(path)?;
         let kind_fits = match entry.kind {
@@ -173,10 +187,7 @@ impl StatIndex {
             return None;
         }
         let mtime = mtime_ns(meta);
-        if self
-            .saved_at_ns
-            .is_some_and(|saved| entry.mtime_ns >= saved)
-        {
+        if entry.mtime_ns >= self.boundary_ns {
             return None;
         }
         let inode = file_identity(meta, &self.caps);

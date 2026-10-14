@@ -55,8 +55,8 @@ fn save_and_load_round_trip() {
     assert_eq!(loaded.len(), 2);
     assert!(!loaded.is_empty());
     assert_eq!(loaded.lookup(&rp("f")), saved.lookup(&rp("f")));
-    assert_eq!(loaded.saved_at_ns(), saved.saved_at_ns());
-    assert!(loaded.saved_at_ns().is_some());
+    assert_eq!(loaded.boundary_ns(), saved.boundary_ns());
+    assert!(loaded.boundary_ns() > 0);
     let paths: Vec<_> = loaded.iter().map(|(path, _)| path.to_string()).collect();
     assert_eq!(paths, ["a/b", "f"]);
     assert_eq!(loaded.capabilities(), &HOST);
@@ -214,10 +214,12 @@ fn a_changed_inode_is_stale_unless_a_side_has_none() {
     let mut blind = StatIndex::empty(BARE);
     let mut stored = *index.lookup(&rp("f")).unwrap();
     blind.upsert(rp("f"), stored);
+    blind.save(&dir.path().join("blind.idx")).unwrap();
     assert!(blind.is_fresh(&rp("f"), &meta).is_some());
     stored.inode = 0;
     let mut none_stored = StatIndex::empty(HOST);
     none_stored.upsert(rp("f"), stored);
+    none_stored.save(&dir.path().join("none.idx")).unwrap();
     assert!(none_stored.is_fresh(&rp("f"), &meta).is_some());
 }
 
@@ -243,7 +245,7 @@ fn an_entry_newer_than_the_save_is_not_fresh() {
 
     let mut equal = StatIndex::load(&idx, HOST);
     let mut same_tick = *equal.lookup(&rp("f")).unwrap();
-    same_tick.mtime_ns = equal.saved_at_ns().unwrap();
+    same_tick.mtime_ns = equal.boundary_ns();
     equal.upsert(rp("f"), same_tick);
     assert_eq!(equal.is_fresh(&rp("f"), &meta), None);
 }
@@ -280,6 +282,7 @@ fn the_file_type_must_fit_the_recorded_kind() {
     assert_eq!(host.is_fresh(&rp("f"), &meta), None);
     let mut bare = StatIndex::empty(BARE);
     bare.upsert(rp("f"), as_link);
+    bare.save(&dir.path().join("bare.idx")).unwrap();
     assert!(bare.is_fresh(&rp("f"), &meta).is_some(), "an emulated link");
 
     let sub = dir.path().join("d");
@@ -288,4 +291,33 @@ fn the_file_type_must_fit_the_recorded_kind() {
     let mut index = StatIndex::empty(HOST);
     index.upsert(rp("d"), entry_for(&sub));
     assert_eq!(index.is_fresh(&rp("d"), &dir_meta), None);
+}
+
+#[test]
+fn an_index_never_saved_or_marked_has_nothing_fresh() {
+    let dir = tempfile::tempdir().unwrap();
+    let (saved, _) = saved_index(dir.path());
+    let meta = fs::metadata(dir.path().join("f")).unwrap();
+    let stored = *saved.lookup(&rp("f")).unwrap();
+    let mut index = StatIndex::empty(HOST);
+    index.upsert(rp("f"), stored);
+    assert_eq!(index.boundary_ns(), 0);
+    assert_eq!(index.is_fresh(&rp("f"), &meta), None);
+    let missing = StatIndex::load(&dir.path().join("missing.idx"), HOST);
+    assert_eq!(missing.boundary_ns(), 0);
+
+    index.mark_boundary(dir.path()).unwrap();
+    assert!(index.boundary_ns() > stored.mtime_ns);
+    assert!(index.is_fresh(&rp("f"), &meta).is_some());
+    assert_eq!(
+        fs::read_dir(dir.path()).unwrap().count(),
+        2,
+        "the probe is gone"
+    );
+
+    let mut same_tick = stored;
+    same_tick.mtime_ns = index.boundary_ns();
+    index.upsert(rp("f"), same_tick);
+    assert_eq!(index.is_fresh(&rp("f"), &meta), None);
+    assert!(index.mark_boundary(&dir.path().join("absent")).is_err());
 }

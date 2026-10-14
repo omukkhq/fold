@@ -73,3 +73,31 @@ pub fn sample(store: &ObjectStore) -> ObjectHash {
         ],
     )
 }
+
+pub fn write(root: &std::path::Path, path: &str, content: &[u8]) {
+    let full = root.join(path);
+    std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+    std::fs::write(full, content).unwrap();
+}
+
+pub fn flat_paths(flat: &fold_core::tree::FlatTree) -> Vec<String> {
+    flat.keys()
+        .map(|path| String::from_utf8(path.clone()).unwrap())
+        .collect()
+}
+
+/// Saves the index until the save lands in a later clock tick than every entry, so on a file system with a coarse clock each entry is still fresh afterwards.
+pub fn settle(index: &mut fold_vcs::index::StatIndex, path: &std::path::Path) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        index.save(path).unwrap();
+        let boundary = index.boundary_ns();
+        if index.iter().all(|(_, entry)| entry.mtime_ns < boundary) {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the file system clock did not move"
+        );
+    }
+}

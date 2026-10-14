@@ -49,7 +49,8 @@ fn a_bare_platform_still_materialises() {
 fn freshness_ignores_inodes_when_the_platform_has_none() {
     let (dir, store) = store();
     let root = dir.path().join("ws");
-    let done = materialise(&store, &sample(&store), &root, &opts(BARE, false)).unwrap();
+    let mut done = materialise(&store, &sample(&store), &root, &opts(BARE, false)).unwrap();
+    settle(&mut done.index, &dir.path().join("ws.idx"));
     let lib = RepoPath::parse(b"src/lib.rs").unwrap();
     let path = root.join("src/lib.rs");
     let before = fs::metadata(&path).unwrap();

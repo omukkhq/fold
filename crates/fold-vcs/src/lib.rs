@@ -1,5 +1,8 @@
+pub mod ignore;
 pub mod index;
 pub mod materialise;
 pub mod objects;
 pub mod paths;
 pub mod platform;
+pub mod scan;
+pub mod snapshot;

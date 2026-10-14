@@ -46,7 +46,7 @@ pub struct Materialised {
     pub synced: Synced,
 }
 
-/// Writes the whole tree into `root`, which must not exist or must be empty. Everything written is on disk when this returns, so the caller can save the returned index. A failure part-way leaves the directory in place and returns the error.
+/// Writes the whole tree into `root`, which must not exist or must be empty. Everything written is on disk when this returns, so the caller can save the returned index. Its freshness boundary is taken after the last write, so a file edited in the same clock tick is hashed again. A failure part-way leaves the directory in place and returns the error.
 pub fn materialise(
     objects: &ObjectStore,
     tree: &ObjectHash,
@@ -63,6 +63,8 @@ pub fn materialise(
     };
     write_tree(objects, tree, None, opts, &mut batch, &mut done)?;
     done.synced = batch.finish()?;
+    staging_ready(root, true)?;
+    done.index.mark_boundary(&staging_dir(root))?;
     Ok(done)
 }
 
