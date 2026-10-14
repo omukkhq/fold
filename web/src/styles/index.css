@@ -47,6 +47,27 @@
   --color-label-moss: var(--label-moss);
   --color-label-plum: var(--label-plum);
   --color-label-stone: var(--label-stone);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-focus-ring: var(--focus-ring);
+  --color-scrim: var(--scrim);
+  --color-presence-active: var(--presence-active);
+  --color-presence-idle: var(--presence-idle);
+  --color-presence-offline: var(--presence-offline);
+  --color-ink-soft: var(--ink-soft);
+  --color-label-sage-soft: var(--label-sage-soft);
+  --color-label-slate-soft: var(--label-slate-soft);
+  --color-label-teal-soft: var(--label-teal-soft);
+  --color-label-ink-soft: var(--label-ink-soft);
+  --color-label-gold-soft: var(--label-gold-soft);
+  --color-label-moss-soft: var(--label-moss-soft);
+  --color-label-plum-soft: var(--label-plum-soft);
+  --color-label-stone-soft: var(--label-stone-soft);
+  --color-diff-context: var(--diff-context);
+  --color-diff-hunk: var(--diff-hunk);
+  --color-diff-selected: var(--diff-selected);
+  --color-diff-comment-marker: var(--diff-comment-marker);
+  --color-diff-outdated: var(--diff-outdated);
   --color-muted: var(--text-muted);
   --color-faint: var(--text-faint);
 
@@ -55,6 +76,7 @@
   --font-mono: var(--font-mono);
 
   --radius-*: initial;
+  --radius-xs: var(--radius-xs);
   --radius-s: var(--radius-s);
   --radius-m: var(--radius-m);
   --radius-l: var(--radius-l);
@@ -62,10 +84,16 @@
   --text-*: initial;
   --text-page: var(--size-page);
   --text-screen: var(--size-screen);
+  --text-wordmark: var(--size-wordmark);
+  --text-wordmark--letter-spacing: var(--tracking-wordmark);
   --text-section: var(--size-section);
   --text-card: var(--size-card);
   --text-body: var(--size-body);
+  --text-bar: var(--size-bar);
+  --text-micro: var(--size-micro);
+  --text-caption: var(--size-caption);
   --text-meta: var(--size-meta);
+  --text-code: var(--size-code);
   --text-label: var(--size-label);
   --text-overline: var(--size-overline);
   --text-overline--letter-spacing: var(--tracking-overline);
@@ -93,14 +121,28 @@
   --spacing-6: var(--space-6);
   --spacing-7: var(--space-7);
   --spacing-8: var(--space-8);
+  --spacing-9: var(--space-9);
   --spacing-10: var(--space-10);
   --spacing-12: var(--space-12);
   --spacing-13: var(--space-13);
   --spacing-14: var(--space-14);
+  --spacing-16: var(--space-16);
+  --spacing-18: var(--space-18);
+  --spacing-20: var(--space-20);
+  --spacing-22: var(--space-22);
   --spacing-24: var(--space-24);
   --spacing-28: var(--space-28);
   --spacing-32: var(--space-32);
   --spacing-40: var(--space-40);
+
+  --container-*: initial;
+
+  --width-*: initial;
+  --width-skeleton-s: var(--width-skeleton-s);
+  --width-skeleton-l: var(--width-skeleton-l);
+
+  --height-*: initial;
+  --height-bar: var(--height-bar);
 }
 
 @layer base {

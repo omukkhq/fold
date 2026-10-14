@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { composite, contrastRatio, parseHex } from "../theme/contrast";
+import fontsCss from "./fonts.css?raw";
 import tokensCss from "./tokens.css?raw";
 
 const sources = import.meta.glob<string>("/src/**/*.{ts,tsx,css}", {
@@ -50,8 +51,48 @@ const W00_COLOURS = [
   "label-teal",
   "label-stone",
   "label-ink",
+  "warning",
+  "warning-soft",
+  "focus-ring",
+  "scrim",
+  "presence-active",
+  "presence-idle",
+  "presence-offline",
+  "ink-soft",
+  "label-sage-soft",
+  "label-slate-soft",
+  "label-teal-soft",
+  "label-ink-soft",
+  "label-gold-soft",
+  "label-moss-soft",
+  "label-plum-soft",
+  "label-stone-soft",
+  "diff-context",
+  "diff-hunk",
+  "diff-selected",
+  "diff-comment-marker",
+  "diff-outdated",
 ];
-const W00_OTHER = ["font-ui", "font-mono", "radius-s", "radius-m", "radius-l"];
+const W00_OTHER = [
+  "font-ui",
+  "font-mono",
+  "radius-xs",
+  "radius-s",
+  "radius-m",
+  "radius-l",
+  "size-micro",
+  "size-caption",
+  "size-code",
+  "size-bar",
+  "size-wordmark",
+  "tracking-wordmark",
+  "height-bar",
+  "width-skeleton-s",
+  "width-skeleton-l",
+  ...[
+    0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 16, 18, 20, 22, 24, 28, 32, 40,
+  ].map((n) => `space-${String(n)}`),
+];
 
 function blocks(css: string): { selector: string; body: string }[] {
   const out: { selector: string; body: string }[] = [];
@@ -107,6 +148,15 @@ describe("token contract", () => {
   });
 });
 
+describe("fonts", () => {
+  it("bundles JetBrains Mono in the weights the frames use", () => {
+    const weights = [
+      ...fontsCss.matchAll(/jetbrains-mono\/latin-(\d+)\.css/g),
+    ].map((m) => m[1]);
+    expect(weights).toEqual(["400", "600", "700"]);
+  });
+});
+
 describe("raw literal guard", () => {
   const files = Object.entries(sources).filter(
     ([p]) =>
@@ -135,17 +185,62 @@ describe("contrast", () => {
     ["primary-text", "primary-soft"],
     ["secondary-text", "secondary-soft"],
     ["on-ink", "ink"],
+    ["warning", "warning-soft"],
+    ["text-muted", "warning-soft"],
+    ["text-muted", "ink-soft"],
+    ["text-muted", "diff-context"],
+    ["text-muted", "diff-hunk"],
+    ["text-muted", "diff-selected"],
+    ...["sage", "slate", "teal", "ink", "gold", "moss", "plum", "stone"].map(
+      (hue): [string, string] => [`label-${hue}`, `label-${hue}-soft`],
+    ),
   ];
+  const nonText: [string, string][] = [
+    ["focus-ring", "bg"],
+    ["focus-ring", "surface"],
+    ["presence-active", "surface"],
+    ["presence-idle", "surface"],
+    ["presence-offline", "surface"],
+    ["diff-comment-marker", "surface"],
+    ["diff-outdated", "surface"],
+  ];
+  // The product owner accepted these light pairs below 4.5:1, so their exact
+  // values are pinned instead of a ratio.
+  const acceptedLight: [string, string, string, string][] = [
+    ["on-primary", "primary", "#ffffff", "#6b8f8a"],
+    ["success", "success-soft", "#6a9e7a", "#f0f7f2"],
+    ["text-faint", "sunken", "#72716b", "#f3f1ed"],
+  ];
+  const darkOnly = acceptedLight.map(([fg, bg]) => [fg, bg] as const);
+  const ratio = (set: Map<string, string>, fg: string, bg: string) => {
+    const surface = parseHex(set.get("surface") ?? "");
+    const under = composite(parseHex(set.get(bg) ?? ""), surface);
+    const top = composite(parseHex(set.get(fg) ?? ""), under);
+    return contrastRatio(top, under);
+  };
+  for (const [fg, bg, fgHex, bgHex] of acceptedLight) {
+    it(`light: ${fg} on ${bg} keeps its accepted values`, () => {
+      expect(light.get(fg)).toBe(fgHex);
+      expect(light.get(bg)).toBe(bgHex);
+    });
+  }
+  for (const [fg, bg] of darkOnly) {
+    it(`dark: ${fg} on ${bg} is at least 4.5:1`, () => {
+      expect(ratio(dark, fg, bg)).toBeGreaterThanOrEqual(4.5);
+    });
+  }
   for (const [theme, set] of [
     ["light", light],
     ["dark", dark],
   ] as const) {
     for (const [fg, bg] of pairs) {
       it(`${theme}: ${fg} on ${bg} is at least 4.5:1`, () => {
-        const surface = parseHex(set.get("surface") ?? "");
-        const under = composite(parseHex(set.get(bg) ?? ""), surface);
-        const top = composite(parseHex(set.get(fg) ?? ""), under);
-        expect(contrastRatio(top, under)).toBeGreaterThanOrEqual(4.5);
+        expect(ratio(set, fg, bg)).toBeGreaterThanOrEqual(4.5);
+      });
+    }
+    for (const [fg, bg] of nonText) {
+      it(`${theme}: ${fg} on ${bg} is at least 3:1`, () => {
+        expect(ratio(set, fg, bg)).toBeGreaterThanOrEqual(3);
       });
     }
   }
