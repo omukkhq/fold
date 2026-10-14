@@ -7,7 +7,7 @@ use fold_store::WriteTx;
 use fold_store::tasks::{self, EdgeRow};
 use serde_json::json;
 
-use super::{TaskError, TaskService, task_not_found};
+use super::{TaskError, TaskService, recompute, task_not_found};
 use crate::services::events::EventBuffer;
 
 /// One edge of the project graph: `task` needs `needs`.
@@ -33,7 +33,7 @@ impl From<EdgeRow> for Edge {
 }
 
 impl TaskService {
-    /// Adds the direct edge `task` needs `needs`. It writes no status: the effect on the board is calculated by recompute.
+    /// Adds the direct edge `task` needs `needs` and recomputes `task` and its dependents in the same transaction.
     pub async fn add_dependency(
         &self,
         actor: &EventActor,
@@ -53,7 +53,9 @@ impl TaskService {
                     actor,
                     now,
                 )
-                .await
+                .await?;
+                buffer.extend(recompute(tx, &[task], now).await?.events);
+                Ok::<_, TaskError>(())
             })
             .await?;
         self.bus.publish(buffer);
@@ -66,7 +68,7 @@ impl TaskService {
         })
     }
 
-    /// Removes a direct edge. A checklist edge is removed only with its linked checklist item.
+    /// Removes a direct edge and recomputes `task` and its dependents in the same transaction. A checklist edge is removed only with its linked checklist item.
     pub async fn remove_dependency(
         &self,
         actor: &EventActor,
@@ -104,6 +106,7 @@ impl TaskService {
                     .task(task)
                     .data(json!({"needs": needs.to_string(), "origin": edge.origin.as_str()}))?;
                 buffer.append(tx, &event, now).await?;
+                buffer.extend(recompute(tx, &[task], now).await?.events);
                 Ok::<_, TaskError>(())
             })
             .await?;
@@ -121,7 +124,7 @@ impl TaskService {
     }
 }
 
-/// Checks and inserts one edge inside the caller's transaction and appends `dependency.added`. Linked checklist items call this with `DependencyOrigin::Checklist`. The graph is read on the writer's connection, and the project has one writer, so the cycle check and the insert are atomic: two adds that would close a cycle together cannot both pass.
+/// Checks and inserts one edge inside the caller's transaction and appends `dependency.added`. Linked checklist items call this with `DependencyOrigin::Checklist`. The caller runs `recompute` on `task` before it commits. The graph is read on the writer's connection, and the project has one writer, so the cycle check and the insert are atomic: two adds that would close a cycle together cannot both pass.
 pub async fn add_edge_in_tx(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,

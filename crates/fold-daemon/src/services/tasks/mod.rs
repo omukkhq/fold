@@ -14,8 +14,10 @@ use thiserror::Error;
 use super::events::{EventBuffer, EventBus};
 
 mod dependencies;
+mod recompute;
 
 pub use dependencies::{Edge, add_edge_in_tx};
+pub use recompute::{Recomputed, recompute};
 
 /// Refusals carry a stable code; anything else is a database failure.
 #[derive(Debug, Error)]
@@ -111,7 +113,11 @@ impl TaskService {
         let mut buffer = EventBuffer::new();
         let id = self
             .store
-            .write(async |tx| create_in_tx(tx, &mut buffer, actor, &input, now).await)
+            .write(async |tx| {
+                let id = create_in_tx(tx, &mut buffer, actor, &input, now).await?;
+                buffer.extend(recompute(tx, &[id], now).await?.events);
+                Ok::<_, TaskError>(id)
+            })
             .await?;
         self.bus.publish(buffer);
         self.get(id).await
@@ -245,7 +251,7 @@ async fn require_labels(tx: &mut WriteTx, names: &[LabelName]) -> Result<(), Tas
     ))
 }
 
-/// Creates a task and its label links inside the caller's transaction and appends `task.created`. The tool card calls this to create a task, its edges and its parent link in one transaction.
+/// Creates a task and its label links inside the caller's transaction and appends `task.created`. The tool card calls this to create a task, its edges and its parent link in one transaction. The caller runs `recompute` on the new task before it commits, once every edge is in place.
 pub(crate) async fn create_in_tx(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,

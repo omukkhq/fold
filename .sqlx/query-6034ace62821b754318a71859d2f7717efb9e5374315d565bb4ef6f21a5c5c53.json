@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO completions (task_id, kind, integration_id, created_at)\n         SELECT t.id, ?2, i.id, ?4\n         FROM tasks t LEFT JOIN integrations i ON i.number = ?3\n         WHERE t.number = ?1 AND (?3 IS NULL OR i.id IS NOT NULL)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "6034ace62821b754318a71859d2f7717efb9e5374315d565bb4ef6f21a5c5c53"
+}

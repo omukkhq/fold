@@ -4,9 +4,12 @@ use sqlx::{SqliteConnection, SqlitePool};
 use crate::error::StoreError;
 use crate::store::WriteTx;
 
+pub mod completions;
 mod dependencies;
+mod recompute;
 
 pub use dependencies::{EdgeRow, delete_edge, edges, edges_conn, fetch_edge, insert_edge};
+pub use recompute::{LoadedFacts, load_facts, write_cache};
 
 /// A task as stored. The row id stays inside this crate; callers address a task by its public number.
 #[derive(Debug, Clone, PartialEq, Eq)]

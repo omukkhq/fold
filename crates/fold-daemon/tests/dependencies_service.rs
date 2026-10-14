@@ -6,6 +6,7 @@ use fold_core::{
 };
 use fold_daemon::services::events::{BusMessage, EventBuffer, EventBus};
 use fold_daemon::services::tasks::{self, CreateTask, Edge, TaskError, TaskService};
+use fold_store::tasks::completions::{self, CompletionKind};
 use fold_store::testing::TestProject;
 use fold_store::{StoreError, events};
 use serde_json::{Value, json};
@@ -77,6 +78,13 @@ async fn last_event(project: &TestProject) -> fold_core::Event {
 }
 
 #[cfg(test)]
+async fn events_after(project: &TestProject, after: u64) -> Vec<fold_core::Event> {
+    events::read_after(project.store().read(), after, &EventFilter::default(), 1000)
+        .await
+        .unwrap()
+}
+
+#[cfg(test)]
 async fn exec(project: &TestProject, sql: &'static str) {
     project
         .store()
@@ -121,7 +129,7 @@ async fn refused_add(
 }
 
 #[tokio::test]
-async fn add_inserts_a_direct_edge_and_appends_one_event() {
+async fn add_inserts_a_direct_edge_and_recomputes_the_task() {
     let (project, service, bus) = project_with_tasks(3).await;
     let before = head(&project).await;
     let mut receiver = bus.subscribe();
@@ -142,19 +150,27 @@ async fn add_inserts_a_direct_edge_and_appends_one_event() {
         }
     );
     assert_eq!(service.edges().await.unwrap(), vec![edge]);
-    assert_eq!(head(&project).await, before + 1);
-    let stored = last_event(&project).await;
-    assert_eq!(stored.event_type, types::DEPENDENCY_ADDED);
-    assert_eq!(stored.actor, backend());
-    assert_eq!(stored.task, Some(t(1)));
-    assert_eq!(stored.data, json!({"needs": "T-2", "origin": "direct"}));
-    match receiver.try_recv().unwrap() {
-        BusMessage::Durable(event) => assert_eq!(*event, stored),
-        BusMessage::Live(_) => panic!("expected the stored event"),
+    // The edge and the recompute it triggers: T-1 now waits on T-2.
+    assert_eq!(head(&project).await, before + 2);
+    let appended = events_after(&project, before).await;
+    let added = &appended[0];
+    assert_eq!(added.event_type, types::DEPENDENCY_ADDED);
+    assert_eq!(added.actor, backend());
+    assert_eq!(added.task, Some(t(1)));
+    assert_eq!(added.data, json!({"needs": "T-2", "origin": "direct"}));
+    let changed = &appended[1];
+    assert_eq!(changed.event_type, types::TASK_STATUS_CHANGED);
+    assert_eq!(changed.actor, EventActor::fold());
+    assert_eq!(changed.task, Some(t(1)));
+    assert_eq!(changed.data, json!({"from": "todo", "to": "backlog"}));
+    for stored in &appended {
+        match receiver.try_recv().unwrap() {
+            BusMessage::Durable(event) => assert_eq!(*event, *stored),
+            BusMessage::Live(_) => panic!("expected the stored event"),
+        }
     }
     assert!(receiver.try_recv().is_err());
 
-    // Adding an edge writes no status: the cache is left to recompute.
     let row = fold_store::tasks::get_by_number(project.store().read(), t(1))
         .await
         .unwrap()
@@ -170,7 +186,7 @@ async fn add_inserts_a_direct_edge_and_appends_one_event() {
 }
 
 #[tokio::test]
-async fn remove_deletes_the_edge_and_appends_one_event() {
+async fn remove_deletes_the_edge_and_recomputes_the_task() {
     let (project, service, bus) = project_with_tasks(2).await;
     service
         .add_dependency(&backend(), t(1), t(2))
@@ -185,16 +201,25 @@ async fn remove_deletes_the_edge_and_appends_one_event() {
         .unwrap();
 
     assert!(pairs(&service).await.is_empty());
-    assert_eq!(head(&project).await, before + 1);
-    let stored = last_event(&project).await;
-    assert_eq!(stored.event_type, types::DEPENDENCY_REMOVED);
-    assert_eq!(stored.actor, frontend());
-    assert_eq!(stored.task, Some(t(1)));
-    assert_eq!(stored.data, json!({"needs": "T-2", "origin": "direct"}));
-    assert!(matches!(
-        receiver.try_recv().unwrap(),
-        BusMessage::Durable(event) if *event == stored
-    ));
+    // The removal and the recompute it triggers: T-1 waits on nothing again.
+    assert_eq!(head(&project).await, before + 2);
+    let appended = events_after(&project, before).await;
+    let removed = &appended[0];
+    assert_eq!(removed.event_type, types::DEPENDENCY_REMOVED);
+    assert_eq!(removed.actor, frontend());
+    assert_eq!(removed.task, Some(t(1)));
+    assert_eq!(removed.data, json!({"needs": "T-2", "origin": "direct"}));
+    let changed = &appended[1];
+    assert_eq!(changed.event_type, types::TASK_STATUS_CHANGED);
+    assert_eq!(changed.task, Some(t(1)));
+    assert_eq!(changed.data, json!({"from": "backlog", "to": "todo"}));
+    for stored in &appended {
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            BusMessage::Durable(event) if *event == *stored
+        ));
+    }
+    assert!(receiver.try_recv().is_err());
 }
 
 #[tokio::test]
@@ -271,12 +296,16 @@ async fn an_archived_task_on_either_end_is_closed() {
 #[tokio::test]
 async fn a_done_task_takes_no_new_dependencies_but_may_be_needed() {
     let (project, service, _bus) = project_with_tasks(2).await;
-    // Stands in for recompute, which owns the status cache.
-    exec(
-        &project,
-        "UPDATE tasks SET status = 'done' WHERE number = 1",
-    )
-    .await;
+    let now = project.now();
+    project
+        .store()
+        .write(async |tx| {
+            completions::insert(tx, t(1), CompletionKind::Children, None, now).await?;
+            tasks::recompute(tx, &[t(1)], now).await?;
+            Ok::<_, TaskError>(())
+        })
+        .await
+        .unwrap();
     let (code, details) = refused_add(&project, &service, 1, 2).await;
     assert_eq!(code, "task_closed");
     assert_eq!(details["reason"], "done");
@@ -287,6 +316,12 @@ async fn a_done_task_takes_no_new_dependencies_but_may_be_needed() {
         .await
         .unwrap();
     assert_eq!(pairs(&service).await, vec![(t(2), t(1))]);
+    // A Done prerequisite holds nothing back.
+    let row = fold_store::tasks::get_by_number(project.store().read(), t(2))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.status, TaskStatus::Todo);
 }
 
 #[tokio::test]

@@ -37,6 +37,16 @@ impl EventBuffer {
         Ok(&self.events[self.events.len() - 1])
     }
 
+    /// Takes over the events another step of the same write appended.
+    pub fn extend(&mut self, other: EventBuffer) {
+        self.events.extend(other.events);
+    }
+
+    /// The stored events in the order they were appended.
+    pub fn events(&self) -> &[Event] {
+        &self.events
+    }
+
     pub fn len(&self) -> usize {
         self.events.len()
     }

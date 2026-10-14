@@ -1,0 +1,71 @@
+use fold_core::dag::Dag;
+use fold_core::events::types;
+use fold_core::status::calculate;
+use fold_core::{EventActor, NewEvent, TaskId, Timestamp};
+use fold_store::{WriteTx, tasks};
+use serde_json::json;
+
+use super::TaskError;
+use crate::services::events::EventBuffer;
+
+/// What one recompute appended. The events are stored but not published: the calling command adds them to its own buffer and publishes after the commit.
+#[derive(Debug, Default)]
+pub struct Recomputed {
+    pub events: EventBuffer,
+}
+
+/// Recalculates `tasks.status` and `tasks.blocked` for `seeds` and every task that needs one of them, directly or not, inside the caller's transaction. Every command that changes a fact the status depends on calls this before it commits, with the tasks whose facts it changed as seeds; `now` comes from the command's `Clock`.
+///
+/// Tasks are visited in dependency order and their facts are read on the writer's connection, so each prerequisite's status is final before a dependent reads it, and one call cascades a completion down the whole chain. Archived tasks keep the cache they had. A row is written, and its events appended, only when the status or the blocked flag differs from the stored value. `task.blocked_changed` follows the stored flag, so its `blocked_by` is the unfinished set at the moment the flag changes; a list that shrinks or grows while the task stays blocked shows in the prerequisite's `task.status_changed` or in the `dependency.added` and `dependency.removed` events. The events carry the `fold` actor: the status is calculated, no agent sets it.
+pub async fn recompute(
+    tx: &mut WriteTx,
+    seeds: &[TaskId],
+    now: Timestamp,
+) -> Result<Recomputed, TaskError> {
+    let mut recomputed = Recomputed::default();
+    if seeds.is_empty() {
+        return Ok(recomputed);
+    }
+    let graph = Dag::from_edges(
+        tasks::edges_conn(tx.conn())
+            .await?
+            .into_iter()
+            .map(|edge| (edge.task, edge.needs)),
+    );
+    let closure = graph.dependent_closure(seeds.iter().copied());
+    for task in graph.topological_order(closure) {
+        let Some(stored) = tasks::load_facts(tx, &[task]).await?.pop() else {
+            continue;
+        };
+        if stored.archived {
+            continue;
+        }
+        let calculated = calculate(&stored.facts);
+        let blocked = calculated.blocked();
+        if calculated.status == stored.status && blocked == stored.blocked {
+            continue;
+        }
+        tasks::write_cache(tx, task, calculated.status, blocked).await?;
+        if calculated.status != stored.status {
+            let event = NewEvent::new(types::TASK_STATUS_CHANGED, EventActor::fold())?
+                .task(task)
+                .data(json!({
+                    "from": stored.status.as_str(),
+                    "to": calculated.status.as_str(),
+                }))?;
+            recomputed.events.append(tx, &event, now).await?;
+        }
+        if blocked != stored.blocked {
+            let blocked_by: Vec<String> = calculated
+                .blocked_by
+                .iter()
+                .map(TaskId::to_string)
+                .collect();
+            let event = NewEvent::new(types::TASK_BLOCKED_CHANGED, EventActor::fold())?
+                .task(task)
+                .data(json!({"blocked": blocked, "blocked_by": blocked_by}))?;
+            recomputed.events.append(tx, &event, now).await?;
+        }
+    }
+    Ok(recomputed)
+}

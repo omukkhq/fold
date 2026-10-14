@@ -63,7 +63,7 @@ async fn stored(project: &TestProject) -> Vec<fold_core::Event> {
 }
 
 #[tokio::test]
-async fn create_with_labels_writes_the_row_and_one_event() {
+async fn create_with_labels_writes_the_row_its_event_and_its_status() {
     let project = TestProject::new().await;
     let (service, bus) = service(&project);
     service
@@ -84,7 +84,8 @@ async fn create_with_labels_writes_the_row_and_one_event() {
     assert_eq!(task.title.as_str(), "Build it");
     assert_eq!(task.description.as_str(), "## body");
     assert_eq!(task.created_by, "frontend");
-    assert_eq!(task.status, TaskStatus::Backlog);
+    // Recompute ran in the create: a task with no prerequisites is ready.
+    assert_eq!(task.status, TaskStatus::Todo);
     assert!(!task.blocked);
     assert!(!task.human_review);
     assert_eq!(task.human_reviewer, None);
@@ -108,10 +109,27 @@ async fn create_with_labels_writes_the_row_and_one_event() {
     );
     assert_eq!(created[0].created_at, project.now());
 
-    let BusMessage::Durable(published) = receiver.try_recv().unwrap() else {
-        unreachable!("a stored event")
-    };
-    assert_eq!(published.seq, created[0].seq);
+    let changed: Vec<_> = stored(&project)
+        .await
+        .into_iter()
+        .filter(|e| e.event_type == types::TASK_STATUS_CHANGED)
+        .collect();
+    assert_eq!(changed.len(), 1);
+    assert_eq!(changed[0].task, Some(task.id));
+    assert_eq!(changed[0].actor, EventActor::fold());
+    assert_eq!(
+        changed[0].data,
+        serde_json::json!({"from": "backlog", "to": "todo"})
+    );
+    assert_eq!(changed[0].seq, created[0].seq + 1);
+
+    for expected in [created[0].seq, changed[0].seq] {
+        let BusMessage::Durable(published) = receiver.try_recv().unwrap() else {
+            unreachable!("a stored event")
+        };
+        assert_eq!(published.seq, expected);
+    }
+    assert!(receiver.try_recv().is_err());
 
     let second = service
         .create_task(&actor(), input("Second", &[]))
