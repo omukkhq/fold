@@ -20,6 +20,8 @@ panic = "deny"
 todo = "deny"
 dbg_macro = "deny"
 print_stdout = "deny"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
 
 [profile.release]
 lto = true
