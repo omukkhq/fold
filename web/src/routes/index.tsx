@@ -1,5 +1,8 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/")({
-  component: () => <h1>fold</h1>,
+  beforeLoad: () => {
+    // Untyped href: the projects route belongs to its own screen.
+    redirect({ href: "/projects", replace: true, throw: true });
+  },
 });

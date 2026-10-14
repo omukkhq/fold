@@ -3,7 +3,26 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
     <title>fold</title>
+    <!-- Applies the stored theme before the first paint with the rule of themeAttribute(parseStoredTheme(...)) in src/theme/theme.ts; src/theme/boot.test.ts runs this script against that rule. -->
+    <script>
+      try {
+        var stored = localStorage.getItem("fold.theme");
+        if (stored === "light" || stored === "dark") {
+          document.documentElement.dataset.theme = stored;
+        }
+      } catch (e) {}
+    </script>
+    <!-- Paints the page canvas in the chosen scheme until the stylesheet loads. -->
+    <style>
+      :root[data-theme="light"] {
+        color-scheme: light;
+      }
+      :root[data-theme="dark"] {
+        color-scheme: dark;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>
