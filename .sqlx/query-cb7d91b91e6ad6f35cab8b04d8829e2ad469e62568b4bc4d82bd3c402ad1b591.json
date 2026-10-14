@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO checkpoints (number, workspace_id, tree_hash, kind, reason, label, created_at)\n           SELECT ?, id, ?, ?, ?, ?, ? FROM workspaces WHERE number = ?\n           RETURNING id AS \"id!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "checkpoints",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "cb7d91b91e6ad6f35cab8b04d8829e2ad469e62568b4bc4d82bd3c402ad1b591"
+}

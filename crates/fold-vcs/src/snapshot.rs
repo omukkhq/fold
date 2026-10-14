@@ -210,7 +210,7 @@ fn store_blob(
     Ok(written == entry.hash)
 }
 
-fn load_tree(objects: &ObjectStore, hash: &ObjectHash) -> Result<Tree, FoldError> {
+pub(crate) fn load_tree(objects: &ObjectStore, hash: &ObjectHash) -> Result<Tree, FoldError> {
     let object = objects
         .read_expecting(hash, ObjectKind::Tree)
         .map_err(FoldError::from)?;

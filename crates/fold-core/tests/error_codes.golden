@@ -38,3 +38,4 @@ label_not_found
 label_exists
 dependency_exists
 dependency_not_found
+unrecorded_changes

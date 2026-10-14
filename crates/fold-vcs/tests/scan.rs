@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 
 use fold_core::object::{ObjectKind, hash_object};
-use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
+use fold_core::tree::{ChangeCounts, EntryKind, FlatEntry, FlatTree};
 use fold_vcs::ignore::IgnoreRules;
 use fold_vcs::index::StatIndex;
 use fold_vcs::materialise::materialise;
@@ -18,7 +18,7 @@ use fold_vcs::paths::RepoPath;
 use fold_vcs::platform::Capabilities;
 use fold_vcs::scan::{
     ChangeKind, DEFAULT_MAX_FILE_BYTES, PathChange, ScanOptions, ScanResult, SkipReason, changes,
-    rescan_paths, scan,
+    count_changes, rescan_paths, scan,
 };
 
 use common::*;
@@ -592,6 +592,42 @@ fn changes_compare_by_hash_and_kind() {
     );
     assert!(changes(&base, &base).is_empty());
     assert!(changes(&FlatTree::new(), &FlatTree::new()).is_empty());
+}
+
+#[test]
+fn change_counts_count_each_kind_of_changed_path() {
+    let hash = |text: &[u8]| hash_object(ObjectKind::Blob, text);
+    let file = |text: &[u8]| FlatEntry {
+        kind: EntryKind::File,
+        hash: hash(text),
+    };
+    let base: FlatTree = [
+        (b"README.md".to_vec(), file(b"readme")),
+        (b"old.txt".to_vec(), file(b"old")),
+        (b"src/lib.rs".to_vec(), file(b"lib")),
+        (b"src/main.rs".to_vec(), file(b"main")),
+        (b"same.txt".to_vec(), file(b"same")),
+    ]
+    .into();
+    let current: FlatTree = [
+        (b"README.md".to_vec(), file(b"readme, edited")),
+        (b"docs/a.md".to_vec(), file(b"a")),
+        (b"docs/b.md".to_vec(), file(b"b")),
+        (b"src/lib.rs".to_vec(), file(b"lib, edited")),
+        (b"src/main.rs".to_vec(), file(b"main, edited")),
+        (b"src/new.rs".to_vec(), file(b"new")),
+        (b"same.txt".to_vec(), file(b"same")),
+    ]
+    .into();
+    assert_eq!(
+        count_changes(&changes(&base, &current)),
+        ChangeCounts {
+            files_added: 3,
+            files_modified: 3,
+            files_deleted: 1,
+        }
+    );
+    assert_eq!(count_changes(&[]), ChangeCounts::default());
 }
 
 #[test]

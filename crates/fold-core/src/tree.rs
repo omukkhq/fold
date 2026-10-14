@@ -155,6 +155,14 @@ pub struct FlatEntry {
 /// Slash-joined paths to their entries. Directories are not in the map, so an empty directory is not tracked.
 pub type FlatTree = BTreeMap<Vec<u8>, FlatEntry>;
 
+/// How many files a set of changed paths adds, modifies and deletes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ChangeCounts {
+    pub files_added: u32,
+    pub files_modified: u32,
+    pub files_deleted: u32,
+}
+
 /// Supplies tree objects, so the core stays free of I/O.
 pub type TreeLoader<'a> = &'a dyn Fn(&ObjectHash) -> Result<Tree, FoldError>;
 

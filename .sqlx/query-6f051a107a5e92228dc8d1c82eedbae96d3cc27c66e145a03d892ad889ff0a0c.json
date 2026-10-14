@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE checkpoints SET pruned_at = ?1\n           WHERE workspace_id = (SELECT id FROM workspaces WHERE number = ?2)\n             AND pruned_at IS NULL\n           RETURNING number AS \"number!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "checkpoints",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "6f051a107a5e92228dc8d1c82eedbae96d3cc27c66e145a03d892ad889ff0a0c"
+}

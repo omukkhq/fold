@@ -51,6 +51,7 @@ define_codes! {
     LABEL_EXISTS = "label_exists",
     DEPENDENCY_EXISTS = "dependency_exists",
     DEPENDENCY_NOT_FOUND = "dependency_not_found",
+    UNRECORDED_CHANGES = "unrecorded_changes",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

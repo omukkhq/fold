@@ -1,6 +1,16 @@
+mod changesets;
+mod checkpoints;
+mod columns;
 mod refs;
 mod revisions;
 
+pub use changesets::{
+    Changeset, ChangesetStats, get_changeset, insert_changeset, latest_changeset, list_changesets,
+};
+pub use checkpoints::{
+    AUTO_CHECKPOINTS_KEPT, Checkpoint, CheckpointKind, CheckpointReason, get_checkpoint,
+    insert_checkpoint, list_checkpoints, prune_auto, prune_workspace,
+};
 pub use refs::{advance_main, create_main};
 pub use revisions::{
     IntegratedProposal, IntegrationInfo, IntegrationKind, MAX_PAGE, RevisionRow, ancestors,

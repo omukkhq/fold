@@ -177,11 +177,13 @@ impl Batch {
             std::process::id(),
             TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
+        // The stat comes from the staged entry, which no one else can reach: an edit that lands at the destination right after the rename then differs from the index, so the next scan reads it.
         let staged = stage(objects, &tmp, entry, opts).and_then(|staged| {
+            let meta = fs::symlink_metadata(&tmp)?;
             fs::rename(&tmp, &dest)?;
-            Ok(staged)
+            Ok((staged, meta))
         });
-        let (outcome, file) = match staged {
+        let ((outcome, file), meta) = match staged {
             Ok(staged) => staged,
             Err(error) => {
                 let _ = fs::remove_file(&tmp);
@@ -191,7 +193,6 @@ impl Batch {
         if let Some(file) = file {
             self.hold(file)?;
         }
-        let meta = fs::symlink_metadata(&dest)?;
         Ok(Written {
             stat: StatEntry::from_metadata(&meta, entry.kind, entry.hash, &opts.caps),
             degraded: outcome == SymlinkOutcome::Emulated,

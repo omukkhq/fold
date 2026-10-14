@@ -4,7 +4,7 @@ use std::io::{self, Read};
 use std::path::Path;
 
 use fold_core::object::{ObjectHash, ObjectHasher, ObjectKind, hash_object};
-use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
+use fold_core::tree::{ChangeCounts, EntryKind, FlatEntry, FlatTree};
 
 use crate::ignore::{FOLDIGNORE, GITIGNORE, IgnoreRules};
 use crate::index::{StatEntry, StatIndex, mtime_ns};
@@ -129,6 +129,20 @@ pub fn changes(base: &FlatTree, current: &FlatTree) -> Vec<PathChange> {
     }
     found.sort_by(|a, b| a.path.cmp(&b.path));
     found
+}
+
+/// The file counts a changeset stores for its changed paths.
+pub fn count_changes(changes: &[PathChange]) -> ChangeCounts {
+    let mut counts = ChangeCounts::default();
+    for change in changes {
+        let count = match change.kind {
+            ChangeKind::Added => &mut counts.files_added,
+            ChangeKind::Modified => &mut counts.files_modified,
+            ChangeKind::Deleted => &mut counts.files_deleted,
+        };
+        *count = count.saturating_add(1);
+    }
+    counts
 }
 
 fn change(path: &[u8], kind: ChangeKind) -> PathChange {

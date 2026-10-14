@@ -1,0 +1,110 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT c.number AS \"number!: i64\", w.number AS \"workspace!: i64\", c.tree_hash,\n                  c.kind, c.reason, c.label, c.created_at, c.pruned_at\n           FROM checkpoints c JOIN workspaces w ON w.id = c.workspace_id\n           WHERE c.number = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "checkpoints",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "workspace!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "workspaces",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "tree_hash",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "checkpoints",
+            "name": "tree_hash"
+          }
+        }
+      },
+      {
+        "name": "kind",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "checkpoints",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "name": "reason",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "checkpoints",
+            "name": "reason"
+          }
+        }
+      },
+      {
+        "name": "label",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "checkpoints",
+            "name": "label"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "checkpoints",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "pruned_at",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "checkpoints",
+            "name": "pruned_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "3ff11995734d381d8511a371176a15caa6ef6efc2a77c919f859d675fc35b7a4"
+}

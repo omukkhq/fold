@@ -23,6 +23,9 @@ pub enum WorkspaceError {
     Tree(#[from] TreeError),
     #[error("workspace I/O failed: {0}")]
     Io(#[from] io::Error),
+    /// The paths hold content that no object records, so replacing them would lose it.
+    #[error("{} paths hold changes no checkpoint records", .0.len())]
+    Unrecorded(Vec<String>),
 }
 
 impl WorkspaceError {
@@ -33,6 +36,7 @@ impl WorkspaceError {
             Self::Object(error) => error.code(),
             Self::Tree(error) => error.code(),
             Self::Io(_) => codes::WORKSPACE_IO,
+            Self::Unrecorded(_) => codes::UNRECORDED_CHANGES,
         }
     }
 
@@ -48,6 +52,7 @@ impl From<WorkspaceError> for FoldError {
             WorkspaceError::InvalidPath(path) | WorkspaceError::TargetNotEmpty(path) => {
                 folded.with_details(json!({ "path": path }))
             }
+            WorkspaceError::Unrecorded(paths) => folded.with_details(json!({ "paths": paths })),
             _ => folded,
         }
     }

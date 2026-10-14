@@ -4,6 +4,7 @@ pub mod materialise;
 pub mod objects;
 pub mod paths;
 pub mod platform;
+pub mod restore;
 pub mod revision_store;
 pub mod scan;
 pub mod snapshot;

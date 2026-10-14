@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO changesets (number, workspace_id, task_id, parent_changeset_id,\n                                   base_revision_id, tree_hash, message, stats, created_by, created_at)\n           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": []
+  },
+  "hash": "f2a261585ea55549f1d918ca96908600d5347a5b7f55a58222a1fb22eab70c94"
+}
