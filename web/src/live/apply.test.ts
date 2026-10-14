@@ -225,6 +225,20 @@ describe("patch rules", () => {
     expect(invalidated).toEqual([]);
   });
 
+  it("leaves the workspace list and the activity list alone on a workspace_changed frame", () => {
+    client.setQueryData(keys.workspaces(slug), [{ workspace: "ws-1" }]);
+    applyEvent(
+      client,
+      slug,
+      guarded({ kind: "workspace_changed", ...live("ws-1", "1 file, +2 -0") }),
+    );
+    expect(client.getQueryData(keys.workspaces(slug))).toEqual([
+      { workspace: "ws-1" },
+    ]);
+    expect(hit(keys.workspaces(slug))).toBe(false);
+    expect(hit(keys.activity(slug))).toBe(false);
+  });
+
   it("replaces every live state on a snapshot and drops absent ones", () => {
     client.setQueryData(keys.workspaceLive(slug, "ws-1"), live("ws-1", "a"));
     client.setQueryData(keys.workspaceLive(slug, "ws-2"), live("ws-2", "b"));

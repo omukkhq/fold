@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as PSlugRouteImport } from './routes/p.$slug'
+import { Route as PSlugActivityRouteImport } from './routes/p.$slug.activity'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -22,31 +23,39 @@ const PSlugRoute = PSlugRouteImport.update({
   path: '/p/$slug',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PSlugActivityRoute = PSlugActivityRouteImport.update({
+  id: '/activity',
+  path: '/activity',
+  getParentRoute: () => PSlugRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/p/$slug': typeof PSlugRoute
+  '/p/$slug': typeof PSlugRouteWithChildren
+  '/p/$slug/activity': typeof PSlugActivityRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/p/$slug': typeof PSlugRoute
+  '/p/$slug': typeof PSlugRouteWithChildren
+  '/p/$slug/activity': typeof PSlugActivityRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/p/$slug': typeof PSlugRoute
+  '/p/$slug': typeof PSlugRouteWithChildren
+  '/p/$slug/activity': typeof PSlugActivityRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/p/$slug'
+  fullPaths: '/' | '/p/$slug' | '/p/$slug/activity'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/p/$slug'
-  id: '__root__' | '/' | '/p/$slug'
+  to: '/' | '/p/$slug' | '/p/$slug/activity'
+  id: '__root__' | '/' | '/p/$slug' | '/p/$slug/activity'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  PSlugRoute: typeof PSlugRoute
+  PSlugRoute: typeof PSlugRouteWithChildren
 }
 
 declare module '@tanstack/react-router' {
@@ -65,12 +74,29 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/p/$slug/activity': {
+      id: '/p/$slug/activity'
+      path: '/activity'
+      fullPath: '/p/$slug/activity'
+      preLoaderRoute: typeof PSlugActivityRouteImport
+      parentRoute: typeof PSlugRoute
+    }
   }
 }
 
+interface PSlugRouteChildren {
+  PSlugActivityRoute: typeof PSlugActivityRoute
+}
+
+const PSlugRouteChildren: PSlugRouteChildren = {
+  PSlugActivityRoute: PSlugActivityRoute,
+}
+
+const PSlugRouteWithChildren = PSlugRoute._addFileChildren(PSlugRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  PSlugRoute: PSlugRoute,
+  PSlugRoute: PSlugRouteWithChildren,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

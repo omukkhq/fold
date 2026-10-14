@@ -3,34 +3,38 @@ import type {
   LiveWorkspace,
   StoredEvent,
 } from "../src/live/envelope";
+import { workspaces } from "./workspaces";
 
 const KEEP_ALIVE_MS = 15_000;
 const STEP_MS = 1_500;
 const T0 = Date.UTC(2026, 9, 1, 9, 0, 0);
 
-function workspace(
-  id: string,
-  task: string,
-  changed: number,
-  at: number,
-): LiveWorkspace {
-  return {
-    workspace: id,
-    task,
-    worker: "frontend/ui",
-    base: "r1",
-    files: Array.from({ length: changed }, (_, i) => ({
-      path: `src/board/part${String(i + 1)}.ts`,
+const active = workspaces.flatMap((entry) =>
+  entry.live === null ? [] : [entry.live],
+);
+
+/** The listed live state of `id` with `extra` more changed files, as the watcher reports it a moment later. */
+function changed(id: string, extra: number, after: number): LiveWorkspace {
+  const base = active.find((live) => live.workspace === id);
+  if (base === undefined) {
+    throw new Error(`no active fixture workspace ${id}`);
+  }
+  const files = [
+    ...base.files,
+    ...Array.from({ length: extra }, (_, i) => ({
+      path: `src/forms/step${String(i + 1)}.ts`,
       previous_path: null,
-      change: "modified" as const,
-      added_lines: 3,
-      removed_lines: 1,
+      change: "added" as const,
+      added_lines: 12,
+      removed_lines: 0,
       binary: false,
     })),
-    summary: `${String(changed)} files, +${String(changed * 3)} -${String(changed)}`,
-    last_activity_at: at,
-    checkpoints: [],
-    proposal: null,
+  ];
+  return {
+    ...base,
+    files,
+    summary: `${String(files.length)} files`,
+    last_activity_at: base.last_activity_at + after,
   };
 }
 
@@ -60,7 +64,7 @@ const script: { after: number; frame: EventEnvelope }[] = [
     after: 0,
     frame: {
       kind: "workspace_changed",
-      ...workspace("ws-1", "T-1", 2, T0),
+      ...changed("ws-1", 1, STEP_MS),
     },
   },
   {
@@ -71,7 +75,7 @@ const script: { after: number; frame: EventEnvelope }[] = [
     after: 1,
     frame: {
       kind: "workspace_changed",
-      ...workspace("ws-1", "T-1", 5, T0 + STEP_MS),
+      ...changed("ws-1", 2, 2 * STEP_MS),
     },
   },
   {
@@ -114,10 +118,7 @@ export function fixtureEventTransport(
       const snapshot: EventEnvelope = {
         kind: "snapshot",
         seq: cursor,
-        workspaces: [
-          workspace("ws-1", "T-1", 1, T0),
-          workspace("ws-2", "T-2", 0, T0),
-        ],
+        workspaces: slug === "demo" ? active : [],
       };
       yield frame(snapshot, cursor);
       const after = script.filter(({ after, frame }) =>
