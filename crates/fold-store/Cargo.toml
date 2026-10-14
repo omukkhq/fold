@@ -1,0 +1,12 @@
+[package]
+name = "fold-store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+fold-core = { version = "0.1.0", path = "../fold-core" }
+
+[lints]
+workspace = true
