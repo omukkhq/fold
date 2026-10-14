@@ -6,8 +6,10 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+blake3 = "1.8.7"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+similar = "3.2.0"
 thiserror = "2.0.21"
 time = { version = "0.3.55", features = ["formatting", "parsing"] }
 

@@ -3,3 +3,6 @@ invalid_timestamp
 agent_not_registered
 dependency_cycle
 already_claimed
+invalid_hash
+tree_invalid
+revision_invalid

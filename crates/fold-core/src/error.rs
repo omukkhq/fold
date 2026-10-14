@@ -16,6 +16,9 @@ define_codes! {
     AGENT_NOT_REGISTERED = "agent_not_registered",
     DEPENDENCY_CYCLE = "dependency_cycle",
     ALREADY_CLAIMED = "already_claimed",
+    INVALID_HASH = "invalid_hash",
+    TREE_INVALID = "tree_invalid",
+    REVISION_INVALID = "revision_invalid",
 }
 
 /// The error every transport reports. The message and details name ids, never content.
