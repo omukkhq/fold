@@ -1,0 +1,7 @@
+[profile.default]
+fail-fast = false
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[profile.fast]
+inherits = "default"
+default-filter = "not test(/^acceptance_/)"

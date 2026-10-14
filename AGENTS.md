@@ -24,7 +24,7 @@ fold: a local-first platform where independent AI coding agents plan, build, rev
 **The Makefile is the interface.** `make help` lists every target; prefer a target over the raw command.
 
 ```bash
-make setup                 # toolchain components, cargo tools, bun install, git hooks (once per clone)
+make setup                 # toolchain components, cargo tools, bun install, prek and its git hook (once per clone)
 make dev                   # daemon with reload on :7420 plus the Vite dev server on :5173
 make dev-daemon            # daemon only (also dev-web)
 make gen-api               # regenerate web/src/api/schema.d.ts from `fold openapi` (no daemon needed)
@@ -112,7 +112,7 @@ Before declaring Rust work done, run `make check-rust`; for web work, `make chec
 
 ## Git
 
-1. **Never commit with `--no-verify`.** The hooks in `.githooks/` run `make fmt` checks, clippy and the fast tests; fix what they reject, re-stage and commit again.
+1. **Never commit with `--no-verify`.** The hooks are defined in `.pre-commit-config.yaml` and run by prek, which `make setup` installs. They run the format checks, clippy and the fast tests for the halves a commit touches; fix what they reject, re-stage and commit again.
 2. **Write commit messages for the person reading the history:** what changed and why it matters, not the mechanics visible in the diff.
 3. **No trailing signature:** no `Co-Authored-By`, `Generated with …`, or any attribution footer.
 4. **Commit to the current branch.** Don't create a separate branch to hold the work unless asked.

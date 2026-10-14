@@ -1,0 +1,15 @@
+repos:
+  - repo: local
+    hooks:
+      - id: rust
+        name: rust
+        language: system
+        pass_filenames: false
+        files: '(\.rs$|(^|/)Cargo\.toml$|(^|/)Cargo\.lock$|(^|/)rust-toolchain\.toml$|(^|/)clippy\.toml$|(^|/)\.sqlx/|(^|/)migrations/)'
+        entry: make --no-print-directory fmt-check-rust clippy test-fast
+      - id: web
+        name: web
+        language: system
+        pass_filenames: false
+        files: '^web/'
+        entry: make --no-print-directory fmt-check-web test-web
