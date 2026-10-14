@@ -1,4 +1,5 @@
 pub mod clock;
+pub mod dag;
 pub mod error;
 pub mod ids;
 pub mod merge;
