@@ -1,1 +1,114 @@
 @import "tailwindcss";
+@import "./fonts.css";
+@import "./tokens.css";
+
+@theme inline reference {
+  --color-*: initial;
+  --color-transparent: transparent;
+  --color-current: currentColor;
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-sunken: var(--sunken);
+  --color-raised: var(--raised);
+  --color-border: var(--border);
+  --color-border-subtle: var(--border-subtle);
+  --color-text: var(--text);
+  --color-text-muted: var(--text-muted);
+  --color-text-faint: var(--text-faint);
+  --color-ink: var(--ink);
+  --color-on-ink: var(--on-ink);
+  --color-primary: var(--primary);
+  --color-primary-strong: var(--primary-strong);
+  --color-primary-muted: var(--primary-muted);
+  --color-primary-text: var(--primary-text);
+  --color-primary-soft: var(--primary-soft);
+  --color-on-primary: var(--on-primary);
+  --color-secondary: var(--secondary);
+  --color-secondary-text: var(--secondary-text);
+  --color-secondary-soft: var(--secondary-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-status-backlog: var(--status-backlog);
+  --color-status-todo: var(--status-todo);
+  --color-status-progress: var(--status-progress);
+  --color-status-review: var(--status-review);
+  --color-status-done: var(--status-done);
+  --color-diff-add: var(--diff-add);
+  --color-diff-add-strong: var(--diff-add-strong);
+  --color-diff-del: var(--diff-del);
+  --color-diff-del-strong: var(--diff-del-strong);
+  --color-label-sage: var(--label-sage);
+  --color-label-slate: var(--label-slate);
+  --color-label-teal: var(--label-teal);
+  --color-label-ink: var(--label-ink);
+  --color-label-gold: var(--label-gold);
+  --color-label-moss: var(--label-moss);
+  --color-label-plum: var(--label-plum);
+  --color-label-stone: var(--label-stone);
+  --color-muted: var(--text-muted);
+  --color-faint: var(--text-faint);
+
+  --font-*: initial;
+  --font-ui: var(--font-ui);
+  --font-mono: var(--font-mono);
+
+  --radius-*: initial;
+  --radius-s: var(--radius-s);
+  --radius-m: var(--radius-m);
+  --radius-l: var(--radius-l);
+
+  --text-*: initial;
+  --text-page: var(--size-page);
+  --text-screen: var(--size-screen);
+  --text-section: var(--size-section);
+  --text-card: var(--size-card);
+  --text-body: var(--size-body);
+  --text-meta: var(--size-meta);
+  --text-label: var(--size-label);
+  --text-overline: var(--size-overline);
+  --text-overline--letter-spacing: var(--tracking-overline);
+
+  --leading-*: initial;
+  --leading-snug: var(--leading-snug);
+  --leading-normal: var(--leading-normal);
+  --leading-loose: var(--leading-loose);
+
+  --font-weight-*: initial;
+  --font-weight-regular: var(--weight-regular);
+  --font-weight-medium: var(--weight-medium);
+  --font-weight-semibold: var(--weight-semibold);
+  --font-weight-bold: var(--weight-bold);
+
+  --shadow-*: initial;
+  --shadow-card: var(--elevation-card);
+
+  --spacing-*: initial;
+  --spacing-0: var(--space-0);
+  --spacing-2: var(--space-2);
+  --spacing-3: var(--space-3);
+  --spacing-4: var(--space-4);
+  --spacing-5: var(--space-5);
+  --spacing-6: var(--space-6);
+  --spacing-7: var(--space-7);
+  --spacing-8: var(--space-8);
+  --spacing-10: var(--space-10);
+  --spacing-12: var(--space-12);
+  --spacing-13: var(--space-13);
+  --spacing-14: var(--space-14);
+  --spacing-24: var(--space-24);
+  --spacing-28: var(--space-28);
+  --spacing-32: var(--space-32);
+  --spacing-40: var(--space-40);
+}
+
+@layer base {
+  html {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-ui);
+    font-size: var(--size-body);
+    line-height: var(--leading-normal);
+  }
+}

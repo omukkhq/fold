@@ -1,0 +1,184 @@
+:root {
+  --font-ui: "Barlow", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --radius-s: 4px;
+  --radius-m: 8px;
+  --radius-l: 12px;
+
+  --size-page: 28px;
+  --size-screen: 24px;
+  --size-section: 16px;
+  --size-card: 15px;
+  --size-body: 14px;
+  --size-meta: 12px;
+  --size-label: 11.5px;
+  --size-overline: 11.5px;
+
+  --leading-snug: 1.3;
+  --leading-normal: 1.4;
+  --leading-loose: 1.7;
+
+  --tracking-overline: 0.9px;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  --elevation-card: 0 1px 2px #1a1a1f14;
+
+  --space-0: 0px;
+  --space-2: 2px;
+  --space-3: 3px;
+  --space-4: 4px;
+  --space-5: 5px;
+  --space-6: 6px;
+  --space-7: 7px;
+  --space-8: 8px;
+  --space-10: 10px;
+  --space-12: 12px;
+  --space-13: 13px;
+  --space-14: 14px;
+  --space-24: 24px;
+  --space-28: 28px;
+  --space-32: 32px;
+  --space-40: 40px;
+}
+
+:root {
+  color-scheme: light;
+  --bg: #fafaf8;
+  --surface: #ffffff;
+  --sunken: #f3f1ed;
+  --raised: #ffffff;
+  --border: #d6d3cc;
+  --border-subtle: #e8e6e1;
+  --text: #1a1a1f;
+  --text-muted: #64635e;
+  --text-faint: #72716b;
+  --ink: #1a1a1f;
+  --on-ink: #fafaf8;
+  --primary: #6b8f8a;
+  --primary-strong: #557570;
+  --primary-muted: #8aaba7;
+  --primary-text: #4f6f6a;
+  --primary-soft: #f0f5f4;
+  --on-primary: #ffffff;
+  --secondary: #b89a5a;
+  --secondary-text: #86692f;
+  --secondary-soft: #faf6ee;
+  --success: #6a9e7a;
+  --success-soft: #f0f7f2;
+  --danger: #b8433b;
+  --danger-soft: #fcf0ef;
+  --status-backlog: #c4c2bb;
+  --status-todo: #6b7785;
+  --status-progress: #6b8f8a;
+  --status-review: #b89a5a;
+  --status-done: #1a1a1f;
+  --diff-add: #f0f7f2;
+  --diff-add-strong: #d7eadd;
+  --diff-del: #f7ede9;
+  --diff-del-strong: #edd3cb;
+  --label-sage: #6b8f8a;
+  --label-slate: #6b7785;
+  --label-teal: #4f8a84;
+  --label-ink: #1a1a1f;
+  --label-gold: #b89a5a;
+  --label-moss: #7d9466;
+  --label-plum: #8c7389;
+  --label-stone: #a3a19a;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0a0a0b;
+  --surface: #121214;
+  --sunken: #19191c;
+  --raised: #1c1c20;
+  --border: #2a2a2e;
+  --border-subtle: #1f1f23;
+  --text: #f5f5f3;
+  --text-muted: #9e9d98;
+  --text-faint: #8a8983;
+  --ink: #f5f5f3;
+  --on-ink: #0a0a0b;
+  --primary: #8ab5b0;
+  --primary-strong: #a3c9c4;
+  --primary-muted: #6d9691;
+  --primary-text: #a3c9c4;
+  --primary-soft: #8ab5b012;
+  --on-primary: #0a0a0b;
+  --secondary: #c9a966;
+  --secondary-text: #d9bd80;
+  --secondary-soft: #c9a96612;
+  --success: #7dba8e;
+  --success-soft: #7dba8e0f;
+  --danger: #ef6b6b;
+  --danger-soft: #ef6b6b14;
+  --status-backlog: #4a4945;
+  --status-todo: #a3afbc;
+  --status-progress: #8ab5b0;
+  --status-review: #c9a966;
+  --status-done: #f5f5f3;
+  --diff-add: #7dba8e0f;
+  --diff-add-strong: #7dba8e26;
+  --diff-del: #dc8b7912;
+  --diff-del-strong: #dc8b7926;
+  --label-sage: #8ab5b0;
+  --label-slate: #a3afbc;
+  --label-teal: #7fb3ac;
+  --label-ink: #f5f5f3;
+  --label-gold: #c9a966;
+  --label-moss: #a3b67e;
+  --label-plum: #c1a0b8;
+  --label-stone: #77766f;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0a0a0b;
+    --surface: #121214;
+    --sunken: #19191c;
+    --raised: #1c1c20;
+    --border: #2a2a2e;
+    --border-subtle: #1f1f23;
+    --text: #f5f5f3;
+    --text-muted: #9e9d98;
+    --text-faint: #8a8983;
+    --ink: #f5f5f3;
+    --on-ink: #0a0a0b;
+    --primary: #8ab5b0;
+    --primary-strong: #a3c9c4;
+    --primary-muted: #6d9691;
+    --primary-text: #a3c9c4;
+    --primary-soft: #8ab5b012;
+    --on-primary: #0a0a0b;
+    --secondary: #c9a966;
+    --secondary-text: #d9bd80;
+    --secondary-soft: #c9a96612;
+    --success: #7dba8e;
+    --success-soft: #7dba8e0f;
+    --danger: #ef6b6b;
+    --danger-soft: #ef6b6b14;
+    --status-backlog: #4a4945;
+    --status-todo: #a3afbc;
+    --status-progress: #8ab5b0;
+    --status-review: #c9a966;
+    --status-done: #f5f5f3;
+    --diff-add: #7dba8e0f;
+    --diff-add-strong: #7dba8e26;
+    --diff-del: #dc8b7912;
+    --diff-del-strong: #dc8b7926;
+    --label-sage: #8ab5b0;
+    --label-slate: #a3afbc;
+    --label-teal: #7fb3ac;
+    --label-ink: #f5f5f3;
+    --label-gold: #c9a966;
+    --label-moss: #a3b67e;
+    --label-plum: #c1a0b8;
+    --label-stone: #77766f;
+  }
+}
