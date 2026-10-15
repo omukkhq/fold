@@ -12,6 +12,7 @@ use super::workspaces::{WorkspaceError, WorkspaceService};
 mod checkouts;
 mod claims;
 mod comments;
+mod conflicts;
 mod human_review;
 mod integrate;
 mod proposals;

@@ -1,5 +1,6 @@
 use fold_core::checkpoint_policy::AutoReason;
 use fold_core::events::types;
+use fold_core::merge::ConflictReport;
 use fold_core::object::ObjectHash;
 use fold_core::status::ProposalFact;
 use fold_core::tree::ChangeCounts;
@@ -131,6 +132,8 @@ pub struct ProposalDetail {
     pub versions: Vec<VersionView>,
     /// The version that was asked for, else the current one.
     pub selected: VersionView,
+    /// The report of the latest conflicted integration of the selected version. A new version has none until an integration of it conflicts.
+    pub conflict: Option<ConflictReport>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -431,7 +434,7 @@ impl ReviewService {
         Ok(rows.into_iter().map(ProposalSummary::from).collect())
     }
 
-    /// A proposal with every version. `version` selects one of them, else the current one is selected.
+    /// A proposal with every version and the conflict report of the selected one. `version` selects one of them, else the current one is selected.
     pub async fn get_proposal(
         &self,
         proposal: ProposalId,
@@ -463,10 +466,12 @@ impl ReviewService {
                 ])
                 .with_hint("call get_proposal without a version to see every version")
             })?;
+        let conflict = self.conflict_report(proposal, selected.version).await?;
         Ok(ProposalDetail {
             summary: row.into(),
             versions,
             selected,
+            conflict,
         })
     }
 }

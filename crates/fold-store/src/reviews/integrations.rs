@@ -1,7 +1,8 @@
+use fold_core::merge::ConflictReport;
 use fold_core::reviews::{HumanReviewMark, ReviewFact};
 use fold_core::revision::StoredRevision;
 use fold_core::{IntegrationId, ProposalId, TaskId, TaskStatus, Timestamp, WorkspaceId};
-use sqlx::SqliteConnection;
+use sqlx::{SqliteConnection, SqliteExecutor};
 
 use super::{ProposalRow, ReviewTarget, get_proposal, review_facts, review_target};
 use crate::error::StoreError;
@@ -105,6 +106,62 @@ pub async fn insert_refused(
     report: &str,
 ) -> Result<(), StoreError> {
     insert(tx, new, "refused", report).await
+}
+
+/// Records an integration whose merge conflicted, with its report. No revision is named and main does not move.
+pub async fn insert_conflicted(
+    tx: &mut WriteTx,
+    new: &NewIntegration<'_>,
+    report: &ConflictReport,
+) -> Result<(), StoreError> {
+    let report =
+        serde_json::to_string(report).map_err(|_| StoreError::Invalid("the conflict report"))?;
+    insert(tx, new, "conflicted", &report).await
+}
+
+/// Sets the conflict flag of an open proposal, which puts the task back with its author until a new version clears it. False, with nothing changed, when the proposal is not open.
+pub async fn mark_conflicted(
+    tx: &mut WriteTx,
+    proposal: ProposalId,
+    now: Timestamp,
+) -> Result<bool, StoreError> {
+    let (number, now) = (proposal.to_db(), now.as_millis());
+    let updated = sqlx::query!(
+        "UPDATE proposals SET conflicted = 1, updated_at = ?2 WHERE number = ?1 AND state = 'open'",
+        number,
+        now
+    )
+    .execute(tx.conn())
+    .await?
+    .rows_affected();
+    Ok(updated == 1)
+}
+
+/// The report of the latest `conflicted` integration of `version` of `proposal`, as it was stored; `None` when that version never conflicted.
+pub async fn conflict_report(
+    executor: impl SqliteExecutor<'_>,
+    proposal: ProposalId,
+    version: u32,
+) -> Result<Option<ConflictReport>, StoreError> {
+    let (number, version) = (proposal.to_db(), i64::from(version));
+    let report = sqlx::query_scalar!(
+        r#"SELECT i.report
+           FROM integrations i
+           JOIN proposal_versions v ON v.id = i.version_id
+           JOIN proposals p ON p.id = v.proposal_id
+           WHERE p.number = ?1 AND v.version = ?2 AND i.result = 'conflicted'
+           ORDER BY i.id DESC
+           LIMIT 1"#,
+        number,
+        version
+    )
+    .fetch_optional(executor)
+    .await?;
+    report
+        .map(|text| {
+            serde_json::from_str(&text).map_err(|_| StoreError::Corrupt("integrations.report"))
+        })
+        .transpose()
 }
 
 async fn insert(

@@ -472,7 +472,7 @@ async fn moved_main_with_a_clean_merge_integrates_without_new_review() {
 }
 
 #[tokio::test]
-async fn conflicting_proposal_returns_conflicts_and_changes_nothing() {
+async fn conflicting_proposal_returns_conflicts_and_publishes_nothing() {
     let fx = Fixture::new().await;
     let review = approved(&fx).await;
     let mut moved = pull(&fx, "# demo\n");
@@ -493,7 +493,6 @@ async fn conflicting_proposal_returns_conflicts_and_changes_nothing() {
     moved.remote_tree = write_initial_tree(&objects, tree).unwrap();
     fx.reviews.integrate_pull(&human(), moved).await.unwrap();
     let before = untouched(&fx).await;
-    let seq = fx.last_seq().await;
 
     let outcome = fx
         .reviews
@@ -506,9 +505,18 @@ async fn conflicting_proposal_returns_conflicts_and_changes_nothing() {
     };
     assert_eq!(conflicts.len(), 1);
     assert_eq!(conflicts[0].path, b"src/lib.rs");
-    assert_eq!(untouched(&fx).await, before);
-    assert_eq!(fx.events_after(seq).await, Vec::new());
-    assert_eq!(fx.count("SELECT COUNT(*) FROM integrations").await, 1);
+    assert_eq!(
+        untouched(&fx).await,
+        Untouched {
+            status: TaskStatus::InProgress,
+            ..before
+        }
+    );
+    assert_eq!(
+        fx.count("SELECT COUNT(*) FROM integrations WHERE result = 'conflicted'")
+            .await,
+        1
+    );
 }
 
 /// Sets up `P-1` for one gate case and returns the caller; the case refuses with `code` and records a row when `recorded`.

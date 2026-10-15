@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT i.report\n           FROM integrations i\n           JOIN proposal_versions v ON v.id = i.version_id\n           JOIN proposals p ON p.id = v.proposal_id\n           WHERE p.number = ?1 AND v.version = ?2 AND i.result = 'conflicted'\n           ORDER BY i.id DESC\n           LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "report",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "integrations",
+            "name": "report"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "8c00e97df46bbf63172f88e3b73eb5cb374b104d84d14230c68405719f26789c"
+}

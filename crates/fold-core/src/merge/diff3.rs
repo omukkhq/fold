@@ -7,12 +7,15 @@ pub enum Segment {
     Conflict(ConflictHunk),
 }
 
-/// All three versions of the whole conflicting span, so a caller can render or resolve it without the inputs.
+/// All three versions of the whole conflicting span, so a caller can render or resolve it without the inputs. Each `*_start` is the index, from 0, of the span's first line in that side's file; an empty span starts where its lines would be.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConflictHunk {
     pub base: Vec<String>,
     pub ours: Vec<String>,
     pub theirs: Vec<String>,
+    pub base_start: usize,
+    pub ours_start: usize,
+    pub theirs_start: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,6 +70,8 @@ pub fn merge3(base: &str, ours: &str, theirs: &str) -> Merge3 {
 
     let mut segments = Vec::new();
     let mut pos = 0;
+    // The line in ours and in theirs that base line `pos` lines up with.
+    let (mut ours_pos, mut theirs_pos) = (0, 0);
     let (mut oi, mut ti) = (0, 0);
     while oi < ours_regions.len() || ti < theirs_regions.len() {
         // Both sides' regions that overlap or touch form one cluster; a lone region is a clean one-sided change.
@@ -95,6 +100,8 @@ pub fn merge3(base: &str, ours: &str, theirs: &str) -> Merge3 {
         push_resolved(&mut segments, base_lines[pos..first].to_vec());
         let ours_cluster = &ours_regions[oi..o_end];
         let theirs_cluster = &theirs_regions[ti..t_end];
+        let ours_start = ours_pos + (first - pos);
+        let theirs_start = theirs_pos + (first - pos);
         if theirs_cluster.is_empty() || ours_cluster.is_empty() {
             let only = if theirs_cluster.is_empty() {
                 ours_cluster
@@ -114,9 +121,14 @@ pub fn merge3(base: &str, ours: &str, theirs: &str) -> Merge3 {
                     base: base_lines[first..span_end].to_vec(),
                     ours: ours_text,
                     theirs: theirs_text,
+                    base_start: first,
+                    ours_start,
+                    theirs_start,
                 }));
             }
         }
+        ours_pos = ours_start + applied_len(first, span_end, ours_cluster);
+        theirs_pos = theirs_start + applied_len(first, span_end, theirs_cluster);
         pos = span_end;
         oi = o_end;
         ti = t_end;
@@ -167,6 +179,13 @@ fn apply(base: &[String], start: usize, end: usize, regions: &[Region]) -> Vec<S
     out
 }
 
+/// How many lines [`apply`] gives for `base[start..end]`, without building them.
+fn applied_len(start: usize, end: usize, regions: &[Region]) -> usize {
+    regions.iter().fold(end - start, |len, region| {
+        len - (region.end - region.start) + region.lines.len()
+    })
+}
+
 /// Myers diff of base against `side`, reduced to maximal changed regions in base order. Consecutive non-equal ops are one region, so regions of one side never touch.
 fn regions(base: &[String], side: &[String]) -> Vec<Region> {
     let base_refs: Vec<&str> = base.iter().map(String::as_str).collect();
@@ -211,6 +230,8 @@ fn regions(base: &[String], side: &[String]) -> Vec<Region> {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
 
     fn text(m: Merge3) -> String {
@@ -333,6 +354,9 @@ mod tests {
                     base: v(&["b\n", "c\n"]),
                     ours: v(&["B1\n", "C1\n"]),
                     theirs: v(&["B2\n", "c\n"]),
+                    base_start: 1,
+                    ours_start: 1,
+                    theirs_start: 1,
                 }),
                 Segment::Resolved(v(&["d\n"])),
             ]
@@ -415,10 +439,57 @@ mod tests {
         assert_eq!(merge3("a\n", "b\n", "c\n").into_text(), None);
     }
 
+    /// Lines added or removed earlier on one side move that side's later spans.
+    #[test]
+    fn hunk_starts_follow_each_side() {
+        let m = merge3("a\nb\nc\nd\ne\n", "x\ny\na\nb\nc\nD1\ne\n", "b\nc\nD2\ne\n");
+        let hunks: Vec<_> = m
+            .segments
+            .iter()
+            .filter_map(|s| match s {
+                Segment::Conflict(h) => Some(h),
+                Segment::Resolved(_) => None,
+            })
+            .collect();
+        let starts: Vec<_> = hunks
+            .iter()
+            .map(|h| (h.base_start, h.ours_start, h.theirs_start))
+            .collect();
+        assert_eq!(starts, [(0, 0, 0), (3, 5, 2)]);
+        assert_eq!(hunks[0].theirs, Vec::<String>::new());
+        assert_eq!(hunks[1].ours, v(&["D1\n"]));
+        assert_eq!(hunks[1].theirs, v(&["D2\n"]));
+    }
+
     #[test]
     fn deterministic() {
         let a = merge3("a\nb\nc\n", "a\nx\nc\n", "a\ny\nc\n");
         let b = merge3("a\nb\nc\n", "a\nx\nc\n", "a\ny\nc\n");
         assert_eq!(a, b);
+    }
+
+    fn file() -> impl Strategy<Value = String> {
+        proptest::collection::vec(prop_oneof!["a\n", "b\n", "c\n", "d\n"], 0..8)
+            .prop_map(|lines| lines.concat())
+    }
+
+    /// The lines at `start` of `side`, as many as `lines` holds.
+    fn at(side: &str, start: usize, lines: &[String]) -> Option<Vec<String>> {
+        split_lines(side)
+            .get(start..start + lines.len())
+            .map(<[String]>::to_vec)
+    }
+
+    proptest! {
+        #[test]
+        fn each_hunk_start_points_at_its_lines_in_that_side(base in file(), ours in file(), theirs in file()) {
+            for segment in merge3(&base, &ours, &theirs).segments {
+                if let Segment::Conflict(hunk) = segment {
+                    prop_assert_eq!(at(&base, hunk.base_start, &hunk.base), Some(hunk.base.clone()));
+                    prop_assert_eq!(at(&ours, hunk.ours_start, &hunk.ours), Some(hunk.ours.clone()));
+                    prop_assert_eq!(at(&theirs, hunk.theirs_start, &hunk.theirs), Some(hunk.theirs.clone()));
+                }
+            }
+        }
     }
 }

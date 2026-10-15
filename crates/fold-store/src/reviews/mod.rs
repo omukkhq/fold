@@ -16,8 +16,8 @@ mod integrations;
 
 pub use claims::{ReviewClaimRow, insert_review_claim, unreleased_review_claim};
 pub use integrations::{
-    IntegrationFacts, IntegrationSubject, NewIntegration, insert_refused, insert_succeeded,
-    integration_facts,
+    IntegrationFacts, IntegrationSubject, NewIntegration, conflict_report, insert_conflicted,
+    insert_refused, insert_succeeded, integration_facts, mark_conflicted,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

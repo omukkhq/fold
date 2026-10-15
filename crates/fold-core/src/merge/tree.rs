@@ -841,6 +841,9 @@ mod tests {
                 base: vec!["old\n".into()],
                 ours: vec!["mine\n".into()],
                 theirs: vec!["main\n".into()],
+                base_start: 1,
+                ours_start: 1,
+                theirs_start: 1,
             }]
         );
     }

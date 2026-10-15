@@ -1,5 +1,5 @@
 use fold_core::events::types;
-use fold_core::merge::Conflict;
+use fold_core::merge::{Conflict, ReportTrees};
 use fold_core::object::ObjectHash;
 use fold_core::policy::{CallerFacts, GateRefusal, IntegrateInput, ProposalFacts, can_integrate};
 use fold_core::reviews::{Approver, ReviewFact, Verdict, latest_verdict};
@@ -17,6 +17,7 @@ use fold_store::{StoreError, WriteTx, counters, workspaces};
 use fold_vcs::integrate::MergeOutcome;
 use serde_json::json;
 
+use super::conflicts::FoundConflict;
 use super::proposals::{Retirement, proposal_not_found, retire_proposal};
 use super::{ReviewError, ReviewService};
 use crate::services::events::EventBuffer;
@@ -152,7 +153,7 @@ fn decide(
 }
 
 impl ReviewService {
-    /// Integrates the current version of an open proposal onto main, by an agent with the `integrator` tag that is not the author's agent, or by a named human, who approves in the same action. `expected_version` is the version the caller saw; another current version refuses with `stale_version`. A refusal by the open, version or caller gate writes nothing; a refusal by the approval, human review or prerequisite gate records a `refused` integration and `integration.refused`, then returns the gate's error. A clean merge moves main by compare-and-swap, records the integration, completes the task, retires the proposal, archives its workspaces and releases its claims in one transaction; a conflicting merge changes nothing and returns the conflicts.
+    /// Integrates the current version of an open proposal onto main, by an agent with the `integrator` tag that is not the author's agent, or by a named human, who approves in the same action. `expected_version` is the version the caller saw; another current version refuses with `stale_version`. A refusal by the open, version or caller gate writes nothing; a refusal by the approval, human review or prerequisite gate records a `refused` integration and `integration.refused`, then returns the gate's error. A clean merge moves main by compare-and-swap, records the integration, completes the task, retires the proposal, archives its workspaces and releases its claims in one transaction. A conflicting merge publishes nothing: it records a `conflicted` integration with its report, flags the proposal, tells the author's worker and returns the task to In Progress, then returns the conflicts.
     pub async fn integrate_proposal(
         &self,
         actor: &Actor,
@@ -234,7 +235,34 @@ impl ReviewService {
             .map_err(ReviewError::from)?;
         let tree = match merged {
             MergeOutcome::Merged { tree_hash } => tree_hash,
-            MergeOutcome::Conflicted(conflicts) => return Ok(Integrated::Conflicted(conflicts)),
+            MergeOutcome::Conflicted(conflicts) => {
+                if let Subject::Proposal {
+                    proposal,
+                    task,
+                    version,
+                    ..
+                } = plan.subject
+                {
+                    let found = FoundConflict {
+                        proposal,
+                        task,
+                        version,
+                        main: head.number,
+                        trees: ReportTrees {
+                            base: plan.base_tree,
+                            main: head.tree_hash,
+                            version: plan.other_tree,
+                        },
+                        conflicts: &conflicts,
+                    };
+                    #[cfg(feature = "failpoints")]
+                    fail::fail_point!("integration_before_conflict_record");
+                    if !self.record_conflict(actor, found).await? {
+                        return Err(Step::Retry);
+                    }
+                }
+                return Ok(Integrated::Conflicted(conflicts));
+            }
         };
         // Allocated in its own write, so a failed attempt never gives its number to a later one.
         let number = self
