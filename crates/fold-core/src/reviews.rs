@@ -171,11 +171,7 @@ pub fn human_approval_standing(
     if integrating_human.is_some_and(|human| mark.accepts(human)) {
         return true;
     }
-    let withdrawn = reviews
-        .iter()
-        .filter(|review| review.verdict == Verdict::RequestChanges)
-        .map(|review| review.seq)
-        .max();
+    let withdrawn = last_request_changes(reviews);
     reviews.iter().any(|review| {
         review.verdict == Verdict::Approve
             && matches!(&review.approver, Approver::Human(human) if mark.accepts(human))
@@ -185,11 +181,7 @@ pub fn human_approval_standing(
 
 /// The agent whose approval of the version stands: the latest approval by an agent after the last `request_changes`, or `None` when no agent's approval stands. Pass the reviews of one version only.
 pub fn standing_agent_approval(reviews: &[ReviewFact]) -> Option<AgentName> {
-    let withdrawn = reviews
-        .iter()
-        .filter(|review| review.verdict == Verdict::RequestChanges)
-        .map(|review| review.seq)
-        .max();
+    let withdrawn = last_request_changes(reviews);
     reviews
         .iter()
         .filter(|review| {
@@ -202,11 +194,7 @@ pub fn standing_agent_approval(reviews: &[ReviewFact]) -> Option<AgentName> {
 
 /// Every reviewer whose approval of the version stands: an approval after the last `request_changes`, workers and humans alike, each once, in the order of their first standing approval. Pass the reviews of one version only.
 pub fn standing_approvers(reviews: &[ReviewFact]) -> Vec<EventActor> {
-    let withdrawn = reviews
-        .iter()
-        .filter(|review| review.verdict == Verdict::RequestChanges)
-        .map(|review| review.seq)
-        .max();
+    let withdrawn = last_request_changes(reviews);
     let mut standing: Vec<&ReviewFact> = reviews
         .iter()
         .filter(|review| {
@@ -221,6 +209,38 @@ pub fn standing_approvers(reviews: &[ReviewFact]) -> Vec<EventActor> {
         }
     }
     approvers
+}
+
+/// The `seq` of the agent approval that lets fold integrate the version on its own: the first approval by an integrator agent other than `author`'s after the last `request_changes`, or `None` when no such approval stands. It is the first one because only a `request_changes` withdraws a human approval: a second agent approval after the human's leaves it standing. Pass the reviews of one version only.
+pub fn integrator_approval(reviews: &[ReviewFact], author: &AgentName) -> Option<u64> {
+    let withdrawn = last_request_changes(reviews);
+    reviews
+        .iter()
+        .filter(|review| {
+            review.verdict == Verdict::Approve
+                && review.approver == Approver::IntegratorAgent
+                && review.reviewer.agent() != Some(author.as_str())
+                && withdrawn.is_none_or(|seq| review.seq > seq)
+        })
+        .map(|review| review.seq)
+        .min()
+}
+
+/// Whether a human the mark accepts approved the version after the review with `seq`, the agent approval the human's approval must follow. Pass the reviews of one version only.
+pub fn human_approved_after(mark: &HumanReviewMark, reviews: &[ReviewFact], seq: u64) -> bool {
+    reviews.iter().any(|review| {
+        review.verdict == Verdict::Approve
+            && review.seq > seq
+            && matches!(&review.approver, Approver::Human(human) if mark.accepts(human))
+    })
+}
+
+fn last_request_changes(reviews: &[ReviewFact]) -> Option<u64> {
+    reviews
+        .iter()
+        .filter(|review| review.verdict == Verdict::RequestChanges)
+        .map(|review| review.seq)
+        .max()
 }
 
 #[cfg(test)]
@@ -499,5 +519,48 @@ mod tests {
             by("review", Verdict::Approve, 3),
         ];
         assert_eq!(names(&withdrawn), ["review"]);
+    }
+
+    #[test]
+    fn the_integrator_approval_is_the_first_one_after_the_last_request_changes() {
+        let author = AgentName::parse("backend").unwrap();
+        let by_author = ReviewFact {
+            reviewer: EventActor::parse("backend/ci").unwrap(),
+            ..by_integrator(Verdict::Approve, 5)
+        };
+        assert_eq!(integrator_approval(&[], &author), None);
+        let reviews = [
+            by_integrator(Verdict::Approve, 1),
+            fact(Verdict::Approve, 3),
+            by_human(Verdict::Approve, "ana", 4),
+            by_author,
+        ];
+        assert_eq!(integrator_approval(&reviews, &author), Some(1));
+        let withdrawn = [
+            by_integrator(Verdict::Approve, 1),
+            by_human(Verdict::RequestChanges, "ana", 2),
+        ];
+        assert_eq!(integrator_approval(&withdrawn, &author), None);
+        let again = [
+            by_integrator(Verdict::Approve, 1),
+            fact(Verdict::RequestChanges, 2),
+            by_integrator(Verdict::Approve, 3),
+            by_integrator(Verdict::Approve, 4),
+        ];
+        assert_eq!(integrator_approval(&again, &author), Some(3));
+    }
+
+    #[test]
+    fn only_a_human_approval_after_the_agent_approval_follows_it() {
+        let named = mark(Some("tanim"));
+        let reviews = [
+            by_human(Verdict::Approve, "tanim", 1),
+            by_integrator(Verdict::Approve, 2),
+            by_human(Verdict::Approve, "ana", 3),
+            by_human(Verdict::Comment, "tanim", 4),
+        ];
+        assert!(!human_approved_after(&named, &reviews, 2));
+        assert!(human_approved_after(&mark(None), &reviews, 2));
+        assert!(human_approved_after(&named, &reviews, 0));
     }
 }

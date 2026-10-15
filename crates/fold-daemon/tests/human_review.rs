@@ -145,6 +145,10 @@ impl Fixture {
                 .await
                 .unwrap();
         }
+        agents
+            .set_integrator(&human("tanim"), &AgentName::parse("review").unwrap(), true)
+            .await
+            .unwrap();
         let author = agent("frontend", &[]);
         workspaces.create_workspace(&author, t(1)).await.unwrap();
         let file = project.paths().root().join("ws/t-1/src/lib.rs");
@@ -514,6 +518,19 @@ async fn awaiting_human_review_lists_and_clears_after_a_human_approval() {
     fx.mark(&planner(), t(2), None).await;
     let marked_at = fx.project.now();
     assert!(marked_at > version_at);
+    assert!(
+        fx.awaiting().await.is_empty(),
+        "the human sees P-1 only once an agent approved it"
+    );
+    fx.review(&agent("planner", &["integrator"]), Verdict::Approve)
+        .await;
+    assert!(
+        fx.awaiting().await.is_empty(),
+        "an agent that no longer holds integrator does not count"
+    );
+
+    fx.review(&agent("review", &["integrator"]), Verdict::Approve)
+        .await;
     let waiting = fx.awaiting().await;
     assert_eq!(
         waiting,
@@ -523,15 +540,7 @@ async fn awaiting_human_review_lists_and_clears_after_a_human_approval() {
             reviewer: Some(name("tanim")),
             since: marked_at,
         }],
-        "T-2 has no proposal, so it waits for nothing"
-    );
-
-    fx.review(&agent("review", &["integrator"]), Verdict::Approve)
-        .await;
-    assert_eq!(
-        fx.awaiting().await.len(),
-        1,
-        "an agent approval never counts"
+        "an agent approval never counts for the human, and T-2 has no proposal"
     );
     fx.review(&human("ana"), Verdict::Approve).await;
     assert_eq!(
@@ -548,15 +557,31 @@ async fn awaiting_human_review_lists_and_clears_after_a_human_approval() {
     );
 
     fx.review(&human("tanim"), Verdict::Approve).await;
-    assert!(fx.awaiting().await.is_empty(), "tanim's approval stands");
+    assert!(
+        fx.awaiting().await.is_empty(),
+        "no agent approved after the request_changes"
+    );
+
+    fx.review(&agent("review", &["integrator"]), Verdict::Approve)
+        .await;
+    let back = fx.awaiting().await;
+    assert_eq!(back.len(), 1, "tanim approved before the agent did");
+    assert_eq!(back[0].since, marked_at);
+    fx.review(&human("tanim"), Verdict::Approve).await;
+    assert!(
+        fx.awaiting().await.is_empty(),
+        "tanim approved after the agent"
+    );
 
     fx.review(&agent("review", &[]), Verdict::RequestChanges)
         .await;
     fx.review(&agent("review", &["integrator"]), Verdict::Approve)
         .await;
-    let back = fx.awaiting().await;
-    assert_eq!(back.len(), 1, "a later request_changes withdrew it");
-    assert_eq!(back[0].since, marked_at);
+    assert_eq!(
+        fx.awaiting().await.len(),
+        1,
+        "a later request_changes withdrew it"
+    );
 
     fx.reviews
         .clear_human_review(&human("tanim"), t(1))
@@ -571,6 +596,9 @@ async fn board_attention_carries_human_review_for_a_waiting_proposal() {
     assert!(fx.card_attention(t(1)).await.is_empty());
     fx.mark(&planner(), t(1), None).await;
     fx.mark(&planner(), t(2), None).await;
+    assert!(fx.card_attention(t(1)).await.is_empty());
+    fx.review(&agent("review", &["integrator"]), Verdict::Approve)
+        .await;
     assert_eq!(fx.card_attention(t(1)).await, [AttentionKind::HumanReview]);
     assert!(fx.card_attention(t(2)).await.is_empty());
     let detail = fx.tasks.get_view(t(1)).await.unwrap();

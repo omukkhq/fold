@@ -23,6 +23,7 @@ pub struct ProjectConfig {
     /// The remote Git repositories by name, as `[remotes.<name>]` sections.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub remotes: BTreeMap<String, RemoteConfig>,
+    pub integration: IntegrationConfig,
 }
 
 /// The `[git]` section: the branch of the project's repository `.fold/git` that every integration is committed to.
@@ -56,6 +57,21 @@ pub struct RemoteConfig {
 /// The section names in `config.toml`.
 pub const GIT_SECTION: &str = "git";
 pub const REMOTES_SECTION: &str = "remotes";
+pub const INTEGRATION_SECTION: &str = "integration";
+
+/// The `[integration]` section.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct IntegrationConfig {
+    /// fold integrates each proposal that becomes ready by itself. With `false`, a proposal integrates only when an integrator or a human calls for it.
+    pub automatic: bool,
+}
+
+impl Default for IntegrationConfig {
+    fn default() -> Self {
+        Self { automatic: true }
+    }
+}
 
 impl Default for ProjectConfig {
     fn default() -> Self {
@@ -70,6 +86,7 @@ impl Default for ProjectConfig {
             closed_workspace_days: 14,
             git: GitConfig::default(),
             remotes: BTreeMap::new(),
+            integration: IntegrationConfig::default(),
         }
     }
 }
@@ -88,6 +105,10 @@ impl ProjectConfig {
             }
             if key == REMOTES_SECTION {
                 check_remotes_section(value)?;
+                continue;
+            }
+            if key == INTEGRATION_SECTION {
+                check_integration_section(value)?;
                 continue;
             }
             if !known.contains(key) {
@@ -224,6 +245,21 @@ fn check_remotes_section(value: &toml::Value) -> Result<(), FoldError> {
     Ok(())
 }
 
+fn check_integration_section(value: &toml::Value) -> Result<(), FoldError> {
+    let table = value
+        .as_table()
+        .ok_or_else(|| refused(INTEGRATION_SECTION, "must be a table"))?;
+    for (key, value) in table {
+        let name = format!("{INTEGRATION_SECTION}.{key}");
+        match key.as_str() {
+            "automatic" if value.is_bool() => {}
+            "automatic" => return Err(refused(&name, "must be true or false")),
+            _ => return Err(refused(&name, "is not a config key")),
+        }
+    }
+    Ok(())
+}
+
 fn check_branch_value(name: &str, value: &toml::Value) -> Result<(), FoldError> {
     match value.as_str() {
         Some(branch) => {
@@ -343,7 +379,7 @@ mod tests {
         // No remote exists by default, so the template names the section in a comment only.
         assert!(CONFIG_TEMPLATE.contains("`[remotes.<name>]`"));
         assert_eq!(named, fields);
-        assert_eq!(fields.len(), 9);
+        assert_eq!(fields.len(), 10);
         assert_eq!(known_keys().len(), 8);
         // Only comments: the file as written changes nothing.
         let as_written = ProjectConfig::from_toml(CONFIG_TEMPLATE).unwrap();
@@ -475,6 +511,29 @@ mod tests {
         let secret = "https://user:token@example.com/app.git\n";
         let error = check_remote(secret).unwrap_err();
         assert!(!error.message().contains("token"));
+    }
+
+    #[test]
+    fn the_integration_section_switches_automatic_integration() {
+        assert!(ProjectConfig::default().integration.automatic);
+        let off = ProjectConfig::from_toml("[integration]\nautomatic = false\n").unwrap();
+        assert!(!off.integration.automatic);
+        assert_eq!(off.git, GitConfig::default());
+        let defaults = ProjectConfig::from_toml("[integration]\n").unwrap();
+        assert!(defaults.integration.automatic);
+        for (text, key) in [
+            ("integration = true", "integration"),
+            ("[integration]\nautomatic = 1", "integration.automatic"),
+            ("[integration]\nauto = true", "integration.auto"),
+        ] {
+            let error = ProjectConfig::from_toml(text).unwrap_err();
+            assert_eq!(error.code(), "invalid_config", "{text}");
+            assert_eq!(
+                error.details().cloned().map(serde_json::Value::Object),
+                Some(serde_json::json!({"key": key})),
+                "{text}"
+            );
+        }
     }
 
     #[test]

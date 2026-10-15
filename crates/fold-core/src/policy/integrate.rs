@@ -4,7 +4,8 @@ use thiserror::Error;
 use crate::agents::{AgentName, HumanName, Tag};
 use crate::error::{FoldError, codes};
 use crate::reviews::{
-    Approver, HumanReviewMark, ReviewFact, Verdict, human_approval_standing, latest_verdict,
+    Approver, HumanReviewMark, ReviewFact, Verdict, human_approval_standing, human_approved_after,
+    integrator_approval, latest_verdict,
 };
 use crate::{TaskId, TaskStatus};
 
@@ -17,6 +18,8 @@ pub enum CallerFacts {
         tags: Vec<Tag>,
     },
     Human(HumanName),
+    /// fold itself, integrating a ready proposal without a call. Only the automatic integration job acts as this caller. It needs more than an integrator does: an integrator agent's approval, and, on a marked task, a human approval given after it, because the human looks at a marked proposal only once an agent has approved it.
+    Automatic,
 }
 
 /// The facts of the proposal the gates read.
@@ -209,7 +212,7 @@ fn version(input: &IntegrateInput<'_>) -> Option<GateRefusal> {
 /// The author's agent is refused before the tag is read, as it is for a verdict.
 fn caller(input: &IntegrateInput<'_>) -> Option<GateRefusal> {
     match input.caller {
-        CallerFacts::Human(_) => None,
+        CallerFacts::Human(_) | CallerFacts::Automatic => None,
         CallerFacts::Agent { agent, .. } if *agent == input.proposal.author => {
             Some(GateRefusal::AuthorCannotIntegrate)
         }
@@ -218,19 +221,23 @@ fn caller(input: &IntegrateInput<'_>) -> Option<GateRefusal> {
     }
 }
 
-/// A human caller approves in the same action, so the latest verdict is that approval.
+/// A human caller approves in the same action, so the latest verdict is that approval. The automatic caller also needs an integrator agent's approval among the reviews, whoever gave the latest one.
 fn approval(input: &IntegrateInput<'_>) -> Option<GateRefusal> {
     if matches!(input.caller, CallerFacts::Human(_)) {
         return None;
     }
+    let author = &input.proposal.author;
     match latest_verdict(input.reviews) {
         Some(latest) if latest.verdict == Verdict::RequestChanges => {
             Some(GateRefusal::ChangesRequested)
         }
-        Some(latest)
-            if latest.verdict == Verdict::Approve && counts(latest, &input.proposal.author) =>
-        {
-            None
+        Some(latest) if latest.verdict == Verdict::Approve && counts(latest, author) => {
+            match input.caller {
+                CallerFacts::Automatic if integrator_approval(input.reviews, author).is_none() => {
+                    Some(GateRefusal::NotApproved)
+                }
+                CallerFacts::Automatic | CallerFacts::Agent { .. } | CallerFacts::Human(_) => None,
+            }
         }
         Some(_) | None => Some(GateRefusal::NotApproved),
     }
@@ -246,11 +253,19 @@ fn counts(review: &ReviewFact, author: &AgentName) -> bool {
 }
 
 fn human_review(input: &IntegrateInput<'_>) -> Option<GateRefusal> {
-    let integrating = match input.caller {
-        CallerFacts::Human(name) => Some(name),
-        CallerFacts::Agent { .. } => None,
+    let met = match input.caller {
+        CallerFacts::Human(name) => {
+            human_approval_standing(input.human_review, input.reviews, Some(name))
+        }
+        CallerFacts::Agent { .. } => {
+            human_approval_standing(input.human_review, input.reviews, None)
+        }
+        CallerFacts::Automatic => input.human_review.is_none_or(|mark| {
+            integrator_approval(input.reviews, &input.proposal.author)
+                .is_some_and(|seq| human_approved_after(mark, input.reviews, seq))
+        }),
     };
-    if human_approval_standing(input.human_review, input.reviews, integrating) {
+    if met {
         return None;
     }
     Some(GateRefusal::HumanApprovalMissing {
@@ -598,6 +613,109 @@ mod tests {
                 },
                 Err(ProposalNotOpen),
             ),
+            (
+                "automatic after an integrator's approval",
+                Case {
+                    caller: CallerFacts::Automatic,
+                    ..Case::new()
+                },
+                Ok(()),
+            ),
+            (
+                "automatic after a human approval alone",
+                Case {
+                    caller: CallerFacts::Automatic,
+                    reviews: vec![review(Approve, "human:ana", 1)],
+                    ..Case::new()
+                },
+                Err(NotApproved),
+            ),
+            (
+                "automatic after an integrator's then a human's approval",
+                Case {
+                    caller: CallerFacts::Automatic,
+                    reviews: vec![
+                        review(Approve, "integrator", 1),
+                        review(Approve, "human:ana", 2),
+                    ],
+                    ..Case::new()
+                },
+                Ok(()),
+            ),
+            (
+                "automatic after an integrator's approval and a request_changes",
+                Case {
+                    caller: CallerFacts::Automatic,
+                    reviews: vec![
+                        review(Approve, "integrator", 1),
+                        review(RequestChanges, "agent", 2),
+                    ],
+                    ..Case::new()
+                },
+                Err(ChangesRequested),
+            ),
+            (
+                "automatic on a marked task without a human approval",
+                Case {
+                    caller: CallerFacts::Automatic,
+                    mark: Some(mark(None)),
+                    ..Case::new()
+                },
+                Err(HumanApprovalMissing { reviewer: None }),
+            ),
+            (
+                "automatic on a marked task with the human approval before the agent's",
+                Case {
+                    caller: CallerFacts::Automatic,
+                    mark: Some(mark(Some("tanim"))),
+                    reviews: vec![
+                        review(Approve, "human:tanim", 1),
+                        review(Approve, "integrator", 2),
+                    ],
+                    ..Case::new()
+                },
+                Err(HumanApprovalMissing {
+                    reviewer: Some(name("tanim")),
+                }),
+            ),
+            (
+                "automatic on a marked task with the human approval after the agent's",
+                Case {
+                    caller: CallerFacts::Automatic,
+                    mark: Some(mark(Some("tanim"))),
+                    reviews: vec![
+                        review(Approve, "integrator", 1),
+                        review(Approve, "human:tanim", 2),
+                    ],
+                    ..Case::new()
+                },
+                Ok(()),
+            ),
+            (
+                "automatic on a marked task with a second agent approval after the human's",
+                Case {
+                    caller: CallerFacts::Automatic,
+                    mark: Some(mark(Some("tanim"))),
+                    reviews: vec![
+                        review(Approve, "integrator", 1),
+                        review(Approve, "human:tanim", 2),
+                        review(Approve, "integrator", 3),
+                    ],
+                    ..Case::new()
+                },
+                Ok(()),
+            ),
+            (
+                "automatic with an unfinished prerequisite",
+                Case {
+                    caller: CallerFacts::Automatic,
+                    prerequisites: vec![(task(3), TaskStatus::Todo)],
+                    ..Case::new()
+                },
+                Err(PrerequisitesNotDone {
+                    unfinished: vec![(task(3), TaskStatus::Todo)],
+                }),
+            ),
         ];
         for (name, case, expected) in cases {
             assert_eq!(case.run(can_integrate), expected, "{name}");
@@ -744,6 +862,7 @@ mod tests {
             Just(agent_caller(AUTHOR, &["integrator"])),
             Just(human("tanim")),
             Just(human("ana")),
+            Just(CallerFacts::Automatic),
         ]
     }
 
@@ -817,16 +936,33 @@ mod tests {
 
     /// The rule written out without the module's helpers: scan for the highest `seq` by hand.
     fn oracle(case: &Case) -> bool {
+        let automatic = case.caller == CallerFacts::Automatic;
         let human_caller = match &case.caller {
             CallerFacts::Human(name) => Some(name.as_str()),
-            CallerFacts::Agent { .. } => None,
+            CallerFacts::Agent { .. } | CallerFacts::Automatic => None,
         };
         let caller_ok = match &case.caller {
-            CallerFacts::Human(_) => true,
+            CallerFacts::Human(_) | CallerFacts::Automatic => true,
             CallerFacts::Agent { agent, tags } => {
                 agent.as_str() != AUTHOR && tags.iter().any(|tag| tag.as_str() == "integrator")
             }
         };
+        let last_request = case
+            .reviews
+            .iter()
+            .filter(|review| review.verdict == Verdict::RequestChanges)
+            .map(|review| review.seq)
+            .max();
+        let mut agent_approval: Option<u64> = None;
+        for review in &case.reviews {
+            if review.verdict == Verdict::Approve
+                && review.reviewer.as_str() == "review"
+                && last_request.is_none_or(|seq| review.seq > seq)
+                && agent_approval.is_none_or(|seq| review.seq < seq)
+            {
+                agent_approval = Some(review.seq);
+            }
+        }
         let mut latest: Option<&ReviewFact> = None;
         for review in &case.reviews {
             if review.verdict != Verdict::Comment && latest.is_none_or(|l| review.seq > l.seq) {
@@ -841,9 +977,17 @@ mod tests {
                         Approver::IntegratorAgent => review.reviewer.as_str() == "review",
                         Approver::OtherAgent => false,
                     }
-            });
+            }) && (!automatic || agent_approval.is_some());
         let human_ok = match &case.mark {
             None => true,
+            Some(mark) if automatic => agent_approval.is_some_and(|after| {
+                case.reviews.iter().any(|approval| {
+                    approval.verdict == Verdict::Approve
+                        && approval.seq > after
+                        && matches!(&approval.approver, Approver::Human(h)
+                            if mark.reviewer.as_ref().is_none_or(|r| r == h))
+                })
+            }),
             Some(mark) => {
                 let accepts = |who: &str| mark.reviewer.as_ref().is_none_or(|r| r.as_str() == who);
                 human_caller.is_some_and(accepts) || case.reviews.iter().any(|approval| {

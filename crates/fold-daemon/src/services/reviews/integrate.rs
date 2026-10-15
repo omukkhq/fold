@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use fold_core::events::types;
 use fold_core::merge::{Conflict, ReportTrees};
 use fold_core::object::ObjectHash;
@@ -63,11 +65,20 @@ pub enum PullOutcome {
     Conflicted(Vec<Conflict>),
 }
 
+/// What one automatic integration did with a ready proposal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutomaticIntegration {
+    pub proposal: ProposalId,
+    pub outcome: IntegrationOutcome,
+}
+
 #[derive(Clone, Copy)]
 enum IntegrationRequest<'a> {
     Proposal {
         proposal: ProposalId,
         expected_version: Option<u32>,
+        /// Set only by [`ReviewService::integrate_ready`], the one path on which `Actor::System` integrates.
+        automatic: bool,
     },
     Pull(&'a PullIntegration),
 }
@@ -129,6 +140,7 @@ enum Subject {
         version: u32,
         version_id: i64,
         expected_version: Option<u32>,
+        automatic: bool,
     },
     Pull {
         remote_commit: String,
@@ -169,6 +181,7 @@ impl ReviewService {
         let request = IntegrationRequest::Proposal {
             proposal,
             expected_version,
+            automatic: false,
         };
         Ok(match self.integrate(actor, request).await? {
             Integrated::Succeeded(revision) => IntegrationOutcome::Succeeded { revision },
@@ -191,6 +204,54 @@ impl ReviewService {
                 Integrated::Conflicted(conflicts) => PullOutcome::Conflicted(conflicts),
             },
         )
+    }
+
+    /// Integrates, as fold, every open proposal whose current version is ready: an integrator agent approved it, the latest verdict asks for no changes, a marked task has a human approval given after the agent's, and every prerequisite is Done. Each integration is the same procedure an integrator runs. The open proposals are looked at in number order and looked at again after each integration, so a prerequisite's integration lets the proposals that need it follow in the same call. A proposal flagged with a conflict waits for its next version, which clears the flag. A failed attempt is logged by its code and left for the next call. Returns the integrations in the order they ran; a conflicted one recorded `integration.conflicted` and left its proposal open.
+    pub async fn integrate_ready(&self) -> Result<Vec<AutomaticIntegration>, ReviewError> {
+        let mut done = Vec::new();
+        let mut passed = HashSet::new();
+        while let Some((proposal, version)) = self.next_ready(&passed).await? {
+            passed.insert(proposal);
+            let request = IntegrationRequest::Proposal {
+                proposal,
+                expected_version: Some(version),
+                automatic: true,
+            };
+            let outcome = match self.integrate(&Actor::System, request).await {
+                Ok(Integrated::Succeeded(revision)) => IntegrationOutcome::Succeeded { revision },
+                Ok(Integrated::Conflicted(conflicts)) => IntegrationOutcome::Conflicted(conflicts),
+                Err(error) => {
+                    tracing::warn!(proposal = %proposal, code = error.code().unwrap_or(codes::INTERNAL_ERROR), "the automatic integration of a proposal failed; the next trigger tries again");
+                    continue;
+                }
+            };
+            done.push(AutomaticIntegration { proposal, outcome });
+        }
+        Ok(done)
+    }
+
+    /// The lowest-numbered open proposal outside `passed` that is not flagged with a conflict and passes every gate for the automatic caller, with its current version.
+    async fn next_ready(
+        &self,
+        passed: &HashSet<ProposalId>,
+    ) -> Result<Option<(ProposalId, u32)>, ReviewError> {
+        let mut read = self.store.read().begin().await.map_err(StoreError::from)?;
+        let open = reviews::list_proposals(&mut *read, Some(ProposalState::Open), false).await?;
+        let mut ready = None;
+        for row in open {
+            if row.conflicted || passed.contains(&row.id) {
+                continue;
+            }
+            let Some(facts) = reviews::integration_facts(&mut read, row.id).await? else {
+                continue;
+            };
+            if decide(&facts, &CallerFacts::Automatic, None).is_ok() {
+                ready = Some((row.id, facts.target.version));
+                break;
+            }
+        }
+        read.commit().await.map_err(StoreError::from)?;
+        Ok(ready)
     }
 
     /// The one procedure behind both kinds. The project's integration mutex is held throughout, so two integrations never run at the same time; an attempt that finds main moved starts again, three times at most.
@@ -227,8 +288,9 @@ impl ReviewService {
             IntegrationRequest::Proposal {
                 proposal,
                 expected_version,
+                automatic,
             } => {
-                self.proposal_plan(actor, proposal, expected_version)
+                self.proposal_plan(actor, proposal, expected_version, automatic)
                     .await?
             }
             IntegrationRequest::Pull(pull) => self.pull_plan(actor, pull).await?,
@@ -333,20 +395,24 @@ impl ReviewService {
         Ok(Integrated::Succeeded(next))
     }
 
-    /// Step 2 of a proposal: the gates on stored facts, with the refusals of the review gates recorded.
+    /// Step 2 of a proposal: the gates on stored facts, with the refusals of the review gates recorded. An automatic integration records no refusal: it runs only for a proposal it found ready, and one that stopped being ready in between waits for its next trigger.
     async fn proposal_plan(
         &self,
         actor: &Actor,
         proposal: ProposalId,
         expected_version: Option<u32>,
+        automatic: bool,
     ) -> Result<Plan, Step> {
-        let caller = caller_facts(actor)?;
+        let caller = caller_facts(actor, automatic)?;
         let mut read = self.store.read().begin().await.map_err(StoreError::from)?;
         let facts = reviews::integration_facts(&mut read, proposal)
             .await?
             .ok_or_else(|| proposal_not_found(proposal))?;
         read.commit().await.map_err(StoreError::from)?;
         if let Err(refusal) = decide(&facts, &caller, expected_version) {
+            if automatic {
+                return Err(FoldError::from(refusal).into());
+            }
             return Err(match refusal {
                 GateRefusal::ChangesRequested
                 | GateRefusal::NotApproved
@@ -370,6 +436,7 @@ impl ReviewService {
                 version: facts.target.version,
                 version_id: facts.target.version_id,
                 expected_version,
+                automatic,
             },
         })
     }
@@ -468,14 +535,15 @@ impl ReviewService {
     }
 }
 
-/// The caller as the gates see it. The daemon itself never integrates.
-fn caller_facts(actor: &Actor) -> Result<CallerFacts, Step> {
+/// The caller as the gates see it. The daemon integrates only through the automatic integration, so `Actor::System` is refused on every other path.
+fn caller_facts(actor: &Actor, automatic: bool) -> Result<CallerFacts, Step> {
     match actor {
         Actor::Agent(agent) => Ok(CallerFacts::Agent {
             agent: agent.agent.clone(),
             tags: agent.tags.clone(),
         }),
         Actor::Human { name } => Ok(CallerFacts::Human(name.clone())),
+        Actor::System if automatic => Ok(CallerFacts::Automatic),
         Actor::System => Err(FoldError::from(GateRefusal::IntegratorRequired).into()),
     }
 }
@@ -510,9 +578,10 @@ impl Commit<'_> {
                 version,
                 version_id,
                 expected_version,
+                automatic,
             } => {
                 let facts = self
-                    .recheck(tx, *proposal, *version_id, *expected_version)
+                    .recheck(tx, *proposal, *version_id, *expected_version, *automatic)
                     .await?;
                 // A sync task's integration marks the remote commit it resolves as merged, for the sync base walk and the Git writers.
                 let remote_commit = tasks::remote_commit(tx.conn(), *task).await?;
@@ -609,11 +678,12 @@ impl Commit<'_> {
         proposal: ProposalId,
         version_id: i64,
         expected_version: Option<u32>,
+        automatic: bool,
     ) -> Result<IntegrationFacts, Step> {
         let facts = reviews::integration_facts(tx.conn(), proposal)
             .await?
             .ok_or_else(|| proposal_not_found(proposal))?;
-        let caller = caller_facts(self.actor)?;
+        let caller = caller_facts(self.actor, automatic)?;
         if facts.target.version_id != version_id
             || facts.live_workspace != self.plan.workspace
             || decide(&facts, &caller, expected_version).is_err()

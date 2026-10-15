@@ -1,9 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use fold_core::checkpoint_policy::quiet_checkpoint_due;
-use fold_core::events::types;
+use fold_core::events::{EventType, types};
 use fold_core::object::ObjectHash;
 use fold_core::{
     Actor, FoldError, NewEvent, ProjectPaths, RevisionId, Timestamp, WorkspaceId, codes,
@@ -48,6 +48,9 @@ pub const LEASE_TICK: Duration = Duration::from_secs(60);
 
 /// How often the stall job decides the stalled flag of every live workspace.
 pub const STALL_TICK: Duration = Duration::from_secs(30);
+
+/// How often the automatic integration job looks for projects it does not listen to yet. Each project's listener reacts to its events, so this only bounds how late a project opened while the daemon runs gets its first look.
+pub const AUTO_INTEGRATE_TICK: Duration = Duration::from_secs(5);
 
 /// How many workspaces [`reconcile_workspaces`] scans at once.
 pub const RECONCILE_PARALLEL: usize = 4;
@@ -292,6 +295,111 @@ pub fn spawn_stalls(state: AppState, tick: Duration, stop: watch::Receiver<bool>
         task,
         progress: watcher,
     }
+}
+
+/// Starts the automatic integration job: every `tick` it starts a listener for each open project that has none. A listener runs [`ReviewService::integrate_ready`] once when it starts, which retries what a stopped daemon left, and again after each committed event that can make a proposal ready, while `[integration].automatic` is true in the project's configuration, read on each run. Each run is a check; a run that integrated at least one proposal, cleanly or with a conflict, is a cycle. It stops when `stop` changes: each listener finishes the run it is in, so a stop never cuts an integration short unless the drain times out.
+///
+/// [`ReviewService::integrate_ready`]: crate::services::reviews::ReviewService::integrate_ready
+pub fn spawn_auto_integrate(state: AppState, tick: Duration, stop: watch::Receiver<bool>) -> Job {
+    let (progress, watcher) = watch::channel(JobProgress::default());
+    let task = tokio::spawn(auto_integrate(state, tick, stop, Arc::new(progress)));
+    Job {
+        task,
+        progress: watcher,
+    }
+}
+
+async fn auto_integrate(
+    state: AppState,
+    tick: Duration,
+    mut stop: watch::Receiver<bool>,
+    progress: Arc<watch::Sender<JobProgress>>,
+) {
+    let mut listening = HashSet::new();
+    let mut listeners = JoinSet::new();
+    let mut ticks = tokio::time::interval(tick);
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            _ = stop.changed() => break,
+            _ = ticks.tick() => {}
+        }
+        for handle in state.projects.handles() {
+            if listening.insert(handle.slug.clone()) {
+                listeners.spawn(integrate_project(
+                    state.clone(),
+                    handle,
+                    Arc::clone(&progress),
+                    stop.clone(),
+                ));
+            }
+        }
+    }
+    while listeners.join_next().await.is_some() {}
+}
+
+/// One run after each event of a kind that can make a proposal ready, rather than one run for a burst: a run that is already past a proposal does not see an approval that lands on it during the run.
+async fn integrate_project(
+    state: AppState,
+    handle: Arc<ProjectHandle>,
+    progress: Arc<watch::Sender<JobProgress>>,
+    mut stop: watch::Receiver<bool>,
+) {
+    let mut events = handle.bus.subscribe();
+    integrate_ready(&state, &handle, &progress).await;
+    loop {
+        let received = tokio::select! {
+            _ = stop.changed() => return,
+            received = events.recv() => received,
+        };
+        match received {
+            Ok(BusMessage::Durable(event)) if can_make_ready(event.event_type) => {}
+            Err(RecvError::Lagged(_)) => {}
+            Ok(_) => continue,
+            Err(RecvError::Closed) => return,
+        }
+        integrate_ready(&state, &handle, &progress).await;
+    }
+}
+
+/// A verdict, a changed or cleared mark, a removed dependency, a status change, which covers a prerequisite becoming Done, and a granted tag, because an approval counts as an integrator's by the tags its agent holds now.
+fn can_make_ready(event_type: EventType) -> bool {
+    [
+        types::REVIEW_SUBMITTED,
+        types::TASK_HUMAN_REVIEW_SET,
+        types::TASK_HUMAN_REVIEW_CLEARED,
+        types::AGENT_TAG_ADDED,
+        types::DEPENDENCY_REMOVED,
+        types::TASK_STATUS_CHANGED,
+    ]
+    .contains(&event_type)
+}
+
+async fn integrate_ready(
+    state: &AppState,
+    handle: &ProjectHandle,
+    progress: &watch::Sender<JobProgress>,
+) {
+    let integrated = match projects::load_config(&handle.paths).await {
+        Ok(config) if config.integration.automatic => {
+            match handle.reviews(&state.registry).integrate_ready().await {
+                Ok(done) => done.len(),
+                Err(error) => {
+                    tracing::warn!(project = %handle.slug, code = error.code().unwrap_or(codes::INTERNAL_ERROR), "the automatic integration failed; the next event tries again");
+                    0
+                }
+            }
+        }
+        Ok(_) => 0,
+        Err(error) => {
+            tracing::warn!(project = %handle.slug, code = error.code().unwrap_or(codes::INTERNAL_ERROR), "the automatic integration skipped a run; the configuration is invalid");
+            0
+        }
+    };
+    progress.send_modify(|seen| {
+        seen.checks += 1;
+        seen.cycles += u64::from(integrated > 0);
+    });
 }
 
 async fn lease_sweeper(

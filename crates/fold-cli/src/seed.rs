@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand};
 use fold_cli::daemon_client::{ClientConfig, ClientError, DaemonClient};
-use fold_core::codes;
+use fold_core::{ProjectPaths, codes};
 use hyper::Method;
 use serde_json::{Value, json};
 use thiserror::Error;
@@ -131,6 +131,11 @@ fn seed(args: &SeedArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), SeedEr
     };
     let slug = init::initialise(&init, dirs, &mut io::sink())?;
     let root = dir.canonicalize()?;
+    // The scenario integrates each proposal at the step that needs it and keeps approved proposals open for the board.
+    let config = ProjectPaths::new(&root).config();
+    let mut text = std::fs::read_to_string(&config)?;
+    text.push_str("\n[integration]\nautomatic = false\n");
+    std::fs::write(&config, text)?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -522,15 +527,16 @@ impl Seeder {
                 Some("frontend/ui"),
             )
             .await?;
-        self.propose(
-            backend,
-            &audit,
-            &tasks.audit,
-            "Record changes in an audit log",
-            "Each write adds one entry.",
-            None,
-        )
-        .await?;
+        let audit_proposal = self
+            .propose(
+                backend,
+                &audit,
+                &tasks.audit,
+                "Record changes in an audit log",
+                "Each write adds one entry.",
+                None,
+            )
+            .await?;
         // The limit task already has a workspace when it gets a prerequisite, so its card shows the blocked indicator.
         self.frontend
             .call(
@@ -626,7 +632,7 @@ impl Seeder {
             )
             .await?;
 
-        // A human has to look at the audit log before it integrates; the mark stays unapproved.
+        // A human has to look at the audit log before it integrates. The agent approves it, which puts it on the human's screen, and the human's approval stays missing.
         self.review
             .call(
                 "require_human_review",
@@ -637,7 +643,11 @@ impl Seeder {
                 }),
             )
             .await?;
-        Ok(())
+        self.approve(
+            &audit_proposal,
+            "Each write adds one entry, as the evidence says.",
+        )
+        .await
     }
 
     /// A parent task whose checklist links two Done tasks and one step. The last tick completes it by the container rule, which is why the step is added first and ticked last.

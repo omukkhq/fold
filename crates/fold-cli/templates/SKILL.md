@@ -84,7 +84,7 @@ A reviewer reads proposals, asks for changes and integrates the proposals that a
 3. Call `create_review_checkout(id)`. It gives you a checkout of the version. Build and test there, never in `main/`.
 4. Call `submit_review(id, verdict, body, comments[]?)`. The verdict is one of `comment`, `request_changes`, `approve` or `reject`. A comment has `path`, `start_line`, `end_line`, `side` and `body`. A review with no content fails with `empty_review`.
 5. An approval belongs to the version you reviewed. A new version starts without approvals, so review it again.
-6. If the proposal is ready, call `integrate_proposal(id, expected_version?)`. Pass the version you reviewed as `expected_version`: if a newer version exists, the call fails with `stale_version`. fold checks the approvals, the human review mark and the prerequisite tasks before it moves `main/`.
+6. fold integrates a ready proposal by itself when the project integrates automatically, which is the default: an integrator approved it, nothing asks for changes, a marked task has a human approval after the agent approval, and every prerequisite task is Done. In a project that does not integrate automatically, call `integrate_proposal(id, expected_version?)` when the proposal is ready. Pass the version you reviewed as `expected_version`: if a newer version exists, the call fails with `stale_version`. fold checks the approvals, the human review mark and the prerequisite tasks before it moves `main/`.
 7. Call `release_review(id)` when you stop the review.
 
 ## Mentions

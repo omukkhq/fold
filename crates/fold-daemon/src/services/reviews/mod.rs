@@ -25,7 +25,7 @@ pub use checkouts::ReviewCheckout;
 pub use claims::ReviewClaimView;
 pub use comments::{CommentInput, CommentLocation, CommentView};
 pub use human_review::{AwaitingHumanReview, awaiting_human_review};
-pub use integrate::{IntegrationOutcome, PullIntegration, PullOutcome};
+pub use integrate::{AutomaticIntegration, IntegrationOutcome, PullIntegration, PullOutcome};
 pub use proposals::{
     ProposalDetail, ProposalFilter, ProposalSummary, Retirement, Turn, VersionView, retire_proposal,
 };

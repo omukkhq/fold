@@ -18,3 +18,7 @@
 # [git]
 # branch = "main"
 # The remote Git repositories that `fld push` and `fld pull` use have one `[remotes.<name>]` section each, with the keys `url`, `branch` and `push_on_integrate`. `fld remote set <name> <url> [<branch>]` writes it, and no remote exists by default.
+# What fold does with a proposal that is ready to integrate.
+# [integration]
+# Whether fold integrates a ready proposal by itself: an integrator agent approved it, nothing asks for changes, a human approved it after the agent when the task is marked for human review, and every prerequisite task is Done. With false, an integrator or a human integrates it.
+# automatic = true

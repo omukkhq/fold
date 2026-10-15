@@ -55,21 +55,7 @@ impl Fixture {
         create_initial_revision(project.store(), &stored, None)
             .await
             .unwrap();
-        let clock = Arc::new(project.clock().clone());
-        let state: AppState = Arc::new(DaemonState {
-            registry: project.registry().clone(),
-            projects: Projects::default(),
-            clock: clock.clone(),
-            assets: AssetSource::Embedded,
-            listen: "127.0.0.1".parse().unwrap(),
-            session_lifetime: DEFAULT_SESSION_LIFETIME,
-        });
-        let row = ProjectRow {
-            slug: "demo".to_owned(),
-            name: "Demo".to_owned(),
-            root: project.paths().root().to_string_lossy().into_owned(),
-        };
-        let handle = state.projects.open(&row, clock).await.unwrap();
+        let (state, handle) = open(&project).await;
         ensure_human(
             project.registry(),
             project.clock(),
@@ -96,6 +82,17 @@ impl Fixture {
             state,
             handle,
         }
+    }
+
+    /// Closes the project as a stopping daemon does and opens it again in a new daemon state, as a restarted daemon would.
+    pub async fn restart(&mut self) {
+        for live in self.handle.live.all() {
+            self.handle.live.detach(live.view.workspace).await;
+        }
+        self.handle.store.close().await.unwrap();
+        let (state, handle) = open(&self.project).await;
+        self.state = state;
+        self.handle = handle;
     }
 
     pub fn agents(&self) -> AgentService {
@@ -145,4 +142,23 @@ impl Fixture {
             .await
             .unwrap();
     }
+}
+
+async fn open(project: &TestProject) -> (AppState, Arc<ProjectHandle>) {
+    let clock = Arc::new(project.clock().clone());
+    let state: AppState = Arc::new(DaemonState {
+        registry: project.registry().clone(),
+        projects: Projects::default(),
+        clock: clock.clone(),
+        assets: AssetSource::Embedded,
+        listen: "127.0.0.1".parse().unwrap(),
+        session_lifetime: DEFAULT_SESSION_LIFETIME,
+    });
+    let row = ProjectRow {
+        slug: "demo".to_owned(),
+        name: "Demo".to_owned(),
+        root: project.paths().root().to_string_lossy().into_owned(),
+    };
+    let handle = state.projects.open(&row, clock).await.unwrap();
+    (state, handle)
 }

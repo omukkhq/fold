@@ -1,0 +1,397 @@
+#![cfg(test)]
+
+use std::path::Path;
+use std::process::Command;
+use std::time::Duration;
+
+use fold_core::events::types;
+use fold_core::reviews::Verdict;
+use fold_core::{Actor, AgentName, EventFilter, ProposalId, RevisionId, TaskStatus, codes};
+use fold_daemon::daemon::AppState;
+use fold_daemon::jobs::{Job, spawn_auto_integrate};
+use fold_daemon::services::reviews::IntegrationOutcome;
+use fold_store::events;
+use fold_store::workspaces;
+use tokio::sync::watch;
+
+use crate::proposal_tools_support::{Fixture, human, t};
+
+const WAIT: Duration = Duration::from_secs(20);
+
+fn p(number: u32) -> ProposalId {
+    ProposalId::from_number(number).unwrap()
+}
+
+fn r(number: u32) -> RevisionId {
+    RevisionId::from_number(number).unwrap()
+}
+
+/// The job with a short discovery tick, and the sender that stops it.
+pub struct Running {
+    stop: watch::Sender<bool>,
+    pub job: Job,
+}
+
+impl Running {
+    pub fn start(state: &AppState) -> Self {
+        let (stop, stopped) = watch::channel(false);
+        let job = spawn_auto_integrate(state.clone(), Duration::from_millis(10), stopped);
+        Self { stop, job }
+    }
+
+    /// Waits until the job has finished `count` runs.
+    pub async fn runs(&self, count: u64) {
+        let mut progress = self.job.progress();
+        tokio::time::timeout(WAIT, progress.wait_for(|seen| seen.checks >= count))
+            .await
+            .expect("the job runs in time")
+            .unwrap();
+    }
+
+    /// Waits until `count` runs have integrated at least one proposal.
+    pub async fn cycles(&self, count: u64) {
+        let mut progress = self.job.progress();
+        tokio::time::timeout(WAIT, progress.wait_for(|seen| seen.cycles >= count))
+            .await
+            .expect("the job integrates in time")
+            .unwrap();
+    }
+
+    pub fn checks(&self) -> u64 {
+        self.job.progress().borrow().checks
+    }
+
+    pub async fn stop(self) {
+        self.stop.send(true).unwrap();
+        self.job.stopped(WAIT).await;
+    }
+}
+
+/// Registers `name` and grants it `integrator`, returning its actor with the tag.
+pub async fn integrator(fx: &Fixture, name: &str) -> Actor {
+    let agents = fx.agents();
+    let agent = AgentName::parse(name).unwrap();
+    let mut session = agents.start_session(1).await.unwrap();
+    agents
+        .register_agent(&mut session, &agent, &[])
+        .await
+        .unwrap();
+    agents
+        .set_integrator(&human("tanim"), &agent, true)
+        .await
+        .unwrap();
+    agents.actor(&session, None).await.unwrap()
+}
+
+pub async fn approve(fx: &Fixture, reviewer: &Actor, proposal: u32) {
+    fx.reviews()
+        .submit_review(
+            reviewer,
+            p(proposal),
+            Verdict::Approve,
+            "looks right",
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+}
+
+/// `author` creates the workspace of `task`, writes `content` to `path` and opens a proposal.
+async fn propose(fx: &Fixture, author: &Actor, task: u32, path: &str, content: &str) {
+    fx.workspaces()
+        .create_workspace(author, t(task))
+        .await
+        .unwrap();
+    fx.write(task, path, content);
+    fx.reviews()
+        .create_proposal(author, t(task), "Change it", None)
+        .await
+        .unwrap();
+}
+
+pub async fn head(fx: &Fixture) -> RevisionId {
+    workspaces::head(fx.handle.store.read())
+        .await
+        .unwrap()
+        .unwrap()
+        .number
+}
+
+pub async fn state_of(fx: &Fixture, proposal: u32) -> String {
+    sqlx::query_scalar("SELECT state FROM proposals WHERE number = ?1")
+        .bind(i64::from(proposal))
+        .fetch_one(fx.handle.store.read())
+        .await
+        .unwrap()
+}
+
+pub async fn status(fx: &Fixture, task: u32) -> TaskStatus {
+    fx.handle.tasks.get(t(task)).await.unwrap().status
+}
+
+/// The proposal numbers of the succeeded integrations, in the order they ran.
+async fn integrated_in_order(fx: &Fixture) -> Vec<i64> {
+    sqlx::query_scalar(
+        "SELECT p.number FROM integrations i JOIN proposals p ON p.id = i.proposal_id
+         WHERE i.result = 'succeeded' ORDER BY i.id",
+    )
+    .fetch_all(fx.handle.store.read())
+    .await
+    .unwrap()
+}
+
+async fn count(fx: &Fixture, sql: &'static str) -> i64 {
+    sqlx::query_scalar(sql)
+        .fetch_one(fx.handle.store.read())
+        .await
+        .unwrap()
+}
+
+fn write_config(fx: &Fixture, text: &str) {
+    std::fs::write(fx.project.paths().config(), text).unwrap();
+}
+
+fn git(dir: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_approved_proposal_integrates_with_no_tool_call_and_gets_its_git_commit() {
+    let fx = Fixture::new().await;
+    let author = fx.agent("backend").await;
+    let review = integrator(&fx, "review").await;
+    propose(&fx, &author, 1, "src/lib.rs", "pub fn y() {}\n").await;
+    let job = Running::start(&fx.state);
+    job.runs(1).await;
+    assert_eq!(head(&fx).await, r(1), "nothing is approved yet");
+
+    approve(&fx, &review, 1).await;
+    job.cycles(1).await;
+
+    assert_eq!(head(&fx).await, r(2));
+    assert_eq!(state_of(&fx, 1).await, "integrated");
+    assert_eq!(status(&fx, 1).await, TaskStatus::Done);
+    assert_eq!(
+        count(
+            &fx,
+            "SELECT COUNT(*) FROM completions c JOIN integrations i ON i.id = c.integration_id
+             WHERE i.result = 'succeeded' AND i.actor = 'fold'"
+        )
+        .await,
+        1
+    );
+    let committed = "SELECT COUNT(*) FROM revision_commits c JOIN revisions r ON r.id = c.revision_id WHERE r.number = 2";
+    tokio::time::timeout(WAIT, async {
+        while count(&fx, committed).await == 0 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the integration gets its Git commit");
+    let repository = fx.project.paths().fold_dir().join("git");
+    assert_eq!(
+        git(&repository, &["show", "main:src/lib.rs"]),
+        "pub fn y() {}\n"
+    );
+    job.stop().await;
+}
+
+#[tokio::test]
+async fn an_approval_integrates_once_its_agent_holds_integrator_again() {
+    let fx = Fixture::new().await;
+    let author = fx.agent("backend").await;
+    let review = integrator(&fx, "review").await;
+    propose(&fx, &author, 1, "src/lib.rs", "pub fn y() {}\n").await;
+    approve(&fx, &review, 1).await;
+    let agent = AgentName::parse("review").unwrap();
+    fx.agents()
+        .set_integrator(&human("tanim"), &agent, false)
+        .await
+        .unwrap();
+    let job = Running::start(&fx.state);
+    job.runs(1).await;
+    assert_eq!(
+        head(&fx).await,
+        r(1),
+        "the approval counts by the tags held now"
+    );
+
+    fx.agents()
+        .set_integrator(&human("tanim"), &agent, true)
+        .await
+        .unwrap();
+    job.cycles(1).await;
+    assert_eq!(head(&fx).await, r(2));
+    assert_eq!(state_of(&fx, 1).await, "integrated");
+    job.stop().await;
+}
+
+#[tokio::test]
+async fn a_marked_proposal_waits_for_the_human_after_the_agent_approval() {
+    let fx = Fixture::new().await;
+    let author = fx.agent("backend").await;
+    let review = integrator(&fx, "review").await;
+    fx.reviews()
+        .require_human_review(&review, t(1), None, "touches the public API")
+        .await
+        .unwrap();
+    propose(&fx, &author, 1, "src/lib.rs", "pub fn y() {}\n").await;
+    let job = Running::start(&fx.state);
+    job.runs(1).await;
+
+    approve(&fx, &review, 1).await;
+    job.runs(2).await;
+    assert_eq!(head(&fx).await, r(1));
+    assert_eq!(state_of(&fx, 1).await, "open");
+    let waiting = fx.reviews().awaiting_human_review().await.unwrap();
+    assert_eq!(
+        waiting.len(),
+        1,
+        "the human sees it after the agent approval"
+    );
+    assert_eq!(count(&fx, "SELECT COUNT(*) FROM integrations").await, 0);
+
+    approve(&fx, &human("tanim"), 1).await;
+    job.cycles(1).await;
+    assert_eq!(head(&fx).await, r(2));
+    assert_eq!(state_of(&fx, 1).await, "integrated");
+    assert_eq!(status(&fx, 1).await, TaskStatus::Done);
+    assert_eq!(
+        count(&fx, "SELECT COUNT(*) FROM reviews").await,
+        2,
+        "fold adds no approval of its own"
+    );
+    job.stop().await;
+}
+
+#[tokio::test]
+async fn two_dependent_proposals_integrate_in_dependency_order() {
+    let fx = Fixture::new().await;
+    let author = fx.agent("backend").await;
+    let review = integrator(&fx, "review").await;
+    propose(&fx, &author, 1, "src/lib.rs", "pub fn y() {}\n").await;
+    propose(&fx, &author, 2, "README.md", "# demo, exported\n").await;
+    fx.handle
+        .tasks
+        .add_dependency(&human("tanim"), t(2), t(1))
+        .await
+        .unwrap();
+    let job = Running::start(&fx.state);
+    job.runs(1).await;
+
+    approve(&fx, &review, 2).await;
+    job.runs(2).await;
+    assert_eq!(head(&fx).await, r(1));
+    assert_eq!(state_of(&fx, 2).await, "open", "T-1 is not Done yet");
+    assert_eq!(
+        count(&fx, "SELECT COUNT(*) FROM integrations").await,
+        0,
+        "a waiting proposal records no refusal"
+    );
+
+    approve(&fx, &review, 1).await;
+    job.cycles(1).await;
+    assert_eq!(integrated_in_order(&fx).await, [1, 2]);
+    assert_eq!(head(&fx).await, r(3));
+    assert_eq!(status(&fx, 1).await, TaskStatus::Done);
+    assert_eq!(status(&fx, 2).await, TaskStatus::Done);
+    job.stop().await;
+}
+
+#[tokio::test]
+async fn a_conflict_leaves_the_proposal_open_and_is_recorded_once() {
+    let fx = Fixture::new().await;
+    let author = fx.agent("backend").await;
+    let review = integrator(&fx, "review").await;
+    let other = fx.agent("frontend").await;
+    propose(&fx, &author, 1, "src/lib.rs", "pub fn y() {}\n").await;
+    propose(&fx, &other, 2, "src/lib.rs", "pub fn z() {}\n").await;
+    let job = Running::start(&fx.state);
+    job.runs(1).await;
+
+    approve(&fx, &review, 1).await;
+    job.cycles(1).await;
+    assert_eq!(head(&fx).await, r(2));
+
+    approve(&fx, &review, 2).await;
+    job.cycles(2).await;
+    assert_eq!(head(&fx).await, r(2));
+    assert_eq!(state_of(&fx, 2).await, "open");
+    assert_eq!(status(&fx, 2).await, TaskStatus::InProgress);
+    let conflicted = || async {
+        let filter = EventFilter {
+            types: vec![types::INTEGRATION_CONFLICTED],
+            ..EventFilter::default()
+        };
+        events::read_after(fx.handle.store.read(), 0, &filter, 100)
+            .await
+            .unwrap()
+    };
+    let recorded = conflicted().await;
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].proposal, Some(p(2)));
+    assert_eq!(recorded[0].actor.as_str(), "fold");
+
+    let before = job.checks();
+    fx.reviews()
+        .submit_review(&review, p(2), Verdict::Comment, "still looking", Vec::new())
+        .await
+        .unwrap();
+    job.runs(before + 1).await;
+    assert_eq!(
+        conflicted().await.len(),
+        1,
+        "a flagged proposal waits for its next version"
+    );
+    job.stop().await;
+}
+
+#[tokio::test]
+async fn with_automatic_off_nothing_integrates_on_its_own() {
+    let fx = Fixture::new().await;
+    write_config(&fx, "[integration]\nautomatic = false\n");
+    let author = fx.agent("backend").await;
+    let review = integrator(&fx, "review").await;
+    propose(&fx, &author, 1, "src/lib.rs", "pub fn y() {}\n").await;
+    let job = Running::start(&fx.state);
+    job.runs(1).await;
+
+    approve(&fx, &review, 1).await;
+    job.runs(2).await;
+    assert_eq!(head(&fx).await, r(1));
+    assert_eq!(state_of(&fx, 1).await, "open");
+    assert_eq!(job.job.progress().borrow().cycles, 0);
+
+    let refused = fx
+        .reviews()
+        .integrate_proposal(&Actor::System, p(1), Some(1))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused.code(),
+        Some(codes::INTEGRATOR_REQUIRED),
+        "fold integrates only through the job"
+    );
+    let outcome = fx
+        .reviews()
+        .integrate_proposal(&review, p(1), Some(1))
+        .await
+        .unwrap();
+    assert_eq!(outcome, IntegrationOutcome::Succeeded { revision: r(2) });
+    job.stop().await;
+}

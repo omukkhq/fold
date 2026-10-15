@@ -27,6 +27,9 @@ mod acceptance_9_offline;
 mod adoption;
 mod attention_question;
 mod auto_checkpoints;
+mod auto_integrate;
+#[cfg(feature = "failpoints")]
+mod auto_integrate_failpoints;
 mod checklists_service;
 mod claims_service;
 mod claude_probe;

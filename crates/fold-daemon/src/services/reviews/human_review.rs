@@ -1,6 +1,8 @@
 use fold_core::events::types;
 use fold_core::policy::{self, MarkChange, PolicyDenied};
-use fold_core::reviews::{HumanReviewMark, changes_requested, human_approval_standing};
+use fold_core::reviews::{
+    HumanReviewMark, changes_requested, human_approved_after, integrator_approval,
+};
 use fold_core::status::ProposalFact;
 use fold_core::{
     Actor, FoldError, HumanName, NewEvent, ProposalId, TaskId, TaskStatus, Timestamp, codes,
@@ -16,7 +18,7 @@ use crate::services::tasks::task_not_found;
 /// The longest reason, in characters.
 const MAX_REASON_CHARS: usize = 500;
 
-/// An open proposal that is with the reviewer on a marked task whose current version has no standing human approval.
+/// An open proposal that is with the reviewer on a marked task whose current version an integrator agent approved and no human approved after that.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AwaitingHumanReview {
     pub task: TaskId,
@@ -133,7 +135,7 @@ impl ReviewService {
     }
 }
 
-/// The open proposals on marked tasks that are with the reviewer and whose current version has no standing human approval, read in one transaction of `read`'s read pool. It decides the `human_review` attention kind, so clients derive nothing.
+/// The open proposals on marked tasks that are with the reviewer and whose current version waits for the human: an integrator agent approved it and no human the mark accepts approved it after that. A human sees a marked proposal only once an agent has approved it, and the automatic integration counts only a human approval given after the agent's. Read in one transaction of `read`'s read pool. It decides the `human_review` attention kind, so clients derive nothing.
 pub async fn awaiting_human_review(read: &Store) -> Result<Vec<AwaitingHumanReview>, StoreError> {
     let mut tx = read.read().begin().await?;
     let marked = tasks::marked_open_proposals(&mut *tx).await?;
@@ -142,7 +144,17 @@ pub async fn awaiting_human_review(read: &Store) -> Result<Vec<AwaitingHumanRevi
         let facts = reviews::review_facts(&mut *tx, row.proposal, row.version).await?;
         let with_reviewer = ProposalFact::open(changes_requested(&facts), row.conflicted)
             == ProposalFact::WithReviewer;
-        if !with_reviewer || human_approval_standing(Some(&row.mark), &facts, None) {
+        if !with_reviewer {
+            continue;
+        }
+        let author = reviews::get_proposal(&mut *tx, row.proposal)
+            .await?
+            .ok_or(StoreError::Corrupt("proposals.number"))?
+            .author
+            .agent();
+        let for_human = integrator_approval(&facts, &author)
+            .is_some_and(|seq| !human_approved_after(&row.mark, &facts, seq));
+        if !for_human {
             continue;
         }
         waiting.push(AwaitingHumanReview {
