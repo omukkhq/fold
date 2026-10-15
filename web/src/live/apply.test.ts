@@ -429,6 +429,64 @@ describe("invalidation rules", () => {
     expect(hit(keys.repository(slug))).toBe(false);
   });
 
+  it("refreshes the request list and the named request for request events", () => {
+    expect(domainOf("request.created")).toBe("request");
+    applyEvent(
+      client,
+      slug,
+      ev("request.created", { data: { request: "RQ-7" } }),
+    );
+    expect(hit(keys.requests(slug))).toBe(true);
+    expect(hit(keys.request(slug, "RQ-7"))).toBe(true);
+    expect(hit(keys.board(slug))).toBe(false);
+    invalidated = [];
+    applyEvent(
+      client,
+      slug,
+      ev("request.draft_submitted", { data: { request: "RQ-4", version: 2 } }),
+    );
+    expect(hit(keys.request(slug, "RQ-4"))).toBe(true);
+    invalidated = [];
+    applyEvent(client, slug, ev("request.closed", { data: {} }));
+    expect(hit(keys.requests(slug))).toBe(true);
+    expect(invalidated.some((k) => k?.includes('"request"'))).toBe(false);
+  });
+
+  it("puts the tasks an approval created on the board", () => {
+    applyEvent(
+      client,
+      slug,
+      ev("request.approved", {
+        data: { request: "RQ-4", version: 2, tasks: ["T-12", "T-13"] },
+      }),
+    );
+    expect(hit(keys.request(slug, "RQ-4"))).toBe(true);
+    expect(hit(keys.board(slug))).toBe(true);
+    expect(hit(keys.task(slug, "T-12"))).toBe(true);
+    expect(hit(keys.task(slug, "T-13"))).toBe(true);
+    invalidated = [];
+    applyEvent(
+      client,
+      slug,
+      ev("request.approved", { data: { request: "RQ-5", tasks: "T-1" } }),
+    );
+    expect(hit(keys.board(slug))).toBe(true);
+    expect(hit(keys.task(slug, "T-1"))).toBe(false);
+  });
+
+  it("refreshes the request whose thread a message joins", () => {
+    applyEvent(
+      client,
+      slug,
+      ev("message.sent", { data: { message: "m-3", request: "RQ-4" } }),
+    );
+    expect(hit(keys.messages(slug))).toBe(true);
+    expect(hit(keys.request(slug, "RQ-4"))).toBe(true);
+    invalidated = [];
+    applyEvent(client, slug, ev("message.sent", { data: { message: "m-4" } }));
+    expect(invalidated.some((k) => k?.includes('"request"'))).toBe(false);
+  });
+
   it("invalidates board, workspace and agents keys for claim.stale", () => {
     applyEvent(
       client,

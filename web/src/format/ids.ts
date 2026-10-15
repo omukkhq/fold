@@ -5,7 +5,8 @@ export type IdKind =
   | "revision"
   | "workspace"
   | "checkpoint"
-  | "message";
+  | "message"
+  | "request";
 
 export interface FoundId {
   kind: IdKind;
@@ -25,6 +26,7 @@ const PREFIXES: readonly (readonly [string, IdKind])[] = [
   ["ws-", "workspace"],
   ["ck-", "checkpoint"],
   ["m-", "message"],
+  ["RQ-", "request"],
   ["r", "revision"],
 ];
 

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { parseProposalParam, parseSlug, parseTaskParam } from "./params";
+import {
+  parseProposalParam,
+  parseRequestParam,
+  parseSlug,
+  parseTaskParam,
+} from "./params";
 
 describe("parseTaskParam", () => {
   it("reads a task id", () => {
@@ -29,6 +34,15 @@ describe("parseProposalParam", () => {
   });
   it.each(["P-0", "p-3", "P-3abc", "", "T-3"])("rejects %j", (raw) => {
     expect(parseProposalParam(raw)).toBeNull();
+  });
+});
+
+describe("parseRequestParam", () => {
+  it("reads a request id", () => {
+    expect(parseRequestParam("RQ-4")).toBe(4);
+  });
+  it.each(["RQ-0", "rq-4", "RQ-4x", "R-4", "P-4"])("rejects %j", (raw) => {
+    expect(parseRequestParam(raw)).toBeNull();
   });
 });
 

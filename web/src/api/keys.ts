@@ -25,6 +25,12 @@ export const keys = {
   /** Under the proposal prefix, so every event and write that refreshes the proposal also refreshes its comments. */
   proposalComments: (slug: string, proposal: string) =>
     [slug, "proposal", proposal, "comments"] as const,
+  requests: (slug: string) => [slug, "requests"] as const,
+  request: (slug: string, request: string) =>
+    [slug, "request", request] as const,
+  /** Under the request prefix, so every event and write that refreshes the request also refreshes its clarification thread. */
+  requestThread: (slug: string, request: string, thread: string) =>
+    [slug, "request", request, "thread", thread] as const,
   events: (slug: string) => [slug, "events"] as const,
   agents: (slug: string) => [slug, "agents"] as const,
   /** Under the agents prefix, so every event that invalidates the agents also refreshes the agent chips of the top bar. */

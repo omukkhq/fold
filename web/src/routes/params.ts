@@ -22,6 +22,10 @@ export function parseProposalParam(raw: string): number | null {
   return parsePrefixed("P", raw);
 }
 
+export function parseRequestParam(raw: string): number | null {
+  return parsePrefixed("RQ", raw);
+}
+
 export function parseSlug(raw: string): string | null {
   return SLUG.test(raw) ? raw : null;
 }

@@ -2,6 +2,7 @@ export type NavId =
   | "board"
   | "activity"
   | "proposals"
+  | "requests"
   | "agents"
   | "messages"
   | "repository";
@@ -18,6 +19,7 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
   BOARD,
   { id: "activity", label: "Activity", segment: "activity" },
   { id: "proposals", label: "Proposals", segment: "proposals" },
+  { id: "requests", label: "Requests", segment: "requests" },
   { id: "agents", label: "Agents", segment: "agents" },
   { id: "messages", label: "Messages", segment: "messages" },
   { id: "repository", label: "Repository", segment: "repository" },

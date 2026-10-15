@@ -29,6 +29,7 @@ const DOMAINS = new Set([
   "main",
   "remote",
   "message",
+  "request",
 ]);
 
 export function domainOf(type: string): string | null {
@@ -298,6 +299,18 @@ function applySnapshot(
   }
 }
 
+/** A request event and a request-linked message name the request in `data.request`: request events carry no task or proposal id. */
+function requestOf(event: StoredEvent): string | null {
+  const request = event.data.request;
+  return typeof request === "string" ? request : null;
+}
+
+/** The ids of the tasks `request.approved` created. */
+function createdTasks(event: StoredEvent): string[] {
+  const tasks = event.data.tasks;
+  return isTaskIds(tasks) ? tasks : [];
+}
+
 function invalidationKeys(
   slug: string,
   type: string,
@@ -311,6 +324,8 @@ function invalidationKeys(
     workspace === null ? [] : [keys.workspace(slug, workspace)];
   const board = keys.board(slug);
   const repository = keys.repository(slug);
+  const request = requestOf(event);
+  const requestKey = request === null ? [] : [keys.request(slug, request)];
 
   switch (domain) {
     case "agent":
@@ -354,8 +369,17 @@ function invalidationKeys(
       return [repository, board];
     case "remote":
       return [repository];
+    case "request":
+      return type === "request.approved"
+        ? [
+            keys.requests(slug),
+            ...requestKey,
+            board,
+            ...createdTasks(event).map((t) => keys.task(slug, t)),
+          ]
+        : [keys.requests(slug), ...requestKey];
     default:
-      return [keys.messages(slug), board];
+      return [keys.messages(slug), board, ...requestKey];
   }
 }
 

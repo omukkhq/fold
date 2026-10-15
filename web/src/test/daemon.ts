@@ -1,5 +1,6 @@
 import createClient from "openapi-fetch";
 import type { paths } from "@/api/schema";
+import { readBody } from "./stubFetch";
 
 export interface Call {
   method: string;
@@ -135,11 +136,10 @@ export class FakeDaemon {
 
   private async answer(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    const text = await request.text();
     const call: Call = {
       method: request.method,
       path: url.pathname + url.search,
-      body: text === "" ? undefined : JSON.parse(text),
+      body: await readBody(request),
       params: {},
     };
     this.calls.push(call);

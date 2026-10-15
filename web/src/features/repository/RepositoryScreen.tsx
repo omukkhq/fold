@@ -10,6 +10,7 @@ import { CompareBar } from "./CompareBar";
 import { FileView } from "./FileView";
 import { mainCopyText } from "./describe";
 import { repositoryQuery, revisionsQuery } from "./queries";
+import { parentDirs } from "./search";
 import { RevisionList } from "./RevisionList";
 import { TreeView } from "./TreeView";
 
@@ -17,6 +18,8 @@ interface RepositoryScreenProps {
   slug: string;
   /** The revision to show; the newest shows when it is absent or the project has no such revision. */
   revision?: string;
+  /** A file to open first, with the directories above it expanded. */
+  path?: string;
   /** Called with the revision the human picks; the route puts it in the address, which brings it back as `revision`. */
   onSelectRevision: (id: string) => void;
 }
@@ -24,12 +27,15 @@ interface RepositoryScreenProps {
 export function RepositoryScreen({
   slug,
   revision,
+  path,
   onSelectRevision,
 }: RepositoryScreenProps) {
   const revisions = useQuery(revisionsQuery(slug));
   const repository = useQuery(repositoryQuery(slug));
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
-  const [openPath, setOpenPath] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(
+    () => new Set(path === undefined ? [] : parentDirs(path)),
+  );
+  const [openPath, setOpenPath] = useState<string | null>(path ?? null);
   // The clock is read once per mount: the row times are a snapshot, not a ticking display.
   const [now] = useState(() => Date.now());
 

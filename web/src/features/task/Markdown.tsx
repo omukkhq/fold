@@ -2,6 +2,9 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
+import { MentionLink } from "@/mentions/MentionLink";
+import type { Known } from "@/mentions/parse";
+import { remarkMentions } from "@/mentions/remark";
 
 // Every element takes token classes; W03 draws the description as 14 / 400 body text with 600 subheads.
 const COMPONENTS: Components = {
@@ -66,17 +69,24 @@ const COMPONENTS: Components = {
         className="size-14 accent-primary"
       />
     ) : null,
-  a: ({ children, href }) => (
-    <a
-      href={href}
-      className={cn(
-        "text-primary-text underline underline-offset-2",
-        focusRing,
-      )}
-    >
-      {children}
-    </a>
-  ),
+  a: ({ children, href, node }) => {
+    const tag = node?.properties.dataMention;
+    return typeof tag === "string" && href ? (
+      <MentionLink href={href} tag={tag}>
+        {children}
+      </MentionLink>
+    ) : (
+      <a
+        href={href}
+        className={cn(
+          "text-primary-text underline underline-offset-2",
+          focusRing,
+        )}
+      >
+        {children}
+      </a>
+    );
+  },
   code: ({ children }) => (
     <code className="rounded-xs bg-sunken px-4 font-mono text-meta">
       {children}
@@ -112,12 +122,21 @@ const COMPONENTS: Components = {
 /**
  * The task description. GFM adds tables and task lists; raw HTML is dropped, never rendered, because a description is
  * written by agents and humans and shown to everyone. Images show their alt text: the bundle loads nothing remote.
+ * With `mentions`, `#` and `@` mentions in the text link to their screens.
  */
-export function Markdown({ children }: { children: string }) {
+export function Markdown({
+  children,
+  mentions,
+}: {
+  children: string;
+  mentions?: { slug: string; known?: Known };
+}) {
   return (
     <div className="flex flex-col gap-6">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={
+          mentions ? [remarkGfm, remarkMentions(mentions)] : [remarkGfm]
+        }
         skipHtml
         components={COMPONENTS}
       >

@@ -5,6 +5,7 @@ import { keys } from "./keys";
 import { countAwaitingHuman, listThreads } from "./messages";
 import { getProject, listProjects } from "./projects";
 import { getProposal, listComments, listProposals } from "./proposals";
+import { getRequest, getThread, listRequests } from "./requests";
 import { getSession } from "./session";
 import { getWorkspace } from "./workspaces";
 
@@ -91,5 +92,26 @@ export const proposalCommentsQuery = (slug: string, id: string) =>
   queryOptions({
     queryKey: keys.proposalComments(slug, id),
     queryFn: () => listComments(slug, id),
+    staleTime: Infinity,
+  });
+
+export const requestsQuery = (slug: string) =>
+  queryOptions({
+    queryKey: keys.requests(slug),
+    queryFn: () => listRequests(slug),
+    staleTime: Infinity,
+  });
+
+export const requestQuery = (slug: string, id: string) =>
+  queryOptions({
+    queryKey: keys.request(slug, id),
+    queryFn: () => getRequest(slug, id),
+    staleTime: Infinity,
+  });
+
+export const requestThreadQuery = (slug: string, id: string, thread: string) =>
+  queryOptions({
+    queryKey: keys.requestThread(slug, id, thread),
+    queryFn: () => getThread(slug, thread),
     staleTime: Infinity,
   });

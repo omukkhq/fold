@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { findIds, parseId } from "./ids";
 
 describe("findIds", () => {
-  it("finds all seven id kinds with exact spans", () => {
-    const text = "T-12 P-3 C-40 r17 ws-9 ck-88 m-210";
+  it("finds all eight id kinds with exact spans", () => {
+    const text = "T-12 P-3 C-40 r17 ws-9 ck-88 m-210 RQ-4";
     const found = findIds(text);
     expect(found.map((id) => [id.kind, id.number, id.text])).toEqual([
       ["task", 12, "T-12"],
@@ -13,6 +13,7 @@ describe("findIds", () => {
       ["workspace", 9, "ws-9"],
       ["checkpoint", 88, "ck-88"],
       ["message", 210, "m-210"],
+      ["request", 4, "RQ-4"],
     ]);
     for (const id of found) {
       expect(text.slice(id.start, id.end)).toBe(id.text);

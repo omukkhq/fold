@@ -9,13 +9,14 @@ export const Route = createFileRoute("/p/$slug/repository")({
 
 function RepositoryRoute() {
   const { slug } = Route.useParams();
-  const { revision } = Route.useSearch();
+  const { revision, path } = Route.useSearch();
   const navigate = Route.useNavigate();
   return (
     <RepositoryScreen
-      key={revision}
+      key={`${revision ?? ""}:${path ?? ""}`}
       slug={slug}
       revision={revision}
+      path={path}
       onSelectRevision={(id) => {
         void navigate({ search: { revision: id } });
       }}

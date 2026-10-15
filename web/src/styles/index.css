@@ -156,6 +156,7 @@
   --width-dialog: var(--width-dialog);
   --width-review-panel: var(--width-review-panel);
   --width-event-stream: var(--width-event-stream);
+  --width-request-dialog: var(--width-request-dialog);
 
   --height-*: initial;
   --height-bar: var(--height-bar);

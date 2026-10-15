@@ -7,6 +7,7 @@ describe("NAV_ENTRIES", () => {
       "Board",
       "Activity",
       "Proposals",
+      "Requests",
       "Agents",
       "Messages",
       "Repository",
@@ -29,6 +30,8 @@ describe("activeNav", () => {
     ["/p/demo/activity", "activity"],
     ["/p/demo/proposals", "proposals"],
     ["/p/demo/proposals/P-3", "proposals"],
+    ["/p/demo/requests", "requests"],
+    ["/p/demo/requests/RQ-4", "requests"],
     ["/p/demo/agents", "agents"],
     ["/p/demo/messages", "messages"],
     ["/p/demo/repository", "repository"],
@@ -52,6 +55,7 @@ describe("activeNav", () => {
 describe("switchProjectPath", () => {
   it.each([
     ["/p/demo/proposals/P-3", "/p/ledger/proposals"],
+    ["/p/demo/requests/RQ-4", "/p/ledger/requests"],
     ["/p/demo/t/T-12", "/p/ledger/board"],
     ["/p/demo/diff", "/p/ledger/board"],
     ["/p/demo", "/p/ledger/board"],
