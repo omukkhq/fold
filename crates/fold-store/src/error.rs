@@ -9,6 +9,14 @@ pub enum StoreError {
     Database(#[from] sqlx::Error),
     #[error("migration error: {0}")]
     Migrate(#[source] MigrateError),
+    #[error(
+        "the {database} database is still locked after {} s; another fold process (a daemon, fold serve or fold init) holds its write lock: stop that process or let it finish, then try again",
+        waited.as_secs()
+    )]
+    Locked {
+        database: &'static str,
+        waited: std::time::Duration,
+    },
     #[error("the database was written by a newer fold (schema version {version})")]
     SchemaTooNew { version: i64 },
     /// A caller handed the store a value it refuses to write.
@@ -41,6 +49,7 @@ impl StoreError {
     pub fn code(&self) -> Option<&'static str> {
         match self {
             StoreError::SchemaTooNew { .. } => Some(codes::SCHEMA_TOO_NEW),
+            StoreError::Locked { .. } => Some(codes::DATABASE_LOCKED),
             StoreError::RevisionNotFound(_) => Some(codes::REVISION_NOT_FOUND),
             StoreError::HeadMoved { .. } => Some(codes::HEAD_MOVED),
             _ => None,

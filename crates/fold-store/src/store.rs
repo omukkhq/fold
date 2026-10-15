@@ -2,7 +2,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use fold_core::ProjectPaths;
-use sqlx::migrate::Migrator;
+use sqlx::migrate::{MigrateError, Migrator};
 use sqlx::sqlite::{
     SqliteConnectOptions, SqliteConnection, SqliteJournalMode, SqlitePool, SqlitePoolOptions,
     SqliteSynchronous,
@@ -16,7 +16,10 @@ static REGISTRY_MIGRATIONS: Migrator = sqlx::migrate!("./migrations/registry");
 
 const READ_CONNECTIONS: u32 = 4;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long an open waits for another process to release the write lock before it gives up with `database_locked`.
+const OPEN_WAIT: Duration = Duration::from_secs(60);
 const BUSY_RETRY: Duration = Duration::from_millis(10);
+const BUSY_RETRY_MAX: Duration = Duration::from_millis(250);
 const SQLITE_BUSY: i32 = 5;
 
 /// One SQLite database: a single writer connection and a pool of read-only connections. Clones share both pools.
@@ -41,23 +44,54 @@ impl WriteTx {
 impl Store {
     /// Opens `fold.db`, creating the file when it is absent, and applies the project migrations before returning.
     pub async fn open_project(paths: &ProjectPaths) -> Result<Store, StoreError> {
-        Self::open(&paths.db(), &PROJECT_MIGRATIONS).await
+        Self::open(&paths.db(), &PROJECT_MIGRATIONS, "project", OPEN_WAIT).await
     }
 
     /// Opens the host registry database and applies the registry migrations before returning.
     pub async fn open_registry(path: &Path) -> Result<Store, StoreError> {
-        Self::open(path, &REGISTRY_MIGRATIONS).await
+        Self::open(path, &REGISTRY_MIGRATIONS, "registry", OPEN_WAIT).await
     }
 
-    async fn open(path: &Path, migrations: &'static Migrator) -> Result<Store, StoreError> {
+    /// `open_registry` with a shorter wait for the write lock, so a test can see the open give up.
+    #[cfg(any(test, feature = "testing"))]
+    pub async fn open_registry_waiting(path: &Path, wait: Duration) -> Result<Store, StoreError> {
+        Self::open(path, &REGISTRY_MIGRATIONS, "registry", wait).await
+    }
+
+    /// Another opener's WAL switch or migration transaction refuses this one with `SQLITE_BUSY`, and a loaded host can hold the migration transaction past the busy timeout, so the whole open is tried again from a fresh connection until `wait` has passed. The last attempt can run up to the busy timeout past `wait`.
+    async fn open(
+        path: &Path,
+        migrations: &'static Migrator,
+        database: &'static str,
+        wait: Duration,
+    ) -> Result<Store, StoreError> {
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
-        let writer = connect_writer(path).await?;
-        if let Err(error) = migrate(&writer, migrations).await {
-            writer.close().await;
-            return Err(error);
-        }
+        let started = tokio::time::Instant::now();
+        let mut retry = BUSY_RETRY;
+        let mut logged = false;
+        let writer = loop {
+            match connect_and_migrate(path, migrations).await {
+                Err(error) if is_busy(&error) => {
+                    let waited = started.elapsed();
+                    if waited >= wait {
+                        return Err(StoreError::Locked { database, waited });
+                    }
+                    if waited > BUSY_TIMEOUT && !logged {
+                        tracing::warn!(
+                            database,
+                            waited_ms = waited.as_millis(),
+                            "waiting for another process to release the database write lock"
+                        );
+                        logged = true;
+                    }
+                    tokio::time::sleep(retry.min(wait.saturating_sub(waited))).await;
+                    retry = retry.saturating_mul(2).min(BUSY_RETRY_MAX);
+                }
+                other => break other?,
+            }
+        };
         let readers = SqlitePoolOptions::new()
             .max_connections(READ_CONNECTIONS)
             .connect_lazy_with(connect_options(path).read_only(true));
@@ -108,26 +142,26 @@ impl Store {
     }
 }
 
-/// Switching a new file to WAL takes the exclusive lock without waiting on the busy timeout, so a second process that opens the same new file at that moment is refused with `SQLITE_BUSY`. It tries again until the busy timeout has passed.
-async fn connect_writer(path: &Path) -> Result<SqlitePool, StoreError> {
-    let deadline = tokio::time::Instant::now() + BUSY_TIMEOUT;
-    loop {
-        let connected = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(connect_options(path).create_if_missing(true))
-            .await;
-        match connected {
-            Err(error) if is_busy(&error) && tokio::time::Instant::now() < deadline => {
-                tokio::time::sleep(BUSY_RETRY).await;
-            }
-            other => return Ok(other?),
-        }
+/// One attempt to open the writer and apply the migrations. Switching a new file to WAL takes the exclusive lock without waiting on the busy timeout, so it fails at once with `SQLITE_BUSY` while another process holds a lock; the migration's `BEGIN IMMEDIATE` waits up to the busy timeout first.
+async fn connect_and_migrate(path: &Path, migrations: &Migrator) -> Result<SqlitePool, StoreError> {
+    let writer = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(connect_options(path).create_if_missing(true))
+        .await?;
+    if let Err(error) = migrate(&writer, migrations).await {
+        writer.close().await;
+        return Err(error);
     }
+    Ok(writer)
 }
 
-fn is_busy(error: &sqlx::Error) -> bool {
+fn is_busy(error: &StoreError) -> bool {
     let code = match error {
-        sqlx::Error::Database(error) => error.code(),
+        StoreError::Database(sqlx::Error::Database(error))
+        | StoreError::Migrate(
+            MigrateError::Execute(sqlx::Error::Database(error))
+            | MigrateError::ExecuteMigration(sqlx::Error::Database(error), _),
+        ) => error.code(),
         _ => None,
     };
     // Extended codes keep the primary code in the low byte.

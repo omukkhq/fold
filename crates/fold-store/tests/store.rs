@@ -235,6 +235,123 @@ async fn opens_of_a_new_file_at_once_apply_each_migration_once() {
     }
 }
 
+/// Holds the write lock on a new file for longer than the store's five-second busy timeout, the way a first opener's migration transaction does on a loaded host, and checks that `open_registry` waits it out instead of failing with `SQLITE_BUSY`.
+#[cfg(test)]
+async fn open_outlasts_a_long_write_lock(wal: bool) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("registry.db");
+    let mut options = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(&path)
+        .create_if_missing(true);
+    if wal {
+        options = options.journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
+    }
+    let mut holder = sqlx::SqliteConnection::connect_with(&options)
+        .await
+        .unwrap();
+    sqlx::query("BEGIN IMMEDIATE")
+        .execute(&mut holder)
+        .await
+        .unwrap();
+    sqlx::query("CREATE TABLE held (a)")
+        .execute(&mut holder)
+        .await
+        .unwrap();
+
+    let opener = tokio::spawn({
+        let path = path.clone();
+        async move { Store::open_registry(&path).await }
+    });
+    tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+    assert!(
+        !opener.is_finished(),
+        "the opener gave up while the lock was held"
+    );
+    sqlx::query("COMMIT").execute(&mut holder).await.unwrap();
+
+    let store = tokio::time::timeout(std::time::Duration::from_secs(30), opener)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        count(&store, "SELECT COUNT(*) FROM _sqlx_migrations").await,
+        1
+    );
+    store.close().await.unwrap();
+    holder.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn open_waits_out_a_migration_transaction_longer_than_the_busy_timeout() {
+    open_outlasts_a_long_write_lock(true).await;
+}
+
+#[tokio::test]
+async fn open_waits_out_a_lock_on_the_wal_switch_longer_than_the_busy_timeout() {
+    open_outlasts_a_long_write_lock(false).await;
+}
+
+#[tokio::test]
+async fn open_gives_up_with_database_locked_when_the_lock_is_never_released() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("registry.db");
+    let options = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(&path)
+        .create_if_missing(true);
+    let mut holder = sqlx::SqliteConnection::connect_with(&options)
+        .await
+        .unwrap();
+    sqlx::query("BEGIN IMMEDIATE")
+        .execute(&mut holder)
+        .await
+        .unwrap();
+
+    let wait = std::time::Duration::from_secs(1);
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        Store::open_registry_waiting(&path, wait),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
+    assert_eq!(error.code(), Some(codes::DATABASE_LOCKED));
+    assert!(
+        matches!(error, StoreError::Locked { database: "registry", waited } if waited >= wait),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("another fold process"));
+    holder.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_migration_that_fails_for_another_reason_fails_at_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("registry.db");
+    let options = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(&path)
+        .create_if_missing(true);
+    let mut conn = sqlx::SqliteConnection::connect_with(&options)
+        .await
+        .unwrap();
+    sqlx::query("CREATE TABLE projects (a)")
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    conn.close().await.unwrap();
+
+    // Far shorter than the wait: a refused migration is not retried.
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        Store::open_registry_waiting(&path, std::time::Duration::from_secs(600)),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
+    assert!(matches!(error, StoreError::Migrate(_)), "{error:?}");
+    assert_eq!(error.code(), None);
+}
+
 #[tokio::test]
 async fn registry_opens_with_its_own_migrations() {
     let dir = tempfile::tempdir().unwrap();

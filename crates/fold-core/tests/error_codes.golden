@@ -49,3 +49,4 @@ invalid_handshake
 not_claim_holder
 claim_not_found
 web_not_built
+database_locked
