@@ -26,6 +26,7 @@ fn service(state: &AppState, project: &Project) -> ReviewService {
         handle.bus.clone(),
         handle.clock.clone(),
         WorkspaceService::for_project(handle, Git::default()),
+        handle.integration.clone(),
     )
     .with_registry(state.registry.clone())
 }

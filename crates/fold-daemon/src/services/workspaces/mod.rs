@@ -26,6 +26,7 @@ mod checkpoints;
 mod compare;
 mod files;
 mod git;
+mod integration;
 mod lifecycle;
 mod reconcile;
 mod repository;

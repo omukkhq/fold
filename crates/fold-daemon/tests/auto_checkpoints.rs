@@ -121,6 +121,7 @@ impl Fixture {
             self.handle.bus.clone(),
             self.handle.clock.clone(),
             self.workspaces.clone(),
+            self.handle.integration.clone(),
         )
     }
 

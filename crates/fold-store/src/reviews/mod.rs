@@ -12,8 +12,13 @@ use crate::store::WriteTx;
 use crate::workspaces::parse_stats;
 
 mod claims;
+mod integrations;
 
 pub use claims::{ReviewClaimRow, insert_review_claim, unreleased_review_claim};
+pub use integrations::{
+    IntegrationFacts, IntegrationSubject, NewIntegration, insert_refused, insert_succeeded,
+    integration_facts,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProposalState {

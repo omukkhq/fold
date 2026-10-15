@@ -121,6 +121,7 @@ define_codes! {
     NOT_APPROVED = "not_approved",
     HUMAN_APPROVAL_MISSING = "human_approval_missing",
     PREREQUISITES_NOT_DONE = "prerequisites_not_done",
+    INTEGRATION_FAILED = "integration_failed",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

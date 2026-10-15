@@ -24,7 +24,7 @@ pub use lifecycle::{
     set_base, set_directory_present, set_sync_checkpoint, set_worker, sync_checkpoint,
     task_workspace_paths, touch,
 };
-pub use refs::{advance_main, create_main};
+pub use refs::{advance_main, create_main, main_head};
 pub use revisions::{
     IntegratedProposal, IntegrationInfo, IntegrationKind, MAX_PAGE, RevisionRow, ancestors,
     create_initial_revision, get_by_hash, get_by_number, head, initial_revision, insert_revision,

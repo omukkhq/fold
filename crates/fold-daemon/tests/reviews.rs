@@ -98,7 +98,13 @@ impl Fixture {
             Git::default(),
             LEASE_MINUTES,
         );
-        let reviews = ReviewService::new(project.store().clone(), bus, clock, workspaces.clone());
+        let reviews = ReviewService::new(
+            project.store().clone(),
+            bus,
+            clock,
+            workspaces.clone(),
+            Arc::default(),
+        );
         tasks
             .create_task(
                 &agent("frontend", &[]),

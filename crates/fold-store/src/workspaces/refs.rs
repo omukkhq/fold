@@ -1,5 +1,7 @@
 use fold_core::RevisionId;
 
+use sqlx::SqliteExecutor;
+
 use crate::error::StoreError;
 use crate::store::WriteTx;
 
@@ -61,4 +63,22 @@ pub async fn advance_main(
     } else {
         Err(StoreError::HeadMoved { expected })
     }
+}
+
+/// The number of the revision `main` names, or `None` before `r1` exists. On the writer's connection it is the head a compare-and-swap in the same transaction will find.
+pub async fn main_head(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Option<RevisionId>, StoreError> {
+    let number = sqlx::query_scalar!(
+        r#"SELECT r.number AS "number!: i64"
+           FROM refs JOIN revisions r ON r.id = refs.revision_id
+           WHERE refs.name = 'main'"#
+    )
+    .fetch_optional(executor)
+    .await?;
+    number
+        .map(|number| {
+            RevisionId::try_from_db(number).ok_or(StoreError::Corrupt("revisions.number"))
+        })
+        .transpose()
 }

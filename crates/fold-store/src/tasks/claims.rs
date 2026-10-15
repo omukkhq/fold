@@ -12,6 +12,8 @@ pub enum ReleaseReason {
     Released,
     TaskArchived,
     TakenOver,
+    /// The task's proposal integrated, which completes the task.
+    Integrated,
 }
 
 impl ReleaseReason {
@@ -20,6 +22,7 @@ impl ReleaseReason {
             ReleaseReason::Released => "released",
             ReleaseReason::TaskArchived => "task_archived",
             ReleaseReason::TakenOver => "taken_over",
+            ReleaseReason::Integrated => "integrated",
         }
     }
 }

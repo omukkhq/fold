@@ -10,6 +10,7 @@ pub mod git_sync_map;
 pub mod ignore;
 pub mod import;
 pub mod index;
+pub mod integrate;
 pub mod materialise;
 pub mod objects;
 pub mod paths;

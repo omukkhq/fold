@@ -54,6 +54,8 @@ pub struct Fixture {
     pub reviews: ReviewService,
     objects: Arc<tokio::sync::RwLock<()>>,
     locks: Arc<WorkspaceLocks>,
+    /// The project's integration mutex, shared by every review service of the fixture.
+    pub integration: Arc<tokio::sync::Mutex<()>>,
     pub frontend: Agent,
     pub backend: Agent,
     pub review: Agent,
@@ -93,11 +95,13 @@ impl Fixture {
         let objects = Arc::new(tokio::sync::RwLock::new(()));
         let locks = Arc::new(WorkspaceLocks::default());
         let workspaces = workspace_service(&project, &bus, &objects, &locks);
+        let integration = Arc::new(tokio::sync::Mutex::new(()));
         let reviews = ReviewService::new(
             project.store().clone(),
             bus.clone(),
             clock,
             workspaces.clone(),
+            Arc::clone(&integration),
         );
         let creator = agent("frontend");
         for _ in 0..2 {
@@ -125,6 +129,7 @@ impl Fixture {
             reviews,
             objects,
             locks,
+            integration,
             frontend,
             backend,
             review,
@@ -150,6 +155,7 @@ impl Fixture {
             self.bus.clone(),
             Arc::new(self.project.clock().clone()),
             workspaces,
+            Arc::clone(&self.integration),
         )
     }
 

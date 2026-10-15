@@ -99,6 +99,8 @@ fn status_of(code: &str) -> Option<StatusCode> {
         | codes::PREREQUISITES_NOT_DONE => Some(StatusCode::CONFLICT),
         codes::GIT_FAILED => Some(StatusCode::BAD_GATEWAY),
         codes::WORKSPACE_IO => Some(StatusCode::INTERNAL_SERVER_ERROR),
+        codes::HEAD_MOVED => Some(StatusCode::CONFLICT),
+        codes::INTEGRATION_FAILED => Some(StatusCode::SERVICE_UNAVAILABLE),
         _ => None,
     }
 }
@@ -323,6 +325,8 @@ mod tests {
             (codes::GIT_SYNC_MAP_INVALID, StatusCode::CONFLICT),
             (codes::INVALID_CONFIG, StatusCode::CONFLICT),
             (codes::GIT_FAILED, StatusCode::BAD_GATEWAY),
+            (codes::HEAD_MOVED, StatusCode::CONFLICT),
+            (codes::INTEGRATION_FAILED, StatusCode::SERVICE_UNAVAILABLE),
             (codes::TASK_NOT_FOUND, StatusCode::NOT_FOUND),
             (codes::INVALID_ID, StatusCode::BAD_REQUEST),
             (codes::DEPENDENCY_CYCLE, StatusCode::CONFLICT),

@@ -119,8 +119,14 @@ impl Fixture {
             Git::default(),
             LEASE_MINUTES,
         );
-        let reviews = ReviewService::new(project.store().clone(), bus, clock, workspaces.clone())
-            .with_registry(project.registry().clone());
+        let reviews = ReviewService::new(
+            project.store().clone(),
+            bus,
+            clock,
+            workspaces.clone(),
+            Arc::default(),
+        )
+        .with_registry(project.registry().clone());
         for title in ["auth", "docs"] {
             tasks
                 .create_task(
@@ -400,7 +406,13 @@ async fn unknown_reviewer_is_refused() {
         Git::default(),
         LEASE_MINUTES,
     );
-    let without_registry = ReviewService::new(fx.project.store().clone(), bus, clock, workspaces);
+    let without_registry = ReviewService::new(
+        fx.project.store().clone(),
+        bus,
+        clock,
+        workspaces,
+        Arc::default(),
+    );
     let error = refusal(
         without_registry
             .require_human_review(&planner(), t(1), Some(name("tanim")), REASON)

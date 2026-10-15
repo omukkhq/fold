@@ -18,7 +18,9 @@ mod recompute;
 mod removal;
 mod views;
 
-pub use dependencies::{EdgeRow, delete_edge, edges, edges_conn, fetch_edge, insert_edge};
+pub use dependencies::{
+    EdgeRow, delete_edge, edges, edges_conn, fetch_edge, insert_edge, prerequisite_statuses,
+};
 pub use human_review::{
     MarkedProposal, clear_human_review, marked_open_proposals, set_human_review,
 };

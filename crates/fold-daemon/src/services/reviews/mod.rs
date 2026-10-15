@@ -13,6 +13,7 @@ mod checkouts;
 mod claims;
 mod comments;
 mod human_review;
+mod integrate;
 mod proposals;
 mod verdicts;
 
@@ -20,6 +21,7 @@ pub use checkouts::ReviewCheckout;
 pub use claims::ReviewClaimView;
 pub use comments::{CommentInput, CommentLocation, CommentView};
 pub use human_review::{AwaitingHumanReview, awaiting_human_review};
+pub use integrate::{IntegrationOutcome, PullIntegration, PullOutcome};
 pub use proposals::{
     ProposalDetail, ProposalFilter, ProposalSummary, Retirement, Turn, VersionView, retire_proposal,
 };
@@ -82,6 +84,7 @@ pub struct ReviewService {
     clock: Arc<dyn Clock>,
     workspaces: WorkspaceService,
     registry: Option<Store>,
+    integration: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl std::fmt::Debug for ReviewService {
@@ -91,11 +94,13 @@ impl std::fmt::Debug for ReviewService {
 }
 
 impl ReviewService {
+    /// `integration` is the project's integration mutex (`ProjectHandle::integration`). Every review service of a project must share it, because it is what keeps two integrations from running at the same time.
     pub fn new(
         store: Store,
         bus: EventBus,
         clock: Arc<dyn Clock>,
         workspaces: WorkspaceService,
+        integration: Arc<tokio::sync::Mutex<()>>,
     ) -> Self {
         Self {
             store,
@@ -103,6 +108,7 @@ impl ReviewService {
             clock,
             workspaces,
             registry: None,
+            integration,
         }
     }
 

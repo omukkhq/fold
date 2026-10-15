@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT n.number AS \"needs!: i64\", n.status\n           FROM dependencies d\n           JOIN tasks t ON t.id = d.task_id\n           JOIN tasks n ON n.id = d.needs_task_id\n           WHERE t.number = ?\n           ORDER BY n.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "needs!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "status",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "status"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "57b6768bb2f6a68d8ba0afbc3a44340dea3df6bc5eddcbb10df32ccaa3bb2999"
+}

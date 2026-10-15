@@ -103,6 +103,7 @@ impl Fixture {
             bus.clone(),
             clock,
             workspaces.clone(),
+            Arc::default(),
         );
         let creator = agent("frontend");
         for _ in 0..2 {
@@ -141,6 +142,7 @@ impl Fixture {
             self.bus.clone(),
             Arc::new(self.project.clock().clone()),
             workspaces,
+            Arc::default(),
         )
     }
 

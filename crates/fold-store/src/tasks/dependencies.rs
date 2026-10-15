@@ -1,5 +1,5 @@
-use fold_core::{DependencyOrigin, TaskId, Timestamp};
-use sqlx::{SqliteConnection, SqlitePool};
+use fold_core::{DependencyOrigin, TaskId, TaskStatus, Timestamp};
+use sqlx::{SqliteConnection, SqliteExecutor, SqlitePool};
 
 use crate::error::StoreError;
 use crate::store::WriteTx;
@@ -134,4 +134,34 @@ pub async fn edges_conn(conn: &mut SqliteConnection) -> Result<Vec<EdgeRow>, Sto
     .into_iter()
     .map(RawEdge::into_row)
     .collect()
+}
+
+/// The tasks `task` needs directly, by either origin, with their cached status, in task number order.
+pub async fn prerequisite_statuses(
+    executor: impl SqliteExecutor<'_>,
+    task: TaskId,
+) -> Result<Vec<(TaskId, TaskStatus)>, StoreError> {
+    let number = task.to_db();
+    let rows = sqlx::query!(
+        r#"SELECT n.number AS "needs!: i64", n.status
+           FROM dependencies d
+           JOIN tasks t ON t.id = d.task_id
+           JOIN tasks n ON n.id = d.needs_task_id
+           WHERE t.number = ?
+           ORDER BY n.number"#,
+        number
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            let needs =
+                TaskId::try_from_db(row.needs).ok_or(StoreError::Corrupt("tasks.number"))?;
+            let status = row
+                .status
+                .parse()
+                .map_err(|_| StoreError::Corrupt("tasks.status"))?;
+            Ok((needs, status))
+        })
+        .collect()
 }

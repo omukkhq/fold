@@ -957,6 +957,7 @@ async fn proposal_commands_update_the_proposal_and_checkpoints_of_the_state() {
         fx.bus.clone(),
         Arc::new(fx.project.clock().clone()),
         fx.workspaces.clone(),
+        Arc::default(),
     );
     let actor = by(&fx.frontend);
     fs::write(dir.join("README.md"), "# demo\nfirst\n").unwrap();
@@ -995,6 +996,7 @@ async fn a_reject_clears_the_proposal_of_the_state() {
         fx.bus.clone(),
         Arc::new(fx.project.clock().clone()),
         fx.workspaces.clone(),
+        Arc::default(),
     );
     fs::write(dir.join("README.md"), "# demo\nfirst\n").unwrap();
     let opened = reviews
