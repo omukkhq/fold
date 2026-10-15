@@ -168,7 +168,13 @@ describe("recordedCheckpoints", () => {
 
 describe("liveStrip without the task details", () => {
   it("shows what the frame reports when the payload has no workspace details, activity or checkpoints", () => {
-    const bare = { attention: [], claims: task().claims, workspace: "ws-2" };
+    const bare = {
+      activity: null,
+      attention: [],
+      claims: task().claims,
+      workspace: "ws-2",
+      workspace_info: null,
+    };
     expect(liveStrip(bare, live(), NOW)).toEqual({
       worker: "frontend/ui",
       verb: "is editing",
@@ -197,6 +203,9 @@ describe("the working-changes texts", () => {
     expect(liveChipText(live(), NOW)).toBe("Live · 12 s ago");
     expect(changesNote(live(), workspace())).toBe(
       "1 file against base r7 · not in main",
+    );
+    expect(changesNote({ ...live(), base: "r6" }, null)).toBe(
+      "1 file against base r6 · not in main",
     );
     expect(baseText({ base: "r7", main: "r9" })).toBe("base r7 (main r9)");
     expect(baseText({ base: "r7" })).toBe("base r7");

@@ -259,6 +259,8 @@ async fn the_board_returns_five_columns_in_order_with_blocked_blocks_and_attenti
             "messages": 0,
             "completed_at": null,
             "attention": [],
+            "proposal": null,
+            "activity": null,
         })
     );
     let todo = &board["columns"][1]["cards"][0];
@@ -515,6 +517,35 @@ async fn reads_and_writes_return_the_declared_shapes() {
     );
     assert_eq!(view["claims"], json!([]));
     assert_eq!(view["attention"], json!([]));
+    assert_eq!(view["status_reason"], "Calculated: waits for T-2");
+    for null in [
+        "workspace_info",
+        "activity",
+        "proposal",
+        "integration",
+        "human_review_set_at",
+    ] {
+        assert_eq!(view[null], Value::Null, "{null}");
+    }
+    assert_eq!(view["changesets"], json!([]));
+    assert_eq!(view["can_change_human_review"], true);
+    let history = view["history"].as_array().unwrap();
+    assert_eq!(history[0]["type"], "checklist.item_updated");
+    assert_eq!(history[0]["actor"], "human:ana");
+    assert!(
+        history
+            .iter()
+            .any(|e| e["type"] == "task.created" && e["actor"] == "human:ana")
+    );
+    assert!(history[0]["seq"].as_u64() > history[1]["seq"].as_u64());
+    let (_, anonymous) = fx.send_as(Method::GET, "/tasks/T-1", None, &[]).await;
+    assert_eq!(anonymous["can_change_human_review"], false);
+    let board = fx.ok(Method::GET, "/board", None).await;
+    let card = &board["columns"][1]["cards"][0];
+    assert_eq!(
+        (card["proposal"].clone(), card["activity"].clone()),
+        (Value::Null, Value::Null)
+    );
     assert_eq!(
         view["progress"],
         json!({"steps_done": 0, "steps_total": 1, "linked_done": 0, "linked_total": 1})

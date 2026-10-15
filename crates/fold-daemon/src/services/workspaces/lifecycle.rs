@@ -532,7 +532,7 @@ async fn abandon_in_tx(
             ])
             .into());
     }
-    let open_proposal = tasks::load_facts(tx, &[row.task])
+    let open_proposal = tasks::load_facts(tx.conn(), &[row.task])
         .await?
         .pop()
         .is_some_and(|loaded| loaded.facts.proposal != ProposalFact::None);

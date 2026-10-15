@@ -5,7 +5,6 @@ import type {
   ReviewVerdict,
   TaskClaim,
   TaskEvent,
-  TaskHumanReviewNote,
   TaskIntegration,
 } from "@/api/tasks";
 import { formatSince } from "@/format/time";
@@ -117,17 +116,20 @@ export function checkpointText(ck: CheckpointSummary): string {
   return ck.label ?? "checkpoint";
 }
 
-/** The human-review mark: who must approve, and who set it when the daemon says. */
+/** The human-review mark: who must approve, and who set it, with the time when the daemon says. */
 export function humanReviewLines(
   mark: HumanReviewMark,
-  note?: TaskHumanReviewNote,
-): { title: string; setBy: string | null } {
+  setAt: number | null,
+): { title: string; setBy: string } {
   return {
     title:
       mark.reviewer === null
         ? "Required · any human"
         : `Required · ${mark.reviewer}`,
-    setBy: note ? `Set by ${note.set_by} · ${clockTime(note.set_at)}` : null,
+    setBy:
+      setAt === null
+        ? `Set by ${mark.set_by}`
+        : `Set by ${mark.set_by} · ${clockTime(setAt)}`,
   };
 }
 

@@ -80,8 +80,8 @@ export function WorkingChanges({
   slug: string;
   /** The workspace id, `ws-9`. */
   workspace: string | null;
-  /** The workspace details with the main head; absent from the task read, which hides "Compare with main". */
-  info?: TaskWorkspaceInfo;
+  /** The workspace details with the main head; null without a live workspace, which hides "Compare with main". */
+  info: TaskWorkspaceInfo | null;
   live: LiveWorkspace | null;
   now: number;
 }) {

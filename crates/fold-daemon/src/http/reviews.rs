@@ -16,7 +16,7 @@ use utoipa_axum::routes;
 use super::Project;
 use super::actor::Human;
 use super::error::{ApiError, ApiJson, ApiQuery, ErrorEnvelope};
-use super::tasks::{HumanReviewMark, TaskStatus, TaskView, id};
+use super::tasks::{HumanReviewMark, TaskStatus, TaskView, id, task_view};
 use super::workspaces::{ComparedFile, ComparisonTotals};
 use crate::daemon::AppState;
 use crate::services::reviews::{
@@ -116,7 +116,10 @@ pub async fn clear_human_review(
     service(&state, &project)
         .clear_human_review(&human.actor(), task)
         .await?;
-    Ok(Json(project.0.tasks.get_view(task).await?.into()))
+    Ok(Json(task_view(
+        project.0.tasks.get_view(task).await?,
+        Some(&human),
+    )))
 }
 
 /// Where a proposal stands.

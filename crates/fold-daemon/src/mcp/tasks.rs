@@ -372,7 +372,34 @@ fn detail_json(detail: &TaskDetail) -> Value {
             "reviewer": mark.reviewer.as_ref().map(HumanName::as_str),
             "reason": mark.reason,
             "set_by": mark.set_by.as_str(),
+            "set_at": detail.human_review_set_at,
         })),
+        "status_reason": detail.status_reason,
+        "workspace_info": detail.workspace_info.as_ref().map(|info| json!({
+            "directory": info.directory,
+            "base": info.base,
+            "main": info.main,
+            "behind": info.behind,
+        })),
+        "changesets": detail.changesets.iter().map(|changeset| json!({
+            "id": changeset.id,
+            "message": changeset.message,
+        })).collect::<Vec<_>>(),
+        "proposal": detail.proposal.as_ref().map(|proposal| json!({
+            "id": proposal.id,
+            "state": proposal.standing.as_str(),
+            "version": proposal.version,
+        })),
+        "integration": detail.integration.as_ref().map(|integration| json!({
+            "revision": integration.revision,
+            "proposal": integration.proposal,
+            "by": integration.by,
+        })),
+        "history": detail.history.iter().map(|event| json!({
+            "seq": event.seq,
+            "type": event.event_type.as_str(),
+            "actor": event.actor.to_string(),
+        })).collect::<Vec<_>>(),
     })
 }
 

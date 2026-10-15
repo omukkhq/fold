@@ -219,7 +219,7 @@ function Checkpoints({ task, live, now }: Props) {
 }
 
 function Changesets({ task, now }: Props) {
-  const changesets = task.changesets ?? [];
+  const changesets = task.changesets;
   return (
     <SideGroup title="Changesets">
       {changesets.length === 0 ? <Note>No changesets yet.</Note> : null}
@@ -246,8 +246,7 @@ function Changesets({ task, now }: Props) {
 }
 
 function Proposal({ slug, task }: { slug: string; task: TaskDetail }) {
-  const proposal = task.proposal ?? null;
-  const integration = task.integration ?? null;
+  const { proposal, integration } = task;
   return (
     <SideGroup title="Proposal">
       {proposal ? (
@@ -368,8 +367,7 @@ function HumanReview({ slug, task }: { slug: string; task: TaskDetail }) {
     clearHumanReview(slug, task.task),
   );
   const mark = task.human_review;
-  // The task read carries no `can_change_human_review`, so the controls stay unmounted.
-  const editable = task.can_change_human_review === true;
+  const editable = task.can_change_human_review;
   if (mark === null) {
     return (
       <SideGroup title="Human review">
@@ -401,21 +399,15 @@ function HumanReview({ slug, task }: { slug: string; task: TaskDetail }) {
       </SideGroup>
     );
   }
-  const lines = humanReviewLines(mark, task.human_review_note);
+  const lines = humanReviewLines(mark, task.human_review_set_at);
   return (
     <SideGroup title="Human review">
       <p className="flex items-center gap-6 text-bar font-medium text-secondary-text">
         <UserCheck aria-hidden="true" size={13} />
         {lines.title}
       </p>
-      {lines.setBy ? (
-        <p className="text-meta text-text-muted">{lines.setBy}</p>
-      ) : null}
-      {task.human_review_note ? (
-        <p className="text-bar leading-normal text-text">
-          {task.human_review_note.reason}
-        </p>
-      ) : null}
+      <p className="text-meta text-text-muted">{lines.setBy}</p>
+      <p className="text-bar leading-normal text-text">{mark.reason}</p>
       {editable ? (
         <Button
           variant="ghost"
@@ -614,7 +606,7 @@ function Dependencies({ slug, task }: { slug: string; task: TaskDetail }) {
 
 function History({ task }: { task: TaskDetail }) {
   const [open, setOpen] = useState(false);
-  const list = collapse(task.history ?? [], 2, open);
+  const list = collapse(task.history, 2, open);
   return (
     <SideGroup title="History">
       <ul className="flex flex-col gap-8">
@@ -650,7 +642,7 @@ export function TaskSide({ slug, task, live, now }: Props) {
       <HumanReview slug={slug} task={task} />
       <Dependencies slug={slug} task={task} />
       {/* W03 draws no empty History, so the group is left out for a task read without events. */}
-      {task.history && task.history.length > 0 ? <History task={task} /> : null}
+      {task.history.length > 0 ? <History task={task} /> : null}
     </aside>
   );
 }

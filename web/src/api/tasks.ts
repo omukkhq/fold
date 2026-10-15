@@ -1,5 +1,5 @@
 import { queryOptions } from "@tanstack/react-query";
-import type { BoardActivity, BoardLabel, ProposalState } from "./board";
+import type { BoardLabel } from "./board";
 import { api } from "./client";
 import { keys } from "./keys";
 import { readPages, type Pages } from "./pages";
@@ -23,94 +23,19 @@ export type EdgeOrigin = Schemas["EdgeOrigin"];
 export type DurableEventType = Schemas["DurableEventType"];
 export type TaskMessage = Schemas["MessageView"];
 
-export interface TaskWorkspaceInfo {
-  /** Relative to the project root. */
-  directory: string;
-  /** The revision the workspace is based on, such as `r7`. */
-  base: string;
-  /** The main head, such as `r8`. */
-  main: string;
-  /** How many revisions main moved since `base`. */
-  behind: number;
-}
+export type TaskWorkspaceInfo = Schemas["TaskWorkspaceInfo"];
+export type TaskChangeset = Schemas["TaskChangeset"];
+export type ReviewVerdict = Schemas["ReviewVerdict"];
+export type TaskReview = Schemas["TaskReview"];
+export type TaskProposal = Schemas["TaskProposal"];
+export type TaskIntegration = Schemas["TaskIntegration"];
+export type TaskEvent = Schemas["TaskEvent"];
 
-export interface TaskChangeset {
-  /** @example C-18 */
-  id: string;
-  message: string;
-  /** UTC milliseconds. */
-  created_at: number;
-}
-
-export type ReviewVerdict =
-  | "comment"
-  | "request_changes"
-  | "approve"
-  | "reject";
-
-export interface TaskReview {
-  reviewer: string;
-  verdict: ReviewVerdict;
-  /** The proposal version the review belongs to. */
-  version: number;
-  /** UTC milliseconds. */
-  at: number;
-}
-
-export interface TaskProposal {
-  /** @example P-3 */
-  id: string;
-  state: ProposalState;
-  version: number;
-  reviews: TaskReview[];
-}
-
-export interface TaskIntegration {
-  /** The revision the integration published, such as `r8`. */
-  revision: string;
-  proposal: string;
-  by: string;
-  /** UTC milliseconds. */
-  at: number;
-}
-
-export interface TaskHumanReviewNote {
-  reason: string;
-  /** The worker or human that turned the mark on. */
-  set_by: string;
-  /** UTC milliseconds. */
-  set_at: number;
-}
-
-/** A row of the task's history: a stored event as the event stream and the activity list carry it. */
-export type TaskEvent = Pick<
-  Schemas["DurableEvent"],
-  "seq" | "type" | "actor" | "created_at"
->;
-
-/**
- * Fields the dialog can draw that the task read does not carry. Each one is optional: an absent field draws the
- * section's empty state, or leaves the section out where its frame has none.
- */
-export interface TaskExtras {
-  /** The daemon's explanation of the calculated status. */
-  status_reason: string;
-  activity: BoardActivity | null;
-  workspace_info: TaskWorkspaceInfo;
+/** The generated task read plus the checkpoints the daemon's task read does not carry; the live frame names them too. */
+export type TaskDetail = Schemas["TaskView"] & {
   /** Newest first. */
-  checkpoints: CheckpointSummary[];
-  /** Newest first. */
-  changesets: TaskChangeset[];
-  proposal: TaskProposal | null;
-  integration: TaskIntegration | null;
-  human_review_note: TaskHumanReviewNote;
-  /** Whether the viewer may turn human review on or off; the daemon decides. */
-  can_change_human_review: boolean;
-  /** Newest first. */
-  history: TaskEvent[];
-}
-
-export type TaskDetail = Schemas["TaskView"] & Partial<TaskExtras>;
+  checkpoints?: CheckpointSummary[];
+};
 
 /** Whom the feedback box can address besides the claim holder. */
 export interface MessageTargets {

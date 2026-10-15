@@ -35,6 +35,8 @@ export function boardCard(
     workspace: null,
     human_review: null,
     attention: [],
+    proposal: null,
+    activity: null,
     ...over,
   };
 }
@@ -79,6 +81,16 @@ export function taskView(
     created_at: 1_000,
     created_by: "orchestrator",
     updated_at: 1_000,
+    human_review_set_at: null,
+    status_reason:
+      "Calculated: no workspace yet and every prerequisite is Done",
+    workspace_info: null,
+    activity: null,
+    changesets: [],
+    proposal: null,
+    integration: null,
+    history: [],
+    can_change_human_review: false,
     ...over,
   };
 }

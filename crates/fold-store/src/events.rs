@@ -189,6 +189,51 @@ pub async fn touching_after(
     rows.into_iter().map(EventRecord::into_event).collect()
 }
 
+/// The newest `limit` events that carry `task`, newest first.
+pub async fn newest_for_task(
+    executor: impl SqliteExecutor<'_>,
+    task: TaskId,
+    limit: usize,
+) -> Result<Vec<Event>, StoreError> {
+    let task = task.to_db();
+    let limit = i64::try_from(limit.min(MAX_PAGE)).unwrap_or(MAX_PAGE as i64);
+    let rows = sqlx::query_as!(
+        EventRecord,
+        r#"SELECT seq AS "seq!: i64", type AS event_type, actor, task_id, proposal_id,
+                  workspace_id, revision_id, data, created_at
+           FROM events
+           WHERE task_id = ?1
+           ORDER BY seq DESC
+           LIMIT ?2"#,
+        task,
+        limit
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter().map(EventRecord::into_event).collect()
+}
+
+/// When the newest event of `event_type` that carries `task` happened, or `None` without one.
+pub async fn newest_at_for_task(
+    executor: impl SqliteExecutor<'_>,
+    task: TaskId,
+    event_type: EventType,
+) -> Result<Option<Timestamp>, StoreError> {
+    let task = task.to_db();
+    let event_type = event_type.as_str();
+    let at = sqlx::query_scalar!(
+        "SELECT created_at FROM events WHERE task_id = ?1 AND type = ?2 ORDER BY seq DESC LIMIT 1",
+        task,
+        event_type
+    )
+    .fetch_optional(executor)
+    .await?;
+    at.map(|millis| {
+        Timestamp::from_millis(millis).map_err(|_| StoreError::Corrupt("events.created_at"))
+    })
+    .transpose()
+}
+
 /// The newest `limit` events that a worker of `agent` performed, newest first. The actor column holds the worker name, so the agent's own name or a name under `agent/` matches. The children are the range from `agent/` up to `agent0`, because `0` follows `/`; a range, unlike a pattern built from a parameter, can use `events_actor_seq`.
 pub async fn newest_by_agent(
     executor: impl SqliteExecutor<'_>,

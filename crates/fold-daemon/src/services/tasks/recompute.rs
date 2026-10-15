@@ -37,7 +37,7 @@ pub async fn recompute(
     );
     let closure = graph.dependent_closure(seeds.iter().copied());
     for task in graph.topological_order(closure) {
-        let Some(mut stored) = tasks::load_facts(tx, &[task]).await?.pop() else {
+        let Some(mut stored) = tasks::load_facts(tx.conn(), &[task]).await?.pop() else {
             continue;
         };
         if stored.archived {

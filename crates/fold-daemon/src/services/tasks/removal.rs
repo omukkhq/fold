@@ -131,7 +131,7 @@ async fn archive_in_tx(
     if workspace.as_ref().map(|live| live.id) != locked {
         return Ok(Archive::Moved);
     }
-    let open_proposal = tasks::load_facts(tx, &[id])
+    let open_proposal = tasks::load_facts(tx.conn(), &[id])
         .await?
         .pop()
         .is_some_and(|loaded| loaded.facts.proposal != ProposalFact::None);

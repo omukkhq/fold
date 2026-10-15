@@ -39,9 +39,15 @@ pub use fold_core::reviews::HumanReviewMark;
 pub use leases::sweep_leases;
 pub use ready::ReadyTask;
 pub use recompute::{Recomputed, recompute};
+/// Whether `actor` may turn the human review mark on, change it or clear it: the rule that governs the human-review routes, read for a task view.
+pub fn can_change_human_review(actor: &Actor) -> bool {
+    fold_core::policy::can_clear_human_review(actor).is_ok()
+}
+
 pub use views::{
-    BOARD_DONE_LIMIT, Board, BoardCard, BoardColumn, ChecklistCounts, DetailChecklist, DetailEdge,
-    DetailItem, GraphTask, TaskDetail, TaskRef,
+    Activity, BOARD_DONE_LIMIT, Board, BoardCard, BoardColumn, CardProposal, ChangesetSummary,
+    ChecklistCounts, DetailChecklist, DetailEdge, DetailItem, GraphTask, HISTORY_LIMIT, TaskDetail,
+    TaskIntegration, TaskProposal, TaskRef, WorkspaceInfo,
 };
 
 /// Refusals carry a stable code; anything else is a database failure.

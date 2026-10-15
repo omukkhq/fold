@@ -5,6 +5,7 @@ use sqlx::{SqliteConnection, SqlitePool};
 
 use super::{EdgeRow, LabelRow, RawTask, TaskRow, edges_conn, label_row, timestamp};
 use crate::error::StoreError;
+use crate::reviews::{ProposalSummary, proposal_summaries};
 
 /// A task named from another task's view: an edge end or a linked checklist item.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +40,10 @@ pub struct BoardSnapshot {
     pub messages: BTreeMap<TaskId, u32>,
     /// When the completion record was written.
     pub completions: BTreeMap<TaskId, Timestamp>,
+    /// The last tracked edit in the live task workspace, for a workspace that has one.
+    pub activity: BTreeMap<TaskId, Timestamp>,
+    /// The open or integrated proposal of each task.
+    pub proposals: BTreeMap<TaskId, ProposalSummary>,
 }
 
 fn task_id(number: i64) -> Result<TaskId, StoreError> {
@@ -190,6 +195,29 @@ pub async fn board_snapshot(pool: &SqlitePool) -> Result<BoardSnapshot, StoreErr
         );
     }
 
+    let mut activity = BTreeMap::new();
+    let rows = sqlx::query!(
+        r#"SELECT t.number AS "task!: i64", w.last_activity_at AS "at!: i64"
+           FROM workspaces w
+           JOIN tasks t ON t.id = w.task_id
+           WHERE w.kind = 'task' AND w.state IN ('active', 'missing') AND t.archived_at IS NULL
+             AND w.last_activity_at IS NOT NULL"#
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    for row in rows {
+        activity.insert(
+            task_id(row.task)?,
+            timestamp(row.at, "workspaces.last_activity_at")?,
+        );
+    }
+
+    let proposals = proposal_summaries(&mut tx, None)
+        .await?
+        .into_iter()
+        .map(|summary| (summary.task, summary))
+        .collect();
+
     tx.commit().await?;
     Ok(BoardSnapshot {
         tasks,
@@ -200,6 +228,8 @@ pub async fn board_snapshot(pool: &SqlitePool) -> Result<BoardSnapshot, StoreErr
         workspaces,
         messages,
         completions,
+        activity,
+        proposals,
     })
 }
 

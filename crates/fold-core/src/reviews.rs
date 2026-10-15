@@ -104,6 +104,43 @@ pub fn changes_requested(reviews: &[ReviewFact]) -> bool {
     latest_verdict(reviews).is_some_and(|review| review.verdict == Verdict::RequestChanges)
 }
 
+/// Where a proposal stands for the pill on a card and the proposal block of a task. A conflict comes first, because it puts the proposal with its author whatever the verdicts say.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProposalStanding {
+    Open,
+    Approved,
+    ChangesRequested,
+    Conflict,
+    Integrated,
+}
+
+impl ProposalStanding {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ProposalStanding::Open => "open",
+            ProposalStanding::Approved => "approved",
+            ProposalStanding::ChangesRequested => "changes_requested",
+            ProposalStanding::Conflict => "conflict",
+            ProposalStanding::Integrated => "integrated",
+        }
+    }
+
+    /// `latest` is the verdict of [`latest_verdict`] on the current version. Only `request_changes` moves the card to its author, so a `reject` leaves the proposal open, as the status calculation reads it.
+    pub fn of(integrated: bool, conflicted: bool, latest: Option<Verdict>) -> Self {
+        if integrated {
+            return ProposalStanding::Integrated;
+        }
+        if conflicted {
+            return ProposalStanding::Conflict;
+        }
+        match latest {
+            Some(Verdict::RequestChanges) => ProposalStanding::ChangesRequested,
+            Some(Verdict::Approve) => ProposalStanding::Approved,
+            Some(Verdict::Comment | Verdict::Reject) | None => ProposalStanding::Open,
+        }
+    }
+}
+
 /// A task's request that a human looks at its proposal before it integrates. `reviewer` names the one human whose approval counts; `None` lets any human approve.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HumanReviewMark {
@@ -148,6 +185,25 @@ pub fn human_approval_standing(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn standing_puts_integration_then_conflict_before_the_verdict() {
+        use ProposalStanding::*;
+        use Verdict::*;
+        assert_eq!(
+            ProposalStanding::of(true, true, Some(RequestChanges)),
+            Integrated
+        );
+        assert_eq!(ProposalStanding::of(false, true, Some(Approve)), Conflict);
+        assert_eq!(
+            ProposalStanding::of(false, false, Some(RequestChanges)),
+            ChangesRequested
+        );
+        assert_eq!(ProposalStanding::of(false, false, Some(Approve)), Approved);
+        assert_eq!(ProposalStanding::of(false, false, Some(Reject)), Open);
+        assert_eq!(ProposalStanding::of(false, false, None), Open);
+        assert_eq!(ChangesRequested.as_str(), "changes_requested");
+    }
+
     use super::*;
 
     fn fact(verdict: Verdict, seq: u64) -> ReviewFact {

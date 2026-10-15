@@ -126,22 +126,24 @@ describe("checkpointText", () => {
 });
 
 describe("humanReviewLines", () => {
-  it("names the reviewer, or any human, and who set the mark when the daemon says", () => {
-    const note = { reason: "auth", set_by: "planner", set_at: AT };
+  it("names the reviewer, or any human, and who set the mark and when the daemon says", () => {
     expect(
       humanReviewLines(
         { reviewer: "tanim", reason: "auth", set_by: "planner" },
-        note,
+        AT,
       ),
     ).toEqual({
       title: "Required · tanim",
       setBy: "Set by planner · 13:40",
     });
     expect(
-      humanReviewLines({ reviewer: null, reason: "auth", set_by: "planner" }),
+      humanReviewLines(
+        { reviewer: null, reason: "auth", set_by: "planner" },
+        null,
+      ),
     ).toEqual({
       title: "Required · any human",
-      setBy: null,
+      setBy: "Set by planner",
     });
   });
 });

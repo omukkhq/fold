@@ -133,8 +133,8 @@ describe("activityLine", () => {
     expect(activityLine(card(null), live(NOW, 3), NOW)?.text).toBe("Editing");
   });
 
-  it("works from a card whose payload has no activity field at all", () => {
-    const bare = { attention: [], blocked: false };
+  it("works from a card whose payload has no activity", () => {
+    const bare = { activity: null, attention: [], blocked: false };
     expect(activityLine(bare, undefined, NOW)).toBeNull();
     expect(activityLine(bare, live(NOW, 0), NOW)?.text).toBe("Editing");
   });

@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use fold_core::TaskId;
 use fold_core::container::{ContainerFacts, ItemFact};
 use fold_core::status::{ProposalFact, TaskFacts, TaskStatus};
+use sqlx::SqliteConnection;
 
 use crate::error::StoreError;
 use crate::store::WriteTx;
@@ -18,8 +19,11 @@ pub struct LoadedFacts {
     pub container: ContainerFacts,
 }
 
-/// Reads the facts of `ids` from the tables that hold them: completions, dependencies with the prerequisites' stored statuses, task workspaces, the open proposal, its highest version and the latest verdict on that version, and for the container rule the checklist items with their linked children's stored statuses and whether a task workspace ever existed. Reviews with the verdict `comment` are not verdicts and are skipped; among the rest the newest by `created_at`, then by row id, decides, whoever wrote it. It reads on the writer's connection, so a prerequisite's status is the one this transaction last wrote. Unknown numbers are left out; the result is in number order.
-pub async fn load_facts(tx: &mut WriteTx, ids: &[TaskId]) -> Result<Vec<LoadedFacts>, StoreError> {
+/// Reads the facts of `ids` from the tables that hold them: completions, dependencies with the prerequisites' stored statuses, task workspaces, the open proposal, its highest version and the latest verdict on that version, and for the container rule the checklist items with their linked children's stored statuses and whether a task workspace ever existed. Reviews with the verdict `comment` are not verdicts and are skipped; among the rest the newest by `created_at`, then by row id, decides, whoever wrote it. Run on the writer's connection (`WriteTx::conn`) it sees the prerequisite statuses this transaction last wrote; on a read connection it sees the committed ones. Unknown numbers are left out; the result is in number order.
+pub async fn load_facts(
+    conn: &mut SqliteConnection,
+    ids: &[TaskId],
+) -> Result<Vec<LoadedFacts>, StoreError> {
     let numbers =
         serde_json::Value::from(ids.iter().map(|id| id.to_db()).collect::<Vec<i64>>()).to_string();
     let mut prerequisites: BTreeMap<i64, Vec<(TaskId, TaskStatus)>> = BTreeMap::new();
@@ -32,7 +36,7 @@ pub async fn load_facts(tx: &mut WriteTx, ids: &[TaskId]) -> Result<Vec<LoadedFa
            ORDER BY t.number, n.number"#,
         numbers
     )
-    .fetch_all(tx.conn())
+    .fetch_all(&mut *conn)
     .await?;
     for edge in edges {
         let needs = TaskId::try_from_db(edge.needs).ok_or(StoreError::Corrupt("tasks.number"))?;
@@ -54,7 +58,7 @@ pub async fn load_facts(tx: &mut WriteTx, ids: &[TaskId]) -> Result<Vec<LoadedFa
            ORDER BY t.number, c.position, i.position"#,
         numbers
     )
-    .fetch_all(tx.conn())
+    .fetch_all(&mut *conn)
     .await?;
     for row in item_rows {
         let fact = match row.child_status {
@@ -97,7 +101,7 @@ pub async fn load_facts(tx: &mut WriteTx, ids: &[TaskId]) -> Result<Vec<LoadedFa
            ORDER BY t.number"#,
         numbers
     )
-    .fetch_all(tx.conn())
+    .fetch_all(&mut *conn)
     .await?;
     rows.into_iter()
         .map(|row| {

@@ -2,14 +2,19 @@ use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 
 use fold_core::claims::is_stale;
+use fold_core::events::types;
+use fold_core::reviews::ProposalStanding;
+use fold_core::status::status_reason;
 use fold_core::{
-    ChecklistName, DependencyOrigin, TaskId, TaskStatus, TaskTitle, Timestamp, WorkerName,
-    WorkspaceId,
+    ChangesetId, ChecklistName, DependencyOrigin, Event, ProposalId, RevisionId, TaskId,
+    TaskStatus, TaskTitle, Timestamp, WorkerName, WorkspaceId,
 };
-use fold_store::StoreError;
+use fold_store::reviews::{self, ProposalSummary, ReviewEntry};
 use fold_store::tasks::checklists::{self, ItemContent};
 use fold_store::tasks::claims;
 use fold_store::tasks::{self, BoardSnapshot};
+use fold_store::workspaces;
+use fold_store::{StoreError, events};
 
 pub use fold_store::tasks::{ChecklistCounts, TaskRef};
 
@@ -21,6 +26,64 @@ use super::{
 
 /// How many Done cards the board returns: the most recently completed ones. The Done column's `total` counts them all.
 pub const BOARD_DONE_LIMIT: usize = 20;
+
+/// How many history rows a task read returns.
+pub const HISTORY_LIMIT: usize = 50;
+
+/// The live task workspace as the task shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceInfo {
+    /// Relative to the project root.
+    pub directory: String,
+    pub base: RevisionId,
+    pub main: RevisionId,
+    /// How many revisions main moved since `base`.
+    pub behind: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangesetSummary {
+    pub id: ChangesetId,
+    pub message: String,
+    pub created_at: Timestamp,
+}
+
+/// The newest proposal of the task that is open or integrated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskProposal {
+    pub id: ProposalId,
+    pub standing: ProposalStanding,
+    pub version: u32,
+    /// Newest first.
+    pub reviews: Vec<ReviewEntry>,
+}
+
+/// The integration that published the task's proposal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskIntegration {
+    pub revision: RevisionId,
+    pub proposal: ProposalId,
+    /// A worker name or `human:<name>`.
+    pub by: String,
+    pub at: Timestamp,
+}
+
+/// The last tracked edit in the task's live workspace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Activity {
+    /// The file, when exactly one is changed.
+    pub path: Option<String>,
+    pub at: Timestamp,
+}
+
+/// The proposal pill of a board card.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CardProposal {
+    pub id: ProposalId,
+    pub standing: ProposalStanding,
+    /// The revision an integrated proposal became.
+    pub revision: Option<RevisionId>,
+}
 
 /// A checklist item with the title and status of the task it links.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,7 +106,7 @@ pub struct DetailEdge {
 }
 
 /// Everything one task shows, with public ids only.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TaskDetail {
     pub task: TaskView,
     pub checklists: Vec<DetailChecklist>,
@@ -55,6 +118,18 @@ pub struct TaskDetail {
     pub claim: Option<ClaimView>,
     pub workspace: Option<WorkspaceId>,
     pub attention: Vec<AttentionItem>,
+    /// When the human review mark was last set: the time of the newest `task.human_review_set` event. `None` without a mark.
+    pub human_review_set_at: Option<Timestamp>,
+    /// The rule of the status calculation that decided the status, named with the ids it used.
+    pub status_reason: String,
+    pub workspace_info: Option<WorkspaceInfo>,
+    pub activity: Option<Activity>,
+    /// Of the live workspace, or of the latest one when none is live; newest first.
+    pub changesets: Vec<ChangesetSummary>,
+    pub proposal: Option<TaskProposal>,
+    pub integration: Option<TaskIntegration>,
+    /// The task's newest [`HISTORY_LIMIT`] events, newest first.
+    pub history: Vec<Event>,
 }
 
 /// One node of the task graph.
@@ -91,6 +166,8 @@ pub struct BoardCard {
     pub messages: u32,
     pub completed_at: Option<Timestamp>,
     pub attention: Vec<AttentionItem>,
+    pub proposal: Option<CardProposal>,
+    pub activity: Option<Activity>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,6 +182,10 @@ pub struct BoardColumn {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Board {
     pub columns: Vec<BoardColumn>,
+}
+
+fn standing(summary: &ProposalSummary) -> ProposalStanding {
+    ProposalStanding::of(summary.integrated, summary.conflicted, summary.verdict)
 }
 
 fn counts_of(items: &[checklists::ItemRow]) -> ChecklistCounts {
@@ -144,6 +225,65 @@ impl TaskService {
         let edges = tasks::edges_conn(&mut tx).await?;
         let claim = claims::unreleased_for_task(&mut *tx, id).await?;
         let workspace = tasks::live_workspace(&mut tx, id).await?;
+        let facts = tasks::load_facts(&mut tx, &[id])
+            .await?
+            .pop()
+            .ok_or_else(|| task_not_found(id))?
+            .facts;
+        let live = workspaces::live_task_workspace(&mut *tx, id).await?;
+        let main = workspaces::main_head(&mut *tx).await?;
+        let info = match (&live, main) {
+            (Some(live), Some(main)) => Some(WorkspaceInfo {
+                directory: live.path.clone(),
+                base: live.base,
+                main,
+                behind: main.number().saturating_sub(live.base.number()),
+            }),
+            _ => None,
+        };
+        let latest = match &live {
+            Some(_) => None,
+            None => workspaces::latest_task_workspace(&mut *tx, id).await?,
+        };
+        let changesets = match live.as_ref().or(latest.as_ref()) {
+            Some(row) => workspaces::list_changesets(&mut *tx, row.id)
+                .await?
+                .into_iter()
+                .rev()
+                .map(|changeset| ChangesetSummary {
+                    id: changeset.id,
+                    message: changeset.message,
+                    created_at: changeset.created_at,
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        let summary = reviews::proposal_summaries(&mut tx, Some(id)).await?.pop();
+        let integration = summary.as_ref().and_then(|summary| {
+            summary.integration.as_ref().map(|record| TaskIntegration {
+                revision: record.revision,
+                proposal: summary.id,
+                by: record.actor.clone(),
+                at: record.at,
+            })
+        });
+        let proposal = match summary {
+            Some(summary) => Some(TaskProposal {
+                standing: standing(&summary),
+                version: summary.version,
+                reviews: reviews::review_entries(&mut tx, summary.id).await?,
+                id: summary.id,
+            }),
+            None => None,
+        };
+        let history = events::newest_for_task(&mut *tx, id, HISTORY_LIMIT).await?;
+        let human_review_set_at = match row.human_review {
+            Some(_) => {
+                events::newest_at_for_task(&mut *tx, id, types::TASK_HUMAN_REVIEW_SET).await?
+            }
+            None => None,
+        };
+
         let needs: Vec<(TaskId, DependencyOrigin)> = edges
             .iter()
             .filter(|edge| edge.task == id)
@@ -211,6 +351,15 @@ impl TaskService {
             }),
             None => None,
         };
+        let activity = self.activity_of(workspace, live.as_ref().and_then(|w| w.last_activity_at));
+        let status_reason = status_reason(
+            &facts,
+            workspace,
+            proposal
+                .as_ref()
+                .filter(|p| p.standing != ProposalStanding::Integrated)
+                .map(|p| p.id),
+        );
         Ok(TaskDetail {
             task: view(row, labels),
             checklists,
@@ -220,7 +369,30 @@ impl TaskService {
             claim,
             workspace,
             attention,
+            human_review_set_at,
+            status_reason,
+            workspace_info: info,
+            activity,
+            changesets,
+            proposal,
+            integration,
+            history,
         })
+    }
+
+    /// The last edit of a live workspace: the time from the live state when it holds the workspace, else the stored column, and the file when the live state names exactly one changed.
+    fn activity_of(
+        &self,
+        workspace: Option<WorkspaceId>,
+        stored: Option<Timestamp>,
+    ) -> Option<Activity> {
+        let live = workspace.and_then(|id| self.live.as_ref()?.get(id));
+        let at = live.as_ref().map(|w| w.view.last_activity_at).or(stored)?;
+        let path = live.and_then(|w| match w.view.files.as_slice() {
+            [only] => Some(only.path.clone()),
+            _ => None,
+        });
+        Some(Activity { path, at })
     }
 
     /// The tasks that are not archived, in number order, with their direct prerequisites and claim holders. Done tasks only when `include_done`.
@@ -291,6 +463,15 @@ impl TaskService {
                 human_review: row.human_review,
                 messages: snapshot.messages.get(&row.id).copied().unwrap_or(0),
                 completed_at: snapshot.completions.get(&row.id).copied(),
+                proposal: snapshot.proposals.get(&row.id).map(|summary| CardProposal {
+                    id: summary.id,
+                    standing: standing(summary),
+                    revision: summary.integration.as_ref().map(|record| record.revision),
+                }),
+                activity: self.activity_of(
+                    snapshot.workspaces.get(&row.id).copied(),
+                    snapshot.activity.get(&row.id).copied(),
+                ),
                 attention: attention.remove(&row.id).unwrap_or_default(),
                 id: row.id,
                 title: row.title,

@@ -154,7 +154,9 @@ async fn put_sets_the_mark_as_the_named_human() {
     assert_eq!(status, StatusCode::OK, "{mark}");
     let expected = json!({"reviewer": "tanim", "reason": "touches auth", "set_by": "human:ana"});
     assert_eq!(mark, expected);
-    assert_eq!(fx.task().await["human_review"], expected);
+    let task = fx.task().await;
+    assert_eq!(task["human_review"], expected);
+    assert_eq!(task["human_review_set_at"], fx.project.now().as_millis());
     let (_, board) = fx.send(Method::GET, "/board", None, &[]).await;
     let card = board["columns"]
         .as_array()
@@ -244,6 +246,8 @@ async fn delete_clears_the_mark() {
     assert_eq!(status, StatusCode::OK, "{task}");
     assert_eq!(task["task"], "T-1");
     assert_eq!(task["human_review"], Value::Null);
+    assert_eq!(task["human_review_set_at"], Value::Null);
+    assert_eq!(task["can_change_human_review"], true);
     assert_eq!(fx.task().await["human_review"], Value::Null);
     assert_eq!(
         fx.events_after(before).await,

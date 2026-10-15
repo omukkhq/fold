@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use crate::ids::TaskId;
+use crate::ids::{ProposalId, TaskId, WorkspaceId};
 use crate::task::TaskValueError;
 
 /// A task's column on the board. The value is always calculated from `TaskFacts`; nothing sets it directly.
@@ -101,19 +101,22 @@ impl Calculated {
     }
 }
 
+/// The prerequisites that are not Done, sorted by id.
+fn unfinished(facts: &TaskFacts) -> Vec<TaskId> {
+    let mut ids: Vec<TaskId> = facts
+        .prerequisites
+        .iter()
+        .filter(|(_, status)| *status != TaskStatus::Done)
+        .map(|(id, _)| *id)
+        .collect();
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
 /// Only `completed` yields `Done`, and the first matching rule wins.
 pub fn calculate(facts: &TaskFacts) -> Calculated {
-    let unfinished = || {
-        let mut ids: Vec<TaskId> = facts
-            .prerequisites
-            .iter()
-            .filter(|(_, status)| *status != TaskStatus::Done)
-            .map(|(id, _)| *id)
-            .collect();
-        ids.sort();
-        ids.dedup();
-        ids
-    };
+    let unfinished = || unfinished(facts);
     let status = if facts.completed {
         TaskStatus::Done
     } else if facts.proposal == ProposalFact::WithReviewer {
@@ -130,6 +133,41 @@ pub fn calculate(facts: &TaskFacts) -> Calculated {
         _ => Vec::new(),
     };
     Calculated { status, blocked_by }
+}
+
+/// The sentence that names the rule of [`calculate`] that decided the status of `facts`. `workspace` is the live task workspace and `proposal` the open one; the rule never needs them to decide, only to name them.
+pub fn status_reason(
+    facts: &TaskFacts,
+    workspace: Option<WorkspaceId>,
+    proposal: Option<ProposalId>,
+) -> String {
+    let calculated = calculate(facts);
+    let ids = |ids: &[TaskId]| {
+        ids.iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let proposal = proposal.map_or_else(|| "the proposal".to_owned(), |id| id.to_string());
+    let workspace = workspace.map_or_else(|| "a workspace".to_owned(), |id| id.to_string());
+    let mut text = match calculated.status {
+        TaskStatus::Done => "Completed: a completion record exists".to_owned(),
+        TaskStatus::Review => format!("Calculated: proposal {proposal} waits for a reviewer"),
+        TaskStatus::InProgress => match facts.proposal {
+            ProposalFact::WithAuthor => format!(
+                "Calculated: workspace {workspace} is open and proposal {proposal} waits for its author"
+            ),
+            _ => format!("Calculated: workspace {workspace} is open, no proposal yet"),
+        },
+        TaskStatus::Todo => {
+            "Calculated: no workspace yet and every prerequisite is Done".to_owned()
+        }
+        TaskStatus::Backlog => format!("Calculated: waits for {}", ids(&unfinished(facts))),
+    };
+    if calculated.blocked() {
+        text.push_str(&format!(", needs {}", ids(&calculated.blocked_by)));
+    }
+    text
 }
 
 #[cfg(test)]
@@ -388,6 +426,45 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&InProgress).unwrap(),
             "\"in_progress\""
+        );
+    }
+    #[test]
+    fn the_reason_names_the_rule_that_decided_the_status() {
+        let ws = WorkspaceId::from_number(2).unwrap();
+        let p = ProposalId::from_number(3).unwrap();
+        let reason = |f: &TaskFacts| status_reason(f, Some(ws), Some(p));
+        assert_eq!(
+            reason(&facts(true, WithReviewer, true, &[])),
+            "Completed: a completion record exists"
+        );
+        assert_eq!(
+            reason(&facts(false, WithReviewer, true, &[])),
+            "Calculated: proposal P-3 waits for a reviewer"
+        );
+        assert_eq!(
+            reason(&facts(false, WithReviewer, true, &[(5, InProgress)])),
+            "Calculated: proposal P-3 waits for a reviewer, needs T-5"
+        );
+        assert_eq!(
+            reason(&facts(false, NoProposal, true, &[])),
+            "Calculated: workspace ws-2 is open, no proposal yet"
+        );
+        assert_eq!(
+            reason(&facts(false, WithAuthor, true, &[(1, Todo)])),
+            "Calculated: workspace ws-2 is open and proposal P-3 waits for its author, needs T-1"
+        );
+        assert_eq!(
+            reason(&facts(false, NoProposal, false, &[(1, Done)])),
+            "Calculated: no workspace yet and every prerequisite is Done"
+        );
+        assert_eq!(
+            reason(&facts(
+                false,
+                NoProposal,
+                false,
+                &[(4, Todo), (1, Review), (2, Done)]
+            )),
+            "Calculated: waits for T-1, T-4"
         );
     }
 }

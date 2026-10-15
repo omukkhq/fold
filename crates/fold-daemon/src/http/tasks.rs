@@ -15,6 +15,7 @@ use utoipa_axum::routes;
 use super::Project;
 use super::actor::Human;
 use super::error::{ApiError, ApiJson, ErrorEnvelope};
+use super::events::DurableEventType;
 use crate::daemon::AppState;
 use crate::services::tasks::{self as service, ItemContent};
 
@@ -188,6 +189,75 @@ pub struct BoardCard {
     #[schema(required = true)]
     pub completed_at: Option<i64>,
     pub attention: Vec<AttentionItem>,
+    /// The task's open proposal, or the integrated one once it is Done.
+    #[schema(required = true)]
+    pub proposal: Option<BoardProposal>,
+    /// The last tracked edit in the live workspace.
+    #[schema(required = true)]
+    pub activity: Option<BoardActivity>,
+}
+
+/// Where a proposal stands, as the pill on a card and the block of a task draw it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProposalState {
+    Open,
+    Approved,
+    ChangesRequested,
+    Conflict,
+    Integrated,
+}
+
+impl From<fold_core::reviews::ProposalStanding> for ProposalState {
+    fn from(standing: fold_core::reviews::ProposalStanding) -> Self {
+        use fold_core::reviews::ProposalStanding as S;
+        match standing {
+            S::Open => Self::Open,
+            S::Approved => Self::Approved,
+            S::ChangesRequested => Self::ChangesRequested,
+            S::Conflict => Self::Conflict,
+            S::Integrated => Self::Integrated,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct BoardProposal {
+    #[schema(example = "P-3")]
+    pub id: String,
+    pub state: ProposalState,
+    /// The revision an integrated proposal became; null before integration.
+    #[schema(required = true, example = "r8")]
+    pub revision: Option<String>,
+}
+
+impl From<service::CardProposal> for BoardProposal {
+    fn from(proposal: service::CardProposal) -> Self {
+        Self {
+            id: proposal.id.to_string(),
+            state: proposal.standing.into(),
+            revision: proposal.revision.map(|revision| revision.to_string()),
+        }
+    }
+}
+
+/// The last tracked edit in the task's workspace.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct BoardActivity {
+    /// Relative to the workspace root; null when more than one file changed.
+    #[schema(required = true)]
+    pub path: Option<String>,
+    /// UTC milliseconds.
+    pub at: i64,
+}
+
+impl From<service::Activity> for BoardActivity {
+    fn from(activity: service::Activity) -> Self {
+        Self {
+            path: activity.path,
+            at: activity.at.as_millis(),
+        }
+    }
 }
 
 impl From<service::BoardCard> for BoardCard {
@@ -208,6 +278,8 @@ impl From<service::BoardCard> for BoardCard {
             messages: card.messages,
             completed_at: card.completed_at.map(|at| at.as_millis()),
             attention: attention(card.attention),
+            proposal: card.proposal.map(BoardProposal::from),
+            activity: card.activity.map(BoardActivity::from),
         }
     }
 }
@@ -347,7 +419,130 @@ pub struct TaskView {
     pub workspace: Option<String>,
     #[schema(required = true)]
     pub human_review: Option<HumanReviewMark>,
+    /// When the human review mark was last set, in UTC milliseconds; null without a mark.
+    #[schema(required = true)]
+    pub human_review_set_at: Option<i64>,
     pub attention: Vec<AttentionItem>,
+    /// The rule of the status calculation that decided the status, with the ids it used.
+    pub status_reason: String,
+    /// The live task workspace; null without one.
+    #[schema(required = true)]
+    pub workspace_info: Option<TaskWorkspaceInfo>,
+    /// The last tracked edit in the live workspace.
+    #[schema(required = true)]
+    pub activity: Option<BoardActivity>,
+    /// Of the live workspace, or of the latest one when none is live; newest first.
+    pub changesets: Vec<TaskChangeset>,
+    /// The open proposal, or the integrated one once it is Done.
+    #[schema(required = true)]
+    pub proposal: Option<TaskProposal>,
+    /// The integration that published the proposal; null until the task is integrated.
+    #[schema(required = true)]
+    pub integration: Option<TaskIntegration>,
+    /// The task's newest stored events, newest first, at most 50.
+    pub history: Vec<TaskEvent>,
+    /// Whether the human who made the request may turn the human review mark on, change it or clear it. False without a named human.
+    pub can_change_human_review: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct TaskWorkspaceInfo {
+    /// Relative to the project root.
+    pub directory: String,
+    /// The revision the workspace is based on.
+    #[schema(example = "r7")]
+    pub base: String,
+    /// The main head.
+    #[schema(example = "r8")]
+    pub main: String,
+    /// How many revisions main moved since `base`.
+    pub behind: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct TaskChangeset {
+    #[schema(example = "C-18")]
+    pub id: String,
+    pub message: String,
+    /// UTC milliseconds.
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewVerdict {
+    Comment,
+    RequestChanges,
+    Approve,
+    Reject,
+}
+
+impl From<fold_core::reviews::Verdict> for ReviewVerdict {
+    fn from(verdict: fold_core::reviews::Verdict) -> Self {
+        use fold_core::reviews::Verdict as V;
+        match verdict {
+            V::Comment => Self::Comment,
+            V::RequestChanges => Self::RequestChanges,
+            V::Approve => Self::Approve,
+            V::Reject => Self::Reject,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct TaskReview {
+    /// A worker or `human:<name>`.
+    pub reviewer: String,
+    pub verdict: ReviewVerdict,
+    /// The proposal version the review belongs to.
+    pub version: u32,
+    /// UTC milliseconds.
+    pub at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct TaskProposal {
+    #[schema(example = "P-3")]
+    pub id: String,
+    pub state: ProposalState,
+    /// The current version.
+    pub version: u32,
+    /// Newest first.
+    pub reviews: Vec<TaskReview>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct TaskIntegration {
+    /// The revision the integration published.
+    #[schema(example = "r8")]
+    pub revision: String,
+    #[schema(example = "P-3")]
+    pub proposal: String,
+    /// A worker or `human:<name>`.
+    pub by: String,
+    /// UTC milliseconds.
+    pub at: i64,
+}
+
+/// A stored event of the task as its history lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct TaskEvent {
+    pub seq: u64,
+    #[serde(rename = "type")]
+    #[schema(rename = "type", value_type = DurableEventType)]
+    pub event_type: String,
+    /// A worker, `human:<name>` or `fold`.
+    pub actor: String,
+    /// UTC milliseconds.
+    pub created_at: i64,
+}
+
+/// The task read for `human`, the caller of the route; `None` when the request names no human.
+pub(super) fn task_view(detail: service::TaskDetail, human: Option<&Human>) -> TaskView {
+    let mut view = TaskView::from(detail);
+    view.can_change_human_review =
+        human.is_some_and(|human| service::can_change_human_review(&human.actor()));
+    view
 }
 
 fn edge(edge: service::DetailEdge, direction: EdgeDirection) -> TaskEdge {
@@ -432,6 +627,56 @@ impl From<service::TaskDetail> for TaskView {
             workspace: detail.workspace.map(|workspace| workspace.to_string()),
             human_review: task.human_review.map(HumanReviewMark::from),
             attention: attention(detail.attention),
+            human_review_set_at: detail.human_review_set_at.map(|at| at.as_millis()),
+            status_reason: detail.status_reason,
+            workspace_info: detail.workspace_info.map(|info| TaskWorkspaceInfo {
+                directory: info.directory,
+                base: info.base.to_string(),
+                main: info.main.to_string(),
+                behind: info.behind,
+            }),
+            activity: detail.activity.map(BoardActivity::from),
+            changesets: detail
+                .changesets
+                .into_iter()
+                .map(|changeset| TaskChangeset {
+                    id: changeset.id.to_string(),
+                    message: changeset.message,
+                    created_at: changeset.created_at.as_millis(),
+                })
+                .collect(),
+            proposal: detail.proposal.map(|proposal| TaskProposal {
+                id: proposal.id.to_string(),
+                state: proposal.standing.into(),
+                version: proposal.version,
+                reviews: proposal
+                    .reviews
+                    .into_iter()
+                    .map(|review| TaskReview {
+                        reviewer: review.reviewer.to_string(),
+                        verdict: review.verdict.into(),
+                        version: review.version,
+                        at: review.at.as_millis(),
+                    })
+                    .collect(),
+            }),
+            integration: detail.integration.map(|integration| TaskIntegration {
+                revision: integration.revision.to_string(),
+                proposal: integration.proposal.to_string(),
+                by: integration.by,
+                at: integration.at.as_millis(),
+            }),
+            history: detail
+                .history
+                .into_iter()
+                .map(|event| TaskEvent {
+                    seq: event.seq,
+                    event_type: event.event_type.as_str().to_owned(),
+                    actor: event.actor.to_string(),
+                    created_at: event.created_at.as_millis(),
+                })
+                .collect(),
+            can_change_human_review: false,
         }
     }
 }
@@ -669,7 +914,7 @@ pub async fn create_task(
         .create_linked_task(&human.actor(), create, &needs, parent)
         .await?;
     let view = tasks.get_view(created.id).await?;
-    Ok((StatusCode::CREATED, Json(view.into())))
+    Ok((StatusCode::CREATED, Json(task_view(view, Some(&human)))))
 }
 
 /// One task with its checklists, dependencies, claim and workspace. An archived task is found too.
@@ -692,10 +937,11 @@ pub async fn create_task(
 )]
 pub async fn get_task(
     project: Project,
+    human: Result<Human, ApiError>,
     Path((_slug, task)): Path<(String, String)>,
 ) -> Result<Json<TaskView>, ApiError> {
     let view = project.0.tasks.get_view(id(&task)?).await?;
-    Ok(Json(view.into()))
+    Ok(Json(task_view(view, human.ok().as_ref())))
 }
 
 /// Changes the title, the description or the label set.
@@ -732,7 +978,7 @@ pub async fn update_task(
     };
     let tasks = &project.0.tasks;
     tasks.update_task(&human.actor(), task, patch).await?;
-    Ok(Json(tasks.get_view(task).await?.into()))
+    Ok(Json(task_view(tasks.get_view(task).await?, Some(&human))))
 }
 
 /// Deletes a task that never had a workspace, a proposal, a completion or a message.

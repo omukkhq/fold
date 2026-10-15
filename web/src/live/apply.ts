@@ -288,7 +288,7 @@ function invalidationKeys(
         ? [keys.proposals(slug), ...proposalKey, ...taskKey, repository, board]
         : [keys.proposals(slug), ...proposalKey, ...taskKey, board];
     case "review":
-      return [keys.proposals(slug), ...proposalKey, board];
+      return [keys.proposals(slug), ...proposalKey, ...taskKey, board];
     case "integration":
       return [
         ...(proposal === null ? [] : [keys.proposals(slug), ...proposalKey]),

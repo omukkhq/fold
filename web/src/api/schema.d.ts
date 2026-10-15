@@ -727,7 +727,18 @@ export interface components {
             task: string;
             title: string;
         };
+        /** @description The last tracked edit in the task's workspace. */
+        BoardActivity: {
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            at: number;
+            /** @description Relative to the workspace root; null when more than one file changed. */
+            path: string | null;
+        };
         BoardCard: {
+            activity: components["schemas"]["BoardActivity"] | null;
             attention: components["schemas"]["AttentionItem"][];
             blocked: boolean;
             /** @description The direct prerequisites that are not Done. */
@@ -752,6 +763,7 @@ export interface components {
             messages: number;
             /** @description Every direct prerequisite, as public task ids. */
             needs: string[];
+            proposal: components["schemas"]["BoardProposal"] | null;
             status: components["schemas"]["TaskStatus"];
             /** @example T-12 */
             task: string;
@@ -786,6 +798,16 @@ export interface components {
             review: number;
             /** Format: int32 */
             todo: number;
+        };
+        BoardProposal: {
+            /** @example P-3 */
+            id: string;
+            /**
+             * @description The revision an integrated proposal became; null before integration.
+             * @example r8
+             */
+            revision: string | null;
+            state: components["schemas"]["ProposalState"];
         };
         /** @description The five columns in board order: backlog, todo, in_progress, review, done. Archived tasks are left out. */
         BoardView: {
@@ -1517,6 +1539,11 @@ export interface components {
             version: number;
         };
         /**
+         * @description Where a proposal stands, as the pill on a card and the block of a task draw it.
+         * @enum {string}
+         */
+        ProposalState: "open" | "approved" | "changes_requested" | "conflict" | "integrated";
+        /**
          * @description Where a proposal stands.
          * @enum {string}
          */
@@ -1801,6 +1828,16 @@ export interface components {
              */
             version: number;
         };
+        TaskChangeset: {
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            created_at: number;
+            /** @example C-18 */
+            id: string;
+            message: string;
+        };
         TaskClaim: {
             /**
              * Format: int64
@@ -1829,9 +1866,65 @@ export interface components {
             task: string;
             title: string;
         };
+        /** @description A stored event of the task as its history lists it. */
+        TaskEvent: {
+            /** @description A worker, `human:<name>` or `fold`. */
+            actor: string;
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            created_at: number;
+            /** Format: int64 */
+            seq: number;
+            type: components["schemas"]["DurableEventType"];
+        };
+        TaskIntegration: {
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            at: number;
+            /** @description A worker or `human:<name>`. */
+            by: string;
+            /** @example P-3 */
+            proposal: string;
+            /**
+             * @description The revision the integration published.
+             * @example r8
+             */
+            revision: string;
+        };
         TaskList: {
             /** @description In number order. */
             tasks: components["schemas"]["TaskSummary"][];
+        };
+        TaskProposal: {
+            /** @example P-3 */
+            id: string;
+            /** @description Newest first. */
+            reviews: components["schemas"]["TaskReview"][];
+            state: components["schemas"]["ProposalState"];
+            /**
+             * Format: int32
+             * @description The current version.
+             */
+            version: number;
+        };
+        TaskReview: {
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            at: number;
+            /** @description A worker or `human:<name>`. */
+            reviewer: string;
+            verdict: components["schemas"]["ReviewVerdict"];
+            /**
+             * Format: int32
+             * @description The proposal version the review belongs to.
+             */
+            version: number;
         };
         /**
          * @description A calculated board status; it is also the board's column key.
@@ -1847,6 +1940,7 @@ export interface components {
             title: string;
         };
         TaskView: {
+            activity: components["schemas"]["BoardActivity"] | null;
             /**
              * Format: int64
              * @description UTC milliseconds; null while the task is on the board.
@@ -1854,6 +1948,10 @@ export interface components {
             archived_at: number | null;
             attention: components["schemas"]["AttentionItem"][];
             blocked: boolean;
+            /** @description Whether the human who made the request may turn the human review mark on, change it or clear it. False without a named human. */
+            can_change_human_review: boolean;
+            /** @description Of the live workspace, or of the latest one when none is live; newest first. */
+            changesets: components["schemas"]["TaskChangeset"][];
             /** @description The first checklist is `Subtasks` when the task was split. */
             checklists: components["schemas"]["Checklist"][];
             claims: components["schemas"]["TaskClaim"][];
@@ -1868,10 +1966,21 @@ export interface components {
             dependencies: components["schemas"]["TaskEdge"][];
             /** @description Markdown. */
             description: string;
+            /** @description The task's newest stored events, newest first, at most 50. */
+            history: components["schemas"]["TaskEvent"][];
             human_review: components["schemas"]["HumanReviewMark"] | null;
+            /**
+             * Format: int64
+             * @description When the human review mark was last set, in UTC milliseconds; null without a mark.
+             */
+            human_review_set_at: number | null;
+            integration: components["schemas"]["TaskIntegration"] | null;
             labels: components["schemas"]["Label"][];
             progress: components["schemas"]["ChecklistCounts"];
+            proposal: components["schemas"]["TaskProposal"] | null;
             status: components["schemas"]["TaskStatus"];
+            /** @description The rule of the status calculation that decided the status, with the ids it used. */
+            status_reason: string;
             /** @example T-12 */
             task: string;
             title: string;
@@ -1885,6 +1994,26 @@ export interface components {
              * @example ws-9
              */
             workspace: string | null;
+            workspace_info: components["schemas"]["TaskWorkspaceInfo"] | null;
+        };
+        TaskWorkspaceInfo: {
+            /**
+             * @description The revision the workspace is based on.
+             * @example r7
+             */
+            base: string;
+            /**
+             * Format: int32
+             * @description How many revisions main moved since `base`.
+             */
+            behind: number;
+            /** @description Relative to the project root. */
+            directory: string;
+            /**
+             * @description The main head.
+             * @example r8
+             */
+            main: string;
         };
         /** @description One page of threads, the newest message first. */
         ThreadList: {

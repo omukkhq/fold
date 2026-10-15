@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT created_at FROM events WHERE task_id = ?1 AND type = ?2 ORDER BY seq DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "created_at",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "events",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "88281d07b79f28e315a2f3bc125518e9481cd2a24d96f0d4d3bd1f0401afe39a"
+}

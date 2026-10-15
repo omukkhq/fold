@@ -538,12 +538,12 @@ describe("the task dialog route", () => {
         { seq: 2, type: "task.created", actor: "human:tanim", created_at: at },
         { seq: 1, type: "task.updated", actor: "human:tanim", created_at: at },
       ],
-      human_review_note: { reason: "Auth work", set_by: "planner", set_at: at },
       human_review: {
         reviewer: "tanim",
         reason: "Auth work",
         set_by: "planner",
       },
+      human_review_set_at: at,
     });
     const { dialog } = await openTask();
     expect(
@@ -593,7 +593,7 @@ describe("the task dialog route", () => {
     expect(within(history).getByText(/Edited by human:tanim/)).toBeTruthy();
     const review = region(dialog, "Human review");
     expect(within(review).getByText("Required · tanim")).toBeTruthy();
-    expect(within(review).getByText(/Set by planner/)).toBeTruthy();
+    expect(within(review).getByText("Set by planner · 13:40")).toBeTruthy();
     expect(within(review).getByText("Auth work")).toBeTruthy();
   }, 20_000);
 

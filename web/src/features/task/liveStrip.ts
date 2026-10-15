@@ -115,9 +115,9 @@ export function liveChipText(live: LiveWorkspace, now: number): string {
 /** `4 files against base r7 · not in main`: working changes are never history. */
 export function changesNote(
   live: LiveWorkspace,
-  workspace: { base: string } = live,
+  workspace: { base: string } | null = null,
 ): string {
-  return `${files(live.files.length)} against base ${workspace.base} · not in main`;
+  return `${files(live.files.length)} against base ${(workspace ?? live).base} · not in main`;
 }
 
 const LETTERS: Record<ChangeKind, string> = {
