@@ -6,6 +6,8 @@ mod init;
 mod mcp;
 mod output;
 mod platform;
+#[cfg(feature = "dev-seed")]
+mod seed;
 mod serve;
 mod service;
 mod token;
@@ -52,6 +54,10 @@ enum Command {
     Hook(hook::HookArgs),
     /// Bring the commits of the Git remote into main; a conflict becomes a sync task
     Pull(commands::remote::PullArgs),
+    /// Development helpers
+    #[cfg(feature = "dev-seed")]
+    #[command(hide = true)]
+    Dev(seed::DevArgs),
 }
 
 /// clap prints a parse outcome, including `--help` and `--version`, and exits with its own code; a failed write is a runtime error with exit code 1.
@@ -69,6 +75,8 @@ enum Failure {
     Agent(agent::AgentError),
     Token(token::TokenError),
     Remote(commands::remote::RemoteError),
+    #[cfg(feature = "dev-seed")]
+    Seed(seed::SeedError),
 }
 
 fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result<(), Failure> {
@@ -110,6 +118,10 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         }
         Some(Command::Pull(args)) => {
             commands::remote::run_pull(&args, out).map_err(Failure::Remote)
+        }
+        #[cfg(feature = "dev-seed")]
+        Some(Command::Dev(args)) => {
+            seed::run(&args, &serve::Dirs::from_env(), out).map_err(Failure::Seed)
         }
         None => output::line(out, &output::version_line()).map_err(Failure::Write),
     }
@@ -161,6 +173,12 @@ fn main() -> anyhow::Result<()> {
         Err(Failure::Remote(error)) => Err(match error.code() {
             Some(code) => anyhow::anyhow!("{code}: {error}"),
             None => anyhow::anyhow!("{error}"),
+        }),
+        #[cfg(feature = "dev-seed")]
+        Err(Failure::Seed(error)) => Err(match (error.code(), error.hint()) {
+            (Some(code), Some(hint)) => anyhow::anyhow!("{code}: {error}\nhint: {hint}"),
+            (Some(code), None) => anyhow::anyhow!("{code}: {error}"),
+            _ => anyhow::anyhow!("{error}"),
         }),
     }
 }

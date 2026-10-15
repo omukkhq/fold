@@ -109,3 +109,4 @@ prerequisites_not_done
 integration_failed
 daemon_unreachable
 integration_conflicted
+seed_exists

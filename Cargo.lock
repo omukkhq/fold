@@ -677,6 +677,7 @@ name = "fold-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum",
  "clap",
  "fold-core",
  "fold-daemon",
@@ -695,6 +696,7 @@ dependencies = [
  "tokio",
  "toml",
  "toml_edit",
+ "tower",
  "tracing",
  "tracing-subscriber",
 ]

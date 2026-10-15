@@ -18,6 +18,7 @@ fold-vcs = { version = "0.1.0", path = "../fold-vcs" }
 http-body-util = "0.1.5"
 hyper = { version = "1.12.0", features = ["client", "http1"] }
 hyper-util = { version = "0.1.21", features = ["tokio"] }
+rmcp = { version = "3.5.1", features = ["client"], optional = true }
 rustix = { version = "1.1.5", features = ["fs", "process"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
@@ -34,13 +35,16 @@ tracing-subscriber = { version = "0.3.23", features = ["json", "env-filter"] }
 workspace = true
 
 [dev-dependencies]
+axum = "0.8.9"
 fold-store = { path = "../fold-store", features = ["testing"] }
 rmcp = { version = "3.5.1", features = ["client"] }
 tokio = { version = "1.53.3", features = ["macros", "rt-multi-thread", "process"] }
+tower = { version = "0.5.3", features = ["util"] }
 
 [features]
 # A `fold serve` built with it reads `FAILPOINTS`, so a crash test can stop the real daemon inside a command.
 failpoints = ["fold-daemon/failpoints"]
+dev-seed = ["dep:rmcp"]
 
 [[test]]
 name = "crash_sigkill"

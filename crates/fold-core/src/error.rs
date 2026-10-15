@@ -124,6 +124,7 @@ define_codes! {
     INTEGRATION_FAILED = "integration_failed",
     DAEMON_UNREACHABLE = "daemon_unreachable",
     INTEGRATION_CONFLICTED = "integration_conflicted",
+    SEED_EXISTS = "seed_exists",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

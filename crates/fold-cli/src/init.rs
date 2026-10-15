@@ -24,22 +24,22 @@ const ANSWER_TIMEOUT: Duration = Duration::from_secs(10);
 pub struct InitArgs {
     /// The project directory; created when it does not exist. With --refresh, a directory of the project, by default the working directory
     #[arg(required_unless_present = "refresh")]
-    dir: Option<PathBuf>,
+    pub(crate) dir: Option<PathBuf>,
     /// The project name; defaults to the directory name
     #[arg(long)]
-    name: Option<String>,
+    pub(crate) name: Option<String>,
     /// A directory whose files become the first revision, honouring its .gitignore and .foldignore files; the directory is only read
     #[arg(long, value_name = "PATH")]
-    from: Option<PathBuf>,
+    pub(crate) from: Option<PathBuf>,
     /// A Git repository whose committed tree at HEAD becomes the first revision, without history or ignore rules; the repository is only read
     #[arg(long, value_name = "REPO", conflicts_with = "from")]
-    from_git: Option<PathBuf>,
+    pub(crate) from_git: Option<PathBuf>,
     /// Unix socket of the running daemon; overrides daemon.toml (default $XDG_RUNTIME_DIR/fold/fold.sock)
     #[arg(long)]
-    socket: Option<PathBuf>,
+    pub(crate) socket: Option<PathBuf>,
     /// Rewrite the Claude Code files of an existing project, keeping every entry fold does not own, instead of creating a project
     #[arg(long, conflicts_with_all = ["name", "from", "from_git", "socket"])]
-    refresh: bool,
+    pub(crate) refresh: bool,
 }
 
 #[derive(Debug, Error)]
@@ -83,6 +83,15 @@ pub fn run(args: &InitArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), Ini
     if args.refresh {
         return refresh(args.dir.as_deref(), dirs, out);
     }
+    initialise(args, dirs, out).map(|_| ())
+}
+
+/// [`run`], returning the slug of the new project.
+pub(crate) fn initialise(
+    args: &InitArgs,
+    dirs: &Dirs,
+    out: &mut impl Write,
+) -> Result<String, InitError> {
     let Some(dir) = args.dir.as_deref() else {
         return Err(InitError::Dir(io::Error::from(io::ErrorKind::InvalidInput)));
     };
@@ -137,7 +146,7 @@ pub fn run(args: &InitArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), Ini
     if let Some(note) = note {
         output::line(out, &note)?;
     }
-    Ok(())
+    Ok(project.slug)
 }
 
 /// Rewrites the Claude Code files of the registered project that holds `dir`.

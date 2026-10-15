@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help setup build fmt dev dev-daemon dev-web fmt-check-rust fmt-check-web fmt-check web-build check-inner-allow clippy test test-fast test-web coverage check-rust check-web check acceptance clean clean-keep-cargo gen-api check-api release
+.PHONY: help setup build fmt dev dev-daemon dev-web seed-dev fmt-check-rust fmt-check-web fmt-check web-build check-inner-allow clippy test test-fast test-default-features test-web coverage check-rust check-web check acceptance clean clean-keep-cargo gen-api check-api release
 
 help: ## List the targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-18s %s\n", $$1, $$2}'
@@ -37,6 +37,11 @@ dev-daemon: ## Run the daemon on 127.0.0.1:7420, rebuilt on every change; its da
 	XDG_DATA_HOME=$(DEV_DIR)/data XDG_CONFIG_HOME=$(DEV_DIR)/config XDG_RUNTIME_DIR=$(DEV_DIR)/runtime \
 		cargo watch -w crates -w Cargo.toml -w Cargo.lock -x 'run -p fold-cli -- serve --listen 127.0.0.1:7420'
 
+# The seed registers its project in the dev daemon's registry and acts on the dev daemon's socket, so it takes the same directories as dev-daemon.
+seed-dev: ## Development only: build a throwaway demo project in .dev/projects/demo through the running dev daemon
+	XDG_DATA_HOME=$(DEV_DIR)/data XDG_CONFIG_HOME=$(DEV_DIR)/config XDG_RUNTIME_DIR=$(DEV_DIR)/runtime FOLD_HUMAN=dev \
+		cargo run -p fold-cli --features dev-seed -- dev seed --socket $(DEV_DIR)/runtime/fold/fold.sock
+
 web-build: ## Build the web application into web/dist, which the binary embeds
 	cd web && bun install --frozen-lockfile
 	cd web && bun run build
@@ -67,8 +72,11 @@ check-inner-allow: ## Fail when a Rust file under crates/ has an inner allow att
 clippy: check-inner-allow ## Run clippy with warnings denied, after the inner allow check
 	cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-test: ## Run every Rust test
+test: test-default-features ## Run every Rust test
 	cargo nextest run --workspace --all-features
+
+test-default-features: ## Run the tests that only build without features (the hidden dev command stays out of a normal build)
+	cargo nextest run -p fold-cli --test dev_command
 
 test-fast: ## Run the Rust tests without the acceptance tests and failpoint tests
 	cargo nextest run --workspace --profile fast
@@ -81,7 +89,7 @@ coverage: export CARGO_LLVM_COV_TARGET_DIR := $(CURDIR)/target/llvm-cov-target
 coverage: ## Run every Rust test and fail under 85% line coverage
 	cargo llvm-cov nextest --workspace --all-features --ignore-filename-regex '/tests/' --fail-under-lines 85
 
-check-rust: fmt-check-rust sqlx-check clippy coverage ## Run rustfmt, clippy and the Rust tests with coverage
+check-rust: fmt-check-rust sqlx-check clippy coverage test-default-features ## Run rustfmt, clippy and the Rust tests with coverage
 
 acceptance: ## Run only the acceptance tests
 	cargo nextest run --workspace --all-features -E 'test(/^acceptance_/)' --no-tests=pass

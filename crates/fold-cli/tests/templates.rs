@@ -173,7 +173,7 @@ const FOLD_ERROR_CODES: [&str; 108] = [
 ];
 
 /// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.
-const PENDING_ERROR_CODES: [&str; 2] = ["seed_exists", "too_large"];
+const PENDING_ERROR_CODES: [&str; 1] = ["too_large"];
 
 /// The `invalid_request` reasons that have a name.
 const INVALID_REQUEST_REASONS: [&str; 7] = [
