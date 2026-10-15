@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM claims WHERE task_id = (SELECT id FROM tasks WHERE number = ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "af5879056a6306a38812caa16b248737270dfe405f4501fea251472fa3b2304f"
+}

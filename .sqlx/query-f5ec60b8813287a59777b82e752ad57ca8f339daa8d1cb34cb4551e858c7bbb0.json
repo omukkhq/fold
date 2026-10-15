@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM checklist_items WHERE linked_task_id = (SELECT id FROM tasks WHERE number = ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "f5ec60b8813287a59777b82e752ad57ca8f339daa8d1cb34cb4551e858c7bbb0"
+}

@@ -15,10 +15,13 @@ use super::events::{EventBuffer, EventBus};
 
 mod claims;
 mod dependencies;
+mod ready;
 mod recompute;
+mod removal;
 
 pub use claims::{ClaimView, claim_view, renew_leases};
 pub use dependencies::{Edge, add_edge_in_tx};
+pub use ready::ReadyTask;
 pub use recompute::{Recomputed, recompute};
 
 /// Refusals carry a stable code; anything else is a database failure.

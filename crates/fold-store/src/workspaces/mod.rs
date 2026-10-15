@@ -1,3 +1,4 @@
+mod archive;
 mod changesets;
 mod checkpoints;
 mod columns;
@@ -5,6 +6,7 @@ mod conflicts;
 mod refs;
 mod revisions;
 
+pub use archive::archive_live_task_workspace;
 pub use changesets::{
     Changeset, ChangesetStats, get_changeset, insert_changeset, latest_changeset, list_changesets,
 };

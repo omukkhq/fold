@@ -223,7 +223,7 @@ pub async fn add_edge_in_tx(
     Ok(())
 }
 
-fn refusal(
+pub(super) fn refusal(
     code: &'static str,
     message: String,
     details: impl IntoIterator<Item = (&'static str, serde_json::Value)>,

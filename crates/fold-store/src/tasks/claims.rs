@@ -8,12 +8,14 @@ use crate::store::WriteTx;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReleaseReason {
     Released,
+    TaskArchived,
 }
 
 impl ReleaseReason {
     pub fn as_str(self) -> &'static str {
         match self {
             ReleaseReason::Released => "released",
+            ReleaseReason::TaskArchived => "task_archived",
         }
     }
 }

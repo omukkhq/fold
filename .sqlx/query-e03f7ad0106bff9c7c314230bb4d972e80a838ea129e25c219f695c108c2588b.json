@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT owner.number AS \"number!: i64\"\n           FROM checklist_items i\n           JOIN checklists c ON c.id = i.checklist_id\n           JOIN tasks owner ON owner.id = c.task_id\n           WHERE i.linked_task_id = (SELECT id FROM tasks WHERE number = ?)\n           ORDER BY owner.number, i.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e03f7ad0106bff9c7c314230bb4d972e80a838ea129e25c219f695c108c2588b"
+}

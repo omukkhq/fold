@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT t.number AS \"number!: i64\", t.title, t.created_at\n           FROM tasks t\n           WHERE t.status = 'todo' AND t.archived_at IS NULL\n             AND NOT EXISTS (\n                 SELECT 1 FROM claims c\n                 WHERE c.task_id = t.id AND c.kind = 'implementation' AND c.released_at IS NULL\n             )\n           ORDER BY t.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "title",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "0cc7634f59ddad6b366a692f951756d91a77cba6da50082b947463fda959a4d3"
+}

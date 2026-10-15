@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT number AS \"number!: i64\", status FROM tasks WHERE archived_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "status",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "status"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "7d7078e77595a1a6344833a1c7807c74b7758eb8813ddd54aed569626b9afdbd"
+}

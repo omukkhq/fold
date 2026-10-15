@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE workspaces SET state = 'archived', closed_at = ?2\n           WHERE kind = 'task' AND state IN ('active', 'missing')\n             AND task_id = (SELECT id FROM tasks WHERE number = ?1)\n           RETURNING number AS \"number!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "workspaces",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "6efe575b2586aa150fd68e50895d9b87b56174a2c20a2612346dea2f224004da"
+}
