@@ -112,7 +112,7 @@ Before declaring Rust work done, run `make check-rust`; for web work, `make chec
 
 ## Git
 
-1. **Never commit with `--no-verify`.** The hooks are defined in `.pre-commit-config.yaml` and run by prek, which `make setup` installs. They run the format checks, clippy and the fast tests for the halves a commit touches; fix what they reject, re-stage and commit again.
+1. **Never commit with `--no-verify`.** The hooks are defined in `.pre-commit-config.yaml` and run by prek, which `make setup` installs. For Rust they run rustfmt on the workspace and clippy on the crates a commit touches (on the workspace when a path outside `crates/<crate>/` such as `Cargo.toml`, `Cargo.lock` or `.sqlx/` changes), with no tests: the full suite runs in review. For the web they run the format check and the web tests. Fix what they reject, re-stage and commit again.
 2. **Write commit messages for the person reading the history:** what changed and why it matters, not the mechanics visible in the diff.
 3. **No trailing signature:** no `Co-Authored-By`, `Generated with …`, or any attribution footer.
 4. **Commit to the current branch.** Don't create a separate branch to hold the work unless asked.

@@ -4,9 +4,10 @@ repos:
       - id: rust
         name: rust
         language: system
-        pass_filenames: false
+        pass_filenames: true
+        require_serial: true
         files: '(\.rs$|(^|/)Cargo\.toml$|(^|/)Cargo\.lock$|(^|/)rust-toolchain\.toml$|(^|/)clippy\.toml$|(^|/)\.sqlx/|(^|/)migrations/)'
-        entry: make --no-print-directory fmt-check-rust clippy test-fast
+        entry: scripts/hook-rust.sh
       - id: web
         name: web
         language: system
