@@ -28,6 +28,12 @@ allow_attributes_without_reason = "deny"
 incremental = false
 debug = "line-tables-only"
 
+# The bench builds the daemon optimised but without link-time optimisation, which would make every change to a bench wait minutes for a link.
+[profile.bench]
+inherits = "release"
+lto = false
+codegen-units = 16
+
 [profile.release]
 lto = true
 codegen-units = 1

@@ -38,6 +38,7 @@ workspace = true
 axum = "0.8.9"
 fold-store = { path = "../fold-store", features = ["testing"] }
 rmcp = { version = "3.5.1", features = ["client"] }
+sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 tokio = { version = "1.53.3", features = ["macros", "rt-multi-thread", "process"] }
 tower = { version = "0.5.3", features = ["util"] }
 
@@ -49,3 +50,7 @@ dev-seed = ["dep:rmcp"]
 [[test]]
 name = "crash_sigkill"
 required-features = ["failpoints"]
+
+[[bench]]
+name = "budgets"
+harness = false

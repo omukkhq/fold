@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help setup build fmt dev dev-daemon dev-web seed-dev fmt-check-rust fmt-check-web fmt-check web-build check-inner-allow clippy test test-fast test-default-features test-web coverage check-rust check-web check acceptance clean clean-keep-cargo gen-api check-api release
+.PHONY: help setup build fmt dev dev-daemon dev-web seed-dev fmt-check-rust fmt-check-web fmt-check web-build check-inner-allow clippy test test-fast test-default-features test-web coverage check-rust check-web check acceptance clean clean-keep-cargo gen-api check-api release bench bench-smoke
 
 help: ## List the targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-18s %s\n", $$1, $$2}'
@@ -93,6 +93,12 @@ check-rust: fmt-check-rust sqlx-check clippy coverage test-default-features ## R
 
 acceptance: ## Run only the acceptance tests
 	cargo nextest run --workspace --all-features -E 'test(/^acceptance_/)' --no-tests=pass
+
+bench: ## Measure the five runtime budgets against a real daemon; FOLD_BENCH_LIMIT_SCALE=<factor> scales every limit, FOLD_BENCH_DIR=<dir> picks the disk
+	cargo bench -p fold-cli --bench budgets
+
+bench-smoke: ## Run the whole bench harness on a fixture 100 times smaller and report without enforcing the limits
+	FOLD_BENCH_SIZE=smoke cargo bench -p fold-cli --bench budgets
 
 SQLX_DIR := target/sqlx
 SQLX_DB_URL := sqlite:$(CURDIR)/$(SQLX_DIR)/prepare.db
