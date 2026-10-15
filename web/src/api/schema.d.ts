@@ -1630,9 +1630,12 @@ export interface components {
              * @description The highest version number.
              */
             current_version: number;
+            /** @description The task's human review mark is met on the current version: a human it accepts approved it and no later `request_changes` withdrew that. True without a mark, so an approved proposal with this false is an agent's approval that waits for a human. */
+            human_approved: boolean;
             human_review: components["schemas"]["HumanReviewMark"] | null;
             /** @example P-3 */
             id: string;
+            latest_verdict: components["schemas"]["ReviewVerdict"] | null;
             /** @description The worker that holds the review claim. */
             review_claim: string | null;
             state: components["schemas"]["ProposalStateView"];

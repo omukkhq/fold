@@ -44,6 +44,7 @@ describe("importsRetiredFixture", () => {
     "import { comparisons } from '../../../fixtures/diff'",
     'const e = await import("../../fixtures/events");',
     'import { checkouts } from "../../fixtures/reviews";',
+    'import { detail } from "../../../fixtures/proposals";',
   ])("flags %s", (source) => {
     expect(importsRetiredFixture(source)).toBe(true);
   });
@@ -51,7 +52,6 @@ describe("importsRetiredFixture", () => {
   it.each([
     'import { agents } from "../../fixtures/agents";',
     'import { projects } from "../../fixtures/projects";',
-    'import { detail } from "../../fixtures/proposals";',
     'import { tasks } from "./tasks";',
     'import { comparisons } from "../../fixtures/diffs";',
   ])("passes %s", (source) => {

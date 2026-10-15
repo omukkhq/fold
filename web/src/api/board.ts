@@ -13,7 +13,8 @@ export type AttentionKind = Schemas["AttentionKind"];
 export type ChecklistCounts = Schemas["ChecklistCounts"];
 export type HumanReviewMark = Schemas["HumanReviewMark"];
 
-export type ProposalState = Schemas["ProposalState"];
+/** The review state a card shows for its task's proposal: an open proposal is told apart by its latest verdict or a conflict. A closed proposal leaves the card. */
+export type CardProposalState = Schemas["ProposalState"];
 export type BoardProposal = Schemas["BoardProposal"];
 export type BoardActivity = Schemas["BoardActivity"];
 export type BoardCard = Schemas["BoardCard"];

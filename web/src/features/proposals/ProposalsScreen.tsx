@@ -1,4 +1,4 @@
-import { useSuspenseQuery } from "@tanstack/react-query";
+import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { Check, GitMerge, GitPullRequest, UserRoundCheck } from "lucide-react";
 import { proposalsQuery } from "@/api/queries";
 import { HrefLink } from "@/app/HrefLink";
@@ -7,6 +7,7 @@ import { Button } from "@/components/button/Button";
 import { Menu } from "@/components/overlay/Menu";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { Skeleton } from "@/components/states/Skeleton";
+import { revisionsQuery } from "@/features/repository/queries";
 import { formatSince } from "@/format/time";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
@@ -22,6 +23,7 @@ import {
   type ClaimFilter,
   type ListSearch,
 } from "./filters";
+import { integratedRevisions } from "./integration";
 import { reviewPill, versionText, waitingOn } from "./present";
 import { ReviewPill, WaitingChip } from "./ReviewPill";
 
@@ -58,6 +60,11 @@ export function ProposalsScreen({
   const state = shownState(search);
   const counts = countByState(data);
   const rows = filterProposals(data, search);
+  const revisions = useQuery({
+    ...revisionsQuery(slug),
+    enabled: state === "integrated",
+  });
+  const integrated = integratedRevisions(revisions.data?.items ?? []);
 
   return (
     <div className="flex flex-col gap-16 px-24 pt-20 pb-24">
@@ -206,7 +213,9 @@ export function ProposalsScreen({
                     <td className={CELL}>
                       <span className="flex flex-col items-start gap-4">
                         <ReviewPill
-                          pill={reviewPill(p)}
+                          pill={reviewPill(p, {
+                            revision: integrated.get(p.id) ?? null,
+                          })}
                           className="whitespace-nowrap"
                         />
                         <span className="font-mono text-caption whitespace-nowrap text-text-muted">

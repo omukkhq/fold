@@ -19,18 +19,12 @@ export const keys = {
     to: string,
     path: string,
   ) => [slug, "file-diff", from ?? null, to, path] as const,
-  /** A proposal version never changes, so its diffs never go stale. */
-  versionComparison: (slug: string, from: string | undefined, to: string) =>
-    [slug, "version-comparison", from ?? null, to] as const,
-  versionFileDiff: (
-    slug: string,
-    from: string | undefined,
-    to: string,
-    path: string,
-  ) => [slug, "version-file-diff", from ?? null, to, path] as const,
   proposals: (slug: string) => [slug, "proposals"] as const,
   proposal: (slug: string, proposal: string) =>
     [slug, "proposal", proposal] as const,
+  /** Under the proposal prefix, so every event and write that refreshes the proposal also refreshes its comments. */
+  proposalComments: (slug: string, proposal: string) =>
+    [slug, "proposal", proposal, "comments"] as const,
   events: (slug: string) => [slug, "events"] as const,
   agents: (slug: string) => [slug, "agents"] as const,
   /** Under the agents prefix, so every event that invalidates the agents also refreshes the agent chips of the top bar. */

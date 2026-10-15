@@ -1,50 +1,73 @@
 import { describe, expect, it } from "vitest";
-import type { Gate, ProposalDetail } from "@/api/proposals";
-import { detail } from "../../../fixtures/proposals";
-import { gateText, orderGates, waitingSummary } from "./gates";
+import type {
+  Gate,
+  ProposalDetail,
+  ProposalSummary,
+  ProposalTask,
+} from "@/api/proposals";
+import {
+  conflictReport,
+  humanGates,
+  proposalDetail,
+  proposalSummary,
+  review,
+} from "@/test/proposals";
+import { gateText, shownGates, waitingSummary } from "./gates";
+
+const mark = {
+  reviewer: "tanim",
+  reason: "schema work for a junior task",
+  set_by: "backend",
+};
 
 function proposal(
-  id: string,
+  summary: Partial<ProposalSummary> = {},
   fields: Partial<ProposalDetail> = {},
 ): ProposalDetail {
-  const found = detail("demo", id);
-  if (!found) throw new Error(`no fixture ${id}`);
-  return { ...structuredClone(found), ...fields };
+  return proposalDetail(
+    proposalSummary("P-4", { current_version: 2, ...summary }),
+    fields,
+  );
 }
 
-const clock = (at: number) => `@${String(at)}`;
+function gate(
+  name: Gate["gate"],
+  status: Gate["status"] = "met",
+  code: string | null = null,
+): Gate {
+  return { gate: name, status, code };
+}
 
-describe("orderGates", () => {
-  it("orders gates as the integration checks them, with the human review after the approval", () => {
-    const gates: Gate[] = [
-      {
-        kind: "merge",
-        state: "met",
-        main: "r8",
-        conflicting_files: 0,
-        checked_at: 1,
-      },
-      { kind: "prerequisites", state: "met", unfinished: [], total: 0 },
-      { kind: "integrator", state: "met", agents: ["review"] },
-      {
-        kind: "human_review",
-        state: "waiting_human",
-        reviewer: "tanim",
-        marked_by: "backend",
-        reason: "",
-      },
-      {
-        kind: "approval",
-        state: "met",
-        version: 2,
-        approvers: ["review/quality"],
-        latest_verdict: "approve",
-      },
-    ];
-    expect(orderGates(gates).map((g) => g.kind)).toEqual([
+const task = (id: string, status: ProposalTask["status"]): ProposalTask => ({
+  task: id,
+  title: id,
+  description: "",
+  status,
+});
+
+describe("shownGates", () => {
+  it("orders the gates as the integration checks them and leaves out a met open or version gate", () => {
+    const gates = [...humanGates()].reverse();
+    expect(shownGates(gates).map((g) => g.gate)).toEqual([
+      "caller",
       "approval",
       "human_review",
-      "integrator",
+      "prerequisites",
+      "merge",
+    ]);
+    expect(
+      shownGates(
+        humanGates({
+          open: { status: "unmet", code: "proposal_not_open" },
+          version: { status: "unmet", code: "stale_version" },
+        }),
+      ).map((g) => g.gate),
+    ).toEqual([
+      "open",
+      "version",
+      "caller",
+      "approval",
+      "human_review",
       "prerequisites",
       "merge",
     ]);
@@ -52,192 +75,266 @@ describe("orderGates", () => {
 });
 
 describe("gateText", () => {
-  it("describes an approval gate in each state", () => {
-    const met: Gate = {
-      kind: "approval",
-      state: "met",
-      version: 2,
-      approvers: ["review/quality", "human:tanim"],
-      latest_verdict: "approve",
-    };
-    expect(gateText(met, clock)).toBe(
+  it("describes the open, version and caller gates in each state", () => {
+    const p = proposal();
+    expect(gateText(gate("open"), p, null)).toBe("The proposal is open");
+    expect(gateText(gate("open", "unmet"), p, null)).toBe(
+      "The proposal is not open",
+    );
+    expect(gateText(gate("version"), p, null)).toBe(
+      "v2 is the current version",
+    );
+    expect(gateText(gate("version", "unmet"), p, null)).toBe(
+      "v2 is not the version on screen",
+    );
+    expect(gateText(gate("caller"), p, null)).toBe(
+      "You can integrate as a named human",
+    );
+    expect(
+      gateText(gate("caller", "unmet", "author_cannot_integrate"), p, null),
+    ).toBe("Your agent wrote this proposal, so you cannot integrate it");
+    expect(
+      gateText(gate("caller", "unmet", "integrator_required"), p, null),
+    ).toBe("You cannot integrate this proposal");
+  });
+
+  it("names the approvers of the version, and says when integrating here approves", () => {
+    const approved = proposal(
+      {},
+      {
+        reviews: [
+          review(2, "review/quality", "approve", { created_at: 1 }),
+          review(2, "human:tanim", "approve", { created_at: 2 }),
+        ],
+      },
+    );
+    expect(gateText(gate("approval"), approved, null)).toBe(
       "Approved on v2 by review/quality and tanim",
     );
-    expect(gateText({ ...met, approvers: ["a", "b", "c"] }, clock)).toBe(
-      "Approved on v2 by a, b and c",
+    const changes = proposal(
+      { latest_verdict: "request_changes" },
+      { reviews: [review(2, "review/security", "request_changes")] },
+    );
+    expect(gateText(gate("approval"), changes, null)).toBe(
+      "Changes requested on v2; integrating here approves it",
+    );
+    expect(gateText(gate("approval"), proposal(), null)).toBe(
+      "No approval on v2 yet; integrating here approves it",
     );
     expect(
       gateText(
-        {
-          ...met,
-          state: "unmet",
-          approvers: [],
-          latest_verdict: "request_changes",
-        },
-        clock,
+        gate("approval", "unmet", "changes_requested"),
+        proposal(),
+        null,
       ),
     ).toBe("Changes requested on v2; it needs an approval");
     expect(
-      gateText(
-        { ...met, state: "unmet", approvers: [], latest_verdict: null },
-        clock,
-      ),
-    ).toBe("No approval on v2 yet");
+      gateText(gate("approval", "unmet", "not_approved"), proposal(), null),
+    ).toBe("No approval on v2 yet; it needs an approval");
   });
 
-  it("describes the human review waiting, met and for any human", () => {
-    const gate: Gate = {
-      kind: "human_review",
-      state: "waiting_human",
-      reviewer: "tanim",
-      marked_by: "backend",
-      reason: "schema work for a junior task",
-    };
-    expect(gateText(gate, clock)).toBe(
+  it("describes the human review mark with who set it and why", () => {
+    expect(gateText(gate("human_review"), proposal(), null)).toBe(
+      "No human review asked for",
+    );
+    const marked = proposal({ human_review: mark });
+    expect(gateText(gate("human_review"), marked, null)).toBe(
       'Human review by tanim · marked by backend: "schema work for a junior task"',
     );
     expect(
       gateText(
-        {
-          ...gate,
-          state: "met",
-          reviewer: null,
-          marked_by: "human:alex",
-          reason: " ",
-        },
-        clock,
+        gate("human_review"),
+        proposal(
+          {
+            human_review: { reviewer: null, reason: " ", set_by: "human:ana" },
+            human_approved: true,
+          },
+          { reviews: [review(2, "human:ana", "approve")] },
+        ),
+        null,
       ),
-    ).toBe("Approved by any human · marked by alex");
+    ).toBe("Approved by any human · marked by ana");
   });
 
-  it("describes the integrator tag holders", () => {
-    expect(
-      gateText({ kind: "integrator", state: "met", agents: ["review"] }, clock),
-    ).toBe("Caller needs the integrator tag: review has it");
-    expect(
-      gateText(
-        { kind: "integrator", state: "met", agents: ["review", "lead"] },
-        clock,
-      ),
-    ).toBe("Caller needs the integrator tag: review and lead have it");
-    expect(
-      gateText({ kind: "integrator", state: "unmet", agents: [] }, clock),
-    ).toBe("Caller needs the integrator tag: no agent has it");
-  });
-
-  it("describes the prerequisites", () => {
-    const gate: Gate = {
-      kind: "prerequisites",
-      state: "met",
-      unfinished: [],
-      total: 0,
-    };
-    expect(gateText(gate, clock)).toBe("Prerequisites Done: none needed");
-    expect(gateText({ ...gate, total: 2 }, clock)).toBe(
-      "Prerequisites Done: all 2",
+  it("lists the prerequisites that are not Done", () => {
+    expect(gateText(gate("prerequisites"), proposal(), null)).toBe(
+      "Prerequisites Done: none needed",
+    );
+    const done = proposal({}, { prerequisites: [task("T-1", "done")] });
+    expect(gateText(gate("prerequisites"), done, null)).toBe(
+      "Prerequisites Done: all 1",
+    );
+    const open = proposal(
+      {},
+      { prerequisites: [task("T-1", "done"), task("T-2", "review")] },
     );
     expect(
       gateText(
-        { ...gate, state: "unmet", total: 2, unfinished: ["T-4", "T-9"] },
-        clock,
+        gate("prerequisites", "unmet", "prerequisites_not_done"),
+        open,
+        null,
       ),
-    ).toBe("Prerequisites not Done: T-4, T-9");
+    ).toBe("Prerequisites not Done: T-2");
+    expect(
+      gateText(
+        gate("prerequisites", "unmet", "prerequisites_not_done"),
+        done,
+        null,
+      ),
+    ).toBe("Prerequisites not Done");
   });
 
-  it("describes the merge with main", () => {
-    const gate: Gate = {
-      kind: "merge",
-      state: "met",
-      main: "r8",
-      conflicting_files: 0,
-      checked_at: 5,
-    };
-    expect(gateText(gate, clock)).toBe("Merges cleanly onto r8 (checked @5)");
-    expect(gateText({ ...gate, checked_at: null }, clock)).toBe(
-      "Merges cleanly onto r8 (not checked yet)",
+  it("says the merge is checked at integration, or names the conflict the last attempt found", () => {
+    const p = proposal();
+    expect(gateText(gate("merge", "checked_at_integration"), p, "r8")).toBe(
+      "Merge onto r8 is checked at integration",
+    );
+    expect(gateText(gate("merge", "checked_at_integration"), p, null)).toBe(
+      "The merge is checked at integration",
+    );
+    expect(gateText(gate("merge"), p, null)).toBe("Merges cleanly");
+    expect(gateText(gate("merge", "unmet"), p, null)).toBe(
+      "Does not merge onto main",
+    );
+    const conflicted = proposal(
+      { conflicted: true },
+      { conflict: conflictReport("P-4", 2) },
     );
     expect(
-      gateText({ ...gate, state: "unmet", conflicting_files: 1 }, clock),
-    ).toBe("Does not merge onto r8: 1 file conflicts (checked @5)");
+      gateText(gate("merge", "checked_at_integration"), conflicted, "r8"),
+    ).toBe("Does not merge onto r8: 5 files conflict");
+    const one = conflictReport("P-4", 2);
+    one.files = one.files.slice(0, 1);
     expect(
-      gateText({ ...gate, state: "unmet", conflicting_files: 5 }, clock),
-    ).toBe("Does not merge onto r8: 5 files conflict (checked @5)");
+      gateText(
+        gate("merge", "checked_at_integration"),
+        proposal({}, { conflict: one }),
+        null,
+      ),
+    ).toBe("Does not merge onto r8: 1 file conflicts");
   });
 });
 
 describe("waitingSummary", () => {
-  it("waits on the named human while the human review waits", () => {
-    expect(waitingSummary(proposal("P-4"))).toBe(
+  it("says nothing for an integrated proposal and gives a closed one's reason", () => {
+    expect(
+      waitingSummary(proposal({ state: "integrated", turn: null })),
+    ).toBeNull();
+    expect(
+      waitingSummary(
+        proposal({
+          state: "closed",
+          turn: null,
+          close_reason: "superseded by P-9",
+        }),
+      ),
+    ).toBe("Closed without integration: superseded by P-9");
+    expect(waitingSummary(proposal({ state: "closed", turn: null }))).toBe(
+      "Closed without integration.",
+    );
+  });
+
+  it("sends a conflicted or returned proposal back to its author", () => {
+    expect(
+      waitingSummary(proposal({ conflicted: true, turn: "with_author" })),
+    ).toBe(
+      "fold sent the report to backend/db. The task is back in In Progress until a new version arrives.",
+    );
+    expect(waitingSummary(proposal({ turn: "with_author" }))).toBe(
+      "Waiting for backend/db to send a new version.",
+    );
+  });
+
+  it("waits for the named human until a human approves, naming who integrates", () => {
+    const approved = [review(2, "review/quality", "approve")];
+    expect(
+      waitingSummary(
+        proposal(
+          { human_review: mark, latest_verdict: "approve" },
+          {
+            reviews: approved,
+            review_claim: {
+              holder: "review/quality",
+              claimed_at: 1,
+              renewed_at: 2,
+              stale: false,
+            },
+          },
+        ),
+      ),
+    ).toBe(
       "Waiting for tanim. When tanim approves v2, review/quality integrates, or tanim can integrate here.",
     );
-    const anyHuman = proposal("P-4", { review_claim: null });
-    anyHuman.gates = anyHuman.gates.map((g) =>
-      g.kind === "human_review" ? { ...g, reviewer: null } : g,
-    );
-    expect(waitingSummary(anyHuman)).toBe(
-      "Waiting for a human. When a human approves v2, the review agent integrates, or a human can integrate here.",
-    );
-  });
-
-  it("says the report went to the author of a conflicted proposal", () => {
-    expect(waitingSummary(proposal("P-6"))).toBe(
-      "fold sent the report to frontend/charts. The task is back in In Progress until a new version arrives.",
+    expect(
+      waitingSummary(
+        proposal(
+          { human_review: { ...mark, reviewer: null } },
+          { reviews: approved },
+        ),
+      ),
+    ).toBe(
+      "Waiting for a human. When a human approves v2, an integrator integrates, or a human can integrate here.",
     );
   });
 
-  it("waits on the author after a request for changes", () => {
-    expect(waitingSummary(proposal("P-3"))).toBe(
-      "Waiting for frontend/styles to send a new version.",
-    );
-  });
-
-  it("names the first unmet gate while the proposal is with the reviewer", () => {
-    const p = proposal("P-3", { with: "reviewer", latest_verdict: null });
-    expect(waitingSummary(p)).toBe("Waiting for a review of v1.");
-    p.gates = p.gates.map((g): Gate => {
-      if (g.kind === "approval") return { ...g, state: "met" };
-      if (g.kind === "prerequisites")
-        return { ...g, state: "unmet", total: 1, unfinished: ["T-4"] };
-      return g;
-    });
-    expect(waitingSummary(p)).toBe("Waiting for T-4 to be Done.");
-    p.gates = p.gates.map((g): Gate => {
-      if (g.kind === "prerequisites") return { ...g, state: "met" };
-      if (g.kind === "integrator") return { ...g, state: "unmet", agents: [] };
-      return g;
-    });
-    expect(waitingSummary(p)).toBe(
-      "Waiting for a human to give an agent the integrator tag, or to integrate here.",
-    );
-    p.gates = p.gates.map((g): Gate => {
-      if (g.kind === "integrator") return { ...g, state: "met" };
-      if (g.kind === "merge") return { ...g, state: "unmet" };
-      return g;
-    });
-    expect(waitingSummary(p)).toBe("Waiting on the gates above.");
-  });
-
-  it("says every gate is met and who integrates next", () => {
-    const p = proposal("P-3", { with: "reviewer", latest_verdict: "approve" });
-    p.gates = p.gates.map(
-      (g): Gate => (g.kind === "approval" ? { ...g, state: "met" } : g),
-    );
-    expect(waitingSummary(p)).toBe(
-      "Every gate is met. Next, the review agent integrates, or a human can integrate here.",
-    );
-    p.gates = p.gates.filter((g) => g.kind !== "integrator");
-    expect(waitingSummary(p)).toBe(
-      "Every gate is met. Next, an integrator integrates, or a human can integrate here.",
-    );
-  });
-
-  it("waits on nothing once integrated and gives the reason of a closed proposal", () => {
-    expect(waitingSummary(proposal("P-5"))).toBeNull();
-    expect(waitingSummary(proposal("P-8"))).toBe(
-      "Closed without integration: Split into a smaller change after T-1",
-    );
-    expect(waitingSummary(proposal("P-8", { close_reason: null }))).toBe(
-      "Closed without integration.",
+  it("waits for a review, then for the prerequisites, then for an integrator", () => {
+    expect(waitingSummary(proposal())).toBe("Waiting for a review of v2.");
+    const approved = [review(2, "review/quality", "approve")];
+    expect(
+      waitingSummary(
+        proposal(
+          { latest_verdict: "approve" },
+          {
+            reviews: approved,
+            prerequisites: [task("T-2", "in_progress")],
+            gates: humanGates({
+              prerequisites: {
+                status: "unmet",
+                code: "prerequisites_not_done",
+              },
+            }),
+          },
+        ),
+      ),
+    ).toBe("Waiting for T-2 to be Done.");
+    expect(
+      waitingSummary(
+        proposal(
+          { latest_verdict: "approve" },
+          {
+            reviews: approved,
+            gates: humanGates({
+              prerequisites: {
+                status: "unmet",
+                code: "prerequisites_not_done",
+              },
+            }),
+          },
+        ),
+      ),
+    ).toBe("Waiting for the prerequisites to be Done.");
+    expect(
+      waitingSummary(
+        proposal(
+          { latest_verdict: "approve" },
+          {
+            reviews: approved,
+            gates: humanGates({
+              caller: { status: "unmet", code: "author_cannot_integrate" },
+            }),
+          },
+        ),
+      ),
+    ).toBe("Waiting on the gates above.");
+    expect(
+      waitingSummary(
+        proposal(
+          { review_claim: "review/quality", latest_verdict: "approve" },
+          { reviews: approved },
+        ),
+      ),
+    ).toBe(
+      "Every gate is met. Next, review/quality integrates, or a human can integrate here.",
     );
   });
 });

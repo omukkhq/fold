@@ -1,4 +1,5 @@
 import type {
+  ComparisonTotals,
   ProposalDetail,
   ProposalSummary,
   ProposalVersion,
@@ -34,24 +35,48 @@ export function displayName(name: string): string {
   return isHuman(name) ? name.slice(HUMAN_PREFIX.length) : name;
 }
 
-function humanReviewer(p: ProposalSummary): string {
-  return p.human_review?.reviewer ?? "a human";
+function verdictsOn(version: number, reviews: readonly Review[]): Review[] {
+  return reviews
+    .filter((r) => r.version === version && r.verdict !== "comment")
+    .sort((a, b) => a.created_at - b.created_at);
 }
 
-/**
- * The review state as the payload states it. `long` is the detail header's wording, the default the list's.
- * `conflictMain` is the main revision the conflict report merged onto, which the long wording names.
- */
+/** The workers and humans whose latest verdict on the version is an approval, in the order they approved. */
+export function approvers(
+  version: number,
+  reviews: readonly Review[],
+): string[] {
+  const last = new Map<string, Review>();
+  for (const r of verdictsOn(version, reviews)) {
+    last.delete(r.reviewer);
+    last.set(r.reviewer, r);
+  }
+  return [...last.values()]
+    .filter((r) => r.verdict === "approve")
+    .map((r) => r.reviewer);
+}
+
+export interface PillContext {
+  /** The main revision an integrated proposal became, when the screen knows it. */
+  revision?: string | null;
+  /** The main revision the conflict report merged onto, which the long wording names. */
+  conflictMain?: string | null;
+  /** The detail header's wording; the list's otherwise. */
+  long?: boolean;
+}
+
+/** The review state as the summary states it: the latest verdict on the current version and whether the human review mark is met. */
 export function reviewPill(
   p: ProposalSummary,
-  long = false,
-  conflictMain: string | null = null,
+  context: PillContext = {},
 ): Pill {
+  const { revision = null, conflictMain = null } = context;
+  const long = context.long === true;
   if (p.state === "integrated") {
     return {
       tone: "done",
       icon: "integrated",
-      text: `Integrated as ${p.integrated_revision ?? "main"}`,
+      text: revision ? `Integrated as ${revision}` : "Integrated",
     };
   }
   if (p.state === "closed") {
@@ -66,7 +91,7 @@ export function reviewPill(
       text: `Conflict${onto}${back}`,
     };
   }
-  if (p.latest_verdict === "request_changes") {
+  if (p.latest_verdict === "request_changes" || p.turn === "with_author") {
     return {
       tone: "danger",
       icon: "changes",
@@ -80,7 +105,7 @@ export function reviewPill(
         icon: "human",
         text: long
           ? "Agent approved · waiting for human review"
-          : `Agent approved · needs ${humanReviewer(p)}`,
+          : `Agent approved · needs ${p.human_review.reviewer ?? "a human"}`,
       };
     }
     return { tone: "approved", icon: "approved", text: "Approved" };
@@ -101,9 +126,19 @@ export interface Waiting {
   human: boolean;
 }
 
+/**
+ * The author while the turn is theirs. While it is the reviewer's, the human the mark names once an agent approved without the human approval, else the review claim's holder; nobody when none of them is named.
+ */
 export function waitingOn(p: ProposalSummary): Waiting | null {
-  if (p.waiting_on === null) return null;
-  return { name: displayName(p.waiting_on), human: isHuman(p.waiting_on) };
+  if (p.turn === "with_author") {
+    return { name: displayName(p.author), human: isHuman(p.author) };
+  }
+  if (p.turn !== "with_reviewer") return null;
+  if (p.latest_verdict === "approve" && p.human_review && !p.human_approved) {
+    return { name: p.human_review.reviewer ?? "a human", human: true };
+  }
+  if (p.review_claim === null) return null;
+  return { name: displayName(p.review_claim), human: isHuman(p.review_claim) };
 }
 
 /** `v2 of 2`: the current version is always the latest. */
@@ -128,10 +163,7 @@ export function versionVerdict(
   version: number,
   reviews: readonly Review[],
 ): string {
-  const verdicts = reviews
-    .filter((r) => r.version === version && r.verdict !== "comment")
-    .sort((a, b) => a.created_at - b.created_at);
-  const latest = verdicts.at(-1);
+  const latest = verdictsOn(version, reviews).at(-1);
   return latest ? VERDICT_WORDS[latest.verdict] : "no verdict yet";
 }
 
@@ -158,9 +190,18 @@ export function listedReviews(reviews: readonly Review[]): Review[] {
     .sort((a, b) => b.created_at - a.created_at);
 }
 
-export function filesText(v: ProposalVersion): string {
-  const files = `${String(v.files)} ${v.files === 1 ? "file" : "files"}`;
-  return `${files} · +${String(v.added_lines)} −${String(v.removed_lines)}`;
+export function fileCount(v: ProposalVersion): number {
+  return v.files_added + v.files_modified + v.files_deleted;
+}
+
+/** `3 files · +96 −4`; the line counts are the totals of the version the payload compared with its base. */
+export function filesText(
+  v: ProposalVersion,
+  totals: ComparisonTotals,
+): string {
+  const n = fileCount(v);
+  const files = `${String(n)} ${n === 1 ? "file" : "files"}`;
+  return `${files} · +${String(totals.added_lines)} −${String(totals.removed_lines)}`;
 }
 
 export function claimText(p: ProposalSummary): string {
@@ -170,7 +211,9 @@ export function claimText(p: ProposalSummary): string {
 }
 
 export function currentVersion(p: ProposalDetail): ProposalVersion | null {
-  return p.versions.find((v) => v.version === p.current_version) ?? null;
+  return (
+    p.versions.find((v) => v.version === p.summary.current_version) ?? null
+  );
 }
 
 /** The evidence as lines; a line that starts with `$` is a command, the rest its output. */

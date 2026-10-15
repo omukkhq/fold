@@ -2,7 +2,7 @@ import type {
   BoardCard,
   BoardProposal,
   HumanReviewMark,
-  ProposalState,
+  CardProposalState,
 } from "@/api/board";
 
 /**
@@ -65,7 +65,7 @@ export function messagesText(card: Pick<BoardCard, "messages">): string | null {
   return card.messages > 0 ? String(card.messages) : null;
 }
 
-const PROPOSAL_TEXT: Record<ProposalState, string> = {
+const PROPOSAL_TEXT: Record<CardProposalState, string> = {
   open: "waiting for review",
   approved: "approved",
   changes_requested: "changes requested",

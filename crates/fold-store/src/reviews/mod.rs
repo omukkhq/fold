@@ -83,6 +83,8 @@ pub struct ProposalRow {
     pub current_version: u32,
     /// The latest verdict on the current version is `request_changes`, read with the rule `tasks::load_facts` uses for the status, so the board and the proposal never disagree.
     pub changes_requested: bool,
+    /// The latest verdict on the current version, comments left out, by the same rule.
+    pub latest_verdict: Option<Verdict>,
     /// The worker that holds the unreleased review claim.
     pub review_claim: Option<WorkerName>,
     /// The task's human review mark as it stands now.
@@ -423,6 +425,7 @@ async fn select(
                 close_reason: row.close_reason,
                 current_version,
                 changes_requested: row.verdict.as_deref() == Some("request_changes"),
+                latest_verdict: row.verdict.as_deref().map(parse_verdict).transpose()?,
                 review_claim: row.review_claim.as_deref().map(worker).transpose()?,
                 human_review: crate::tasks::mark(
                     row.human_review,

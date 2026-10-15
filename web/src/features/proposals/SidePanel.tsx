@@ -12,11 +12,11 @@ import {
   Undo2,
   type LucideIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useForm } from "react-hook-form";
 import type {
   ConflictReport,
-  GateState,
+  GateStatus,
   ProposalDetail,
   ProposalVersion,
   Verdict,
@@ -32,10 +32,12 @@ import { requestChangesSchema, type RequestChangesValues } from "./compose";
 import {
   conflictKindText,
   fileSides,
+  hunkSides,
   nextStepText,
   reportTrees,
 } from "./conflict";
-import { gateText, orderGates, waitingSummary } from "./gates";
+import { gateText, shownGates, waitingSummary } from "./gates";
+import type { IntegrationView } from "./integration";
 import {
   displayName,
   evidenceLines,
@@ -49,15 +51,15 @@ const OVERLINE =
   "text-overline leading-snug font-semibold text-primary-text uppercase";
 
 const GATE_ICONS: Record<
-  GateState,
+  GateStatus,
   { icon: LucideIcon; label: string; className: string }
 > = {
   met: { icon: CircleCheck, label: "met", className: "text-primary-text" },
   unmet: { icon: CircleX, label: "not met", className: "text-danger" },
-  waiting_human: {
+  checked_at_integration: {
     icon: CircleDashed,
-    label: "waiting on a human",
-    className: "text-secondary-text",
+    label: "checked at integration",
+    className: "text-text-muted",
   },
 };
 
@@ -72,8 +74,10 @@ const VERDICT_ICONS: Record<Verdict, { icon: LucideIcon; className: string }> =
 export interface ActionHandlers {
   visible: readonly HumanAction[];
   pending: HumanAction | null;
-  /** The sentence for the last failed write whose code the screen knows. */
+  /** The sentence for the last failed write the screen shows on the actions. */
   failure: string | null;
+  /** Why Integrate cannot work now, from the daemon's gate report; null when it can. */
+  integrateBlock: string | null;
   onApprove: () => void;
   onIntegrate: () => void;
   /** Resolves once the daemon has taken the verdict; rejects with its error. */
@@ -87,7 +91,7 @@ function ConflictBlock({
   report: ConflictReport;
   proposal: ProposalDetail;
 }) {
-  const ref = versionRef(proposal.id, report.version);
+  const ref = versionRef(proposal.summary.id, report.version);
   return (
     <section
       aria-label="Conflict report"
@@ -129,13 +133,7 @@ function ConflictBlock({
                 key={index}
                 className="flex flex-col gap-4 overflow-x-auto rounded-s bg-surface px-8 py-6 font-mono text-caption"
               >
-                {(
-                  [
-                    ["base", hunk.base],
-                    ["main", hunk.main],
-                    [ref, hunk.version],
-                  ] as const
-                ).map(([label, lines]) => (
+                {hunkSides(hunk, ref).map(({ label, lines }) => (
                   <div key={label} className="flex flex-col">
                     <span className="text-text-faint">{label}</span>
                     {lines.map((text, n) => (
@@ -151,7 +149,7 @@ function ConflictBlock({
         ))}
       </ul>
       <p className="text-code leading-snug text-text-muted">
-        {nextStepText(proposal.author, report.version)}
+        {nextStepText(proposal.summary.author, report.version)}
       </p>
     </section>
   );
@@ -232,7 +230,8 @@ function HumanActions({
   actions: ActionHandlers;
 }) {
   const [requesting, setRequesting] = useState(false);
-  const v = `v${String(proposal.current_version)}`;
+  const blockId = useId();
+  const v = `v${String(proposal.summary.current_version)}`;
   const busy = actions.pending !== null;
   if (view.kind === "version" && !view.current) {
     return (
@@ -242,7 +241,7 @@ function HumanActions({
           takes no verdict.
         </p>
         <HrefLink
-          href={`/p/${slug}/proposals/${proposal.id}`}
+          href={`/p/${slug}/proposals/${proposal.summary.id}`}
           className={cn(
             "text-code font-semibold text-primary-text hover:underline",
             focusRing,
@@ -297,7 +296,10 @@ function HumanActions({
             {shows("integrate") ? (
               <Button
                 pending={actions.pending === "integrate"}
-                disabled={busy}
+                disabled={busy || actions.integrateBlock !== null}
+                aria-describedby={
+                  actions.integrateBlock === null ? undefined : blockId
+                }
                 icon={<GitMerge aria-hidden="true" size={15} />}
                 className="flex-1 justify-center"
                 onClick={actions.onIntegrate}
@@ -306,6 +308,11 @@ function HumanActions({
               </Button>
             ) : null}
           </div>
+          {shows("integrate") && actions.integrateBlock !== null ? (
+            <p id={blockId} className="text-meta text-text-muted">
+              {actions.integrateBlock}
+            </p>
+          ) : null}
         </>
       )}
       {actions.failure ? (
@@ -354,6 +361,8 @@ export function SidePanel({
   view,
   human,
   now,
+  main,
+  integration,
   actions,
 }: {
   slug: string;
@@ -361,6 +370,10 @@ export function SidePanel({
   view: DetailView;
   human: string | null;
   now: number;
+  /** The head of main; null until the revisions arrive. */
+  main: string | null;
+  /** Null until a revision of main names the proposal. */
+  integration: IntegrationView | null;
   actions: ActionHandlers;
 }) {
   const summary = waitingSummary(proposal);
@@ -377,13 +390,13 @@ export function SidePanel({
           Integration
         </h2>
         <ul className="flex flex-col gap-10">
-          {orderGates(proposal.gates).map((gate) => {
-            const spec = GATE_ICONS[gate.state];
+          {shownGates(proposal.gates).map((gate) => {
+            const spec = GATE_ICONS[gate.status];
             const Icon = spec.icon;
             return (
               <li
-                key={gate.kind}
-                data-state={gate.state}
+                key={gate.gate}
+                data-state={gate.status}
                 className="flex gap-8"
               >
                 <Icon
@@ -393,7 +406,7 @@ export function SidePanel({
                   className={cn("mt-2 shrink-0", spec.className)}
                 />
                 <span className="min-w-0 flex-1 text-bar leading-snug text-text">
-                  {gateText(gate, clock)}
+                  {gateText(gate, proposal, main)}
                 </span>
               </li>
             );
@@ -405,28 +418,28 @@ export function SidePanel({
             {summary}
           </p>
         ) : null}
-        {proposal.integration ? (
+        {integration ? (
           <div className="flex flex-col gap-4 rounded-m bg-primary-soft px-12 py-10">
             <p className="flex items-center gap-8 text-bar font-semibold text-primary-text">
               <GitMerge aria-hidden="true" size={14} />
               Integrated as{" "}
               <HrefLink
-                href={`/p/${slug}/repository?revision=${proposal.integration.revision}`}
+                href={`/p/${slug}/repository?revision=${integration.revision}`}
                 className={cn("font-mono underline", focusRing)}
               >
-                {proposal.integration.revision}
+                {integration.revision}
               </HrefLink>
             </p>
             <p className="font-mono text-caption text-text-muted">
-              {displayName(proposal.integration.actor)} · v
-              {proposal.integration.version} · {clock(proposal.integration.at)}
+              {integration.actor ? `${displayName(integration.actor)} · ` : ""}v
+              {integration.version} · {clock(integration.at)}
             </p>
           </div>
         ) : null}
         {proposal.conflict ? (
           <ConflictBlock report={proposal.conflict} proposal={proposal} />
         ) : null}
-        {human !== null && proposal.state === "open" ? (
+        {human !== null && proposal.summary.state === "open" ? (
           <HumanActions
             proposal={proposal}
             human={human}
@@ -448,7 +461,7 @@ export function SidePanel({
               const Icon = spec.icon;
               const earlier =
                 review.verdict === "approve" &&
-                review.version !== proposal.current_version;
+                review.version !== proposal.summary.current_version;
               return (
                 <li
                   key={index}

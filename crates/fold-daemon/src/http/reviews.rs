@@ -243,6 +243,11 @@ pub struct ProposalSummary {
     /// Null once the proposal is no longer open.
     #[schema(required = true)]
     pub turn: Option<ProposalTurn>,
+    /// The latest verdict on the current version; comments are not verdicts.
+    #[schema(required = true)]
+    pub latest_verdict: Option<ReviewVerdict>,
+    /// The task's human review mark is met on the current version: a human it accepts approved it and no later `request_changes` withdrew that. True without a mark, so an approved proposal with this false is an agent's approval that waits for a human.
+    pub human_approved: bool,
     /// The worker that holds the review claim.
     #[schema(required = true)]
     pub review_claim: Option<String>,
@@ -272,6 +277,8 @@ impl From<service::ProposalSummary> for ProposalSummary {
             conflicted: summary.conflicted,
             current_version: summary.current_version,
             turn: summary.turn.map(ProposalTurn::from),
+            latest_verdict: summary.latest_verdict.map(ReviewVerdict::from),
+            human_approved: summary.human_approved,
             review_claim: summary.review_claim.map(|worker| worker.to_string()),
             human_review: summary.human_review.map(HumanReviewMark::from),
             close_reason: summary.close_reason,

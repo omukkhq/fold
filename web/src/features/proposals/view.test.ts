@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { ProposalDetail } from "@/api/proposals";
-import { detail } from "../../../fixtures/proposals";
+import {
+  proposalDetail,
+  proposalSummary,
+  proposalVersion,
+  review,
+} from "@/test/proposals";
 import {
   detailHref,
   parseDetailSearch,
@@ -9,10 +13,23 @@ import {
   versionTabs,
 } from "./view";
 
-function proposal(id: string): ProposalDetail {
-  const found = detail("demo", id);
-  if (!found) throw new Error(`no fixture ${id}`);
-  return structuredClone(found);
+/** P-4 v2 on r8 after a request for changes on v1 and an approval of v2; P-3 has one version with changes requested. */
+function proposal(id: "P-3" | "P-4") {
+  if (id === "P-3") {
+    return proposalDetail(proposalSummary("P-3"), {
+      reviews: [review(1, "review/security", "request_changes")],
+    });
+  }
+  return proposalDetail(proposalSummary("P-4", { current_version: 2 }), {
+    versions: [
+      proposalVersion(1, { base: "r7", changeset: "C-11" }),
+      proposalVersion(2, { base: "r8", changeset: "C-18" }),
+    ],
+    reviews: [
+      review(1, "review/security", "request_changes"),
+      review(2, "review/quality", "approve"),
+    ],
+  });
 }
 
 describe("parseDetailSearch", () => {
@@ -37,18 +54,22 @@ describe("parseDetailSearch", () => {
 describe("resolveView", () => {
   const p = proposal("P-4");
 
-  it("shows the current version by default and an earlier one when asked", () => {
+  it("shows the current version against its base revision by default, and an earlier one when asked", () => {
     expect(resolveView(p, {})).toEqual({
       kind: "version",
       version: 2,
       current: true,
-      to: "P-4 v2",
+      from: "r8",
+      to: "C-18",
+      label: "P-4 v2",
     });
     expect(resolveView(p, { version: 1 })).toEqual({
       kind: "version",
       version: 1,
       current: false,
-      to: "P-4 v1",
+      from: "r7",
+      to: "C-11",
+      label: "P-4 v1",
     });
   });
 
@@ -59,13 +80,15 @@ describe("resolveView", () => {
     });
   });
 
-  it("compares an earlier version with the version shown", () => {
+  it("compares the changesets of an earlier version and the version shown", () => {
     expect(resolveView(p, { compare: 1 })).toEqual({
       kind: "compare",
       from: 1,
       version: 2,
-      fromRef: "P-4 v1",
-      to: "P-4 v2",
+      fromRef: "C-11",
+      to: "C-18",
+      fromLabel: "P-4 v1",
+      label: "P-4 v2",
     });
     expect(resolveView(p, { version: 1, compare: 1 })).toMatchObject({
       kind: "version",

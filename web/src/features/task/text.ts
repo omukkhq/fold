@@ -1,4 +1,8 @@
-import type { HumanReviewMark, ProposalState, TaskStatus } from "@/api/board";
+import type {
+  HumanReviewMark,
+  CardProposalState,
+  TaskStatus,
+} from "@/api/board";
 import type {
   CheckpointSummary,
   FeedbackRecipient,
@@ -148,7 +152,7 @@ export function reviewText(review: {
   return `${review.reviewer} ${VERDICTS[review.verdict]} on v${String(review.version)}`;
 }
 
-const PROPOSAL_STATES: Record<ProposalState, string> = {
+const PROPOSAL_STATES: Record<CardProposalState, string> = {
   open: "waiting for review",
   approved: "approved",
   changes_requested: "changes requested",
@@ -156,7 +160,7 @@ const PROPOSAL_STATES: Record<ProposalState, string> = {
   integrated: "integrated",
 };
 
-export function proposalStateText(state: ProposalState, version: number) {
+export function proposalStateText(state: CardProposalState, version: number) {
   return `${PROPOSAL_STATES[state]} · v${String(version)}`;
 }
 

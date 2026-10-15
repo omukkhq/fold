@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ReviewComment } from "@/api/proposals";
+import { reviewComment } from "@/test/proposals";
 import {
   buildThreads,
   commentNote,
@@ -26,6 +27,8 @@ function comment(
     reply_to: null,
     body: `comment ${String(id)}`,
     created_at: id,
+    verdict: "comment",
+    outdated: false,
     ...fields,
   };
 }
@@ -226,5 +229,63 @@ describe("thread text", () => {
         "tanim",
       ),
     ).toBe("Comment on lines 2–4 · new side · tanim");
+  });
+});
+
+describe("threads from the daemon's comments of several versions", () => {
+  // As the comments route answers for P-4 at v3: `outdated` is relative to the current version, the threads to the version on screen.
+  const payload: ReviewComment[] = [
+    reviewComment(1, 1, {
+      author: "review/security",
+      verdict: "request_changes",
+      start_line: 10,
+      end_line: 10,
+      outdated: true,
+    }),
+    reviewComment(2, 2, {
+      author: "backend/db",
+      reply_to: "rc-1",
+      start_line: null,
+      end_line: null,
+      path: null,
+      side: null,
+      outdated: true,
+    }),
+    reviewComment(3, 2, { start_line: 3, end_line: 5, outdated: true }),
+    reviewComment(4, 3, {
+      author: "human:tanim",
+      start_line: 3,
+      end_line: 5,
+      outdated: false,
+    }),
+  ];
+
+  it("marks threads by the version numbers against the version on screen, not by the daemon's flag", () => {
+    const onV2 = buildThreads(payload, 2);
+    expect(onV2.map((t) => [t.id, t.version, t.outdated])).toEqual([
+      ["rc-1", 1, true],
+      ["rc-3", 2, false],
+    ]);
+    const onV3 = buildThreads(payload, 3);
+    expect(onV3.map((t) => [t.id, t.version, t.outdated])).toEqual([
+      ["rc-1", 1, true],
+      ["rc-3", 2, true],
+      ["rc-4", 3, false],
+    ]);
+    const onV1 = buildThreads(payload, 1);
+    expect(onV1.map((t) => [t.id, t.outdated])).toEqual([["rc-1", false]]);
+  });
+
+  it("keeps a reply from a later version under the comment it answers", () => {
+    const [first] = buildThreads(payload, 3);
+    if (!first) throw new Error("no thread");
+    expect(first.comments.map((c) => [c.comment.id, c.reply])).toEqual([
+      ["rc-1", false],
+      ["rc-2", true],
+    ]);
+    const [start, reply] = first.comments;
+    if (!start || !reply) throw new Error("no comments");
+    expect(commentNote(first, start)).toBe("on v1 · line 10 · outdated");
+    expect(commentNote(first, reply)).toBe("reply · v2");
   });
 });

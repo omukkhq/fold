@@ -1,13 +1,14 @@
 import type {
   ConflictEntry,
   ConflictFile,
+  ConflictHunk,
   ConflictKind,
   ConflictReport,
 } from "@/api/proposals";
 import { displayName } from "./present";
 
 const KIND_TEXTS: Record<ConflictKind, string> = {
-  both_modified_text: "Text conflict: both sides changed the same lines",
+  text: "Text conflict: both sides changed the same lines",
   both_modified_binary: "Binary conflict: both sides changed the file",
   modify_delete: "One side changed the file and the other deleted it",
   add_add: "Both sides added a different file at this path",
@@ -35,8 +36,8 @@ export function fileSides(
   report: ConflictReport,
 ): SideLine[] {
   return [
-    { label: `base ${report.base}`, entry: entryText(file.base) },
-    { label: `main ${report.main}`, entry: entryText(file.main) },
+    { label: `base ${report.base_revision}`, entry: entryText(file.base) },
+    { label: `main ${report.main_revision}`, entry: entryText(file.main) },
     { label: versionRef, entry: entryText(file.version) },
   ];
 }
@@ -48,15 +49,45 @@ export function reportTrees(
 ): SideLine[] {
   return [
     {
-      label: `base ${report.base}`,
+      label: `base ${report.base_revision}`,
       entry: `tree ${report.trees.base.slice(0, 7)}`,
     },
     {
-      label: `main ${report.main}`,
+      label: `main ${report.main_revision}`,
       entry: `tree ${report.trees.main.slice(0, 7)}`,
     },
     { label: versionRef, entry: `tree ${report.trees.version.slice(0, 7)}` },
   ];
+}
+
+export interface HunkSideView {
+  /** `base · line 4`, `main · lines 4–6`, `P-3 v2 · after line 3` for an empty side. */
+  label: string;
+  /** The lines without their terminators. */
+  lines: string[];
+}
+
+function at(start: number, count: number): string {
+  if (count === 0) return `after line ${String(start - 1)}`;
+  if (count === 1) return `line ${String(start)}`;
+  return `lines ${String(start)}–${String(start + count - 1)}`;
+}
+
+/** The three sides of a text hunk in report order, each named with the lines it spans. */
+export function hunkSides(
+  hunk: ConflictHunk,
+  versionRef: string,
+): HunkSideView[] {
+  return (
+    [
+      ["base", hunk.base],
+      ["main", hunk.main],
+      [versionRef, hunk.version],
+    ] as const
+  ).map(([name, side]) => ({
+    label: `${name} · ${at(side.start, side.count)}`,
+    lines: side.lines.map((line) => line.replace(/\r?\n$/, "")),
+  }));
 }
 
 /** What the author does next; the daemon sent them the same report. */

@@ -1,26 +1,24 @@
-import { apiErrorCode } from "@/api/errors";
 import type { ProposalDetail } from "@/api/proposals";
+import { gateText, shownGates } from "./gates";
 
 export type HumanAction = "approve" | "request_changes" | "integrate";
 
+/** The body an Approve sends: the daemon takes no verdict without a body or a comment, and the button has no text field. */
+export const APPROVE_BODY = "approved in the web interface";
+
 /**
- * The actions the signed-in human sees on the current version. A human with no name can do nothing; otherwise each action shows only when the payload allows it.
- * The daemon has already weighed the gates: Integrate shows whenever it allows it, also after a `request_changes`, because an integrating human approves in the same action.
+ * The actions the signed-in human sees on the current version of an open proposal. The daemon decides whether each write holds and refuses with a code the screen shows on the action;
+ * Integrate shows also after a `request_changes`, because an integrating human approves in the same action.
  */
 export function visibleActions(
   proposal: ProposalDetail,
   human: string | null,
 ): HumanAction[] {
-  if (human === null || proposal.state !== "open") return [];
-  const allowed = proposal.human_actions;
-  const out: HumanAction[] = [];
-  if (allowed.approve) out.push("approve");
-  if (allowed.request_changes) out.push("request_changes");
-  if (allowed.integrate) out.push("integrate");
-  return out;
+  if (human === null || proposal.summary.state !== "open") return [];
+  return ["approve", "request_changes", "integrate"];
 }
 
-/** The composer opens only on the current version of an open proposal, for a named human the payload lets comment. */
+/** The composer opens only on the current version of an open proposal, for a named human. */
 export function canComment(
   proposal: ProposalDetail,
   human: string | null,
@@ -28,24 +26,24 @@ export function canComment(
 ): boolean {
   return (
     human !== null &&
-    proposal.state === "open" &&
-    proposal.human_actions.comment &&
-    shownVersion === proposal.current_version
+    proposal.summary.state === "open" &&
+    shownVersion === proposal.summary.current_version
   );
 }
 
-const TEXTS: Record<string, string> = {
-  version_superseded:
-    "A newer version arrived. Read it before you send a verdict.",
-  proposal_not_open: "The proposal is no longer open.",
-  proposal_not_found: "fold has no proposal with this id.",
-  gate_unmet: "A gate is not met, so fold did not integrate.",
-  human_name_required: "Tell fold your name first, then try once more.",
-  auth_required: "Sign in again, then try once more.",
-};
-
-/** The sentence for a failed write whose code the screen knows; null for any other failure, which the screen shows with its message. */
-export function actionErrorText(error: unknown): string | null {
-  const code = apiErrorCode(error);
-  return code === null ? null : (TEXTS[code] ?? null);
+/**
+ * Why Integrate cannot work for the signed-in human, from the first unmet gate in the daemon's report; null when no gate stands in the way.
+ * For a human only the human review mark and the prerequisites can be unmet: the caller and approval gates hold, because the integrating human approves in the same action.
+ */
+export function integrateBlock(
+  proposal: ProposalDetail,
+  main: string | null,
+): string | null {
+  const gate = shownGates(proposal.gates).find((g) => g.status === "unmet");
+  if (!gate) return null;
+  if (gate.gate === "human_review") {
+    const who = proposal.summary.human_review?.reviewer ?? "a human";
+    return `Integrate waits for ${who} to approve v${String(proposal.summary.current_version)}.`;
+  }
+  return `${gateText(gate, proposal, main)}, so you cannot integrate yet.`;
 }

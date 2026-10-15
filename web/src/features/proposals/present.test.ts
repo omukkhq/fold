@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
-import type { ProposalDetail, Review } from "@/api/proposals";
-import { detail } from "../../../fixtures/proposals";
+import type { Review } from "@/api/proposals";
 import {
+  proposalDetail,
+  proposalSummary,
+  proposalVersion,
+  review as reviewOf,
+} from "@/test/proposals";
+import {
+  approvers,
   claimText,
   currentVersion,
   displayName,
   evidenceLines,
+  fileCount,
   filesText,
   isHuman,
   listedReviews,
@@ -17,69 +24,98 @@ import {
   waitingOn,
 } from "./present";
 
-function proposal(
-  id: string,
-  fields: Partial<ProposalDetail> = {},
-): ProposalDetail {
-  const found = detail("demo", id);
-  if (!found) throw new Error(`no fixture ${id}`);
-  return { ...structuredClone(found), ...fields };
-}
-
 function review(
   version: number,
   verdict: Review["verdict"],
   body = "",
   at = 0,
+  reviewer = "review/quality",
 ): Review {
-  return { version, reviewer: "review/quality", verdict, body, created_at: at };
+  return reviewOf(version, reviewer, verdict, { body, created_at: at });
 }
 
+const mark = { reviewer: "tanim", reason: "schema work", set_by: "backend" };
+
+describe("approvers", () => {
+  it("lists who approved the version last, in approval order", () => {
+    expect(
+      approvers(2, [
+        review(2, "approve", "", 1, "review/quality"),
+        review(2, "approve", "", 2, "human:tanim"),
+        review(2, "request_changes", "", 3, "review/quality"),
+        review(1, "approve", "", 4, "review/security"),
+        review(2, "approve", "", 5, "review/security"),
+      ]),
+    ).toEqual(["human:tanim", "review/security"]);
+  });
+});
+
 describe("reviewPill", () => {
+  const p4 = proposalSummary("P-4", {
+    current_version: 2,
+    human_review: mark,
+    latest_verdict: "approve",
+    human_approved: false,
+  });
+
   it("states the review state for the list and the header", () => {
-    expect(reviewPill(proposal("P-4")).text).toBe(
-      "Agent approved · needs tanim",
-    );
-    expect(reviewPill(proposal("P-4"), true).text).toBe(
+    expect(reviewPill(p4)).toEqual({
+      tone: "human",
+      icon: "human",
+      text: "Agent approved · needs tanim",
+    });
+    expect(reviewPill(p4, { long: true }).text).toBe(
       "Agent approved · waiting for human review",
     );
-    expect(reviewPill(proposal("P-3"))).toEqual({
+    const p3 = proposalSummary("P-3", { turn: "with_author" });
+    expect(reviewPill(p3)).toEqual({
       tone: "danger",
       icon: "changes",
       text: "Changes requested",
     });
-    expect(reviewPill(proposal("P-3"), true).text).toBe(
+    expect(reviewPill(p3, { long: true }).text).toBe(
       "Changes requested · back with the author",
     );
-    expect(reviewPill(proposal("P-6"))).toEqual({
+    const p6 = proposalSummary("P-6", {
+      conflicted: true,
+      turn: "with_author",
+    });
+    expect(reviewPill(p6)).toEqual({
       tone: "danger",
       icon: "conflict",
       text: "Conflict",
     });
-    expect(reviewPill(proposal("P-6"), true).text).toBe(
+    expect(reviewPill(p6, { long: true }).text).toBe(
       "Conflict · back with the author",
     );
-    expect(reviewPill(proposal("P-6"), true, "r9").text).toBe(
+    expect(reviewPill(p6, { long: true, conflictMain: "r9" }).text).toBe(
       "Conflict with main r9 · back with the author",
     );
-    expect(reviewPill(proposal("P-6"), false, "r9").text).toBe("Conflict");
-    expect(reviewPill(proposal("P-5")).text).toBe("Integrated as r8");
+    expect(reviewPill(p6, { conflictMain: "r9" }).text).toBe("Conflict");
+    const p5 = proposalSummary("P-5", { state: "integrated", turn: null });
+    expect(reviewPill(p5, { revision: "r8" }).text).toBe("Integrated as r8");
+    expect(reviewPill(p5).text).toBe("Integrated");
     expect(
-      reviewPill(proposal("P-5", { integrated_revision: null })).text,
-    ).toBe("Integrated as main");
-    expect(reviewPill(proposal("P-8")).text).toBe("Closed");
+      reviewPill(proposalSummary("P-8", { state: "closed", turn: null })).text,
+    ).toBe("Closed");
   });
 
-  it("names any human when the mark names nobody, and says approved once a human approved", () => {
-    const p = proposal("P-4");
+  it("tells an approval with the human approval from one without it", () => {
+    expect(reviewPill({ ...p4, human_approved: true })).toEqual({
+      tone: "approved",
+      icon: "approved",
+      text: "Approved",
+    });
     expect(
-      reviewPill({
-        ...p,
-        human_review: p.human_review && { ...p.human_review, reviewer: null },
-      }).text,
+      reviewPill({ ...p4, human_review: { ...mark, reviewer: null } }).text,
     ).toBe("Agent approved · needs a human");
-    expect(reviewPill({ ...p, human_approved: true }).text).toBe("Approved");
-    expect(reviewPill({ ...p, latest_verdict: null }).text).toBe(
+    expect(
+      reviewPill({ ...p4, human_review: null, human_approved: true }).text,
+    ).toBe("Approved");
+    expect(reviewPill({ ...p4, latest_verdict: "request_changes" }).text).toBe(
+      "Changes requested",
+    );
+    expect(reviewPill({ ...p4, latest_verdict: null }).text).toBe(
       "Waiting for review",
     );
   });
@@ -92,21 +128,51 @@ describe("names and versions", () => {
     expect(displayName("backend/db")).toBe("backend/db");
   });
 
-  it("says who the proposal waits on", () => {
-    expect(waitingOn(proposal("P-4"))).toEqual({ name: "tanim", human: true });
-    expect(waitingOn(proposal("P-3"))).toEqual({
-      name: "frontend/styles",
+  it("says who the proposal waits on from the turn", () => {
+    expect(
+      waitingOn(proposalSummary("P-4", { review_claim: "review/quality" })),
+    ).toEqual({ name: "review/quality", human: false });
+    expect(waitingOn(proposalSummary("P-4"))).toBeNull();
+    const needsHuman = proposalSummary("P-4", {
+      review_claim: "review/quality",
+      latest_verdict: "approve",
+      human_review: mark,
+    });
+    expect(waitingOn(needsHuman)).toEqual({ name: "tanim", human: true });
+    expect(
+      waitingOn({
+        ...needsHuman,
+        human_review: { ...mark, reviewer: null },
+      }),
+    ).toEqual({ name: "a human", human: true });
+    expect(waitingOn({ ...needsHuman, human_approved: true })).toEqual({
+      name: "review/quality",
       human: false,
     });
-    expect(waitingOn(proposal("P-5"))).toBeNull();
+    expect(
+      waitingOn(
+        proposalSummary("P-3", {
+          turn: "with_author",
+          author: "frontend/styles",
+        }),
+      ),
+    ).toEqual({ name: "frontend/styles", human: false });
+    expect(
+      waitingOn(proposalSummary("P-5", { state: "integrated", turn: null })),
+    ).toBeNull();
   });
 
   it("names versions and the latest verdict of each", () => {
-    const p = proposal("P-4");
-    expect(versionText(p)).toBe("v2 of 2");
+    const reviews = [
+      review(1, "request_changes", "", 1),
+      review(2, "approve", "", 2),
+    ];
+    expect(versionText(proposalSummary("P-4", { current_version: 2 }))).toBe(
+      "v2 of 2",
+    );
     expect(versionRef("P-4", 1)).toBe("P-4 v1");
-    expect(versionVerdict(1, p.reviews)).toBe("changes requested");
-    expect(versionVerdict(2, p.reviews)).toBe("approved");
+    expect(versionVerdict(1, reviews)).toBe("changes requested");
+    expect(versionVerdict(2, reviews)).toBe("approved");
     expect(versionVerdict(1, [review(1, "comment")])).toBe("no verdict yet");
     expect(versionVerdict(1, [review(1, "reject")])).toBe("rejected");
     expect(
@@ -117,16 +183,29 @@ describe("names and versions", () => {
     ).toBe("approved");
   });
 
-  it("describes the current version's files and the claim", () => {
-    const p = proposal("P-4");
+  it("describes the current version's files with the payload's totals, and the claim", () => {
+    const p = proposalDetail(proposalSummary("P-4", { current_version: 2 }), {
+      versions: [
+        proposalVersion(1),
+        proposalVersion(2, { files_added: 2, files_modified: 1 }),
+      ],
+      totals: { files: 3, added_lines: 96, removed_lines: 4 },
+    });
     const current = currentVersion(p);
     expect(current?.version).toBe(2);
-    expect(current ? filesText(current) : "").toMatch(/^3 files · \+\d+ −2$/);
+    expect(current ? filesText(current, p.totals) : "").toBe(
+      "3 files · +96 −4",
+    );
     expect(currentVersion({ ...p, versions: [] })).toBeNull();
-    expect(claimText(p)).toBe("review claimed by review/quality");
-    expect(claimText(proposal("P-3"))).toBe("review not claimed");
-    const one = proposal("P-5").versions[0];
-    expect(one ? filesText(one) : "").toBe("1 file · +1 −0");
+    const one = proposalVersion(1, { files_modified: 0 });
+    expect(fileCount(one)).toBe(1);
+    expect(filesText(one, { files: 1, added_lines: 1, removed_lines: 0 })).toBe(
+      "1 file · +1 −0",
+    );
+    expect(
+      claimText(proposalSummary("P-4", { review_claim: "review/quality" })),
+    ).toBe("review claimed by review/quality");
+    expect(claimText(proposalSummary("P-3"))).toBe("review not claimed");
   });
 });
 

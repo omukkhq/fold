@@ -4,12 +4,7 @@ import { RECENT_EVENTS, listAgents } from "./agents";
 import { keys } from "./keys";
 import { countAwaitingHuman, listThreads } from "./messages";
 import { getProject, listProjects } from "./projects";
-import {
-  getProposal,
-  getVersionComparison,
-  getVersionFileDiff,
-  listProposals,
-} from "./proposals";
+import { getProposal, listComments, listProposals } from "./proposals";
 import { getSession } from "./session";
 import { getWorkspace } from "./workspaces";
 
@@ -46,29 +41,6 @@ export const fileDiffQuery = (
   queryOptions({
     queryKey: keys.fileDiff(slug, from, to, path),
     queryFn: () => getFileDiff(slug, from, to, path),
-    staleTime: Infinity,
-  });
-
-export const versionComparisonQuery = (
-  slug: string,
-  from: string | undefined,
-  to: string,
-) =>
-  queryOptions({
-    queryKey: keys.versionComparison(slug, from, to),
-    queryFn: () => getVersionComparison(slug, from, to),
-    staleTime: Infinity,
-  });
-
-export const versionFileDiffQuery = (
-  slug: string,
-  from: string | undefined,
-  to: string,
-  path: string,
-) =>
-  queryOptions({
-    queryKey: keys.versionFileDiff(slug, from, to, path),
-    queryFn: () => getVersionFileDiff(slug, from, to, path),
     staleTime: Infinity,
   });
 
@@ -112,5 +84,12 @@ export const workspaceQuery = (slug: string, id: string) =>
   queryOptions({
     queryKey: keys.workspace(slug, id),
     queryFn: () => getWorkspace(slug, id),
+    staleTime: Infinity,
+  });
+
+export const proposalCommentsQuery = (slug: string, id: string) =>
+  queryOptions({
+    queryKey: keys.proposalComments(slug, id),
+    queryFn: () => listComments(slug, id),
     staleTime: Infinity,
   });

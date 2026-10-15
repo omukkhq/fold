@@ -2,7 +2,7 @@ use fold_core::checkpoint_policy::AutoReason;
 use fold_core::events::types;
 use fold_core::merge::ConflictReport;
 use fold_core::object::ObjectHash;
-use fold_core::reviews::HumanReviewMark;
+use fold_core::reviews::{HumanReviewMark, ReviewFact, Verdict, human_approval_standing};
 use fold_core::status::ProposalFact;
 use fold_core::tree::ChangeCounts;
 use fold_core::{
@@ -74,16 +74,24 @@ pub struct ProposalSummary {
     /// The task's human review mark as it stands now.
     pub human_review: Option<HumanReviewMark>,
     pub turn: Option<Turn>,
+    /// The latest verdict on the current version; comments are not verdicts.
+    pub latest_verdict: Option<Verdict>,
+    /// The human review mark is met on the current version, as the integration gate reads it for an agent; true without a mark. It tells an agent's approval that still waits for a human from a full one.
+    pub human_approved: bool,
     pub close_reason: Option<String>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
     pub closed_at: Option<Timestamp>,
 }
 
-impl From<ProposalRow> for ProposalSummary {
-    fn from(row: ProposalRow) -> Self {
+impl ProposalSummary {
+    /// `facts` are the reviews of the current version; a row without a human review mark needs none.
+    fn new(row: ProposalRow, facts: &[ReviewFact]) -> Self {
+        let human_approved = human_approval_standing(row.human_review.as_ref(), facts, None);
         Self {
             turn: Turn::of(&row),
+            latest_verdict: row.latest_verdict,
+            human_approved,
             id: row.id,
             task: row.task,
             title: row.title,
@@ -435,9 +443,18 @@ impl ReviewService {
         &self,
         filter: ProposalFilter,
     ) -> Result<Vec<ProposalSummary>, ReviewError> {
-        let rows =
-            reviews::list_proposals(self.store.read(), filter.state, filter.unclaimed).await?;
-        Ok(rows.into_iter().map(ProposalSummary::from).collect())
+        let mut tx = self.store.read().begin().await.map_err(StoreError::from)?;
+        let rows = reviews::list_proposals(&mut *tx, filter.state, filter.unclaimed).await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let facts = match row.human_review {
+                Some(_) => reviews::review_facts(&mut *tx, row.id, row.current_version).await?,
+                None => Vec::new(),
+            };
+            out.push(ProposalSummary::new(row, &facts));
+        }
+        tx.commit().await.map_err(StoreError::from)?;
+        Ok(out)
     }
 
     /// A proposal with every version and the conflict report of the selected one. `version` selects one of them, else the current one is selected.
@@ -477,8 +494,13 @@ impl ReviewService {
             .await?
             .ok_or(StoreError::Corrupt("proposals.task_id"))?
             .status;
+        let facts = match row.human_review {
+            Some(_) => reviews::review_facts(read, row.id, row.current_version).await?,
+            None => Vec::new(),
+        };
+        let summary = ProposalSummary::new(row, &facts);
         Ok(ProposalDetail {
-            summary: row.into(),
+            summary,
             versions,
             selected,
             conflict,

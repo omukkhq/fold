@@ -1,100 +1,105 @@
 import { describe, expect, it } from "vitest";
-import { ApiError } from "@/api/errors";
-import type { ProposalDetail } from "@/api/proposals";
-import { detail } from "../../../fixtures/proposals";
-import { actionErrorText, canComment, visibleActions } from "./actions";
+import type { ProposalSummary } from "@/api/proposals";
+import {
+  humanGates,
+  proposalDetail,
+  proposalSummary,
+  review,
+} from "@/test/proposals";
+import { canComment, integrateBlock, visibleActions } from "./actions";
 
-function proposal(
-  id: string,
-  fields: Partial<ProposalDetail> = {},
-): ProposalDetail {
-  const found = detail("demo", id);
-  if (!found) throw new Error(`no fixture ${id}`);
-  return { ...structuredClone(found), ...fields };
+function proposal(fields: Partial<ProposalSummary> = {}) {
+  return proposalDetail(
+    proposalSummary("P-4", { current_version: 2, ...fields }),
+  );
 }
 
-const ALL = {
-  approve: true,
-  request_changes: true,
-  integrate: true,
-  comment: true,
-};
-const NONE = {
-  approve: false,
-  request_changes: false,
-  integrate: false,
-  comment: false,
-};
-
 describe("visibleActions", () => {
-  it("shows Approve, Request changes and Integrate to a named human when the payload allows them", () => {
-    expect(visibleActions(proposal("P-4"), "tanim")).toEqual([
+  it("shows Approve, Request changes and Integrate to a named human on an open proposal", () => {
+    expect(visibleActions(proposal(), "tanim")).toEqual([
       "approve",
       "request_changes",
       "integrate",
     ]);
   });
 
-  it("shows Integrate after a request for changes on the current version when the payload allows it", () => {
-    const p = proposal("P-3");
-    expect(p.latest_verdict).toBe("request_changes");
+  it("shows Integrate after a request for changes on the current version, because the integrating human approves", () => {
+    const p = proposalDetail(proposalSummary("P-3", { turn: "with_author" }), {
+      reviews: [review(1, "review/security", "request_changes")],
+    });
     expect(visibleActions(p, "tanim")).toContain("integrate");
   });
 
-  it("hides Integrate when the payload does not allow it", () => {
-    expect(visibleActions(proposal("P-6"), "tanim")).toEqual([
-      "approve",
-      "request_changes",
-    ]);
-    expect(
-      visibleActions(
-        proposal("P-4", { human_actions: { ...ALL, integrate: false } }),
-        "tanim",
-      ),
-    ).not.toContain("integrate");
-  });
-
   it("shows nothing to a human with no name, and nothing on a proposal that is not open", () => {
-    expect(visibleActions(proposal("P-4"), null)).toEqual([]);
-    expect(
-      visibleActions(proposal("P-4", { state: "integrated" }), "tanim"),
-    ).toEqual([]);
-    expect(
-      visibleActions(proposal("P-4", { human_actions: NONE }), "tanim"),
-    ).toEqual([]);
+    expect(visibleActions(proposal(), null)).toEqual([]);
+    expect(visibleActions(proposal({ state: "integrated" }), "tanim")).toEqual(
+      [],
+    );
+    expect(visibleActions(proposal({ state: "closed" }), "tanim")).toEqual([]);
   });
 
   it("never offers a reject", () => {
-    expect(visibleActions(proposal("P-4"), "tanim")).not.toContain("reject");
+    expect(visibleActions(proposal(), "tanim")).not.toContain("reject");
   });
 });
 
 describe("canComment", () => {
-  it("opens the composer only on the current version for a named human the payload lets comment", () => {
-    const p = proposal("P-4");
-    expect(canComment(p, "tanim", 2)).toBe(true);
-    expect(canComment(p, "tanim", 1)).toBe(false);
-    expect(canComment(p, "tanim", null)).toBe(false);
-    expect(canComment(p, null, 2)).toBe(false);
-    expect(
-      canComment(proposal("P-4", { human_actions: NONE }), "tanim", 2),
-    ).toBe(false);
-    expect(canComment(proposal("P-5"), "tanim", 1)).toBe(false);
+  it("opens the composer only on the current version of an open proposal for a named human", () => {
+    expect(canComment(proposal(), "tanim", 2)).toBe(true);
+    expect(canComment(proposal(), "tanim", 1)).toBe(false);
+    expect(canComment(proposal(), "tanim", null)).toBe(false);
+    expect(canComment(proposal(), null, 2)).toBe(false);
+    expect(canComment(proposal({ state: "closed" }), "tanim", 2)).toBe(false);
   });
 });
 
-describe("actionErrorText", () => {
-  it("maps the codes the screen knows", () => {
-    expect(actionErrorText(new ApiError("version_superseded", "x"))).toMatch(
-      /newer version/,
+describe("integrateBlock", () => {
+  it("is null when the daemon reports no unmet gate for the human", () => {
+    expect(integrateBlock(proposal(), "r8")).toBeNull();
+  });
+
+  it("names the human the mark waits for when the viewer is not that human", () => {
+    const p = proposalDetail(
+      proposalSummary("P-4", {
+        current_version: 2,
+        human_review: { reviewer: "tanim", reason: "", set_by: "backend" },
+      }),
+      {
+        gates: humanGates({
+          human_review: { status: "unmet", code: "human_approval_missing" },
+        }),
+      },
     );
-    expect(actionErrorText({ error: { code: "gate_unmet" } })).toMatch(
-      /did not integrate/,
+    expect(integrateBlock(p, "r8")).toBe(
+      "Integrate waits for tanim to approve v2.",
+    );
+    const anyHuman = {
+      ...p,
+      summary: { ...p.summary, human_review: null },
+    };
+    expect(integrateBlock(anyHuman, "r8")).toBe(
+      "Integrate waits for a human to approve v2.",
     );
   });
 
-  it("leaves an unknown code and an error without a code to the screen", () => {
-    expect(actionErrorText(new ApiError("disk_full", "no space"))).toBeNull();
-    expect(actionErrorText(new Error("offline"))).toBeNull();
+  it("gives the first unmet gate's sentence for any other gate", () => {
+    const p = proposalDetail(proposalSummary("P-7"), {
+      gates: humanGates({
+        prerequisites: { status: "unmet", code: "prerequisites_not_done" },
+      }),
+      prerequisites: [
+        { task: "T-1", title: "T-1", description: "", status: "in_progress" },
+      ],
+    });
+    expect(integrateBlock(p, "r8")).toBe(
+      "Prerequisites not Done: T-1, so you cannot integrate yet.",
+    );
+  });
+
+  it("ignores the merge gate, which only the integration decides", () => {
+    const p = proposalDetail(proposalSummary("P-7"), {
+      gates: humanGates({ merge: { status: "checked_at_integration" } }),
+    });
+    expect(integrateBlock(p, null)).toBeNull();
   });
 });

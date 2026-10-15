@@ -115,6 +115,92 @@ async fn list_proposals_returns_summaries_with_the_mark() {
 }
 
 #[tokio::test]
+async fn an_agent_approval_waits_for_the_human_the_mark_names() {
+    let fx = with_p1().await;
+    let p1 = fold_core::ProposalId::from_number(1).unwrap();
+    fx.agent("review").await;
+    fx.agents()
+        .set_integrator(
+            &human("tanim"),
+            &fold_core::AgentName::parse("review").unwrap(),
+            true,
+        )
+        .await
+        .unwrap();
+    let review = fx.agent("review").await;
+    // A human is known once a request named them.
+    send(&fx, Method::GET, "/proposals/P-1", None, &[TANIM]).await;
+    fx.reviews()
+        .require_human_review(
+            &fx.agent("planner").await,
+            t(1),
+            Some(fold_core::HumanName::parse("tanim").unwrap()),
+            "schema work",
+        )
+        .await
+        .unwrap();
+    let row = |answer: &Answer| answer.body["proposals"][0].clone();
+    let answer = send(&fx, Method::GET, "/proposals", None, &[]).await;
+    assert_eq!(row(&answer)["latest_verdict"], Value::Null);
+    assert_eq!(row(&answer)["human_approved"], false);
+    fx.reviews()
+        .submit_review(
+            &review,
+            p1,
+            fold_core::reviews::Verdict::Approve,
+            "fine",
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let answer = send(&fx, Method::GET, "/proposals", None, &[]).await;
+    assert_eq!(row(&answer)["latest_verdict"], "approve");
+    assert_eq!(row(&answer)["human_approved"], false);
+    let answer = send(
+        &fx,
+        Method::POST,
+        "/proposals/P-1/reviews",
+        Some(json!({"verdict": "approve", "body": "seen"})),
+        &[ANA],
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::CREATED, "{}", answer.body);
+    assert_eq!(answer.body["summary"]["human_approved"], false);
+    let answer = send(
+        &fx,
+        Method::POST,
+        "/proposals/P-1/reviews",
+        Some(json!({"verdict": "approve", "body": "seen"})),
+        &[TANIM],
+    )
+    .await;
+    assert_eq!(answer.body["summary"]["human_approved"], true);
+    let detail = send(&fx, Method::GET, "/proposals/P-1", None, &[TANIM]).await;
+    assert_eq!(detail.body["summary"]["latest_verdict"], "approve");
+    assert_eq!(detail.body["summary"]["human_approved"], true);
+    fx.reviews()
+        .submit_review(
+            &review,
+            p1,
+            fold_core::reviews::Verdict::RequestChanges,
+            "one more thing",
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let answer = send(&fx, Method::GET, "/proposals", None, &[]).await;
+    assert_eq!(row(&answer)["latest_verdict"], "request_changes");
+    assert_eq!(row(&answer)["human_approved"], false);
+}
+
+#[tokio::test]
+async fn a_proposal_without_a_mark_counts_as_human_approved() {
+    let fx = with_p1().await;
+    let answer = send(&fx, Method::GET, "/proposals", None, &[]).await;
+    assert_eq!(answer.body["proposals"][0]["human_approved"], true);
+}
+
+#[tokio::test]
 async fn get_proposal_reports_the_gates_for_the_requesting_human() {
     let fx = with_p1().await;
     let answer = send(&fx, Method::GET, "/proposals/P-1", None, &[TANIM]).await;

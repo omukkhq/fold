@@ -14,11 +14,13 @@ import {
   type NewComment,
   type NewReview,
   type ProposalDetail,
+  type ReviewComment,
 } from "@/api/proposals";
 import {
+  comparisonQuery,
+  fileDiffQuery,
+  proposalCommentsQuery,
   proposalQuery,
-  versionComparisonQuery,
-  versionFileDiffQuery,
 } from "@/api/queries";
 import { HrefLink } from "@/app/HrefLink";
 import { buttonClasses } from "@/components/button/buttonStyles";
@@ -28,15 +30,19 @@ import { Skeleton } from "@/components/states/Skeleton";
 import { DiffViewer, type FileDiffView } from "@/features/diff/DiffViewer";
 import { currentFile, fileBody, listedFiles } from "@/features/diff/layout";
 import type { DiffSelection } from "@/features/diff/selection";
+import { revisionsQuery } from "@/features/repository/queries";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { useNow } from "@/live/useNow";
 import {
-  actionErrorText,
+  APPROVE_BODY,
   canComment,
+  integrateBlock,
   visibleActions,
   type HumanAction,
 } from "./actions";
+import { describeFailure, reloadsProposal } from "./errors";
+import { integrationOf, mainHead } from "./integration";
 import { ProposalHeader } from "./ProposalHeader";
 import { SidePanel } from "./SidePanel";
 import { CommentComposer, ThreadBox } from "./Threads";
@@ -57,23 +63,18 @@ interface ProposalDetailScreenProps {
   onSearch: (next: DetailSearch) => void;
 }
 
-function failureMessage(error: unknown): string {
-  return (
-    actionErrorText(error) ??
-    (error instanceof Error && error.message
-      ? error.message
-      : "The request failed.")
-  );
+function failureText(error: unknown): string {
+  return describeFailure(error).text;
 }
 
 function useFileDiff(
   slug: string,
-  from: string | undefined,
+  from: string,
   to: string,
   path: string | null,
 ): FileDiffView {
   const query = useQuery({
-    ...versionFileDiffQuery(slug, from, to, path ?? ""),
+    ...fileDiffQuery(slug, from, to, path ?? ""),
     enabled: path !== null,
   });
   if (query.isError) {
@@ -89,20 +90,25 @@ function useFileDiff(
     : { status: "pending" };
 }
 
+/** A line comment from the diff selection, exactly as the selection gives its range. */
+type LineComment = DiffSelection & { body: string };
+
 interface DiffAreaProps {
   slug: string;
   proposal: ProposalDetail;
+  comments: readonly ReviewComment[];
   view: DetailView;
   search: DetailSearch;
   human: string | null;
   now: number;
   onSearch: (next: DetailSearch) => void;
-  onComment: (comment: NewComment) => Promise<void>;
+  onComment: (comment: LineComment) => Promise<void>;
 }
 
 function DiffArea({
   slug,
   proposal,
+  comments,
   view,
   search,
   human,
@@ -110,8 +116,8 @@ function DiffArea({
   onSearch,
   onComment,
 }: DiffAreaProps) {
-  const from = view.kind === "compare" ? view.fromRef : undefined;
-  const comparison = useQuery(versionComparisonQuery(slug, from, view.to));
+  const from = view.kind === "compare" ? view.fromRef : view.from;
+  const comparison = useQuery(comparisonQuery(slug, from, view.to));
   const [selection, setSelection] = useState<DiffSelection | null>(null);
   const files = comparison.data ? listedFiles(comparison.data.files) : [];
   const file = currentFile(files, search.path);
@@ -122,8 +128,7 @@ function DiffArea({
     file !== null && fileBody(file) === "text" ? file.path : null,
   );
   const version = shownVersion(view);
-  const threads =
-    version === null ? [] : buildThreads(proposal.comments, version);
+  const threads = version === null ? [] : buildThreads(comments, version);
   const byId = new Map(threads.map((t) => [t.id, t]));
   const unplaced = unplacedThreads(
     threads,
@@ -148,8 +153,8 @@ function DiffArea({
       {data === null || files.length === 0 ? (
         <EmptyPanel title={data === null ? "No diff" : "No changes"}>
           {data === null
-            ? `fold has no diff for ${view.kind === "compare" ? `${view.fromRef} and ${view.to}` : view.to}.`
-            : `${view.to} holds the same files as its base.`}
+            ? `fold has no diff for ${view.kind === "compare" ? `${view.fromLabel} and ${view.label}` : view.label}.`
+            : `${view.label} holds the same files as its base.`}
         </EmptyPanel>
       ) : (
         <DiffViewer
@@ -169,18 +174,18 @@ function DiffArea({
             return thread ? <ThreadBox thread={thread} now={now} /> : null;
           }}
           renderComposer={
-            composer && version !== null
+            composer
               ? (sel) => (
                   <CommentComposer
                     key={`${sel.path}:${sel.side}:${String(sel.start_line)}:${String(sel.end_line)}`}
                     selection={sel}
                     human={human}
-                    failureText={failureMessage}
+                    failureText={failureText}
                     onCancel={() => {
                       setSelection(null);
                     }}
                     onSubmit={async (body) => {
-                      await onComment({ version, ...sel, body });
+                      await onComment({ ...sel, body });
                       setSelection(null);
                     }}
                   />
@@ -211,38 +216,55 @@ export function ProposalDetailScreen({
   onSearch,
 }: ProposalDetailScreenProps) {
   const { data } = useSuspenseQuery(proposalQuery(slug, id));
+  const comments = useQuery({
+    ...proposalCommentsQuery(slug, id),
+    enabled: data !== null,
+  });
+  const revisions = useQuery({
+    ...revisionsQuery(slug),
+    enabled: data !== null,
+  });
   const queryClient = useQueryClient();
   const now = useNow(true, 30_000);
   const [failure, setFailure] = useState<unknown>(null);
 
-  // The daemon answers a write with the proposal as it now stands, so the screen shows that answer; nothing changes before it.
-  const settle = (detail: ProposalDetail) => {
-    queryClient.setQueryData(keys.proposal(slug, id), detail);
-    void queryClient.invalidateQueries({
-      queryKey: keys.proposals(slug),
-      exact: true,
-    });
+  // The write answers before the proposal is read again; the action stays pending until the new proposal arrives, so the screen never shows a result the daemon has not sent.
+  const reload = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: keys.proposal(slug, id) }),
+      queryClient.invalidateQueries({
+        queryKey: keys.proposals(slug),
+        exact: true,
+      }),
+    ]);
   };
   const handlers = {
     onMutate: () => {
       setFailure(null);
     },
-    onSuccess: settle,
-    onError: (error: unknown) => {
+    onError: async (error: unknown) => {
       setFailure(error);
+      if (reloadsProposal(error)) await reload();
     },
   };
   const review = useMutation({
     mutationFn: (input: NewReview) => submitReview(slug, id, input),
+    onSuccess: reload,
     ...handlers,
   });
   const integrate = useMutation({
-    mutationFn: (version: number) => integrateProposal(slug, id, { version }),
+    mutationFn: (version: number) => integrateProposal(slug, id, version),
+    onSuccess: async () => {
+      await Promise.all([
+        reload(),
+        queryClient.invalidateQueries({ queryKey: keys.repository(slug) }),
+      ]);
+    },
     ...handlers,
   });
   const comment = useMutation({
     mutationFn: (input: NewComment) => addComment(slug, id, input),
-    onSuccess: settle,
+    onSuccess: reload,
   });
 
   if (data === null) {
@@ -266,35 +288,52 @@ export function ProposalDetailScreen({
     );
   }
 
+  const summary = data.summary;
   const view = resolveView(data, search);
+  const revisionList = revisions.data?.items ?? [];
+  const main = mainHead(revisionList);
+  const integration = integrationOf(summary, revisionList, integrate.data);
   const pending: HumanAction | null = review.isPending
-    ? review.variables.verdict
+    ? review.variables.verdict === "approve"
+      ? "approve"
+      : "request_changes"
     : integrate.isPending
       ? "integrate"
       : null;
-  const mapped = failure === null ? null : actionErrorText(failure);
+  const shown = failure === null ? null : describeFailure(failure);
 
   return (
     <div className="flex flex-col">
-      <ProposalHeader slug={slug} proposal={data} view={view} />
-      {failure !== null && mapped === null ? (
-        <ErrorBanner
-          title="The request failed."
-          message={failureMessage(failure)}
-        />
+      <ProposalHeader
+        slug={slug}
+        proposal={data}
+        view={view}
+        main={main}
+        revision={integration?.revision ?? null}
+      />
+      {shown?.place === "banner" ? (
+        <ErrorBanner title="The request failed." message={shown.text} />
       ) : null}
       <div className="flex items-start gap-20 px-24 pt-16 pb-24">
         <DiffArea
           key={`${view.kind}:${view.to}`}
           slug={slug}
           proposal={data}
+          comments={comments.data ?? []}
           view={view}
           search={search}
           human={human}
           now={now}
           onSearch={onSearch}
-          onComment={async (input) => {
-            await comment.mutateAsync(input);
+          onComment={async ({ path, side, start_line, end_line, body }) => {
+            await comment.mutateAsync({
+              path,
+              side,
+              start_line,
+              end_line,
+              body,
+              reply_to: null,
+            });
           }}
         />
         <SidePanel
@@ -303,26 +342,21 @@ export function ProposalDetailScreen({
           view={view}
           human={human}
           now={now}
+          main={main}
+          integration={integration}
           actions={{
             visible: visibleActions(data, human),
             pending,
-            failure: mapped,
+            failure: shown?.place === "inline" ? shown.text : null,
+            integrateBlock: integrateBlock(data, main),
             onApprove: () => {
-              review.mutate({
-                version: data.current_version,
-                verdict: "approve",
-                body: "",
-              });
+              review.mutate({ verdict: "approve", body: APPROVE_BODY });
             },
             onIntegrate: () => {
-              integrate.mutate(data.current_version);
+              integrate.mutate(summary.current_version);
             },
             onRequestChanges: async (body) => {
-              await review.mutateAsync({
-                version: data.current_version,
-                verdict: "request_changes",
-                body,
-              });
+              await review.mutateAsync({ verdict: "request_changes", body });
             },
           }}
         />

@@ -1,19 +1,24 @@
-import type { Gate, GateKind, ProposalDetail } from "@/api/proposals";
-import { displayName } from "./present";
+import type { Gate, GateName, ProposalDetail } from "@/api/proposals";
+import { approvers, displayName } from "./present";
 
-/** The order the integration procedure checks them in, with the human review beside the approval it adds to. */
-const ORDER: readonly GateKind[] = [
+/** The order the integration procedure checks them in. */
+const ORDER: readonly GateName[] = [
+  "open",
+  "version",
+  "caller",
   "approval",
   "human_review",
-  "integrator",
   "prerequisites",
   "merge",
 ];
 
-export function orderGates(gates: readonly Gate[]): Gate[] {
-  return [...gates].sort(
-    (a, b) => ORDER.indexOf(a.kind) - ORDER.indexOf(b.kind),
-  );
+/** The gates in check order. A met open or version gate says nothing the header does not, so it is left out. */
+export function shownGates(gates: readonly Gate[]): Gate[] {
+  return [...gates]
+    .filter(
+      (g) => (g.gate !== "open" && g.gate !== "version") || g.status !== "met",
+    )
+    .sort((a, b) => ORDER.indexOf(a.gate) - ORDER.indexOf(b.gate));
 }
 
 function names(list: readonly string[]): string {
@@ -22,101 +27,122 @@ function names(list: readonly string[]): string {
   return `${shown.slice(0, -1).join(", ")} and ${shown.at(-1) ?? ""}`;
 }
 
+function unfinishedPrerequisites(p: ProposalDetail): string[] {
+  return p.prerequisites.filter((t) => t.status !== "done").map((t) => t.task);
+}
+
 /**
- * The sentence for one gate. The words describe the state the daemon sent; they never test whether the gate holds.
- * `clock` formats a check time, so the caller decides how a time reads.
+ * The sentence for one gate. The state is the one the daemon sent for the signed-in human; the words add the facts the payload carries and never test whether the gate holds.
+ * `main` is the head of main when the screen knows it.
  */
-export function gateText(gate: Gate, clock: (at: number) => string): string {
-  switch (gate.kind) {
+export function gateText(
+  gate: Gate,
+  p: ProposalDetail,
+  main: string | null,
+): string {
+  const v = `v${String(p.summary.current_version)}`;
+  const met = gate.status === "met";
+  switch (gate.gate) {
+    case "open":
+      return met ? "The proposal is open" : "The proposal is not open";
+    case "version":
+      return met
+        ? `${v} is the current version`
+        : `${v} is not the version on screen`;
+    case "caller":
+      if (met) return "You can integrate as a named human";
+      return gate.code === "author_cannot_integrate"
+        ? "Your agent wrote this proposal, so you cannot integrate it"
+        : "You cannot integrate this proposal";
     case "approval": {
-      const v = `v${String(gate.version)}`;
-      if (gate.state === "met") {
-        return `Approved on ${v} by ${names(gate.approvers)}`;
-      }
-      if (gate.latest_verdict === "request_changes") {
-        return `Changes requested on ${v}; it needs an approval`;
-      }
-      return `No approval on ${v} yet`;
+      const by = approvers(p.summary.current_version, p.reviews);
+      if (met && by.length > 0) return `Approved on ${v} by ${names(by)}`;
+      const changes =
+        gate.code === "changes_requested" ||
+        p.summary.latest_verdict === "request_changes";
+      const head = changes
+        ? `Changes requested on ${v}`
+        : `No approval on ${v} yet`;
+      return met
+        ? `${head}; integrating here approves it`
+        : `${head}; it needs an approval`;
     }
     case "human_review": {
-      const who = gate.reviewer ?? "any human";
-      const reason = gate.reason.trim() ? `: "${gate.reason.trim()}"` : "";
-      const head =
-        gate.state === "met" ? `Approved by ${who}` : `Human review by ${who}`;
-      return `${head} · marked by ${displayName(gate.marked_by)}${reason}`;
+      const mark = p.summary.human_review;
+      if (mark === null) return "No human review asked for";
+      const who = mark.reviewer ?? "any human";
+      const reason = mark.reason.trim() ? `: "${mark.reason.trim()}"` : "";
+      const head = p.summary.human_approved
+        ? `Approved by ${who}`
+        : `Human review by ${who}`;
+      return `${head} · marked by ${displayName(mark.set_by)}${reason}`;
     }
-    case "integrator":
-      return gate.agents.length > 0
-        ? `Caller needs the integrator tag: ${names(gate.agents)} ${gate.agents.length === 1 ? "has" : "have"} it`
-        : "Caller needs the integrator tag: no agent has it";
-    case "prerequisites":
-      if (gate.total === 0) return "Prerequisites Done: none needed";
-      if (gate.unfinished.length === 0) {
-        return `Prerequisites Done: all ${String(gate.total)}`;
+    case "prerequisites": {
+      const total = p.prerequisites.length;
+      if (total === 0) return "Prerequisites Done: none needed";
+      const open = unfinishedPrerequisites(p);
+      if (met || open.length === 0) {
+        return met
+          ? `Prerequisites Done: all ${String(total)}`
+          : "Prerequisites not Done";
       }
-      return `Prerequisites not Done: ${gate.unfinished.join(", ")}`;
+      return `Prerequisites not Done: ${open.join(", ")}`;
+    }
     case "merge": {
-      const checked =
-        gate.checked_at === null
-          ? "not checked yet"
-          : `checked ${clock(gate.checked_at)}`;
-      if (gate.state === "met") {
-        return `Merges cleanly onto ${gate.main} (${checked})`;
+      const conflict = p.conflict;
+      if (conflict !== null) {
+        const n = conflict.files.length;
+        const files = `${String(n)} ${n === 1 ? "file conflicts" : "files conflict"}`;
+        return `Does not merge onto ${conflict.main_revision}: ${files}`;
       }
-      const files = `${String(gate.conflicting_files)} ${gate.conflicting_files === 1 ? "file conflicts" : "files conflict"}`;
-      return `Does not merge onto ${gate.main}: ${files} (${checked})`;
+      if (met) return "Merges cleanly";
+      if (gate.status === "unmet") return "Does not merge onto main";
+      return main
+        ? `Merge onto ${main} is checked at integration`
+        : "The merge is checked at integration";
     }
   }
 }
 
 function integrators(p: ProposalDetail): string {
-  if (p.review_claim) return `${p.review_claim} integrates`;
-  const gate = p.gates.find((g) => g.kind === "integrator");
-  const agent = gate?.kind === "integrator" ? gate.agents[0] : undefined;
-  return agent ? `the ${agent} agent integrates` : "an integrator integrates";
+  const holder = p.review_claim?.holder ?? p.summary.review_claim;
+  return holder ? `${holder} integrates` : "an integrator integrates";
 }
 
 /**
  * The line under the gates that says what the proposal waits on, or null when nothing is left to wait for.
- * It reads the gate states and the proposal's own fields; it decides nothing.
+ * It reads the gate states, the turn, the latest verdict and the human approval the daemon sent; it decides nothing.
  */
 export function waitingSummary(p: ProposalDetail): string | null {
-  if (p.state === "integrated") return null;
-  if (p.state === "closed") {
-    return p.close_reason
-      ? `Closed without integration: ${p.close_reason}`
+  const s = p.summary;
+  if (s.state === "integrated") return null;
+  if (s.state === "closed") {
+    return s.close_reason
+      ? `Closed without integration: ${s.close_reason}`
       : "Closed without integration.";
   }
-  const v = `v${String(p.current_version)}`;
-  const author = displayName(p.author);
-  if (p.conflicted) {
+  const v = `v${String(s.current_version)}`;
+  const author = displayName(s.author);
+  if (s.conflicted) {
     return `fold sent the report to ${author}. The task is back in In Progress until a new version arrives.`;
   }
-  const gates = orderGates(p.gates);
-  const human = gates.find((g) => g.state === "waiting_human");
-  if (human) {
-    const who =
-      human.kind === "human_review" && human.reviewer
-        ? human.reviewer
-        : "a human";
-    return `Waiting for ${who}. When ${who} approves ${v}, ${integrators(p)}, or ${who} can integrate here.`;
-  }
-  if (p.with === "author") {
+  if (s.turn === "with_author") {
     return `Waiting for ${author} to send a new version.`;
   }
-  const unmet = gates.filter((g) => g.state === "unmet");
-  const first = unmet[0];
-  if (!first) {
-    return `Every gate is met. Next, ${integrators(p)}, or a human can integrate here.`;
+  if (s.human_review && !s.human_approved) {
+    const who = s.human_review.reviewer ?? "a human";
+    return `Waiting for ${who}. When ${who} approves ${v}, ${integrators(p)}, or ${who} can integrate here.`;
   }
-  switch (first.kind) {
-    case "approval":
-      return `Waiting for a review of ${v}.`;
-    case "prerequisites":
-      return `Waiting for ${first.unfinished.join(", ")} to be Done.`;
-    case "integrator":
-      return "Waiting for a human to give an agent the integrator tag, or to integrate here.";
-    default:
-      return "Waiting on the gates above.";
+  if (s.latest_verdict !== "approve") {
+    return `Waiting for a review of ${v}.`;
   }
+  const unmet = shownGates(p.gates).find((g) => g.status === "unmet");
+  if (unmet?.gate === "prerequisites") {
+    const open = unfinishedPrerequisites(p);
+    return open.length > 0
+      ? `Waiting for ${open.join(", ")} to be Done.`
+      : "Waiting for the prerequisites to be Done.";
+  }
+  if (unmet) return "Waiting on the gates above.";
+  return `Every gate is met. Next, ${integrators(p)}, or a human can integrate here.`;
 }

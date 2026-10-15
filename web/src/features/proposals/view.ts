@@ -28,15 +28,27 @@ export function parseDetailSearch(
   };
 }
 
-/** What the diff shows: one version against its base, or two versions. */
+/**
+ * What the diff shows: one version against its base revision, or two versions. The diff route reads recorded states, so a version is its changeset.
+ * `from` and `to` are the references the diff reads; `label` names the shown side as the screen writes it, such as `P-3 v2`.
+ */
 export type DetailView =
-  | { kind: "version"; version: number; current: boolean; to: string }
+  | {
+      kind: "version";
+      version: number;
+      current: boolean;
+      from: string;
+      to: string;
+      label: string;
+    }
   | {
       kind: "compare";
       from: number;
       version: number;
       fromRef: string;
       to: string;
+      fromLabel: string;
+      label: string;
     };
 
 /** A version the proposal does not have falls back to the current one; a comparison needs an earlier version than the one shown. */
@@ -44,30 +56,31 @@ export function resolveView(
   p: ProposalDetail,
   search: DetailSearch,
 ): DetailView {
-  const known = (n: number | undefined) =>
-    n !== undefined && p.versions.some((v) => v.version === n);
-  const version = known(search.version)
-    ? (search.version ?? p.current_version)
-    : p.current_version;
-  const to = versionRef(p.id, version);
-  if (
-    known(search.compare) &&
-    search.compare !== undefined &&
-    search.compare < version
-  ) {
+  const id = p.summary.id;
+  const current = p.summary.current_version;
+  const find = (n: number | undefined) =>
+    n === undefined ? undefined : p.versions.find((v) => v.version === n);
+  const shown =
+    find(search.version) ?? find(current) ?? p.versions.at(-1) ?? p.selected;
+  const earlier = find(search.compare);
+  if (earlier && earlier.version < shown.version) {
     return {
       kind: "compare",
-      from: search.compare,
-      version,
-      fromRef: versionRef(p.id, search.compare),
-      to,
+      from: earlier.version,
+      version: shown.version,
+      fromRef: earlier.changeset,
+      to: shown.changeset,
+      fromLabel: versionRef(id, earlier.version),
+      label: versionRef(id, shown.version),
     };
   }
   return {
     kind: "version",
-    version,
-    current: version === p.current_version,
-    to,
+    version: shown.version,
+    current: shown.version === current,
+    from: shown.base,
+    to: shown.changeset,
+    label: versionRef(id, shown.version),
   };
 }
 
@@ -81,25 +94,26 @@ export interface VersionTab {
 
 /** The newest version first, then a comparison of the previous version with the current one when there are two or more. */
 export function versionTabs(p: ProposalDetail, view: DetailView): VersionTab[] {
+  const current = p.summary.current_version;
   const versions = [...p.versions].sort((a, b) => b.version - a.version);
   const tabs: VersionTab[] = versions.map((v) => ({
     key: `v${String(v.version)}`,
     label: `v${String(v.version)} · ${versionVerdict(v.version, p.reviews)}`,
     compare: false,
-    search: v.version === p.current_version ? {} : { version: v.version },
+    search: v.version === current ? {} : { version: v.version },
     selected: view.kind === "version" && view.version === v.version,
   }));
-  const previous = p.current_version - 1;
+  const previous = current - 1;
   if (p.versions.some((v) => v.version === previous)) {
     tabs.push({
       key: "compare",
-      label: `Compare v${String(previous)} → v${String(p.current_version)}`,
+      label: `Compare v${String(previous)} → v${String(current)}`,
       compare: true,
       search: { compare: previous },
       selected:
         view.kind === "compare" &&
         view.from === previous &&
-        view.version === p.current_version,
+        view.version === current,
     });
   }
   return tabs;

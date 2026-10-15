@@ -19,17 +19,28 @@ export function ProposalHeader({
   slug,
   proposal,
   view,
+  main,
+  revision,
 }: {
   slug: string;
   proposal: ProposalDetail;
   view: DetailView;
+  /** The head of main; null until the revisions arrive. */
+  main: string | null;
+  /** The revision an integrated proposal became; null until it is known. */
+  revision: string | null;
 }) {
+  const summary = proposal.summary;
   const current = currentVersion(proposal);
   const meta = [
-    `proposal ${versionText(proposal)}`,
-    current ? `base ${current.base} → main ${proposal.main}` : null,
-    current ? filesText(current) : null,
-    proposal.state === "open" ? claimText(proposal) : null,
+    `proposal ${versionText(summary)}`,
+    current
+      ? main
+        ? `base ${current.base} → main ${main}`
+        : `base ${current.base}`
+      : null,
+    current ? filesText(current, proposal.totals) : null,
+    summary.state === "open" ? claimText(summary) : null,
   ].filter((m): m is string => m !== null);
   return (
     <header className="flex flex-col gap-10 px-24 pt-18">
@@ -53,35 +64,39 @@ export function ProposalHeader({
               className="text-text-faint"
             />
             <span aria-current="page" className="font-mono text-text">
-              {proposal.id}
+              {summary.id}
             </span>
           </li>
         </ol>
       </nav>
       <div className="flex flex-wrap items-center gap-12">
         <h1 className="text-screen leading-snug font-semibold text-text">
-          {proposal.title}
+          {summary.title}
         </h1>
         <ReviewPill
-          pill={reviewPill(proposal, true, proposal.conflict?.main ?? null)}
+          pill={reviewPill(summary, {
+            long: true,
+            revision,
+            conflictMain: proposal.conflict?.main_revision ?? null,
+          })}
           large
         />
       </div>
       <div className="flex flex-wrap items-center gap-x-16 gap-y-4 text-bar text-text-muted">
         <span className="flex items-center gap-6 text-text">
-          <Avatar name={proposal.author} />
-          <span className="font-mono text-code">{proposal.author}</span>
+          <Avatar name={summary.author} />
+          <span className="font-mono text-code">{summary.author}</span>
         </span>
         <span>
           for{" "}
           <HrefLink
-            href={`/p/${slug}/t/${proposal.task}`}
+            href={`/p/${slug}/t/${summary.task}`}
             className={cn(
               "rounded-s font-mono hover:text-text hover:underline",
               focusRing,
             )}
           >
-            {proposal.task}
+            {summary.task}
           </HrefLink>
         </span>
         {meta.map((item) => (
@@ -94,7 +109,7 @@ export function ProposalHeader({
           return (
             <HrefLink
               key={tab.key}
-              href={detailHref(slug, proposal.id, tab.search)}
+              href={detailHref(slug, summary.id, tab.search)}
               aria-current={tab.selected ? "page" : undefined}
               className={cn(tabClasses(tab.selected), focusRing)}
             >

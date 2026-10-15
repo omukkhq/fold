@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ProposalSummary } from "@/api/proposals";
+import { proposalSummary } from "@/test/proposals";
 import {
   claimLabel,
   countByState,
@@ -14,24 +15,7 @@ function summary(
   id: string,
   fields: Partial<ProposalSummary> = {},
 ): ProposalSummary {
-  return {
-    id,
-    title: id,
-    task: "T-1",
-    author: "backend",
-    state: "open",
-    current_version: 1,
-    with: "reviewer",
-    waiting_on: null,
-    latest_verdict: null,
-    human_review: null,
-    human_approved: false,
-    review_claim: null,
-    conflicted: false,
-    integrated_revision: null,
-    updated_at: 0,
-    ...fields,
-  };
+  return proposalSummary(id, { updated_at: 0, ...fields });
 }
 
 const all = [
