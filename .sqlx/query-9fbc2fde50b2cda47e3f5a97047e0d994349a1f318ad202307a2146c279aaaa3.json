@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT c.number AS \"number!: i64\", w.number AS \"workspace!: i64\", c.tree_hash,\n                  c.kind, c.reason, c.label, c.created_at, c.pruned_at\n           FROM checkpoints c JOIN workspaces w ON w.id = c.workspace_id\n           WHERE w.number = ?1 AND (?2 OR c.pruned_at IS NULL)\n           ORDER BY c.number ASC",
+  "query": "SELECT c.number AS \"number!: i64\", w.number AS \"workspace!: i64\", c.tree_hash,\n                  c.kind, c.reason, c.label, c.created_at, c.pruned_at, r.number AS \"base?: i64\"\n           FROM checkpoints c JOIN workspaces w ON w.id = c.workspace_id\n           LEFT JOIN revisions r ON r.id = c.base_revision_id\n           WHERE c.number = ?",
   "describe": {
     "columns": [
       {
@@ -90,10 +90,21 @@
             "name": "pruned_at"
           }
         }
+      },
+      {
+        "name": "base?: i64",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "revisions",
+            "name": "number"
+          }
+        }
       }
     ],
     "parameters": {
-      "Right": 2
+      "Right": 1
     },
     "nullable": [
       false,
@@ -103,8 +114,9 @@
       true,
       true,
       false,
+      true,
       true
     ]
   },
-  "hash": "7f3abfc34ee15f1c7386d89a758684e3ce3f021c711dfd71d3a569b5d2e45e25"
+  "hash": "9fbc2fde50b2cda47e3f5a97047e0d994349a1f318ad202307a2146c279aaaa3"
 }

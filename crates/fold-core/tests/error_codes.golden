@@ -79,3 +79,6 @@ invalid_token
 host_not_allowed
 remote_not_set
 remote_ahead
+unresolved_conflicts
+checkpoint_not_found
+workspace_write_unfinished

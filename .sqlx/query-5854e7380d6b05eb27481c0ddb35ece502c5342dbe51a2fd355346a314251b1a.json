@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE workspaces SET base_revision_id = r.id\n         FROM (SELECT id FROM revisions WHERE number = ?2) AS r\n         WHERE workspaces.number = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "5854e7380d6b05eb27481c0ddb35ece502c5342dbe51a2fd355346a314251b1a"
+}

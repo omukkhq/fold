@@ -115,6 +115,12 @@ impl FoldServer {
             (workspaces::COMPARE_REVISIONS, _) => {
                 workspaces::compare_revisions(self, &arguments).await?
             }
+            (_, Some(_)) => {
+                match workspaces::call(self, tool, as_worker.as_ref(), &arguments).await? {
+                    Some(value) => value,
+                    None => return Ok(None),
+                }
+            }
             _ => return Ok(None),
         };
         let after = self.session().await;

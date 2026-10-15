@@ -18,8 +18,8 @@ pub use conflicts::{ConflictRow, clear_conflict, list_conflicts, set_conflicts};
 pub use gc::{ClosedWorkspace, closed_workspaces_due, gc_roots, workspaces_over_auto_limit};
 pub use lifecycle::{
     ClosedState, NewTaskWorkspace, WorkspaceKind, WorkspaceRow, WorkspaceState, close,
-    get_workspace, insert_task_workspace, latest_task_workspace, live_task_workspace,
-    task_workspace_paths,
+    get_workspace, insert_task_workspace, latest_task_workspace, live_task_workspace, set_base,
+    set_sync_checkpoint, sync_checkpoint, task_workspace_paths,
 };
 pub use refs::{advance_main, create_main};
 pub use revisions::{

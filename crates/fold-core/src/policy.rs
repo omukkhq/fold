@@ -95,3 +95,15 @@ pub fn can_send_feedback(actor: &Actor) -> Result<(), PolicyDenied> {
         hint: "send a message linked to the task with send_message",
     })
 }
+
+/// Only the worker that owns a workspace records, restores or syncs in it, because a workspace holds that one worker's unfinished work. `owner` is the workspace's worker; a human, the system and every other worker are refused.
+pub fn can_change_workspace(actor: &Actor, owner: Option<&WorkerName>) -> Result<(), PolicyDenied> {
+    match actor {
+        Actor::Agent(agent) if owner == Some(&agent.worker) => Ok(()),
+        Actor::Agent(_) | Actor::Human { .. } | Actor::System => Err(PolicyDenied {
+            code: codes::NOT_WORKSPACE_OWNER,
+            message: "only the owning worker can change a workspace",
+            hint: "call get_workspace to see the owner",
+        }),
+    }
+}

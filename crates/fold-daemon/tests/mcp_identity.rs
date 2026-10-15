@@ -411,6 +411,14 @@ async fn the_server_lists_described_tools_and_sends_the_workflow() {
             "get_repository_state",
             "get_revision",
             "compare_revisions",
+            "create_workspace",
+            "get_workspace",
+            "record_checkpoint",
+            "list_checkpoints",
+            "restore_checkpoint",
+            "record_changes",
+            "sync_workspace",
+            "abandon_workspace",
         ]
     );
     for tool in &tools {

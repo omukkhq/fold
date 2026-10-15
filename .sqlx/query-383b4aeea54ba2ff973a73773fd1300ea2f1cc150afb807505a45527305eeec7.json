@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT w.id AS \"id!: i64\", w.base_revision_id AS \"base_id!: i64\", r.number AS \"base!: i64\"\n           FROM workspaces w JOIN revisions r ON r.id = w.base_revision_id\n           WHERE w.number = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "workspaces",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "base_id!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "workspaces",
+            "name": "base_revision_id"
+          }
+        }
+      },
+      {
+        "name": "base!: i64",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "revisions",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "383b4aeea54ba2ff973a73773fd1300ea2f1cc150afb807505a45527305eeec7"
+}

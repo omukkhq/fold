@@ -13,7 +13,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::UnixStream;
 
 use super::FoldServer;
-use super::error::{ErrorBody, from_agent, from_project};
+use super::error::{ErrorBody, from_agent, from_project, from_workspace};
 use crate::daemon::AppState;
 use crate::services::agents::{AgentService, SessionContext};
 use crate::services::events::EventService;
@@ -223,17 +223,9 @@ async fn open(
         .map_err(from_project)?;
     let agents = handle.agents();
     let events = EventService::new(handle.store.clone(), handle.bus.clone());
-    let config = projects::load_config(&handle.paths)
+    let workspaces = WorkspaceService::for_project(&handle, Git::default())
         .await
-        .map_err(from_project)?;
-    let workspaces = WorkspaceService::new(
-        handle.store.clone(),
-        handle.bus.clone(),
-        handle.clock.clone(),
-        handle.paths.clone(),
-        Git::default(),
-        config.lease_minutes,
-    );
+        .map_err(from_workspace)?;
     let mut session = agents.start_session(hello.pid).await.map_err(from_agent)?;
     if let Some(agent) = agent
         && let Err(error) = agents.register_agent(&mut session, &agent, &[]).await

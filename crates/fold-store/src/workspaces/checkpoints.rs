@@ -1,5 +1,5 @@
 use fold_core::object::ObjectHash;
-use fold_core::{CheckpointId, IdKind, Timestamp, WorkspaceId};
+use fold_core::{CheckpointId, IdKind, RevisionId, Timestamp, WorkspaceId};
 use sqlx::SqliteExecutor;
 
 use super::columns::{number, timestamp, tree_hash};
@@ -84,6 +84,8 @@ pub struct Checkpoint {
     pub id: CheckpointId,
     pub workspace: WorkspaceId,
     pub tree: ObjectHash,
+    /// The workspace's base revision when the checkpoint was taken; `None` for a checkpoint older than this column.
+    pub base: Option<RevisionId>,
     pub kind: CheckpointKind,
     pub reason: CheckpointReason,
     pub label: Option<String>,
@@ -91,7 +93,7 @@ pub struct Checkpoint {
     pub pruned_at: Option<Timestamp>,
 }
 
-/// Inserts one checkpoint row in the caller's write. `tree` must already be in the object store. A `reason` whose kind differs from `kind`, or a workspace that does not exist, is refused.
+/// Inserts one checkpoint row in the caller's write, with the workspace's base revision as it is now. `tree` must already be in the object store. A `reason` whose kind differs from `kind`, or a workspace that does not exist, is refused.
 pub async fn insert_checkpoint(
     tx: &mut WriteTx,
     workspace: WorkspaceId,
@@ -106,35 +108,46 @@ pub async fn insert_checkpoint(
             "the checkpoint reason does not fit its kind",
         ));
     }
+    let workspace_number = workspace.to_db();
+    let found = sqlx::query!(
+        r#"SELECT w.id AS "id!: i64", w.base_revision_id AS "base_id!: i64", r.number AS "base!: i64"
+           FROM workspaces w JOIN revisions r ON r.id = w.base_revision_id
+           WHERE w.number = ?"#,
+        workspace_number
+    )
+    .fetch_optional(tx.conn())
+    .await?
+    .ok_or(StoreError::Invalid("the workspace does not exist"))?;
     let id = counters::allocate(tx, IdKind::Checkpoint).await?;
     let id = CheckpointId::from_number(id).ok_or(StoreError::Corrupt("counters.next"))?;
-    let number = id.to_db();
+    let number_value = id.to_db();
     let tree_text = tree.to_string();
     let kind_text = kind.as_str();
     let reason_text = reason.as_str();
     let created_at = now.as_millis();
-    let workspace_number = workspace.to_db();
-    let inserted = sqlx::query_scalar!(
-        r#"INSERT INTO checkpoints (number, workspace_id, tree_hash, kind, reason, label, created_at)
-           SELECT ?, id, ?, ?, ?, ?, ? FROM workspaces WHERE number = ?
-           RETURNING id AS "id!: i64""#,
-        number,
+    sqlx::query!(
+        "INSERT INTO checkpoints (number, workspace_id, tree_hash, kind, reason, label, created_at, base_revision_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        number_value,
+        found.id,
         tree_text,
         kind_text,
         reason_text,
         label,
         created_at,
-        workspace_number
+        found.base_id
     )
-    .fetch_optional(tx.conn())
+    .execute(tx.conn())
     .await?;
-    if inserted.is_none() {
-        return Err(StoreError::Invalid("the workspace does not exist"));
-    }
     Ok(Checkpoint {
         id,
         workspace,
         tree,
+        base: Some(number(
+            found.base,
+            RevisionId::try_from_db,
+            "revisions.number",
+        )?),
         kind,
         reason,
         label: label.map(str::to_owned),
@@ -153,8 +166,9 @@ pub async fn list_checkpoints<'e>(
     let rows = sqlx::query_as!(
         Row,
         r#"SELECT c.number AS "number!: i64", w.number AS "workspace!: i64", c.tree_hash,
-                  c.kind, c.reason, c.label, c.created_at, c.pruned_at
+                  c.kind, c.reason, c.label, c.created_at, c.pruned_at, r.number AS "base?: i64"
            FROM checkpoints c JOIN workspaces w ON w.id = c.workspace_id
+           LEFT JOIN revisions r ON r.id = c.base_revision_id
            WHERE w.number = ?1 AND (?2 OR c.pruned_at IS NULL)
            ORDER BY c.number ASC"#,
         workspace_number,
@@ -173,8 +187,9 @@ pub async fn get_checkpoint<'e>(
     let row = sqlx::query_as!(
         Row,
         r#"SELECT c.number AS "number!: i64", w.number AS "workspace!: i64", c.tree_hash,
-                  c.kind, c.reason, c.label, c.created_at, c.pruned_at
+                  c.kind, c.reason, c.label, c.created_at, c.pruned_at, r.number AS "base?: i64"
            FROM checkpoints c JOIN workspaces w ON w.id = c.workspace_id
+           LEFT JOIN revisions r ON r.id = c.base_revision_id
            WHERE c.number = ?"#,
         number
     )
@@ -183,7 +198,7 @@ pub async fn get_checkpoint<'e>(
     row.map(Row::into_checkpoint).transpose()
 }
 
-/// Marks every unpruned automatic checkpoint of the workspace except the newest `keep` of them as pruned at `now`, and returns the ones it marked. Explicit checkpoints and checkpoints already pruned are left alone, and already-pruned ones do not count toward `keep`.
+/// Marks every unpruned automatic checkpoint of the workspace except the newest `keep` of them as pruned at `now`, and returns the ones it marked. Explicit checkpoints and checkpoints already pruned are left alone, and already-pruned ones do not count toward `keep`. The checkpoint a workspace names as `sync_checkpoint_id` is left alone too: the next sync restores it, so its objects must stay.
 pub async fn prune_auto(
     tx: &mut WriteTx,
     workspace: WorkspaceId,
@@ -197,6 +212,9 @@ pub async fn prune_auto(
         r#"UPDATE checkpoints SET pruned_at = ?1
            WHERE workspace_id = (SELECT id FROM workspaces WHERE number = ?2)
              AND kind = 'auto' AND pruned_at IS NULL
+             AND id NOT IN (
+                 SELECT sync_checkpoint_id FROM workspaces WHERE sync_checkpoint_id IS NOT NULL
+             )
              AND id NOT IN (
                  SELECT id FROM checkpoints
                  WHERE workspace_id = (SELECT id FROM workspaces WHERE number = ?2)
@@ -253,6 +271,7 @@ struct Row {
     label: Option<String>,
     created_at: i64,
     pruned_at: Option<i64>,
+    base: Option<i64>,
 }
 
 impl Row {
@@ -265,6 +284,10 @@ impl Row {
                 "workspaces.number",
             )?,
             tree: tree_hash(&self.tree_hash, "checkpoints.tree_hash")?,
+            base: self
+                .base
+                .map(|value| number(value, RevisionId::try_from_db, "revisions.number"))
+                .transpose()?,
             kind: CheckpointKind::parse(&self.kind)
                 .ok_or(StoreError::Corrupt("checkpoints.kind"))?,
             reason: self

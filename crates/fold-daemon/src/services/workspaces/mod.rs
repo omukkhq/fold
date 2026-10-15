@@ -1,29 +1,39 @@
-use std::sync::{Arc, OnceLock};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
-use fold_core::{Clock, EventError, FoldError, ProjectPaths, codes};
+use fold_core::{Clock, EventError, FoldError, ProjectPaths, WorkspaceId, codes};
 use fold_store::{Store, StoreError};
 use fold_vcs::git::Git;
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::platform::Capabilities;
 use thiserror::Error;
+use tokio::sync::{OwnedMutexGuard, RwLock};
 
 use super::events::EventBus;
 use super::projects::{ProjectError, load_config};
 use super::tasks::TaskError;
+use crate::projects::ProjectHandle;
 
+mod changesets;
+mod checkpoints;
 mod compare;
+mod files;
 mod git;
 mod lifecycle;
 mod repository;
+mod sync;
 
+pub use changesets::RecordedChanges;
+pub use checkpoints::{CheckpointView, Restored};
 pub use compare::{ResolvedState, StateComparison, StateKind, StateRef, StateSummary};
 pub(crate) use git::unsynced;
 pub use git::{GitExport, MAIN_REF, commit_message};
-pub use lifecycle::{ArchiveReason, WorkspaceRef, WorkspaceView, archive_in_tx};
+pub use lifecycle::{ArchiveReason, WorkspaceDetails, WorkspaceRef, WorkspaceView, archive_in_tx};
 pub use repository::{
     DEFAULT_REVISION_PAGE, RECENT_REVISIONS, RepositoryState, RevisionDetail, RevisionOrigin,
     RevisionPage, RevisionSummary,
 };
+pub use sync::Synced;
 
 #[derive(Debug, Error)]
 pub enum WorkspaceError {
@@ -69,8 +79,11 @@ pub struct WorkspaceService {
     paths: ProjectPaths,
     git: Git,
     lease_minutes: u64,
-    /// Probed by the first create or working-files read and shared by every clone of the service.
+    /// Probed by the first command that touches files and shared by every clone of the service; in the daemon, by every service of the project.
     caps: Arc<OnceLock<Capabilities>>,
+    /// The project's object lock (`ProjectHandle::objects`): a command that writes objects and then records a row naming them holds it shared from its first object write until that row commits.
+    objects: Arc<RwLock<()>>,
+    ops: Arc<WorkspaceLocks>,
 }
 
 impl std::fmt::Debug for WorkspaceService {
@@ -99,7 +112,39 @@ impl WorkspaceService {
             git,
             lease_minutes,
             caps: Arc::new(OnceLock::new()),
+            objects: Arc::new(RwLock::new(())),
+            ops: Arc::new(WorkspaceLocks::default()),
         }
+    }
+
+    /// The service of an open project in the daemon. It shares the project's object lock, workspace locks and capabilities probe, so every session's commands and garbage collection keep out of each other's way. The claim lease is read from `config.toml` here, once per service.
+    pub async fn for_project(handle: &ProjectHandle, git: Git) -> Result<Self, WorkspaceError> {
+        let config = load_config(&handle.paths).await?;
+        Ok(Self::new(
+            handle.store.clone(),
+            handle.bus.clone(),
+            handle.clock.clone(),
+            handle.paths.clone(),
+            git,
+            config.lease_minutes,
+        )
+        .with_locks(handle.objects.clone(), handle.workspace_locks.clone())
+        .with_capabilities(handle.capabilities.clone()))
+    }
+
+    /// Shares one capabilities probe with every other service of the project.
+    #[must_use]
+    pub fn with_capabilities(mut self, caps: Arc<OnceLock<Capabilities>>) -> Self {
+        self.caps = caps;
+        self
+    }
+
+    /// Replaces the service's own locks with shared ones. A service built by [`WorkspaceService::new`] alone holds locks nobody else sees.
+    #[must_use]
+    pub fn with_locks(mut self, objects: Arc<RwLock<()>>, ops: Arc<WorkspaceLocks>) -> Self {
+        self.objects = objects;
+        self.ops = ops;
+        self
     }
 
     /// The service of the project at `paths` for a host command that runs without the daemon, with a bus nobody listens to and the project's configured lease. A directory without a project database is `project_not_found`, and nothing is created in it.
@@ -135,6 +180,22 @@ impl WorkspaceService {
     /// Closes the database this service opened. A failed close only delays the WAL checkpoint.
     pub async fn close(self) {
         let _ = self.store.close().await;
+    }
+}
+
+/// One operation per workspace at a time. Restore, sync and record each scan a workspace and then write files or rows from that scan, so a second command between the two would act on a stale scan.
+#[derive(Debug, Default)]
+pub struct WorkspaceLocks(Mutex<HashMap<WorkspaceId, Arc<tokio::sync::Mutex<()>>>>);
+
+impl WorkspaceLocks {
+    /// Waits until no other operation runs on `workspace`. A lock that no guard or waiter holds any more is dropped from the map here.
+    pub async fn lock(&self, workspace: WorkspaceId) -> OwnedMutexGuard<()> {
+        let lock = {
+            let mut locks = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+            locks.retain(|_, lock| Arc::strong_count(lock) > 1);
+            locks.entry(workspace).or_default().clone()
+        };
+        lock.lock_owned().await
     }
 }
 

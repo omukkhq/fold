@@ -8,7 +8,7 @@ use fold_core::{CheckpointId, Timestamp, WorkspaceId};
 use fold_store::testing::TestProject;
 use fold_store::workspaces::{
     AUTO_CHECKPOINTS_KEPT, Checkpoint, CheckpointKind, CheckpointReason, get_checkpoint,
-    insert_checkpoint, list_checkpoints, prune_auto, prune_workspace,
+    insert_checkpoint, list_checkpoints, prune_auto, prune_workspace, set_sync_checkpoint,
 };
 use fold_store::{Store, StoreError};
 
@@ -256,6 +256,34 @@ async fn prune_auto_keeps_the_newest_twenty_and_every_explicit_one() {
         explicit,
         "explicit checkpoints are never pruned automatically"
     );
+}
+
+#[tokio::test]
+async fn prune_auto_keeps_the_checkpoint_an_unfinished_sync_restores() {
+    let project = TestProject::new().await;
+    let store = project.store();
+    let one = seed::workspace(store, 1).await.workspace;
+    let now = project.now();
+    let mut auto = Vec::new();
+    for _ in 0..3 {
+        auto.push(
+            checkpoint(store, one, CheckpointReason::BeforeSync, None, now)
+                .await
+                .unwrap()
+                .id,
+        );
+    }
+    store
+        .write(async |tx| set_sync_checkpoint(tx, one, Some(auto[0])).await)
+        .await
+        .unwrap();
+    let pruned = store
+        .write(async |tx| prune_auto(tx, one, 0, now).await)
+        .await
+        .unwrap();
+    assert_eq!(pruned, auto[1..].to_vec());
+    let left = list_checkpoints(store.read(), one, false).await.unwrap();
+    assert_eq!(numbers(&left), vec![auto[0].number()]);
 }
 
 #[tokio::test]

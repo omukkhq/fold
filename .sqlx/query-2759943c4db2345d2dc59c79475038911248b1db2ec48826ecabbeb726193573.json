@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT c.number AS \"number!: i64\"\n           FROM workspaces w JOIN checkpoints c ON c.id = w.sync_checkpoint_id\n           WHERE w.number = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "checkpoints",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "2759943c4db2345d2dc59c79475038911248b1db2ec48826ecabbeb726193573"
+}

@@ -13,7 +13,6 @@ use utoipa_axum::routes;
 use super::Project;
 use super::error::{ApiError, ApiQuery, ErrorEnvelope};
 use crate::daemon::AppState;
-use crate::services::projects::load_config;
 use crate::services::workspaces::{
     RepositoryState, RevisionDetail, RevisionOrigin, RevisionPage, RevisionSummary,
     WorkspaceService,
@@ -29,16 +28,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
 }
 
 async fn service(project: &Project) -> Result<WorkspaceService, ApiError> {
-    let handle = &project.0;
-    let config = load_config(&handle.paths).await?;
-    Ok(WorkspaceService::new(
-        handle.store.clone(),
-        handle.bus.clone(),
-        handle.clock.clone(),
-        handle.paths.clone(),
-        Git::default(),
-        config.lease_minutes,
-    ))
+    Ok(WorkspaceService::for_project(&project.0, Git::default()).await?)
 }
 
 fn revision(text: &str) -> Result<RevisionId, ApiError> {

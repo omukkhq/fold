@@ -1,4 +1,4 @@
-use fold_core::{ProposalId, RevisionId, TaskId, Timestamp, WorkerName, WorkspaceId};
+use fold_core::{CheckpointId, ProposalId, RevisionId, TaskId, Timestamp, WorkerName, WorkspaceId};
 use sqlx::SqliteExecutor;
 
 use super::columns::{number, timestamp};
@@ -281,4 +281,64 @@ async fn select(
         })
     })
     .transpose()
+}
+
+/// Moves the workspace's base to `base`, as a finished sync and a restore do. False when the workspace or the revision does not exist, and then nothing changes.
+pub async fn set_base(
+    tx: &mut WriteTx,
+    workspace: WorkspaceId,
+    base: RevisionId,
+) -> Result<bool, StoreError> {
+    let (workspace, base) = (workspace.to_db(), base.to_db());
+    let moved = sqlx::query!(
+        "UPDATE workspaces SET base_revision_id = r.id
+         FROM (SELECT id FROM revisions WHERE number = ?2) AS r
+         WHERE workspaces.number = ?1",
+        workspace,
+        base
+    )
+    .execute(tx.conn())
+    .await?
+    .rows_affected();
+    Ok(moved == 1)
+}
+
+/// The checkpoint of the last complete state of the workspace before a sync or a restore began to write files, while that command has not finished. A finished sync or restore clears it.
+pub async fn sync_checkpoint(
+    executor: impl SqliteExecutor<'_>,
+    workspace: WorkspaceId,
+) -> Result<Option<CheckpointId>, StoreError> {
+    let workspace = workspace.to_db();
+    let found = sqlx::query_scalar!(
+        r#"SELECT c.number AS "number!: i64"
+           FROM workspaces w JOIN checkpoints c ON c.id = w.sync_checkpoint_id
+           WHERE w.number = ?"#,
+        workspace
+    )
+    .fetch_optional(executor)
+    .await?;
+    found
+        .map(|value| number(value, CheckpointId::try_from_db, "checkpoints.number"))
+        .transpose()
+}
+
+/// Sets or clears the checkpoint of a sync or a restore in progress. False when the workspace or the checkpoint does not exist, and then nothing changes.
+pub async fn set_sync_checkpoint(
+    tx: &mut WriteTx,
+    workspace: WorkspaceId,
+    checkpoint: Option<CheckpointId>,
+) -> Result<bool, StoreError> {
+    let workspace = workspace.to_db();
+    let checkpoint = checkpoint.map(CheckpointId::to_db);
+    let changed = sqlx::query!(
+        "UPDATE workspaces
+         SET sync_checkpoint_id = (SELECT id FROM checkpoints WHERE number = ?2)
+         WHERE number = ?1 AND (?2 IS NULL OR EXISTS (SELECT 1 FROM checkpoints WHERE number = ?2))",
+        workspace,
+        checkpoint
+    )
+    .execute(tx.conn())
+    .await?
+    .rows_affected();
+    Ok(changed == 1)
 }

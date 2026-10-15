@@ -94,6 +94,9 @@ define_codes! {
     HOST_NOT_ALLOWED = "host_not_allowed",
     REMOTE_NOT_SET = "remote_not_set",
     REMOTE_AHEAD = "remote_ahead",
+    UNRESOLVED_CONFLICTS = "unresolved_conflicts",
+    CHECKPOINT_NOT_FOUND = "checkpoint_not_found",
+    WORKSPACE_WRITE_UNFINISHED = "workspace_write_unfinished",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

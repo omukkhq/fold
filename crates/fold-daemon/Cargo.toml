@@ -52,3 +52,7 @@ failpoints = ["dep:fail", "fail/failpoints"]
 [[test]]
 name = "workspaces_failpoints"
 required-features = ["failpoints"]
+
+[[test]]
+name = "workspaces_tools_failpoints"
+required-features = ["failpoints"]

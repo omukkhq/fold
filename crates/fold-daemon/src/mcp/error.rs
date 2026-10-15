@@ -26,6 +26,23 @@ const HINTS: &[(&str, &str)] = &[
         codes::PATH_NOT_IN_COMPARISON,
         "call compare_revisions without path to list the changed files",
     ),
+    (
+        codes::NOT_WORKSPACE_OWNER,
+        "call get_workspace to see the owner",
+    ),
+    (codes::CHECKPOINT_NOT_FOUND, "call list_checkpoints"),
+    (
+        codes::UNRESOLVED_CONFLICTS,
+        "remove the conflict markers and the .fold-main files, then call record_changes again",
+    ),
+    (
+        codes::WORKSPACE_CHANGED_DURING_SYNC,
+        "call sync_workspace again",
+    ),
+    (
+        codes::WORKSPACE_WRITE_UNFINISHED,
+        "call sync_workspace, or call restore_checkpoint again",
+    ),
 ];
 
 pub fn hint_for(code: &str) -> Option<&'static str> {
@@ -147,6 +164,25 @@ mod tests {
         let store = from_project(ProjectError::Store(StoreError::Corrupt("projects.root")));
         assert_eq!(store.code(), codes::INTERNAL_ERROR);
         assert_eq!(fold.code(), codes::INVALID_NAME);
+        let task = from_workspace(WorkspaceError::Task(TaskError::Fold(FoldError::new(
+            codes::ALREADY_CLAIMED,
+            "held",
+        ))));
+        assert_eq!(task.code(), codes::ALREADY_CLAIMED);
+        for internal in [
+            from_workspace(WorkspaceError::Event(fold_core::EventError::InvalidActor)),
+            from_workspace(WorkspaceError::Task(TaskError::Event(
+                fold_core::EventError::InvalidActor,
+            ))),
+            from_workspace(WorkspaceError::Task(TaskError::Store(StoreError::Corrupt(
+                "tasks.status",
+            )))),
+            from_workspace(WorkspaceError::Store(StoreError::Corrupt(
+                "workspaces.state",
+            ))),
+        ] {
+            assert_eq!(internal.code(), codes::INTERNAL_ERROR);
+        }
     }
 
     #[test]

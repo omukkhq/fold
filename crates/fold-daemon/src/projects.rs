@@ -1,12 +1,14 @@
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use fold_core::{Clock, FoldError, ProjectPaths, codes};
 use fold_store::Store;
 use fold_store::projects::ProjectRow;
+use fold_vcs::platform::Capabilities;
 
 use crate::services::agents::{AgentService, SeenPresence};
 use crate::services::events::EventBus;
+use crate::services::workspaces::WorkspaceLocks;
 
 /// An open project: its database, its clock and the live state shared by every request. Later domains add their state here.
 pub struct ProjectHandle {
@@ -27,6 +29,10 @@ pub struct ProjectHandle {
     pub objects: Arc<tokio::sync::RwLock<()>>,
     /// Held for a whole push, so two pushes of one project never run together. It is an `Arc` so the guard can move into the blocking Git work and outlive an aborted caller.
     pub remote_lock: Arc<tokio::sync::Mutex<()>>,
+    /// One restore, sync or record per workspace at a time, across every session of the project.
+    pub workspace_locks: Arc<WorkspaceLocks>,
+    /// What the file system under `.fold/` supports, probed by the first workspace command of any session.
+    pub capabilities: Arc<OnceLock<Capabilities>>,
 }
 
 impl std::fmt::Debug for ProjectHandle {
@@ -62,6 +68,8 @@ impl ProjectHandle {
             gc: tokio::sync::Mutex::new(()),
             objects: Arc::new(tokio::sync::RwLock::new(())),
             remote_lock: Arc::new(tokio::sync::Mutex::new(())),
+            workspace_locks: Arc::new(WorkspaceLocks::default()),
+            capabilities: Arc::new(OnceLock::new()),
         })
     }
 

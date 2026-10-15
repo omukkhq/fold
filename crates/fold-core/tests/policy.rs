@@ -160,3 +160,21 @@ fn only_a_human_or_the_daemon_pushes() {
     assert_eq!(denied.code(), codes::HUMAN_REQUIRED);
     assert!(denied.hint().contains("fold push"));
 }
+
+#[test]
+fn only_the_owning_worker_changes_a_workspace() {
+    use fold_core::policy::can_change_workspace;
+    let owner = WorkerName::parse("frontend/ui").unwrap();
+    assert!(can_change_workspace(&agent("frontend/ui", &[]), Some(&owner)).is_ok());
+    for actor in [
+        agent("frontend", &[]),
+        agent("backend", &["integrator"]),
+        human("tanim"),
+        Actor::System,
+    ] {
+        let denied = can_change_workspace(&actor, Some(&owner)).unwrap_err();
+        assert_eq!(denied.code(), codes::NOT_WORKSPACE_OWNER, "{actor:?}");
+        assert!(denied.hint().contains("get_workspace"));
+    }
+    assert!(can_change_workspace(&agent("frontend/ui", &[]), None).is_err());
+}

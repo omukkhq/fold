@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO checkpoints (number, workspace_id, tree_hash, kind, reason, label, created_at, base_revision_id)\n         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 8
+    },
+    "nullable": []
+  },
+  "hash": "5bb5be4886ffa8511e333e14a2cd4988ceb8c4caedff40be4b4a1cb8cd8fcb3e"
+}

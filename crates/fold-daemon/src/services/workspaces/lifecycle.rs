@@ -8,8 +8,9 @@ use fold_core::events::types;
 use fold_core::object::ObjectHash;
 use fold_core::status::ProposalFact;
 use fold_core::{
-    Actor, AgentActor, EventActor, EventError, FoldError, IdKind, NewEvent, ProposalId, RevisionId,
-    TaskId, Timestamp, WorkerName, WorkspaceId, codes, policy, task_workspace_path,
+    Actor, AgentActor, ChangesetId, CheckpointId, EventActor, EventError, FoldError, IdKind,
+    NewEvent, ProposalId, RevisionId, TaskId, TaskStatus, Timestamp, WorkerName, WorkspaceId,
+    codes, policy, task_workspace_path,
 };
 use fold_store::agents::WorkerRow;
 use fold_store::tasks::claims;
@@ -24,6 +25,7 @@ use fold_vcs::paths::WorkspaceError as VcsError;
 use fold_vcs::platform::sync_dir;
 use serde_json::json;
 
+use super::sync::path_text;
 use super::{WorkspaceError, WorkspaceService, blocking, capabilities};
 use crate::services::events::EventBuffer;
 use crate::services::tasks::{
@@ -75,6 +77,16 @@ impl From<WorkspaceRow> for WorkspaceView {
             closed_at: row.closed_at,
         }
     }
+}
+
+/// A workspace with what an agent needs to pick up its work: the conflicted paths and the newest checkpoint and changeset.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceDetails {
+    pub workspace: WorkspaceView,
+    /// In path order.
+    pub conflicted: Vec<String>,
+    pub latest_checkpoint: Option<CheckpointId>,
+    pub latest_changeset: Option<ChangesetId>,
 }
 
 /// What `get` looks up: a workspace by id, or the workspace of a task.
@@ -187,6 +199,7 @@ impl WorkspaceService {
             .with_hint("call abandon_workspace again with a short reason")
             .into());
         }
+        let _op = self.ops.lock(workspace).await;
         let now = self.clock.now();
         let mut buffer = EventBuffer::new();
         self.store
@@ -215,6 +228,38 @@ impl WorkspaceService {
                 .with_hint("call create_workspace to start one")
                 .into()
         })
+    }
+
+    /// [`WorkspaceService::get`] with the conflicted paths and the newest unpruned checkpoint and changeset.
+    pub async fn details(&self, target: WorkspaceRef) -> Result<WorkspaceDetails, WorkspaceError> {
+        let workspace = self.get(target).await?;
+        let read = self.store.read();
+        let conflicted = workspaces::list_conflicts(read, workspace.id)
+            .await?
+            .iter()
+            .map(path_text)
+            .collect();
+        let latest_checkpoint = workspaces::list_checkpoints(read, workspace.id, false)
+            .await?
+            .last()
+            .map(|checkpoint| checkpoint.id);
+        let latest_changeset = workspaces::latest_changeset(read, workspace.id)
+            .await?
+            .map(|changeset| changeset.id);
+        Ok(WorkspaceDetails {
+            workspace,
+            conflicted,
+            latest_checkpoint,
+            latest_changeset,
+        })
+    }
+
+    /// The status of `task` as `recompute` last wrote it.
+    pub async fn task_status(&self, task: TaskId) -> Result<TaskStatus, WorkspaceError> {
+        let row = tasks::get_by_number(self.store.read(), task)
+            .await?
+            .ok_or_else(|| task_not_found(task))?;
+        Ok(row.status)
     }
 
     /// Step 1 of a create: the refusals that need no files, read before anything is written. The transaction checks the claim and the live workspace again.
