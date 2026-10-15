@@ -1,0 +1,110 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT i.number, t.number AS \"task!: i64\", c.name AS checklist, i.text,\n                  l.number AS \"linked?: i64\", i.done_at, i.done_by, i.created_at\n           FROM checklist_items i\n           JOIN checklists c ON c.id = i.checklist_id\n           JOIN tasks t ON t.id = c.task_id\n           LEFT JOIN tasks l ON l.id = i.linked_task_id\n           WHERE i.number = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "number",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "checklist_items",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "task!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "checklist",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "checklists",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "text",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "checklist_items",
+            "name": "text"
+          }
+        }
+      },
+      {
+        "name": "linked?: i64",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "done_at",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "checklist_items",
+            "name": "done_at"
+          }
+        }
+      },
+      {
+        "name": "done_by",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "checklist_items",
+            "name": "done_by"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "checklist_items",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "2cdd2e9456ecc9fd96c9e35d3281acf943d34019fce7edfffe44d39d2a70f832"
+}

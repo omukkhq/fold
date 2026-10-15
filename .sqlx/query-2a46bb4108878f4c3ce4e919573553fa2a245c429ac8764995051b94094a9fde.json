@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT c.name FROM checklists c JOIN tasks t ON t.id = c.task_id\n         WHERE t.number = ? ORDER BY c.position",
+  "describe": {
+    "columns": [
+      {
+        "name": "name",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "checklists",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "2a46bb4108878f4c3ce4e919573553fa2a245c429ac8764995051b94094a9fde"
+}

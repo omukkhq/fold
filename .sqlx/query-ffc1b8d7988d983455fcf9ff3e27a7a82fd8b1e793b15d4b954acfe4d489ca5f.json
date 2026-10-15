@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO checklists (task_id, name, position, created_at)\n         SELECT t.id, ?2, COALESCE((SELECT MAX(c.position) + 1 FROM checklists c WHERE c.task_id = t.id), 0), ?3\n         FROM tasks t WHERE t.number = ?1\n         ON CONFLICT (task_id, name) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "ffc1b8d7988d983455fcf9ff3e27a7a82fd8b1e793b15d4b954acfe4d489ca5f"
+}

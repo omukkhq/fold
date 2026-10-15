@@ -70,6 +70,9 @@ define_codes! {
     GIT_SYNC_MAP_INVALID = "git_sync_map_invalid",
     DOCTOR_CHECKS_FAILED = "doctor_checks_failed",
     SERVICE_INSTALL_FAILED = "service_install_failed",
+    INVALID_CHECKLIST_NAME = "invalid_checklist_name",
+    INVALID_STEP_TEXT = "invalid_step_text",
+    CHECKLIST_ITEM_NOT_FOUND = "checklist_item_not_found",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

@@ -13,12 +13,17 @@ use thiserror::Error;
 
 use super::events::{EventBuffer, EventBus};
 
+mod checklists;
 mod claims;
 mod dependencies;
 mod ready;
 mod recompute;
 mod removal;
 
+pub use checklists::{
+    ChecklistItemPatch, ChecklistItemView, ChecklistProgress, ChecklistView, ItemContent,
+    NewChecklistItem,
+};
 pub use claims::{ClaimView, claim_view, renew_leases};
 pub use dependencies::{Edge, add_edge_in_tx};
 pub use ready::ReadyTask;

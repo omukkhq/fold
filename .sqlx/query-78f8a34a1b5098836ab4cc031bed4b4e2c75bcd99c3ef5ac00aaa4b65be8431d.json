@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO checklist_items (number, checklist_id, text, linked_task_id, position, created_at)\n         SELECT ?1, c.id, ?4, (SELECT l.id FROM tasks l WHERE l.number = ?5),\n                COALESCE((SELECT MAX(i.position) + 1 FROM checklist_items i WHERE i.checklist_id = c.id), 0), ?6\n         FROM checklists c JOIN tasks t ON t.id = c.task_id\n         WHERE t.number = ?2 AND c.name = ?3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "78f8a34a1b5098836ab4cc031bed4b4e2c75bcd99c3ef5ac00aaa4b65be8431d"
+}

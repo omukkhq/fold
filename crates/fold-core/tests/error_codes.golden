@@ -56,3 +56,6 @@ export_diverged
 git_sync_map_invalid
 doctor_checks_failed
 service_install_failed
+invalid_checklist_name
+invalid_step_text
+checklist_item_not_found

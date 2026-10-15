@@ -1,4 +1,4 @@
-use fold_core::{TaskId, Timestamp};
+use fold_core::{ChecklistItemId, TaskId, Timestamp};
 use sqlx::SqliteConnection;
 
 use crate::error::StoreError;
@@ -39,25 +39,31 @@ pub async fn history(conn: &mut SqliteConnection, task: TaskId) -> Result<TaskHi
     }))
 }
 
-/// The task that owns each linked checklist item pointing at `task`, one entry per item, in task number order. An owner appears twice when two of its items link to `task`.
+/// Each linked checklist item pointing at `task` with the task that owns it, in owner number order, then item number order. An owner appears twice when two of its items link to `task`.
 pub async fn linked_item_owners(
     conn: &mut SqliteConnection,
     task: TaskId,
-) -> Result<Vec<TaskId>, StoreError> {
+) -> Result<Vec<(TaskId, ChecklistItemId)>, StoreError> {
     let number = task.to_db();
-    sqlx::query_scalar!(
-        r#"SELECT owner.number AS "number!: i64"
+    sqlx::query!(
+        r#"SELECT owner.number AS "owner!: i64", i.number AS "item!: i64"
            FROM checklist_items i
            JOIN checklists c ON c.id = i.checklist_id
            JOIN tasks owner ON owner.id = c.task_id
            WHERE i.linked_task_id = (SELECT id FROM tasks WHERE number = ?)
-           ORDER BY owner.number, i.id"#,
+           ORDER BY owner.number, i.number"#,
         number
     )
     .fetch_all(conn)
     .await?
     .into_iter()
-    .map(|owner| TaskId::try_from_db(owner).ok_or(StoreError::Corrupt("tasks.number")))
+    .map(|row| {
+        Ok((
+            TaskId::try_from_db(row.owner).ok_or(StoreError::Corrupt("tasks.number"))?,
+            ChecklistItemId::try_from_db(row.item)
+                .ok_or(StoreError::Corrupt("checklist_items.number"))?,
+        ))
+    })
     .collect()
 }
 

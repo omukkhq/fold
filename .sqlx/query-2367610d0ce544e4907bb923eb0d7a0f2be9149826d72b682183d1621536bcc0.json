@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM checklist_items WHERE number = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "2367610d0ce544e4907bb923eb0d7a0f2be9149826d72b682183d1621536bcc0"
+}

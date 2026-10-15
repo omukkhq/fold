@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE checklist_items SET done_at = ?2, done_by = ?3 WHERE number = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "34aedf692a1c5ea6cdfa272a1830cf95b058524ce5cd8ea5001b7f659b345907"
+}

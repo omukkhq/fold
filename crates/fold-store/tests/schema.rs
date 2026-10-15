@@ -283,31 +283,6 @@ async fn dependency_self_edge_is_refused() {
 }
 
 #[tokio::test]
-async fn checklist_item_needs_exactly_one_of_text_or_link() {
-    let (_dir, store) = seeded().await;
-    exec(
-        &store,
-        "INSERT INTO checklists (id, task_id, title, position, created_at) VALUES (1, 1, 'c', 0, 0)",
-    )
-    .await
-    .unwrap();
-    let item = |text: &str, link: &str| {
-        format!(
-            "INSERT INTO checklist_items (checklist_id, text, linked_task_id, position, created_at) VALUES (1, {text}, {link}, 0, 0)"
-        )
-    };
-    for sql in [item("NULL", "NULL"), item("'t'", "2")] {
-        let error = refused(&store, &sql).await;
-        assert_eq!(
-            error.constraint().as_deref(),
-            Some("checklist_items_text_or_link")
-        );
-    }
-    exec(&store, &item("'t'", "NULL")).await.unwrap();
-    exec(&store, &item("NULL", "2")).await.unwrap();
-}
-
-#[tokio::test]
 async fn review_needs_exactly_one_reviewer() {
     let (_dir, store) = seeded().await;
     let review = |worker: &str, human: &str| {

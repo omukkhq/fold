@@ -163,10 +163,10 @@ async fn detach(
     let owners = tasks::linked_item_owners(tx.conn(), id).await?;
     tasks::delete_linked_items(tx, id).await?;
     tasks::delete_edges_touching(tx, id).await?;
-    for owner in &owners {
+    for (owner, item) in &owners {
         let event = NewEvent::new(types::CHECKLIST_ITEM_REMOVED, actor.clone())?
             .task(*owner)
-            .data(json!({"linked_task": id.to_string()}))?;
+            .data(json!({"item": item.to_string(), "linked_task": id.to_string()}))?;
         buffer.append(tx, &event, now).await?;
     }
     for edge in &edges {
@@ -179,7 +179,7 @@ async fn detach(
         .iter()
         .filter(|edge| edge.needs == id)
         .map(|edge| edge.task)
-        .chain(owners)
+        .chain(owners.into_iter().map(|(owner, _)| owner))
         .collect();
     Ok(dependents.into_iter().collect())
 }

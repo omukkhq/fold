@@ -46,10 +46,11 @@ pub enum IdKind {
     Message,
     Comment,
     Integration,
+    ChecklistItem,
 }
 
 impl IdKind {
-    pub const ALL: [IdKind; 9] = [
+    pub const ALL: [IdKind; 10] = [
         IdKind::Task,
         IdKind::Proposal,
         IdKind::Changeset,
@@ -59,6 +60,7 @@ impl IdKind {
         IdKind::Message,
         IdKind::Comment,
         IdKind::Integration,
+        IdKind::ChecklistItem,
     ];
 
     pub fn prefix(self) -> &'static str {
@@ -72,6 +74,7 @@ impl IdKind {
             IdKind::Message => "m-",
             IdKind::Comment => "rc-",
             IdKind::Integration => "i-",
+            IdKind::ChecklistItem => "ci-",
         }
     }
 
@@ -86,6 +89,7 @@ impl IdKind {
             IdKind::Message => "message",
             IdKind::Comment => "comment",
             IdKind::Integration => "integration",
+            IdKind::ChecklistItem => "checklist_item",
         }
     }
 }
@@ -187,6 +191,11 @@ define_id!(
     IntegrationId,
     IdKind::Integration
 );
+define_id!(
+    /// The public id of a checklist item, plain step or linked; the `checklist_item` counter numbers them.
+    ChecklistItemId,
+    IdKind::ChecklistItem
+);
 
 #[cfg(test)]
 mod tests {
@@ -218,6 +227,7 @@ mod tests {
             round_trip!(MessageId, n);
             round_trip!(CommentId, n);
             round_trip!(IntegrationId, n);
+            round_trip!(ChecklistItemId, n);
         }
     }
 
@@ -272,6 +282,12 @@ mod tests {
         assert_eq!(serde_json::to_string(&comment).unwrap(), "\"rc-5\"");
         let integration = IntegrationId::from_number(7).unwrap();
         assert_eq!(serde_json::to_string(&integration).unwrap(), "\"i-7\"");
+        let item = ChecklistItemId::from_number(3).unwrap();
+        assert_eq!(serde_json::to_string(&item).unwrap(), "\"ci-3\"");
+        assert_eq!(
+            "c-3".parse::<ChecklistItemId>(),
+            Err(IdParseError::WrongPrefix)
+        );
     }
 
     #[test]
@@ -282,8 +298,8 @@ mod tests {
         prefixes.dedup();
         keys.sort_unstable();
         keys.dedup();
-        assert_eq!(prefixes.len(), 9);
-        assert_eq!(keys.len(), 9);
+        assert_eq!(prefixes.len(), 10);
+        assert_eq!(keys.len(), 10);
     }
 
     #[test]

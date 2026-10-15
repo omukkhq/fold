@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT i.number AS \"item!: i64\", l.number AS \"linked!: i64\"\n           FROM checklist_items i\n           JOIN checklists c ON c.id = i.checklist_id\n           JOIN tasks t ON t.id = c.task_id\n           JOIN tasks l ON l.id = i.linked_task_id\n           WHERE t.number = ? AND i.done_at IS NULL AND l.status = 'done'\n           ORDER BY c.position, i.position",
+  "describe": {
+    "columns": [
+      {
+        "name": "item!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "checklist_items",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "linked!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "e24ca4f603c707d051d157c64def495d1d856d84c7a14dfec8ffc57c745fe6e7"
+}

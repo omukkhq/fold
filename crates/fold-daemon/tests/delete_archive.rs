@@ -2,11 +2,13 @@ use std::sync::Arc;
 
 use fold_core::events::types;
 use fold_core::{
-    Event, EventActor, EventFilter, EventType, LabelColor, LabelName, TaskDescription, TaskId,
-    TaskStatus, TaskTitle,
+    ChecklistName, Event, EventActor, EventFilter, EventType, LabelColor, LabelName, StepText,
+    TaskDescription, TaskId, TaskStatus, TaskTitle,
 };
 use fold_daemon::services::events::{BusMessage, EventBus};
-use fold_daemon::services::tasks::{self, CreateTask, TaskError, TaskService};
+use fold_daemon::services::tasks::{
+    self, CreateTask, ItemContent, NewChecklistItem, TaskError, TaskService,
+};
 use fold_store::tasks::completions::{self, CompletionKind};
 use fold_store::testing::TestProject;
 use fold_store::{StoreError, events};
@@ -35,7 +37,7 @@ enum Bind {
 #[cfg(test)]
 use Bind::{Int, Text};
 
-/// Tasks come from `create_task`. The rows other domains own (checklists, workspaces, proposals, claims) are inserted the way their commands write them.
+/// Tasks and checklist items come from their commands. The rows other domains own (workspaces, proposals, claims) are inserted the way their commands write them.
 #[cfg(test)]
 struct Fixture {
     project: TestProject,
@@ -142,44 +144,33 @@ impl Fixture {
             .unwrap();
     }
 
-    /// A checklist on `owner` with one item linked to `linked` and its checklist edge, as the checklist command writes them.
+    /// An item on `owner`'s `parts` checklist linked to `linked`, with its checklist edge.
     async fn linked_item(&self, owner: u32, linked: u32) {
-        let checklist = self
-            .run(
-                "INSERT INTO checklists (task_id, title, position, created_at)
-                 VALUES ((SELECT id FROM tasks WHERE number = ?), 'parts', 0, 1)",
-                &[Int(owner.into())],
+        self.tasks
+            .add_checklist_item(
+                &agent(),
+                t(owner),
+                NewChecklistItem {
+                    content: ItemContent::Linked(t(linked)),
+                    checklist: Some(ChecklistName::parse("parts").unwrap()),
+                },
             )
-            .await;
-        self.run(
-            "INSERT INTO checklist_items (checklist_id, linked_task_id, position, created_at)
-             VALUES (?, (SELECT id FROM tasks WHERE number = ?), 0, 1)",
-            &[Int(checklist), Int(linked.into())],
-        )
-        .await;
-        self.run(
-            "INSERT INTO dependencies (task_id, needs_task_id, origin, created_by, created_at)
-             VALUES ((SELECT id FROM tasks WHERE number = ?), (SELECT id FROM tasks WHERE number = ?), 'checklist', 'backend', 1)",
-            &[Int(owner.into()), Int(linked.into())],
-        )
-        .await;
-        self.recompute(owner).await;
+            .await
+            .unwrap();
     }
 
     async fn text_item(&self, owner: u32) {
-        let checklist = self
-            .run(
-                "INSERT INTO checklists (task_id, title, position, created_at)
-                 VALUES ((SELECT id FROM tasks WHERE number = ?), 'notes', 1, 1)",
-                &[Int(owner.into())],
+        self.tasks
+            .add_checklist_item(
+                &agent(),
+                t(owner),
+                NewChecklistItem {
+                    content: ItemContent::Step(StepText::parse("write tests").unwrap()),
+                    checklist: Some(ChecklistName::parse("notes").unwrap()),
+                },
             )
-            .await;
-        self.run(
-            "INSERT INTO checklist_items (checklist_id, text, position, created_at)
-             VALUES (?, 'write tests', 0, 1)",
-            &[Int(checklist)],
-        )
-        .await;
+            .await
+            .unwrap();
     }
 
     async fn workspace(&self, task: u32, state: &'static str) -> i64 {
@@ -380,7 +371,7 @@ async fn deleting_a_fresh_task_removes_every_row_that_mentions_it_and_frees_its_
     let items = of_type(&appended, types::CHECKLIST_ITEM_REMOVED);
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].task, Some(t(3)));
-    assert_eq!(items[0].data, json!({"linked_task": "T-1"}));
+    assert_eq!(items[0].data, json!({"item": "ci-1", "linked_task": "T-1"}));
     let changed: Vec<Option<TaskId>> = of_type(&appended, types::TASK_STATUS_CHANGED)
         .into_iter()
         .map(|event| event.task)
@@ -549,7 +540,10 @@ async fn archive_removes_edges_and_linked_items_archives_the_workspace_releases_
         json!({"kind": "implementation", "worker": "api", "reason": "task_archived"})
     );
     assert_eq!(of_type(&appended, types::DEPENDENCY_REMOVED).len(), 3);
-    assert_eq!(of_type(&appended, types::CHECKLIST_ITEM_REMOVED).len(), 1);
+    let items = of_type(&appended, types::CHECKLIST_ITEM_REMOVED);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].task, Some(t(3)));
+    assert_eq!(items[0].data, json!({"item": "ci-1", "linked_task": "T-1"}));
     // Recompute skips the archived task, so only the dependents move.
     let changed: Vec<Option<TaskId>> = of_type(&appended, types::TASK_STATUS_CHANGED)
         .into_iter()

@@ -16,6 +16,10 @@ pub enum TaskValueError {
     InvalidLabelColor,
     #[error("a task status is one of backlog, todo, in_progress, review, done")]
     InvalidStatus,
+    #[error("a checklist name is not empty and has no line break")]
+    InvalidChecklistName,
+    #[error("a checklist step is not empty and has no line break")]
+    InvalidStepText,
 }
 
 impl TaskValueError {
@@ -25,6 +29,8 @@ impl TaskValueError {
             TaskValueError::InvalidLabelName => codes::INVALID_LABEL_NAME,
             TaskValueError::InvalidLabelColor => codes::INVALID_LABEL_COLOR,
             TaskValueError::InvalidStatus => codes::INVALID_TASK_STATUS,
+            TaskValueError::InvalidChecklistName => codes::INVALID_CHECKLIST_NAME,
+            TaskValueError::InvalidStepText => codes::INVALID_STEP_TEXT,
         }
     }
 }
@@ -82,6 +88,23 @@ define_line!(
     LabelName,
     TaskValueError::InvalidLabelName
 );
+define_line!(
+    /// One trimmed line of text, unique within its task. A task's first checklist is [`ChecklistName::subtasks`].
+    ChecklistName,
+    TaskValueError::InvalidChecklistName
+);
+define_line!(
+    /// The text of a plain checklist step: one trimmed line.
+    StepText,
+    TaskValueError::InvalidStepText
+);
+
+impl ChecklistName {
+    /// The name of the checklist that an item added without a checklist name creates.
+    pub fn subtasks() -> Self {
+        Self("Subtasks".to_owned())
+    }
+}
 
 /// Markdown text, kept exactly as given.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -197,7 +220,19 @@ mod tests {
         for bad in ["", "   ", "\n", "a\nb", "a\r\nb", "a\rb"] {
             assert_eq!(TaskTitle::parse(bad), Err(TaskValueError::InvalidTitle));
             assert_eq!(LabelName::parse(bad), Err(TaskValueError::InvalidLabelName));
+            assert_eq!(
+                ChecklistName::parse(bad),
+                Err(TaskValueError::InvalidChecklistName)
+            );
+            assert_eq!(StepText::parse(bad), Err(TaskValueError::InvalidStepText));
         }
+        assert_eq!(ChecklistName::parse(" QA ").unwrap().to_string(), "QA");
+        assert_eq!(StepText::parse(" Wire it ").unwrap().as_str(), "Wire it");
+        assert_eq!(ChecklistName::subtasks().as_str(), "Subtasks");
+        assert_eq!(
+            "Subtasks".parse::<ChecklistName>(),
+            Ok(ChecklistName::subtasks())
+        );
         assert_eq!(
             "a\nb".parse::<LabelName>(),
             Err(TaskValueError::InvalidLabelName)
@@ -263,6 +298,11 @@ mod tests {
             (TaskValueError::InvalidLabelName, "invalid_label_name"),
             (TaskValueError::InvalidLabelColor, "invalid_label_color"),
             (TaskValueError::InvalidStatus, "invalid_task_status"),
+            (
+                TaskValueError::InvalidChecklistName,
+                "invalid_checklist_name",
+            ),
+            (TaskValueError::InvalidStepText, "invalid_step_text"),
         ];
         for (error, code) in cases {
             assert_eq!(error.code(), code);
