@@ -108,3 +108,4 @@ human_approval_missing
 prerequisites_not_done
 integration_failed
 daemon_unreachable
+integration_conflicted

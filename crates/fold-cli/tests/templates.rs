@@ -58,20 +58,7 @@ const FOLD_TOOLS: [&str; 51] = [
 ];
 
 /// The tools of `FOLD_TOOLS` that the MCP server does not list yet. The skill already teaches them; a tool leaves this list in the change that adds it to the server.
-const PENDING_TOOLS: [&str; 12] = [
-    "create_proposal",
-    "list_proposals",
-    "get_proposal",
-    "update_proposal",
-    "close_proposal",
-    "claim_review",
-    "release_review",
-    "create_review_checkout",
-    "submit_review",
-    "get_review_comments",
-    "integrate_proposal",
-    "require_human_review",
-];
+const PENDING_TOOLS: [&str; 0] = [];
 
 /// Every code of the error table and the named `invalid_request` reasons.
 const FOLD_ERROR_CODES: [&str; 108] = [
@@ -186,7 +173,7 @@ const FOLD_ERROR_CODES: [&str; 108] = [
 ];
 
 /// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.
-const PENDING_ERROR_CODES: [&str; 3] = ["seed_exists", "too_large", "integration_conflicted"];
+const PENDING_ERROR_CODES: [&str; 2] = ["seed_exists", "too_large"];
 
 /// The `invalid_request` reasons that have a name.
 const INVALID_REQUEST_REASONS: [&str; 7] = [
@@ -274,7 +261,7 @@ fn every_backticked_identifier_is_a_tool_a_code_or_an_allowed_name() {
 }
 
 fn server_tools() -> BTreeSet<String> {
-    use fold_daemon::mcp::{agents, events, identity, messages, tasks, workspaces};
+    use fold_daemon::mcp::{agents, events, identity, messages, reviews, tasks, workspaces};
     [
         identity::tools(),
         agents::tools(),
@@ -282,6 +269,7 @@ fn server_tools() -> BTreeSet<String> {
         workspaces::tools(),
         tasks::tools(),
         messages::tools(),
+        reviews::tools(),
     ]
     .into_iter()
     .flatten()

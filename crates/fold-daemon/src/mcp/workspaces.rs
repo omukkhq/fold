@@ -249,7 +249,7 @@ fn revision_line(summary: &RevisionSummary) -> Value {
     })
 }
 
-fn file_line(file: &FileChange) -> Value {
+pub(super) fn file_line(file: &FileChange) -> Value {
     let mut line = json!({
         "path": file.path.to_string(),
         "change": file.change.as_str(),

@@ -112,7 +112,7 @@ impl RawTask {
 }
 
 /// The mark the four `human_review` columns hold. A mark that is on always has a reason and a setter; the columns of a mark that is off are ignored.
-fn mark(
+pub(crate) fn mark(
     on: bool,
     reviewer: Option<String>,
     reason: Option<String>,

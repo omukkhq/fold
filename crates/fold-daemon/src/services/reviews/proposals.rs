@@ -2,11 +2,12 @@ use fold_core::checkpoint_policy::AutoReason;
 use fold_core::events::types;
 use fold_core::merge::ConflictReport;
 use fold_core::object::ObjectHash;
+use fold_core::reviews::HumanReviewMark;
 use fold_core::status::ProposalFact;
 use fold_core::tree::ChangeCounts;
 use fold_core::{
     Actor, AgentActor, ChangesetId, EventActor, FoldError, IdKind, NewEvent, ProposalId,
-    RevisionId, TaskId, Timestamp, WorkerName, codes, policy,
+    RevisionId, TaskId, TaskStatus, Timestamp, WorkerName, codes, policy,
 };
 use fold_store::reviews::{
     self, NewProposal, NewVersion, ProposalRow, ProposalState, RetiredState, VersionRow,
@@ -70,6 +71,8 @@ pub struct ProposalSummary {
     pub conflicted: bool,
     pub current_version: u32,
     pub review_claim: Option<WorkerName>,
+    /// The task's human review mark as it stands now.
+    pub human_review: Option<HumanReviewMark>,
     pub turn: Option<Turn>,
     pub close_reason: Option<String>,
     pub created_at: Timestamp,
@@ -89,6 +92,7 @@ impl From<ProposalRow> for ProposalSummary {
             conflicted: row.conflicted,
             current_version: row.current_version,
             review_claim: row.review_claim,
+            human_review: row.human_review,
             close_reason: row.close_reason,
             created_at: row.created_at,
             updated_at: row.updated_at,
@@ -134,6 +138,8 @@ pub struct ProposalDetail {
     pub selected: VersionView,
     /// The report of the latest conflicted integration of the selected version. A new version has none until an integration of it conflicts.
     pub conflict: Option<ConflictReport>,
+    /// The status of the proposal's task as the board shows it.
+    pub task_status: TaskStatus,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -467,11 +473,16 @@ impl ReviewService {
                 .with_hint("call get_proposal without a version to see every version")
             })?;
         let conflict = self.conflict_report(proposal, selected.version).await?;
+        let task_status = tasks::get_by_number(read, row.task)
+            .await?
+            .ok_or(StoreError::Corrupt("proposals.task_id"))?
+            .status;
         Ok(ProposalDetail {
             summary: row.into(),
             versions,
             selected,
             conflict,
+            task_status,
         })
     }
 }

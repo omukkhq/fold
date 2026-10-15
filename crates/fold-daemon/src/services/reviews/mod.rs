@@ -17,6 +17,7 @@ mod human_review;
 mod integrate;
 mod proposals;
 mod verdicts;
+mod views;
 
 pub use checkouts::ReviewCheckout;
 pub use claims::ReviewClaimView;
@@ -27,6 +28,9 @@ pub use proposals::{
     ProposalDetail, ProposalFilter, ProposalSummary, Retirement, Turn, VersionView, retire_proposal,
 };
 pub use verdicts::SubmittedReview;
+pub use views::{
+    CommentCounts, ProposalView, ReviewView, TaskRequirements, integration_conflicted,
+};
 
 #[derive(Debug, Error)]
 pub enum ReviewError {

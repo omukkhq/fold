@@ -5,6 +5,7 @@ pub mod footer;
 pub mod handshake;
 pub mod identity;
 pub mod messages;
+pub mod reviews;
 pub mod tasks;
 pub mod workspaces;
 
@@ -24,6 +25,7 @@ use tokio::sync::Mutex;
 use crate::services::agents::{AgentService, SessionContext};
 use crate::services::events::EventService;
 use crate::services::messages::MessageService;
+use crate::services::reviews::ReviewService;
 use crate::services::tasks::TaskService;
 use crate::services::workspaces::WorkspaceService;
 use error::{from_agent, tool_error};
@@ -39,6 +41,8 @@ pub struct FoldServer {
     workspaces: WorkspaceService,
     tasks: TaskService,
     messages: MessageService,
+    /// The proposal tools exist only on a server that has it.
+    reviews: Option<ReviewService>,
     /// Held across the `register_agent` command, which binds the session.
     session: Mutex<SessionContext>,
     footer: Vec<Arc<dyn FooterSource>>,
@@ -72,6 +76,7 @@ impl FoldServer {
             workspaces,
             tasks,
             messages,
+            reviews: None,
             session: Mutex::new(session),
             footer: vec![unread, new_events],
         }
@@ -81,6 +86,13 @@ impl FoldServer {
     #[must_use]
     pub fn with_footer_source(mut self, source: Arc<dyn FooterSource>) -> Self {
         self.footer.push(source);
+        self
+    }
+
+    /// Serves the proposal and review tools through `reviews`, which in the daemon is `ProjectHandle::reviews`.
+    #[must_use]
+    pub fn with_reviews(mut self, reviews: ReviewService) -> Self {
+        self.reviews = Some(reviews);
         self
     }
 
@@ -140,11 +152,14 @@ impl FoldServer {
                 workspaces::compare_revisions(self, &arguments).await?
             }
             (_, Some(_)) => {
-                let value =
-                    match workspaces::call(self, tool, as_worker.as_ref(), &arguments).await? {
-                        Some(value) => Some(value),
-                        None => tasks::call(self, tool, as_worker.as_ref(), &arguments).await?,
-                    };
+                let mut value =
+                    workspaces::call(self, tool, as_worker.as_ref(), &arguments).await?;
+                if value.is_none() {
+                    value = tasks::call(self, tool, as_worker.as_ref(), &arguments).await?;
+                }
+                if value.is_none() {
+                    value = reviews::call(self, tool, as_worker.as_ref(), &arguments).await?;
+                }
                 match value {
                     Some(value) => value,
                     None => return Ok(None),
@@ -220,6 +235,9 @@ impl ServerHandler for FoldServer {
         tools.extend(workspaces::tools());
         tools.extend(tasks::tools());
         tools.extend(messages::tools());
+        if self.reviews.is_some() {
+            tools.extend(reviews::tools());
+        }
         Ok(ListToolsResult::with_all_items(tools))
     }
 

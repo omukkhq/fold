@@ -1,5 +1,5 @@
 use fold_core::object::ObjectHash;
-use fold_core::reviews::{Approver, ReviewFact, Side, Verdict};
+use fold_core::reviews::{Approver, HumanReviewMark, ReviewFact, Side, Verdict};
 use fold_core::tree::ChangeCounts;
 use fold_core::{
     ChangesetId, CommentId, EventActor, HumanName, ProposalId, RevisionId, TaskId, Timestamp,
@@ -79,6 +79,8 @@ pub struct ProposalRow {
     pub changes_requested: bool,
     /// The worker that holds the unreleased review claim.
     pub review_claim: Option<WorkerName>,
+    /// The task's human review mark as it stands now.
+    pub human_review: Option<HumanReviewMark>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
     pub closed_at: Option<Timestamp>,
@@ -370,6 +372,10 @@ async fn select(
                       SELECT k.name FROM claims c JOIN workers k ON k.id = c.worker_id
                       WHERE c.proposal_id = p.id AND c.kind = 'review' AND c.released_at IS NULL
                   ) AS "review_claim?: String",
+                  t.human_review AS "human_review: bool",
+                  t.human_reviewer,
+                  t.human_review_reason,
+                  t.human_review_set_by,
                   p.created_at,
                   p.updated_at,
                   p.closed_at
@@ -412,6 +418,12 @@ async fn select(
                 current_version,
                 changes_requested: row.verdict.as_deref() == Some("request_changes"),
                 review_claim: row.review_claim.as_deref().map(worker).transpose()?,
+                human_review: crate::tasks::mark(
+                    row.human_review,
+                    row.human_reviewer,
+                    row.human_review_reason,
+                    row.human_review_set_by,
+                )?,
                 created_at: time(row.created_at, "proposals.created_at")?,
                 updated_at: time(row.updated_at, "proposals.updated_at")?,
                 closed_at: row
@@ -766,6 +778,57 @@ pub async fn list_comments(
                     .transpose()?,
                 body: row.body,
                 created_at: time(row.created_at, "review_comments.created_at")?,
+            })
+        })
+        .collect()
+}
+
+/// One stored review with public ids only: the version it reviewed, its writer, and how many comments it carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewRow {
+    pub version: u32,
+    pub verdict: Verdict,
+    pub reviewer: EventActor,
+    pub body: String,
+    pub comments: u32,
+    pub created_at: Timestamp,
+}
+
+/// The reviews of every version of the proposal, in the `(created_at, id)` order that `review_facts` counts in.
+pub async fn list_reviews(
+    executor: impl SqliteExecutor<'_>,
+    proposal: ProposalId,
+) -> Result<Vec<ReviewRow>, StoreError> {
+    let number = proposal.to_db();
+    let rows = sqlx::query!(
+        r#"SELECT v.version, r.verdict, w.name AS "worker?: String", r.reviewer_human, r.body,
+                  r.created_at,
+                  (SELECT COUNT(*) FROM review_comments c WHERE c.review_id = r.id) AS "comments!: i64"
+           FROM reviews r
+           JOIN proposal_versions v ON v.id = r.version_id
+           JOIN proposals p ON p.id = v.proposal_id
+           LEFT JOIN workers w ON w.id = r.reviewer_worker_id
+           WHERE p.number = ?
+           ORDER BY r.created_at, r.id"#,
+        number
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(ReviewRow {
+                version: u32::try_from(row.version)
+                    .map_err(|_| StoreError::Corrupt("proposal_versions.version"))?,
+                verdict: parse_verdict(&row.verdict)?,
+                reviewer: actor(
+                    row.worker.as_deref(),
+                    row.reviewer_human.as_deref(),
+                    "reviews",
+                )?,
+                body: row.body,
+                comments: u32::try_from(row.comments)
+                    .map_err(|_| StoreError::Corrupt("review_comments.review_id"))?,
+                created_at: time(row.created_at, "reviews.created_at")?,
             })
         })
         .collect()

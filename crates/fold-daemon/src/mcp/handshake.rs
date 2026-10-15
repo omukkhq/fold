@@ -19,6 +19,7 @@ use crate::services::agents::{AgentService, SessionContext};
 use crate::services::events::EventService;
 use crate::services::messages::MessageService;
 use crate::services::projects;
+use crate::services::reviews::ReviewService;
 use crate::services::tasks::TaskService;
 use crate::services::workspaces::WorkspaceService;
 use crate::socket::HandshakeHandler;
@@ -93,19 +94,20 @@ where
         Ok(Err(error)) => Err(error),
         Err(_) => Err(invalid("no handshake line arrived within 5 seconds")),
     };
-    let ((agents, events, workspaces, tasks, messages, session, project), rest) = match opened {
-        Ok(opened) => opened,
-        Err(error) => {
-            if write
-                .write_all(&Answer::refused(&error).line())
-                .await
-                .is_ok()
-            {
-                let _ = write.shutdown().await;
+    let ((agents, events, workspaces, tasks, messages, reviews, session, project), rest) =
+        match opened {
+            Ok(opened) => opened,
+            Err(error) => {
+                if write
+                    .write_all(&Answer::refused(&error).line())
+                    .await
+                    .is_ok()
+                {
+                    let _ = write.shutdown().await;
+                }
+                return;
             }
-            return;
-        }
-    };
+        };
     if write
         .write_all(&Answer::accepted(&project).line())
         .await
@@ -118,7 +120,8 @@ where
             tasks,
             messages,
             session.clone(),
-        );
+        )
+        .with_reviews(reviews);
         // Bytes the client sent after its line belong to MCP.
         let read = Cursor::new(rest).chain(read);
         match server.serve((read, write)).await {
@@ -222,6 +225,7 @@ async fn open(
         WorkspaceService,
         TaskService,
         MessageService,
+        ReviewService,
         SessionContext,
         String,
     ),
@@ -257,6 +261,7 @@ async fn open(
         workspaces,
         handle.tasks.clone(),
         messages,
+        handle.reviews(&state.registry),
         session,
         handle.slug.clone(),
     ))

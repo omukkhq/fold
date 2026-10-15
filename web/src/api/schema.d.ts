@@ -246,6 +246,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/proposals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lists the proposals in number order. */
+        get: operations["list_proposals"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/proposals/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One proposal as the requesting human sees it, with the gate report for that human integrating the selected version. */
+        get: operations["get_proposal"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/proposals/{id}/comments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The comments of a proposal in number order, each marked outdated when it was made on an earlier version. */
+        get: operations["list_review_comments"];
+        put?: never;
+        /** Adds one human comment to the current version, as a `comment` review; it never changes whose turn it is. */
+        post: operations["add_review_comment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/proposals/{id}/integrate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A named human integrates the current version onto main and approves it in the same action. A conflicting merge publishes nothing: the answer is `integration_conflicted` with each conflicting path and its kind in `details.files`, and the full report is on the proposal. */
+        post: operations["integrate_proposal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/proposals/{id}/reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A human verdict on the current version with line comments. `request_changes` gives the turn to the author, `approve` counts for integration and `reject` closes the proposal. */
+        post: operations["submit_review"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/push": {
         parameters: {
             query?: never;
@@ -809,6 +895,47 @@ export interface components {
         };
         /** @enum {string} */
         ClaimKind: "implementation";
+        /** @description One comment: on a run of lines when `path`, `side`, `start_line` and `end_line` are all given, on the whole version when none is. */
+        CommentBody: {
+            body: string;
+            /**
+             * Format: int32
+             * @description Inclusive.
+             */
+            end_line?: number | null;
+            path?: string | null;
+            /** @description A comment of the same proposal this one answers, such as rc-5. */
+            reply_to?: string | null;
+            side?: components["schemas"]["CommentSide"] | null;
+            /**
+             * Format: int32
+             * @description From 1.
+             */
+            start_line?: number | null;
+        };
+        CommentCounts: {
+            /**
+             * Format: int32
+             * @description On the selected version.
+             */
+            on_version: number;
+            /**
+             * Format: int32
+             * @description On a version before the current one.
+             */
+            outdated: number;
+            /** Format: int32 */
+            total: number;
+        };
+        CommentList: {
+            /** @description In number order. */
+            comments: components["schemas"]["ReviewComment"][];
+        };
+        /**
+         * @description Which tree a line comment reads: `old` is the version's base, `new` the version.
+         * @enum {string}
+         */
+        CommentSide: "old" | "new";
         /** @description One changed file of a comparison. A binary file is compared by hash only, so its line counts are 0; a hash is null on the side where the file does not exist. */
         ComparedFile: {
             /** Format: int32 */
@@ -859,6 +986,60 @@ export interface components {
             totals: components["schemas"]["ComparisonTotals"];
             /** @description Working files that could not be read, by path. */
             warnings: components["schemas"]["FileWarning"][];
+        };
+        /** @description What one side of a merge has at a conflicting path. */
+        ConflictEntry: {
+            hash: string;
+            kind: components["schemas"]["ConflictEntryKind"];
+        };
+        /** @enum {string} */
+        ConflictEntryKind: "file" | "executable" | "symlink" | "directory";
+        ConflictFile: {
+            base: components["schemas"]["ConflictEntry"] | null;
+            /** @description Empty unless `kind` is `text`. */
+            hunks: components["schemas"]["ConflictHunk"][];
+            kind: components["schemas"]["ConflictKind"];
+            main: components["schemas"]["ConflictEntry"] | null;
+            path: string;
+            version: components["schemas"]["ConflictEntry"] | null;
+        };
+        /** @description One span of a text file that main and the version changed differently. */
+        ConflictHunk: {
+            base: components["schemas"]["ConflictHunkSide"];
+            main: components["schemas"]["ConflictHunkSide"];
+            version: components["schemas"]["ConflictHunkSide"];
+        };
+        /** @description The lines of one side of a hunk, each with its terminator. */
+        ConflictHunkSide: {
+            count: number;
+            lines: string[];
+            /** @description The number, from 1, of the first line; an empty side starts at the line after the span's position. */
+            start: number;
+        };
+        /** @enum {string} */
+        ConflictKind: "text" | "both_modified_binary" | "modify_delete" | "add_add" | "type_change";
+        /** @description Why a version could not be integrated, as the conflicted integration stored it. */
+        ConflictReportView: {
+            /** @example r17 */
+            base_revision: string;
+            /** @description In path order. */
+            files: components["schemas"]["ConflictFile"][];
+            /**
+             * @description The head of main the merge ran onto.
+             * @example r19
+             */
+            main_revision: string;
+            /** @example P-3 */
+            proposal: string;
+            trees: components["schemas"]["ConflictTrees"];
+            /** Format: int32 */
+            version: number;
+        };
+        /** @description The root trees of the three sides of the merge. */
+        ConflictTrees: {
+            base: string;
+            main: string;
+            version: string;
         };
         CreateLabelBody: {
             /**
@@ -1030,6 +1211,13 @@ export interface components {
         };
         /** @enum {string} */
         FileWarningReason: "unstable" | "too_large" | "special" | "unreadable" | "changed_during_snapshot";
+        /**
+         * @description The gates in the order the integration procedure checks them.
+         * @enum {string}
+         */
+        GateName: "open" | "version" | "caller" | "approval" | "human_review" | "prerequisites" | "merge";
+        /** @enum {string} */
+        GateStatusKind: "met" | "unmet" | "checked_at_integration";
         /** @description The counts of one garbage collection run. */
         GcCounts: {
             /**
@@ -1123,6 +1311,25 @@ export interface components {
             /** Format: int32 */
             old_start: number;
         };
+        IntegrateBody: {
+            /**
+             * Format: int32
+             * @description The version the human reviewed. When the current version is another one, nothing integrates and the answer is `stale_version`.
+             */
+            expected_version: number;
+        };
+        IntegrationResult: {
+            /** @example P-3 */
+            proposal: string;
+            result: components["schemas"]["IntegrationResultKind"];
+            /**
+             * @description The new head of main.
+             * @example r18
+             */
+            revision: string;
+        };
+        /** @enum {string} */
+        IntegrationResultKind: "succeeded";
         Label: {
             /**
              * @description One of sage, slate, teal, ink, gold, moss, plum, stone.
@@ -1257,6 +1464,146 @@ export interface components {
             overview: components["schemas"]["ProjectOverview"] | null;
             slug: string;
         };
+        /** @description A proposal as the requesting human sees it. */
+        ProposalDetail: {
+            comments: components["schemas"]["CommentCounts"];
+            conflict: components["schemas"]["ConflictReportView"] | null;
+            /** @description The files the selected version changes against its base, in path order. */
+            files: components["schemas"]["ComparedFile"][];
+            /** @description What stands between the requesting human and integrating the selected version. */
+            gates: components["schemas"]["ProposalGate"][];
+            /** @description The direct prerequisites of the task. */
+            prerequisites: components["schemas"]["ProposalTask"][];
+            review_claim: components["schemas"]["ReviewClaim"] | null;
+            /** @description Every version's reviews, oldest first. */
+            reviews: components["schemas"]["ProposalReview"][];
+            /** @description The version that was asked for, else the current one. */
+            selected: components["schemas"]["ProposalVersion"];
+            summary: components["schemas"]["ProposalSummary"];
+            task: components["schemas"]["ProposalTask"];
+            /** @description The task's status on the board. */
+            task_status: components["schemas"]["TaskStatus"];
+            totals: components["schemas"]["ComparisonTotals"];
+            /** @description Oldest first. */
+            versions: components["schemas"]["ProposalVersion"][];
+        };
+        /** @description One gate between the requesting human and integrating the selected version. */
+        ProposalGate: {
+            /** @description The refusal an integration would get from an unmet gate, such as `not_approved`. */
+            code: string | null;
+            gate: components["schemas"]["GateName"];
+            status: components["schemas"]["GateStatusKind"];
+        };
+        ProposalList: {
+            /** @description In number order. */
+            proposals: components["schemas"]["ProposalSummary"][];
+        };
+        ProposalReview: {
+            body: string;
+            /**
+             * Format: int32
+             * @description How many comments came with the review.
+             */
+            comments: number;
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            created_at: number;
+            /** @description The worker, or `human:<name>`. */
+            reviewer: string;
+            verdict: components["schemas"]["ReviewVerdict"];
+            /** Format: int32 */
+            version: number;
+        };
+        /**
+         * @description Where a proposal stands.
+         * @enum {string}
+         */
+        ProposalStateView: "open" | "integrated" | "closed";
+        ProposalSummary: {
+            /** @description The worker that opened the proposal, `agent` or `agent/worker`. */
+            author: string;
+            /** @description Why a closed proposal closed. */
+            close_reason: string | null;
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            closed_at: number | null;
+            /** @description The latest integration of the current version conflicted with main. */
+            conflicted: boolean;
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            created_at: number;
+            /**
+             * Format: int32
+             * @description The highest version number.
+             */
+            current_version: number;
+            human_review: components["schemas"]["HumanReviewMark"] | null;
+            /** @example P-3 */
+            id: string;
+            /** @description The worker that holds the review claim. */
+            review_claim: string | null;
+            state: components["schemas"]["ProposalStateView"];
+            /** @example T-12 */
+            task: string;
+            title: string;
+            turn: components["schemas"]["ProposalTurn"] | null;
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            updated_at: number;
+        };
+        /** @description A task as the proposal shows it. */
+        ProposalTask: {
+            /** @description Markdown; empty for a prerequisite. */
+            description: string;
+            status: components["schemas"]["TaskStatus"];
+            /** @example T-12 */
+            task: string;
+            title: string;
+        };
+        /**
+         * @description Whose move it is on an open proposal: with the reviewer the task is in Review, with the author it is In Progress.
+         * @enum {string}
+         */
+        ProposalTurn: "with_reviewer" | "with_author";
+        /** @description One immutable version of a proposal. */
+        ProposalVersion: {
+            /**
+             * @description The revision the version is based on.
+             * @example r17
+             */
+            base: string;
+            /**
+             * @description The changeset that holds the proposed tree.
+             * @example C-40
+             */
+            changeset: string;
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            created_at: number;
+            created_by: string;
+            /** @description The author's evidence that the work is done. */
+            evidence: string | null;
+            /** Format: int32 */
+            files_added: number;
+            /** Format: int32 */
+            files_deleted: number;
+            /** Format: int32 */
+            files_modified: number;
+            /** @description The proposed tree's hash. */
+            tree: string;
+            /** Format: int32 */
+            version: number;
+        };
         PushResult: {
             /** @description The remote branch. */
             branch: string;
@@ -1299,6 +1646,58 @@ export interface components {
             /** @description The newest 10 revisions, newest first. */
             recent: components["schemas"]["RevisionView"][];
         };
+        /** @description A human verdict on the current version. The web screens offer approve, request changes and comment; the route also takes reject, which closes the proposal. */
+        ReviewBody: {
+            /** @description May be empty only when the review carries a comment; a reject needs it. */
+            body: string;
+            comments?: components["schemas"]["CommentBody"][];
+            verdict: components["schemas"]["ReviewVerdict"];
+        };
+        ReviewClaim: {
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            claimed_at: number;
+            /** @description The worker, `agent` or `agent/worker`. */
+            holder: string;
+            /**
+             * Format: int64
+             * @description UTC milliseconds of the last lease renewal.
+             */
+            renewed_at: number;
+            /** @description True once the lease ran out without a renewal. */
+            stale: boolean;
+        };
+        ReviewComment: {
+            /** @description The worker, or `human:<name>`. */
+            author: string;
+            body: string;
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            created_at: number;
+            /** Format: int32 */
+            end_line: number | null;
+            /** @example rc-5 */
+            id: string;
+            /** @description Made on a version before the current one. */
+            outdated: boolean;
+            /** @description Null for a comment on the whole version. */
+            path: string | null;
+            /** @description The comment this one answers. */
+            reply_to: string | null;
+            side: components["schemas"]["CommentSide"] | null;
+            /** Format: int32 */
+            start_line: number | null;
+            /** @description The verdict of the review the comment came with. */
+            verdict: components["schemas"]["ReviewVerdict"];
+            /** Format: int32 */
+            version: number;
+        };
+        /** @enum {string} */
+        ReviewVerdict: "comment" | "request_changes" | "approve" | "reject";
         RevisionDetailView: {
             /** @description The files changed against the parent, or every file as added for `r1`. */
             files: components["schemas"]["ComparedFile"][];
@@ -1387,6 +1786,20 @@ export interface components {
              * @description The unacknowledged messages of every worker of the agent.
              */
             unread: number;
+        };
+        SubmittedReview: {
+            /** @description The new comments in order. */
+            comments: string[];
+            /** @example P-3 */
+            proposal: string;
+            /** @description The proposal after the review. */
+            summary: components["schemas"]["ProposalSummary"];
+            verdict: components["schemas"]["ReviewVerdict"];
+            /**
+             * Format: int32
+             * @description The version the review is of.
+             */
+            version: number;
         };
         TaskClaim: {
             /**
@@ -3102,6 +3515,555 @@ export interface operations {
                 };
             };
             /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    list_proposals: {
+        parameters: {
+            query?: {
+                /** @description Only proposals in this state. */
+                state?: components["schemas"]["ProposalStateView"];
+                /** @description Only proposals without a review claim. */
+                unclaimed?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The proposals */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProposalList"];
+                };
+            };
+            /** @description `invalid_request`: the query string is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_proposal: {
+        parameters: {
+            query?: {
+                /** @description A version number; left out, the current version. */
+                version?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The proposal id, such as P-3 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The proposal */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProposalDetail"];
+                };
+            };
+            /** @description `invalid_id`, `invalid_name` or `invalid_request` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `proposal_not_found`: no such proposal or version, or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `invalid_config`: the proposal has a review claim and the project configuration that sets its lease is invalid */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    list_review_comments: {
+        parameters: {
+            query?: {
+                /** @description A version number; left out, the current version. */
+                version?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The proposal id, such as P-3 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The comments */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommentList"];
+                };
+            };
+            /** @description `invalid_id` or `invalid_request` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `proposal_not_found`: no such proposal or version, or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    add_review_comment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The proposal id, such as P-3 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CommentBody"];
+            };
+        };
+        responses: {
+            /** @description The comment */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewComment"];
+                };
+            };
+            /** @description `invalid_request` (`details.field` names the field), `invalid_path`, `invalid_id` or `invalid_name` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `proposal_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `proposal_not_open` or `task_closed` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unknown_comment_path` or `invalid_comment_range`: the lines are not in the file on that side */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    integrate_proposal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The proposal id, such as P-3 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IntegrateBody"];
+            };
+        };
+        responses: {
+            /** @description Integrated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationResult"];
+                };
+            };
+            /** @description `invalid_request`, `invalid_id` or `invalid_name` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `author_cannot_integrate`: the caller's agent wrote the proposal; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `proposal_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description A gate refusal: `stale_version` (`details.expected_version`, `details.current_version`), `changes_requested`, `not_approved`, `human_approval_missing` (`details.reviewer`), `prerequisites_not_done` (`details.prerequisites`); or `proposal_not_open`, `integration_conflicted` (`details.files`: path and kind), `head_moved` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable`, or `integration_failed` (`details.cause`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    submit_review: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The proposal id, such as P-3 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewBody"];
+            };
+        };
+        responses: {
+            /** @description The review */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubmittedReview"];
+                };
+            };
+            /** @description `invalid_request` (`details.field` names the field; `details.reason` is `version_changed` when a version arrived during the review), `invalid_path`, `invalid_id` or `invalid_name` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `proposal_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `proposal_not_open` or `task_closed` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `empty_review`, `unknown_comment_path` or `invalid_comment_range` */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
             503: {
                 headers: {
                     [name: string]: unknown;

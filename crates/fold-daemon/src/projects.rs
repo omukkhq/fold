@@ -4,6 +4,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 use fold_core::{Clock, FoldError, ProjectConfig, ProjectPaths, codes};
 use fold_store::Store;
 use fold_store::projects::ProjectRow;
+use fold_vcs::git::Git;
 use fold_vcs::platform::Capabilities;
 
 use crate::jobs;
@@ -12,8 +13,9 @@ use crate::push::{self, PushTargets, PushTask};
 use crate::services::agents::{AgentService, SeenPresence};
 use crate::services::events::EventBus;
 use crate::services::projects::load_config;
+use crate::services::reviews::ReviewService;
 use crate::services::tasks::TaskService;
-use crate::services::workspaces::WorkspaceLocks;
+use crate::services::workspaces::{WorkspaceLocks, WorkspaceService};
 
 /// An open project: its database, its clock and the live state shared by every request. Later domains add their state here.
 pub struct ProjectHandle {
@@ -122,6 +124,18 @@ impl ProjectHandle {
             .with_seen_presence(self.presence.clone())
             .with_push_targets(self.push.clone())
             .with_live(self.live.clone())
+    }
+
+    /// The review service of this project. Every transport builds it here, per request or session, so it always shares the project's integration mutex, object lock and workspace locks, and knows the humans of `registry`.
+    pub fn reviews(&self, registry: &Store) -> ReviewService {
+        ReviewService::new(
+            self.store.clone(),
+            self.bus.clone(),
+            self.clock.clone(),
+            WorkspaceService::for_project(self, Git::default()),
+            self.integration.clone(),
+        )
+        .with_registry(registry.clone())
     }
 }
 

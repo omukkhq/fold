@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT p.number AS \"number!: i64\",\n                  t.number AS \"task!: i64\",\n                  p.author_worker_id,\n                  w.name AS author,\n                  p.title,\n                  p.state,\n                  p.conflicted AS \"conflicted: bool\",\n                  p.close_reason,\n                  (SELECT MAX(v.version) FROM proposal_versions v WHERE v.proposal_id = p.id) AS \"current_version?: i64\",\n                  (\n                      SELECT r.verdict FROM reviews r\n                      WHERE r.version_id = (\n                                SELECT v.id FROM proposal_versions v\n                                WHERE v.proposal_id = p.id\n                                ORDER BY v.version DESC\n                                LIMIT 1\n                            )\n                        AND r.verdict <> 'comment'\n                      ORDER BY r.created_at DESC, r.id DESC\n                      LIMIT 1\n                  ) AS \"verdict?: String\",\n                  (\n                      SELECT k.name FROM claims c JOIN workers k ON k.id = c.worker_id\n                      WHERE c.proposal_id = p.id AND c.kind = 'review' AND c.released_at IS NULL\n                  ) AS \"review_claim?: String\",\n                  p.created_at,\n                  p.updated_at,\n                  p.closed_at\n           FROM proposals p\n           JOIN tasks t ON t.id = p.task_id\n           JOIN workers w ON w.id = p.author_worker_id\n           WHERE (?1 IS NULL OR p.number = ?1)\n             AND (?2 IS NULL OR p.state = ?2)\n             AND (NOT ?3 OR NOT EXISTS (\n                     SELECT 1 FROM claims c\n                     WHERE c.proposal_id = p.id AND c.kind = 'review' AND c.released_at IS NULL\n                 ))\n           ORDER BY p.number",
+  "query": "SELECT p.number AS \"number!: i64\",\n                  t.number AS \"task!: i64\",\n                  p.author_worker_id,\n                  w.name AS author,\n                  p.title,\n                  p.state,\n                  p.conflicted AS \"conflicted: bool\",\n                  p.close_reason,\n                  (SELECT MAX(v.version) FROM proposal_versions v WHERE v.proposal_id = p.id) AS \"current_version?: i64\",\n                  (\n                      SELECT r.verdict FROM reviews r\n                      WHERE r.version_id = (\n                                SELECT v.id FROM proposal_versions v\n                                WHERE v.proposal_id = p.id\n                                ORDER BY v.version DESC\n                                LIMIT 1\n                            )\n                        AND r.verdict <> 'comment'\n                      ORDER BY r.created_at DESC, r.id DESC\n                      LIMIT 1\n                  ) AS \"verdict?: String\",\n                  (\n                      SELECT k.name FROM claims c JOIN workers k ON k.id = c.worker_id\n                      WHERE c.proposal_id = p.id AND c.kind = 'review' AND c.released_at IS NULL\n                  ) AS \"review_claim?: String\",\n                  t.human_review AS \"human_review: bool\",\n                  t.human_reviewer,\n                  t.human_review_reason,\n                  t.human_review_set_by,\n                  p.created_at,\n                  p.updated_at,\n                  p.closed_at\n           FROM proposals p\n           JOIN tasks t ON t.id = p.task_id\n           JOIN workers w ON w.id = p.author_worker_id\n           WHERE (?1 IS NULL OR p.number = ?1)\n             AND (?2 IS NULL OR p.state = ?2)\n             AND (NOT ?3 OR NOT EXISTS (\n                     SELECT 1 FROM claims c\n                     WHERE c.proposal_id = p.id AND c.kind = 'review' AND c.released_at IS NULL\n                 ))\n           ORDER BY p.number",
   "describe": {
     "columns": [
       {
@@ -120,8 +120,52 @@
         }
       },
       {
-        "name": "created_at",
+        "name": "human_review: bool",
         "ordinal": 11,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "human_review"
+          }
+        }
+      },
+      {
+        "name": "human_reviewer",
+        "ordinal": 12,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "human_reviewer"
+          }
+        }
+      },
+      {
+        "name": "human_review_reason",
+        "ordinal": 13,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "human_review_reason"
+          }
+        }
+      },
+      {
+        "name": "human_review_set_by",
+        "ordinal": 14,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "human_review_set_by"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 15,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -132,7 +176,7 @@
       },
       {
         "name": "updated_at",
-        "ordinal": 12,
+        "ordinal": 16,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -143,7 +187,7 @@
       },
       {
         "name": "closed_at",
-        "ordinal": 13,
+        "ordinal": 17,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -169,9 +213,13 @@
       true,
       true,
       false,
+      true,
+      true,
+      true,
+      false,
       false,
       true
     ]
   },
-  "hash": "919057ab81bae07f68efa052e5138ed4c94a7444d04e11ccd4f117cff97a825b"
+  "hash": "671ea9fbc371e4b7d27067b36a4b41034cc3d8b80232e0fba9bf1206e7699775"
 }

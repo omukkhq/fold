@@ -1,0 +1,641 @@
+#![cfg(test)]
+
+pub mod proposal_tools_support;
+
+use axum::body::Body;
+use axum::http::{HeaderMap, Method, Request, StatusCode};
+use fold_daemon::http::{openapi, router};
+use http_body_util::BodyExt;
+use proposal_tools_support::{Fixture, human, t};
+use serde_json::{Value, json};
+use tower::ServiceExt;
+
+const BASE: &str = "/api/v1/projects/demo";
+const TANIM: (&str, &str) = ("cookie", "fold_human=tanim");
+const ANA: (&str, &str) = ("cookie", "fold_human=ana");
+
+#[cfg(test)]
+struct Answer {
+    status: StatusCode,
+    headers: HeaderMap,
+    body: Value,
+}
+
+#[cfg(test)]
+impl Answer {
+    fn code(&self) -> &str {
+        self.body["error"]["code"].as_str().unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+async fn send_to(
+    fx: &Fixture,
+    method: Method,
+    uri: &str,
+    body: Option<Value>,
+    headers: &[(&str, &str)],
+) -> Answer {
+    let mut request = Request::builder().method(method).uri(uri);
+    for (name, value) in headers {
+        request = request.header(*name, *value);
+    }
+    let body = match body {
+        Some(value) => {
+            request = request.header("content-type", "application/json");
+            Body::from(value.to_string())
+        }
+        None => Body::empty(),
+    };
+    let response = router(fx.state.clone())
+        .oneshot(request.body(body).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let headers = response.headers().clone();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap()
+    };
+    Answer {
+        status,
+        headers,
+        body,
+    }
+}
+
+#[cfg(test)]
+async fn send(
+    fx: &Fixture,
+    method: Method,
+    path: &str,
+    body: Option<Value>,
+    headers: &[(&str, &str)],
+) -> Answer {
+    send_to(fx, method, &format!("{BASE}{path}"), body, headers).await
+}
+
+/// `frontend` opens P-1 on T-1, changing `src/lib.rs`.
+#[cfg(test)]
+async fn with_p1() -> Fixture {
+    let fx = Fixture::new().await;
+    let frontend = fx.agent("frontend").await;
+    fx.proposal(&frontend, 1, "pub fn y() {}\n").await;
+    fx
+}
+
+#[tokio::test]
+async fn list_proposals_returns_summaries_with_the_mark() {
+    let fx = with_p1().await;
+    fx.reviews()
+        .require_human_review(&fx.agent("planner").await, t(1), None, "touches auth")
+        .await
+        .unwrap();
+    let answer = send(&fx, Method::GET, "/proposals?state=open", None, &[]).await;
+    assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
+    let row = &answer.body["proposals"][0];
+    assert_eq!(row["id"], "P-1");
+    assert_eq!(row["task"], "T-1");
+    assert_eq!(row["author"], "frontend");
+    assert_eq!(row["state"], "open");
+    assert_eq!(row["turn"], "with_reviewer");
+    assert_eq!(row["current_version"], 1);
+    assert_eq!(row["review_claim"], Value::Null);
+    assert_eq!(
+        row["human_review"],
+        json!({"reviewer": null, "reason": "touches auth", "set_by": "planner"})
+    );
+    let answer = send(&fx, Method::GET, "/proposals?unclaimed=true", None, &[]).await;
+    assert_eq!(answer.body["proposals"].as_array().unwrap().len(), 1);
+    let answer = send(&fx, Method::GET, "/proposals?state=merged", None, &[]).await;
+    assert_eq!(
+        (answer.status, answer.code()),
+        (StatusCode::BAD_REQUEST, "invalid_request")
+    );
+}
+
+#[tokio::test]
+async fn get_proposal_reports_the_gates_for_the_requesting_human() {
+    let fx = with_p1().await;
+    let answer = send(&fx, Method::GET, "/proposals/P-1", None, &[TANIM]).await;
+    assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
+    let detail = &answer.body;
+    assert_eq!(detail["summary"]["id"], "P-1");
+    assert_eq!(detail["task_status"], "review");
+    assert_eq!(detail["task"]["title"], "report");
+    assert_eq!(detail["selected"]["version"], 1);
+    assert_eq!(detail["selected"]["base"], "r1");
+    assert_eq!(detail["selected"]["evidence"], "tests pass");
+    assert_eq!(detail["versions"].as_array().unwrap().len(), 1);
+    assert_eq!(detail["conflict"], Value::Null);
+    assert_eq!(detail["review_claim"], Value::Null);
+    assert_eq!(detail["files"][0]["path"], "src/lib.rs");
+    assert_eq!(detail["files"][0]["change"], "modified");
+    assert_eq!(detail["totals"]["files"], 1);
+    let gates: Vec<(String, String)> = detail["gates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|gate| {
+            (
+                gate["gate"].as_str().unwrap().to_owned(),
+                gate["status"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    let expected: Vec<(String, String)> = [
+        ("open", "met"),
+        ("version", "met"),
+        ("caller", "met"),
+        ("approval", "met"),
+        ("human_review", "met"),
+        ("prerequisites", "met"),
+        ("merge", "checked_at_integration"),
+    ]
+    .iter()
+    .map(|(gate, status)| ((*gate).to_owned(), (*status).to_owned()))
+    .collect();
+    assert_eq!(gates, expected);
+
+    let answer = send(&fx, Method::GET, "/proposals/P-1", None, &[]).await;
+    assert_eq!(
+        (answer.status, answer.code()),
+        (StatusCode::UNAUTHORIZED, "human_name_required")
+    );
+    let answer = send(&fx, Method::GET, "/proposals/P-9", None, &[TANIM]).await;
+    assert_eq!(
+        (answer.status, answer.code()),
+        (StatusCode::NOT_FOUND, "proposal_not_found")
+    );
+    let answer = send(&fx, Method::GET, "/proposals/P-1?version=4", None, &[TANIM]).await;
+    assert_eq!(
+        (answer.status, answer.code()),
+        (StatusCode::NOT_FOUND, "proposal_not_found")
+    );
+    let answer = send(&fx, Method::GET, "/proposals/nine", None, &[TANIM]).await;
+    assert_eq!(
+        (answer.status, answer.code()),
+        (StatusCode::BAD_REQUEST, "invalid_id")
+    );
+}
+
+#[tokio::test]
+async fn a_human_comment_is_added_and_listed() {
+    let fx = with_p1().await;
+    let answer = send(
+        &fx,
+        Method::POST,
+        "/proposals/P-1/comments",
+        Some(json!({"path": "src/lib.rs", "side": "new", "start_line": 1, "end_line": 1, "body": "why y"})),
+        &[TANIM],
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::CREATED, "{}", answer.body);
+    assert_eq!(
+        answer.body,
+        json!({
+            "id": "rc-1",
+            "version": 1,
+            "verdict": "comment",
+            "author": "human:tanim",
+            "path": "src/lib.rs",
+            "side": "new",
+            "start_line": 1,
+            "end_line": 1,
+            "reply_to": null,
+            "body": "why y",
+            "created_at": answer.body["created_at"],
+            "outdated": false,
+        })
+    );
+    let answer = send(
+        &fx,
+        Method::POST,
+        "/proposals/P-1/comments",
+        Some(json!({"reply_to": "rc-1", "body": "because"})),
+        &[ANA],
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::CREATED, "{}", answer.body);
+    assert_eq!(answer.body["reply_to"], "rc-1");
+    assert_eq!(answer.body["path"], Value::Null);
+
+    let answer = send(&fx, Method::GET, "/proposals/P-1/comments", None, &[]).await;
+    assert_eq!(answer.status, StatusCode::OK);
+    assert_eq!(answer.body["comments"].as_array().unwrap().len(), 2);
+    let answer = send(
+        &fx,
+        Method::GET,
+        "/proposals/P-1/comments?version=1",
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(answer.body["comments"].as_array().unwrap().len(), 2);
+    let answer = send(
+        &fx,
+        Method::GET,
+        "/proposals/P-1/comments?version=3",
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(
+        (answer.status, answer.code()),
+        (StatusCode::NOT_FOUND, "proposal_not_found")
+    );
+
+    let answer = send(
+        &fx,
+        Method::POST,
+        "/proposals/P-1/comments",
+        Some(json!({"path": "src/lib.rs", "side": "new", "start_line": 5, "end_line": 6, "body": "far"})),
+        &[TANIM],
+    )
+    .await;
+    assert_eq!(
+        (answer.status, answer.code()),
+        (StatusCode::UNPROCESSABLE_ENTITY, "invalid_comment_range")
+    );
+    let answer = send(
+        &fx,
+        Method::POST,
+        "/proposals/P-1/comments",
+        Some(json!({"path": "src/lib.rs", "body": "no lines"})),
+        &[TANIM],
+    )
+    .await;
+    assert_eq!(
+        (answer.status, answer.code()),
+        (StatusCode::BAD_REQUEST, "invalid_request")
+    );
+    let answer = send(
+        &fx,
+        Method::POST,
+        "/proposals/P-1/comments",
+        Some(json!({"body": "anonymous"})),
+        &[],
+    )
+    .await;
+    assert_eq!(
+        (answer.status, answer.code()),
+        (StatusCode::UNAUTHORIZED, "human_name_required")
+    );
+}
+
+#[tokio::test]
+async fn a_human_verdict_moves_the_turn() {
+    let fx = with_p1().await;
+    let answer = send(
+        &fx,
+        Method::POST,
+        "/proposals/P-1/reviews",
+        Some(json!({"verdict": "comment", "body": ""})),
+        &[TANIM],
+    )
+    .await;
+    assert_eq!(
+        (answer.status, answer.code()),
+        (StatusCode::UNPROCESSABLE_ENTITY, "empty_review")
+    );
+    let answer = send(
+        &fx,
+        Method::POST,
+        "/proposals/P-1/reviews",
+        Some(json!({"verdict": "request_changes", "body": "rename back", "comments": [
+            {"path": "src/lib.rs", "side": "old", "start_line": 1, "end_line": 1, "body": "keep x"},
+        ]})),
+        &[TANIM],
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::CREATED, "{}", answer.body);
+    assert_eq!(answer.body["proposal"], "P-1");
+    assert_eq!(answer.body["version"], 1);
+    assert_eq!(answer.body["verdict"], "request_changes");
+    assert_eq!(answer.body["comments"], json!(["rc-1"]));
+    assert_eq!(answer.body["summary"]["turn"], "with_author");
+    let answer = send(
+        &fx,
+        Method::POST,
+        "/proposals/P-1/reviews",
+        Some(json!({"verdict": "approve", "body": "fine after all"})),
+        &[ANA],
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::CREATED, "{}", answer.body);
+    assert_eq!(answer.body["summary"]["turn"], "with_reviewer");
+    let detail = send(&fx, Method::GET, "/proposals/P-1", None, &[TANIM]).await;
+    assert_eq!(detail.body["reviews"].as_array().unwrap().len(), 2);
+    assert_eq!(detail.body["reviews"][0]["reviewer"], "human:tanim");
+    assert_eq!(detail.body["reviews"][0]["comments"], 1);
+    assert_eq!(detail.body["comments"]["total"], 1);
+    let answer = send(
+        &fx,
+        Method::POST,
+        "/proposals/P-1/reviews",
+        Some(json!({"verdict": "reject", "body": "not this way"})),
+        &[TANIM],
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::CREATED);
+    assert_eq!(answer.body["summary"]["state"], "closed");
+    assert_eq!(answer.body["summary"]["close_reason"], "not this way");
+    let answer = send(
+        &fx,
+        Method::POST,
+        "/proposals/P-1/reviews",
+        Some(json!({"verdict": "approve", "body": "late"})),
+        &[TANIM],
+    )
+    .await;
+    assert_eq!(
+        (answer.status, answer.code()),
+        (StatusCode::CONFLICT, "proposal_not_open")
+    );
+}
+
+#[tokio::test]
+async fn human_integrates_through_the_route_with_the_fold_human_cookie() {
+    let fx = with_p1().await;
+    let answer = send(
+        &fx,
+        Method::POST,
+        "/proposals/P-1/integrate",
+        Some(json!({"expected_version": 1})),
+        &[TANIM],
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
+    assert_eq!(
+        answer.body,
+        json!({"proposal": "P-1", "result": "succeeded", "revision": "r2"})
+    );
+    let detail = send(&fx, Method::GET, "/proposals/P-1", None, &[TANIM]).await;
+    assert_eq!(detail.body["summary"]["state"], "integrated");
+    assert_eq!(detail.body["task_status"], "done");
+    assert_eq!(detail.body["reviews"][0]["verdict"], "approve");
+    assert_eq!(detail.body["reviews"][0]["reviewer"], "human:tanim");
+}
+
+#[tokio::test]
+async fn human_integrate_without_the_cookie_is_refused() {
+    let fx = with_p1().await;
+    let answer = send(
+        &fx,
+        Method::POST,
+        "/proposals/P-1/integrate",
+        Some(json!({"expected_version": 1})),
+        &[],
+    )
+    .await;
+    assert_eq!(
+        (answer.status, answer.code()),
+        (StatusCode::UNAUTHORIZED, "human_name_required")
+    );
+    let answer = send(&fx, Method::GET, "/proposals?state=integrated", None, &[]).await;
+    assert_eq!(answer.body["proposals"], json!([]));
+}
+
+#[tokio::test]
+async fn integrate_with_a_stale_expected_version_gives_stale_version() {
+    let fx = with_p1().await;
+    let answer = send(
+        &fx,
+        Method::POST,
+        "/proposals/P-1/integrate",
+        Some(json!({"expected_version": 2})),
+        &[TANIM],
+    )
+    .await;
+    assert_eq!(
+        (answer.status, answer.code()),
+        (StatusCode::CONFLICT, "stale_version")
+    );
+    assert_eq!(answer.body["error"]["details"]["expected_version"], 2);
+    assert_eq!(answer.body["error"]["details"]["current_version"], 1);
+    let answer = send(
+        &fx,
+        Method::POST,
+        "/proposals/P-1/integrate",
+        Some(json!({})),
+        &[TANIM],
+    )
+    .await;
+    assert_eq!(
+        (answer.status, answer.code()),
+        (StatusCode::BAD_REQUEST, "invalid_request")
+    );
+}
+
+#[tokio::test]
+async fn integrate_refusals_answer_with_their_gate_codes() {
+    let fx = with_p1().await;
+    fx.reviews()
+        .require_human_review(
+            &human("tanim"),
+            t(1),
+            Some(fold_core::HumanName::parse("tanim").unwrap()),
+            "touches auth",
+        )
+        .await
+        .unwrap();
+    let answer = send(
+        &fx,
+        Method::POST,
+        "/proposals/P-1/integrate",
+        Some(json!({"expected_version": 1})),
+        &[ANA],
+    )
+    .await;
+    assert_eq!(
+        (answer.status, answer.code()),
+        (StatusCode::CONFLICT, "human_approval_missing")
+    );
+    assert_eq!(answer.body["error"]["details"]["reviewer"], "tanim");
+    fx.handle
+        .tasks
+        .add_dependency(&human("tanim"), t(1), t(2))
+        .await
+        .unwrap();
+    let answer = send(
+        &fx,
+        Method::POST,
+        "/proposals/P-1/integrate",
+        Some(json!({"expected_version": 1})),
+        &[TANIM],
+    )
+    .await;
+    assert_eq!(
+        (answer.status, answer.code()),
+        (StatusCode::CONFLICT, "prerequisites_not_done")
+    );
+    assert_eq!(
+        answer.body["error"]["details"]["prerequisites"],
+        json!([{"task": "T-2", "status": "todo"}])
+    );
+}
+
+#[tokio::test]
+async fn a_conflicting_integration_answers_integration_conflicted() {
+    let fx = with_p1().await;
+    let backend = fx.agent("backend").await;
+    fx.proposal(&backend, 2, "pub fn w() {}\n").await;
+    let answer = send(
+        &fx,
+        Method::POST,
+        "/proposals/P-2/integrate",
+        Some(json!({"expected_version": 1})),
+        &[TANIM],
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
+    let answer = send(
+        &fx,
+        Method::POST,
+        "/proposals/P-1/integrate",
+        Some(json!({"expected_version": 1})),
+        &[TANIM],
+    )
+    .await;
+    assert_eq!(
+        (answer.status, answer.code()),
+        (StatusCode::CONFLICT, "integration_conflicted")
+    );
+    let details = &answer.body["error"]["details"];
+    assert_eq!(details["proposal"], "P-1");
+    assert_eq!(
+        details["files"],
+        json!([{"path": "src/lib.rs", "kind": "text"}])
+    );
+    assert!(details["hint"].as_str().unwrap().contains("get_proposal"));
+    let detail = send(&fx, Method::GET, "/proposals/P-1", None, &[TANIM]).await;
+    let report = &detail.body["conflict"];
+    assert_eq!(report["proposal"], "P-1");
+    assert_eq!(report["version"], 1);
+    assert_eq!(report["base_revision"], "r1");
+    assert_eq!(report["main_revision"], "r2");
+    let file = &report["files"][0];
+    assert_eq!(file["path"], "src/lib.rs");
+    assert_eq!(file["kind"], "text");
+    assert_eq!(file["base"]["kind"], "file");
+    let hunk = &file["hunks"][0];
+    assert_eq!(
+        hunk["base"],
+        json!({"start": 1, "count": 1, "lines": ["pub fn x() {}\n"]})
+    );
+    assert_eq!(hunk["main"]["lines"], json!(["pub fn w() {}\n"]));
+    assert_eq!(hunk["version"]["lines"], json!(["pub fn y() {}\n"]));
+    assert_eq!(detail.body["summary"]["conflicted"], true);
+    assert_eq!(detail.body["summary"]["turn"], "with_author");
+}
+
+#[tokio::test]
+async fn fold_human_cookie_is_http_only_strict_and_one_year() {
+    let fx = Fixture::new().await;
+    let answer = send_to(
+        &fx,
+        Method::POST,
+        "/api/v1/session",
+        Some(json!({"name": "ana"})),
+        &[],
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::NO_CONTENT);
+    let cookies: Vec<&str> = answer
+        .headers
+        .get_all("set-cookie")
+        .iter()
+        .map(|value| value.to_str().unwrap())
+        .collect();
+    assert_eq!(
+        cookies,
+        ["fold_human=ana; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000"]
+    );
+}
+
+#[test]
+fn the_openapi_document_declares_every_route_and_error_schema() {
+    let doc = serde_json::to_value(openapi()).unwrap();
+    let paths = &doc["paths"];
+    for (path, method, operation) in [
+        ("/api/v1/projects/{slug}/proposals", "get", "list_proposals"),
+        (
+            "/api/v1/projects/{slug}/proposals/{id}",
+            "get",
+            "get_proposal",
+        ),
+        (
+            "/api/v1/projects/{slug}/proposals/{id}/comments",
+            "get",
+            "list_review_comments",
+        ),
+        (
+            "/api/v1/projects/{slug}/proposals/{id}/comments",
+            "post",
+            "add_review_comment",
+        ),
+        (
+            "/api/v1/projects/{slug}/proposals/{id}/reviews",
+            "post",
+            "submit_review",
+        ),
+        (
+            "/api/v1/projects/{slug}/proposals/{id}/integrate",
+            "post",
+            "integrate_proposal",
+        ),
+    ] {
+        let declared = &paths[path][method];
+        assert_eq!(declared["operationId"], operation, "{method} {path}");
+        let responses = declared["responses"].as_object().unwrap();
+        for (status, response) in responses {
+            if status.starts_with('4') || status.starts_with('5') {
+                assert_eq!(
+                    response["content"]["application/json"]["schema"]["$ref"],
+                    "#/components/schemas/ErrorEnvelope",
+                    "{operation} {status}"
+                );
+            }
+        }
+    }
+    let integrate = &paths["/api/v1/projects/{slug}/proposals/{id}/integrate"]["post"]["responses"];
+    let conflict = integrate["409"]["description"].as_str().unwrap();
+    for code in [
+        "stale_version",
+        "changes_requested",
+        "not_approved",
+        "human_approval_missing",
+        "prerequisites_not_done",
+        "integration_conflicted",
+        "head_moved",
+    ] {
+        assert!(conflict.contains(code), "{code}");
+    }
+    assert!(
+        integrate["403"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("author_cannot_integrate")
+    );
+    let schemas = &doc["components"]["schemas"];
+    for name in [
+        "ProposalList",
+        "ProposalSummary",
+        "ProposalDetail",
+        "ProposalGate",
+        "ConflictReportView",
+        "ConflictHunkSide",
+        "CommentList",
+        "ReviewComment",
+        "CommentBody",
+        "ReviewBody",
+        "SubmittedReview",
+        "IntegrateBody",
+        "IntegrationResult",
+        "ErrorEnvelope",
+    ] {
+        assert!(schemas[name].is_object(), "{name} is missing");
+    }
+}

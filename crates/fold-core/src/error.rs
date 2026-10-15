@@ -123,6 +123,7 @@ define_codes! {
     PREREQUISITES_NOT_DONE = "prerequisites_not_done",
     INTEGRATION_FAILED = "integration_failed",
     DAEMON_UNREACHABLE = "daemon_unreachable",
+    INTEGRATION_CONFLICTED = "integration_conflicted",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

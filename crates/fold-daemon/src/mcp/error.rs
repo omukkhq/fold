@@ -7,6 +7,7 @@ use crate::services::agents::AgentError;
 use crate::services::events::EventsError;
 use crate::services::messages::MessageError;
 use crate::services::projects::ProjectError;
+use crate::services::reviews::ReviewError;
 use crate::services::tasks::TaskError;
 use crate::services::workspaces::WorkspaceError;
 
@@ -148,6 +149,18 @@ pub fn from_project(error: ProjectError) -> FoldError {
     }
 }
 
+pub fn from_review(error: ReviewError) -> FoldError {
+    match error {
+        ReviewError::Fold(error) => error,
+        ReviewError::Store(error) => from_store(error),
+        ReviewError::Task(error) => from_task(error),
+        ReviewError::Event(error) => {
+            tracing::error!(%error, "tool call failed to build an event");
+            FoldError::new(codes::INTERNAL_ERROR, "internal error")
+        }
+    }
+}
+
 /// A tool-level error result: MCP clients show its content to the agent, while a protocol error would reach the agent as an opaque failure.
 pub fn tool_error(error: &FoldError) -> CallToolResult {
     let body = serde_json::json!({ "error": ErrorBody::from(error) });
@@ -196,6 +209,22 @@ mod tests {
             "x",
         )));
         assert_eq!(missing.code(), codes::PROJECT_NOT_FOUND);
+        let review = from_review(ReviewError::Fold(FoldError::new(
+            codes::STALE_VERSION,
+            "v1",
+        )));
+        assert_eq!(review.code(), codes::STALE_VERSION);
+        let review = from_review(ReviewError::Task(TaskError::Fold(FoldError::new(
+            codes::TASK_CLOSED,
+            "done",
+        ))));
+        assert_eq!(review.code(), codes::TASK_CLOSED);
+        for internal in [
+            from_review(ReviewError::Store(StoreError::Corrupt("proposals.number"))),
+            from_review(ReviewError::Event(fold_core::EventError::InvalidActor)),
+        ] {
+            assert_eq!(internal.code(), codes::INTERNAL_ERROR);
+        }
         let store = from_project(ProjectError::Store(StoreError::Corrupt("projects.root")));
         let task = from_task(TaskError::Fold(FoldError::new(codes::TASK_NOT_FOUND, "x")));
         assert_eq!(task.code(), codes::TASK_NOT_FOUND);

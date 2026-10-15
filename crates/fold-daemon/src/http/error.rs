@@ -105,6 +105,13 @@ fn status_of(code: &str) -> Option<StatusCode> {
         codes::WORKSPACE_IO => Some(StatusCode::INTERNAL_SERVER_ERROR),
         codes::HEAD_MOVED => Some(StatusCode::CONFLICT),
         codes::INTEGRATION_FAILED => Some(StatusCode::SERVICE_UNAVAILABLE),
+        codes::INTEGRATOR_REQUIRED | codes::AUTHOR_CANNOT_REVIEW => Some(StatusCode::FORBIDDEN),
+        codes::PROPOSAL_EXISTS | codes::PROPOSAL_NOT_OPEN | codes::INTEGRATION_CONFLICTED => {
+            Some(StatusCode::CONFLICT)
+        }
+        codes::INVALID_COMMENT_RANGE | codes::UNKNOWN_COMMENT_PATH | codes::EMPTY_REVIEW => {
+            Some(StatusCode::UNPROCESSABLE_ENTITY)
+        }
         _ => None,
     }
 }
@@ -342,6 +349,11 @@ mod tests {
             (codes::HUMAN_REVIEW_ALREADY_SET, StatusCode::CONFLICT),
             (codes::STALE_VERSION, StatusCode::CONFLICT),
             (codes::AUTHOR_CANNOT_INTEGRATE, StatusCode::FORBIDDEN),
+            (codes::INTEGRATOR_REQUIRED, StatusCode::FORBIDDEN),
+            (codes::AUTHOR_CANNOT_REVIEW, StatusCode::FORBIDDEN),
+            (codes::PROPOSAL_EXISTS, StatusCode::CONFLICT),
+            (codes::PROPOSAL_NOT_OPEN, StatusCode::CONFLICT),
+            (codes::INTEGRATION_CONFLICTED, StatusCode::CONFLICT),
             (codes::CHANGES_REQUESTED, StatusCode::CONFLICT),
             (codes::NOT_APPROVED, StatusCode::CONFLICT),
             (codes::HUMAN_APPROVAL_MISSING, StatusCode::CONFLICT),
@@ -349,6 +361,15 @@ mod tests {
             (codes::AGENT_NOT_REGISTERED, StatusCode::NOT_FOUND),
             (codes::INVALID_PUSH_TARGET, StatusCode::BAD_REQUEST),
             (codes::DAEMON_UNREACHABLE, StatusCode::SERVICE_UNAVAILABLE),
+            (
+                codes::INVALID_COMMENT_RANGE,
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                codes::UNKNOWN_COMMENT_PATH,
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (codes::EMPTY_REVIEW, StatusCode::UNPROCESSABLE_ENTITY),
         ] {
             assert_eq!(status_of(code), Some(status));
         }
