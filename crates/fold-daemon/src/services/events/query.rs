@@ -1,7 +1,6 @@
 use fold_core::events::types;
 use fold_core::{
-    AgentName, Event, EventFilter, EventType, FoldError, MessageId, ProposalId, TaskId, codes,
-    concerns,
+    AgentName, Event, EventFilter, EventType, FoldError, ProposalId, TaskId, codes, concerns,
 };
 use fold_store::{Store, StoreError, events};
 use serde_json::json;
@@ -143,9 +142,8 @@ pub(super) async fn cursor_page(
                     let keep = match recipient_check(&event) {
                         _ if !recipients_only => true,
                         RecipientCheck::Pass => true,
-                        RecipientCheck::Fail => false,
-                        RecipientCheck::Ask(message) => {
-                            events::is_recipient(tx.conn(), message, agent_id).await?
+                        RecipientCheck::Ask(seq) => {
+                            events::is_recipient(tx.conn(), seq, agent_id).await?
                         }
                     };
                     if keep {
@@ -173,24 +171,16 @@ fn is_message_event(event: &Event) -> bool {
 /// What decides whether an event reaches an agent that waits.
 pub(super) enum RecipientCheck {
     Pass,
-    Fail,
-    /// Passes only when a worker of the agent receives this message.
-    Ask(MessageId),
+    /// Passes only when a worker of the agent receives the message that the event with this `seq` names in `events.message_id`.
+    Ask(u64),
 }
 
-/// A message event reaches an agent only when one of its workers is a recipient of the message in `data.message`; every other event passes.
+/// A message event reaches an agent only when one of its workers is a recipient of the event's message; every other event passes.
 pub(super) fn recipient_check(event: &Event) -> RecipientCheck {
-    if !is_message_event(event) {
-        return RecipientCheck::Pass;
-    }
-    match event
-        .data
-        .get("message")
-        .and_then(serde_json::Value::as_str)
-        .and_then(|id| id.parse::<MessageId>().ok())
-    {
-        Some(message) => RecipientCheck::Ask(message),
-        None => RecipientCheck::Fail,
+    if is_message_event(event) {
+        RecipientCheck::Ask(event.seq)
+    } else {
+        RecipientCheck::Pass
     }
 }
 

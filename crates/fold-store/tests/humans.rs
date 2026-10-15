@@ -102,3 +102,25 @@ async fn a_stored_time_that_no_longer_parses_is_corrupt() {
         .unwrap_err();
     assert!(matches!(error, StoreError::Corrupt("humans.created_at")));
 }
+
+#[tokio::test]
+async fn list_humans_orders_every_human_by_name() {
+    let (_dir, store) = registry_store().await;
+    assert!(
+        projects::list_humans(store.read())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    for text in ["tanim", "ana", "bo"] {
+        let now = Timestamp::from_millis(1).unwrap();
+        store
+            .write(async |tx| projects::insert_human(tx, &name(text), now).await)
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        projects::list_humans(store.read()).await.unwrap(),
+        vec![name("ana"), name("bo"), name("tanim")]
+    );
+}

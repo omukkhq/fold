@@ -524,13 +524,17 @@ async fn events_keep_rows_when_their_task_is_deleted() {
         count(&store, "SELECT COUNT(*) FROM events WHERE task_id = 12").await,
         1
     );
-    let foreign_keys: Vec<String> = sqlx::query_scalar(
-        "SELECT m.name FROM sqlite_master m, pragma_foreign_key_list(m.name) f WHERE m.name = 'events'",
+    // A message is never deleted, so `message_id` is the one reference column with a foreign key.
+    let foreign_keys: Vec<(String, String)> = sqlx::query_as(
+        "SELECT f.\"from\", f.\"table\" FROM sqlite_master m, pragma_foreign_key_list(m.name) f WHERE m.name = 'events'",
     )
     .fetch_all(store.read())
     .await
     .unwrap();
-    assert!(foreign_keys.is_empty());
+    assert_eq!(
+        foreign_keys,
+        [("message_id".to_owned(), "messages".to_owned())]
+    );
     let bad_data = refused(
         &store,
         "INSERT INTO events (type, actor, data, created_at) VALUES ('task.created', 'fold', '[1]', 0)",

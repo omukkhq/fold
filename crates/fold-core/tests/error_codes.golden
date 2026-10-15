@@ -69,3 +69,7 @@ workspace_not_found
 workspace_not_active
 not_workspace_owner
 failpoint
+message_not_found
+recipient_not_found
+unknown_human
+proposal_not_found

@@ -84,6 +84,10 @@ define_codes! {
     NOT_WORKSPACE_OWNER = "not_workspace_owner",
     // Only a fired failpoint of the `failpoints` test feature returns it; a release build never does.
     FAILPOINT = "failpoint",
+    MESSAGE_NOT_FOUND = "message_not_found",
+    RECIPIENT_NOT_FOUND = "recipient_not_found",
+    UNKNOWN_HUMAN = "unknown_human",
+    PROPOSAL_NOT_FOUND = "proposal_not_found",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

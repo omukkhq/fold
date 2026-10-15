@@ -12,7 +12,7 @@ use crate::store::WriteTx;
 /// The most events one `read_after` call returns.
 pub const MAX_PAGE: usize = 1000;
 
-/// Inserts `event` in the caller's write transaction and returns it with its `seq`. `now` comes from the project's `Clock`. The reference columns hold public numbers, not row ids.
+/// Inserts `event` in the caller's write transaction and returns it with its `seq`. `now` comes from the project's `Clock`. The reference columns hold public numbers, not row ids; `message_id` must name a stored message.
 pub async fn append(
     tx: &mut WriteTx,
     event: &NewEvent,
@@ -30,11 +30,12 @@ pub async fn append(
     let proposal = event.proposal.map(ProposalId::to_db);
     let workspace = event.workspace.map(WorkspaceId::to_db);
     let revision = event.revision.map(RevisionId::to_db);
+    let message = event.message.map(MessageId::to_db);
     let data = event.data.to_string();
     let created_at = now.as_millis();
     let seq = sqlx::query_scalar!(
-        r#"INSERT INTO events (type, actor, task_id, proposal_id, workspace_id, revision_id, data, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        r#"INSERT INTO events (type, actor, task_id, proposal_id, workspace_id, revision_id, message_id, data, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
            RETURNING seq AS "seq!: i64""#,
         event_type,
         actor,
@@ -42,6 +43,7 @@ pub async fn append(
         proposal,
         workspace,
         revision,
+        message,
         data,
         created_at
     )
@@ -212,21 +214,22 @@ pub async fn advance_cursor(tx: &mut WriteTx, agent_id: i64, seq: u64) -> Result
     Ok(())
 }
 
-/// Whether a worker of the agent is a recipient of `message`.
+/// Whether a worker of the agent receives the message that the event `seq` is about, read from `events.message_id`. An event about no message reaches nobody here.
 pub async fn is_recipient(
     executor: impl SqliteExecutor<'_>,
-    message: MessageId,
+    seq: u64,
     agent_id: i64,
 ) -> Result<bool, StoreError> {
-    let number = message.to_db();
+    let seq = seq_param(seq)?;
     let found = sqlx::query_scalar!(
         r#"SELECT EXISTS (
-               SELECT 1 FROM message_recipients r
-               JOIN messages m ON m.id = r.message_id
+               SELECT 1 FROM events e
+               JOIN messages m ON m.number = e.message_id
+               JOIN message_recipients r ON r.message_id = m.id
                JOIN workers w ON w.id = r.worker_id
-               WHERE m.number = ?1 AND w.agent_id = ?2
+               WHERE e.seq = ?1 AND w.agent_id = ?2
            ) AS "found!: bool""#,
-        number,
+        seq,
         agent_id
     )
     .fetch_one(executor)

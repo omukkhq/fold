@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO message_recipients (message_id, worker_id, human, addressed_as)\n         VALUES ((SELECT id FROM messages WHERE number = ?1),\n                 (SELECT w.id FROM workers w JOIN agents a ON a.id = w.agent_id\n                  WHERE a.name = ?5 AND w.name = ?2), ?3, ?4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "93480b3762743356e3b5dd5fc5d217368e05ea789005e4c7565432a7d777edf8"
+}

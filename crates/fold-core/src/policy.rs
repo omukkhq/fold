@@ -71,3 +71,15 @@ pub fn can_abandon_workspace(
         }),
     }
 }
+
+/// Feedback is the human path onto a task: it is stored as a message from the named human, so an agent or the system sends an ordinary message instead.
+pub fn can_send_feedback(actor: &Actor) -> Result<(), PolicyDenied> {
+    if actor.is_human() {
+        return Ok(());
+    }
+    Err(PolicyDenied {
+        code: codes::HUMAN_REQUIRED,
+        message: "only a human writes feedback on a task",
+        hint: "send a message linked to the task with send_message",
+    })
+}

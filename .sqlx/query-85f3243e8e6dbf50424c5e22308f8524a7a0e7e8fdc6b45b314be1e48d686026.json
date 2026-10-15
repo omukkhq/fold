@@ -1,0 +1,86 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT m.number, w.name AS \"worker?: String\", r.human, r.addressed_as,\n                  r.delivered_at, r.acked_at\n           FROM message_recipients r\n           JOIN messages m ON m.id = r.message_id\n           LEFT JOIN workers w ON w.id = r.worker_id\n           WHERE m.number IN (SELECT value FROM json_each(?))\n           ORDER BY m.number, r.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "number",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "worker?: String",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workers",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "human",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "message_recipients",
+            "name": "human"
+          }
+        }
+      },
+      {
+        "name": "addressed_as",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "message_recipients",
+            "name": "addressed_as"
+          }
+        }
+      },
+      {
+        "name": "delivered_at",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "message_recipients",
+            "name": "delivered_at"
+          }
+        }
+      },
+      {
+        "name": "acked_at",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "message_recipients",
+            "name": "acked_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "85f3243e8e6dbf50424c5e22308f8524a7a0e7e8fdc6b45b314be1e48d686026"
+}

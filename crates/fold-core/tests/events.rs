@@ -196,12 +196,14 @@ fn new_events_refuse_live_types_and_non_object_data() {
         .proposal(ProposalId::from_number(2).unwrap())
         .workspace(WorkspaceId::from_number(3).unwrap())
         .revision(RevisionId::from_number(4).unwrap())
+        .message(fold_core::MessageId::from_number(5).unwrap())
         .data(json!({"k": 1}))
         .unwrap();
     assert_eq!(built.task.map(TaskId::number), Some(1));
     assert_eq!(built.proposal.map(ProposalId::number), Some(2));
     assert_eq!(built.workspace.map(WorkspaceId::number), Some(3));
     assert_eq!(built.revision.map(RevisionId::number), Some(4));
+    assert_eq!(built.message.map(fold_core::MessageId::number), Some(5));
     assert_eq!(built.data, json!({"k": 1}));
 }
 

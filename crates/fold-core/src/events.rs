@@ -5,7 +5,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
 
 use crate::agents::{AgentName, HumanName, WorkerName};
-use crate::ids::{ProposalId, RevisionId, TaskId, WorkspaceId};
+use crate::ids::{MessageId, ProposalId, RevisionId, TaskId, WorkspaceId};
 use crate::time::Timestamp;
 
 /// The messages never repeat the rejected text.
@@ -236,6 +236,8 @@ pub struct NewEvent {
     pub proposal: Option<ProposalId>,
     pub workspace: Option<WorkspaceId>,
     pub revision: Option<RevisionId>,
+    /// Stored in its own column for the recipient rule of message events; it is not part of a stored `Event`, whose `data` names the message.
+    pub message: Option<MessageId>,
     pub data: serde_json::Value,
 }
 
@@ -252,6 +254,7 @@ impl NewEvent {
             proposal: None,
             workspace: None,
             revision: None,
+            message: None,
             data: serde_json::Value::Object(serde_json::Map::new()),
         })
     }
@@ -277,6 +280,12 @@ impl NewEvent {
     #[must_use]
     pub fn revision(mut self, revision: RevisionId) -> Self {
         self.revision = Some(revision);
+        self
+    }
+
+    #[must_use]
+    pub fn message(mut self, message: MessageId) -> Self {
+        self.message = Some(message);
         self
     }
 

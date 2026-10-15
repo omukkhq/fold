@@ -7,8 +7,12 @@ use crate::error::{FoldError, codes};
 const MAX_NAME_LEN: usize = 32;
 const MAX_WORKER_NAME_LEN: usize = 128;
 
-/// Agent names that an agent cannot take. `fold` is the event actor label of the daemon itself, so an agent with that name would be indistinguishable from it in the history.
-const RESERVED_AGENT_NAMES: &[&str] = &[crate::events::EventActor::FOLD];
+/// Agent names that an agent cannot take. `fold` is the event actor label of the daemon itself, so an agent with that name would be indistinguishable from it in the history. `all` and `humans` are message addresses, so an agent with either name could not be addressed by name.
+const RESERVED_AGENT_NAMES: &[&str] = &[
+    crate::events::EventActor::FOLD,
+    crate::messages::ALL,
+    crate::messages::HUMANS,
+];
 
 /// The tag that makes an agent the integrator. Only a human can grant it.
 pub const INTEGRATOR_TAG: &str = "integrator";
@@ -22,7 +26,7 @@ pub enum NameError {
     InvalidSegment,
     #[error("a worker name is an agent name followed by /<segment> parts, at most 128 characters")]
     InvalidWorker,
-    #[error("the agent name fold is reserved for fold itself")]
+    #[error("the agent names fold, all and humans are reserved")]
     Reserved,
 }
 

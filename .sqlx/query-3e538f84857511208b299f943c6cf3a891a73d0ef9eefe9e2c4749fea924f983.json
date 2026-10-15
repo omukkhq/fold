@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO messages\n             (number, thread_id, reply_to, sender_kind, sender_worker_id, sender_human,\n              task_id, proposal_id, body, created_at)\n         VALUES (?1, ?2, ?3, ?4,\n                 (SELECT w.id FROM workers w JOIN agents a ON a.id = w.agent_id\n                  WHERE a.name = ?11 AND w.name = ?5), ?6,\n                 (SELECT id FROM tasks WHERE number = ?7),\n                 (SELECT id FROM proposals WHERE number = ?8), ?9, ?10)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 11
+    },
+    "nullable": []
+  },
+  "hash": "3e538f84857511208b299f943c6cf3a891a73d0ef9eefe9e2c4749fea924f983"
+}

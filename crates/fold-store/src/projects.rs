@@ -135,3 +135,14 @@ pub async fn ensure_human(
         .await?
         .ok_or(StoreError::Corrupt("humans.name"))
 }
+
+/// Every human of the host registry, ordered by name.
+pub async fn list_humans(executor: impl SqliteExecutor<'_>) -> Result<Vec<HumanName>, StoreError> {
+    let names = sqlx::query_scalar!("SELECT name FROM humans ORDER BY name")
+        .fetch_all(executor)
+        .await?;
+    names
+        .iter()
+        .map(|name| HumanName::parse(name).map_err(|_| StoreError::Corrupt("humans.name")))
+        .collect()
+}

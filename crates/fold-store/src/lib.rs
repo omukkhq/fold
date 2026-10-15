@@ -2,7 +2,9 @@ pub mod agents;
 pub mod counters;
 pub mod error;
 pub mod events;
+pub mod messages;
 pub mod projects;
+pub mod reviews;
 pub mod store;
 pub mod tasks;
 #[cfg(any(test, feature = "testing"))]

@@ -96,11 +96,10 @@ impl Waiter {
                     Some(Ok(event)) => {
                         let reaches = match recipient_check(&event) {
                             RecipientCheck::Pass => true,
-                            RecipientCheck::Fail => false,
-                            RecipientCheck::Ask(message) => {
+                            RecipientCheck::Ask(seq) => {
                                 fold_store::events::is_recipient(
                                     self.service.store().read(),
-                                    message,
+                                    seq,
                                     self.agent_id,
                                 )
                                 .await?

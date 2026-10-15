@@ -5,12 +5,13 @@ use std::time::Duration;
 
 use fold_core::events::types;
 use fold_core::{
-    Actor, AgentActor, AgentName, EventActor, EventType, HumanName, NewEvent, TaskDescription,
-    TaskId, TaskTitle, Timestamp,
+    Actor, Address, AgentActor, AgentName, EventActor, EventType, HumanName, MessageBody,
+    MessageId, NewEvent, TaskDescription, TaskId, TaskTitle, Timestamp,
 };
 use fold_daemon::mcp::FoldServer;
 use fold_daemon::services::agents::{AgentService, SessionContext};
 use fold_daemon::services::events::{EventBuffer, EventBus, EventService, WaitQuery, WaitStep};
+use fold_daemon::services::messages::{MessageService, SendMessage};
 use fold_daemon::services::tasks::{CreateTask, TaskService};
 use fold_store::agents::WorkerRow;
 use fold_store::testing::{TestProject, eventually};
@@ -183,6 +184,11 @@ async fn commit(store: &Store, bus: &EventBus, now: Timestamp, batch: Vec<NewEve
 #[cfg(test)]
 fn new_event(event_type: EventType, by: &str) -> NewEvent {
     NewEvent::new(event_type, EventActor::parse(by).unwrap()).unwrap()
+}
+
+#[cfg(test)]
+fn m(number: u32) -> MessageId {
+    MessageId::from_number(number).unwrap()
 }
 
 #[cfg(test)]
@@ -413,15 +419,9 @@ async fn a_message_event_wakes_only_an_agent_whose_worker_receives_it() {
     .await;
     let added = fx
         .commit(vec![
-            new_event(types::MESSAGE_SENT, "human:ana")
-                .data(json!({"message": "m-1"}))
-                .unwrap(),
-            new_event(types::MESSAGE_SENT, "human:ana")
-                .data(json!({"message": "m-2"}))
-                .unwrap(),
-            new_event(types::MESSAGE_ACKNOWLEDGED, "backend")
-                .data(json!({"message": "m-1"}))
-                .unwrap(),
+            new_event(types::MESSAGE_SENT, "human:ana").message(m(1)),
+            new_event(types::MESSAGE_SENT, "human:ana").message(m(2)),
+            new_event(types::MESSAGE_ACKNOWLEDGED, "backend").message(m(1)),
             new_event(types::MESSAGE_SENT, "human:ana"),
         ])
         .await;
@@ -446,6 +446,57 @@ async fn a_message_event_wakes_only_an_agent_whose_worker_receives_it() {
         cursor,
         "nothing returned, nothing moved"
     );
+}
+
+#[tokio::test]
+async fn a_sent_message_wakes_its_recipient_and_no_other_agent() {
+    let fx = Fixture::new().await;
+    let frontend = fx.connect("frontend").await;
+    let backend = fx.connect("backend").await;
+    let messages = MessageService::new(
+        fx.store().clone(),
+        fx.project.registry().clone(),
+        fx.bus.clone(),
+        Arc::new(fx.project.clock().clone()),
+    );
+    let wait = |session: &Session| {
+        let client = session.client.clone();
+        tokio::spawn(async move {
+            client
+                .call_tool(params(
+                    "wait_for_events",
+                    json!({"types": ["message.sent"], "timeout_s": 2}),
+                ))
+                .await
+                .unwrap()
+        })
+    };
+    let reached = wait(&backend);
+    let missed = wait(&frontend);
+    subscribed(&fx.bus, 2).await;
+    let sender = Actor::human(HumanName::parse("ana").unwrap());
+    let sent = messages
+        .send(
+            &sender,
+            SendMessage {
+                to: Address::parse_all(&["backend"]).unwrap(),
+                body: MessageBody::parse("are you there?").unwrap(),
+                task: None,
+                proposal: None,
+                reply_to: None,
+            },
+        )
+        .await
+        .unwrap();
+    let reached = tokio::time::timeout(WAIT, reached).await.unwrap().unwrap();
+    let reached = body(&reached);
+    assert_eq!(reached["events"].as_array().unwrap().len(), 1, "{reached}");
+    assert_eq!(
+        reached["events"][0]["data"]["message"],
+        json!(sent.id.to_string())
+    );
+    let missed = tokio::time::timeout(WAIT, missed).await.unwrap().unwrap();
+    assert_eq!(body(&missed), json!({"timed_out": true}));
 }
 
 #[tokio::test]

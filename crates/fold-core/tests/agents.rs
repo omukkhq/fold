@@ -93,6 +93,24 @@ fn the_agent_name_fold_is_reserved_because_it_is_the_system_actor() {
 }
 
 #[test]
+fn the_broadcast_addresses_all_and_humans_are_reserved_agent_names() {
+    for reserved in ["all", "humans"] {
+        assert_eq!(AgentName::parse(reserved), Err(NameError::Reserved));
+        assert_eq!(
+            WorkerName::parse(&format!("{reserved}/ui")),
+            Err(NameError::Reserved),
+            "{reserved}"
+        );
+        // `human:<name>` and `tag:<tag>` carry a prefix, so these words stay free for humans and tags.
+        assert!(HumanName::parse(reserved).is_ok());
+        assert!(Tag::parse(reserved).is_ok());
+    }
+    for allowed in ["allison", "humanses", "all-hands"] {
+        assert!(AgentName::parse(allowed).is_ok(), "{allowed}");
+    }
+}
+
+#[test]
 fn a_name_error_becomes_invalid_name() {
     let error = FoldError::from(NameError::InvalidWorker);
     assert_eq!(error.code(), codes::INVALID_NAME);

@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS (\n               SELECT 1 FROM events e\n               JOIN messages m ON m.number = e.message_id\n               JOIN message_recipients r ON r.message_id = m.id\n               JOIN workers w ON w.id = r.worker_id\n               WHERE e.seq = ?1 AND w.agent_id = ?2\n           ) AS \"found!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "found!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "af492842d791ade10b228e2a2f8f591b15058ca26a86b8a5a71005f9034775a3"
+}

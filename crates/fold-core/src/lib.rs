@@ -10,6 +10,7 @@ pub mod events;
 pub mod ids;
 pub mod layout;
 pub mod merge;
+pub mod messages;
 pub mod object;
 pub mod policy;
 pub mod projects;
@@ -34,6 +35,10 @@ pub use ids::{
     MessageId, ProposalId, RevisionId, TaskId, WorkspaceId,
 };
 pub use layout::{HostPaths, ProjectPaths, task_workspace_path};
+pub use messages::{
+    Address, AddressError, AddressedAs, Directory, DirectoryAgent, MessageBody, Recipient,
+    ResolveError, Sender, Target,
+};
 pub use policy::PolicyDenied;
 pub use projects::{choose_slug, slugify};
 pub use status::TaskStatus;

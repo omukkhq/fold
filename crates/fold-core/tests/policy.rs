@@ -139,3 +139,14 @@ fn only_the_owning_worker_abandons_a_workspace() {
     }
     assert!(can_abandon_workspace(&agent("frontend/ui", &[]), None).is_err());
 }
+
+#[test]
+fn only_a_human_sends_feedback() {
+    use fold_core::policy::can_send_feedback;
+    assert!(can_send_feedback(&human("tanim")).is_ok());
+    for actor in [agent("frontend", &["integrator"]), Actor::System] {
+        let denied = can_send_feedback(&actor).unwrap_err();
+        assert_eq!(denied.code(), codes::HUMAN_REQUIRED);
+        assert!(denied.hint().contains("send_message"));
+    }
+}
