@@ -1,13 +1,12 @@
-mod archive;
 mod changesets;
 mod checkpoints;
 mod columns;
 mod conflicts;
 mod gc;
+mod lifecycle;
 mod refs;
 mod revisions;
 
-pub use archive::archive_live_task_workspace;
 pub use changesets::{
     Changeset, ChangesetStats, get_changeset, insert_changeset, latest_changeset, list_changesets,
 };
@@ -17,6 +16,11 @@ pub use checkpoints::{
 };
 pub use conflicts::{ConflictRow, clear_conflict, list_conflicts, set_conflicts};
 pub use gc::{ClosedWorkspace, closed_workspaces_due, gc_roots, workspaces_over_auto_limit};
+pub use lifecycle::{
+    ClosedState, NewTaskWorkspace, WorkspaceKind, WorkspaceRow, WorkspaceState, close,
+    get_workspace, insert_task_workspace, latest_task_workspace, live_task_workspace,
+    task_workspace_paths,
+};
 pub use refs::{advance_main, create_main};
 pub use revisions::{
     IntegratedProposal, IntegrationInfo, IntegrationKind, MAX_PAGE, RevisionRow, ancestors,

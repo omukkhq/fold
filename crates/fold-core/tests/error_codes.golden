@@ -64,3 +64,8 @@ gc_in_progress
 human_name_required
 agent_not_found
 actor_cannot_claim
+workspace_exists
+workspace_not_found
+workspace_not_active
+not_workspace_owner
+failpoint

@@ -76,12 +76,11 @@ async fn deleting_an_unknown_task_fails() {
 #[tokio::test]
 async fn nothing_to_release_or_archive_reports_nothing() {
     let project = project_with_task().await;
-    let now = project.now();
     let (workspace, items, edges) = project
         .store()
         .write(async |tx| {
             Ok::<_, StoreError>((
-                workspaces::archive_live_task_workspace(tx, id(1), now).await?,
+                workspaces::live_task_workspace(tx.conn(), id(1)).await?,
                 tasks::delete_linked_items(tx, id(1)).await?,
                 tasks::delete_edges_touching(tx, id(1)).await?,
             ))

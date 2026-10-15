@@ -31,7 +31,7 @@ pub async fn workspace(store: &Store, n: u32) -> Seeded {
             .await?;
             sqlx::query(
                 "INSERT INTO workspaces (number, task_id, kind, path, base_revision_id, state, created_at)
-                 VALUES (?1, (SELECT id FROM tasks WHERE number = ?1), 'task', 'ws', (SELECT id FROM revisions WHERE number = ?1), 'active', 0)",
+                 VALUES (?1, (SELECT id FROM tasks WHERE number = ?1), 'task', 'ws/' || ?1, (SELECT id FROM revisions WHERE number = ?1), 'active', 0)",
             )
             .bind(number)
             .execute(tx.conn())

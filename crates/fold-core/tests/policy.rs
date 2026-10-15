@@ -121,3 +121,21 @@ fn only_an_agent_can_claim() {
         assert!(denied.hint().contains("claim_task"));
     }
 }
+
+#[test]
+fn only_the_owning_worker_abandons_a_workspace() {
+    use fold_core::policy::can_abandon_workspace;
+    let owner = WorkerName::parse("frontend/ui").unwrap();
+    assert!(can_abandon_workspace(&agent("frontend/ui", &[]), Some(&owner)).is_ok());
+    for actor in [
+        agent("frontend", &[]),
+        agent("backend", &["integrator"]),
+        human("tanim"),
+        Actor::System,
+    ] {
+        let denied = can_abandon_workspace(&actor, Some(&owner)).unwrap_err();
+        assert_eq!(denied.code(), codes::NOT_WORKSPACE_OWNER, "{actor:?}");
+        assert!(denied.hint().contains("get_workspace"));
+    }
+    assert!(can_abandon_workspace(&agent("frontend/ui", &[]), None).is_err());
+}

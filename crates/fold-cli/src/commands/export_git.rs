@@ -1,8 +1,10 @@
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use clap::Args;
 use fold_core::ProjectPaths;
+use fold_daemon::SystemClock;
 use fold_daemon::services::workspaces::{GitExport, WorkspaceError, WorkspaceService};
 use fold_vcs::git::Git;
 use thiserror::Error;
@@ -45,9 +47,9 @@ pub fn run(args: &ExportGitArgs, out: &mut impl Write) -> Result<(), ExportGitEr
         .build()
         .map_err(ExportGitError::Runtime)?;
     let exported = runtime.block_on(async {
+        let paths = ProjectPaths::new(find_project(&start));
         let service =
-            WorkspaceService::open_local(ProjectPaths::new(find_project(&start)), Git::default())
-                .await?;
+            WorkspaceService::open_local(paths, Git::default(), Arc::new(SystemClock)).await?;
         let exported = service.export_git(&args.repo).await;
         service.close().await;
         exported

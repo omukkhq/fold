@@ -7,7 +7,7 @@ use fold_core::tree::EntryKind;
 
 static PROBE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// What the host file system can hold. Probed once when a project opens; tests build one by hand so every fallback runs on any host.
+/// What the host file system can hold. Probed once per open project, by its first command that needs it; tests build one by hand so every fallback runs on any host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Capabilities {
     pub symlinks: bool,

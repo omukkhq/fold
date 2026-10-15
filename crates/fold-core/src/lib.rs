@@ -33,7 +33,7 @@ pub use ids::{
     ChangesetId, ChecklistItemId, CheckpointId, CommentId, IdKind, IdParseError, IntegrationId,
     MessageId, ProposalId, RevisionId, TaskId, WorkspaceId,
 };
-pub use layout::{HostPaths, ProjectPaths};
+pub use layout::{HostPaths, ProjectPaths, task_workspace_path};
 pub use policy::PolicyDenied;
 pub use projects::{choose_slug, slugify};
 pub use status::TaskStatus;

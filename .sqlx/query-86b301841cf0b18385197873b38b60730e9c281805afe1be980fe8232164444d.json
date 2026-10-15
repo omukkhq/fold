@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO workspaces (number, task_id, worker_id, kind, path, base_revision_id, state, last_activity_at, created_at)\n         SELECT ?1, t.id, ?3, 'task', ?4, r.id, 'active', ?6, ?6\n         FROM tasks t, revisions r\n         WHERE t.number = ?2 AND r.number = ?5",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "86b301841cf0b18385197873b38b60730e9c281805afe1be980fe8232164444d"
+}

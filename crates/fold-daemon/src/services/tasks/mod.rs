@@ -25,6 +25,7 @@ pub use checklists::{
     NewChecklistItem,
 };
 pub use claims::{ClaimView, claim_view, renew_leases};
+pub(crate) use claims::{already_claimed, claim_in_tx, closed_refusal, worker_row};
 pub use dependencies::{Edge, add_edge_in_tx};
 pub use ready::ReadyTask;
 pub use recompute::{Recomputed, recompute};
@@ -247,7 +248,7 @@ fn view(row: tasks::TaskRow, labels: Vec<tasks::LabelRow>) -> TaskView {
     }
 }
 
-fn task_not_found(id: TaskId) -> TaskError {
+pub(crate) fn task_not_found(id: TaskId) -> TaskError {
     TaskError::Fold(
         FoldError::new(codes::TASK_NOT_FOUND, format!("{id} does not exist"))
             .with_hint("call get_task_graph to see the tasks"),

@@ -2,6 +2,7 @@ use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 
 use fold_core::revision::Revision;
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
@@ -165,7 +166,8 @@ async fn add_revision(
 
 #[cfg(test)]
 async fn export(root: &Path, repo: &Path) -> Result<GitExport, Option<&'static str>> {
-    let service = WorkspaceService::open_local(ProjectPaths::new(root), Git::default())
+    let clock = Arc::new(ManualClock::new());
+    let service = WorkspaceService::open_local(ProjectPaths::new(root), Git::default(), clock)
         .await
         .unwrap();
     let result = service.export_git(repo).await;
@@ -530,7 +532,9 @@ async fn exported_commits_carry_the_revision_messages() {
 #[tokio::test]
 async fn a_directory_without_a_project_is_project_not_found() {
     let host = Host::new();
-    let error = WorkspaceService::open_local(ProjectPaths::new(host.path("none")), Git::default())
+    let paths = ProjectPaths::new(host.path("none"));
+    let clock = Arc::new(host.clock.clone());
+    let error = WorkspaceService::open_local(paths, Git::default(), clock)
         .await
         .unwrap_err();
     assert_eq!(error.code(), Some(codes::PROJECT_NOT_FOUND));

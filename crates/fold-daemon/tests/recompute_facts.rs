@@ -146,7 +146,7 @@ impl Fixture {
     async fn workspace(&self, task: u32, kind: &'static str, state: &'static str) -> i64 {
         self.run(
             "INSERT INTO workspaces (number, task_id, worker_id, kind, path, base_revision_id, state, created_at)
-             VALUES (?, (SELECT id FROM tasks WHERE number = ?), 1, ?, 'ws', 1, ?, 1)",
+             VALUES (?1, (SELECT id FROM tasks WHERE number = ?2), 1, ?3, 'ws/' || ?1, 1, ?4, 1)",
             &[Int(self.number()), Int(task.into()), Text(kind), Text(state)],
         )
         .await

@@ -5,6 +5,7 @@ use fold_core::{
     codes, policy,
 };
 use fold_store::agents::{self, WorkerRow};
+use fold_store::tasks::TaskRow;
 use fold_store::tasks::claims::{self, ClaimRow, ReleaseReason};
 use fold_store::{Store, StoreError, WriteTx, tasks};
 use serde_json::json;
@@ -132,7 +133,7 @@ pub async fn renew_leases(
 }
 
 /// The insert runs before any read of the holder, so the unique index on unreleased implementation claims decides a race and its violation becomes `already_claimed` or, for the holder, a renewal.
-async fn claim_in_tx(
+pub(crate) async fn claim_in_tx(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,
     worker: &WorkerRow,
@@ -143,22 +144,8 @@ async fn claim_in_tx(
     let row = tasks::fetch(tx.conn(), task)
         .await?
         .ok_or_else(|| task_not_found(task))?;
-    let closed = if row.archived_at.is_some() {
-        Some("archived")
-    } else if row.status == TaskStatus::Done {
-        Some("done")
-    } else {
-        None
-    };
-    if let Some(reason) = closed {
-        return Err(
-            FoldError::new(codes::TASK_CLOSED, format!("{task} is {reason}"))
-                .with_details([("reason", json!(reason))])
-                .with_hint(
-                    "a Done or archived task takes no claim; call get_ready_tasks for open work",
-                )
-                .into(),
-        );
+    if let Some(refusal) = closed_refusal(&row) {
+        return Err(refusal);
     }
     match claims::insert_implementation(tx, task, worker.id, now).await {
         Ok(()) => {}
@@ -175,19 +162,7 @@ async fn claim_in_tx(
                 };
                 return Ok(claim_view_of(renewed, now, lease_minutes));
             }
-            let stale = is_stale(holder.renewed_at, now, lease_minutes);
-            return Err(FoldError::new(
-                codes::ALREADY_CLAIMED,
-                format!("{task} is claimed by {}", holder.worker),
-            )
-            .with_details([
-                ("holder", json!(holder.worker.as_str())),
-                ("stale", json!(stale)),
-            ])
-            .with_hint(
-                "call takeover_claim when the holder's lease is stale, or call get_ready_tasks for other work",
-            )
-            .into());
+            return Err(already_claimed(&holder, now, lease_minutes));
         }
         Err(error) => return Err(error.into()),
     }
@@ -204,8 +179,11 @@ async fn claim_in_tx(
     })
 }
 
-/// The worker row of the claimant, read in the claim's transaction. A worker that does not exist is `worker_not_found`.
-async fn worker_row(tx: &mut WriteTx, claimant: &AgentActor) -> Result<WorkerRow, TaskError> {
+/// The worker row of the claimant, read in the command's transaction. A worker that does not exist is `worker_not_found`.
+pub(crate) async fn worker_row(
+    tx: &mut WriteTx,
+    claimant: &AgentActor,
+) -> Result<WorkerRow, TaskError> {
     let not_found = || {
         TaskError::Fold(
             FoldError::new(codes::WORKER_NOT_FOUND, "the worker does not exist")
@@ -218,4 +196,38 @@ async fn worker_row(tx: &mut WriteTx, claimant: &AgentActor) -> Result<WorkerRow
     agents::find_worker(tx.conn(), agent.id, &claimant.worker)
         .await?
         .ok_or_else(not_found)
+}
+
+/// `task_closed` for a Done or archived task, which takes no claim; `None` for an open task.
+pub(crate) fn closed_refusal(row: &TaskRow) -> Option<TaskError> {
+    let reason = if row.archived_at.is_some() {
+        "archived"
+    } else if row.status == TaskStatus::Done {
+        "done"
+    } else {
+        return None;
+    };
+    Some(
+        FoldError::new(codes::TASK_CLOSED, format!("{} is {reason}", row.id))
+            .with_details([("reason", json!(reason))])
+            .with_hint("a Done or archived task takes no claim; call get_ready_tasks for open work")
+            .into(),
+    )
+}
+
+/// `already_claimed` naming the other worker that holds `holder`, with the staleness of its lease at `now`.
+pub(crate) fn already_claimed(holder: &ClaimRow, now: Timestamp, lease_minutes: u64) -> TaskError {
+    let stale = is_stale(holder.renewed_at, now, lease_minutes);
+    FoldError::new(
+        codes::ALREADY_CLAIMED,
+        format!("{} is claimed by {}", holder.task, holder.worker),
+    )
+    .with_details([
+        ("holder", json!(holder.worker.as_str())),
+        ("stale", json!(stale)),
+    ])
+    .with_hint(
+        "call takeover_claim when the holder's lease is stale, or call get_ready_tasks for other work",
+    )
+    .into()
 }

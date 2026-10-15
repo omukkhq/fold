@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT w.path\n         FROM workspaces w JOIN tasks t ON t.id = w.task_id\n         WHERE t.number = ? AND w.kind = 'task'\n         ORDER BY w.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "path",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workspaces",
+            "name": "path"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1448cd04b3f0d2ef7b23cce6b7920e04915dfb72f748c14869a385a3609580eb"
+}

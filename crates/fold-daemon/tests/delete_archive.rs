@@ -182,8 +182,8 @@ impl Fixture {
         let id = self
             .run(
                 "INSERT INTO workspaces (number, task_id, worker_id, kind, path, base_revision_id, state, created_at)
-                 VALUES (?, (SELECT id FROM tasks WHERE number = ?), 1, 'task', 'ws', 1, ?, 1)",
-                &[Int(task.into()), Int(task.into()), Text(state)],
+                 VALUES (?1, (SELECT id FROM tasks WHERE number = ?1), 1, 'task', 'ws/t-' || ?1, 1, ?2, 1)",
+                &[Int(task.into()), Text(state)],
             )
             .await;
         self.recompute(task).await;

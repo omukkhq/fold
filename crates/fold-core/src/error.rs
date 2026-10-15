@@ -78,6 +78,12 @@ define_codes! {
     HUMAN_NAME_REQUIRED = "human_name_required",
     AGENT_NOT_FOUND = "agent_not_found",
     ACTOR_CANNOT_CLAIM = "actor_cannot_claim",
+    WORKSPACE_EXISTS = "workspace_exists",
+    WORKSPACE_NOT_FOUND = "workspace_not_found",
+    WORKSPACE_NOT_ACTIVE = "workspace_not_active",
+    NOT_WORKSPACE_OWNER = "not_workspace_owner",
+    // Only a fired failpoint of the `failpoints` test feature returns it; a release build never does.
+    FAILPOINT = "failpoint",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

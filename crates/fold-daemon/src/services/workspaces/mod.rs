@@ -1,11 +1,20 @@
-use fold_core::{FoldError, ProjectPaths, codes};
+use std::sync::{Arc, OnceLock};
+
+use fold_core::{Clock, EventError, FoldError, ProjectPaths, codes};
 use fold_store::{Store, StoreError};
 use fold_vcs::git::Git;
+use fold_vcs::platform::Capabilities;
 use thiserror::Error;
 
+use super::events::EventBus;
+use super::projects::{ProjectError, load_config};
+use super::tasks::TaskError;
+
 mod git;
+mod lifecycle;
 
 pub use git::{GitExport, MAIN_REF, commit_message};
+pub use lifecycle::{ArchiveReason, WorkspaceRef, WorkspaceView, archive_in_tx};
 
 #[derive(Debug, Error)]
 pub enum WorkspaceError {
@@ -13,6 +22,12 @@ pub enum WorkspaceError {
     Fold(#[from] FoldError),
     #[error(transparent)]
     Store(#[from] StoreError),
+    /// A refusal of the claim or the status step a workspace command runs, such as `already_claimed`.
+    #[error(transparent)]
+    Task(#[from] TaskError),
+    /// A command built an event the declared types refuse: a defect in the command, not in the input.
+    #[error(transparent)]
+    Event(#[from] EventError),
 }
 
 impl WorkspaceError {
@@ -21,25 +36,69 @@ impl WorkspaceError {
         match self {
             Self::Fold(error) => Some(error.code()),
             Self::Store(error) => error.code(),
+            Self::Task(error) => error.code(),
+            Self::Event(_) => None,
         }
     }
 }
 
-/// Commands and reads for the revisions, `main` and the workspaces of one project.
-#[derive(Debug, Clone)]
+impl From<ProjectError> for WorkspaceError {
+    fn from(error: ProjectError) -> Self {
+        match error {
+            ProjectError::Fold(error) => Self::Fold(error),
+            ProjectError::Store(error) => Self::Store(error),
+        }
+    }
+}
+
+/// Commands and reads for the revisions, `main` and the workspaces of one project. Each command is one write transaction; its events reach the bus only after the commit. `lease_minutes` is the project's configured claim lease, so the claim a create takes follows the rules of `claim_task`.
+#[derive(Clone)]
 pub struct WorkspaceService {
     store: Store,
+    bus: EventBus,
+    clock: Arc<dyn Clock>,
     paths: ProjectPaths,
     git: Git,
+    lease_minutes: u64,
+    /// Probed by the first create and shared by every clone of the service.
+    caps: Arc<OnceLock<Capabilities>>,
+}
+
+impl std::fmt::Debug for WorkspaceService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkspaceService")
+            .field("paths", &self.paths)
+            .field("lease_minutes", &self.lease_minutes)
+            .finish_non_exhaustive()
+    }
 }
 
 impl WorkspaceService {
-    pub fn new(store: Store, paths: ProjectPaths, git: Git) -> Self {
-        Self { store, paths, git }
+    pub fn new(
+        store: Store,
+        bus: EventBus,
+        clock: Arc<dyn Clock>,
+        paths: ProjectPaths,
+        git: Git,
+        lease_minutes: u64,
+    ) -> Self {
+        Self {
+            store,
+            bus,
+            clock,
+            paths,
+            git,
+            lease_minutes,
+            caps: Arc::new(OnceLock::new()),
+        }
     }
 
-    /// The service of the project at `paths` for a host command that runs without the daemon. A directory without a project database is `project_not_found`, and nothing is created in it.
-    pub async fn open_local(paths: ProjectPaths, git: Git) -> Result<Self, WorkspaceError> {
+    /// The service of the project at `paths` for a host command that runs without the daemon, with a bus nobody listens to and the project's configured lease. A directory without a project database is `project_not_found`, and nothing is created in it.
+    pub async fn open_local(
+        paths: ProjectPaths,
+        git: Git,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Self, WorkspaceError> {
         let db = paths.db();
         let found = tokio::task::spawn_blocking(move || db.is_file())
             .await
@@ -52,8 +111,16 @@ impl WorkspaceService {
             .with_hint("run the command inside a project directory or pass --project")
             .into());
         }
+        let config = load_config(&paths).await?;
         let store = Store::open_project(&paths).await?;
-        Ok(Self::new(store, paths, git))
+        Ok(Self::new(
+            store,
+            EventBus::new(),
+            clock,
+            paths,
+            git,
+            config.lease_minutes,
+        ))
     }
 
     /// Closes the database this service opened. A failed close only delays the WAL checkpoint.

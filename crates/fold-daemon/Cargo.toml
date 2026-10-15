@@ -7,6 +7,7 @@ publish.workspace = true
 
 [dependencies]
 axum = "0.8.9"
+fail = { version = "0.5.1", optional = true }
 fold-core = { version = "0.1.0", path = "../fold-core" }
 fold-store = { version = "0.1.0", path = "../fold-store" }
 fold-vcs = { version = "0.1.0", path = "../fold-vcs" }
@@ -30,6 +31,7 @@ utoipa-axum = "0.3.0"
 workspace = true
 
 [dev-dependencies]
+fail = "0.5.1"
 fold-store = { path = "../fold-store", features = ["testing"] }
 http-body-util = "0.1.5"
 rmcp = { version = "3.5.1", features = ["client"] }
@@ -38,3 +40,11 @@ sqlx = { version = "0.9.0", default-features = false, features = ["sqlite", "run
 tempfile = "3.27.0"
 tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "time", "test-util"] }
 tower = { version = "0.5.3", features = ["util"] }
+
+[features]
+# Compiles the failpoints that crash-safety tests fire; release builds leave it off.
+failpoints = ["dep:fail", "fail/failpoints"]
+
+[[test]]
+name = "workspaces_failpoints"
+required-features = ["failpoints"]

@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 use crate::actor::{Actor, AgentActor};
-use crate::agents::Tag;
+use crate::agents::{Tag, WorkerName};
 use crate::error::{FoldError, codes};
 
 /// A refusal by a policy gate. The code is a stable error code, so every transport reports it unchanged.
@@ -55,4 +55,19 @@ pub fn can_set_tag(actor: &Actor, tag: &Tag, add: bool) -> Result<(), PolicyDeni
         },
         hint: "ask a human to run fold agent tag <agent> integrator",
     })
+}
+
+/// Only the worker that owns a workspace abandons it, because abandoning gives up that worker's own work. `owner` is the workspace's worker; a human, the system and every other worker are refused.
+pub fn can_abandon_workspace(
+    actor: &Actor,
+    owner: Option<&WorkerName>,
+) -> Result<(), PolicyDenied> {
+    match actor {
+        Actor::Agent(agent) if owner == Some(&agent.worker) => Ok(()),
+        Actor::Agent(_) | Actor::Human { .. } | Actor::System => Err(PolicyDenied {
+            code: codes::NOT_WORKSPACE_OWNER,
+            message: "only the owning worker can abandon a workspace",
+            hint: "call get_workspace to see the owner",
+        }),
+    }
 }

@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::{FoldError, codes};
+use crate::ids::{TaskId, WorkspaceId};
 
 /// Where the host-wide files live: `<data home>/fold/`. The data home is `XDG_DATA_HOME`, else `<home>/.local/share`. An empty or relative value counts as unset, as the XDG base directory rules require.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,6 +79,20 @@ impl ProjectPaths {
     pub fn ws_dir(&self) -> PathBuf {
         self.root.join("ws")
     }
+
+    /// The stat index of one workspace. It is named by the public id, which never repeats, rather than by the directory.
+    pub fn workspace_index(&self, workspace: WorkspaceId) -> PathBuf {
+        self.index().join(format!("{workspace}.idx"))
+    }
+}
+
+/// The directory of a task workspace relative to the project root, as `workspaces.path` stores it. `earlier` counts the task workspaces the task had before this one: none gives `ws/t-12`, one gives `ws/t-12-2`. The name carries no worker, so it never changes when the workspace changes hands.
+pub fn task_workspace_path(task: TaskId, earlier: u32) -> String {
+    let name = task.to_string().to_ascii_lowercase();
+    match earlier {
+        0 => format!("ws/{name}"),
+        _ => format!("ws/{name}-{}", u64::from(earlier) + 1),
+    }
 }
 
 #[cfg(test)]
@@ -114,5 +129,22 @@ mod tests {
         assert_eq!(paths.config(), Path::new("/srv/demo/.fold/config.toml"));
         assert_eq!(paths.main_dir(), Path::new("/srv/demo/main"));
         assert_eq!(paths.ws_dir(), Path::new("/srv/demo/ws"));
+        let workspace = WorkspaceId::from_number(9).unwrap();
+        assert_eq!(
+            paths.workspace_index(workspace),
+            Path::new("/srv/demo/.fold/index/ws-9.idx")
+        );
+    }
+
+    #[test]
+    fn task_workspace_paths_count_the_earlier_workspaces() {
+        let task = TaskId::from_number(12).unwrap();
+        assert_eq!(task_workspace_path(task, 0), "ws/t-12");
+        assert_eq!(task_workspace_path(task, 1), "ws/t-12-2");
+        assert_eq!(task_workspace_path(task, 2), "ws/t-12-3");
+        assert_eq!(
+            task_workspace_path(task, u32::MAX),
+            format!("ws/t-12-{}", u64::from(u32::MAX) + 1)
+        );
     }
 }

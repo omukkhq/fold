@@ -11,8 +11,7 @@ use serde_json::json;
 use super::dependencies::refusal;
 use super::{TaskError, TaskService, TaskView, recompute, task_not_found};
 use crate::services::events::EventBuffer;
-
-const ARCHIVED_REASON: &str = "task_archived";
+use crate::services::workspaces::{self as workspace_service, ArchiveReason};
 
 impl TaskService {
     /// Removes a task that never had a workspace, a proposal, a completion or a message naming it, with its edges, the linked checklist items pointing at it, its labels, its own checklists and its claim rows. Its earlier events stay, and its number is never reused. Dependents recompute in the same transaction.
@@ -119,12 +118,10 @@ async fn archive_in_tx(
         ));
     }
     let seeds = detach(tx, buffer, actor, id, now).await?;
-    if let Some(workspace) = workspaces::archive_live_task_workspace(tx, id, now).await? {
-        let event = NewEvent::new(types::WORKSPACE_ARCHIVED, actor.clone())?
-            .task(id)
-            .workspace(workspace)
-            .data(json!({"reason": ARCHIVED_REASON}))?;
-        buffer.append(tx, &event, now).await?;
+    if let Some(live) = workspaces::live_task_workspace(tx.conn(), id).await? {
+        let reason = ArchiveReason::TaskArchived;
+        workspace_service::archive_in_tx::<TaskError>(tx, buffer, actor, live.id, reason, now)
+            .await?;
     }
     if let Some(claim) = claims::unreleased_for_task(tx.conn(), id).await? {
         let reason = ReleaseReason::TaskArchived;

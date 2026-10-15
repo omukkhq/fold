@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE workspaces SET state = ?2, closed_at = ?3\n         WHERE number = ?1 AND state IN ('active', 'missing')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "8882289ea55a7e8f248ef7974c463b5d942769c8da7f548af4cbbf5a75b61c18"
+}
