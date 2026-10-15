@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE workspaces SET changed_files = ?2, last_activity_at = ?3\n         WHERE number = ?1 AND state IN ('active', 'missing')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "2e92eb88f1e737c9d395361d6210ae6e9bb377da15bf95fc745f2537e9a20146"
+}

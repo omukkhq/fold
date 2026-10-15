@@ -105,7 +105,7 @@ pub struct LiveWorkspace {
     #[schema(value_type = String, example = "r17")]
     pub base: RevisionId,
     pub files: Vec<ChangedFile>,
-    /// A short change summary, such as `3 files, +40 -12`.
+    /// A one-line change summary, such as `3 files: 2 modified, 1 added (+40 -5)`, or `no changes`.
     pub summary: String,
     /// UTC milliseconds.
     #[schema(value_type = i64)]

@@ -1,0 +1,1119 @@
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock};
+use std::time::Duration;
+
+use fold_core::events::types;
+use fold_core::object::ObjectHash;
+use fold_core::tree::{ChangeKind as FileChangeKind, ChangeTally, FlatTree};
+use fold_core::{
+    Clock, EventActor, FoldError, LiveEvent, NewEvent, ProjectConfig, ProjectPaths, ProposalId,
+    RevisionId, TaskId, Timestamp, WorkspaceId, codes,
+};
+use fold_store::Store;
+use fold_store::workspaces::{self, Checkpoint, CheckpointKind, WorkspaceState};
+use fold_vcs::compare::{self as vcs, FileChange, LineCache, State};
+use fold_vcs::ignore::IgnoreRules;
+use fold_vcs::index::StatIndex;
+use fold_vcs::objects::ObjectStore;
+use fold_vcs::paths::RepoPath;
+use fold_vcs::platform::Capabilities;
+use fold_vcs::scan::ScanOptions;
+use fold_vcs::snapshot::{Warning, WarningReason};
+use fold_vcs::watch::{
+    DegradedReason, WatchBackend, WatchConfig, WatchEvent, WatchHub, WatchRefused,
+};
+use serde_json::json;
+use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinHandle;
+
+use crate::http::events::{ChangeKind, ChangedFile, CheckpointSummary, LiveWorkspace};
+use crate::services::events::{EventBuffer, EventBus};
+use crate::services::workspaces::{WorkspaceError, capabilities};
+
+/// How many `(old hash, new hash)` line counts one workspace keeps.
+const LINE_CACHE_PAIRS: usize = 4096;
+
+/// The persisted summary columns of a workspace change at most this often.
+pub const TOUCH_INTERVAL: Duration = Duration::from_secs(10);
+
+/// How the live state of a project is fed. Built from the project's configuration; tests shorten the intervals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LiveConfig {
+    pub watch: WatchConfig,
+    /// Time on the project's clock between two full rescans of a workspace (`rescan_seconds`).
+    pub rescan: Duration,
+    /// A larger file keeps its base entry and gives a warning (`max_file_bytes`).
+    pub max_file_bytes: u64,
+}
+
+impl LiveConfig {
+    pub fn from_project(config: &ProjectConfig) -> Self {
+        let defaults = WatchConfig::default();
+        let debounce = Duration::from_millis(config.debounce_ms);
+        Self {
+            watch: WatchConfig {
+                debounce,
+                max_wait: defaults.max_wait.max(debounce),
+                degraded_interval: defaults.degraded_interval,
+            },
+            rescan: Duration::from_secs(config.rescan_seconds),
+            max_file_bytes: config.max_file_bytes,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WatchMode {
+    Watching,
+    /// The platform refused a watch or has no native notifications, so the watcher scans on a timer.
+    Degraded,
+}
+
+impl WatchMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Watching => "watching",
+            Self::Degraded => "degraded",
+        }
+    }
+}
+
+/// One workspace's live state. `view` is what the event stream and the routes send; the rest stays in the daemon.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkspaceLive {
+    pub view: LiveWorkspace,
+    pub watch: WatchMode,
+    /// Files the scans could not read, sorted by path. Each keeps its base entry, so it never shows as deleted.
+    pub warnings: Vec<Warning>,
+    /// Time of the last recalculation.
+    pub updated_at: Timestamp,
+}
+
+impl From<&Checkpoint> for CheckpointSummary {
+    fn from(checkpoint: &Checkpoint) -> Self {
+        Self {
+            id: checkpoint.id,
+            label: checkpoint.label.clone(),
+            automatic: checkpoint.kind == CheckpointKind::Auto,
+            created_at: checkpoint.created_at,
+        }
+    }
+}
+
+type States = RwLock<HashMap<WorkspaceId, Arc<WorkspaceLive>>>;
+type Routes = Mutex<HashMap<WorkspaceId, mpsc::UnboundedSender<Command>>>;
+type Answer = oneshot::Sender<Result<Arc<WorkspaceLive>, FoldError>>;
+
+/// The in-memory state of every attached workspace of one project, kept by one pipeline task per workspace that the watcher and the rescan tick feed. Nothing here is trusted across a restart: attaching scans the directory again. Nothing here writes into a workspace directory.
+#[derive(Clone)]
+pub struct LiveState {
+    shared: Arc<Shared>,
+}
+
+impl std::fmt::Debug for LiveState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LiveState")
+            .field("config", &self.shared.config)
+            .finish_non_exhaustive()
+    }
+}
+
+struct Shared {
+    store: Store,
+    bus: EventBus,
+    clock: Arc<dyn Clock>,
+    paths: ProjectPaths,
+    config: LiveConfig,
+    states: Arc<States>,
+    /// Where the watcher's sink delivers each workspace's events. The sink holds this map and not the state, so the state can drop while the watcher thread runs.
+    routes: Arc<Routes>,
+    pipelines: Mutex<HashMap<WorkspaceId, JoinHandle<()>>>,
+    /// Started by the first attach, so a project nobody works in holds no watcher thread.
+    hub: OnceLock<Arc<WatchHub>>,
+    /// The backend the hub starts with; `None` takes the platform's native one.
+    backend: Mutex<Option<Box<dyn WatchBackend>>>,
+    /// The project's capabilities probe (`ProjectHandle::capabilities`), shared with its workspace services.
+    caps: Arc<OnceLock<Capabilities>>,
+    /// Attach and detach of the project run one at a time.
+    lifecycle: tokio::sync::Mutex<()>,
+}
+
+impl Drop for Shared {
+    fn drop(&mut self) {
+        let pipelines = self
+            .pipelines
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner);
+        for (_, pipeline) in pipelines.drain() {
+            pipeline.abort();
+        }
+    }
+}
+
+impl Shared {
+    fn hub(&self) -> Arc<WatchHub> {
+        Arc::clone(self.hub.get_or_init(|| {
+            let routes = Arc::clone(&self.routes);
+            let sink = move |event: WatchEvent| route(&routes, event);
+            let backend = self
+                .backend
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take();
+            Arc::new(match backend {
+                Some(backend) => WatchHub::start_with(Boxed(backend), self.config.watch, sink),
+                None => WatchHub::start(self.config.watch, sink),
+            })
+        }))
+    }
+
+    fn sender(&self, workspace: WorkspaceId) -> Option<mpsc::UnboundedSender<Command>> {
+        self.routes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&workspace)
+            .cloned()
+    }
+}
+
+/// Runs on the watcher thread, so it only hands the event on.
+fn route(routes: &Routes, event: WatchEvent) {
+    let (workspace, command) = match event {
+        WatchEvent::Changed { workspace, paths } => (workspace, Command::Paths(paths)),
+        WatchEvent::RescanRequested { workspace } => (workspace, Command::Rescan),
+        WatchEvent::Degraded { workspace, reason } => (workspace, Command::Degraded(reason)),
+        WatchEvent::RootMissing { workspace } => (workspace, Command::RootMissing),
+    };
+    let routes = routes.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(sender) = routes.get(&workspace) {
+        let _ = sender.send(command);
+    }
+}
+
+/// Lets a boxed backend start a hub, which takes a backend by value.
+struct Boxed(Box<dyn WatchBackend>);
+
+impl WatchBackend for Boxed {
+    fn watch_dir(&mut self, dir: &Path) -> Result<(), WatchRefused> {
+        self.0.watch_dir(dir)
+    }
+
+    fn unwatch_dir(&mut self, dir: &Path) {
+        self.0.unwatch_dir(dir);
+    }
+
+    fn backslash_separates(&self) -> bool {
+        self.0.backslash_separates()
+    }
+}
+
+impl LiveState {
+    /// `caps` is the project's capabilities probe, so the live state and the workspace services probe `.fold/` once between them.
+    pub fn new(
+        store: Store,
+        bus: EventBus,
+        clock: Arc<dyn Clock>,
+        paths: ProjectPaths,
+        config: LiveConfig,
+        caps: Arc<OnceLock<Capabilities>>,
+    ) -> Self {
+        Self::build(store, bus, clock, paths, config, caps, None)
+    }
+
+    /// A live state whose watcher runs on `backend` instead of the platform's notifications.
+    pub fn with_backend(
+        store: Store,
+        bus: EventBus,
+        clock: Arc<dyn Clock>,
+        paths: ProjectPaths,
+        config: LiveConfig,
+        caps: Arc<OnceLock<Capabilities>>,
+        backend: impl WatchBackend + 'static,
+    ) -> Self {
+        Self::build(
+            store,
+            bus,
+            clock,
+            paths,
+            config,
+            caps,
+            Some(Box::new(backend)),
+        )
+    }
+
+    fn build(
+        store: Store,
+        bus: EventBus,
+        clock: Arc<dyn Clock>,
+        paths: ProjectPaths,
+        config: LiveConfig,
+        caps: Arc<OnceLock<Capabilities>>,
+        backend: Option<Box<dyn WatchBackend>>,
+    ) -> Self {
+        Self {
+            shared: Arc::new(Shared {
+                store,
+                bus,
+                clock,
+                paths,
+                config,
+                states: Arc::default(),
+                routes: Arc::default(),
+                pipelines: Mutex::default(),
+                hub: OnceLock::new(),
+                backend: Mutex::new(backend),
+                caps,
+                lifecycle: tokio::sync::Mutex::new(()),
+            }),
+        }
+    }
+
+    /// Starts the watcher and the pipeline of an active workspace and returns the state of its first scan. Called after the commit that created the workspace. Attaching an attached workspace only rescans it.
+    pub async fn attach(
+        &self,
+        workspace: WorkspaceId,
+    ) -> Result<Arc<WorkspaceLive>, WorkspaceError> {
+        {
+            let _serial = self.shared.lifecycle.lock().await;
+            if self.shared.sender(workspace).is_none() {
+                self.start(workspace).await?;
+            }
+        }
+        self.rescan(workspace).await
+    }
+
+    async fn start(&self, workspace: WorkspaceId) -> Result<(), WorkspaceError> {
+        let shared = &self.shared;
+        let read = shared.store.read();
+        let row = workspaces::get_workspace(read, workspace)
+            .await?
+            .ok_or_else(|| {
+                FoldError::new(
+                    codes::WORKSPACE_NOT_FOUND,
+                    format!("{workspace} does not exist"),
+                )
+            })?;
+        if row.state != WorkspaceState::Active {
+            return Err(FoldError::new(
+                codes::WORKSPACE_NOT_ACTIVE,
+                format!("{workspace} is {}", row.state.as_str()),
+            )
+            .into());
+        }
+        let base = workspaces::get_by_number(read, row.base).await?;
+        let checkpoints = workspaces::list_checkpoints(read, workspace, false).await?;
+        let root = shared.paths.root().join(&row.path);
+        let last_activity = row.last_activity_at.unwrap_or(row.created_at);
+        let seed = Seed {
+            workspace,
+            root: root.clone(),
+            base_tree: base.tree_hash,
+            max_file_bytes: shared.config.max_file_bytes,
+        };
+        let (caps, opened) = {
+            let shared = Arc::clone(shared);
+            let seed = seed.clone();
+            blocking(move || {
+                let caps = capabilities(&shared.caps, &shared.paths)?;
+                Ok((caps, Scanner::open(&shared.paths, caps, &seed)?))
+            })
+            .await?
+        };
+        let rules = Arc::clone(&opened.rules);
+        let (sender, commands) = mpsc::unbounded_channel();
+        shared
+            .routes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(workspace, sender);
+        let watching = {
+            let shared = Arc::clone(shared);
+            tokio::task::spawn_blocking(move || shared.hub().add_workspace(workspace, &root, rules))
+                .await
+        };
+        if watching.is_err() {
+            tracing::warn!(workspace = %workspace, "the watcher did not take the workspace; the rescan tick still covers it");
+        }
+        let pipeline = Pipeline {
+            workspace,
+            task: row.task,
+            store: shared.store.clone(),
+            bus: shared.bus.clone(),
+            clock: Arc::clone(&shared.clock),
+            config: shared.config,
+            states: Arc::clone(&shared.states),
+            paths: shared.paths.clone(),
+            caps,
+            seed,
+            scanner: Some(opened),
+            rebased: None,
+            initial: LiveWorkspace {
+                workspace,
+                task: row.task,
+                worker: row
+                    .worker
+                    .map(|worker| worker.to_string())
+                    .unwrap_or_default(),
+                base: row.base,
+                files: Vec::new(),
+                summary: ChangeTally::default().summary(),
+                last_activity_at: last_activity,
+                checkpoints: checkpoints.iter().map(CheckpointSummary::from).collect(),
+                proposal: row.proposal,
+            },
+            last_activity,
+            last_full: shared.clock.now(),
+            persisted: (row.changed_files, row.last_activity_at),
+            touched_at: None,
+            watch: WatchMode::Watching,
+            missing: false,
+        };
+        let handle = tokio::spawn(pipeline.run(commands));
+        shared
+            .pipelines
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(workspace, handle);
+        Ok(())
+    }
+
+    /// Stops the watcher and the pipeline of a workspace and removes its state. Called after the commit that archived or abandoned it. A workspace that is not attached is left alone.
+    pub async fn detach(&self, workspace: WorkspaceId) {
+        let shared = &self.shared;
+        let _serial = shared.lifecycle.lock().await;
+        let sender = shared
+            .routes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&workspace);
+        if let Some(sender) = sender {
+            let _ = sender.send(Command::Stop);
+        }
+        let pipeline = shared
+            .pipelines
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&workspace);
+        if let Some(pipeline) = pipeline {
+            let _ = pipeline.await;
+        }
+        if let Some(hub) = shared.hub.get() {
+            let hub = Arc::clone(hub);
+            let _ = tokio::task::spawn_blocking(move || hub.remove_workspace(workspace)).await;
+        }
+        shared
+            .states
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&workspace);
+    }
+
+    /// Scans the whole workspace now and returns the fresh state. Commands that record or replace working files call it first, so they never act on a state the watcher has not delivered yet.
+    pub async fn rescan(
+        &self,
+        workspace: WorkspaceId,
+    ) -> Result<Arc<WorkspaceLive>, WorkspaceError> {
+        self.ask(workspace, Command::Now).await
+    }
+
+    /// Compares the workspace against `tree`, the tree of `base`, from now on, and scans it in full. Called after the commit of a sync or restore, which move the base and write the working files.
+    pub async fn set_base(
+        &self,
+        workspace: WorkspaceId,
+        base: RevisionId,
+        tree: ObjectHash,
+    ) -> Result<Arc<WorkspaceLive>, WorkspaceError> {
+        self.ask(workspace, |answer| Command::Rebase { base, tree, answer })
+            .await
+    }
+
+    async fn ask(
+        &self,
+        workspace: WorkspaceId,
+        command: impl FnOnce(Answer) -> Command,
+    ) -> Result<Arc<WorkspaceLive>, WorkspaceError> {
+        let (answer, answered) = oneshot::channel();
+        let sent = self
+            .shared
+            .sender(workspace)
+            .is_some_and(|sender| sender.send(command(answer)).is_ok());
+        if !sent {
+            return Err(not_attached(workspace).into());
+        }
+        match answered.await {
+            Ok(result) => Ok(result?),
+            Err(_) => Err(not_attached(workspace).into()),
+        }
+    }
+
+    /// Replaces the checkpoints of the state after the commit that recorded or pruned one; `checkpoints` are the workspace's rows, and pruned ones are left out.
+    pub fn set_checkpoints(&self, workspace: WorkspaceId, checkpoints: &[Checkpoint]) {
+        let summaries: Vec<CheckpointSummary> = checkpoints
+            .iter()
+            .filter(|checkpoint| checkpoint.pruned_at.is_none())
+            .map(CheckpointSummary::from)
+            .collect();
+        self.update(workspace, |view| view.checkpoints = summaries);
+    }
+
+    /// Reads the checkpoints of an attached workspace from the store after a commit that recorded or pruned one.
+    pub async fn reload_checkpoints(&self, workspace: WorkspaceId) {
+        if self.get(workspace).is_none() {
+            return;
+        }
+        match workspaces::list_checkpoints(self.shared.store.read(), workspace, false).await {
+            Ok(checkpoints) => self.set_checkpoints(workspace, &checkpoints),
+            Err(error) => {
+                tracing::warn!(workspace = %workspace, code = error.code().unwrap_or("store_error"), "the live checkpoints were not read");
+            }
+        }
+    }
+
+    /// Sets the open proposal after the commit that opened or closed it.
+    pub fn set_proposal(&self, workspace: WorkspaceId, proposal: Option<ProposalId>) {
+        self.update(workspace, |view| view.proposal = proposal);
+    }
+
+    fn update(&self, workspace: WorkspaceId, change: impl FnOnce(&mut LiveWorkspace)) {
+        let shared = &self.shared;
+        amend(
+            &shared.states,
+            &shared.bus,
+            workspace,
+            shared.clock.now(),
+            change,
+        );
+    }
+
+    /// Lets every pipeline look at the clock: a workspace whose full rescan is due (`rescan_seconds` after the last) scans, and a held summary write goes out once its interval has passed. The live job calls it every [`crate::jobs::LIVE_TICK`]. Returns how many workspaces it reached.
+    pub fn tick(&self) -> usize {
+        let routes = self
+            .shared
+            .routes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        routes
+            .values()
+            .filter(|sender| sender.send(Command::Tick).is_ok())
+            .count()
+    }
+
+    pub fn get(&self, workspace: WorkspaceId) -> Option<Arc<WorkspaceLive>> {
+        self.shared
+            .states
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&workspace)
+            .cloned()
+    }
+
+    /// Every attached workspace that has finished its first scan, by id.
+    pub fn all(&self) -> Vec<Arc<WorkspaceLive>> {
+        let states = self
+            .shared
+            .states
+            .read()
+            .unwrap_or_else(PoisonError::into_inner);
+        let mut all: Vec<Arc<WorkspaceLive>> = states.values().cloned().collect();
+        all.sort_by_key(|state| state.view.workspace);
+        all
+    }
+}
+
+fn not_attached(workspace: WorkspaceId) -> FoldError {
+    FoldError::new(
+        codes::WORKSPACE_NOT_ACTIVE,
+        format!("{workspace} has no live state"),
+    )
+    .with_details([("workspace", json!(workspace))])
+}
+
+/// Changes the view of an attached workspace that has finished its first scan, and publishes it when it moved.
+fn amend(
+    states: &States,
+    bus: &EventBus,
+    workspace: WorkspaceId,
+    now: Timestamp,
+    change: impl FnOnce(&mut LiveWorkspace),
+) {
+    let mut states = states.write().unwrap_or_else(PoisonError::into_inner);
+    let Some(current) = states.get(&workspace) else {
+        return;
+    };
+    let mut next = WorkspaceLive::clone(current);
+    change(&mut next.view);
+    if next.view == current.view {
+        return;
+    }
+    next.updated_at = now;
+    publish(bus, &next.view);
+    states.insert(workspace, Arc::new(next));
+}
+
+/// Sent while holding the state's write guard, so the bus carries a workspace's states in the order they were made.
+fn publish(bus: &EventBus, view: &LiveWorkspace) {
+    let event = serde_json::to_value(view).map_err(|_| ()).and_then(|data| {
+        LiveEvent::new(types::WORKSPACE_CHANGED, Some(view.workspace), data).map_err(|_| ())
+    });
+    match event {
+        Ok(event) => bus.publish_live(event),
+        Err(()) => {
+            tracing::error!(workspace = %view.workspace, "a live workspace state did not serialise");
+        }
+    }
+}
+
+enum Command {
+    Paths(Vec<RepoPath>),
+    Rescan,
+    Degraded(DegradedReason),
+    RootMissing,
+    Now(Answer),
+    Rebase {
+        base: RevisionId,
+        tree: ObjectHash,
+        answer: Answer,
+    },
+    Tick,
+    Stop,
+}
+
+/// Everything that queued up while the pipeline was busy, handled as one round with at most one scan.
+#[derive(Default)]
+struct Round {
+    full: bool,
+    paths: BTreeSet<RepoPath>,
+    tick: bool,
+    degraded: Option<DegradedReason>,
+    missing: bool,
+    /// The newest base a sync or restore moved the workspace to.
+    rebase: Option<(RevisionId, ObjectHash)>,
+    answers: Vec<Answer>,
+    stop: bool,
+}
+
+impl Round {
+    fn take(&mut self, command: Command) {
+        match command {
+            Command::Paths(paths) => self.paths.extend(paths),
+            Command::Rescan => self.full = true,
+            Command::Degraded(reason) => self.degraded = Some(reason),
+            Command::RootMissing => self.missing = true,
+            Command::Now(answer) => {
+                self.full = true;
+                self.answers.push(answer);
+            }
+            Command::Rebase { base, tree, answer } => {
+                self.rebase = Some((base, tree));
+                self.full = true;
+                self.answers.push(answer);
+            }
+            Command::Tick => self.tick = true,
+            Command::Stop => self.stop = true,
+        }
+    }
+}
+
+/// What a pipeline needs to open its scanner again.
+#[derive(Debug, Clone)]
+struct Seed {
+    workspace: WorkspaceId,
+    root: PathBuf,
+    base_tree: ObjectHash,
+    max_file_bytes: u64,
+}
+
+struct Pipeline {
+    workspace: WorkspaceId,
+    task: TaskId,
+    store: Store,
+    bus: EventBus,
+    clock: Arc<dyn Clock>,
+    config: LiveConfig,
+    states: Arc<States>,
+    paths: ProjectPaths,
+    caps: Capabilities,
+    seed: Seed,
+    /// Moved into each scan's blocking work and back.
+    scanner: Option<Scanner>,
+    /// A base tree the open scanner has not loaded yet.
+    rebased: Option<ObjectHash>,
+    /// The state before the first scan.
+    initial: LiveWorkspace,
+    last_activity: Timestamp,
+    last_full: Timestamp,
+    /// What the row's `changed_files` and `last_activity_at` hold.
+    persisted: (u32, Option<Timestamp>),
+    touched_at: Option<Timestamp>,
+    watch: WatchMode,
+    missing: bool,
+}
+
+/// The outcome of one scan.
+enum Scan {
+    /// The workspace directory is gone; the state stays as it was.
+    Missing,
+    Done(Scanned),
+}
+
+struct Scanned {
+    files: Vec<FileChange>,
+    /// The `(path, content hash)` pairs differ from the previous scan's.
+    moved: bool,
+    warnings: Vec<Warning>,
+}
+
+impl Pipeline {
+    async fn run(mut self, mut commands: mpsc::UnboundedReceiver<Command>) {
+        while let Some(first) = commands.recv().await {
+            let mut round = Round::default();
+            round.take(first);
+            // A request that came in during the last scan is handled by this one scan, however many came.
+            while let Ok(command) = commands.try_recv() {
+                round.take(command);
+            }
+            if round.stop {
+                for answer in round.answers {
+                    let _ = answer.send(Err(not_attached(self.workspace)));
+                }
+                break;
+            }
+            self.handle(round).await;
+        }
+    }
+
+    async fn handle(&mut self, mut round: Round) {
+        let now = self.clock.now();
+        if let Some(reason) = round.degraded {
+            self.degrade(reason, now).await;
+        }
+        if round.missing && !self.missing {
+            self.missing = true;
+            tracing::warn!(workspace = %self.workspace, "the workspace directory is gone; its live state stays as it was");
+        }
+        if let Some((base, tree)) = round.rebase {
+            self.seed.base_tree = tree;
+            self.rebased = Some(tree);
+            self.initial.base = base;
+        }
+        let due = self
+            .last_full
+            .checked_add(self.config.rescan)
+            .is_some_and(|due| now >= due);
+        if round.tick && due {
+            round.full = true;
+        }
+        if round.full || !round.paths.is_empty() {
+            let touched = (!round.full).then(|| round.paths.into_iter().collect::<Vec<_>>());
+            if round.full {
+                self.last_full = now;
+            }
+            let outcome = self.recalculate(touched).await;
+            if let Some((base, _)) = round.rebase
+                && outcome.is_err()
+            {
+                amend(&self.states, &self.bus, self.workspace, now, |view| {
+                    view.base = base;
+                });
+            }
+            for answer in round.answers {
+                let _ = answer.send(outcome.clone());
+            }
+        }
+        self.flush_summary(self.clock.now()).await;
+    }
+
+    /// One scan, and one full scan more when a working file moved between the scan and the comparison.
+    async fn recalculate(
+        &mut self,
+        touched: Option<Vec<RepoPath>>,
+    ) -> Result<Arc<WorkspaceLive>, FoldError> {
+        let scanned = match self.scan(touched).await {
+            Err(error) if error.code() == codes::WORKSPACE_IO => self.scan(None).await,
+            other => other,
+        };
+        match scanned {
+            Ok(Scan::Done(scanned)) => {
+                self.missing = false;
+                Ok(self.apply(scanned))
+            }
+            Ok(Scan::Missing) => {
+                if !self.missing {
+                    self.missing = true;
+                    tracing::warn!(workspace = %self.workspace, "the workspace directory is gone; its live state stays as it was");
+                }
+                Err(FoldError::new(
+                    codes::WORKSPACE_NOT_ACTIVE,
+                    format!("the directory of {} is gone", self.workspace),
+                )
+                .with_details([
+                    ("workspace", json!(self.workspace)),
+                    ("state", json!(WorkspaceState::Missing.as_str())),
+                ]))
+            }
+            Err(error) => {
+                tracing::warn!(workspace = %self.workspace, code = error.code(), "a live scan failed; the state stays as it was");
+                Err(error)
+            }
+        }
+    }
+
+    async fn scan(&mut self, touched: Option<Vec<RepoPath>>) -> Result<Scan, FoldError> {
+        let scanner = self.scanner.take();
+        let rebased = self.rebased.take();
+        let (paths, caps, seed) = (self.paths.clone(), self.caps, self.seed.clone());
+        let done = tokio::task::spawn_blocking(move || {
+            let mut scanner = match scanner {
+                Some(mut scanner) => {
+                    if let Some(tree) = rebased {
+                        scanner.rebase(&tree)?;
+                    }
+                    scanner
+                }
+                None => Scanner::open(&paths, caps, &seed)?,
+            };
+            let outcome = scanner.scan(touched.as_deref());
+            Ok::<_, FoldError>((scanner, outcome))
+        })
+        .await;
+        match done {
+            Ok(Ok((scanner, outcome))) => {
+                self.scanner = Some(scanner);
+                outcome
+            }
+            Ok(Err(error)) => Err(error),
+            Err(error) => Err(FoldError::new(
+                codes::INTERNAL_ERROR,
+                format!("a live scan stopped: {error}"),
+            )),
+        }
+    }
+
+    fn apply(&mut self, scanned: Scanned) -> Arc<WorkspaceLive> {
+        let now = self.clock.now();
+        if scanned.moved {
+            self.last_activity = now;
+        }
+        let mut tally = ChangeTally::default();
+        for file in &scanned.files {
+            // The summary counts the kinds the wire shows, so a mode change is a modification there too.
+            let kind = match file.change {
+                FileChangeKind::ModeChanged => FileChangeKind::Modified,
+                kind => kind,
+            };
+            tally.add(kind, file.added_lines, file.removed_lines);
+        }
+        let files = scanned.files.iter().map(changed_file).collect();
+        let mut states = self.states.write().unwrap_or_else(PoisonError::into_inner);
+        let current = states.get(&self.workspace).cloned();
+        let mut view = current
+            .as_ref()
+            .map_or_else(|| self.initial.clone(), |current| current.view.clone());
+        view.base = self.initial.base;
+        view.files = files;
+        view.summary = tally.summary();
+        view.last_activity_at = self.last_activity;
+        let warned = current
+            .as_ref()
+            .map_or(&[][..], |current| current.warnings.as_slice());
+        if scanned.warnings != warned && !scanned.warnings.is_empty() {
+            tracing::warn!(workspace = %self.workspace, files = scanned.warnings.len(), "files that could not be read keep their base entry");
+        }
+        let next = Arc::new(WorkspaceLive {
+            view,
+            watch: self.watch,
+            warnings: scanned.warnings,
+            updated_at: now,
+        });
+        if current
+            .as_ref()
+            .is_none_or(|current| current.view != next.view)
+        {
+            publish(&self.bus, &next.view);
+        }
+        states.insert(self.workspace, Arc::clone(&next));
+        next
+    }
+
+    async fn degrade(&mut self, reason: DegradedReason, now: Timestamp) {
+        if self.watch == WatchMode::Degraded {
+            return;
+        }
+        self.watch = WatchMode::Degraded;
+        {
+            let mut states = self.states.write().unwrap_or_else(PoisonError::into_inner);
+            if let Some(current) = states.get(&self.workspace) {
+                let mut next = WorkspaceLive::clone(current);
+                next.watch = WatchMode::Degraded;
+                states.insert(self.workspace, Arc::new(next));
+            }
+        }
+        tracing::warn!(workspace = %self.workspace, reason = reason.as_str(), "the watch fell back to timer scans");
+        let event = NewEvent::new(types::WORKSPACE_WATCH_DEGRADED, EventActor::fold())
+            .map(|event| event.task(self.task).workspace(self.workspace))
+            .and_then(|event| event.data(json!({"reason": reason.as_str()})));
+        let Ok(event) = event else {
+            return;
+        };
+        let mut buffer = EventBuffer::new();
+        let written = self
+            .store
+            .write(async |tx| buffer.append(tx, &event, now).await.map(|_| ()))
+            .await;
+        match written {
+            Ok(()) => self.bus.publish(buffer),
+            Err(error) => {
+                tracing::warn!(workspace = %self.workspace, code = error.code().unwrap_or("store_error"), "the degraded watch was not recorded");
+            }
+        }
+    }
+
+    /// Mirrors the state into the row's summary columns, at most once per [`TOUCH_INTERVAL`]. A change inside the interval is written by the first tick after it.
+    async fn flush_summary(&mut self, now: Timestamp) {
+        let Some(state) = self
+            .states
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&self.workspace)
+            .cloned()
+        else {
+            return;
+        };
+        let changed = u32::try_from(state.view.files.len()).unwrap_or(u32::MAX);
+        let activity = state.view.last_activity_at;
+        if self.persisted == (changed, Some(activity)) {
+            return;
+        }
+        let held = self
+            .touched_at
+            .and_then(|at| at.checked_add(TOUCH_INTERVAL))
+            .is_some_and(|due| now < due);
+        if held {
+            return;
+        }
+        let workspace = self.workspace;
+        let written = self
+            .store
+            .write(async |tx| workspaces::touch(tx, workspace, changed, activity).await)
+            .await;
+        match written {
+            Ok(_) => {
+                self.persisted = (changed, Some(activity));
+                self.touched_at = Some(now);
+            }
+            Err(error) => {
+                tracing::warn!(workspace = %workspace, code = error.code().unwrap_or("store_error"), "the workspace summary was not saved");
+            }
+        }
+    }
+}
+
+fn changed_file(file: &FileChange) -> ChangedFile {
+    // The wire has no mode change; it shows as a modification without line changes.
+    let change = match file.change {
+        FileChangeKind::Added => ChangeKind::Added,
+        FileChangeKind::Modified | FileChangeKind::ModeChanged => ChangeKind::Modified,
+        FileChangeKind::Deleted => ChangeKind::Deleted,
+        FileChangeKind::Renamed => ChangeKind::Renamed,
+    };
+    ChangedFile {
+        path: file.path.to_string(),
+        previous_path: file.old_path.as_ref().map(ToString::to_string),
+        change,
+        added_lines: file.added_lines,
+        removed_lines: file.removed_lines,
+        binary: file.binary,
+    }
+}
+
+/// The blocking half of a pipeline: the stat index, the entries of the last scan and the line counts, kept in memory between scans. It reads the workspace and the object store and writes neither; the stat index is never saved here, only its boundary is moved.
+struct Scanner {
+    root: PathBuf,
+    boundary_dir: PathBuf,
+    objects: ObjectStore,
+    caps: Capabilities,
+    rules: Arc<IgnoreRules>,
+    index: StatIndex,
+    base: State,
+    current: FlatTree,
+    scanned: bool,
+    warnings: BTreeMap<RepoPath, WarningReason>,
+    cache: LineCache,
+    max_file_bytes: u64,
+}
+
+impl Scanner {
+    fn open(paths: &ProjectPaths, caps: Capabilities, seed: &Seed) -> Result<Self, FoldError> {
+        let objects = ObjectStore::open(&paths.fold_dir()).map_err(FoldError::from)?;
+        let base = vcs::load_flat(&objects, &seed.base_tree)?;
+        let index = StatIndex::load(&paths.workspace_index(seed.workspace), caps);
+        let boundary_dir = paths.index();
+        std::fs::create_dir_all(&boundary_dir)
+            .map_err(|error| FoldError::from(fold_vcs::paths::WorkspaceError::from(error)))?;
+        Ok(Self {
+            root: seed.root.clone(),
+            boundary_dir,
+            objects,
+            caps,
+            rules: Arc::new(IgnoreRules::new(&seed.root)),
+            index,
+            base: State::recorded(base),
+            current: FlatTree::new(),
+            scanned: false,
+            warnings: BTreeMap::new(),
+            cache: LineCache::new(LINE_CACHE_PAIRS),
+            max_file_bytes: seed.max_file_bytes,
+        })
+    }
+
+    /// Compares against `tree` from the next scan on. The stat index and the line counts stay: both are keyed by content.
+    fn rebase(&mut self, tree: &ObjectHash) -> Result<(), FoldError> {
+        self.base = State::recorded(vcs::load_flat(&self.objects, tree)?);
+        Ok(())
+    }
+
+    /// Scans `touched`, or the whole workspace when it is `None` or nothing was scanned yet, and compares the result to the base tree. A partial scan that fails is repeated as a full one.
+    fn scan(&mut self, touched: Option<&[RepoPath]>) -> Result<Scan, FoldError> {
+        if !self.root.is_dir() {
+            return Ok(Scan::Missing);
+        }
+        let touched = touched.filter(|_| self.scanned);
+        let before = self.scanned.then(|| self.current.clone());
+        let opts = ScanOptions {
+            rules: &self.rules,
+            max_file_bytes: self.max_file_bytes,
+            caps: self.caps,
+            recorded: None,
+        };
+        let base = self.base.entries();
+        let refreshed = match vcs::refresh_working(
+            &self.root,
+            &mut self.index,
+            &mut self.current,
+            base,
+            touched,
+            &opts,
+        ) {
+            Err(_) if touched.is_some() => vcs::refresh_working(
+                &self.root,
+                &mut self.index,
+                &mut self.current,
+                base,
+                None,
+                &opts,
+            )?,
+            other => other?,
+        };
+        // The racy-timestamp rule: a file changed in the same clock tick as this scan is hashed again next time.
+        let _ = self.index.mark_boundary(&self.boundary_dir);
+        match &refreshed.scope {
+            None => self.warnings.clear(),
+            Some(targets) => self
+                .warnings
+                .retain(|path, _| !targets.iter().any(|target| at_or_below(path, target))),
+        }
+        for skipped in refreshed.skipped {
+            self.warnings
+                .insert(skipped.path, WarningReason::Skipped(skipped.reason));
+        }
+        for path in refreshed.unstable {
+            self.warnings.insert(path, WarningReason::Unstable);
+        }
+        let moved = before.is_some_and(|before| !same_content(&before, &self.current));
+        self.scanned = true;
+        let working = State::working(self.root.clone(), self.current.clone());
+        let comparison = vcs::compare_cached(&self.objects, &self.base, &working, &mut self.cache)?;
+        Ok(Scan::Done(Scanned {
+            files: comparison.files,
+            moved,
+            warnings: self
+                .warnings
+                .iter()
+                .map(|(path, reason)| Warning {
+                    path: path.clone(),
+                    reason: *reason,
+                })
+                .collect(),
+        }))
+    }
+}
+
+/// The same paths with the same content hashes; a kind change alone, such as a new executable bit, is not activity.
+fn same_content(before: &FlatTree, after: &FlatTree) -> bool {
+    before.len() == after.len()
+        && before
+            .iter()
+            .zip(after)
+            .all(|((a, a_entry), (b, b_entry))| a == b && a_entry.hash == b_entry.hash)
+}
+
+fn at_or_below(path: &RepoPath, target: &RepoPath) -> bool {
+    path.as_bytes()
+        .strip_prefix(target.as_bytes())
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(b"/"))
+}
+
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, FoldError> + Send + 'static,
+) -> Result<T, FoldError> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .unwrap_or_else(|error| {
+            Err(FoldError::new(
+                codes::INTERNAL_ERROR,
+                format!("blocking work stopped: {error}"),
+            ))
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn path(text: &str) -> RepoPath {
+        RepoPath::parse(text.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn a_path_is_at_or_below_its_own_folders_only() {
+        assert!(at_or_below(&path("src"), &path("src")));
+        assert!(at_or_below(&path("src/lib.rs"), &path("src")));
+        assert!(!at_or_below(&path("srcs/lib.rs"), &path("src")));
+        assert!(!at_or_below(&path("lib.rs"), &path("src")));
+    }
+
+    #[test]
+    fn the_config_follows_the_project_settings() {
+        let config = ProjectConfig {
+            debounce_ms: 5_000,
+            rescan_seconds: 30,
+            max_file_bytes: 99,
+            ..ProjectConfig::default()
+        };
+        let live = LiveConfig::from_project(&config);
+        assert_eq!(live.watch.debounce, Duration::from_secs(5));
+        assert_eq!(live.watch.max_wait, Duration::from_secs(5));
+        assert_eq!(live.rescan, Duration::from_secs(30));
+        assert_eq!(live.max_file_bytes, 99);
+        let defaults = LiveConfig::from_project(&ProjectConfig::default());
+        assert_eq!(defaults.watch, WatchConfig::default());
+        assert_eq!(WatchMode::Watching.as_str(), "watching");
+        assert_eq!(WatchMode::Degraded.as_str(), "degraded");
+    }
+
+    #[test]
+    fn a_mode_change_shows_as_a_modification_on_the_wire() {
+        let file = FileChange {
+            path: path("run.sh"),
+            old_path: None,
+            change: FileChangeKind::ModeChanged,
+            binary: false,
+            old_hash: None,
+            new_hash: None,
+            added_lines: 0,
+            removed_lines: 0,
+        };
+        assert_eq!(changed_file(&file).change, ChangeKind::Modified);
+    }
+}

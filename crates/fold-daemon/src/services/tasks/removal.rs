@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use fold_core::events::types;
 use fold_core::status::ProposalFact;
-use fold_core::{Actor, EventActor, NewEvent, TaskId, Timestamp, codes};
+use fold_core::{Actor, EventActor, NewEvent, TaskId, Timestamp, WorkspaceId, codes};
 use fold_store::tasks::claims::{self, ReleaseReason};
 use fold_store::tasks::{self, EdgeRow};
 use fold_store::{WriteTx, workspaces};
@@ -31,10 +31,14 @@ impl TaskService {
         let actor = &actor.event_actor();
         let now = self.clock.now();
         let mut buffer = EventBuffer::new();
-        self.store
+        let archived = self
+            .store
             .write(async |tx| archive_in_tx(tx, &mut buffer, actor, id, now).await)
             .await?;
         self.bus.publish(buffer);
+        if let (Some(live), Some(workspace)) = (&self.live, archived) {
+            live.detach(workspace).await;
+        }
         self.get(id).await
     }
 }
@@ -87,7 +91,7 @@ async fn archive_in_tx(
     actor: &EventActor,
     id: TaskId,
     now: Timestamp,
-) -> Result<(), TaskError> {
+) -> Result<Option<WorkspaceId>, TaskError> {
     let row = tasks::fetch(tx.conn(), id)
         .await?
         .ok_or_else(|| task_not_found(id))?;
@@ -118,7 +122,8 @@ async fn archive_in_tx(
         ));
     }
     let seeds = detach(tx, buffer, actor, id, now).await?;
-    if let Some(live) = workspaces::live_task_workspace(tx.conn(), id).await? {
+    let workspace = workspaces::live_task_workspace(tx.conn(), id).await?;
+    if let Some(live) = &workspace {
         let reason = ArchiveReason::TaskArchived;
         workspace_service::archive_in_tx::<TaskError>(tx, buffer, actor, live.id, reason, now)
             .await?;
@@ -139,7 +144,7 @@ async fn archive_in_tx(
     let event = NewEvent::new(types::TASK_ARCHIVED, actor.clone())?.task(id);
     buffer.append(tx, &event, now).await?;
     buffer.extend(recompute(tx, &seeds, now).await?.events);
-    Ok(())
+    Ok(workspace.map(|live| live.id))
 }
 
 /// Removes the linked checklist items pointing at `id` and every edge into or out of it, appends their events, and returns the tasks that needed `id`: the seeds of the recompute, collected before the edges go.

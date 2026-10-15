@@ -113,6 +113,40 @@ async fn two_workspaces_never_share_a_path() {
 }
 
 #[tokio::test]
+async fn touch_mirrors_the_live_summary_into_a_live_row_only() {
+    let project = seeded().await;
+    project.insert(1, 1, "ws/t-1").await.unwrap();
+    let touch = async |count: u32, millis: i64| {
+        project
+            .store
+            .write(async |tx| workspaces::touch(tx, ws(1), count, at(millis)).await)
+            .await
+            .unwrap()
+    };
+    assert!(touch(3, 40).await);
+    let row = workspaces::get_workspace(project.store.read(), ws(1))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((row.changed_files, row.last_activity_at), (3, Some(at(40))));
+    exec(&project.store, "UPDATE workspaces SET state = 'missing'")
+        .await
+        .unwrap();
+    assert!(touch(4, 50).await);
+    assert!(project.close(1, ClosedState::Archived).await);
+    assert!(!touch(5, 60).await);
+    let row = workspaces::get_workspace(project.store.read(), ws(1))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((row.changed_files, row.last_activity_at), (4, Some(at(50))));
+    assert_eq!(
+        count(&project.store, "SELECT COUNT(*) FROM events").await,
+        0
+    );
+}
+
+#[tokio::test]
 async fn an_unknown_task_or_base_inserts_nothing() {
     let project = seeded().await;
     let error = project.insert(1, 9, "ws/t-9").await.unwrap_err();

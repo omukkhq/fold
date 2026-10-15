@@ -53,6 +53,7 @@ impl WorkspaceService {
         }
         let _op = self.ops.lock(workspace).await;
         let row = self.owned(actor, workspace).await?;
+        self.live_rescan(workspace).await;
         let files = self.ready_to_record(&row).await?;
         let base_tree = self.tree_of(row.base).await?;
         let _objects = self.objects.clone().read_owned().await;
@@ -125,6 +126,7 @@ impl WorkspaceService {
             })
             .await?;
         self.bus.publish(buffer);
+        self.live_checkpoints(workspace).await;
         Ok(recorded)
     }
 }
@@ -136,6 +138,7 @@ impl WorkspaceService {
         row: &WorkspaceRow,
     ) -> Result<ProposalSnapshot, WorkspaceError> {
         let op = self.ops.lock(row.id).await;
+        self.live_rescan(row.id).await;
         let files = self.ready_to_record(row).await?;
         let base_tree = self.tree_of(row.base).await?;
         let objects = self.objects.clone().read_owned().await;

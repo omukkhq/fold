@@ -16,6 +16,9 @@ pub const GC_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 /// How often the presence job looks at the clock. It is short against the two-minute active window, so an agent shows idle a few seconds after its window passes.
 pub const PRESENCE_TICK: Duration = Duration::from_secs(5);
 
+/// How often the live job lets each workspace pipeline look at the clock for a due rescan.
+pub const LIVE_TICK: Duration = Duration::from_secs(1);
+
 /// When the daily collection is due: every [`GC_INTERVAL`] of clock time after the start, never at the start itself. A clock that jumps past several due times runs once, and the next due time stays on the grid of the start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DailySchedule {
@@ -93,6 +96,42 @@ pub fn spawn_presence(state: AppState, tick: Duration, stop: watch::Receiver<boo
     Job {
         task,
         progress: watcher,
+    }
+}
+
+/// Starts the live job: every `tick` it lets the live state of each open project look at the clock, so a workspace scans in full every `rescan_seconds` of clock time even when its watcher reports nothing. A cycle is a tick that reached at least one workspace. It stops when `stop` changes.
+pub fn spawn_live(state: AppState, tick: Duration, stop: watch::Receiver<bool>) -> Job {
+    let (progress, watcher) = watch::channel(JobProgress::default());
+    let task = tokio::spawn(live(state, tick, stop, progress));
+    Job {
+        task,
+        progress: watcher,
+    }
+}
+
+async fn live(
+    state: AppState,
+    tick: Duration,
+    mut stop: watch::Receiver<bool>,
+    progress: watch::Sender<JobProgress>,
+) {
+    let mut ticks = tokio::time::interval(tick);
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            _ = stop.changed() => break,
+            _ = ticks.tick() => {}
+        }
+        let reached: usize = state
+            .projects
+            .handles()
+            .iter()
+            .map(|handle| handle.live.tick())
+            .sum();
+        progress.send_modify(|seen| {
+            seen.checks += 1;
+            seen.cycles += u64::from(reached > 0);
+        });
     }
 }
 

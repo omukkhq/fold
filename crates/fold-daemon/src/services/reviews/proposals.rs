@@ -260,6 +260,9 @@ impl ReviewService {
             .await?;
         drop(recorded);
         self.bus.publish(buffer);
+        self.workspaces
+            .proposal_changed(workspace.id, Some(id))
+            .await;
         self.get_proposal(id, None).await
     }
 
@@ -335,6 +338,9 @@ impl ReviewService {
             .await?;
         drop(recorded);
         self.bus.publish(buffer);
+        self.workspaces
+            .proposal_changed(workspace.id, Some(proposal))
+            .await;
         self.get_proposal(proposal, None).await
     }
 
@@ -357,7 +363,8 @@ impl ReviewService {
         }
         let now = self.clock.now();
         let mut buffer = EventBuffer::new();
-        self.store
+        let task = self
+            .store
             .write(async |tx| {
                 let row =
                     require_open(reviews::get_proposal(tx.conn(), proposal).await?, proposal)?;
@@ -385,10 +392,13 @@ impl ReviewService {
                     .data(json!({"reason": reason}))?;
                 buffer.append(tx, &event, now).await?;
                 buffer.extend(recompute(tx, &[task], now).await?.events);
-                Ok::<_, ReviewError>(())
+                Ok::<_, ReviewError>(task)
             })
             .await?;
         self.bus.publish(buffer);
+        if let Some(live) = workspaces::live_task_workspace(self.store.read(), task).await? {
+            self.workspaces.proposal_changed(live.id, None).await;
+        }
         self.get_proposal(proposal, None).await
     }
 

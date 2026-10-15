@@ -206,6 +206,27 @@ pub async fn close(
     Ok(closed == 1)
 }
 
+/// Mirrors the live state's change count and last activity into the row of a live workspace, so the board query needs no live state. It appends no event and runs no `recompute`: the columns only summarise working files. False when the workspace is not live or does not exist.
+pub async fn touch(
+    tx: &mut WriteTx,
+    workspace: WorkspaceId,
+    changed_files: u32,
+    last_activity_at: Timestamp,
+) -> Result<bool, StoreError> {
+    let (workspace, at) = (workspace.to_db(), last_activity_at.as_millis());
+    let touched = sqlx::query!(
+        "UPDATE workspaces SET changed_files = ?2, last_activity_at = ?3
+         WHERE number = ?1 AND state IN ('active', 'missing')",
+        workspace,
+        changed_files,
+        at
+    )
+    .execute(tx.conn())
+    .await?
+    .rows_affected();
+    Ok(touched == 1)
+}
+
 /// One statement serves every read so the rows always map the same way. `task` with `live_only` reads the live task workspace; `task` alone the newest task workspace.
 async fn select(
     executor: impl SqliteExecutor<'_>,

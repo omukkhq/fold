@@ -66,6 +66,7 @@ impl WorkspaceService {
         }
         let _op = self.ops.lock(workspace).await;
         let row = self.owned(actor, workspace).await?;
+        self.live_rescan(workspace).await;
         let files = self.files(&row).await?;
         let base_tree = self.tree_of(row.base).await?;
         let _objects = self.objects.clone().read_owned().await;
@@ -94,6 +95,7 @@ impl WorkspaceService {
             })
             .await?;
         self.bus.publish(buffer);
+        self.live_checkpoints(workspace).await;
         Ok(checkpoint.into())
     }
 
@@ -120,13 +122,14 @@ impl WorkspaceService {
         let found = self.unpruned_checkpoint(checkpoint).await?;
         let _op = self.ops.lock(found.workspace).await;
         let row = self.owned(actor, found.workspace).await?;
+        self.live_rescan(row.id).await;
         let files = self.files(&row).await?;
         let _objects = self.objects.clone().read_owned().await;
         // Pruning does not wait for the object lock, but the sweep that follows it does: a checkpoint still unpruned now keeps its objects until this restore ends.
         let target = self.unpruned_checkpoint(checkpoint).await?;
-        self.restore_in(actor, &row, &target, &files)
-            .await
-            .map_err(|error| retry_hint(error, "call restore_checkpoint again"))
+        let restored = self.restore_in(actor, &row, &target, &files).await;
+        self.live_checkpoints(row.id).await;
+        restored.map_err(|error| retry_hint(error, "call restore_checkpoint again"))
     }
 
     async fn unpruned_checkpoint(
@@ -145,7 +148,7 @@ impl WorkspaceService {
             })?)
     }
 
-    /// The steps of a restore, for a caller that holds the workspace lock and the object lock: the safety checkpoint commits, the files are written, then the base and `checkpoint.restored` commit together. The safety checkpoint is marked as the workspace's unfinished write unless an earlier sync or restore left a mark, whose checkpoint is then the last complete state; a restore that stops while writing leaves the mark, so `record_changes` refuses the half-written files and the next sync restores that state first. The finished restore clears the mark, because every tracked file is the target's. The conflict list stays as the last sync left it: `record_changes` checks each listed path for markers, so a restore that brings the markers back is still refused.
+    /// The steps of a restore, for a caller that holds the workspace lock and the object lock: the safety checkpoint commits, the files are written, then the base and `checkpoint.restored` commit together, and the live state moves to that base. The caller hands the live state the new checkpoints. The safety checkpoint is marked as the workspace's unfinished write unless an earlier sync or restore left a mark, whose checkpoint is then the last complete state; a restore that stops while writing leaves the mark, so `record_changes` refuses the half-written files and the next sync restores that state first. The finished restore clears the mark, because every tracked file is the target's. The conflict list stays as the last sync left it: `record_changes` checks each listed path for markers, so a restore that brings the markers back is still refused.
     pub(super) async fn restore_in(
         &self,
         actor: &Actor,
@@ -232,6 +235,7 @@ impl WorkspaceService {
             })
             .await?;
         self.bus.publish(buffer);
+        self.live_base(workspace, base).await;
         Ok(Restored {
             restored: target.id,
             safety: safety.id,

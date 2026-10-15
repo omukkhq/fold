@@ -84,19 +84,25 @@ async fn prune(
     due: Vec<ClosedWorkspace>,
     now: Timestamp,
 ) -> Result<Pruning, ProjectError> {
-    let (buffer, mut checkpoints_pruned) = project
+    let (buffer, mut checkpoints_pruned, over) = project
         .store
-        .write(async |tx| -> Result<(EventBuffer, u64), ProjectError> {
-            let mut buffer = EventBuffer::new();
-            let mut pruned = 0;
-            for workspace in workspaces_over_auto_limit(tx.conn(), keep).await? {
-                let ids = prune_auto(tx, workspace, keep, now).await?;
-                pruned += append_pruned(tx, &mut buffer, workspace, &ids, now).await?;
-            }
-            Ok((buffer, pruned))
-        })
+        .write(
+            async |tx| -> Result<(EventBuffer, u64, Vec<WorkspaceId>), ProjectError> {
+                let mut buffer = EventBuffer::new();
+                let mut pruned = 0;
+                let over = workspaces_over_auto_limit(tx.conn(), keep).await?;
+                for &workspace in &over {
+                    let ids = prune_auto(tx, workspace, keep, now).await?;
+                    pruned += append_pruned(tx, &mut buffer, workspace, &ids, now).await?;
+                }
+                Ok((buffer, pruned, over))
+            },
+        )
         .await?;
     project.bus.publish(buffer);
+    for workspace in over {
+        project.live.reload_checkpoints(workspace).await;
+    }
     let mut workspaces_removed = 0;
     for workspace in due {
         let root = project.paths.root().to_owned();

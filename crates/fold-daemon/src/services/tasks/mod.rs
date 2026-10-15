@@ -14,6 +14,7 @@ use thiserror::Error;
 
 use super::events::{EventBuffer, EventBus};
 use super::projects::{Lease, ProjectError};
+use crate::live::LiveState;
 
 mod attention;
 mod checklists;
@@ -127,6 +128,7 @@ pub struct TaskService {
     bus: EventBus,
     clock: Arc<dyn Clock>,
     lease: Lease,
+    live: Option<LiveState>,
 }
 
 impl TaskService {
@@ -137,6 +139,7 @@ impl TaskService {
             bus,
             clock,
             lease: Lease::Minutes(lease_minutes),
+            live: None,
         }
     }
 
@@ -149,6 +152,13 @@ impl TaskService {
 
     async fn lease_minutes(&self) -> Result<u64, TaskError> {
         Ok(self.lease.minutes().await?)
+    }
+
+    /// Lets archiving a task stop the live state of the workspace it archives.
+    #[must_use]
+    pub fn with_live(mut self, live: LiveState) -> Self {
+        self.live = Some(live);
+        self
     }
 
     pub async fn create_task(

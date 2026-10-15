@@ -1,8 +1,9 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use fold_core::object::{ObjectHash, ObjectKind};
+pub use fold_core::tree::ChangeKind;
 use fold_core::tree::{FlatEntry, FlatTree, flatten};
 use fold_core::{FoldError, codes};
 use serde_json::json;
@@ -15,31 +16,8 @@ use crate::index::StatIndex;
 use crate::objects::ObjectStore;
 use crate::paths::{RepoPath, WorkspaceError, os_bytes, resolve};
 use crate::platform::Capabilities;
-use crate::scan::{self, DEFAULT_MAX_FILE_BYTES, ScanOptions, StableRead};
-use crate::snapshot::{keep_base, load_tree};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChangeKind {
-    Added,
-    Modified,
-    Deleted,
-    /// A deleted path and an added path with the same blob. The pairing is for display only; merging never uses it.
-    Renamed,
-    /// The same blob with another entry kind, such as a file that became executable.
-    ModeChanged,
-}
-
-impl ChangeKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Added => "added",
-            Self::Modified => "modified",
-            Self::Deleted => "deleted",
-            Self::Renamed => "renamed",
-            Self::ModeChanged => "mode_changed",
-        }
-    }
-}
+use crate::scan::{self, DEFAULT_MAX_FILE_BYTES, ScanOptions, Skipped, StableRead};
+use crate::snapshot::{keep_base, load_tree, remove_below};
 
 /// One changed path. A hash is `None` on the side where the path does not exist. Line counts are zero for a binary file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -148,11 +126,144 @@ pub fn working_state(
     Ok(State::working(root.to_path_buf(), entries))
 }
 
+/// What [`refresh_working`] found besides the entries.
+#[derive(Debug, Default)]
+pub struct Refreshed {
+    /// The paths the scan looked at; `None` when it scanned the whole workspace.
+    pub scope: Option<Vec<RepoPath>>,
+    pub skipped: Vec<Skipped>,
+    /// Files whose size or modification time kept changing over three reads.
+    pub unstable: Vec<RepoPath>,
+    /// Files whose content was read and hashed.
+    pub hashed: usize,
+}
+
+/// Brings `current`, the working entries an earlier call found in the workspace at `root`, up to date: the whole workspace when `touched` is `None`, else only the touched paths as [`scan::rescan_paths`] looks at them. A path the scan skips or finds unstable keeps what `base` has there, so a file that cannot be read never shows as deleted. The stat index is updated in place and not saved, and nothing is written.
+pub fn refresh_working(
+    root: &Path,
+    index: &mut StatIndex,
+    current: &mut FlatTree,
+    base: &FlatTree,
+    touched: Option<&[RepoPath]>,
+    opts: &ScanOptions<'_>,
+) -> Result<Refreshed, FoldError> {
+    let opts = ScanOptions {
+        recorded: Some(base),
+        ..*opts
+    };
+    let scope = touched.and_then(scan::rescan_scope);
+    let scanned = match &scope {
+        Some(targets) => {
+            let scanned = scan::rescan_targets(root, index, targets, &opts)?;
+            for target in targets {
+                remove_below(current, target);
+            }
+            current.extend(
+                scanned
+                    .entries
+                    .iter()
+                    .map(|(path, entry)| (path.clone(), *entry)),
+            );
+            scanned
+        }
+        None => {
+            let scanned = scan::scan(root, index, &opts)?;
+            current.clone_from(&scanned.entries);
+            scanned
+        }
+    };
+    let unrecorded = scanned
+        .skipped
+        .iter()
+        .map(|skipped| &skipped.path)
+        .chain(&scanned.unstable);
+    for path in unrecorded {
+        keep_base(current, base, path);
+    }
+    Ok(Refreshed {
+        scope,
+        skipped: scanned.skipped,
+        unstable: scanned.unstable,
+        hashed: scanned.hashed,
+    })
+}
+
+/// The blob hashes of both sides of a changed file; `None` on the side where it does not exist.
+type Pair = (Option<ObjectHash>, Option<ObjectHash>);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Counted {
+    added: u32,
+    removed: u32,
+    binary: bool,
+}
+
+/// Line counts of changed files by the blob hashes of both sides, so comparing a state again reads only the files whose content moved since. It holds at most `capacity` pairs; the oldest leaves first.
+#[derive(Debug)]
+pub struct LineCache {
+    capacity: usize,
+    counts: HashMap<Pair, Counted>,
+    order: VecDeque<Pair>,
+}
+
+impl LineCache {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            counts: HashMap::new(),
+            order: VecDeque::new(),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.counts.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.counts.is_empty()
+    }
+
+    fn get(&self, pair: &Pair) -> Option<Counted> {
+        self.counts.get(pair).copied()
+    }
+
+    fn put(&mut self, pair: Pair, counted: Counted) {
+        if self.capacity == 0 || self.counts.insert(pair, counted).is_some() {
+            return;
+        }
+        self.order.push_back(pair);
+        while self.order.len() > self.capacity {
+            if let Some(oldest) = self.order.pop_front() {
+                self.counts.remove(&oldest);
+            }
+        }
+    }
+}
+
 /// The files that differ between `from` and `to`, with line counts read from both sides.
 pub fn compare(objects: &ObjectStore, from: &State, to: &State) -> Result<Comparison, FoldError> {
+    compare_with(objects, from, to, None)
+}
+
+/// [`compare`] that takes the line counts of a file from `cache` when it holds the file's pair of hashes, and keeps the counts it measures.
+pub fn compare_cached(
+    objects: &ObjectStore,
+    from: &State,
+    to: &State,
+    cache: &mut LineCache,
+) -> Result<Comparison, FoldError> {
+    compare_with(objects, from, to, Some(cache))
+}
+
+fn compare_with(
+    objects: &ObjectStore,
+    from: &State,
+    to: &State,
+    mut cache: Option<&mut LineCache>,
+) -> Result<Comparison, FoldError> {
     let mut comparison = Comparison::default();
     for found in classify(from.entries(), to.entries()) {
-        let file = measure(objects, from, to, &found)?;
+        let file = measure(objects, from, to, &found, cache.as_deref_mut())?;
         let totals = &mut comparison.totals;
         totals.files = totals.files.saturating_add(1);
         totals.added_lines = totals.added_lines.saturating_add(file.added_lines);
@@ -316,11 +427,46 @@ fn measure(
     from: &State,
     to: &State,
     found: &Found,
+    cache: Option<&mut LineCache>,
 ) -> Result<FileChange, FoldError> {
+    let pair = (
+        found.old.map(|entry| entry.hash),
+        found.new.map(|entry| entry.hash),
+    );
+    let counted = match cache {
+        Some(cache) => match cache.get(&pair) {
+            Some(counted) => counted,
+            None => {
+                let counted = count(objects, from, to, found)?;
+                cache.put(pair, counted);
+                counted
+            }
+        },
+        None => count(objects, from, to, found)?,
+    };
+    Ok(FileChange {
+        path: found.path.clone(),
+        old_path: found.renamed_from.clone(),
+        change: found.change,
+        binary: counted.binary,
+        old_hash: pair.0,
+        new_hash: pair.1,
+        added_lines: counted.added,
+        removed_lines: counted.removed,
+    })
+}
+
+/// A rename and a mode change keep the blob, so their counts depend on the pair alone, as every other kind's do.
+fn count(
+    objects: &ObjectStore,
+    from: &State,
+    to: &State,
+    found: &Found,
+) -> Result<Counted, FoldError> {
     let old = side_content(objects, from, found.old_path.as_ref(), found.old)?;
     let new = side_content(objects, to, Some(&found.path), found.new)?;
     let text = texts(old.as_deref(), new.as_deref());
-    let (added_lines, removed_lines) = match (found.change, text) {
+    let (added, removed) = match (found.change, text) {
         (ChangeKind::Renamed | ChangeKind::ModeChanged, _) | (_, None) => (0, 0),
         (ChangeKind::Added, Some((_, new))) => (line_count(new), 0),
         (ChangeKind::Deleted, Some((old, _))) => (0, line_count(old)),
@@ -329,15 +475,10 @@ fn measure(
             (counts.added, counts.removed)
         }
     };
-    Ok(FileChange {
-        path: found.path.clone(),
-        old_path: found.renamed_from.clone(),
-        change: found.change,
+    Ok(Counted {
+        added,
+        removed,
         binary: text.is_none(),
-        old_hash: found.old.map(|entry| entry.hash),
-        new_hash: found.new.map(|entry| entry.hash),
-        added_lines,
-        removed_lines,
     })
 }
 
@@ -398,5 +539,228 @@ fn read_working(root: &Path, path: &RepoPath) -> Result<Vec<u8>, FoldError> {
     match scan::read_stable(&located).map_err(WorkspaceError::from)? {
         StableRead::Read(bytes, _) => Ok(bytes),
         StableRead::Unstable | StableRead::Gone | StableRead::Denied => Err(changed()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use fold_core::tree::EntryKind;
+
+    use super::*;
+    use crate::scan::{SkipReason, with_rewrites_during_reads};
+
+    const HOST: Capabilities = Capabilities {
+        symlinks: true,
+        exec_bit: true,
+        inodes: true,
+        read_only_bit: true,
+    };
+
+    fn path(text: &str) -> RepoPath {
+        RepoPath::parse(text.as_bytes()).unwrap()
+    }
+
+    fn names(entries: &FlatTree) -> Vec<String> {
+        entries
+            .keys()
+            .map(|path| String::from_utf8_lossy(path).into_owned())
+            .collect()
+    }
+
+    struct Workspace {
+        _dir: tempfile::TempDir,
+        root: PathBuf,
+        objects: ObjectStore,
+        base: FlatTree,
+    }
+
+    /// A workspace holding `a.txt`, `big.bin` and `src/lib.rs`, whose base tree holds the same files.
+    fn workspace() -> Workspace {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("ws");
+        fs::create_dir_all(root.join("src")).unwrap();
+        let objects = ObjectStore::open(&dir.path().join(".fold")).unwrap();
+        let mut base = FlatTree::new();
+        for (name, content) in [
+            ("a.txt", &b"one\n"[..]),
+            ("big.bin", &[7u8; 64][..]),
+            ("src/lib.rs", &b"fn a() {}\n"[..]),
+        ] {
+            fs::write(root.join(name), content).unwrap();
+            let hash = objects.write(ObjectKind::Blob, content).unwrap();
+            base.insert(
+                name.as_bytes().to_vec(),
+                FlatEntry {
+                    kind: EntryKind::File,
+                    hash,
+                },
+            );
+        }
+        Workspace {
+            _dir: dir,
+            root,
+            objects,
+            base,
+        }
+    }
+
+    fn opts(rules: &IgnoreRules, max_file_bytes: u64) -> ScanOptions<'_> {
+        ScanOptions {
+            rules,
+            max_file_bytes,
+            caps: HOST,
+            recorded: None,
+        }
+    }
+
+    #[test]
+    fn a_refresh_of_touched_paths_changes_only_those_paths() {
+        let ws = workspace();
+        let rules = IgnoreRules::new(&ws.root);
+        let opts = opts(&rules, DEFAULT_MAX_FILE_BYTES);
+        let mut index = StatIndex::empty(HOST);
+        let mut current = FlatTree::new();
+        let full =
+            refresh_working(&ws.root, &mut index, &mut current, &ws.base, None, &opts).unwrap();
+        assert_eq!(full.scope, None);
+        assert_eq!(full.hashed, 3);
+        assert_eq!(current, ws.base);
+
+        fs::remove_file(ws.root.join("src/lib.rs")).unwrap();
+        fs::write(ws.root.join("src/main.rs"), b"fn main() {}\n").unwrap();
+        // An edit nobody reported stays unseen until a path names it.
+        fs::write(ws.root.join("a.txt"), b"two\n").unwrap();
+        let touched = [path("src")];
+        let partial = refresh_working(
+            &ws.root,
+            &mut index,
+            &mut current,
+            &ws.base,
+            Some(&touched),
+            &opts,
+        )
+        .unwrap();
+        assert_eq!(partial.scope, Some(vec![path("src")]));
+        assert_eq!(names(&current), ["a.txt", "big.bin", "src/main.rs"]);
+        assert_eq!(current[&b"a.txt"[..]], ws.base[&b"a.txt"[..]]);
+    }
+
+    #[test]
+    fn a_touched_ignore_file_widens_the_refresh_to_its_folder() {
+        let ws = workspace();
+        let rules = IgnoreRules::new(&ws.root);
+        let opts = opts(&rules, DEFAULT_MAX_FILE_BYTES);
+        let mut index = StatIndex::empty(HOST);
+        let mut current = FlatTree::new();
+        refresh_working(&ws.root, &mut index, &mut current, &ws.base, None, &opts).unwrap();
+        fs::write(ws.root.join("src/.gitignore"), b"lib.rs\n").unwrap();
+        let touched = [path("src/.gitignore")];
+        let found = refresh_working(
+            &ws.root,
+            &mut index,
+            &mut current,
+            &ws.base,
+            Some(&touched),
+            &opts,
+        )
+        .unwrap();
+        assert_eq!(found.scope, Some(vec![path("src")]));
+        assert_eq!(names(&current), ["a.txt", "big.bin", "src/.gitignore"]);
+
+        fs::write(ws.root.join(".gitignore"), b"*.bin\n").unwrap();
+        let root_rules = [path(".gitignore")];
+        let whole = refresh_working(
+            &ws.root,
+            &mut index,
+            &mut current,
+            &ws.base,
+            Some(&root_rules),
+            &opts,
+        )
+        .unwrap();
+        assert_eq!(whole.scope, None);
+        assert_eq!(names(&current), [".gitignore", "a.txt", "src/.gitignore"]);
+    }
+
+    #[test]
+    fn an_unreadable_file_keeps_its_base_entry_instead_of_vanishing() {
+        let ws = workspace();
+        let rules = IgnoreRules::new(&ws.root);
+        let small = opts(&rules, 16);
+        let mut index = StatIndex::empty(HOST);
+        let mut current = FlatTree::new();
+        fs::write(ws.root.join("big.bin"), [9u8; 128]).unwrap();
+        let found =
+            refresh_working(&ws.root, &mut index, &mut current, &ws.base, None, &small).unwrap();
+        assert_eq!(found.skipped.len(), 1);
+        assert_eq!(found.skipped[0].path, path("big.bin"));
+        assert_eq!(found.skipped[0].reason, SkipReason::TooLarge);
+        assert_eq!(current[&b"big.bin"[..]], ws.base[&b"big.bin"[..]]);
+
+        let opts = opts(&rules, DEFAULT_MAX_FILE_BYTES);
+        fs::write(ws.root.join("a.txt"), b"moving\n").unwrap();
+        let touched = [path("a.txt")];
+        let unstable = with_rewrites_during_reads("a.txt", || {
+            refresh_working(
+                &ws.root,
+                &mut index,
+                &mut current,
+                &ws.base,
+                Some(&touched),
+                &opts,
+            )
+        })
+        .unwrap();
+        assert_eq!(unstable.unstable, [path("a.txt")]);
+        assert_eq!(current[&b"a.txt"[..]], ws.base[&b"a.txt"[..]]);
+    }
+
+    #[test]
+    fn a_cached_comparison_matches_and_skips_the_files_it_already_counted() {
+        let ws = workspace();
+        let rules = IgnoreRules::new(&ws.root);
+        let opts = opts(&rules, DEFAULT_MAX_FILE_BYTES);
+        let mut index = StatIndex::empty(HOST);
+        let mut current = FlatTree::new();
+        fs::write(ws.root.join("a.txt"), b"one\ntwo\n").unwrap();
+        fs::write(ws.root.join("new.txt"), b"x\ny\nz\n").unwrap();
+        refresh_working(&ws.root, &mut index, &mut current, &ws.base, None, &opts).unwrap();
+        let from = State::recorded(ws.base.clone());
+        let to = State::working(ws.root.clone(), current.clone());
+        let mut cache = LineCache::new(8);
+        assert!(cache.is_empty());
+        let plain = compare(&ws.objects, &from, &to).unwrap();
+        let cached = compare_cached(&ws.objects, &from, &to, &mut cache).unwrap();
+        assert_eq!(cached, plain);
+        assert_eq!(cache.len(), 2);
+        assert_eq!(plain.totals.added_lines, 4);
+
+        // With the counts cached, the working files are not read again, so deleting them does not fail the comparison.
+        fs::remove_file(ws.root.join("a.txt")).unwrap();
+        fs::remove_file(ws.root.join("new.txt")).unwrap();
+        let again = compare_cached(&ws.objects, &from, &to, &mut cache).unwrap();
+        assert_eq!(again, plain);
+        assert!(compare(&ws.objects, &from, &to).is_err());
+    }
+
+    #[test]
+    fn the_line_cache_drops_its_oldest_pair_when_full() {
+        let hash = |n: u8| Some(ObjectHash::from_bytes([n; 32]));
+        let counted = Counted {
+            added: 1,
+            removed: 0,
+            binary: false,
+        };
+        let mut cache = LineCache::new(2);
+        cache.put((None, hash(1)), counted);
+        cache.put((None, hash(2)), counted);
+        cache.put((None, hash(1)), counted);
+        cache.put((None, hash(3)), counted);
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.get(&(None, hash(1))), None);
+        assert_eq!(cache.get(&(None, hash(3))), Some(counted));
+        let mut none = LineCache::new(0);
+        none.put((None, hash(1)), counted);
+        assert!(none.is_empty());
     }
 }

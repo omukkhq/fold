@@ -20,7 +20,7 @@ pub use gc::{ClosedWorkspace, closed_workspaces_due, gc_roots, workspaces_over_a
 pub use lifecycle::{
     ClosedState, NewTaskWorkspace, WorkspaceKind, WorkspaceRow, WorkspaceState, close,
     get_workspace, insert_task_workspace, latest_task_workspace, live_task_workspace, set_base,
-    set_sync_checkpoint, sync_checkpoint, task_workspace_paths,
+    set_sync_checkpoint, sync_checkpoint, task_workspace_paths, touch,
 };
 pub use refs::{advance_main, create_main};
 pub use revisions::{

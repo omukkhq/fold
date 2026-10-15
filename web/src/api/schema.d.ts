@@ -861,7 +861,7 @@ export interface components {
             last_activity_at: number;
             /** @example P-3 */
             proposal: string | null;
-            /** @description A short change summary, such as `3 files, +40 -12`. */
+            /** @description A one-line change summary, such as `3 files: 2 modified, 1 added (+40 -5)`, or `no changes`. */
             summary: string;
             /** @example T-12 */
             task: string;

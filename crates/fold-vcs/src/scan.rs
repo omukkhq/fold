@@ -110,17 +110,35 @@ pub fn rescan_paths(
     paths: &[RepoPath],
     opts: &ScanOptions<'_>,
 ) -> Result<ScanResult, WorkspaceError> {
+    match rescan_scope(paths) {
+        Some(targets) => rescan_targets(root, index, &targets, opts),
+        None => scan(root, index, opts),
+    }
+}
+
+/// The paths a [`rescan_paths`] over `paths` looks at: each path itself, except that a touched `.gitignore` or `.foldignore` stands for its whole folder. `None` when an ignore file at the root makes it a full [`scan`].
+pub fn rescan_scope(paths: &[RepoPath]) -> Option<Vec<RepoPath>> {
     let mut targets = Vec::with_capacity(paths.len());
     for path in paths {
         match ignore_folder(path) {
             None => targets.push(path.clone()),
             Some(Some(folder)) => targets.push(folder),
-            Some(None) => return scan(root, index, opts),
+            Some(None) => return None,
         }
     }
+    Some(targets)
+}
+
+/// [`rescan_paths`] over targets that [`rescan_scope`] already worked out, so a caller that keeps its own entries knows exactly which paths the result covers.
+pub fn rescan_targets(
+    root: &Path,
+    index: &mut StatIndex,
+    targets: &[RepoPath],
+    opts: &ScanOptions<'_>,
+) -> Result<ScanResult, WorkspaceError> {
     opts.rules.reload();
     let mut walk = Walk::new(index, opts);
-    for path in &targets {
+    for path in targets {
         walk.touched(root, path)?;
     }
     Ok(walk.out)

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use fold_core::events::types;
 use fold_core::{Actor, CheckpointId, FoldError, NewEvent, RevisionId, WorkspaceId, codes};
-use fold_store::workspaces::{self, CheckpointReason, ConflictRow};
+use fold_store::workspaces::{self, CheckpointReason, ConflictRow, WorkspaceRow};
 use fold_vcs::sync::{SyncInput, sync};
 use serde_json::json;
 
@@ -29,7 +29,20 @@ impl WorkspaceService {
         workspace: WorkspaceId,
     ) -> Result<Synced, WorkspaceError> {
         let _op = self.ops.lock(workspace).await;
-        let mut row = self.owned(actor, workspace).await?;
+        let row = self.owned(actor, workspace).await?;
+        self.live_rescan(workspace).await;
+        let synced = self.sync_in(actor, row).await;
+        self.live_checkpoints(workspace).await;
+        synced
+    }
+
+    /// The steps of a sync, for a caller that holds the workspace lock.
+    async fn sync_in(
+        &self,
+        actor: &Actor,
+        mut row: WorkspaceRow,
+    ) -> Result<Synced, WorkspaceError> {
+        let workspace = row.id;
         let files = self.files(&row).await?;
         let _objects = self.objects.clone().read_owned().await;
         if let Some(pending) = workspaces::sync_checkpoint(self.store.read(), workspace).await? {
@@ -162,6 +175,7 @@ impl WorkspaceService {
             })
             .await?;
         self.bus.publish(buffer);
+        self.live_base(workspace, outcome.new_base).await;
         Ok(Synced {
             base: outcome.new_base,
             conflicted: conflicted.iter().map(path_text).collect(),

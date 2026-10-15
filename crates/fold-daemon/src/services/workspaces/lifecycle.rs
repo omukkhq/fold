@@ -187,6 +187,11 @@ impl WorkspaceService {
         if !matches!(saved, Ok(Ok(()))) {
             tracing::warn!(workspace = %id, "the stat index was not saved; the next scan rebuilds it");
         }
+        if let Some(live) = &self.live
+            && let Err(error) = live.attach(id).await
+        {
+            tracing::warn!(workspace = %id, code = error.code().unwrap_or("store_error"), "the live state did not start");
+        }
         self.get(WorkspaceRef::Workspace(id)).await
     }
 
@@ -214,6 +219,9 @@ impl WorkspaceService {
             .write(async |tx| abandon_in_tx(tx, &mut buffer, actor, workspace, reason, now).await)
             .await?;
         self.bus.publish(buffer);
+        if let Some(live) = &self.live {
+            live.detach(workspace).await;
+        }
         self.get(WorkspaceRef::Workspace(workspace)).await
     }
 

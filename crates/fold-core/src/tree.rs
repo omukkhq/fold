@@ -163,6 +163,96 @@ pub struct ChangeCounts {
     pub files_deleted: u32,
 }
 
+/// How one file differs between two states of a comparison.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangeKind {
+    Added,
+    Modified,
+    Deleted,
+    /// A deleted path and an added path with the same blob. The pairing is for display only; merging never uses it.
+    Renamed,
+    /// The same blob with another entry kind, such as a file that became executable.
+    ModeChanged,
+}
+
+impl ChangeKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Added => "added",
+            Self::Modified => "modified",
+            Self::Deleted => "deleted",
+            Self::Renamed => "renamed",
+            Self::ModeChanged => "mode_changed",
+        }
+    }
+}
+
+/// The changed files of a comparison counted by kind, with their line totals, for the one-line summary the live views show.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ChangeTally {
+    pub modified: u32,
+    pub added: u32,
+    pub deleted: u32,
+    pub renamed: u32,
+    pub mode_changed: u32,
+    pub added_lines: u32,
+    pub removed_lines: u32,
+}
+
+impl ChangeTally {
+    /// Counts one changed file. A binary file adds no lines.
+    pub fn add(&mut self, kind: ChangeKind, added_lines: u32, removed_lines: u32) {
+        let count = match kind {
+            ChangeKind::Modified => &mut self.modified,
+            ChangeKind::Added => &mut self.added,
+            ChangeKind::Deleted => &mut self.deleted,
+            ChangeKind::Renamed => &mut self.renamed,
+            ChangeKind::ModeChanged => &mut self.mode_changed,
+        };
+        *count = count.saturating_add(1);
+        self.added_lines = self.added_lines.saturating_add(added_lines);
+        self.removed_lines = self.removed_lines.saturating_add(removed_lines);
+    }
+
+    pub fn files(&self) -> u32 {
+        [
+            self.modified,
+            self.added,
+            self.deleted,
+            self.renamed,
+            self.mode_changed,
+        ]
+        .into_iter()
+        .fold(0, u32::saturating_add)
+    }
+
+    /// `3 files: 2 modified, 1 added (+40 -5)`, or `no changes`. The kinds always come in the same order and a kind with no file is left out.
+    pub fn summary(&self) -> String {
+        let files = self.files();
+        if files == 0 {
+            return "no changes".to_owned();
+        }
+        let kinds: Vec<String> = [
+            (self.modified, "modified"),
+            (self.added, "added"),
+            (self.deleted, "deleted"),
+            (self.renamed, "renamed"),
+            (self.mode_changed, "mode changed"),
+        ]
+        .into_iter()
+        .filter(|(count, _)| *count > 0)
+        .map(|(count, name)| format!("{count} {name}"))
+        .collect();
+        let noun = if files == 1 { "file" } else { "files" };
+        format!(
+            "{files} {noun}: {} (+{} -{})",
+            kinds.join(", "),
+            self.added_lines,
+            self.removed_lines
+        )
+    }
+}
+
 /// Supplies tree objects, so the core stays free of I/O.
 pub type TreeLoader<'a> = &'a dyn Fn(&ObjectHash) -> Result<Tree, FoldError>;
 
@@ -366,6 +456,83 @@ mod tests {
             kind: EntryKind::File,
             hash: blob(text),
         }
+    }
+
+    fn tally(files: &[(ChangeKind, u32, u32)]) -> ChangeTally {
+        let mut tally = ChangeTally::default();
+        for &(kind, added, removed) in files {
+            tally.add(kind, added, removed);
+        }
+        tally
+    }
+
+    #[test]
+    fn a_summary_without_files_says_so() {
+        let empty = tally(&[]);
+        assert_eq!(empty.files(), 0);
+        assert_eq!(empty.summary(), "no changes");
+    }
+
+    #[test]
+    fn a_summary_of_one_file_is_singular() {
+        let one = tally(&[(ChangeKind::Modified, 3, 1)]);
+        assert_eq!(one.summary(), "1 file: 1 modified (+3 -1)");
+    }
+
+    #[test]
+    fn a_summary_counts_each_kind_in_a_fixed_order() {
+        let all = tally(&[
+            (ChangeKind::ModeChanged, 0, 0),
+            (ChangeKind::Renamed, 0, 0),
+            (ChangeKind::Deleted, 0, 7),
+            (ChangeKind::Added, 12, 0),
+            (ChangeKind::Modified, 28, 5),
+            (ChangeKind::Modified, 0, 0),
+        ]);
+        assert_eq!(all.files(), 6);
+        assert_eq!(
+            all.summary(),
+            "6 files: 2 modified, 1 added, 1 deleted, 1 renamed, 1 mode changed (+40 -12)"
+        );
+    }
+
+    #[test]
+    fn a_summary_leaves_out_kinds_without_files_and_sums_the_lines() {
+        let some = tally(&[
+            (ChangeKind::Added, 10, 0),
+            (ChangeKind::Modified, 25, 3),
+            (ChangeKind::Modified, 5, 2),
+        ]);
+        assert_eq!(some.summary(), "3 files: 2 modified, 1 added (+40 -5)");
+        let deleted = tally(&[(ChangeKind::Deleted, 0, 4), (ChangeKind::Deleted, 0, 1)]);
+        assert_eq!(deleted.summary(), "2 files: 2 deleted (+0 -5)");
+    }
+
+    #[test]
+    fn a_tally_saturates_instead_of_overflowing() {
+        let mut big = tally(&[(ChangeKind::Added, u32::MAX, 0)]);
+        big.add(ChangeKind::Added, 1, 0);
+        big.mode_changed = u32::MAX;
+        assert_eq!(big.added_lines, u32::MAX);
+        assert_eq!(big.files(), u32::MAX);
+    }
+
+    #[test]
+    fn change_kinds_have_stable_names() {
+        let names: Vec<&str> = [
+            ChangeKind::Added,
+            ChangeKind::Modified,
+            ChangeKind::Deleted,
+            ChangeKind::Renamed,
+            ChangeKind::ModeChanged,
+        ]
+        .into_iter()
+        .map(ChangeKind::as_str)
+        .collect();
+        assert_eq!(
+            names,
+            ["added", "modified", "deleted", "renamed", "mode_changed"]
+        );
     }
 
     fn entry(name: &str, kind: EntryKind, hash: ObjectHash) -> TreeEntry {

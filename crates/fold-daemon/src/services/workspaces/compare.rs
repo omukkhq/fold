@@ -5,7 +5,8 @@ use fold_core::object::ObjectHash;
 use fold_core::{
     ChangesetId, CheckpointId, FoldError, IdKind, RevisionId, TaskId, WorkspaceId, codes,
 };
-use fold_store::{Store, workspaces};
+use fold_store::Store;
+use fold_store::workspaces::{self, WorkspaceState};
 use fold_vcs::compare::{self as vcs, FileChange, FileDiff, State, Totals};
 use fold_vcs::paths::RepoPath;
 use serde_json::json;
@@ -136,7 +137,7 @@ enum Source {
 }
 
 impl WorkspaceService {
-    /// Reads the tree of a recorded state from its row, or scans the working files of a workspace. Unknown numbers give `revision_not_found`, `workspace_not_found`, or `not_found` naming the changeset or checkpoint; an archived or abandoned workspace is `workspace_not_active`.
+    /// Reads the tree of a recorded state from its row, or scans the working files of a workspace. Unknown numbers give `revision_not_found`, `workspace_not_found`, or `not_found` naming the changeset or checkpoint; an archived, abandoned or missing workspace, or one whose directory is gone, is `workspace_not_active`.
     pub async fn resolve_state(&self, state: StateRef) -> Result<ResolvedState, WorkspaceError> {
         let (summary, source) = self.locate(state).await?;
         let paths = self.paths.clone();
@@ -153,6 +154,9 @@ impl WorkspaceService {
                     root,
                     base,
                 } => {
+                    if !root.is_dir() {
+                        return Err(inactive_workspace(workspace, WorkspaceState::Missing));
+                    }
                     let caps = capabilities(&probed, &paths)?;
                     let index = paths.workspace_index(workspace);
                     let state = vcs::working_state(&objects, &root, &index, &base, caps)?;
@@ -238,8 +242,8 @@ impl WorkspaceService {
             }
             StateRef::Workspace(id) => {
                 let row = workspace(&self.store, id).await?;
-                if !row.state.is_live() {
-                    return Err(closed_workspace(id, row.state).into());
+                if row.state != WorkspaceState::Active {
+                    return Err(inactive_workspace(id, row.state).into());
                 }
                 let base = workspaces::get_by_number(read, row.base).await?;
                 summary.base = Some(row.base);
@@ -270,14 +274,20 @@ async fn workspace(
         })
 }
 
-/// A closed workspace has no working files: its directory is kept only until `fold gc` removes it.
-fn closed_workspace(id: WorkspaceId, state: workspaces::WorkspaceState) -> FoldError {
+/// Only an active workspace with its directory has working files. A closed workspace keeps its directory only until `fold gc` removes it, and a missing one has lost it, so comparing either would show every file as deleted.
+fn inactive_workspace(id: WorkspaceId, state: WorkspaceState) -> FoldError {
+    let hint = match state {
+        WorkspaceState::Missing => {
+            "the directory is gone; compare one of its checkpoints ck-<n> instead"
+        }
+        _ => "compare the workspace's last changeset C-<n> instead",
+    };
     FoldError::new(
         codes::WORKSPACE_NOT_ACTIVE,
         format!("{id} is {}", state.as_str()),
     )
     .with_details([("workspace", json!(id)), ("state", json!(state.as_str()))])
-    .with_hint("compare the workspace's last changeset C-<n> instead")
+    .with_hint(hint)
 }
 
 async fn changeset(

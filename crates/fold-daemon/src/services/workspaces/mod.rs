@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
-use fold_core::{Clock, EventError, FoldError, ProjectConfig, ProjectPaths, WorkspaceId, codes};
+use fold_core::{
+    Clock, EventError, FoldError, ProjectConfig, ProjectPaths, ProposalId, RevisionId, WorkspaceId,
+    codes,
+};
 use fold_store::{Store, StoreError};
 use fold_vcs::git::Git;
 use fold_vcs::objects::ObjectStore;
@@ -12,6 +15,7 @@ use tokio::sync::{OwnedMutexGuard, RwLock};
 use super::events::EventBus;
 use super::projects::{Lease, ProjectError, load_config};
 use super::tasks::TaskError;
+use crate::live::LiveState;
 use crate::projects::ProjectHandle;
 
 mod changesets;
@@ -86,6 +90,7 @@ pub struct WorkspaceService {
     /// The project's object lock (`ProjectHandle::objects`): a command that writes objects and then records a row naming them holds it shared from its first object write until that row commits.
     objects: Arc<RwLock<()>>,
     ops: Arc<WorkspaceLocks>,
+    live: Option<LiveState>,
 }
 
 impl std::fmt::Debug for WorkspaceService {
@@ -116,6 +121,7 @@ impl WorkspaceService {
             caps: Arc::new(OnceLock::new()),
             objects: Arc::new(RwLock::new(())),
             ops: Arc::new(WorkspaceLocks::default()),
+            live: None,
         }
     }
 
@@ -132,6 +138,7 @@ impl WorkspaceService {
         .with_project_config()
         .with_locks(handle.objects.clone(), handle.workspace_locks.clone())
         .with_capabilities(handle.capabilities.clone())
+        .with_live(handle.live.clone())
     }
 
     /// Reads the claim lease from the service's project `config.toml` on every command that takes a claim; an invalid file fails that command with `invalid_config`.
@@ -154,6 +161,55 @@ impl WorkspaceService {
         self.objects = objects;
         self.ops = ops;
         self
+    }
+
+    /// Keeps the live state of the workspaces this service creates and closes. A service without it, such as one a host command opens, starts no watcher.
+    #[must_use]
+    pub fn with_live(mut self, live: LiveState) -> Self {
+        self.live = Some(live);
+        self
+    }
+
+    /// Brings the live state up to date before a command reads the working files. A workspace with no live state, such as one created before the daemon started, is left alone.
+    async fn live_rescan(&self, workspace: WorkspaceId) {
+        if let Some(live) = &self.live
+            && let Err(error) = live.rescan(workspace).await
+        {
+            tracing::debug!(workspace = %workspace, code = error.code().unwrap_or("store_error"), "the live state was not rescanned");
+        }
+    }
+
+    /// Gives the live state the workspace's checkpoints after a command that recorded one, whether or not the command finished.
+    async fn live_checkpoints(&self, workspace: WorkspaceId) {
+        if let Some(live) = &self.live {
+            live.reload_checkpoints(workspace).await;
+        }
+    }
+
+    /// Gives the live state of `workspace` its open proposal and its checkpoints after the commit of a proposal command.
+    pub(crate) async fn proposal_changed(
+        &self,
+        workspace: WorkspaceId,
+        proposal: Option<ProposalId>,
+    ) {
+        if let Some(live) = &self.live {
+            live.set_proposal(workspace, proposal);
+            live.reload_checkpoints(workspace).await;
+        }
+    }
+
+    /// After the commit of a sync or restore: the live state compares against the new base and scans the files the command wrote.
+    async fn live_base(&self, workspace: WorkspaceId, base: RevisionId) {
+        let Some(live) = &self.live else {
+            return;
+        };
+        let moved = match self.tree_of(base).await {
+            Ok(tree) => live.set_base(workspace, base, tree).await,
+            Err(error) => Err(error),
+        };
+        if let Err(error) = moved {
+            tracing::debug!(workspace = %workspace, code = error.code().unwrap_or("store_error"), "the live state did not take the new base");
+        }
     }
 
     /// The service of the project at `paths` for a host command that runs without the daemon, with a bus nobody listens to and the project's configured lease. A directory without a project database is `project_not_found`, and nothing is created in it.
@@ -209,7 +265,7 @@ impl WorkspaceLocks {
 }
 
 /// The platform capabilities, probed in `.fold` on first use and shared by every clone of the service. Blocking work only.
-fn capabilities(
+pub(crate) fn capabilities(
     probed: &OnceLock<Capabilities>,
     paths: &ProjectPaths,
 ) -> Result<Capabilities, FoldError> {

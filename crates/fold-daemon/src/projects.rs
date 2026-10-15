@@ -6,8 +6,10 @@ use fold_store::Store;
 use fold_store::projects::ProjectRow;
 use fold_vcs::platform::Capabilities;
 
+use crate::live::{LiveConfig, LiveState};
 use crate::services::agents::{AgentService, SeenPresence};
 use crate::services::events::EventBus;
+use crate::services::projects::load_config;
 use crate::services::tasks::TaskService;
 use crate::services::workspaces::WorkspaceLocks;
 
@@ -34,8 +36,10 @@ pub struct ProjectHandle {
     pub remote_lock: Arc<tokio::sync::Mutex<()>>,
     /// One restore, sync or record per workspace at a time, across every session of the project.
     pub workspace_locks: Arc<WorkspaceLocks>,
-    /// What the file system under `.fold/` supports, probed by the first workspace command of any session.
+    /// What the file system under `.fold/` supports, probed by the first workspace command of any session or the first live attach.
     pub capabilities: Arc<OnceLock<Capabilities>>,
+    /// The in-memory state of the project's active workspaces.
+    pub live: LiveState,
 }
 
 impl std::fmt::Debug for ProjectHandle {
@@ -47,7 +51,7 @@ impl std::fmt::Debug for ProjectHandle {
 }
 
 impl ProjectHandle {
-    /// Opens the project database, which applies its pending migrations. A missing database is not created: the registry only lists projects that `fold init` set up.
+    /// Opens the project database, which applies its pending migrations. A missing database is not created: the registry only lists projects that `fold init` set up. The live state takes its intervals from the configuration read here; an invalid configuration gives it the defaults, and the commands that read the configuration report the error.
     pub async fn open(row: &ProjectRow, clock: Arc<dyn Clock>) -> Result<Self, FoldError> {
         let paths = ProjectPaths::new(&row.root);
         let present = tokio::fs::try_exists(paths.db()).await.unwrap_or(false);
@@ -55,18 +59,32 @@ impl ProjectHandle {
             tracing::warn!(project = %row.slug, "project database is missing");
             return Err(unavailable(&row.slug));
         }
+        let config = load_config(&paths).await.unwrap_or_else(|error| {
+            tracing::warn!(project = %row.slug, code = error.code().unwrap_or("store_error"), "project configuration is invalid; the live state uses the defaults");
+            ProjectConfig::default()
+        });
         let store = Store::open_project(&paths).await.map_err(|error| {
             tracing::warn!(project = %row.slug, code = error.code().unwrap_or("store_error"), %error, "project failed to open");
             unavailable(&row.slug)
         })?;
         let bus = EventBus::new();
+        let capabilities = Arc::new(OnceLock::new());
+        let live = LiveState::new(
+            store.clone(),
+            bus.clone(),
+            clock.clone(),
+            paths.clone(),
+            LiveConfig::from_project(&config),
+            Arc::clone(&capabilities),
+        );
         let tasks = TaskService::new(
             store.clone(),
             bus.clone(),
             clock.clone(),
             ProjectConfig::default().lease_minutes,
         )
-        .with_project_config(paths.clone());
+        .with_project_config(paths.clone())
+        .with_live(live.clone());
         Ok(Self {
             slug: row.slug.clone(),
             name: row.name.clone(),
@@ -81,7 +99,8 @@ impl ProjectHandle {
             objects: Arc::new(tokio::sync::RwLock::new(())),
             remote_lock: Arc::new(tokio::sync::Mutex::new(())),
             workspace_locks: Arc::new(WorkspaceLocks::default()),
-            capabilities: Arc::new(OnceLock::new()),
+            capabilities,
+            live,
         })
     }
 

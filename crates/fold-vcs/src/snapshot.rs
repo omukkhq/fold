@@ -149,14 +149,19 @@ fn store_trees(
 
 /// Replaces everything `current` has at and below `path` with what `base` has there.
 pub(crate) fn keep_base(current: &mut FlatTree, base: &FlatTree, path: &RepoPath) {
+    remove_below(current, path);
+    for (found, entry) in at_or_below(base, path) {
+        current.insert(found.clone(), *entry);
+    }
+}
+
+/// Removes everything `current` has at and below `path`.
+pub(crate) fn remove_below(current: &mut FlatTree, path: &RepoPath) {
     let stale: Vec<Vec<u8>> = at_or_below(current, path)
         .map(|(found, _)| found.clone())
         .collect();
     for found in stale {
         current.remove(&found);
-    }
-    for (found, entry) in at_or_below(base, path) {
-        current.insert(found.clone(), *entry);
     }
 }
 

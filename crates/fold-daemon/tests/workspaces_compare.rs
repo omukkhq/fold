@@ -223,17 +223,36 @@ async fn reading_working_files_writes_no_object_and_no_index() {
 }
 
 #[tokio::test]
-async fn a_missing_workspace_directory_compares_as_every_file_deleted() {
+async fn a_missing_workspace_has_no_working_side_but_its_checkpoints_compare() {
     let project = TestProject::new().await;
     three_revisions(&project).await;
-    let compared = service(&project).compare_states(r(1), ws(1)).await.unwrap();
-    assert_eq!(compared.totals.files, R1.len() as u32);
-    assert!(
-        compared
-            .files
-            .iter()
-            .all(|file| file.change == ChangeKind::Deleted)
+    checkpoint(&project, 1, CK1).await;
+    let workspaces = service(&project);
+    let missing = |error: WorkspaceError| {
+        let WorkspaceError::Fold(error) = error else {
+            panic!("a missing workspace is a refusal");
+        };
+        assert_eq!(error.code(), "workspace_not_active");
+        assert_eq!(error.details().unwrap()["state"], "missing");
+    };
+    // The row is still active, but its directory is gone.
+    missing(workspaces.compare_states(r(1), ws(1)).await.unwrap_err());
+    missing(
+        workspaces
+            .diff_file(ws(1), r(1), "README.md")
+            .await
+            .unwrap_err(),
     );
+    workspace_dir(&project, R1);
+    exec(
+        project.store(),
+        "UPDATE workspaces SET state = 'missing' WHERE number = 1",
+    )
+    .await;
+    missing(workspaces.compare_states(ws(1), r(1)).await.unwrap_err());
+    let checkpointed = workspaces.compare_states(r(1), ck(1)).await.unwrap();
+    assert_eq!(checkpointed.to.label, "ck-1");
+    assert!(!checkpointed.files.is_empty());
 }
 
 #[tokio::test]

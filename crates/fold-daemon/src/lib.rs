@@ -3,6 +3,7 @@ pub mod config;
 pub mod daemon;
 pub mod http;
 pub mod jobs;
+pub mod live;
 pub mod mcp;
 pub mod projects;
 pub mod services;
