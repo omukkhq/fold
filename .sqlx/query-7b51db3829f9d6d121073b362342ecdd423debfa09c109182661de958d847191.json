@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT c.worker_id, w.name AS worker, c.acquired_at, c.renewed_at, c.stale_at\n           FROM claims c\n           JOIN proposals p ON p.id = c.proposal_id\n           JOIN workers w ON w.id = c.worker_id\n           WHERE p.number = ? AND c.kind = 'review' AND c.released_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "worker_id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "claims",
+            "name": "worker_id"
+          }
+        }
+      },
+      {
+        "name": "worker",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workers",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "acquired_at",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "claims",
+            "name": "acquired_at"
+          }
+        }
+      },
+      {
+        "name": "renewed_at",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "claims",
+            "name": "renewed_at"
+          }
+        }
+      },
+      {
+        "name": "stale_at",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "claims",
+            "name": "stale_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "7b51db3829f9d6d121073b362342ecdd423debfa09c109182661de958d847191"
+}

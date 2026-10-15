@@ -46,7 +46,7 @@ pub struct Changeset {
     pub created_at: Timestamp,
 }
 
-/// Inserts one changeset in the caller's write, chained to the workspace's latest changeset. `tree` must already be in the object store. A workspace, task or base revision that does not exist is refused, and so is a task the workspace does not belong to.
+/// Inserts one changeset in the caller's write, chained to the workspace's latest changeset. `tree` must already be in the object store. A workspace, task or base revision that does not exist is refused, and so are a task the workspace does not belong to and a review checkout.
 #[expect(
     clippy::too_many_arguments,
     reason = "each argument is one column of the append-only row"
@@ -67,7 +67,8 @@ pub async fn insert_changeset(
     let found = sqlx::query!(
         r#"SELECT w.id AS "workspace_id!: i64", w.task_id AS "task_id!: i64",
                   t.number AS "task_number!: i64",
-                  (SELECT id FROM revisions WHERE number = ?2) AS "revision_id?: i64"
+                  (SELECT id FROM revisions WHERE number = ?2) AS "revision_id?: i64",
+                  w.kind = 'review' AS "review!: bool"
            FROM workspaces w JOIN tasks t ON t.id = w.task_id
            WHERE w.number = ?1"#,
         workspace_number,
@@ -76,6 +77,9 @@ pub async fn insert_changeset(
     .fetch_optional(tx.conn())
     .await?
     .ok_or(StoreError::Invalid("the workspace does not exist"))?;
+    if found.review {
+        return Err(StoreError::Invalid("a review checkout takes no changeset"));
+    }
     if found.task_number != task.to_db() {
         return Err(StoreError::Invalid("the workspace belongs to another task"));
     }

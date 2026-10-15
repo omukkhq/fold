@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT w.path\n         FROM workspaces w JOIN proposals p ON p.id = w.proposal_id\n         WHERE p.number = ? AND w.kind = 'review'\n         ORDER BY w.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "path",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workspaces",
+            "name": "path"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "400d1e55fcda5e6c02ae2174af93a77ee8b135fa922a656b012f5dd97699ab5c"
+}

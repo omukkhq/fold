@@ -110,6 +110,8 @@ define_codes! {
     UNKNOWN_COMMENT_PATH = "unknown_comment_path",
     INVALID_COMMENT_RANGE = "invalid_comment_range",
     EMPTY_REVIEW = "empty_review",
+    REVIEW_CLAIM_REQUIRED = "review_claim_required",
+    CHECKOUT_FAILED = "checkout_failed",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

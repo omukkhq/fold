@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT w.worker_id AS \"worker_id!: i64\", w.number AS \"number!: i64\",\n                  t.number AS \"task!: i64\", w.state, r.number AS \"base!: i64\",\n                  w.changed_files, w.last_activity_at,\n                  (SELECT MAX(c.number) FROM checkpoints c\n                   WHERE c.workspace_id = w.id AND c.pruned_at IS NULL) AS \"checkpoint: i64\"\n           FROM workspaces w\n           JOIN tasks t ON t.id = w.task_id\n           JOIN revisions r ON r.id = w.base_revision_id\n           WHERE w.state IN ('active', 'missing') AND w.worker_id IS NOT NULL\n           ORDER BY w.number",
+  "query": "SELECT w.worker_id AS \"worker_id!: i64\", w.number AS \"number!: i64\",\n                  t.number AS \"task!: i64\", w.state, r.number AS \"base!: i64\",\n                  w.changed_files, w.last_activity_at,\n                  (SELECT MAX(c.number) FROM checkpoints c\n                   WHERE c.workspace_id = w.id AND c.pruned_at IS NULL) AS \"checkpoint: i64\"\n           FROM workspaces w\n           JOIN tasks t ON t.id = w.task_id\n           JOIN revisions r ON r.id = w.base_revision_id\n           WHERE w.kind = 'task' AND w.state IN ('active', 'missing') AND w.worker_id IS NOT NULL\n           ORDER BY w.number",
   "describe": {
     "columns": [
       {
@@ -101,5 +101,5 @@
       true
     ]
   },
-  "hash": "b8c92db912806c44f88dcfb06cd55145503bb634406eada54a99bc3ab7da38fb"
+  "hash": "1e7e767c56b886b32b4f8077d47c04e5e38254005baf94eb267489b5b5969f64"
 }

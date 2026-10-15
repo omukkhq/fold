@@ -8,7 +8,7 @@ use fold_core::tree::{FlatTree, Tree, flatten};
 use fold_core::{Actor, FoldError, RevisionId, Timestamp, WorkerName, WorkspaceId, codes, policy};
 use fold_store::WriteTx;
 use fold_store::workspaces::{
-    self, Checkpoint, CheckpointReason, ConflictRow, WorkspaceRow, WorkspaceState,
+    self, Checkpoint, CheckpointReason, ConflictRow, WorkspaceKind, WorkspaceRow, WorkspaceState,
 };
 use fold_vcs::ignore::IgnoreRules;
 use fold_vcs::index::StatIndex;
@@ -200,7 +200,21 @@ pub(super) async fn owned_in_tx(
     Ok(row)
 }
 
+/// A review checkout is refused before the owner check: it is read, built and tested, and never recorded, synced or restored, also by its own worker.
 fn check_change(actor: &Actor, row: &WorkspaceRow) -> Result<(), FoldError> {
+    if row.kind == WorkspaceKind::Review {
+        return Err(FoldError::new(
+            codes::INVALID_REQUEST,
+            format!("{} is a review checkout", row.id),
+        )
+        .with_details([
+            ("reason", json!("review_checkout")),
+            ("workspace", json!(row.id.to_string())),
+        ])
+        .with_hint(
+            "record work in a task workspace; a review checkout is only read, built and tested",
+        ));
+    }
     if let Err(denied) = policy::can_change_workspace(actor, row.worker.as_ref()) {
         return Err(FoldError::from(denied).with_details([
             ("workspace", json!(row.id.to_string())),

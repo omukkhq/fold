@@ -5,13 +5,18 @@ use fold_store::{Store, StoreError};
 use thiserror::Error;
 
 use super::events::EventBus;
+use super::projects::ProjectError;
 use super::tasks::TaskError;
 use super::workspaces::{WorkspaceError, WorkspaceService};
 
+mod checkouts;
+mod claims;
 mod comments;
 mod proposals;
 mod verdicts;
 
+pub use checkouts::ReviewCheckout;
+pub use claims::ReviewClaimView;
 pub use comments::{CommentInput, CommentLocation, CommentView};
 pub use proposals::{
     ProposalDetail, ProposalFilter, ProposalSummary, Retirement, Turn, VersionView, retire_proposal,
@@ -56,6 +61,15 @@ impl From<WorkspaceError> for ReviewError {
     }
 }
 
+impl From<ProjectError> for ReviewError {
+    fn from(error: ProjectError) -> Self {
+        match error {
+            ProjectError::Fold(error) => Self::Fold(error),
+            ProjectError::Store(error) => Self::Store(error),
+        }
+    }
+}
+
 /// Commands and reads for the proposals and reviews of one project. Each command is one write transaction; its events reach the bus only after the commit.
 ///
 /// `workspaces` snapshots the task workspace a proposal is made from. In the daemon it is `WorkspaceService::for_project`, so a snapshot takes the same per-workspace lock as a record, restore or sync, then the project's object lock shared, and holds both until the transaction that names its objects commits.
@@ -86,6 +100,11 @@ impl ReviewService {
             clock,
             workspaces,
         }
+    }
+
+    /// The review claim follows the same lease as the implementation claims of `workspaces`, which in the daemon reads the project's `config.toml` on each use.
+    async fn lease_minutes(&self) -> Result<u64, ReviewError> {
+        Ok(self.workspaces.lease().minutes().await?)
     }
 }
 

@@ -11,7 +11,7 @@ use fold_core::{
     RevisionId, TaskId, Timestamp, WorkspaceId, codes,
 };
 use fold_store::Store;
-use fold_store::workspaces::{self, Checkpoint, CheckpointKind, WorkspaceState};
+use fold_store::workspaces::{self, Checkpoint, CheckpointKind, WorkspaceKind, WorkspaceState};
 use fold_vcs::compare::{self as vcs, FileChange, LineCache, State};
 use fold_vcs::ignore::IgnoreRules;
 use fold_vcs::index::StatIndex;
@@ -269,7 +269,7 @@ impl LiveState {
         }
     }
 
-    /// Starts the watcher and the pipeline of an active workspace and returns the state of its first scan. Called after the commit that created the workspace. Attaching an attached workspace only rescans it.
+    /// Starts the watcher and the pipeline of an active task workspace and returns the state of its first scan. Called after the commit that created the workspace. Attaching an attached workspace only rescans it. A review checkout is refused: nothing in it is ever recorded, so it has no live state and the live job never reaches it.
     pub async fn attach(
         &self,
         workspace: WorkspaceId,
@@ -294,6 +294,14 @@ impl LiveState {
                     format!("{workspace} does not exist"),
                 )
             })?;
+        if row.kind == WorkspaceKind::Review {
+            return Err(FoldError::new(
+                codes::INVALID_REQUEST,
+                format!("{workspace} is a review checkout"),
+            )
+            .with_details([("reason", json!("review_checkout"))])
+            .into());
+        }
         if row.state != WorkspaceState::Active {
             return Err(FoldError::new(
                 codes::WORKSPACE_NOT_ACTIVE,

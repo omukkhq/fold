@@ -10,7 +10,7 @@ use fold_core::status::ProposalFact;
 use fold_core::{
     Actor, AgentActor, ChangesetId, CheckpointId, EventActor, EventError, FoldError, IdKind,
     NewEvent, ProposalId, RevisionId, TaskId, TaskStatus, Timestamp, WorkerName, WorkspaceId,
-    codes, policy, task_workspace_path,
+    codes, policy, review_checkout_path, task_workspace_path,
 };
 use fold_store::agents::WorkerRow;
 use fold_store::tasks::claims;
@@ -316,6 +316,29 @@ impl WorkspaceService {
         taken: Vec<String>,
         tree: ObjectHash,
     ) -> Result<Placed, WorkspaceError> {
+        let name = move |earlier| task_workspace_path(task, earlier);
+        self.place_named(name, taken, tree, false).await
+    }
+
+    /// Materialises `tree` read-only into the proposal's next review checkout directory, by the naming rules of a task workspace's create, and returns the directory relative to the project root with its full path. Nothing scans a checkout, so its stat index is not kept.
+    pub(crate) async fn place_review_checkout(
+        &self,
+        proposal: ProposalId,
+        taken: Vec<String>,
+        tree: ObjectHash,
+    ) -> Result<(String, PathBuf), WorkspaceError> {
+        let name = move |earlier| review_checkout_path(proposal, earlier);
+        let placed = self.place_named(name, taken, tree, true).await?;
+        Ok((placed.path, placed.dir))
+    }
+
+    async fn place_named(
+        &self,
+        name: impl Fn(u32) -> String + Send + 'static,
+        taken: Vec<String>,
+        tree: ObjectHash,
+        read_only: bool,
+    ) -> Result<Placed, WorkspaceError> {
         let paths = self.paths.clone();
         let ws_dir = self.paths.ws_dir();
         let root = self.paths.root().to_path_buf();
@@ -325,10 +348,7 @@ impl WorkspaceService {
             let objects = ObjectStore::open(&paths.fold_dir()).map_err(FoldError::from)?;
             let caps = capabilities(&probed, &paths)?;
             let staging = staging_dir(&ws_dir)?;
-            let opts = MaterialiseOptions {
-                read_only: false,
-                caps,
-            };
+            let opts = MaterialiseOptions { read_only, caps };
             let index = match materialise(&objects, &tree, &staging, &opts) {
                 Ok(done) => done.index,
                 Err(error) => {
@@ -336,7 +356,7 @@ impl WorkspaceService {
                     return Err(error.into());
                 }
             };
-            match rename_into_place(&staging, &root, task, &taken) {
+            match rename_into_place(&staging, &root, &name, &taken) {
                 Ok((path, dir)) => match sync_dir(&ws_dir) {
                     Ok(()) => Ok(Placed { path, dir, index }),
                     Err(error) => {
@@ -516,17 +536,17 @@ fn staging_dir(ws_dir: &Path) -> Result<PathBuf, FoldError> {
     }
 }
 
-/// Renames `staging` to the first name after the `taken` ones that no row lists and nothing holds on disk, and returns the name relative to `root` with the full path. A rename never replaces a directory with entries, a file or a symlink, so whatever already holds a name stays untouched. It does replace an empty directory, which holds nothing to lose; a concurrent create's directory is never empty, because materialise leaves `.fold/tmp` in it.
+/// Renames `staging` to the first name after the `taken` ones that no row lists and nothing holds on disk, and returns the name relative to `root` with the full path. `name` gives the directory for a count of earlier directories. A rename never replaces a directory with entries, a file or a symlink, so whatever already holds a name stays untouched. It does replace an empty directory, which holds nothing to lose; a concurrent create's directory is never empty, because materialise leaves `.fold/tmp` in it.
 fn rename_into_place(
     staging: &Path,
     root: &Path,
-    task: TaskId,
+    name: &dyn Fn(u32) -> String,
     taken: &[String],
 ) -> Result<(String, PathBuf), FoldError> {
     let earlier = u32::try_from(taken.len()).unwrap_or(u32::MAX);
     let mut last = None;
     for step in 0..MAX_NAME_ATTEMPTS {
-        let path = task_workspace_path(task, earlier.saturating_add(step));
+        let path = name(earlier.saturating_add(step));
         if taken.contains(&path) {
             last = Some(path);
             continue;
@@ -538,7 +558,7 @@ fn rename_into_place(
             Err(error) => return Err(io_error(error)),
         }
     }
-    let path = last.unwrap_or_else(|| task_workspace_path(task, earlier));
+    let path = last.unwrap_or_else(|| name(earlier));
     Err(VcsError::TargetNotEmpty(path).into())
 }
 

@@ -95,3 +95,5 @@ integrator_required
 unknown_comment_path
 invalid_comment_range
 empty_review
+review_claim_required
+checkout_failed

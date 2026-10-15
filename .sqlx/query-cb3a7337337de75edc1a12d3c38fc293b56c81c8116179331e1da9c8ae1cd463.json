@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO workspaces (number, task_id, worker_id, kind, path, base_revision_id, proposal_id, version_id, state, last_activity_at, created_at)\n         SELECT ?1, p.task_id, ?3, 'review', ?4, v.base_revision_id, p.id, v.id, 'active', ?6, ?6\n         FROM proposals p JOIN proposal_versions v ON v.proposal_id = p.id\n         WHERE p.number = ?2 AND v.version = ?5",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "cb3a7337337de75edc1a12d3c38fc293b56c81c8116179331e1da9c8ae1cd463"
+}

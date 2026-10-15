@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT w.id AS \"id!: i64\", w.base_revision_id AS \"base_id!: i64\", r.number AS \"base!: i64\"\n           FROM workspaces w JOIN revisions r ON r.id = w.base_revision_id\n           WHERE w.number = ?",
+  "query": "SELECT w.id AS \"id!: i64\", w.base_revision_id AS \"base_id!: i64\", r.number AS \"base!: i64\",\n                  w.kind = 'review' AS \"review!: bool\"\n           FROM workspaces w JOIN revisions r ON r.id = w.base_revision_id\n           WHERE w.number = ?",
   "describe": {
     "columns": [
       {
@@ -35,6 +35,12 @@
             "name": "number"
           }
         }
+      },
+      {
+        "name": "review!: bool",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": "Expression"
       }
     ],
     "parameters": {
@@ -43,8 +49,9 @@
     "nullable": [
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "383b4aeea54ba2ff973a73773fd1300ea2f1cc150afb807505a45527305eeec7"
+  "hash": "b0536346e6127bbb0484274ffcab5d64f2b0b1b4c3269cc231ee567d65d50d52"
 }

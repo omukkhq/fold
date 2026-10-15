@@ -364,7 +364,7 @@ async fn closed_workspaces_past_their_retention_lose_directories_and_checkpoints
             .checkpoint(1, "one explicit", CheckpointReason::Explicit)
             .await,
         fixture
-            .checkpoint(2, "two explicit", CheckpointReason::Explicit)
+            .checkpoint(1, "one more explicit", CheckpointReason::Explicit)
             .await,
     ];
     let kept = [
@@ -438,7 +438,7 @@ async fn closed_workspaces_past_their_retention_lose_directories_and_checkpoints
         vec![
             (1, "ck-1".to_owned()),
             (1, "ck-2".to_owned()),
-            (2, "ck-3".to_owned())
+            (1, "ck-3".to_owned())
         ]
     );
 

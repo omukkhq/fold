@@ -148,6 +148,11 @@ impl WorkspaceService {
         self
     }
 
+    /// Where the claim lease comes from, so the review claims of the project follow the same lease.
+    pub(crate) fn lease(&self) -> &Lease {
+        &self.lease
+    }
+
     /// Shares one capabilities probe with every other service of the project.
     #[must_use]
     pub fn with_capabilities(mut self, caps: Arc<OnceLock<Capabilities>>) -> Self {

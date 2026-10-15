@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::{FoldError, codes};
-use crate::ids::{TaskId, WorkspaceId};
+use crate::ids::{ProposalId, TaskId, WorkspaceId};
 
 /// Where the host-wide files live: `<data home>/fold/`. The data home is `XDG_DATA_HOME`, else `<home>/.local/share`. An empty or relative value counts as unset, as the XDG base directory rules require.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,6 +95,15 @@ pub fn task_workspace_path(task: TaskId, earlier: u32) -> String {
     }
 }
 
+/// The directory of a review checkout relative to the project root. `earlier` counts the review checkouts the proposal had before this one: none gives `ws/review-p-4`, one gives `ws/review-p-4-2`. Like a task workspace's name it carries no worker and no version, so it never changes when the checkout changes hands.
+pub fn review_checkout_path(proposal: ProposalId, earlier: u32) -> String {
+    let name = proposal.to_string().to_ascii_lowercase();
+    match earlier {
+        0 => format!("ws/review-{name}"),
+        _ => format!("ws/review-{name}-{}", u64::from(earlier) + 1),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,6 +154,18 @@ mod tests {
         assert_eq!(
             task_workspace_path(task, u32::MAX),
             format!("ws/t-12-{}", u64::from(u32::MAX) + 1)
+        );
+    }
+
+    #[test]
+    fn review_checkout_paths_count_the_earlier_checkouts() {
+        let proposal = ProposalId::from_number(4).unwrap();
+        assert_eq!(review_checkout_path(proposal, 0), "ws/review-p-4");
+        assert_eq!(review_checkout_path(proposal, 1), "ws/review-p-4-2");
+        assert_eq!(review_checkout_path(proposal, 2), "ws/review-p-4-3");
+        assert_eq!(
+            review_checkout_path(proposal, u32::MAX),
+            format!("ws/review-p-4-{}", u64::from(u32::MAX) + 1)
         );
     }
 }

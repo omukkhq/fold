@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO claims (kind, proposal_id, worker_id, acquired_at, renewed_at)\n         SELECT 'review', p.id, ?2, ?3, ?3 FROM proposals p WHERE p.number = ?1 AND p.state = 'open'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "d75d7005b5e0b0ea64bf5d571a21a03201bf59447b126d19fad6b10c143d9023"
+}

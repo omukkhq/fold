@@ -577,7 +577,7 @@ pub async fn held_claims(executor: impl SqliteExecutor<'_>) -> Result<Vec<HeldCl
         .collect()
 }
 
-/// A workspace in state `active` or `missing` with an owner. `changed_files` and `last_activity_at` are the row's cached values, so they read the same with or without the watcher.
+/// A task workspace in state `active` or `missing` with an owner. `changed_files` and `last_activity_at` are the row's cached values, so they read the same with or without the watcher.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnedWorkspace {
     pub worker_id: i64,
@@ -591,7 +591,7 @@ pub struct OwnedWorkspace {
     pub latest_checkpoint: Option<CheckpointId>,
 }
 
-/// Every live workspace that has an owner, by workspace number.
+/// Every live task workspace that has an owner, by workspace number. A review checkout holds no work in progress, so the overview leaves it out.
 pub async fn owned_live_workspaces(
     executor: impl SqliteExecutor<'_>,
 ) -> Result<Vec<OwnedWorkspace>, StoreError> {
@@ -604,7 +604,7 @@ pub async fn owned_live_workspaces(
            FROM workspaces w
            JOIN tasks t ON t.id = w.task_id
            JOIN revisions r ON r.id = w.base_revision_id
-           WHERE w.state IN ('active', 'missing') AND w.worker_id IS NOT NULL
+           WHERE w.kind = 'task' AND w.state IN ('active', 'missing') AND w.worker_id IS NOT NULL
            ORDER BY w.number"#
     )
     .fetch_all(executor)

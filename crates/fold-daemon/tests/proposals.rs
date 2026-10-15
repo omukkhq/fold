@@ -867,7 +867,7 @@ async fn close_proposal_returns_task_to_in_progress_and_archives_review_checkout
     let released = of_type(&appended, types::CLAIM_RELEASED)[0];
     assert_eq!(
         released.data,
-        json!({"kind": "review", "worker": "backend", "reason": "closed"})
+        json!({"kind": "review", "proposal": "P-1", "worker": "backend", "reason": "closed"})
     );
     let archived = of_type(&appended, types::WORKSPACE_ARCHIVED)[0];
     assert_eq!(archived.workspace, Some(ws(2)));
@@ -1071,7 +1071,7 @@ async fn retire_proposal_ends_a_proposal_for_reject_and_integration() {
     );
     assert_eq!(
         buffer.events()[0].data,
-        json!({"kind": "review", "worker": "frontend", "reason": "integrated"})
+        json!({"kind": "review", "proposal": "P-2", "worker": "frontend", "reason": "integrated"})
     );
     assert_eq!(buffer.events()[1].data, json!({"reason": "integrated"}));
     let integrated = fx.reviews.get_proposal(p(2), None).await.unwrap().summary;

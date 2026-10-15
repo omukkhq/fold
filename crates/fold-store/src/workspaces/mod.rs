@@ -18,8 +18,9 @@ pub use checkpoints::{
 pub use conflicts::{ConflictRow, clear_conflict, list_conflicts, set_conflicts};
 pub use gc::{ClosedWorkspace, closed_workspaces_due, gc_roots, workspaces_over_auto_limit};
 pub use lifecycle::{
-    ClosedState, NewTaskWorkspace, WorkspaceKind, WorkspaceRow, WorkspaceState, close,
-    get_workspace, insert_task_workspace, latest_task_workspace, live_task_workspace, set_base,
+    ClosedState, NewReviewCheckout, NewTaskWorkspace, WorkspaceKind, WorkspaceRow, WorkspaceState,
+    active_review_checkout, close, get_workspace, insert_review_checkout, insert_task_workspace,
+    latest_task_workspace, live_task_workspace, review_checkout_paths, set_base,
     set_sync_checkpoint, sync_checkpoint, task_workspace_paths, touch,
 };
 pub use refs::{advance_main, create_main};

@@ -472,6 +472,7 @@ pub async fn retire_proposal(
             .proposal(proposal)
             .data(json!({
                 "kind": "review",
+                "proposal": proposal.to_string(),
                 "worker": holder.as_str(),
                 "reason": outcome.as_str(),
             }))?;

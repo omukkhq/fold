@@ -62,7 +62,7 @@ pub struct ClaimSummary {
     pub stale: bool,
 }
 
-/// A workspace in state `active` or `missing` that the worker owns, read from the workspace row's cached counts.
+/// A task workspace in state `active` or `missing` that the worker owns, read from the workspace row's cached counts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WorkspaceSummary {
     pub ws: WorkspaceId,

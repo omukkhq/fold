@@ -11,6 +11,10 @@ use crate::error::StoreError;
 use crate::store::WriteTx;
 use crate::workspaces::parse_stats;
 
+mod claims;
+
+pub use claims::{ReviewClaimRow, insert_review_claim, unreleased_review_claim};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProposalState {
     Open,

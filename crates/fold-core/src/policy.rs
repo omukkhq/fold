@@ -205,6 +205,58 @@ pub fn can_submit_verdict<'a>(
     }
 }
 
+/// A review is a second agent's look at the work, so the author's agent never claims its own proposal through any of its workers. Only an agent's worker holds a claim. It returns the admitted agent, which becomes the reviewer.
+pub fn can_claim_review<'a>(
+    actor: &'a Actor,
+    author: &WorkerName,
+) -> Result<&'a AgentActor, PolicyDenied> {
+    match actor {
+        Actor::Agent(agent) if agent.agent == author.agent() => Err(PolicyDenied {
+            code: codes::AUTHOR_CANNOT_REVIEW,
+            message: "an agent cannot review its own proposal",
+            hint: "ask another agent to call claim_review",
+        }),
+        Actor::Agent(agent) => Ok(agent),
+        Actor::Human { .. } | Actor::System => Err(PolicyDenied {
+            code: codes::ACTOR_CANNOT_CLAIM,
+            message: "only an agent's worker can claim a review",
+            hint: "ask an agent to claim the review with claim_review",
+        }),
+    }
+}
+
+/// A review claim is the reviewing agent's, so any worker of the holder's agent gives it up; a human, the system and every other agent are refused. `holder` is the claim's worker.
+pub fn can_release_review<'a>(
+    actor: &'a Actor,
+    holder: &WorkerName,
+) -> Result<&'a AgentActor, PolicyDenied> {
+    match actor {
+        Actor::Agent(agent) if agent.agent == holder.agent() => Ok(agent),
+        Actor::Agent(_) | Actor::Human { .. } | Actor::System => Err(PolicyDenied {
+            code: codes::NOT_CLAIM_HOLDER,
+            message: "only the agent that holds the review claim can release it",
+            hint: "call get_proposal to see the reviewer",
+        }),
+    }
+}
+
+/// A review checkout serves the review the claim holds, so only the holder's agent creates one, through any of its workers: each review worker gets a directory of its own. `holder` is the claim's worker; an unclaimed proposal is refused too.
+pub fn can_create_review_checkout<'a>(
+    actor: &'a Actor,
+    holder: Option<&WorkerName>,
+) -> Result<&'a AgentActor, PolicyDenied> {
+    match actor {
+        Actor::Agent(agent) if holder.is_some_and(|holder| agent.agent == holder.agent()) => {
+            Ok(agent)
+        }
+        Actor::Agent(_) | Actor::Human { .. } | Actor::System => Err(PolicyDenied {
+            code: codes::REVIEW_CLAIM_REQUIRED,
+            message: "only the agent that holds the review claim can check out the proposal",
+            hint: "call claim_review, then create_review_checkout",
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -363,5 +415,67 @@ mod tests {
         assert!(matches!(admitted, Reviewer::Human(name) if name.as_str() == "tanim"));
         let denied = can_submit_verdict(&other, Verdict::Approve, &author).unwrap_err();
         assert!(denied.hint().contains("integrator"));
+    }
+
+    #[test]
+    fn the_author_agent_never_claims_its_own_review() {
+        let author = worker("backend/api");
+        let expected = [
+            Some(codes::AUTHOR_CANNOT_REVIEW),
+            Some(codes::AUTHOR_CANNOT_REVIEW),
+            None,
+            None,
+            Some(codes::ACTOR_CANNOT_CLAIM),
+            Some(codes::ACTOR_CANNOT_CLAIM),
+        ];
+        for ((case, actor), expected) in actors().into_iter().zip(expected) {
+            let result = can_claim_review(&actor, &author);
+            assert_eq!(outcome(result), expected, "{case}");
+        }
+        let reviewer = agent("frontend", &[]);
+        let admitted = can_claim_review(&reviewer, &author).unwrap();
+        assert_eq!(admitted.worker, worker("frontend"));
+    }
+
+    #[test]
+    fn only_the_holder_agent_releases_a_review_claim() {
+        let holder = worker("frontend/r1");
+        let expected = [
+            Some(codes::NOT_CLAIM_HOLDER),
+            Some(codes::NOT_CLAIM_HOLDER),
+            None,
+            Some(codes::NOT_CLAIM_HOLDER),
+            Some(codes::NOT_CLAIM_HOLDER),
+            Some(codes::NOT_CLAIM_HOLDER),
+        ];
+        for ((case, actor), expected) in actors().into_iter().zip(expected) {
+            let result = can_release_review(&actor, &holder);
+            assert_eq!(outcome(result), expected, "{case}");
+        }
+    }
+
+    #[test]
+    fn only_the_holder_agent_checks_out_a_proposal() {
+        let holder = worker("frontend/r1");
+        let expected = [
+            Some(codes::REVIEW_CLAIM_REQUIRED),
+            Some(codes::REVIEW_CLAIM_REQUIRED),
+            None,
+            Some(codes::REVIEW_CLAIM_REQUIRED),
+            Some(codes::REVIEW_CLAIM_REQUIRED),
+            Some(codes::REVIEW_CLAIM_REQUIRED),
+        ];
+        for ((case, actor), expected) in actors().into_iter().zip(expected) {
+            let result = can_create_review_checkout(&actor, Some(&holder));
+            assert_eq!(outcome(result), expected, "{case}");
+        }
+        for (case, actor) in actors() {
+            let result = can_create_review_checkout(&actor, None);
+            assert_eq!(
+                outcome(result),
+                Some(codes::REVIEW_CLAIM_REQUIRED),
+                "{case} on an unclaimed proposal"
+            );
+        }
     }
 }

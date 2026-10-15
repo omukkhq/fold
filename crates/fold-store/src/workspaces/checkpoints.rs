@@ -93,7 +93,7 @@ pub struct Checkpoint {
     pub pruned_at: Option<Timestamp>,
 }
 
-/// Inserts one checkpoint row in the caller's write, with the workspace's base revision as it is now. `tree` must already be in the object store. A `reason` whose kind differs from `kind`, or a workspace that does not exist, is refused.
+/// Inserts one checkpoint row in the caller's write, with the workspace's base revision as it is now. `tree` must already be in the object store. A `reason` whose kind differs from `kind`, a workspace that does not exist and a review checkout are refused.
 pub async fn insert_checkpoint(
     tx: &mut WriteTx,
     workspace: WorkspaceId,
@@ -110,7 +110,8 @@ pub async fn insert_checkpoint(
     }
     let workspace_number = workspace.to_db();
     let found = sqlx::query!(
-        r#"SELECT w.id AS "id!: i64", w.base_revision_id AS "base_id!: i64", r.number AS "base!: i64"
+        r#"SELECT w.id AS "id!: i64", w.base_revision_id AS "base_id!: i64", r.number AS "base!: i64",
+                  w.kind = 'review' AS "review!: bool"
            FROM workspaces w JOIN revisions r ON r.id = w.base_revision_id
            WHERE w.number = ?"#,
         workspace_number
@@ -118,6 +119,9 @@ pub async fn insert_checkpoint(
     .fetch_optional(tx.conn())
     .await?
     .ok_or(StoreError::Invalid("the workspace does not exist"))?;
+    if found.review {
+        return Err(StoreError::Invalid("a review checkout takes no checkpoint"));
+    }
     let id = counters::allocate(tx, IdKind::Checkpoint).await?;
     let id = CheckpointId::from_number(id).ok_or(StoreError::Corrupt("counters.next"))?;
     let number_value = id.to_db();

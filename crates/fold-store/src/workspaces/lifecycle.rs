@@ -363,3 +363,92 @@ pub async fn set_sync_checkpoint(
     .rows_affected();
     Ok(changed == 1)
 }
+
+#[derive(Debug, Clone)]
+pub struct NewReviewCheckout<'a> {
+    pub id: WorkspaceId,
+    pub proposal: ProposalId,
+    pub version: u32,
+    pub worker_id: i64,
+    pub path: &'a str,
+    pub now: Timestamp,
+}
+
+/// Inserts an active review checkout of `version` of the proposal, owned by `worker_id`. It takes the proposal's task and the version's base revision. A second active checkout of the same version for the worker fails on `workspaces.version_id`, and a reused directory on `workspaces.path`, so the unique indexes decide a race. A proposal or version that does not exist inserts nothing and fails with `StoreError::Invalid`.
+pub async fn insert_review_checkout(
+    tx: &mut WriteTx,
+    new: &NewReviewCheckout<'_>,
+) -> Result<(), StoreError> {
+    let (id, proposal, version, now) = (
+        new.id.to_db(),
+        new.proposal.to_db(),
+        i64::from(new.version),
+        new.now.as_millis(),
+    );
+    let inserted = sqlx::query!(
+        "INSERT INTO workspaces (number, task_id, worker_id, kind, path, base_revision_id, proposal_id, version_id, state, last_activity_at, created_at)
+         SELECT ?1, p.task_id, ?3, 'review', ?4, v.base_revision_id, p.id, v.id, 'active', ?6, ?6
+         FROM proposals p JOIN proposal_versions v ON v.proposal_id = p.id
+         WHERE p.number = ?2 AND v.version = ?5",
+        id,
+        proposal,
+        new.worker_id,
+        new.path,
+        version,
+        now
+    )
+    .execute(tx.conn())
+    .await?
+    .rows_affected();
+    if inserted == 1 {
+        Ok(())
+    } else {
+        Err(StoreError::Invalid(
+            "the proposal or the version does not exist",
+        ))
+    }
+}
+
+/// The active review checkout of `version` of the proposal that `worker_id` owns; the partial unique index allows at most one.
+pub async fn active_review_checkout(
+    executor: impl SqliteExecutor<'_>,
+    proposal: ProposalId,
+    version: u32,
+    worker_id: i64,
+) -> Result<Option<WorkspaceId>, StoreError> {
+    let (proposal, version) = (proposal.to_db(), i64::from(version));
+    let found = sqlx::query_scalar!(
+        r#"SELECT w.number AS "number!: i64"
+           FROM workspaces w
+           JOIN proposals p ON p.id = w.proposal_id
+           JOIN proposal_versions v ON v.id = w.version_id
+           WHERE p.number = ?1 AND v.version = ?2 AND w.worker_id = ?3
+             AND w.kind = 'review' AND w.state = 'active'"#,
+        proposal,
+        version,
+        worker_id
+    )
+    .fetch_optional(executor)
+    .await?;
+    found
+        .map(|value| number(value, WorkspaceId::try_from_db, "workspaces.number"))
+        .transpose()
+}
+
+/// The directories of every review checkout the proposal has had, in any state. Their count gives the next checkout's directory name, and a create skips each of them, so a name is never handed out twice.
+pub async fn review_checkout_paths(
+    executor: impl SqliteExecutor<'_>,
+    proposal: ProposalId,
+) -> Result<Vec<String>, StoreError> {
+    let proposal = proposal.to_db();
+    let paths = sqlx::query_scalar!(
+        "SELECT w.path
+         FROM workspaces w JOIN proposals p ON p.id = w.proposal_id
+         WHERE p.number = ? AND w.kind = 'review'
+         ORDER BY w.number",
+        proposal
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(paths)
+}
