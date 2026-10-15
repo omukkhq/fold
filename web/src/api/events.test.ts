@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "./errors";
-import { eventTransport, openEventStream } from "./events";
+import { eventTransport, listEvents, openEventStream } from "./events";
 
 describe("eventTransport", () => {
   it("opens the daemon stream when no fixture loader is given", async () => {
@@ -156,5 +156,19 @@ describe("openEventStream", () => {
     }
     expect(chunks).toHaveLength(1);
     expect(chunks[0]).toContain('"kind":"snapshot"');
+  });
+});
+
+describe("listEvents", () => {
+  it("answers empty where no fixture is loaded and for another slug", async () => {
+    expect(await listEvents("other")).toEqual([]);
+  });
+
+  it("lists the fixture history of the demo project newest first", async () => {
+    const events = await listEvents("demo");
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.map((e) => e.seq)).toEqual(
+      [...events.map((e) => e.seq)].sort((a, b) => b - a),
+    );
   });
 });

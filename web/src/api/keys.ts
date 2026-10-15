@@ -22,6 +22,7 @@ export const keys = {
   proposals: (slug: string) => [slug, "proposals"] as const,
   proposal: (slug: string, proposal: string) =>
     [slug, "proposal", proposal] as const,
+  events: (slug: string) => [slug, "events"] as const,
   agents: (slug: string) => [slug, "agents"] as const,
   /** Under the agents prefix, so every event that invalidates the agents also refreshes the agent chips of the top bar. */
   agentBar: (slug: string) => [slug, "agents", "bar"] as const,
@@ -38,5 +39,8 @@ export const keys = {
   /** Live working state, written only by the event stream. */
   workspaceLive: (slug: string, workspace: string) =>
     [slug, "workspace-live", workspace] as const,
+  /** Under the workspaces prefix, so every event that refreshes the workspaces also refreshes the review checkouts. */
+  reviewCheckouts: (slug: string) =>
+    [slug, "workspaces", "review-checkouts"] as const,
   workspaceLiveAll: (slug: string) => [slug, "workspace-live"] as const,
 };

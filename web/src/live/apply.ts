@@ -1,5 +1,7 @@
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
+import type { DurableEvent } from "../api/events";
 import { keys } from "../api/keys";
+import { withEvent } from "./eventList";
 import {
   isRecord,
   liveWorkspaceOf,
@@ -419,6 +421,20 @@ export function applyEvent(
     applyPresence(queryClient, slug, event);
     return;
   }
+  const durable: DurableEvent = {
+    seq: event.seq,
+    type: event.type,
+    actor: event.actor,
+    task: event.task,
+    proposal: event.proposal,
+    workspace: event.workspace,
+    revision: event.revision,
+    data: event.data,
+    created_at: event.created_at,
+  };
+  queryClient.setQueryData(keys.events(slug), (old: unknown) =>
+    Array.isArray(old) ? withEvent<DurableEvent>(old, durable) : undefined,
+  );
   const domain = domainOf(event.type);
   if (domain !== null) {
     applyStored(queryClient, slug, domain, event);

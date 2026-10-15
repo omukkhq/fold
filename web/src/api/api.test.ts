@@ -70,13 +70,17 @@ describe("a production build", () => {
     );
   });
 
-  it("lists no agent or thread and refuses writes with the daemon's not_found", async () => {
+  it("lists no agent, thread, event or review checkout and refuses writes with the daemon's not_found", async () => {
     vi.stubEnv("DEV", false);
     vi.resetModules();
     const agents = await import("./agents");
     const messages = await import("./messages");
+    const events = await import("./events");
+    const reviews = await import("./reviews");
     const errors = await import("./errors");
     await expect(agents.listAgents()).resolves.toEqual([]);
+    await expect(events.listEvents("demo")).resolves.toEqual([]);
+    await expect(reviews.listReviewCheckouts("demo")).resolves.toEqual([]);
     await expect(messages.listThreads()).resolves.toEqual([]);
     await expect(agents.setIntegrator("review", true)).rejects.toSatisfy(
       (e: unknown) => errors.isApiError(e, "not_found"),
@@ -237,6 +241,8 @@ describe("keys", () => {
       keys.workspace("s", "ws-3"),
       keys.workspaceLive("s", "ws-3"),
       keys.workspaceLiveAll("s"),
+      keys.events("s"),
+      keys.reviewCheckouts("s"),
     ];
     for (const key of projectKeys) {
       expect(key[0]).toBe("s");

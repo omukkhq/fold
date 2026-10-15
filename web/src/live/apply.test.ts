@@ -569,3 +569,30 @@ describe("patchNamedStatus", () => {
     });
   });
 });
+
+describe("event list", () => {
+  it("adds a stored event to a loaded list in the shape the list read returns", () => {
+    const client = new QueryClient();
+    client.setQueryData(keys.events(slug), []);
+    applyEvent(client, slug, ev("task.created", { seq: 4, task: "T-4" }));
+    expect(client.getQueryData(keys.events(slug))).toEqual([
+      {
+        seq: 4,
+        type: "task.created",
+        actor: "frontend/ui",
+        task: "T-4",
+        proposal: null,
+        workspace: null,
+        revision: null,
+        data: {},
+        created_at: 1_760_000_000_000,
+      },
+    ]);
+  });
+
+  it("starts no list before the list read has loaded", () => {
+    const client = new QueryClient();
+    applyEvent(client, slug, ev("task.created"));
+    expect(client.getQueryData(keys.events(slug))).toBeUndefined();
+  });
+});

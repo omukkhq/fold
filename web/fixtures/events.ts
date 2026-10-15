@@ -143,3 +143,16 @@ export function fixtureEventTransport(
     return Promise.resolve(chunks());
   };
 }
+
+/** The stored events a project holds before the scripted stream starts, newest first. The scripted events continue its numbering. */
+export function eventHistory(slug: string): StoredEvent[] {
+  return slug === "demo"
+    ? [
+        {
+          ...stored(0, "task.created", "T-1", { title: "Login form" }),
+          actor: "human:tanim",
+          created_at: T0 - 60_000,
+        },
+      ]
+    : [];
+}

@@ -1,5 +1,7 @@
 import type { Transport } from "../live/stream";
 import { fetchEventStream } from "./client";
+import { fromFixture } from "./fixture";
+import type { components } from "./schema";
 
 interface EventFixture {
   fixtureEventTransport(slug: string): Transport;
@@ -30,4 +32,16 @@ export function eventTransport(
 /** The transport of one project's event stream. */
 export function openEventStream(slug: string): Transport {
   return eventTransport(slug, fixture);
+}
+
+/** A stored event as the stream and the event list carry it. */
+export type DurableEvent = components["schemas"]["DurableEvent"];
+
+const historyFixture = import.meta.env.DEV
+  ? () => import("../../fixtures/events")
+  : undefined;
+
+/** The project's newest stored events, newest first. No event-list route exists yet; the stream's stored events extend this list in the cache. */
+export async function listEvents(slug: string): Promise<DurableEvent[]> {
+  return fromFixture(historyFixture, (m) => m.eventHistory(slug), []);
 }

@@ -73,6 +73,7 @@
   --width-thread-list: 420px;
   --width-dialog: 1060px;
   --width-review-panel: 330px;
+  --width-event-stream: 360px;
 }
 
 :root {

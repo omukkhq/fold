@@ -155,6 +155,7 @@
   --width-thread-list: var(--width-thread-list);
   --width-dialog: var(--width-dialog);
   --width-review-panel: var(--width-review-panel);
+  --width-event-stream: var(--width-event-stream);
 
   --height-*: initial;
   --height-bar: var(--height-bar);

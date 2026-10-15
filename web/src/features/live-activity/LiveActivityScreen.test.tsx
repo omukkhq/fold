@@ -26,6 +26,12 @@ import { LiveActivityScreen } from "./LiveActivityScreen";
 
 const listWorkspaces = vi.hoisted(() => vi.fn<() => Promise<unknown>>());
 vi.mock("../../api/workspaces", () => ({ listWorkspaces }));
+vi.mock("../../api/events", () => ({
+  listEvents: () => Promise.resolve([]),
+}));
+vi.mock("../../api/reviews", () => ({
+  listReviewCheckouts: () => Promise.resolve([]),
+}));
 
 const NOW = Date.now();
 
