@@ -1,13 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { readSources } from "../test/sources";
 
-const sources = import.meta.glob<string>(
-  ["/src/live/*.{ts,tsx}", "/src/features/**/*.{ts,tsx}"],
-  {
-    query: "?raw",
-    import: "default",
-    eager: true,
-  },
-);
+const sources = {
+  ...readSources(import.meta.url, "live", ["ts", "tsx"], false),
+  ...readSources(import.meta.url, "features", ["ts", "tsx"]),
+};
 
 /** The display clock reads the time only; every other timer in the live layer or a screen would be polling. */
 const DISPLAY_CLOCK = "/src/live/useNow.ts";

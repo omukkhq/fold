@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { readSources } from "../../test/sources";
 
-const sources = import.meta.glob<string>("/src/**/*.{ts,tsx}", {
-  query: "?raw",
-  import: "default",
-  eager: true,
-});
+const sources = readSources(import.meta.url, "", ["ts", "tsx"]);
 
 /** An `attention` list written out, or an item pushed onto one. A type that names a kind builds nothing. */
 export const ATTENTION_BUILT =

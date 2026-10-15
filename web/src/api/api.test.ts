@@ -1,10 +1,9 @@
 import { QueryClient } from "@tanstack/react-query";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseSlug } from "../routes/params";
 import { stubFetch } from "../test/stubFetch";
 import { RECENT_EVENTS } from "./agents";
 import { agentBarQuery } from "./agentBar";
-import { FIXTURE_DELAY_MS, fromFixture } from "./fixture";
 import { keys } from "./keys";
 import {
   agentsQuery,
@@ -18,35 +17,6 @@ import {
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
-});
-
-describe("fromFixture", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
-  it("resolves a copy of the fixture only after the delay", async () => {
-    const value = { a: 1 };
-    const pending = fromFixture(
-      () => Promise.resolve({ value }),
-      (m) => m.value,
-      { a: 0 },
-    );
-    let settled = false;
-    void pending.then(() => {
-      settled = true;
-    });
-    await vi.advanceTimersByTimeAsync(FIXTURE_DELAY_MS - 1);
-    expect(settled).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    const result = await pending;
-    expect(result).toEqual(value);
-    expect(result).not.toBe(value);
-  });
-
-  it("answers with the empty value at once when there is no fixture", async () => {
-    await expect(fromFixture(undefined, () => 1, 0)).resolves.toBe(0);
-  });
 });
 
 describe("queries", () => {

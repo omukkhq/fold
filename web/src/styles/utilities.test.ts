@@ -1,11 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { readSources } from "../test/sources";
 import themeCss from "./index.css?raw";
 
-const sources = import.meta.glob<string>("/src/**/*.{ts,tsx}", {
-  query: "?raw",
-  import: "default",
-  eager: true,
-});
+const sources = readSources(import.meta.url, "", ["ts", "tsx"]);
 
 type Keys = Map<string, Set<string>>;
 

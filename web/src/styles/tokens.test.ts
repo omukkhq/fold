@@ -1,14 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { composite, contrastRatio, parseHex } from "../theme/contrast";
+import { readSources } from "../test/sources";
 import fontsCss from "./fonts.css?raw";
 import themeCss from "./index.css?raw";
 import tokensCss from "./tokens.css?raw";
 
-const sources = import.meta.glob<string>("/src/**/*.{ts,tsx,css}", {
-  query: "?raw",
-  import: "default",
-  eager: true,
-});
+const sources = readSources(import.meta.url, "", ["ts", "tsx", "css"]);
 
 const W00_COLOURS = [
   "bg",

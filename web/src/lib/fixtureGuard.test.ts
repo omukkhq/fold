@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  importsFixtures,
-  importsRetiredFixture,
-  mayImportFixtures,
-} from "./fixtureGuard";
+import { importsFixtures } from "./fixtureGuard";
 
 describe("importsFixtures", () => {
   it.each([
@@ -11,8 +7,15 @@ describe("importsFixtures", () => {
     "import {x} from '../fixtures/session'",
     'const m = await import("../../fixtures/projects");',
     'import "../../fixtures/projects";',
+    'import { board } from "../../fixtures/board";',
+    'const e = await import("../../fixtures/events");',
     'const all = import.meta.glob("../../fixtures/*.ts");',
     "import.meta.glob<string>(['../fixtures/*.ts'], { eager: true })",
+    'const g = import.meta.glob(["./a/*.ts", "../fixtures/*.ts"]);',
+    'import { projects } from "@/../fixtures";',
+    'import "../../fixtures";',
+    'export * from "@/../fixtures/projects";',
+    'const m = require("../../fixtures/projects");',
   ])("flags %s", (source) => {
     expect(importsFixtures(source)).toBe(true);
   });
@@ -21,40 +24,9 @@ describe("importsFixtures", () => {
     'import { keys } from "./keys";',
     'const fixtures = ["a"];',
     "// reads fixtures/projects in a comment",
+    'import { table } from "./fixturesTable";',
+    'const g = import.meta.glob(["./a/*.ts", "./b/*.ts"]);',
   ])("passes %s", (source) => {
     expect(importsFixtures(source)).toBe(false);
-  });
-});
-
-describe("mayImportFixtures", () => {
-  it("allows the api seam and tests only", () => {
-    expect(mayImportFixtures("/src/api/projects.ts")).toBe(true);
-    expect(mayImportFixtures("/src/app/Shell.test.ts")).toBe(true);
-    expect(mayImportFixtures("/src/app/Shell.tsx")).toBe(false);
-    expect(mayImportFixtures("/src/routes/p.$slug.tsx")).toBe(false);
-  });
-});
-
-describe("importsRetiredFixture", () => {
-  it.each([
-    'import { board } from "../../fixtures/board";',
-    "import {x} from '../fixtures/tasks'",
-    'const m = await import("../../fixtures/demoBoard");',
-    'import { workspaces } from "../../fixtures/workspaces";',
-    "import { comparisons } from '../../../fixtures/diff'",
-    'const e = await import("../../fixtures/events");',
-    'import { checkouts } from "../../fixtures/reviews";',
-    'import { detail } from "../../../fixtures/proposals";',
-  ])("flags %s", (source) => {
-    expect(importsRetiredFixture(source)).toBe(true);
-  });
-
-  it.each([
-    'import { agents } from "../../fixtures/agents";',
-    'import { projects } from "../../fixtures/projects";',
-    'import { tasks } from "./tasks";',
-    'import { comparisons } from "../../fixtures/diffs";',
-  ])("passes %s", (source) => {
-    expect(importsRetiredFixture(source)).toBe(false);
   });
 });

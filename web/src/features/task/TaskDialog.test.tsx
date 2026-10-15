@@ -59,19 +59,6 @@ vi.mock("@/api/events", async (importOriginal) => {
   };
 });
 
-// The fixtures answer without the development delay, so the whole app, board included, can be driven test after test.
-vi.mock("@/api/fixture", async (importOriginal) => {
-  const real = await importOriginal<typeof import("@/api/fixture")>();
-  return {
-    ...real,
-    fromFixture: <M, T>(
-      load: (() => Promise<M>) | undefined,
-      pick: (module: M) => T,
-      empty: T,
-    ) => real.fromFixture(load, pick, empty, 0),
-  };
-});
-
 type MessageView = components["schemas"]["MessageView"];
 
 /** A message id written out reads as a spacing utility to the token guard. */

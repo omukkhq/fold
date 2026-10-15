@@ -42,19 +42,6 @@ vi.mock("@/api/client", async (importOriginal) => {
   return { ...real, api: fake.api };
 });
 
-// The fixtures that remain for other screens answer at once here.
-vi.mock("@/api/fixture", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/api/fixture")>();
-  return {
-    ...actual,
-    fromFixture: <M, T>(
-      load: (() => Promise<M>) | undefined,
-      pick: (module: M) => T,
-      empty: T,
-    ) => actual.fromFixture(load, pick, empty, 0),
-  };
-});
-
 const SCHEMA = "migrations/0004_reports.sql";
 
 // The version diff is the diff seam's to read; the proposal screens only name the states it compares.
