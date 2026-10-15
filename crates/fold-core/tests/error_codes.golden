@@ -77,3 +77,5 @@ unknown_human
 proposal_not_found
 invalid_token
 host_not_allowed
+remote_not_set
+remote_ahead

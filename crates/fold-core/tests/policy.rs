@@ -150,3 +150,13 @@ fn only_a_human_sends_feedback() {
         assert!(denied.hint().contains("send_message"));
     }
 }
+
+#[test]
+fn only_a_human_or_the_daemon_pushes() {
+    use fold_core::policy::can_push;
+    assert!(can_push(&human("tanim")).is_ok());
+    assert!(can_push(&Actor::System).is_ok());
+    let denied = can_push(&agent("frontend/ui", &["integrator"])).unwrap_err();
+    assert_eq!(denied.code(), codes::HUMAN_REQUIRED);
+    assert!(denied.hint().contains("fold push"));
+}

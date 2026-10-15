@@ -44,6 +44,10 @@ enum Command {
     Agent(agent::AgentArgs),
     /// Manage the tokens that sign humans in to the web interface off localhost
     Token(token::TokenArgs),
+    /// Link the project to a remote Git repository
+    Remote(commands::remote::RemoteArgs),
+    /// Push the main revisions not yet on the Git remote as commits, without force
+    Push(commands::remote::PushArgs),
 }
 
 /// clap prints a parse outcome, including `--help` and `--version`, and exits with its own code; a failed write is a runtime error with exit code 1.
@@ -60,6 +64,7 @@ enum Failure {
     Gc(commands::gc::GcError),
     Agent(agent::AgentError),
     Token(token::TokenError),
+    Remote(commands::remote::RemoteError),
 }
 
 fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result<(), Failure> {
@@ -88,6 +93,12 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         }
         Some(Command::Token(args)) => {
             token::run(&args, &serve::Dirs::from_env(), out).map_err(Failure::Token)
+        }
+        Some(Command::Remote(args)) => {
+            commands::remote::run_remote(&args, out).map_err(Failure::Remote)
+        }
+        Some(Command::Push(args)) => {
+            commands::remote::run_push(&args, out).map_err(Failure::Remote)
         }
         None => output::line(out, &output::version_line()).map_err(Failure::Write),
     }
@@ -135,6 +146,10 @@ fn main() -> anyhow::Result<()> {
         Err(Failure::Gc(error)) => Err(match error.code() {
             Some(code) => anyhow::anyhow!("{code}: {error}"),
             None => error.into(),
+        }),
+        Err(Failure::Remote(error)) => Err(match error.code() {
+            Some(code) => anyhow::anyhow!("{code}: {error}"),
+            None => anyhow::anyhow!("{error}"),
         }),
     }
 }

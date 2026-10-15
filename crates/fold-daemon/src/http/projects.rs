@@ -5,16 +5,19 @@ use utoipa::ToSchema;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
+use super::actor::Human;
 use super::error::{ApiError, ApiJson, ErrorEnvelope};
 use super::{Project, SocketOnly};
 use crate::daemon::AppState;
-use crate::services::projects;
+use crate::services::projects::{self, PushOutcome};
+use fold_vcs::git::Git;
 
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list, open))
         .routes(routes!(show))
         .routes(routes!(collect_garbage))
+        .routes(routes!(push))
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -171,4 +174,89 @@ pub async fn collect_garbage(
         workspaces_removed: report.workspaces_removed,
         checkpoints_pruned: report.checkpoints_pruned,
     }))
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PushState {
+    /// Every main revision was on the remote already; nothing was written.
+    UpToDate,
+    /// New commits were sent to the remote branch.
+    Pushed,
+    /// An earlier push had reached the remote and only its record was lost; the record was written and nothing was sent.
+    Recorded,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PushResult {
+    pub outcome: PushState,
+    /// The remote branch.
+    pub branch: String,
+    /// The first revision of this push; absent when up to date.
+    pub first: Option<String>,
+    /// The newest revision on the remote.
+    pub last: Option<String>,
+    pub commits: usize,
+    /// The commit the remote branch points to; absent when up to date.
+    pub head: Option<String>,
+}
+
+impl From<PushOutcome> for PushResult {
+    fn from(outcome: PushOutcome) -> Self {
+        match outcome {
+            PushOutcome::UpToDate { branch, last } => Self {
+                outcome: PushState::UpToDate,
+                branch,
+                first: None,
+                last: last.map(|last| last.to_string()),
+                commits: 0,
+                head: None,
+            },
+            PushOutcome::Synced {
+                branch,
+                first,
+                last,
+                commits,
+                head,
+                sent,
+            } => Self {
+                outcome: if sent {
+                    PushState::Pushed
+                } else {
+                    PushState::Recorded
+                },
+                branch,
+                first: Some(first.to_string()),
+                last: Some(last.to_string()),
+                commits,
+                head: Some(head.to_string()),
+            },
+        }
+    }
+}
+
+/// Pushes the main revisions not yet on the Git remote of the project, without force. Socket only; the human comes from `x-fold-human`.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/push",
+    operation_id = "push_project",
+    params(("slug" = String, Path, description = "The project slug")),
+    responses(
+        (status = 200, description = "The remote branch holds main", body = PushResult),
+        (status = 400, description = "The human name is not valid", body = ErrorEnvelope),
+        (status = 401, description = "The request names no human", body = ErrorEnvelope),
+        (status = 404, description = "Not on the socket, or the slug is not registered", body = ErrorEnvelope),
+        (status = 409, description = "No remote is set, the remote is ahead or diverged, or the config or sync map is invalid", body = ErrorEnvelope),
+        (status = 502, description = "A Git command failed", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open, or git is not on PATH", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn push(
+    _socket: SocketOnly,
+    human: Human,
+    Project(handle): Project,
+) -> Result<Json<PushResult>, ApiError> {
+    let outcome = projects::push(&handle, &human.actor(), &Git::default()).await?;
+    Ok(Json(outcome.into()))
 }

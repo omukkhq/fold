@@ -76,7 +76,7 @@ pub fn run(args: &ExportGitArgs, out: &mut impl Write) -> Result<(), ExportGitEr
 }
 
 /// The nearest directory at or above `start` that holds a project database, or `start` itself when none does, so the error names the directory the user gave.
-fn find_project(start: &Path) -> PathBuf {
+pub(crate) fn find_project(start: &Path) -> PathBuf {
     let absolute = std::path::absolute(start).unwrap_or_else(|_| start.to_owned());
     absolute
         .ancestors()

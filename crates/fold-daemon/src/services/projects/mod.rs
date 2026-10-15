@@ -31,8 +31,10 @@ use crate::daemon::DaemonState;
 use crate::projects::{ProjectHandle, Slot};
 
 mod gc;
+mod remote;
 
 pub use gc::{GcReport, gc};
+pub use remote::{PushOutcome, push};
 
 #[derive(Debug, Error)]
 pub enum ProjectError {

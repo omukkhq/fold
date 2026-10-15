@@ -41,6 +41,18 @@ pub fn can_claim(actor: &Actor) -> Result<&AgentActor, PolicyDenied> {
     }
 }
 
+/// A push publishes main to a shared Git remote with the user's own Git credentials, so a human runs it, or the daemon itself when it pushes after an integration. An agent never pushes.
+pub fn can_push(actor: &Actor) -> Result<(), PolicyDenied> {
+    match actor {
+        Actor::Human { .. } | Actor::System => Ok(()),
+        Actor::Agent(_) => Err(PolicyDenied {
+            code: codes::HUMAN_REQUIRED,
+            message: "only a human can push main to the Git remote",
+            hint: "ask a human to run fold push",
+        }),
+    }
+}
+
 /// Only a human grants or removes `integrator`, because the integrator moves main. Any other tag is a free label that an agent sets on itself at registration.
 pub fn can_set_tag(actor: &Actor, tag: &Tag, add: bool) -> Result<(), PolicyDenied> {
     if !tag.is_integrator() || actor.is_human() {

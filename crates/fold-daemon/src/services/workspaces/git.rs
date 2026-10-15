@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use fold_core::RevisionId;
-use fold_store::StoreError;
 use fold_store::workspaces::{RevisionRow, get_by_number, list_after};
+use fold_store::{Store, StoreError};
 use fold_vcs::git::CommitId;
 use fold_vcs::git_export::{
     ExportBase, ExportRevision, ExportTarget, Signature, TargetState, check_target, create_target,
@@ -50,23 +50,7 @@ impl WorkspaceService {
             })
             .await?
         };
-        let pool = self.store.read();
-        let (rows, base) = match &last {
-            Some((number, commit)) => {
-                let base = ExportBase {
-                    commit: commit.clone(),
-                    tree: get_by_number(pool, *number).await?.tree_hash,
-                };
-                (list_after(pool, *number).await?, Some(base))
-            }
-            None => {
-                let first =
-                    RevisionId::from_number(1).ok_or(StoreError::Corrupt("revision number 1"))?;
-                let mut rows = vec![get_by_number(pool, first).await?];
-                rows.extend(list_after(pool, first).await?);
-                (rows, None)
-            }
-        };
+        let (rows, base) = unsynced(&self.store, last.as_ref()).await?;
         let up_to_date = GitExport::UpToDate {
             last: last.as_ref().map(|(number, _)| *number),
         };
@@ -119,6 +103,30 @@ impl WorkspaceService {
             },
             _ => up_to_date,
         })
+    }
+}
+
+/// The main revisions after `last`, the newest mapped revision and its commit, oldest first, with the base the first of them continues; every revision and no base when nothing is mapped.
+pub(crate) async fn unsynced(
+    store: &Store,
+    last: Option<&(RevisionId, CommitId)>,
+) -> Result<(Vec<RevisionRow>, Option<ExportBase>), StoreError> {
+    let pool = store.read();
+    match last {
+        Some((number, commit)) => {
+            let base = ExportBase {
+                commit: commit.clone(),
+                tree: get_by_number(pool, *number).await?.tree_hash,
+            };
+            Ok((list_after(pool, *number).await?, Some(base)))
+        }
+        None => {
+            let first =
+                RevisionId::from_number(1).ok_or(StoreError::Corrupt("revision number 1"))?;
+            let mut rows = vec![get_by_number(pool, first).await?];
+            rows.extend(list_after(pool, first).await?);
+            Ok((rows, None))
+        }
     }
 }
 

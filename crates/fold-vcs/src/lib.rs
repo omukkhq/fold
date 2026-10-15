@@ -5,6 +5,7 @@ pub mod gc;
 pub mod git;
 pub mod git_export;
 pub mod git_import;
+pub mod git_remote;
 pub mod git_sync_map;
 pub mod ignore;
 pub mod import;

@@ -53,8 +53,14 @@ fn status_of(code: &str) -> Option<StatusCode> {
         codes::HUMAN_REQUIRED | codes::ACTOR_CANNOT_CLAIM | codes::HOST_NOT_ALLOWED => {
             Some(StatusCode::FORBIDDEN)
         }
-        codes::PROJECT_UNAVAILABLE => Some(StatusCode::SERVICE_UNAVAILABLE),
-        codes::GC_IN_PROGRESS => Some(StatusCode::CONFLICT),
+        codes::PROJECT_UNAVAILABLE | codes::GIT_NOT_FOUND => Some(StatusCode::SERVICE_UNAVAILABLE),
+        codes::GC_IN_PROGRESS
+        | codes::REMOTE_NOT_SET
+        | codes::REMOTE_AHEAD
+        | codes::EXPORT_DIVERGED
+        | codes::GIT_SYNC_MAP_INVALID
+        | codes::INVALID_CONFIG => Some(StatusCode::CONFLICT),
+        codes::GIT_FAILED => Some(StatusCode::BAD_GATEWAY),
         _ => None,
     }
 }
@@ -236,6 +242,13 @@ mod tests {
             (codes::HOST_NOT_ALLOWED, StatusCode::FORBIDDEN),
             (codes::HUMAN_REQUIRED, StatusCode::FORBIDDEN),
             (codes::ACTOR_CANNOT_CLAIM, StatusCode::FORBIDDEN),
+            (codes::GIT_NOT_FOUND, StatusCode::SERVICE_UNAVAILABLE),
+            (codes::REMOTE_NOT_SET, StatusCode::CONFLICT),
+            (codes::REMOTE_AHEAD, StatusCode::CONFLICT),
+            (codes::EXPORT_DIVERGED, StatusCode::CONFLICT),
+            (codes::GIT_SYNC_MAP_INVALID, StatusCode::CONFLICT),
+            (codes::INVALID_CONFIG, StatusCode::CONFLICT),
+            (codes::GIT_FAILED, StatusCode::BAD_GATEWAY),
         ] {
             assert_eq!(status_of(code), Some(status));
         }

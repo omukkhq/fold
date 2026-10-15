@@ -22,6 +22,8 @@ pub struct ProjectHandle {
     pub gc: tokio::sync::Mutex<()>,
     /// Keeps the sweep away from objects that are about to be named. A reused object must not be deleted between its refresh and the row that names it, and the sweep cannot see a row that is not committed. So every path that writes or refreshes objects and then records a row naming them holds this shared from its first object write until that transaction commits, and writes or refreshes each object less than the grace period before the row names it. The sweep holds it exclusive while it lists, checks and deletes objects. It is an `Arc` so a guard can move into blocking work and outlive an aborted caller.
     pub objects: Arc<tokio::sync::RwLock<()>>,
+    /// Held for a whole push, so two pushes of one project never run together. It is an `Arc` so the guard can move into the blocking Git work and outlive an aborted caller.
+    pub remote_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl std::fmt::Debug for ProjectHandle {
@@ -55,6 +57,7 @@ impl ProjectHandle {
             integration: tokio::sync::Mutex::new(()),
             gc: tokio::sync::Mutex::new(()),
             objects: Arc::new(tokio::sync::RwLock::new(())),
+            remote_lock: Arc::new(tokio::sync::Mutex::new(())),
         })
     }
 }

@@ -74,6 +74,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/push": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Pushes the main revisions not yet on the Git remote of the project, without force. Socket only; the human comes from `x-fold-human`. */
+        post: operations["push_project"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/repository": {
         parameters: {
             query?: never;
@@ -398,6 +415,20 @@ export interface components {
             name: string;
             slug: string;
         };
+        PushResult: {
+            /** @description The remote branch. */
+            branch: string;
+            commits: number;
+            /** @description The first revision of this push; absent when up to date. */
+            first?: string | null;
+            /** @description The commit the remote branch points to; absent when up to date. */
+            head?: string | null;
+            /** @description The newest revision on the remote. */
+            last?: string | null;
+            outcome: components["schemas"]["PushState"];
+        };
+        /** @enum {string} */
+        PushState: "up_to_date" | "pushed" | "recorded";
         RepositoryView: {
             /**
              * @description The revision `main` names; null only before `r1` exists.
@@ -923,6 +954,101 @@ export interface operations {
                 };
             };
             /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    push_project: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The remote branch holds main */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PushResult"];
+                };
+            };
+            /** @description The human name is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie; `invalid_token`: the cookie holds a token the registry does not have */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not on the socket, or the slug is not registered */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description No remote is set, the remote is ahead or diverged, or the config or sync map is invalid */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description A Git command failed */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open, or git is not on PATH */
             503: {
                 headers: {
                     [name: string]: unknown;

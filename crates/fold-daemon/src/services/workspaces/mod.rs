@@ -17,6 +17,7 @@ mod lifecycle;
 mod repository;
 
 pub use compare::{ResolvedState, StateComparison, StateKind, StateRef, StateSummary};
+pub(crate) use git::unsynced;
 pub use git::{GitExport, MAIN_REF, commit_message};
 pub use lifecycle::{ArchiveReason, WorkspaceRef, WorkspaceView, archive_in_tx};
 pub use repository::{

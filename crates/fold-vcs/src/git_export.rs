@@ -167,7 +167,7 @@ fn target_io(error: &io::Error) -> FoldError {
     )
 }
 
-/// Writes `revisions` as one chain of commits on `target.refname` through `git fast-import`, the first continuing `base` or starting the history when there is none, then appends each revision and its commit to `map` in one write. Each commit records only the paths that differ from the previous revision's tree. A ref that a working tree has checked out is refused with `invalid_request`, as Git refuses a push to it, because fast-import moves the ref without touching the files. fast-import refuses to move the ref unless the old commit is an ancestor of the new one, and a failed run appends nothing, so a retry exports the same revisions again. `scratch` holds the marks file while the command runs. Blocking: async callers go through `spawn_blocking`.
+/// Writes `revisions` as one chain of commits on `target.refname` through `git fast-import`, the first continuing `base` or starting the history when there is none, then appends each revision and its commit to `map` in one write. A failed run appends nothing, so a retry exports the same revisions again. See [`write_commits`] for the rest. Blocking: async callers go through `spawn_blocking`.
 pub fn export(
     objects: &ObjectStore,
     git: &Git,
@@ -175,6 +175,20 @@ pub fn export(
     base: Option<&ExportBase>,
     revisions: &[ExportRevision],
     map: &mut SyncMap,
+    scratch: &Path,
+) -> Result<Vec<(RevisionId, CommitId)>, FoldError> {
+    let added = write_commits(objects, git, target, base, revisions, scratch)?;
+    map.append(&added)?;
+    Ok(added)
+}
+
+/// Writes `revisions` as one chain of commits on `target.refname` through `git fast-import`, the first continuing `base` or starting the history when there is none, and returns each revision with its commit. Each commit records only the paths that differ from the previous revision's tree, and its id depends only on the revisions, so writing the same revisions again gives the same commits. A ref that a working tree has checked out is refused with `invalid_request`, as Git refuses a push to it, because fast-import moves the ref without touching the files. fast-import refuses to move the ref unless the old commit is an ancestor of the new one. `scratch` holds the marks file while the command runs. Blocking: async callers go through `spawn_blocking`.
+pub fn write_commits(
+    objects: &ObjectStore,
+    git: &Git,
+    target: &ExportTarget<'_>,
+    base: Option<&ExportBase>,
+    revisions: &[ExportRevision],
     scratch: &Path,
 ) -> Result<Vec<(RevisionId, CommitId)>, FoldError> {
     if revisions.is_empty() {
@@ -197,13 +211,11 @@ pub fn export(
     // The marks file is read already or useless after a failure.
     let _ = fs::remove_file(&marks);
     let commits = result?;
-    let added: Vec<(RevisionId, CommitId)> = revisions
+    Ok(revisions
         .iter()
         .map(|revision| revision.number)
         .zip(commits)
-        .collect();
-    map.append(&added)?;
-    Ok(added)
+        .collect())
 }
 
 fn run_fast_import(

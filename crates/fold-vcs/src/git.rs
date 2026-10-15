@@ -20,7 +20,7 @@ const REPOSITORY_VARIABLES: &[&str] = &[
     "GIT_WORK_TREE",
 ];
 
-/// The `git` program, found on `PATH` unless a path is given. fold needs it only while a Git import or export runs. Arguments go to the process directly, never through a shell.
+/// The `git` program, found on `PATH` unless a path is given. fold needs it only while a Git import, export, remote set or push runs. Arguments go to the process directly, never through a shell.
 #[derive(Debug, Clone)]
 pub struct Git {
     program: PathBuf,
@@ -42,10 +42,22 @@ impl Git {
     /// A command that runs in `repo` with no input and its output discarded; a caller that reads the output pipes it.
     pub(crate) fn command(&self, repo: &Path) -> Command {
         let mut command = Command::new(&self.program);
-        command.arg("-C").arg(repo);
+        // `ext::` runs any command it names and `fd::` talks over inherited descriptors. Command-line config outranks every config file and an `insteadOf` rewrite, and `GIT_ALLOW_PROTOCOL` would outrank it, so the variable goes.
+        command
+            .args([
+                "-c",
+                "protocol.ext.allow=never",
+                "-c",
+                "protocol.fd.allow=never",
+            ])
+            .arg("-C")
+            .arg(repo);
         for name in REPOSITORY_VARIABLES {
             command.env_remove(name);
         }
+        command.env_remove("GIT_ALLOW_PROTOCOL");
+        // A command the daemon runs has nobody to answer a credential prompt, so Git fails instead of waiting.
+        command.env("GIT_TERMINAL_PROMPT", "0");
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -76,6 +88,20 @@ impl Git {
         }
     }
 
+    /// The exit status of a command whose non-zero codes mean different answers.
+    pub(crate) fn status<S: AsRef<OsStr>>(
+        &self,
+        repo: &Path,
+        args: &[S],
+        what: &'static str,
+    ) -> Result<ExitStatus, FoldError> {
+        let mut command = self.command(repo);
+        command.args(args);
+        Self::spawn(&mut command, what)?
+            .wait()
+            .map_err(|error| wait_error(&error, what))
+    }
+
     /// Whether a command exits zero, for the queries whose failure is the answer.
     pub(crate) fn succeeds<S: AsRef<OsStr>>(
         &self,
@@ -83,12 +109,7 @@ impl Git {
         args: &[S],
         what: &'static str,
     ) -> Result<bool, FoldError> {
-        let mut command = self.command(repo);
-        command.args(args);
-        let status = Self::spawn(&mut command, what)?
-            .wait()
-            .map_err(|error| wait_error(&error, what))?;
-        Ok(status.success())
+        Ok(self.status(repo, args, what)?.success())
     }
 
     /// The commit `rev` names in `repo`.
@@ -380,6 +401,39 @@ mod tests {
         assert_eq!(error.code(), codes::GIT_FAILED);
         let lost = wait_error(&io::Error::other("x"), "archive");
         assert_eq!(lost.code(), codes::GIT_FAILED);
+    }
+
+    #[test]
+    fn commands_never_wait_for_a_credential_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let command = Git::default().command(dir.path());
+        let prompt = command
+            .get_envs()
+            .find(|(name, _)| *name == "GIT_TERMINAL_PROMPT");
+        assert_eq!(
+            prompt,
+            Some((OsStr::new("GIT_TERMINAL_PROMPT"), Some(OsStr::new("0"))))
+        );
+    }
+
+    #[test]
+    fn commands_refuse_the_transports_that_run_commands() {
+        let dir = tempfile::tempdir().unwrap();
+        let command = Git::default().command(dir.path());
+        let args: Vec<_> = command.get_args().collect();
+        assert_eq!(
+            args[..4],
+            [
+                "-c",
+                "protocol.ext.allow=never",
+                "-c",
+                "protocol.fd.allow=never"
+            ]
+        );
+        let allow = command
+            .get_envs()
+            .find(|(name, _)| *name == "GIT_ALLOW_PROTOCOL");
+        assert_eq!(allow, Some((OsStr::new("GIT_ALLOW_PROTOCOL"), None)));
     }
 
     #[test]

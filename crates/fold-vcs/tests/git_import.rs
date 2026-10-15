@@ -266,7 +266,7 @@ fn fake_git(dir: &Path, name: &str, reply: &str) -> Git {
     let listing = "100644 blob 1111111111111111111111111111111111111111       5\\ta.txt\\0";
     fs::write(
         &script,
-        format!("#!/bin/sh\ncase \"$3\" in\nls-tree) printf '{listing}' ;;\ncat-file) read oid; {reply} ;;\nesac\n"),
+        format!("#!/bin/sh\nfor arg; do\ncase \"$arg\" in\nls-tree) printf '{listing}'; exit ;;\ncat-file) read oid; {reply}; exit ;;\nesac\ndone\n"),
     )
     .unwrap();
     fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
