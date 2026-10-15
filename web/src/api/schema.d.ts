@@ -4,6 +4,40 @@
  */
 
 export interface paths {
+    "/api/v1/hooks/session-start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** The Claude Code session-start hook of an agent: stores the session's inbox socket for the session push when `socket` and `token` are both present, then returns the session's context. Socket only. */
+        post: operations["hook_session_start"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/hooks/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** The Claude Code stop hook of an agent: how many messages the agent has not acknowledged. Socket only. */
+        post: operations["hook_stop"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects": {
         parameters: {
             query?: never;
@@ -1308,6 +1342,21 @@ export interface components {
         };
         /** @description A token off loopback, a name on loopback. */
         SessionRequest: components["schemas"]["TokenSignIn"] | components["schemas"]["NameSignIn"];
+        SessionStartContext: {
+            /** @description The text for the session's context, at most 1500 characters. */
+            context: string;
+        };
+        /** @description Not `Debug`: `token` must never reach a log line. */
+        SessionStartHook: {
+            /** @description `FOLD_AGENT` of the session. */
+            agent: string;
+            /** @description The session's canonical working directory; the project is the registered one whose root holds it. */
+            cwd: string;
+            /** @description `CLAUDE_CODE_MESSAGING_SOCKET`, the absolute path of the session's inbox socket. Used only together with `token`. */
+            socket?: string | null;
+            /** @description `CLAUDE_CODE_MESSAGING_TOKEN`. Used only together with `socket`. */
+            token?: string | null;
+        };
         /** @description What the sign-in screen needs to know. */
         SessionStatus: {
             /** @description False only off loopback without the cookie of a live session: the sign-in screen then asks for a token. True with a null `human` asks for a name. */
@@ -1326,6 +1375,19 @@ export interface components {
         };
         /** @enum {string} */
         StateKindView: "revision" | "changeset" | "checkpoint" | "workspace" | "tree";
+        StopHook: {
+            /** @description `FOLD_AGENT` of the session. */
+            agent: string;
+            /** @description The session's canonical working directory. */
+            cwd: string;
+        };
+        StopUnread: {
+            /**
+             * Format: int64
+             * @description The unacknowledged messages of every worker of the agent.
+             */
+            unread: number;
+        };
         TaskClaim: {
             /**
              * Format: int64
@@ -1616,6 +1678,162 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    hook_session_start: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionStartHook"];
+            };
+        };
+        responses: {
+            /** @description The session's context */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionStartContext"];
+                };
+            };
+            /** @description The body, the agent name or the push target is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not on the socket, or no registered project holds `cwd` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    hook_stop: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StopHook"];
+            };
+        };
+        responses: {
+            /** @description The agent's unread count */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StopUnread"];
+                };
+            };
+            /** @description The body or the agent name is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not on the socket, no registered project holds `cwd`, or the agent is not registered (`agent_not_registered`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     list_projects: {
         parameters: {
             query?: never;

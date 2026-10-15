@@ -226,7 +226,7 @@ fn sample() -> Event {
         proposal: ProposalId::from_number(3),
         workspace: None,
         revision: RevisionId::from_number(17),
-        data: json!({"to": "review", "from": "in_progress"}),
+        data: json!({"from": "in_progress", "to": "review"}),
         created_at: Timestamp::from_millis(1_767_225_600_000).unwrap(),
     }
 }

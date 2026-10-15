@@ -4,6 +4,7 @@ use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use fold_cli::claude_files;
 use fold_core::ProjectPaths;
 use fold_store::Store;
 use fold_store::workspaces::{RevisionRow, head};
@@ -47,6 +48,16 @@ impl Sandbox {
 #[cfg(test)]
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// The warnings `fold init` prints for a `CLAUDE.md` above the temporary directory, which belongs to the machine running the test.
+#[cfg(test)]
+fn machine_warnings(project: &Path) -> String {
+    let root = project.canonicalize().unwrap();
+    claude_files::shadowing_files(&root, None)
+        .iter()
+        .map(|path| format!("{}\n", claude_files::shadowing_warning(path)))
+        .collect()
 }
 
 #[cfg(test)]
@@ -138,8 +149,9 @@ fn init_from_creates_r1_as_main_and_fills_main_read_only() {
     assert_eq!(
         stdout(&output),
         format!(
-            "initialised project app at {}\nr1: 5 files, 46 bytes\n",
-            canonical.display()
+            "initialised project app at {}\nr1: 5 files, 46 bytes\n{}",
+            canonical.display(),
+            machine_warnings(&project)
         )
     );
 
@@ -174,7 +186,10 @@ fn plain_init_records_an_empty_r1_and_writes_no_ignore_file() {
     let project = sandbox.path("app");
     let output = sandbox.fold(&["init", project.to_str().unwrap()]);
     assert!(output.status.success(), "{output:?}");
-    assert!(stdout(&output).ends_with("\nr1: 0 files, 0 bytes\n"));
+    assert!(stdout(&output).ends_with(&format!(
+        "\nr1: 0 files, 0 bytes\n{}",
+        machine_warnings(&project)
+    )));
     let row = r1(&project);
     assert_eq!(row.number.to_string(), "r1");
     assert_eq!(row.import_source, None);
@@ -207,7 +222,10 @@ fn a_file_over_the_size_limit_is_printed_as_skipped() {
     ]);
     assert!(output.status.success(), "{output:?}");
     assert!(
-        stdout(&output).ends_with("\nr1: 1 file, 2 bytes\nskipped big.bin (too_large)\n"),
+        stdout(&output).ends_with(&format!(
+            "\nr1: 1 file, 2 bytes\nskipped big.bin (too_large)\n{}",
+            machine_warnings(&project)
+        )),
         "{}",
         stdout(&output)
     );

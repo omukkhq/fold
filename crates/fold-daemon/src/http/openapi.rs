@@ -78,7 +78,9 @@ fn add_error(operation: &mut Operation, status: &str, description: &str) {
 
 /// The document as pretty JSON without a trailing newline. Every map serialises sorted, so equal documents give equal text.
 pub fn to_json(doc: &OpenApi) -> Result<String, serde_json::Error> {
-    serde_json::to_string_pretty(&serde_json::to_value(doc)?)
+    let mut value = serde_json::to_value(doc)?;
+    value.sort_all_objects();
+    serde_json::to_string_pretty(&value)
 }
 
 /// Lists every operation that has no 2xx response, or no 4xx or 5xx response whose body is the `ErrorEnvelope`.

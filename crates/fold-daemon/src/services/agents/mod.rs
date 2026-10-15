@@ -16,12 +16,17 @@ use crate::live::LiveState;
 use crate::push::PushTargets;
 use crate::services::events::{EventBuffer, EventBus};
 use crate::services::projects::{Lease, ProjectError};
-use crate::services::tasks::renew_leases;
+use crate::services::tasks::{TaskError, renew_leases};
 
+mod context;
 mod overview;
 mod presence;
 mod push;
 
+pub use context::{
+    CONTEXT_READY_TASKS, ContextClaim, MAX_SESSION_CONTEXT, SessionFacts,
+    render as render_session_context,
+};
 pub use overview::{
     AgentAttention, AgentOverview, ClaimSummary, MAX_OVERVIEW_EVENTS, OverviewFilter,
     ProposalSummary, SessionSummary, WorkerOverview, WorkspaceSummary,
@@ -36,6 +41,16 @@ pub enum AgentError {
     Store(#[from] StoreError),
     #[error(transparent)]
     Event(#[from] EventError),
+}
+
+impl From<TaskError> for AgentError {
+    fn from(error: TaskError) -> Self {
+        match error {
+            TaskError::Fold(error) => Self::Fold(error),
+            TaskError::Store(error) => Self::Store(error),
+            TaskError::Event(error) => Self::Event(error),
+        }
+    }
 }
 
 impl From<ProjectError> for AgentError {

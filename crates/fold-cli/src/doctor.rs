@@ -13,10 +13,10 @@ use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection, Row, SqliteConnection};
 use thiserror::Error;
 
-use crate::claude_files::{self, shadowing_files};
 use crate::output;
 use crate::platform::{Host, Platform, on_path};
 use crate::serve::{self, DEFAULT_LISTEN, Dirs, FileConfig, read_file_config};
+use fold_cli::claude_files::{self, shadowing_files};
 
 const NOT_APPLICABLE: &str = "not applicable on this platform";
 const MIN_WATCHES: u64 = 65_536;

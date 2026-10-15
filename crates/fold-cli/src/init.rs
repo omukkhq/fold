@@ -3,10 +3,13 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use clap::Args;
+use fold_cli::claude_files::{self, ClaudeFileError};
 use fold_cli::daemon_client::{self, ClientConfig, ClientError, DaemonClient, Response};
 use fold_core::{FoldError, HostPaths, codes};
 use fold_daemon::SystemClock;
-use fold_daemon::services::projects::{ProjectError, init_project_from, init_project_from_git};
+use fold_daemon::services::projects::{
+    ProjectError, init_project_from, init_project_from_git, root_for_dir_on_host,
+};
 use fold_vcs::git::Git;
 use hyper::Method;
 use thiserror::Error;
@@ -19,8 +22,9 @@ const ANSWER_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Args, Debug)]
 pub struct InitArgs {
-    /// The project directory; created when it does not exist
-    dir: PathBuf,
+    /// The project directory; created when it does not exist. With --refresh, a directory of the project, by default the working directory
+    #[arg(required_unless_present = "refresh")]
+    dir: Option<PathBuf>,
     /// The project name; defaults to the directory name
     #[arg(long)]
     name: Option<String>,
@@ -33,6 +37,9 @@ pub struct InitArgs {
     /// Unix socket of the running daemon; overrides daemon.toml (default $XDG_RUNTIME_DIR/fold/fold.sock)
     #[arg(long)]
     socket: Option<PathBuf>,
+    /// Rewrite the Claude Code files of an existing project, keeping every entry fold does not own, instead of creating a project
+    #[arg(long, conflicts_with_all = ["name", "from", "from_git", "socket"])]
+    refresh: bool,
 }
 
 #[derive(Debug, Error)]
@@ -41,6 +48,10 @@ pub enum InitError {
     HostPaths(FoldError),
     #[error(transparent)]
     Project(#[from] ProjectError),
+    #[error(transparent)]
+    ClaudeFiles(#[from] ClaudeFileError),
+    #[error("cannot read the directory: {0}")]
+    Dir(io::Error),
     #[error("cannot start the async runtime: {0}")]
     Runtime(io::Error),
     #[error("cannot write the output: {0}")]
@@ -53,7 +64,8 @@ impl InitError {
         match self {
             Self::HostPaths(error) => Some(error.code()),
             Self::Project(error) => error.code(),
-            Self::Runtime(_) | Self::Write(_) => None,
+            Self::ClaudeFiles(error) => error.code(),
+            Self::Dir(_) | Self::Runtime(_) | Self::Write(_) => None,
         }
     }
 }
@@ -68,6 +80,12 @@ enum Registration {
 
 /// A daemon that refuses or cannot be asked leaves the project initialised and registered, so init still succeeds.
 pub fn run(args: &InitArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), InitError> {
+    if args.refresh {
+        return refresh(args.dir.as_deref(), dirs, out);
+    }
+    let Some(dir) = args.dir.as_deref() else {
+        return Err(InitError::Dir(io::Error::from(io::ErrorKind::InvalidInput)));
+    };
     let host = host_paths(dirs).map_err(InitError::HostPaths)?;
     let socket = socket_path(args.socket.as_deref(), dirs);
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -78,12 +96,9 @@ pub fn run(args: &InitArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), Ini
     let project = runtime.block_on(async {
         match &args.from_git {
             Some(repo) => {
-                init_project_from_git(&host, &args.dir, name, repo, Git::default(), &SystemClock)
-                    .await
+                init_project_from_git(&host, dir, name, repo, Git::default(), &SystemClock).await
             }
-            None => {
-                init_project_from(&host, &args.dir, name, args.from.as_deref(), &SystemClock).await
-            }
+            None => init_project_from(&host, dir, name, args.from.as_deref(), &SystemClock).await,
         }
     })?;
     let root = project.root.display();
@@ -105,6 +120,7 @@ pub fn run(args: &InitArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), Ini
     if let Some(commit) = &project.git_commit {
         output::line(out, &format!("{} is Git commit {commit}", project.revision))?;
     }
+    write_claude_files(&project.root, dirs, out)?;
     let note = match socket {
         Ok(Some(socket)) => match runtime.block_on(register(&client(socket), &project.slug)) {
             Registration::NoDaemon => None,
@@ -120,6 +136,40 @@ pub fn run(args: &InitArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), Ini
     };
     if let Some(note) = note {
         output::line(out, &note)?;
+    }
+    Ok(())
+}
+
+/// Rewrites the Claude Code files of the registered project that holds `dir`.
+fn refresh(dir: Option<&Path>, dirs: &Dirs, out: &mut impl Write) -> Result<(), InitError> {
+    let dir = match dir {
+        Some(dir) => std::fs::canonicalize(dir),
+        None => std::env::current_dir().and_then(std::fs::canonicalize),
+    }
+    .map_err(InitError::Dir)?;
+    let host = host_paths(dirs).map_err(InitError::HostPaths)?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(InitError::Runtime)?;
+    let root = runtime.block_on(root_for_dir_on_host(&host, &dir))?;
+    write_claude_files(&root, dirs, out)?;
+    output::line(
+        out,
+        &format!("refreshed the Claude Code files at {}", root.display()),
+    )?;
+    Ok(())
+}
+
+/// The warnings never stop the command: the files are written first.
+fn write_claude_files(root: &Path, dirs: &Dirs, out: &mut impl Write) -> Result<(), InitError> {
+    claude_files::write(root)?;
+    let home = dirs
+        .home
+        .as_deref()
+        .map(|home| std::fs::canonicalize(home).unwrap_or_else(|_| home.to_owned()));
+    for path in claude_files::shadowing_files(root, home.as_deref()) {
+        output::line(out, &claude_files::shadowing_warning(&path))?;
     }
     Ok(())
 }
@@ -205,7 +255,7 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(parsed.args.from.as_deref(), Some(Path::new("../src")));
-        assert_eq!(parsed.args.dir, Path::new("~/scratch"));
+        assert_eq!(parsed.args.dir.as_deref(), Some(Path::new("~/scratch")));
         assert_eq!(parsed.args.name.as_deref(), Some("Scratch"));
         assert_eq!(
             parsed.args.socket.as_deref(),
@@ -220,6 +270,14 @@ mod tests {
             Wrapper::try_parse_from(["fold", "dir", "--from", "a", "--from-git", "b"]).is_err()
         );
         assert!(Wrapper::try_parse_from(["fold"]).is_err());
+        let refresh = Wrapper::try_parse_from(["fold", "--refresh"]).unwrap();
+        assert!(refresh.args.refresh && refresh.args.dir.is_none());
+        for flag in ["--name", "--from", "--from-git", "--socket"] {
+            assert!(
+                Wrapper::try_parse_from(["fold", "dir", "--refresh", flag, "x"]).is_err(),
+                "{flag}"
+            );
+        }
     }
 
     fn reply(status: u16, body: serde_json::Value) -> Result<Response, ClientError> {
@@ -291,11 +349,12 @@ mod tests {
     fn a_missing_home_stops_init_before_it_touches_the_disk() {
         let dir = tempfile::TempDir::new().unwrap();
         let args = InitArgs {
-            dir: dir.path().join("p"),
+            dir: Some(dir.path().join("p")),
             name: None,
             from: None,
             from_git: None,
             socket: None,
+            refresh: false,
         };
         let mut out = Vec::new();
         let error = run(&args, &Dirs::default(), &mut out).unwrap_err();

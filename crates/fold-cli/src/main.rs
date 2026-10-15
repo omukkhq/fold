@@ -1,7 +1,7 @@
 mod agent;
-mod claude_files;
 mod commands;
 mod doctor;
+mod hook;
 mod init;
 mod mcp;
 mod output;
@@ -48,6 +48,8 @@ enum Command {
     Remote(commands::remote::RemoteArgs),
     /// Push the main revisions not yet on the Git remote as commits, without force
     Push(commands::remote::PushArgs),
+    /// Run a Claude Code hook; the generated .claude/settings.json calls these
+    Hook(hook::HookArgs),
 }
 
 /// clap prints a parse outcome, including `--help` and `--version`, and exits with its own code; a failed write is a runtime error with exit code 1.
@@ -99,6 +101,10 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         }
         Some(Command::Push(args)) => {
             commands::remote::run_push(&args, out).map_err(Failure::Remote)
+        }
+        Some(Command::Hook(args)) => {
+            hook::run(&args, out);
+            Ok(())
         }
         None => output::line(out, &output::version_line()).map_err(Failure::Write),
     }

@@ -2,6 +2,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 use std::sync::Arc;
 
+use fold_cli::claude_files;
 use fold_core::ManualClock;
 use fold_daemon::{Daemon, DaemonConfig};
 use fold_store::Store;
@@ -56,6 +57,16 @@ impl Sandbox {
 #[cfg(test)]
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// The warnings `fold init` prints for a `CLAUDE.md` above the temporary directory, which belongs to the machine running the test.
+#[cfg(test)]
+fn machine_warnings(project: &Path) -> String {
+    let root = project.canonicalize().unwrap();
+    claude_files::shadowing_files(&root, None)
+        .iter()
+        .map(|path| format!("{}\n", claude_files::shadowing_warning(path)))
+        .collect()
 }
 
 #[cfg(test)]
@@ -147,8 +158,9 @@ fn init_without_a_daemon_skips_the_call() {
     assert_eq!(
         stdout(&output),
         format!(
-            "initialised project scratch at {}\nr1: 0 files, 0 bytes\n",
-            project.canonicalize().unwrap().display()
+            "initialised project scratch at {}\nr1: 0 files, 0 bytes\n{}",
+            project.canonicalize().unwrap().display(),
+            machine_warnings(&project)
         )
     );
     assert!(!socket.exists());

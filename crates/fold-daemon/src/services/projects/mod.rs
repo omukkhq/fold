@@ -645,10 +645,14 @@ pub async fn open_for_dir(
 
 /// The slug of the registered project whose root holds `cwd`, the nearest one when roots nest.
 pub async fn slug_for_dir(registry: &Store, cwd: &Path) -> Result<String, ProjectError> {
+    Ok(row_for_dir(registry, cwd).await?.slug)
+}
+
+async fn row_for_dir(registry: &Store, cwd: &Path) -> Result<projects::ProjectRow, ProjectError> {
     let rows = projects::list_projects(registry.read()).await?;
     let root = find_root(cwd, rows.iter().map(|row| Path::new(&row.root)));
     root.and_then(|root| rows.iter().find(|row| Path::new(&row.root) == root))
-        .map(|row| row.slug.clone())
+        .cloned()
         .ok_or_else(|| {
             FoldError::new(
                 codes::PROJECT_NOT_FOUND,
@@ -665,6 +669,14 @@ pub async fn slug_for_dir_on_host(host: &HostPaths, cwd: &Path) -> Result<String
     let slug = slug_for_dir(&registry, cwd).await;
     registry.close().await?;
     slug
+}
+
+/// The registered root of the project that holds `cwd`, read from the host registry without a running daemon.
+pub async fn root_for_dir_on_host(host: &HostPaths, cwd: &Path) -> Result<PathBuf, ProjectError> {
+    let registry = Store::open_registry(&host.registry_db()).await?;
+    let row = row_for_dir(&registry, cwd).await;
+    registry.close().await?;
+    Ok(PathBuf::from(row?.root))
 }
 
 /// The registry row of the human `name`, inserted on first use with `created_at` from `clock`. A known human costs one read and no write. Humans belong to the host, so this appends no project event.

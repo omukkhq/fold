@@ -5,6 +5,7 @@ pub mod auth;
 pub mod diff;
 pub mod error;
 pub mod events;
+pub mod hooks;
 pub mod host;
 pub mod messages;
 pub mod openapi;
@@ -38,6 +39,7 @@ fn guarded_routes() -> OpenApiRouter<AppState> {
         .merge(agents::routes())
         .merge(diff::routes())
         .merge(events::routes())
+        .merge(hooks::routes())
         .merge(messages::routes())
         .merge(projects::routes())
         .merge(reviews::routes())

@@ -6,11 +6,11 @@ use fold_store::{Store, StoreError, events};
 use tempfile::TempDir;
 
 use super::*;
-use crate::claude_files::{
+use crate::platform::Probe;
+use fold_cli::claude_files::{
     AGENTS_BEGIN, AGENTS_END, AGENTS_FILE, ALLOW_FOLD_TOOLS, HOOKS, MCP_FILE, MCP_SERVER_NAME,
     MCP_SERVERS_KEY, SETTINGS_FILE,
 };
-use crate::platform::Probe;
 
 const HOUR_MS: i64 = 60 * 60 * 1000;
 

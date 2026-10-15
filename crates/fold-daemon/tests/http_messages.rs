@@ -251,8 +251,10 @@ async fn the_list_filters_by_agent_task_proposal_and_awaiting_human() {
     );
     assert!(first["last_at"].is_i64());
     let message = &first["messages"][0];
+    let mut keys: Vec<_> = message.as_object().unwrap().keys().collect();
+    keys.sort();
     assert_eq!(
-        message.as_object().unwrap().keys().collect::<Vec<_>>(),
+        keys,
         [
             "body",
             "id",

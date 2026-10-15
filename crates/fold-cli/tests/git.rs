@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use fold_cli::claude_files;
 use tempfile::TempDir;
 
 #[cfg(test)]
@@ -54,6 +55,16 @@ fn system_path() -> String {
 #[cfg(test)]
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// The warnings `fold init` prints for a `CLAUDE.md` above the temporary directory, which belongs to the machine running the test.
+#[cfg(test)]
+fn machine_warnings(project: &Path) -> String {
+    let root = project.canonicalize().unwrap();
+    claude_files::shadowing_files(&root, None)
+        .iter()
+        .map(|path| format!("{}\n", claude_files::shadowing_warning(path)))
+        .collect()
 }
 
 #[cfg(test)]
@@ -111,8 +122,9 @@ fn init_from_git_prints_r1_and_its_commit() {
     assert_eq!(
         stdout(&output),
         format!(
-            "initialised project app at {}\nr1: 2 files, 70 bytes\nr1 is Git commit {head}\n",
-            canonical.display()
+            "initialised project app at {}\nr1: 2 files, 70 bytes\nr1 is Git commit {head}\n{}",
+            canonical.display(),
+            machine_warnings(&project)
         )
     );
     let map = fs::read_to_string(project.join(".fold/git-sync.map")).unwrap();

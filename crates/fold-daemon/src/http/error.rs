@@ -55,7 +55,8 @@ fn status_of(code: &str) -> Option<StatusCode> {
         | codes::PROPOSAL_NOT_FOUND
         | codes::MESSAGE_NOT_FOUND
         | codes::RECIPIENT_NOT_FOUND
-        | codes::UNKNOWN_HUMAN => Some(StatusCode::NOT_FOUND),
+        | codes::UNKNOWN_HUMAN
+        | codes::AGENT_NOT_REGISTERED => Some(StatusCode::NOT_FOUND),
         codes::INVALID_REQUEST
         | codes::INVALID_NAME
         | codes::INVALID_ID
@@ -67,7 +68,8 @@ fn status_of(code: &str) -> Option<StatusCode> {
         | codes::INVALID_TASK_STATUS
         | codes::INVALID_CHECKLIST_NAME
         | codes::INVALID_STEP_TEXT
-        | codes::INVALID_LAST_EVENT_ID => Some(StatusCode::BAD_REQUEST),
+        | codes::INVALID_LAST_EVENT_ID
+        | codes::INVALID_PUSH_TARGET => Some(StatusCode::BAD_REQUEST),
         codes::HUMAN_NAME_REQUIRED | codes::AUTH_REQUIRED | codes::INVALID_TOKEN => {
             Some(StatusCode::UNAUTHORIZED)
         }
@@ -75,7 +77,9 @@ fn status_of(code: &str) -> Option<StatusCode> {
         | codes::ACTOR_CANNOT_CLAIM
         | codes::HOST_NOT_ALLOWED
         | codes::AUTHOR_CANNOT_INTEGRATE => Some(StatusCode::FORBIDDEN),
-        codes::PROJECT_UNAVAILABLE | codes::GIT_NOT_FOUND => Some(StatusCode::SERVICE_UNAVAILABLE),
+        codes::PROJECT_UNAVAILABLE | codes::GIT_NOT_FOUND | codes::DAEMON_UNREACHABLE => {
+            Some(StatusCode::SERVICE_UNAVAILABLE)
+        }
         codes::GC_IN_PROGRESS
         | codes::REMOTE_NOT_SET
         | codes::REMOTE_AHEAD
@@ -342,6 +346,9 @@ mod tests {
             (codes::NOT_APPROVED, StatusCode::CONFLICT),
             (codes::HUMAN_APPROVAL_MISSING, StatusCode::CONFLICT),
             (codes::PREREQUISITES_NOT_DONE, StatusCode::CONFLICT),
+            (codes::AGENT_NOT_REGISTERED, StatusCode::NOT_FOUND),
+            (codes::INVALID_PUSH_TARGET, StatusCode::BAD_REQUEST),
+            (codes::DAEMON_UNREACHABLE, StatusCode::SERVICE_UNAVAILABLE),
         ] {
             assert_eq!(status_of(code), Some(status));
         }

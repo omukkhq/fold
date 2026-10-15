@@ -122,6 +122,7 @@ define_codes! {
     HUMAN_APPROVAL_MISSING = "human_approval_missing",
     PREREQUISITES_NOT_DONE = "prerequisites_not_done",
     INTEGRATION_FAILED = "integration_failed",
+    DAEMON_UNREACHABLE = "daemon_unreachable",
 }
 
 /// The error every transport reports. The message and details name ids, never content.
@@ -130,7 +131,8 @@ pub struct FoldError {
     code: &'static str,
     message: String,
     hint: Option<String>,
-    details: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Boxed because the order-preserving map would make every `Result<_, FoldError>` large.
+    details: Option<Box<serde_json::Map<String, serde_json::Value>>>,
 }
 
 impl FoldError {
@@ -155,12 +157,12 @@ impl FoldError {
         mut self,
         details: impl IntoIterator<Item = (&'static str, serde_json::Value)>,
     ) -> Self {
-        self.details = Some(
+        self.details = Some(Box::new(
             details
                 .into_iter()
                 .map(|(name, value)| (name.to_owned(), value))
                 .collect(),
-        );
+        ));
         self
     }
 
@@ -177,7 +179,7 @@ impl FoldError {
     }
 
     pub fn details(&self) -> Option<&serde_json::Map<String, serde_json::Value>> {
-        self.details.as_ref()
+        self.details.as_deref()
     }
 }
 

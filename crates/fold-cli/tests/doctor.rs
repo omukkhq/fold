@@ -56,8 +56,9 @@ fn stderr(output: &Output) -> String {
 #[test]
 fn warnings_alone_exit_0_and_every_project_in_the_registry_is_checked() {
     let sandbox = Sandbox::new().unwrap();
-    sandbox.init("alpha").unwrap();
+    let alpha = sandbox.init("alpha").unwrap();
     sandbox.init("beta").unwrap();
+    std::fs::remove_file(alpha.join(".mcp.json")).unwrap();
     let socket = sandbox.path("absent.sock");
     let output = sandbox
         .fold(&["doctor", "--socket", socket.to_str().unwrap()])
@@ -71,7 +72,8 @@ fn warnings_alone_exit_0_and_every_project_in_the_registry_is_checked() {
     assert!(text.contains("warn git: git is not on PATH"));
     assert!(text.contains("fix: install git"));
     assert!(text.contains("ok   database: quick_check is ok and journal_mode is wal"));
-    assert!(text.contains("fix: fold init --refresh"));
+    assert!(text.contains("warn claude files: .mcp.json is missing"));
+    assert_eq!(text.matches("fix: fold init --refresh").count(), 1);
 }
 
 #[test]
