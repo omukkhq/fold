@@ -5,6 +5,7 @@ use fold_store::{Store, StoreError};
 use thiserror::Error;
 
 use super::events::EventBus;
+use super::messages::MessageError;
 use super::projects::ProjectError;
 use super::tasks::TaskError;
 use super::workspaces::{WorkspaceError, WorkspaceService};
@@ -15,6 +16,7 @@ mod comments;
 mod conflicts;
 mod human_review;
 mod integrate;
+mod notify;
 mod proposals;
 mod verdicts;
 mod views;
@@ -44,6 +46,16 @@ pub enum ReviewError {
     /// A command built an event the declared types refuse: a defect in the command, not in the input.
     #[error(transparent)]
     Event(#[from] EventError),
+}
+
+impl From<MessageError> for ReviewError {
+    fn from(error: MessageError) -> Self {
+        match error {
+            MessageError::Fold(error) => Self::Fold(error),
+            MessageError::Store(error) => Self::Store(error),
+            MessageError::Event(error) => Self::Event(error),
+        }
+    }
 }
 
 impl ReviewError {

@@ -347,6 +347,16 @@ impl DirHandle {
         Ok(names)
     }
 
+    /// The permission bits of the directory itself.
+    pub(crate) fn mode(&self) -> io::Result<u32> {
+        Ok(rustix::fs::fstat(&self.0)?.st_mode & 0o7777)
+    }
+
+    /// Changes the permission bits of the directory itself through the open descriptor, so a path swapped for a symlink cannot redirect the change.
+    pub(crate) fn set_mode(&self, mode: u32) -> io::Result<()> {
+        Ok(rustix::fs::fchmod(&self.0, Mode::from_raw_mode(mode))?)
+    }
+
     /// Flushes the directory's entries, with the tolerance of [`sync_dir`].
     pub(crate) fn sync(&self) -> io::Result<()> {
         match rustix::fs::fsync(&self.0) {

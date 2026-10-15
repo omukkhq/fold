@@ -18,6 +18,7 @@ use fold_vcs::git_import::{GitImportOptions, archive_tree};
 use fold_vcs::git_sync_map::SyncMap;
 use fold_vcs::ignore::IgnoreRules;
 use fold_vcs::import::{ImportOptions, ImportResult, import_dir};
+use fold_vcs::main_view;
 use fold_vcs::materialise::{MaterialiseOptions, materialise};
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::paths::WorkspaceError;
@@ -298,6 +299,7 @@ async fn create_first_revision(
     let tree = imported.tree;
     let fold_dir = paths.fold_dir();
     let synced = git_commit.clone().map(|commit| (row.number, commit));
+    let number = row.number;
     blocking(move || {
         if let Some(synced) = synced {
             SyncMap::load(&fold_dir)?.append(&[synced])?;
@@ -307,6 +309,7 @@ async fn create_first_revision(
             caps,
         };
         materialise(&objects, &tree, &main, &opts).map_err(FoldError::from)?;
+        main_view::write_marker(&fold_dir, number).map_err(|error| io_error(&error))?;
         Ok(())
     })
     .await?;

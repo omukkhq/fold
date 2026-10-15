@@ -7,7 +7,7 @@ use fold_store::projects::ProjectRow;
 use fold_vcs::git::Git;
 use fold_vcs::platform::Capabilities;
 
-use crate::jobs;
+use crate::jobs::{self, MainMaterialiser, MainQueue};
 use crate::live::{LiveConfig, LiveState};
 use crate::push::{self, PushTargets, PushTask};
 use crate::services::agents::{AgentService, SeenPresence};
@@ -47,6 +47,8 @@ pub struct ProjectHandle {
     /// The Claude Code inbox sockets of the project's agents. They live in memory only, so a restarted daemon has none until the session-start hooks run again.
     pub push: PushTargets,
     _push_task: PushTask,
+    /// Keeps `main/` on the head after each integration. It is the only writer of `main/` after `fold init`.
+    pub main_view: MainMaterialiser,
 }
 
 impl std::fmt::Debug for ProjectHandle {
@@ -96,6 +98,13 @@ impl ProjectHandle {
         .with_workspace_locks(workspace_locks.clone());
         let push = PushTargets::new();
         let push_task = push::run(store.clone(), &bus, push.clone());
+        let main_view = jobs::spawn_main_materialiser(
+            store.clone(),
+            &bus,
+            paths.clone(),
+            Arc::clone(&capabilities),
+            MainQueue::new(),
+        );
         Ok(Self {
             slug: row.slug.clone(),
             name: row.name.clone(),
@@ -114,6 +123,7 @@ impl ProjectHandle {
             live,
             push,
             _push_task: push_task,
+            main_view,
         })
     }
 

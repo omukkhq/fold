@@ -73,3 +73,26 @@ pub async fn unreleased_review_claim(
     })
     .transpose()
 }
+
+/// The worker whose review claim the proposal's integration released, or `None` when nobody held one at that moment.
+pub async fn integrated_review_claim_holder(
+    executor: impl SqliteExecutor<'_>,
+    proposal: ProposalId,
+) -> Result<Option<WorkerName>, StoreError> {
+    let number = proposal.to_db();
+    let worker = sqlx::query_scalar!(
+        r#"SELECT w.name AS "name!: String"
+           FROM claims c
+           JOIN proposals p ON p.id = c.proposal_id
+           JOIN workers w ON w.id = c.worker_id
+           WHERE p.number = ? AND c.kind = 'review' AND c.release_reason = 'integrated'
+           ORDER BY c.released_at DESC, c.id DESC
+           LIMIT 1"#,
+        number
+    )
+    .fetch_optional(executor)
+    .await?;
+    worker
+        .map(|name| WorkerName::parse(&name).map_err(|_| StoreError::Corrupt("workers.name")))
+        .transpose()
+}

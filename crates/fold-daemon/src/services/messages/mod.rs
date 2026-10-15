@@ -4,7 +4,7 @@ use fold_core::events::types;
 use fold_core::messages::resolve;
 use fold_core::{
     Actor, Address, AddressedAs, Clock, EventError, FoldError, IdKind, MessageBody, MessageId,
-    NewEvent, ProposalId, Recipient, Sender, Target, TaskId, Timestamp, WorkerName, codes, policy,
+    NewEvent, ProposalId, Recipient, Sender, Target, TaskId, Timestamp, codes, policy,
 };
 use fold_store::messages::{self, MessageHead, MessageRow, NewMessage, RecipientRow};
 use fold_store::tasks::claims;
@@ -331,11 +331,11 @@ async fn write_message(
     })
 }
 
-/// Sends `body` from `fold` to the worker `to` inside the caller's transaction, linked to `task` and `proposal`, so a command can tell an agent about what it just did in the same commit. The caller knows the worker exists and publishes the buffer after the commit.
+/// Sends `body` from `fold` to `recipients` inside the caller's transaction, linked to `task` and `proposal`, so a command can tell the agents concerned about what it just did in the same commit. The caller knows each recipient worker exists and publishes the buffer after the commit.
 pub(crate) async fn send_from_fold_in_tx(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,
-    to: &WorkerName,
+    recipients: Vec<Recipient>,
     links: (TaskId, ProposalId),
     body: &MessageBody,
     now: Timestamp,
@@ -347,10 +347,7 @@ pub(crate) async fn send_from_fold_in_tx(
         proposal: Some(links.1),
         parent: None,
         body,
-        recipients: vec![Recipient {
-            target: Target::Worker(to.clone()),
-            addressed_as: AddressedAs::Worker,
-        }],
+        recipients,
         now,
     };
     write_message(tx, buffer, draft).await

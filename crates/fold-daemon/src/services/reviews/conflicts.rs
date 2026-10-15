@@ -1,7 +1,8 @@
 use fold_core::events::types;
 use fold_core::merge::{Conflict, ConflictReport, ReportTrees};
 use fold_core::{
-    Actor, IdKind, IntegrationId, MessageBody, NewEvent, ProposalId, RevisionId, TaskId,
+    Actor, AddressedAs, IdKind, IntegrationId, MessageBody, NewEvent, ProposalId, Recipient,
+    RevisionId, Target, TaskId,
 };
 use fold_store::reviews::{self, IntegrationSubject, NewIntegration};
 use fold_store::{StoreError, counters, workspaces};
@@ -9,7 +10,7 @@ use serde_json::json;
 
 use super::{ReviewError, ReviewService};
 use crate::services::events::EventBuffer;
-use crate::services::messages::{MessageError, send_from_fold_in_tx};
+use crate::services::messages::send_from_fold_in_tx;
 use crate::services::tasks::recompute;
 
 /// A conflicting merge of the current version of a proposal onto main, as the integration procedure found it.
@@ -86,7 +87,11 @@ impl ReviewService {
                     }))?;
                 buffer.append(tx, &event, now).await?;
                 let body = MessageBody::parse(report.author_message())?;
-                send_from_fold_in_tx(tx, &mut buffer, &row.author, (task, proposal), &body, now)
+                let author = Recipient {
+                    target: Target::Worker(row.author.clone()),
+                    addressed_as: AddressedAs::Worker,
+                };
+                send_from_fold_in_tx(tx, &mut buffer, vec![author], (task, proposal), &body, now)
                     .await?;
                 buffer.extend(recompute(tx, &[task], now).await?.events);
                 Ok::<_, ReviewError>(Some((integration, report.files.len())))
@@ -107,15 +112,5 @@ impl ReviewService {
         version: u32,
     ) -> Result<Option<ConflictReport>, ReviewError> {
         Ok(reviews::conflict_report(self.store.read(), proposal, version).await?)
-    }
-}
-
-impl From<MessageError> for ReviewError {
-    fn from(error: MessageError) -> Self {
-        match error {
-            MessageError::Fold(error) => Self::Fold(error),
-            MessageError::Store(error) => Self::Store(error),
-            MessageError::Event(error) => Self::Event(error),
-        }
     }
 }

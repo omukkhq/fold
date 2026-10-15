@@ -5,6 +5,7 @@
 )]
 
 use std::fmt::Debug;
+use std::path::Path;
 use std::time::Duration;
 
 use fold_core::{Clock, ManualClock, ProjectPaths, Timestamp};
@@ -25,6 +26,35 @@ pub struct TestProject {
     registry: Store,
     clock: ManualClock,
 }
+
+impl Drop for TestProject {
+    /// `main/` keeps its directories without write access, which would stop the temporary directory from being removed.
+    fn drop(&mut self) {
+        restore_write_access(self._dir.path());
+    }
+}
+
+#[cfg(unix)]
+fn restore_write_access(dir: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok(meta) = std::fs::symlink_metadata(dir) else {
+        return;
+    };
+    if !meta.is_dir() {
+        return;
+    }
+    let mode = meta.permissions().mode() | 0o700;
+    let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode));
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        restore_write_access(&entry.path());
+    }
+}
+
+#[cfg(not(unix))]
+fn restore_write_access(_dir: &Path) {}
 
 impl TestProject {
     pub async fn new() -> Self {

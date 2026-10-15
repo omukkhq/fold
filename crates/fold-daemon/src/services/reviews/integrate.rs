@@ -18,6 +18,7 @@ use fold_vcs::integrate::MergeOutcome;
 use serde_json::json;
 
 use super::conflicts::FoundConflict;
+use super::notify;
 use super::proposals::{Retirement, proposal_not_found, retire_proposal};
 use super::{ReviewError, ReviewService};
 use crate::services::events::EventBuffer;
@@ -672,6 +673,7 @@ impl Commit<'_> {
             buffer.append(tx, &released, self.now).await?;
         }
         buffer.extend(recompute(tx, &[task], self.now).await?.events);
+        notify::integration_messages(tx, buffer, &facts, revision, self.now).await?;
         Ok(archived)
     }
 }

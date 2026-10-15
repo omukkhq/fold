@@ -501,11 +501,38 @@ async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError
     {
         ctx.author = Some(row.author.agent());
         ctx.review_claim = row.review_claim.map(|worker| worker.agent());
+        ctx.retired = row.state != reviews::ProposalState::Open;
+        if kind == fold_core::events::types::INTEGRATION_SUCCEEDED {
+            ctx.reviewer = integrated_reviewer(store, event, proposal).await?;
+        }
     }
-    if kind != fold_core::events::types::INTEGRATION_CONFLICTED {
+    if kind != fold_core::events::types::INTEGRATION_CONFLICTED
+        && kind != fold_core::events::types::INTEGRATION_SUCCEEDED
+    {
         ctx.integrators = integrators(store).await?;
     }
     Ok(ctx)
+}
+
+/// The integration released the review claim, so the holder is read from the released row; without one, the agent whose approval of the integrated version stands.
+async fn integrated_reviewer(
+    store: &Store,
+    event: &Event,
+    proposal: fold_core::ProposalId,
+) -> Result<Option<AgentName>, StoreError> {
+    if let Some(holder) = reviews::integrated_review_claim_holder(store.read(), proposal).await? {
+        return Ok(Some(holder.agent()));
+    }
+    let version = event
+        .data
+        .get("version")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|version| u32::try_from(version).ok());
+    let Some(version) = version else {
+        return Ok(None);
+    };
+    let reviews = reviews::review_facts(store.read(), proposal, version).await?;
+    Ok(fold_core::reviews::standing_agent_approval(&reviews))
 }
 
 async fn integrators(store: &Store) -> Result<std::collections::BTreeSet<AgentName>, StoreError> {

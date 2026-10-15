@@ -71,8 +71,15 @@ async fn init_creates_the_layout_and_registers_the_project() {
         .collect();
     inside.retain(|name| !name.starts_with("fold.db-"));
     inside.sort();
-    assert_eq!(inside, ["config.toml", "fold.db", "objects"]);
+    assert_eq!(
+        inside,
+        ["config.toml", "fold.db", "main-materialised", "objects"]
+    );
     assert_eq!(project.revision.to_string(), "r1");
+    assert_eq!(
+        fold_vcs::main_view::read_marker(&paths.fold_dir()).unwrap(),
+        Some(project.revision)
+    );
     assert_eq!(project.imported.files, 0);
 
     let registry = host.registry().await;

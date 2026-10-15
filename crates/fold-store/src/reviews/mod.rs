@@ -15,7 +15,9 @@ mod claims;
 mod integrations;
 mod summaries;
 
-pub use claims::{ReviewClaimRow, insert_review_claim, unreleased_review_claim};
+pub use claims::{
+    ReviewClaimRow, insert_review_claim, integrated_review_claim_holder, unreleased_review_claim,
+};
 pub use integrations::{
     IntegrationFacts, IntegrationSubject, NewIntegration, conflict_report, insert_conflicted,
     insert_refused, insert_succeeded, integration_facts, mark_conflicted,

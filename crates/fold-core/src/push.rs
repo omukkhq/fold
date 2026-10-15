@@ -21,6 +21,10 @@ pub struct PushContext {
     pub implementation_claim: Option<AgentName>,
     /// The agents with a worker among the recipients of the event's message.
     pub recipients: BTreeSet<AgentName>,
+    /// For an integrated proposal, the agent that reviewed it: the holder of the review claim the integration released, else the agent whose approval stands.
+    pub reviewer: Option<AgentName>,
+    /// The event's proposal is integrated or closed.
+    pub retired: bool,
 }
 
 /// One line for one agent's Claude Code session. `text` holds public ids and the next tool only.
@@ -39,6 +43,8 @@ pub fn is_pushed(event: &Event) -> bool {
         types::INTEGRATION_CONFLICTED,
         types::TASK_STATUS_CHANGED,
         types::MESSAGE_SENT,
+        types::PROPOSAL_VERSION_ADDED,
+        types::INTEGRATION_SUCCEEDED,
     ]
     .contains(&event.event_type)
 }
@@ -65,17 +71,32 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
     let kind = event.event_type;
     if kind == types::PROPOSAL_OPENED {
         let proposal = event.proposal?;
-        let agents = ctx
-            .integrators
-            .iter()
-            .filter(|agent| ctx.author.as_ref() != Some(*agent))
-            .cloned()
-            .collect();
         let text = match event.task {
             Some(task) => format!("{proposal} opened for {task}"),
             None => format!("{proposal} opened"),
         };
-        return Some((agents, text, "claim_review"));
+        return Some((reviewers(ctx), text, "claim_review"));
+    }
+    if kind == types::PROPOSAL_VERSION_ADDED {
+        let proposal = event.proposal?;
+        let text = match event
+            .data
+            .get("version")
+            .and_then(serde_json::Value::as_u64)
+        {
+            Some(version) => format!("{proposal} has version {version}"),
+            None => format!("{proposal} has a new version"),
+        };
+        return Some((reviewers(ctx), text, "create_review_checkout"));
+    }
+    if kind == types::INTEGRATION_SUCCEEDED {
+        let proposal = event.proposal?;
+        let agents = ctx.author.iter().chain(&ctx.reviewer).cloned().collect();
+        let text = match event.revision {
+            Some(revision) => format!("{proposal} integrated as {revision}"),
+            None => format!("{proposal} integrated"),
+        };
+        return Some((agents, text, "get_inbox"));
     }
     if kind == types::REVIEW_SUBMITTED {
         let proposal = event.proposal?;
@@ -85,7 +106,7 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
                 format!("{proposal} changes requested"),
                 "get_review_comments",
             )),
-            "approve" if is_human(&event.actor) => {
+            "approve" if is_human(&event.actor) && !ctx.retired => {
                 let agents = match &ctx.review_claim {
                     Some(holder) => vec![holder.clone()],
                     None => ctx.integrators.iter().cloned().collect(),
@@ -133,6 +154,16 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
         ));
     }
     None
+}
+
+/// Every integrator but the author's agent, then the holder of the review claim.
+fn reviewers(ctx: &PushContext) -> Vec<AgentName> {
+    ctx.integrators
+        .iter()
+        .filter(|agent| ctx.author.as_ref() != Some(*agent))
+        .chain(&ctx.review_claim)
+        .cloned()
+        .collect()
 }
 
 /// `review.submitted` names its verdict in `data.verdict`, with the values of `reviews.verdict`.
@@ -186,6 +217,8 @@ mod tests {
             review_claim: Some(name("review")),
             implementation_claim: Some(name("backend")),
             recipients: [name("backend"), name("docs")].into_iter().collect(),
+            reviewer: Some(name("review")),
+            retired: false,
         }
     }
 
@@ -431,6 +464,8 @@ mod tests {
             types::INTEGRATION_CONFLICTED,
             types::TASK_STATUS_CHANGED,
             types::MESSAGE_SENT,
+            types::PROPOSAL_VERSION_ADDED,
+            types::INTEGRATION_SUCCEEDED,
         ] {
             let notices = notice_for(&large(kind), &ctx());
             assert!(!notices.is_empty(), "{kind}");
@@ -444,5 +479,84 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_claim_holder_hears_of_an_opened_proposal_even_without_the_tag() {
+        let ctx = PushContext {
+            integrators: [name("lead")].into_iter().collect(),
+            review_claim: Some(name("docs")),
+            ..ctx()
+        };
+        let notices = notice_for(&event(types::PROPOSAL_OPENED, "frontend"), &ctx);
+        let agents: Vec<&str> = notices.iter().map(|n| n.agent.as_str()).collect();
+        assert_eq!(agents, ["lead", "docs"]);
+    }
+
+    #[test]
+    fn a_new_version_reaches_the_claim_holder_and_the_integrators() {
+        let event = with_data(
+            event(types::PROPOSAL_VERSION_ADDED, "frontend/ui"),
+            json!({"version": 2, "changeset": "C-4"}),
+        );
+        let text = "fold: P-3 has version 2. Call create_review_checkout.";
+        assert_eq!(
+            sent(&notice_for(&event, &ctx())),
+            vec![
+                row("lead", text, "create_review_checkout"),
+                row("review", text, "create_review_checkout"),
+            ]
+        );
+        let bare = with_data(event.clone(), json!({}));
+        assert_eq!(
+            notice_for(&bare, &ctx())[0].text,
+            "fold: P-3 has a new version. Call create_review_checkout."
+        );
+    }
+
+    #[test]
+    fn an_integration_reaches_the_author_and_the_reviewer() {
+        let integrated = Event {
+            revision: Some(crate::ids::RevisionId::from_number(5).unwrap()),
+            ..event(types::INTEGRATION_SUCCEEDED, "lead")
+        };
+        let text = "fold: P-3 integrated as r5. Call get_inbox.";
+        assert_eq!(
+            sent(&notice_for(&integrated, &ctx())),
+            vec![
+                row("frontend", text, "get_inbox"),
+                row("review", text, "get_inbox"),
+            ]
+        );
+        // The reviewer who integrates does not hear of it; a pull has no proposal and reaches nobody.
+        let own = event(types::INTEGRATION_SUCCEEDED, "review");
+        assert_eq!(
+            sent(&notice_for(&own, &ctx())),
+            vec![row(
+                "frontend",
+                "fold: P-3 integrated. Call get_inbox.",
+                "get_inbox"
+            )]
+        );
+        let pull = Event {
+            task: None,
+            proposal: None,
+            ..event(types::INTEGRATION_SUCCEEDED, "human:ana")
+        };
+        assert!(is_pushed(&pull));
+        assert!(notice_for(&pull, &ctx()).is_empty());
+    }
+
+    #[test]
+    fn a_human_approval_of_a_retired_proposal_sends_nothing() {
+        let event = with_data(
+            event(types::REVIEW_SUBMITTED, "human:ana"),
+            json!({"verdict": "approve"}),
+        );
+        let retired = PushContext {
+            retired: true,
+            ..ctx()
+        };
+        assert!(notice_for(&event, &retired).is_empty());
     }
 }

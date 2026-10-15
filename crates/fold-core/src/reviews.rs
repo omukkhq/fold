@@ -1,7 +1,7 @@
 use std::fmt;
 
 use crate::actor::AgentActor;
-use crate::agents::HumanName;
+use crate::agents::{AgentName, HumanName};
 use crate::events::EventActor;
 
 /// What a review says about one proposal version. `Comment` is not a verdict on the work: it leaves the turn where it was.
@@ -181,6 +181,23 @@ pub fn human_approval_standing(
             && matches!(&review.approver, Approver::Human(human) if mark.accepts(human))
             && withdrawn.is_none_or(|seq| review.seq > seq)
     })
+}
+
+/// The agent whose approval of the version stands: the latest approval by an agent after the last `request_changes`, or `None` when no agent's approval stands. Pass the reviews of one version only.
+pub fn standing_agent_approval(reviews: &[ReviewFact]) -> Option<AgentName> {
+    let withdrawn = reviews
+        .iter()
+        .filter(|review| review.verdict == Verdict::RequestChanges)
+        .map(|review| review.seq)
+        .max();
+    reviews
+        .iter()
+        .filter(|review| {
+            review.verdict == Verdict::Approve && withdrawn.is_none_or(|seq| review.seq > seq)
+        })
+        .filter_map(|review| Some((review.seq, AgentName::parse(review.reviewer.agent()?).ok()?)))
+        .max_by_key(|(seq, _)| *seq)
+        .map(|(_, agent)| agent)
 }
 
 #[cfg(test)]
@@ -403,5 +420,32 @@ mod tests {
         assert!(mark(None).accepts(&name("ana")));
         assert!(mark(Some("ana")).accepts(&name("ana")));
         assert!(!mark(Some("ana")).accepts(&name("tanim")));
+    }
+
+    #[test]
+    fn the_latest_agent_approval_after_the_last_request_changes_stands() {
+        let by = |reviewer: &str, verdict: Verdict, seq: u64| ReviewFact {
+            reviewer: EventActor::parse(reviewer).unwrap(),
+            ..fact(verdict, seq)
+        };
+        let agent = |text: &str| Some(AgentName::parse(text).unwrap());
+        assert_eq!(standing_agent_approval(&[]), None);
+        let reviews = [
+            by("lead", Verdict::Approve, 1),
+            by("review/deep", Verdict::Approve, 2),
+            by("human:ana", Verdict::Approve, 3),
+            by("other", Verdict::Comment, 4),
+        ];
+        assert_eq!(standing_agent_approval(&reviews), agent("review"));
+        let withdrawn = [
+            by("lead", Verdict::Approve, 1),
+            by("human:ana", Verdict::RequestChanges, 2),
+        ];
+        assert_eq!(standing_agent_approval(&withdrawn), None);
+        let again = [
+            by("lead", Verdict::RequestChanges, 1),
+            by("lead", Verdict::Approve, 2),
+        ];
+        assert_eq!(standing_agent_approval(&again), agent("lead"));
     }
 }

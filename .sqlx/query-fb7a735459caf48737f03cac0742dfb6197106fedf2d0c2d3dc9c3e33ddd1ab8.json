@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT w.name AS \"name!: String\"\n           FROM claims c\n           JOIN proposals p ON p.id = c.proposal_id\n           JOIN workers w ON w.id = c.worker_id\n           WHERE p.number = ? AND c.kind = 'review' AND c.release_reason = 'integrated'\n           ORDER BY c.released_at DESC, c.id DESC\n           LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "name!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workers",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "fb7a735459caf48737f03cac0742dfb6197106fedf2d0c2d3dc9c3e33ddd1ab8"
+}
