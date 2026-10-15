@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT t.number AS \"task!: i64\"\n           FROM claims c JOIN tasks t ON t.id = c.task_id\n           WHERE c.kind = 'implementation' AND c.released_at IS NULL AND c.stale_at IS NOT NULL\n           UNION\n           SELECT t.number\n           FROM claims c\n           JOIN proposals p ON p.id = c.proposal_id\n           JOIN tasks t ON t.id = p.task_id\n           WHERE c.kind = 'review' AND c.released_at IS NULL AND c.stale_at IS NOT NULL\n             AND p.state = 'open'",
+  "describe": {
+    "columns": [
+      {
+        "name": "task!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5ab5e23c32089e72a265e3d7ee5d2e5a67088799f49be1e8c4a438faf0baa6bf"
+}

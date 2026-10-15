@@ -41,6 +41,7 @@ function live(extra: Partial<LiveWorkspace> = {}): LiveWorkspace {
     last_activity_at: NOW - 12 * SECOND,
     checkpoints: [],
     proposal: null,
+    stalled: false,
     ...extra,
   };
 }

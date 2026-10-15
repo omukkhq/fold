@@ -43,6 +43,7 @@ const live = () =>
     last_activity_at: 1_760_000_000_000,
     checkpoints: [],
     proposal: null,
+    stalled: false,
   })}\n\n`;
 /** An `agent_presence_changed` frame is live too: no `seq`, no `id` line. */
 const presence = () =>

@@ -55,6 +55,7 @@ function live(workspace: string, paths: string[], at = NOW): LiveWorkspace {
       { id: "ck-1", label: null, automatic: false, created_at: NOW },
     ],
     proposal: null,
+    stalled: false,
   };
 }
 

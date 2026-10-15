@@ -13,7 +13,10 @@ use crate::daemon::AppState;
 use crate::projects::ProjectHandle;
 use crate::services::agents::AgentError;
 use crate::services::projects;
-use crate::services::workspaces::{QuietCheckpoint, Reconciliation, WorkspaceService};
+use crate::services::tasks::sweep_leases;
+use crate::services::workspaces::{
+    QuietCheckpoint, Reconciliation, WorkspaceService, check_stalls,
+};
 
 /// How often a running daemon's jobs look at the clock.
 pub const JOB_TICK: Duration = Duration::from_secs(60);
@@ -28,6 +31,12 @@ pub const LIVE_TICK: Duration = Duration::from_secs(1);
 
 /// How often the quiet-period job looks at each workspace's live state. It is short against the two-minute quiet period, so a burst's checkpoint comes at most this much late.
 pub const AUTO_CHECKPOINT_TICK: Duration = Duration::from_secs(10);
+
+/// How often the lease sweeper looks for claims whose lease ran out.
+pub const LEASE_TICK: Duration = Duration::from_secs(60);
+
+/// How often the stall job decides the stalled flag of every live workspace.
+pub const STALL_TICK: Duration = Duration::from_secs(30);
 
 /// How many workspaces [`reconcile_workspaces`] scans at once.
 pub const RECONCILE_PARALLEL: usize = 4;
@@ -251,6 +260,88 @@ impl QuietCheckpoints {
             }
         }
         recorded
+    }
+}
+
+/// Starts the lease sweeper: every `tick` it runs [`sweep_leases`] on each open project with the time of that project's clock. A cycle is a tick that marked at least one claim. It stops when `stop` changes.
+pub fn spawn_lease_sweeper(state: AppState, tick: Duration, stop: watch::Receiver<bool>) -> Job {
+    let (progress, watcher) = watch::channel(JobProgress::default());
+    let task = tokio::spawn(lease_sweeper(state, tick, stop, progress));
+    Job {
+        task,
+        progress: watcher,
+    }
+}
+
+/// Starts the stall job: every `tick` it runs [`check_stalls`] on each open project with the time of that project's clock. A cycle is a tick that changed at least one flag. It stops when `stop` changes.
+pub fn spawn_stalls(state: AppState, tick: Duration, stop: watch::Receiver<bool>) -> Job {
+    let (progress, watcher) = watch::channel(JobProgress::default());
+    let task = tokio::spawn(stalls(state, tick, stop, progress));
+    Job {
+        task,
+        progress: watcher,
+    }
+}
+
+async fn lease_sweeper(
+    state: AppState,
+    tick: Duration,
+    mut stop: watch::Receiver<bool>,
+    progress: watch::Sender<JobProgress>,
+) {
+    let mut ticks = tokio::time::interval(tick);
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            _ = stop.changed() => break,
+            _ = ticks.tick() => {}
+        }
+        let mut marked = 0;
+        for handle in state.projects.handles() {
+            match sweep_leases(&handle, handle.clock.now()).await {
+                Ok(claims) => marked += claims.len(),
+                Err(error) => tracing::warn!(
+                    project = %handle.slug,
+                    code = error.code().unwrap_or(codes::INTERNAL_ERROR),
+                    "the lease sweep failed; the next tick tries again"
+                ),
+            }
+        }
+        progress.send_modify(|seen| {
+            seen.checks += 1;
+            seen.cycles += u64::from(marked > 0);
+        });
+    }
+}
+
+async fn stalls(
+    state: AppState,
+    tick: Duration,
+    mut stop: watch::Receiver<bool>,
+    progress: watch::Sender<JobProgress>,
+) {
+    let mut ticks = tokio::time::interval(tick);
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            _ = stop.changed() => break,
+            _ = ticks.tick() => {}
+        }
+        let mut changed = 0;
+        for handle in state.projects.handles() {
+            match check_stalls(&handle, handle.clock.now()).await {
+                Ok(count) => changed += count,
+                Err(error) => tracing::warn!(
+                    project = %handle.slug,
+                    code = error.code().unwrap_or(codes::INTERNAL_ERROR),
+                    "the stall check failed; the next tick tries again"
+                ),
+            }
+        }
+        progress.send_modify(|seen| {
+            seen.checks += 1;
+            seen.cycles += u64::from(changed > 0);
+        });
     }
 }
 

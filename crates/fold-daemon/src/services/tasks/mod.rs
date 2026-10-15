@@ -21,12 +21,13 @@ mod attention;
 mod checklists;
 mod claims;
 mod dependencies;
+mod leases;
 mod ready;
 mod recompute;
 mod removal;
 mod views;
 
-pub use attention::{AttentionItem, AttentionKind, attention};
+pub use attention::{AttentionItem, AttentionKind, attention, stalled_tasks};
 pub use checklists::{
     ChecklistItemPatch, ChecklistItemView, ChecklistProgress, ChecklistView, ItemContent,
     NewChecklistItem,
@@ -35,6 +36,7 @@ pub use claims::{ClaimView, Claimed, claim_view, renew_leases};
 pub(crate) use claims::{already_claimed, claim_in_tx, closed_refusal, worker_row};
 pub use dependencies::{Edge, add_edge_in_tx};
 pub use fold_core::reviews::HumanReviewMark;
+pub use leases::sweep_leases;
 pub use ready::ReadyTask;
 pub use recompute::{Recomputed, recompute};
 pub use views::{

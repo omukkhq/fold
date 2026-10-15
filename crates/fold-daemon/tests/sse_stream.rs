@@ -213,6 +213,7 @@ fn live_workspace(number: u32, summary: &str) -> LiveWorkspace {
             created_at: Timestamp::from_millis(900).unwrap(),
         }],
         proposal: None,
+        stalled: false,
     }
 }
 

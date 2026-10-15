@@ -83,6 +83,7 @@ export const workspaces: WorkspaceEntry[] = [
         },
       ],
       proposal: null,
+      stalled: false,
     },
   },
   {
@@ -122,6 +123,7 @@ export const workspaces: WorkspaceEntry[] = [
         },
       ],
       proposal: null,
+      stalled: false,
     },
   },
   {

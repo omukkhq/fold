@@ -35,6 +35,7 @@ function workspace(): LiveWorkspace {
       },
     ],
     proposal: "P-3",
+    stalled: false,
   };
 }
 
@@ -163,6 +164,7 @@ describe("isEventEnvelope", () => {
       ["last_activity_at", "now"],
       ["checkpoints", {}],
       ["proposal", 3],
+      ["stalled", "yes"],
     ] as const) {
       expect(isEventEnvelope({ ...changed(), [key]: value }), key).toBe(false);
     }

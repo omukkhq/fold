@@ -29,6 +29,7 @@ mod git;
 mod lifecycle;
 mod reconcile;
 mod repository;
+mod stalls;
 mod sync;
 
 pub use adoption::AdoptReason;
@@ -50,6 +51,7 @@ pub use repository::{
     DEFAULT_REVISION_PAGE, RECENT_REVISIONS, RepositoryState, RevisionDetail, RevisionOrigin,
     RevisionPage, RevisionSummary,
 };
+pub use stalls::check_stalls;
 pub use sync::Synced;
 
 #[derive(Debug, Error)]

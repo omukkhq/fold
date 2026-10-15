@@ -6,7 +6,7 @@ use serde_json::json;
 
 use super::{WorkspaceError, WorkspaceService, WorkspaceView};
 use crate::live::WorkspaceLive;
-use crate::services::tasks::{AttentionItem, attention};
+use crate::services::tasks::{AttentionItem, attention, stalled_tasks};
 
 /// A workspace as the workspace routes list it: its row, its live state when it is attached, and the attention items of its task.
 #[derive(Debug, Clone)]
@@ -50,7 +50,8 @@ impl WorkspaceService {
         views: Vec<WorkspaceView>,
     ) -> Result<Vec<WorkspaceEntry>, WorkspaceError> {
         let tasks: Vec<TaskId> = views.iter().map(|view| view.task).collect();
-        let items = attention(&self.store, &tasks, self.clock.now()).await?;
+        let stalled = stalled_tasks(self.live.as_ref());
+        let items = attention(&self.store, &tasks, &stalled, self.clock.now()).await?;
         Ok(views
             .into_iter()
             .map(|workspace| WorkspaceEntry {

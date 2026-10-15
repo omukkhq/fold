@@ -26,6 +26,7 @@ function live(workspace: string, at = 5): LiveWorkspace {
     last_activity_at: at,
     checkpoints: [],
     proposal: null,
+    stalled: false,
   };
 }
 

@@ -33,6 +33,7 @@ function live(at: number, files: number): LiveWorkspace {
     last_activity_at: at,
     checkpoints: [],
     proposal: null,
+    stalled: false,
   };
 }
 

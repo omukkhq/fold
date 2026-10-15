@@ -98,6 +98,7 @@ export function liveWorkspace(
     last_activity_at: 1_000,
     checkpoints: [],
     proposal: null,
+    stalled: false,
     ...over,
   };
 }

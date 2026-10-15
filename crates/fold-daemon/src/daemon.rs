@@ -154,6 +154,8 @@ impl Daemon {
             jobs::AUTO_CHECKPOINT_TICK,
             stopped.clone(),
         );
+        let leases = jobs::spawn_lease_sweeper(state.clone(), jobs::LEASE_TICK, stopped.clone());
+        let stalls = jobs::spawn_stalls(state.clone(), jobs::STALL_TICK, stopped.clone());
         let http = tokio::spawn(serve_http(listener, http::router(state.clone()), stopped));
         tracing::info!(%http_addr, "daemon started");
         Ok(RunningDaemon {
@@ -166,6 +168,8 @@ impl Daemon {
             presence,
             live,
             auto_checkpoints,
+            leases,
+            stalls,
             stop,
             _lock: lock,
         })
@@ -184,6 +188,8 @@ pub struct RunningDaemon {
     presence: Job,
     live: Job,
     auto_checkpoints: Job,
+    leases: Job,
+    stalls: Job,
     stop: watch::Sender<bool>,
     /// The advisory lock lives as long as this file is open.
     _lock: File,
@@ -225,6 +231,8 @@ impl RunningDaemon {
         self.presence.stopped(DRAIN_TIMEOUT).await;
         self.live.stopped(DRAIN_TIMEOUT).await;
         self.auto_checkpoints.stopped(DRAIN_TIMEOUT).await;
+        self.leases.stopped(DRAIN_TIMEOUT).await;
+        self.stalls.stopped(DRAIN_TIMEOUT).await;
         for handle in self.state.projects.handles() {
             if let Err(error) = handle.agents().close_sessions_at_shutdown().await {
                 tracing::error!(project = %handle.slug, %error, "could not end sessions");

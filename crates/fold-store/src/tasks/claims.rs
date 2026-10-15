@@ -1,4 +1,6 @@
-use fold_core::{TaskId, Timestamp, WorkerName};
+use std::collections::BTreeSet;
+
+use fold_core::{ProposalId, TaskId, Timestamp, WorkerName};
 use sqlx::SqliteExecutor;
 
 use crate::error::StoreError;
@@ -144,4 +146,94 @@ pub async fn release(
     } else {
         Err(StoreError::Invalid("the worker holds no claim on the task"))
     }
+}
+
+/// What a claim holds: a task for an implementation claim, a proposal of a task for a review claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaimTarget {
+    Task(TaskId),
+    Review { proposal: ProposalId, task: TaskId },
+}
+
+/// An unreleased claim that [`mark_stale`] marked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StaleClaim {
+    pub target: ClaimTarget,
+    pub worker: WorkerName,
+    pub renewed_at: Timestamp,
+}
+
+/// Sets `stale_at = now` on each unreleased claim, of either kind, that has no `stale_at` yet and whose `renewed_at` passes `is_stale`, and returns them in the order they were taken. A marked claim is passed over until `renew` clears its `stale_at`, so each lapse is marked once.
+pub async fn mark_stale(
+    tx: &mut WriteTx,
+    now: Timestamp,
+    is_stale: impl Fn(Timestamp) -> bool,
+) -> Result<Vec<StaleClaim>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT c.id AS "id!: i64", c.kind, t.number AS "task!: i64",
+                  p.number AS "proposal?: i64", w.name AS worker, c.renewed_at
+           FROM claims c
+           JOIN workers w ON w.id = c.worker_id
+           LEFT JOIN proposals p ON p.id = c.proposal_id
+           JOIN tasks t ON t.id = COALESCE(c.task_id, p.task_id)
+           WHERE c.released_at IS NULL AND c.stale_at IS NULL
+           ORDER BY c.id"#
+    )
+    .fetch_all(tx.conn())
+    .await?;
+    let stamp = now.as_millis();
+    let mut marked = Vec::new();
+    for row in rows {
+        let renewed_at = time(row.renewed_at, "claims.renewed_at")?;
+        if !is_stale(renewed_at) {
+            continue;
+        }
+        let task = TaskId::try_from_db(row.task).ok_or(StoreError::Corrupt("tasks.number"))?;
+        let target = match (row.kind.as_str(), row.proposal) {
+            ("implementation", None) => ClaimTarget::Task(task),
+            ("review", Some(number)) => ClaimTarget::Review {
+                proposal: ProposalId::try_from_db(number)
+                    .ok_or(StoreError::Corrupt("proposals.number"))?,
+                task,
+            },
+            _ => return Err(StoreError::Corrupt("claims.kind")),
+        };
+        sqlx::query!(
+            "UPDATE claims SET stale_at = ?2 WHERE id = ?1 AND stale_at IS NULL AND released_at IS NULL",
+            row.id,
+            stamp
+        )
+        .execute(tx.conn())
+        .await?;
+        marked.push(StaleClaim {
+            target,
+            worker: WorkerName::parse(&row.worker)
+                .map_err(|_| StoreError::Corrupt("workers.name"))?,
+            renewed_at,
+        });
+    }
+    Ok(marked)
+}
+
+/// The tasks with a marked claim: an unreleased implementation claim with `stale_at` set, or such a review claim on the task's open proposal.
+pub async fn tasks_with_stale_claims(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<BTreeSet<TaskId>, StoreError> {
+    let rows = sqlx::query_scalar!(
+        r#"SELECT t.number AS "task!: i64"
+           FROM claims c JOIN tasks t ON t.id = c.task_id
+           WHERE c.kind = 'implementation' AND c.released_at IS NULL AND c.stale_at IS NOT NULL
+           UNION
+           SELECT t.number
+           FROM claims c
+           JOIN proposals p ON p.id = c.proposal_id
+           JOIN tasks t ON t.id = p.task_id
+           WHERE c.kind = 'review' AND c.released_at IS NULL AND c.stale_at IS NOT NULL
+             AND p.state = 'open'"#
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|number| TaskId::try_from_db(number).ok_or(StoreError::Corrupt("tasks.number")))
+        .collect()
 }

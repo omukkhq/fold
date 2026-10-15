@@ -78,7 +78,8 @@ export function isLiveWorkspace(value: unknown): value is LiveWorkspace {
     typeof value.last_activity_at === "number" &&
     Array.isArray(value.checkpoints) &&
     value.checkpoints.every(isCheckpoint) &&
-    isNullableString(value.proposal)
+    isNullableString(value.proposal) &&
+    typeof value.stalled === "boolean"
   );
 }
 
@@ -140,5 +141,6 @@ export function liveWorkspaceOf(frame: WorkspaceChanged): LiveWorkspace {
     last_activity_at: frame.last_activity_at,
     checkpoints: frame.checkpoints,
     proposal: frame.proposal,
+    stalled: frame.stalled,
   };
 }

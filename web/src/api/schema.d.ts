@@ -1084,6 +1084,8 @@ export interface components {
             last_activity_at: number;
             /** @example P-3 */
             proposal: string | null;
+            /** @description The worker holds the task's implementation claim and nothing in the workspace changed for `stall_minutes`. Calls do not count, so a stalled worker can hold a fresh lease. */
+            stalled: boolean;
             /** @description A one-line change summary, such as `3 files: 2 modified, 1 added (+40 -5)`, or `no changes`. */
             summary: string;
             /** @example T-12 */

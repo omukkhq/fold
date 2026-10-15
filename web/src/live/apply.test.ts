@@ -102,6 +102,7 @@ function live(id: string, summary: string): LiveWorkspace {
       },
     ],
     proposal: null,
+    stalled: false,
   };
 }
 

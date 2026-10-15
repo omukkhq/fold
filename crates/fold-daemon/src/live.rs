@@ -88,6 +88,8 @@ pub struct WorkspaceLive {
     pub warnings: Vec<Warning>,
     /// Time of the last recalculation.
     pub updated_at: Timestamp,
+    /// The last scan found the directory gone. A missing workspace never stalls.
+    pub missing: bool,
 }
 
 impl From<&Checkpoint> for CheckpointSummary {
@@ -369,6 +371,7 @@ impl LiveState {
                 last_activity_at: last_activity,
                 checkpoints: checkpoints.iter().map(CheckpointSummary::from).collect(),
                 proposal: row.proposal,
+                stalled: false,
             },
             last_activity,
             last_full: shared.clock.now(),
@@ -486,6 +489,35 @@ impl LiveState {
     /// Sets the open proposal after the commit that opened or closed it.
     pub fn set_proposal(&self, workspace: WorkspaceId, proposal: Option<ProposalId>) {
         self.update(workspace, |view| view.proposal = proposal);
+    }
+
+    /// Sets the flag the stall check decided from `last_activity_at` and returns whether it changed. A scan that found activity or a missing directory in the meantime wins: the flag is left as that scan set it.
+    pub fn set_stalled(
+        &self,
+        workspace: WorkspaceId,
+        last_activity_at: Timestamp,
+        stalled: bool,
+    ) -> bool {
+        let shared = &self.shared;
+        let mut states = shared
+            .states
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        let Some(current) = states.get(&workspace) else {
+            return false;
+        };
+        if current.missing
+            || current.view.last_activity_at != last_activity_at
+            || current.view.stalled == stalled
+        {
+            return false;
+        }
+        let mut next = WorkspaceLive::clone(current);
+        next.view.stalled = stalled;
+        next.updated_at = shared.clock.now();
+        publish(&shared.bus, &next.view);
+        states.insert(workspace, Arc::new(next));
+        true
     }
 
     fn update(&self, workspace: WorkspaceId, change: impl FnOnce(&mut LiveWorkspace)) {
@@ -703,6 +735,7 @@ impl Pipeline {
         }
         if round.missing && !self.missing {
             self.missing = true;
+            self.mark_missing(now);
             tracing::warn!(workspace = %self.workspace, "the workspace directory is gone; its live state stays as it was");
         }
         if let Some((base, tree)) = round.rebase {
@@ -754,6 +787,7 @@ impl Pipeline {
             Ok(Scan::Missing) => {
                 if !self.missing {
                     self.missing = true;
+                    self.mark_missing(self.clock.now());
                     tracing::warn!(workspace = %self.workspace, "the workspace directory is gone; its live state stays as it was");
                 }
                 Err(FoldError::new(
@@ -827,6 +861,9 @@ impl Pipeline {
         view.files = files;
         view.summary = tally.summary();
         view.last_activity_at = self.last_activity;
+        if scanned.moved {
+            view.stalled = false;
+        }
         let warned = current
             .as_ref()
             .map_or(&[][..], |current| current.warnings.as_slice());
@@ -838,6 +875,7 @@ impl Pipeline {
             watch: self.watch,
             warnings: scanned.warnings,
             updated_at: now,
+            missing: false,
         });
         if current
             .as_ref()
@@ -847,6 +885,22 @@ impl Pipeline {
         }
         states.insert(self.workspace, Arc::clone(&next));
         next
+    }
+
+    /// Marks the state missing and clears its stalled flag.
+    fn mark_missing(&self, now: Timestamp) {
+        let mut states = self.states.write().unwrap_or_else(PoisonError::into_inner);
+        let Some(current) = states.get(&self.workspace) else {
+            return;
+        };
+        let mut next = WorkspaceLive::clone(current);
+        next.missing = true;
+        next.view.stalled = false;
+        if next.view != current.view {
+            next.updated_at = now;
+            publish(&self.bus, &next.view);
+        }
+        states.insert(self.workspace, Arc::new(next));
     }
 
     async fn degrade(&mut self, reason: DegradedReason, now: Timestamp) {

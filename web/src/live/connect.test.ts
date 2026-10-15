@@ -16,6 +16,7 @@ function workspace(summary: string) {
     last_activity_at: 1_760_000_000_000,
     checkpoints: [],
     proposal: null,
+    stalled: false,
   };
 }
 

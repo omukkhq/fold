@@ -20,6 +20,7 @@ pub mod push;
 pub mod readiness;
 pub mod reviews;
 pub mod revision;
+pub mod stall;
 pub mod status;
 pub mod task;
 pub mod time;

@@ -13,7 +13,7 @@ use fold_store::tasks::{self, BoardSnapshot};
 
 pub use fold_store::tasks::{ChecklistCounts, TaskRef};
 
-use super::attention::{AttentionItem, attention};
+use super::attention::{AttentionItem, attention, stalled_tasks};
 use super::{
     ChecklistItemView, ClaimView, HumanReviewMark, LabelView, TaskError, TaskService, TaskView,
     label_view, task_not_found, view,
@@ -196,7 +196,8 @@ impl TaskService {
                 });
             }
         }
-        let attention = attention(&self.store, &[id], now)
+        let stalled = stalled_tasks(self.live.as_ref());
+        let attention = attention(&self.store, &[id], &stalled, now)
             .await?
             .remove(&id)
             .unwrap_or_default();
@@ -246,7 +247,8 @@ impl TaskService {
         let now = self.clock.now();
         let mut snapshot = tasks::board_snapshot(self.store.read()).await?;
         let ids: Vec<TaskId> = snapshot.tasks.iter().map(|row| row.id).collect();
-        let mut attention = attention(&self.store, &ids, now).await?;
+        let stalled = stalled_tasks(self.live.as_ref());
+        let mut attention = attention(&self.store, &ids, &stalled, now).await?;
         let statuses: BTreeMap<TaskId, TaskStatus> = snapshot
             .tasks
             .iter()

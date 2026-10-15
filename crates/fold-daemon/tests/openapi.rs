@@ -77,6 +77,7 @@ fn sample_workspace() -> LiveWorkspace {
             created_at: Timestamp::from_millis(1_760_000_000_100).unwrap(),
         }],
         proposal: ProposalId::from_number(3),
+        stalled: true,
     }
 }
 
