@@ -86,8 +86,8 @@ async fn roots_name_every_referenced_hash_once_and_skip_pruned_checkpoints() {
             "INSERT INTO agents (id, name, created_at) VALUES (1, 'frontend', 0);
              INSERT INTO workers (id, agent_id, name, created_at) VALUES (1, 1, 'frontend', 0);
              INSERT INTO proposals (number, task_id, author_worker_id, title, created_at, updated_at) VALUES (1, 1, 1, 'p', 0, 0);
-             INSERT INTO proposal_versions (proposal_id, version, base_revision_id, tree_hash, head_changeset_id, created_at)
-             VALUES (1, 1, 1, '{}', 1, 0);",
+             INSERT INTO proposal_versions (proposal_id, version, base_revision_id, tree_hash, head_changeset_id, created_by, created_at)
+             VALUES (1, 1, 1, '{}', 1, 'frontend', 0);",
             seed::tree("proposal")
         ),
     )

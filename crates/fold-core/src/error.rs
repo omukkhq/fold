@@ -98,6 +98,10 @@ define_codes! {
     CHECKPOINT_NOT_FOUND = "checkpoint_not_found",
     WORKSPACE_WRITE_UNFINISHED = "workspace_write_unfinished",
     TOKEN_NOT_FOUND = "token_not_found",
+    PROPOSAL_EXISTS = "proposal_exists",
+    PROPOSAL_NOT_OPEN = "proposal_not_open",
+    NOT_PROPOSAL_AUTHOR = "not_proposal_author",
+    VERSION_UNCHANGED = "version_unchanged",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

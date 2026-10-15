@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT w.number AS \"number!: i64\"\n           FROM workspaces w JOIN proposals p ON p.id = w.proposal_id\n           WHERE p.number = ? AND w.kind = 'review' AND w.state IN ('active', 'missing')\n           ORDER BY w.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "workspaces",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bbb8468ff50b74559b89a0cb275103acd7831565af558ba6d004b68764138ea1"
+}

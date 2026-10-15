@@ -7,6 +7,7 @@ mod lifecycle;
 mod refs;
 mod revisions;
 
+pub(crate) use changesets::parse_stats;
 pub use changesets::{
     Changeset, ChangesetStats, get_changeset, insert_changeset, latest_changeset, list_changesets,
 };

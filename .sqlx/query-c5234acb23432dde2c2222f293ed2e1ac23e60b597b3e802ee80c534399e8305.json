@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT p.number AS \"number!: i64\"\n           FROM proposals p JOIN tasks t ON t.id = p.task_id\n           WHERE t.number = ? AND p.state = 'open'",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c5234acb23432dde2c2222f293ed2e1ac23e60b597b3e802ee80c534399e8305"
+}

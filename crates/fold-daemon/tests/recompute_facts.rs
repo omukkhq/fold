@@ -193,8 +193,8 @@ impl Fixture {
             )
             .await;
         self.run(
-            "INSERT INTO proposal_versions (proposal_id, version, base_revision_id, tree_hash, head_changeset_id, created_at)
-             VALUES (?, ?, 1, 't2', ?, 1)",
+            "INSERT INTO proposal_versions (proposal_id, version, base_revision_id, tree_hash, head_changeset_id, created_by, created_at)
+             VALUES (?, ?, 1, 't2', ?, 'backend/api', 1)",
             &[Int(proposal.id), Int(version), Int(changeset)],
         )
         .await
@@ -223,8 +223,8 @@ impl Fixture {
 
     async fn set_proposal(&self, proposal: &Proposal, state: &'static str, conflicted: bool) {
         self.run(
-            "UPDATE proposals SET state = ?, conflicted = ? WHERE id = ?",
-            &[Text(state), Int(conflicted.into()), Int(proposal.id)],
+            "UPDATE proposals SET state = ?, close_reason = CASE ? WHEN 'closed' THEN 'replaced' END, conflicted = ? WHERE id = ?",
+            &[Text(state), Text(state), Int(conflicted.into()), Int(proposal.id)],
         )
         .await;
     }

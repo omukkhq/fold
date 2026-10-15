@@ -101,6 +101,10 @@ pub enum WorkspaceRef {
 pub enum ArchiveReason {
     Integrated,
     TaskArchived,
+    /// A review checkout whose proposal was closed by its author, an integrator or a human.
+    ProposalClosed,
+    /// A review checkout whose proposal was rejected.
+    ProposalRejected,
 }
 
 impl ArchiveReason {
@@ -108,6 +112,8 @@ impl ArchiveReason {
         match self {
             ArchiveReason::Integrated => "integrated",
             ArchiveReason::TaskArchived => "task_archived",
+            ArchiveReason::ProposalClosed => "proposal_closed",
+            ArchiveReason::ProposalRejected => "proposal_rejected",
         }
     }
 }
@@ -337,7 +343,7 @@ impl WorkspaceService {
     }
 }
 
-/// Moves a live workspace to `archived` and stamps `closed_at`, inside the caller's transaction, and appends `workspace.archived`. Used when the task's proposal integrates and when the task is archived. Only the row changes; the directory stays until garbage collection. False, with nothing changed, when the workspace is not live. The caller runs `recompute` for the task.
+/// Moves a live workspace to `archived` and stamps `closed_at`, inside the caller's transaction, and appends `workspace.archived`. Used when the task's proposal integrates, when the task is archived and for the review checkouts of a proposal that ends. Only the row changes; the directory stays until garbage collection. False, with nothing changed, when the workspace is not live. The caller runs `recompute` for the task.
 pub async fn archive_in_tx<E: From<StoreError> + From<EventError>>(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,

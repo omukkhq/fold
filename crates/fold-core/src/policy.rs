@@ -107,3 +107,161 @@ pub fn can_change_workspace(actor: &Actor, owner: Option<&WorkerName>) -> Result
         }),
     }
 }
+
+/// A proposal offers the work done under the implementation claim, so only the worker that holds the claim opens one. `holder` is the claim's worker; a human, the system, another worker and an unclaimed task are refused. It returns the admitted agent, which becomes the author.
+pub fn can_open_proposal<'a>(
+    actor: &'a Actor,
+    holder: Option<&WorkerName>,
+) -> Result<&'a AgentActor, PolicyDenied> {
+    match actor {
+        Actor::Agent(agent) if holder == Some(&agent.worker) => Ok(agent),
+        Actor::Agent(_) | Actor::Human { .. } | Actor::System => Err(PolicyDenied {
+            code: codes::NOT_CLAIM_HOLDER,
+            message: "only the worker that holds the implementation claim can open a proposal",
+            hint: "call claim_task and create_workspace, then create_proposal",
+        }),
+    }
+}
+
+/// A version is the author's own work, so only the author's worker adds one; another worker of the same agent is refused too.
+pub fn can_update_proposal<'a>(
+    actor: &'a Actor,
+    author: &WorkerName,
+) -> Result<&'a AgentActor, PolicyDenied> {
+    match actor {
+        Actor::Agent(agent) if agent.worker == *author => Ok(agent),
+        Actor::Agent(_) | Actor::Human { .. } | Actor::System => Err(PolicyDenied {
+            code: codes::NOT_PROPOSAL_AUTHOR,
+            message: "only the author's worker can add a version",
+            hint: "call get_proposal to see the author",
+        }),
+    }
+}
+
+/// Closing withdraws a proposal. The author's agent withdraws its own work through any of its workers, and an integrator or a human may close any proposal; the system never closes one on anybody's behalf.
+pub fn can_close_proposal(actor: &Actor, author: &WorkerName) -> Result<(), PolicyDenied> {
+    match actor {
+        Actor::Human { .. } => Ok(()),
+        Actor::Agent(agent)
+            if agent.agent == author.agent() || agent.tags.iter().any(Tag::is_integrator) =>
+        {
+            Ok(())
+        }
+        Actor::Agent(_) | Actor::System => Err(PolicyDenied {
+            code: codes::NOT_PROPOSAL_AUTHOR,
+            message: "only the author's agent, an integrator or a human can close a proposal",
+            hint: "call get_proposal to see the author, or ask an integrator",
+        }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agents::HumanName;
+
+    fn agent(worker: &str, tags: &[&str]) -> Actor {
+        let worker = WorkerName::parse(worker).unwrap();
+        Actor::Agent(AgentActor {
+            agent: worker.agent(),
+            worker,
+            tags: tags.iter().map(|tag| Tag::parse(tag).unwrap()).collect(),
+        })
+    }
+
+    fn worker(name: &str) -> WorkerName {
+        WorkerName::parse(name).unwrap()
+    }
+
+    fn human() -> Actor {
+        Actor::human(HumanName::parse("tanim").unwrap())
+    }
+
+    /// The author is `backend/api`; `backend` is another worker of its agent.
+    fn actors() -> [(&'static str, Actor); 6] {
+        [
+            ("author", agent("backend/api", &[])),
+            ("author's other worker", agent("backend", &[])),
+            ("other worker", agent("frontend", &[])),
+            ("integrator", agent("review", &["integrator"])),
+            ("human", human()),
+            ("system", Actor::System),
+        ]
+    }
+
+    fn outcome<T>(result: Result<T, PolicyDenied>) -> Option<&'static str> {
+        result.err().map(|denied| denied.code())
+    }
+
+    #[test]
+    fn only_the_claim_holder_opens_a_proposal() {
+        let holder = worker("backend/api");
+        let expected = [
+            None,
+            Some(codes::NOT_CLAIM_HOLDER),
+            Some(codes::NOT_CLAIM_HOLDER),
+            Some(codes::NOT_CLAIM_HOLDER),
+            Some(codes::NOT_CLAIM_HOLDER),
+            Some(codes::NOT_CLAIM_HOLDER),
+        ];
+        for ((case, actor), expected) in actors().into_iter().zip(expected) {
+            let result = can_open_proposal(&actor, Some(&holder));
+            assert_eq!(outcome(result), expected, "{case}");
+        }
+        let author = agent("backend/api", &[]);
+        let admitted = can_open_proposal(&author, Some(&holder)).unwrap();
+        assert_eq!(admitted.worker, holder);
+        for (case, actor) in actors() {
+            let result = can_open_proposal(&actor, None);
+            assert_eq!(
+                outcome(result),
+                Some(codes::NOT_CLAIM_HOLDER),
+                "{case} on an unclaimed task"
+            );
+        }
+        let denied = can_open_proposal(&human(), Some(&holder)).unwrap_err();
+        assert!(denied.hint().contains("claim_task"));
+    }
+
+    #[test]
+    fn only_the_author_worker_updates_a_proposal() {
+        let author = worker("backend/api");
+        let expected = [
+            None,
+            Some(codes::NOT_PROPOSAL_AUTHOR),
+            Some(codes::NOT_PROPOSAL_AUTHOR),
+            Some(codes::NOT_PROPOSAL_AUTHOR),
+            Some(codes::NOT_PROPOSAL_AUTHOR),
+            Some(codes::NOT_PROPOSAL_AUTHOR),
+        ];
+        for ((case, actor), expected) in actors().into_iter().zip(expected) {
+            let result = can_update_proposal(&actor, &author);
+            assert_eq!(outcome(result), expected, "{case}");
+        }
+        let actor = agent("backend/api", &[]);
+        let admitted = can_update_proposal(&actor, &author).unwrap();
+        assert_eq!(admitted.worker, author);
+    }
+
+    #[test]
+    fn the_author_agent_an_integrator_or_a_human_closes_a_proposal() {
+        let author = worker("backend/api");
+        let expected = [
+            None,
+            None,
+            Some(codes::NOT_PROPOSAL_AUTHOR),
+            None,
+            None,
+            Some(codes::NOT_PROPOSAL_AUTHOR),
+        ];
+        for ((case, actor), expected) in actors().into_iter().zip(expected) {
+            let result = can_close_proposal(&actor, &author);
+            assert_eq!(outcome(result), expected, "{case}");
+        }
+        let denied = can_close_proposal(&agent("frontend", &["review"]), &author).unwrap_err();
+        assert_eq!(
+            denied.to_string(),
+            "only the author's agent, an integrator or a human can close a proposal"
+        );
+    }
+}

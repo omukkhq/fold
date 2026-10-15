@@ -83,3 +83,7 @@ unresolved_conflicts
 checkpoint_not_found
 workspace_write_unfinished
 token_not_found
+proposal_exists
+proposal_not_open
+not_proposal_author
+version_unchanged

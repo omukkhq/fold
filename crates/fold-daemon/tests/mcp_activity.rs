@@ -431,8 +431,8 @@ async fn a_missing_workspace_a_proposal_and_a_review_claim_are_listed() {
                  SELECT 4, id, '{hash}', 'explicit', {now} FROM workspaces WHERE number = 1;
              INSERT INTO checkpoints (number, workspace_id, tree_hash, kind, created_at, pruned_at)
                  SELECT 5, id, '{hash}', 'auto', {now}, {now} FROM workspaces WHERE number = 1;
-             INSERT INTO proposals (number, task_id, author_worker_id, title, state, created_at, updated_at)
-                 SELECT 1, t.id, w.id, 'Old attempt', 'closed', {now}, {now}
+             INSERT INTO proposals (number, task_id, author_worker_id, title, state, close_reason, created_at, updated_at)
+                 SELECT 1, t.id, w.id, 'Old attempt', 'closed', 'replaced', {now}, {now}
                  FROM tasks t, workers w WHERE t.number = 1 AND w.name = 'frontend/ui';
              INSERT INTO proposals (number, task_id, author_worker_id, title, conflicted, created_at, updated_at)
                  SELECT 2, t.id, w.id, 'Login form', 1, {now}, {now}

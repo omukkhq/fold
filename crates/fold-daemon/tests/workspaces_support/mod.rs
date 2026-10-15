@@ -112,7 +112,7 @@ pub async fn three_revisions(project: &TestProject) {
         &format!(
             "INSERT INTO changesets (id, number, workspace_id, task_id, base_revision_id, tree_hash, message, created_by, created_at) VALUES (100, 100, 1, 1, 1, '{r1_tree}', 'seed', 'backend/api', 0);
              INSERT INTO proposals (id, number, task_id, author_worker_id, title, created_at, updated_at) VALUES (1, 5, 1, 1, 'Add the guide', 0, 0);
-             INSERT INTO proposal_versions (id, proposal_id, version, base_revision_id, tree_hash, head_changeset_id, created_at) VALUES (1, 1, 1, 1, '{r1_tree}', 100, 0);
+             INSERT INTO proposal_versions (id, proposal_id, version, base_revision_id, tree_hash, head_changeset_id, created_by, created_at) VALUES (1, 1, 1, 1, '{r1_tree}', 100, 'backend/api', 0);
              INSERT INTO integrations (id, number, kind, proposal_id, version_id, result, actor, created_at) VALUES (1, 1, 'proposal', 1, 1, 'succeeded', 'review', 0);
              INSERT INTO integrations (id, number, kind, remote_commit, result, actor, created_at) VALUES (2, 2, 'pull', 'abc123', 'succeeded', 'human', 0);"
         ),

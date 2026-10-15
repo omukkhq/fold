@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT c.id AS \"id!: i64\", w.name AS worker\n           FROM claims c\n           JOIN proposals p ON p.id = c.proposal_id\n           JOIN workers w ON w.id = c.worker_id\n           WHERE p.number = ? AND c.kind = 'review' AND c.released_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "claims",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "worker",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workers",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "6eef854a8dd51cfa736dcb9703faa4e27aabb15dffa43953d34524550c166f8f"
+}

@@ -1,17 +1,29 @@
 use std::sync::Arc;
 
 use fold_core::events::types;
+use fold_core::object::ObjectHash;
+use fold_core::tree::ChangeCounts;
 use fold_core::{Actor, ChangesetId, CheckpointId, FoldError, NewEvent, WorkspaceId, codes};
-use fold_store::workspaces::{self, CheckpointReason};
+use fold_store::workspaces::{self, CheckpointReason, WorkspaceRow};
 use fold_vcs::scan::{changes, count_changes};
 use serde_json::json;
+use tokio::sync::{OwnedMutexGuard, OwnedRwLockReadGuard};
 
-use super::files::{checkpoint_in_tx, owned_in_tx};
+use super::files::{Files, checkpoint_in_tx, owned_in_tx};
 use super::{WorkspaceError, WorkspaceService, blocking};
 use crate::services::events::EventBuffer;
 
 /// The longest changeset message, in characters.
 const MAX_MESSAGE_CHARS: usize = 2000;
+
+/// A snapshot of a task workspace taken for a proposal, with the workspace lock and the shared object lock that took it. The caller keeps it until the transaction that names `tree` commits, so the stat index has one writer and garbage collection keeps the new objects.
+pub(crate) struct ProposalSnapshot {
+    /// Every object of it is in the object store.
+    pub tree: ObjectHash,
+    /// Against the workspace's base revision.
+    pub stats: ChangeCounts,
+    _held: (OwnedMutexGuard<()>, OwnedRwLockReadGuard<()>),
+}
 
 /// What `record_changes` recorded. `files` counts the paths that differ from the base revision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,39 +53,7 @@ impl WorkspaceService {
         }
         let _op = self.ops.lock(workspace).await;
         let row = self.owned(actor, workspace).await?;
-        if let Some(mark) = workspaces::sync_checkpoint(self.store.read(), workspace).await? {
-            return Err(FoldError::new(
-                codes::WORKSPACE_WRITE_UNFINISHED,
-                format!("a sync or restore of {workspace} stopped before it finished"),
-            )
-            .with_details([
-                ("workspace", json!(workspace.to_string())),
-                ("checkpoint", json!(mark.to_string())),
-            ])
-            .with_hint("call sync_workspace, or call restore_checkpoint again")
-            .into());
-        }
-        let files = self.files(&row).await?;
-        let conflicts = workspaces::list_conflicts(self.store.read(), workspace).await?;
-        if !conflicts.is_empty() {
-            let open = blocking({
-                let files = Arc::clone(&files);
-                move || files.unresolved(&conflicts)
-            })
-            .await?;
-            if !open.is_empty() {
-                let paths: Vec<String> = open
-                    .iter()
-                    .map(|row| String::from_utf8_lossy(&row.path).into_owned())
-                    .collect();
-                return Err(FoldError::new(
-                    codes::UNRESOLVED_CONFLICTS,
-                    format!("conflicts are not resolved in {}", paths.join(", ")),
-                )
-                .with_details([("paths", json!(paths))])
-                .into());
-            }
-        }
+        let files = self.ready_to_record(&row).await?;
         let base_tree = self.tree_of(row.base).await?;
         let _objects = self.objects.clone().read_owned().await;
         let (snapshot, counts) = blocking({
@@ -146,5 +126,68 @@ impl WorkspaceService {
             .await?;
         self.bus.publish(buffer);
         Ok(recorded)
+    }
+}
+
+impl WorkspaceService {
+    /// Snapshots the task workspace `row` for a proposal under the same rules as `record_changes`: refused with `workspace_write_unfinished` after a sync or restore that stopped part-way and with `unresolved_conflicts` while a conflicted path is unresolved. The caller has checked who may propose from the workspace. The locks move into the blocking snapshot and come back in the result, so an aborted caller never releases them while the snapshot still writes.
+    pub(crate) async fn snapshot_for_proposal(
+        &self,
+        row: &WorkspaceRow,
+    ) -> Result<ProposalSnapshot, WorkspaceError> {
+        let op = self.ops.lock(row.id).await;
+        let files = self.ready_to_record(row).await?;
+        let base_tree = self.tree_of(row.base).await?;
+        let objects = self.objects.clone().read_owned().await;
+        blocking(move || {
+            let held = (op, objects);
+            let snapshot = files.snapshot(base_tree)?;
+            let base = files.flat_tree(&base_tree)?;
+            Ok(ProposalSnapshot {
+                tree: snapshot.tree,
+                stats: count_changes(&changes(&base, &snapshot.entries)),
+                _held: held,
+            })
+        })
+        .await
+    }
+
+    /// The files of `row` once nothing stops a record of them: no sync or restore left them half written, and every conflicted path is resolved. The caller holds the workspace lock.
+    async fn ready_to_record(&self, row: &WorkspaceRow) -> Result<Arc<Files>, WorkspaceError> {
+        let workspace = row.id;
+        if let Some(mark) = workspaces::sync_checkpoint(self.store.read(), workspace).await? {
+            return Err(FoldError::new(
+                codes::WORKSPACE_WRITE_UNFINISHED,
+                format!("a sync or restore of {workspace} stopped before it finished"),
+            )
+            .with_details([
+                ("workspace", json!(workspace.to_string())),
+                ("checkpoint", json!(mark.to_string())),
+            ])
+            .with_hint("call sync_workspace, or call restore_checkpoint again")
+            .into());
+        }
+        let files = self.files(row).await?;
+        let conflicts = workspaces::list_conflicts(self.store.read(), workspace).await?;
+        if !conflicts.is_empty() {
+            let open = blocking({
+                let files = Arc::clone(&files);
+                move || files.unresolved(&conflicts)
+            })
+            .await?;
+            if !open.is_empty() {
+                let paths: Vec<String> = open
+                    .iter()
+                    .map(|row| String::from_utf8_lossy(&row.path).into_owned())
+                    .collect();
+                return Err(FoldError::new(
+                    codes::UNRESOLVED_CONFLICTS,
+                    format!("conflicts are not resolved in {}", paths.join(", ")),
+                )
+                .with_details([("paths", json!(paths))])
+                .into());
+            }
+        }
+        Ok(files)
     }
 }

@@ -14,7 +14,7 @@ INSERT INTO revisions (id, number, hash, tree_hash, created_at) VALUES (1, 1, 'h
 INSERT INTO workspaces (id, number, task_id, worker_id, kind, path, base_revision_id, state, created_at) VALUES (1, 1, 1, 1, 'task', 'ws/t-1', 1, 'active', 0);
 INSERT INTO changesets (id, number, workspace_id, task_id, base_revision_id, tree_hash, message, created_by, created_at) VALUES (1, 1, 1, 1, 1, 't2', 'm', 'frontend', 0);
 INSERT INTO proposals (id, number, task_id, author_worker_id, title, created_at, updated_at) VALUES (1, 1, 1, 1, 'p', 0, 0);
-INSERT INTO proposal_versions (id, proposal_id, version, base_revision_id, tree_hash, head_changeset_id, created_at) VALUES (1, 1, 1, 1, 't2', 1, 0);
+INSERT INTO proposal_versions (id, proposal_id, version, base_revision_id, tree_hash, head_changeset_id, created_by, created_at) VALUES (1, 1, 1, 1, 't2', 1, 'frontend', 0);
 INSERT INTO reviews (id, version_id, reviewer_worker_id, verdict, body, created_at) VALUES (1, 1, 1, 'comment', 'b', 0);
 INSERT INTO review_comments (id, number, version_id, review_id, author_worker_id, body, created_at) VALUES (1, 1, 1, 1, 1, 'b', 0);
 INSERT INTO integrations (id, number, kind, proposal_id, version_id, result, actor, created_at) VALUES (1, 1, 'proposal', 1, 1, 'succeeded', 'fold', 0);
@@ -221,17 +221,25 @@ async fn one_active_task_workspace_per_task() {
 async fn one_open_proposal_per_task() {
     let (_dir, store) = seeded().await;
     let proposal = |number: u32, state: &str| {
+        let reason = if state == "closed" {
+            "'replaced'"
+        } else {
+            "NULL"
+        };
         format!(
-            "INSERT INTO proposals (number, task_id, author_worker_id, title, state, created_at, updated_at) VALUES ({number}, 1, 1, 'p', '{state}', 0, 0)"
+            "INSERT INTO proposals (number, task_id, author_worker_id, title, state, close_reason, created_at, updated_at) VALUES ({number}, 1, 1, 'p', '{state}', {reason}, 0, 0)"
         )
     };
     let error = refused(&store, &proposal(2, "open")).await;
     assert_eq!(error.constraint().as_deref(), Some("proposals.task_id"));
     exec(&store, &proposal(2, "closed")).await.unwrap();
     exec(&store, &proposal(3, "integrated")).await.unwrap();
-    exec(&store, "UPDATE proposals SET state = 'closed' WHERE id = 1")
-        .await
-        .unwrap();
+    exec(
+        &store,
+        "UPDATE proposals SET state = 'closed', close_reason = 'replaced' WHERE id = 1",
+    )
+    .await
+    .unwrap();
     exec(&store, &proposal(4, "open")).await.unwrap();
 }
 
@@ -240,7 +248,7 @@ async fn proposal_versions_are_unique_per_proposal() {
     let (_dir, store) = seeded().await;
     let version = |n: u32| {
         format!(
-            "INSERT INTO proposal_versions (proposal_id, version, base_revision_id, tree_hash, head_changeset_id, created_at) VALUES (1, {n}, 1, 't', 1, 0)"
+            "INSERT INTO proposal_versions (proposal_id, version, base_revision_id, tree_hash, head_changeset_id, created_by, created_at) VALUES (1, {n}, 1, 't', 1, 'frontend', 0)"
         )
     };
     let error = refused(&store, &version(1)).await;

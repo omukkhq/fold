@@ -551,7 +551,8 @@ async fn abandon_with_an_open_proposal_changes_nothing_until_it_is_closed() {
         .unwrap();
     assert_eq!(view.state, WorkspaceState::Active);
 
-    fx.execute("UPDATE proposals SET state = 'closed'").await;
+    fx.execute("UPDATE proposals SET state = 'closed', close_reason = 'replaced'")
+        .await;
     fx.recompute(1).await;
     let view = fx.abandon(&fx.frontend, 1).await.unwrap();
     assert_eq!(view.state, WorkspaceState::Abandoned);

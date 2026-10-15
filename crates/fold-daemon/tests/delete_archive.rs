@@ -204,9 +204,9 @@ impl Fixture {
         let workspace = self.workspace(task, "active").await;
         let proposal = self
             .run(
-                "INSERT INTO proposals (number, task_id, author_worker_id, title, state, created_at, updated_at)
-                 VALUES (?, (SELECT id FROM tasks WHERE number = ?), 1, 'proposal', ?, 1, 1)",
-                &[Int(task.into()), Int(task.into()), Text(state)],
+                "INSERT INTO proposals (number, task_id, author_worker_id, title, state, close_reason, created_at, updated_at)
+                 VALUES (?, (SELECT id FROM tasks WHERE number = ?), 1, 'proposal', ?, CASE ? WHEN 'closed' THEN 'replaced' END, 1, 1)",
+                &[Int(task.into()), Int(task.into()), Text(state), Text(state)],
             )
             .await;
         let changeset = self
@@ -217,8 +217,8 @@ impl Fixture {
             )
             .await;
         self.run(
-            "INSERT INTO proposal_versions (proposal_id, version, base_revision_id, tree_hash, head_changeset_id, created_at)
-             VALUES (?, 1, 1, 't2', ?, 1)",
+            "INSERT INTO proposal_versions (proposal_id, version, base_revision_id, tree_hash, head_changeset_id, created_by, created_at)
+             VALUES (?, 1, 1, 't2', ?, 'backend/api', 1)",
             &[Int(proposal), Int(changeset)],
         )
         .await;

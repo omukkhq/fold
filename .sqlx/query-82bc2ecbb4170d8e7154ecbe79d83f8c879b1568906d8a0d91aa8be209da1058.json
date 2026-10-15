@@ -1,0 +1,110 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT v.version, r.number AS \"base!: i64\", v.tree_hash,\n                  c.number AS \"changeset!: i64\", c.stats, v.evidence, v.created_by, v.created_at\n           FROM proposal_versions v\n           JOIN proposals p ON p.id = v.proposal_id\n           JOIN revisions r ON r.id = v.base_revision_id\n           JOIN changesets c ON c.id = v.head_changeset_id\n           WHERE p.number = ?\n           ORDER BY v.version",
+  "describe": {
+    "columns": [
+      {
+        "name": "version",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "name": "base!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "revisions",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "tree_hash",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "tree_hash"
+          }
+        }
+      },
+      {
+        "name": "changeset!: i64",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "changesets",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "stats",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "changesets",
+            "name": "stats"
+          }
+        }
+      },
+      {
+        "name": "evidence",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "evidence"
+          }
+        }
+      },
+      {
+        "name": "created_by",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "created_by"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "82bc2ecbb4170d8e7154ecbe79d83f8c879b1568906d8a0d91aa8be209da1058"
+}

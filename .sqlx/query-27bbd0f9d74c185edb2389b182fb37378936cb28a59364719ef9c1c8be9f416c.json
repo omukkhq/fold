@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO proposals (number, task_id, author_worker_id, title, created_at, updated_at)\n         SELECT ?1, t.id, ?3, ?4, ?5, ?5 FROM tasks t WHERE t.number = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "27bbd0f9d74c185edb2389b182fb37378936cb28a59364719ef9c1c8be9f416c"
+}

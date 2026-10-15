@@ -21,7 +21,7 @@ fn stats_json(stats: ChangesetStats) -> String {
     .to_string()
 }
 
-fn parse_stats(text: &str) -> Option<ChangesetStats> {
+pub(crate) fn parse_stats(text: &str) -> Option<ChangesetStats> {
     let value: Value = serde_json::from_str(text).ok()?;
     let count = |key: &str| u32::try_from(value.get(key)?.as_u64()?).ok();
     Some(ChangesetStats {

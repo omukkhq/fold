@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE claims SET released_at = ?2, release_reason = ?3 WHERE id = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "bb1178f007d52e5a8552df7b5f55e2149e523b6ee00e52d6bb40ac577e6967ee"
+}

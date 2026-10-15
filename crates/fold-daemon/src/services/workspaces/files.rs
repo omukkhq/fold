@@ -234,7 +234,7 @@ pub(super) fn not_found(workspace: WorkspaceId) -> FoldError {
     clippy::too_many_arguments,
     reason = "the step of a command, with the inputs its earlier steps produced"
 )]
-pub(super) async fn checkpoint_in_tx(
+pub(crate) async fn checkpoint_in_tx(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,
     actor: &Actor,

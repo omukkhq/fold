@@ -23,9 +23,11 @@ mod lifecycle;
 mod repository;
 mod sync;
 
+pub(crate) use changesets::ProposalSnapshot;
 pub use changesets::RecordedChanges;
 pub use checkpoints::{CheckpointView, Restored};
 pub use compare::{ResolvedState, StateComparison, StateKind, StateRef, StateSummary};
+pub(crate) use files::checkpoint_in_tx;
 pub(crate) use git::unsynced;
 pub use git::{GitExport, MAIN_REF, commit_message};
 pub use lifecycle::{ArchiveReason, WorkspaceDetails, WorkspaceRef, WorkspaceView, archive_in_tx};
