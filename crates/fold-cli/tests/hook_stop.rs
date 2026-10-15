@@ -1,9 +1,3 @@
-#[expect(
-    dead_code,
-    reason = "this file uses only part of the shared host helpers"
-)]
-mod common;
-
 use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::sync::Arc;
@@ -15,7 +9,7 @@ use fold_daemon::{Daemon, DaemonConfig, RunningDaemon};
 use serde_json::json;
 use tokio::io::AsyncWriteExt;
 
-use common::{Host, daemons};
+use crate::common::{Host, daemons};
 
 /// A daemon of the host on a socket of its own, with agents `frontend` and `backend` in project `app`.
 #[cfg(test)]

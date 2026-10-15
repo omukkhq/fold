@@ -1,17 +1,15 @@
 #![cfg(test)]
 
-pub mod proposal_tools_support;
-
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use crate::proposal_tools_support::{Fixture, human};
 use fold_core::AgentName;
 use fold_daemon::mcp::{FoldServer, FooterPart, FooterSource};
 use fold_daemon::services::agents::SessionContext;
 use fold_daemon::services::events::EventService;
 use fold_daemon::services::messages::MessageService;
-use proposal_tools_support::{Fixture, human};
 use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::service::RunningService;
 use rmcp::{RoleClient, ServiceExt};

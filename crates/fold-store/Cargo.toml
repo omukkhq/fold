@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+autotests = false
 
 [dependencies]
 fold-core = { version = "0.1.0", path = "../fold-core" }
@@ -23,3 +24,7 @@ fold-store = { path = ".", features = ["testing"] }
 
 [features]
 testing = ["dep:tempfile"]
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

@@ -1,17 +1,14 @@
 #![cfg(test)]
 
-pub mod common;
-pub mod reviews_support;
-
 use std::path::Path;
 
-use common::invariants::assert_consistent;
+use crate::common::invariants::assert_consistent;
+use crate::reviews_support::{Fixture, human, names, p};
 use fold_core::events::types;
 use fold_core::reviews::Verdict;
 use fold_core::{Actor, AgentName, RevisionId, TaskStatus};
 use fold_daemon::services::reviews::IntegrationOutcome;
 use fold_store::workspaces;
-use reviews_support::{Fixture, human, names, p};
 
 fn r(number: u32) -> RevisionId {
     RevisionId::from_number(number).unwrap()

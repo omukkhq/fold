@@ -1,7 +1,6 @@
 #![cfg(test)]
 
-pub mod reviews_support;
-
+use crate::reviews_support::{Fixture, LIB, README, by, human, names, p, refusal, t, ws};
 use fold_core::events::types;
 use fold_core::merge::{Conflict, ConflictReport, ReportEntryKind, ReportKind};
 use fold_core::object::ObjectKind;
@@ -15,7 +14,6 @@ use fold_store::reviews::ProposalState;
 use fold_store::workspaces::{self, RevisionRow};
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::revision_store::write_initial_tree;
-use reviews_support::{Fixture, LIB, README, by, human, names, p, refusal, t, ws};
 use serde_json::json;
 
 const COMMIT: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";

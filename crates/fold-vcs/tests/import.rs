@@ -1,7 +1,5 @@
 #![cfg(test)]
 
-pub mod common;
-
 use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
@@ -17,7 +15,7 @@ use fold_vcs::paths::RepoPath;
 use fold_vcs::platform::Capabilities;
 use fold_vcs::scan::{DEFAULT_MAX_FILE_BYTES, SkipReason, Skipped};
 
-use common::*;
+use crate::common::*;
 
 fn write(root: &Path, path: &str, bytes: &[u8]) {
     let path = root.join(path);

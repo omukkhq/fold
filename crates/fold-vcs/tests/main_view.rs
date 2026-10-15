@@ -1,7 +1,5 @@
 #![cfg(test)]
 
-pub mod common;
-
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -14,7 +12,7 @@ use fold_vcs::objects::ObjectStore;
 use fold_vcs::platform::Capabilities;
 use fold_vcs::revision_store::write_initial_tree;
 
-use common::*;
+use crate::common::*;
 
 /// A project directory with its object store and an absent `main/`. Dropping it gives every directory back its write bit, so the temporary directory can be removed.
 struct Project {

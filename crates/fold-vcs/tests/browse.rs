@@ -1,12 +1,10 @@
-pub mod common;
-
 use fold_core::object::{ObjectKind, hash_object};
 use fold_core::tree::EntryKind;
 use fold_vcs::browse::{DirEntry, parse_path, read_dir, read_file};
 use fold_vcs::diff::MAX_INLINE_BYTES;
 use fold_vcs::paths::RepoPath;
 
-use common::{blob, sample, store, tree};
+use crate::common::{blob, sample, store, tree};
 
 #[cfg(test)]
 fn path(text: &str) -> RepoPath {

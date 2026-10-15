@@ -1,9 +1,10 @@
 #![cfg(test)]
 
-pub mod workspaces_support;
-
 use std::fs;
 
+use crate::workspaces_support::{
+    R1, changeset, checkpoint, exec, objects, service, three_revisions, workspace_dir,
+};
 use fold_core::{ChangesetId, CheckpointId, RevisionId, WorkspaceId};
 use fold_daemon::services::workspaces::{
     StateComparison, StateKind, StateRef, StateSummary, WorkspaceError,
@@ -11,9 +12,6 @@ use fold_daemon::services::workspaces::{
 use fold_store::testing::TestProject;
 use fold_vcs::compare::ChangeKind;
 use fold_vcs::diff::LineKind;
-use workspaces_support::{
-    R1, changeset, checkpoint, exec, objects, service, three_revisions, workspace_dir,
-};
 
 fn r(n: u32) -> StateRef {
     StateRef::Revision(RevisionId::from_number(n).unwrap())

@@ -1,9 +1,6 @@
 #![cfg(test)]
 
-#[cfg(test)]
-mod common;
-
-use common::{count, exec, open};
+use crate::common::{count, exec, open};
 use fold_core::WorkspaceId;
 use fold_core::merge::ConflictKind;
 use fold_store::{Store, StoreError, workspaces};

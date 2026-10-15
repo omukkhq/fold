@@ -1,7 +1,5 @@
 #![cfg(test)]
 
-pub mod common;
-
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
@@ -18,7 +16,7 @@ use fold_vcs::git_sync_map::{SYNC_MAP_FILE, SyncMap};
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::revision_store::write_initial_tree;
 
-use common::*;
+use crate::common::*;
 
 const MAIN: &str = "refs/heads/main";
 

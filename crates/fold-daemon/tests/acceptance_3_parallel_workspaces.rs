@@ -1,14 +1,12 @@
 #![cfg(test)]
 
-pub mod common;
-
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::acceptance::{AGENTS, Harness, WAIT};
+use crate::common::acceptance::{AGENTS, Harness, WAIT};
 use fold_core::WorkspaceId;
 use fold_daemon::http::events::LiveWorkspace;
 use fold_daemon::jobs::spawn_auto_checkpoints;

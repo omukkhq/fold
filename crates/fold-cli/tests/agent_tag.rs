@@ -1,5 +1,3 @@
-mod common;
-
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -10,7 +8,7 @@ use fold_daemon::{Daemon, DaemonConfig, RunningDaemon};
 use fold_store::events;
 use serde_json::json;
 
-use common::{DaemonGuard, Host, adapter, daemons, list_agents};
+use crate::common::{DaemonGuard, Host, adapter, daemons, list_agents};
 
 #[cfg(test)]
 async fn start(host: &Host) -> (RunningDaemon, PathBuf) {

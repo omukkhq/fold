@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-pub mod seed;
+use crate::seed;
 
 use std::collections::HashSet;
 use std::time::Duration;

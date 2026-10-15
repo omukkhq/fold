@@ -1,7 +1,4 @@
-#[cfg(test)]
-mod common;
-
-use common::{count, exec, open};
+use crate::common::{count, exec, open};
 
 #[cfg(test)]
 async fn agent(store: &fold_store::Store, id: u32, name: &str) {

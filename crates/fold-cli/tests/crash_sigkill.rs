@@ -1,9 +1,5 @@
 #![cfg(test)]
 
-pub mod common;
-#[path = "../../fold-daemon/tests/common/invariants.rs"]
-pub mod invariants;
-
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
@@ -27,8 +23,8 @@ use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection};
 use tokio::process::Child;
 
-use common::{Host, daemons};
-use invariants::assert_store_consistent;
+use crate::common::{Host, daemons};
+use crate::invariants::assert_store_consistent;
 
 const WAIT: Duration = Duration::from_secs(20);
 const SLUG: &str = "crash";

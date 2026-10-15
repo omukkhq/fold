@@ -1,12 +1,11 @@
 #![cfg(test)]
 
-pub mod reviews_support;
-
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use crate::reviews_support::{Fixture, LIB, README, human, p};
 use fold_core::object::{ObjectHash, ObjectKind};
 use fold_core::reviews::Verdict;
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
@@ -19,7 +18,6 @@ use fold_vcs::main_view;
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::platform::Capabilities;
 use fold_vcs::revision_store::write_initial_tree;
-use reviews_support::{Fixture, LIB, README, human, p};
 
 const WAIT: Duration = Duration::from_secs(10);
 

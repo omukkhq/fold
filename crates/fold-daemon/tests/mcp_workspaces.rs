@@ -1,11 +1,12 @@
 #![cfg(test)]
 
-pub mod workspaces_support;
+use crate::workspaces_support;
 
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use crate::workspaces_support::{service, three_revisions};
 use fold_daemon::mcp::{FoldServer, FooterPart, FooterSource};
 use fold_daemon::services::agents::{AgentService, SessionContext};
 use fold_daemon::services::events::{EventBus, EventService};
@@ -16,7 +17,6 @@ use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::service::RunningService;
 use rmcp::{RoleClient, ServiceExt};
 use serde_json::{Value, json};
-use workspaces_support::{service, three_revisions};
 
 type Client = RunningService<RoleClient, ()>;
 

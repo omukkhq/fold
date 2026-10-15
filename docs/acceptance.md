@@ -2,6 +2,8 @@
 
 Each acceptance scenario has an automated test in `crates/fold-daemon/tests/acceptance_<n>_*.rs` and a manual procedure here that runs the same scenario with real Claude Code sessions. Run the manual procedure before a release and after any change to the MCP tools, the hooks or the generated Claude Code files. Fill in the result line of each section for every run.
 
+`make acceptance` runs every automated acceptance test. To run one scenario, select its module, for example `cargo nextest run -p fold-daemon --test integration -E 'test(/^acceptance_3_parallel_workspaces::/)'`.
+
 ## Setup
 
 Every procedure starts from this setup. You need the `fold` binary on `PATH` and a Claude Code version that sets `CLAUDE_CODE_MESSAGING_SOCKET` and `CLAUDE_CODE_MESSAGING_TOKEN` for a session started with `--name`.

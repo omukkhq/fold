@@ -1,7 +1,4 @@
-#[cfg(test)]
-mod common;
-
-use common::{count, exec, open};
+use crate::common::{count, exec, open};
 use fold_core::codes;
 use fold_store::{Store, StoreError};
 use sqlx::{Connection, Row};

@@ -1,9 +1,10 @@
 #![cfg(test)]
 
-pub mod workspaces_support;
+use crate::workspaces_support;
 
 use std::sync::Arc;
 
+use crate::workspaces_support::three_revisions;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use fold_core::object::ObjectKind;
@@ -19,7 +20,6 @@ use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tower::ServiceExt;
-use workspaces_support::three_revisions;
 
 struct Host {
     _dir: TempDir,

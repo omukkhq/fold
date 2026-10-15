@@ -1,8 +1,6 @@
 #![cfg(test)]
 
-pub mod common;
-
-use common::acceptance::{AGENTS, Harness, body};
+use crate::common::acceptance::{AGENTS, Harness, body};
 use serde_json::{Value, json};
 
 /// Acceptance 1: three sessions registered in one project see one project. Each view tool returns the same body to every caller; only the footer, which counts the caller's own unread messages and new events, may differ.

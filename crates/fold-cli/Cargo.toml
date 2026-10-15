@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+autotests = false
 
 [[bin]]
 name = "fold"
@@ -48,8 +49,8 @@ failpoints = ["fold-daemon/failpoints"]
 dev-seed = ["dep:rmcp"]
 
 [[test]]
-name = "crash_sigkill"
-required-features = ["failpoints"]
+name = "integration"
+path = "tests/main.rs"
 
 [[bench]]
 name = "budgets"

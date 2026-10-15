@@ -1,7 +1,5 @@
 #![cfg(test)]
 
-pub mod common;
-
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 
@@ -12,7 +10,7 @@ use fold_vcs::platform::{
     Capabilities, SymlinkOutcome, create_symlink, file_identity, is_executable, set_mode,
 };
 
-use common::*;
+use crate::common::*;
 
 #[test]
 fn a_bare_platform_still_materialises() {

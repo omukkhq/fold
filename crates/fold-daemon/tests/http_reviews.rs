@@ -1,12 +1,10 @@
 #![cfg(test)]
 
-pub mod proposal_tools_support;
-
+use crate::proposal_tools_support::{Fixture, human, t};
 use axum::body::Body;
 use axum::http::{HeaderMap, Method, Request, StatusCode};
 use fold_daemon::http::{openapi, router};
 use http_body_util::BodyExt;
-use proposal_tools_support::{Fixture, human, t};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 

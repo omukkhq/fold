@@ -1,7 +1,5 @@
 #![cfg(test)]
 
-pub mod common;
-
 use std::fs::{self, File};
 use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, SystemTime};
@@ -11,7 +9,7 @@ use fold_core::tree::EntryKind;
 use fold_vcs::index::{StatEntry, StatIndex};
 use fold_vcs::paths::RepoPath;
 
-use common::*;
+use crate::common::*;
 
 fn entry_for(path: &std::path::Path) -> StatEntry {
     let meta = fs::symlink_metadata(path).unwrap();

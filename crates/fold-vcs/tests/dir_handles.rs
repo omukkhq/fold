@@ -1,7 +1,5 @@
 #![cfg(test)]
 
-pub mod common;
-
 use std::fs;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::symlink;
@@ -20,7 +18,7 @@ use fold_vcs::scan::{DEFAULT_MAX_FILE_BYTES, ScanOptions, rescan_paths, scan};
 use fold_vcs::snapshot::snapshot;
 use rustix::fs::{CWD, RenameFlags, renameat_with};
 
-use common::*;
+use crate::common::*;
 
 const WRITES: usize = 400;
 const SCANS: usize = 150;

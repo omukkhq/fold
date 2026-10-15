@@ -1,13 +1,11 @@
 #![cfg(test)]
 
-pub mod workspaces_support;
-
+use crate::workspaces_support::{service, three_revisions};
 use fold_core::tree::EntryKind;
 use fold_core::{RevisionId, TaskId};
 use fold_daemon::services::workspaces::{RevisionOrigin, RevisionSummary};
 use fold_store::testing::TestProject;
 use fold_vcs::compare::ChangeKind;
-use workspaces_support::{service, three_revisions};
 
 fn id(n: u32) -> RevisionId {
     RevisionId::from_number(n).unwrap()

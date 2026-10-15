@@ -1,10 +1,8 @@
 #![cfg(test)]
 
-pub mod daemon_support;
-
 use std::fs;
 
-use daemon_support::{Opened, agent};
+use crate::daemon_support::{Opened, agent};
 use fold_daemon::jobs::reconcile_workspaces;
 use fold_daemon::services::workspaces::Reconciled;
 use fold_store::workspaces;

@@ -1,5 +1,3 @@
-pub mod common;
-
 use std::fs;
 
 use fold_core::object::{ObjectKind, hash_object};
@@ -9,7 +7,7 @@ use fold_vcs::diff::{LineKind, MAX_INLINE_BYTES};
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::paths::RepoPath;
 
-use common::{blob, sample, store};
+use crate::common::{blob, sample, store};
 
 #[cfg(test)]
 fn flat(objects: &ObjectStore, files: &[(&str, EntryKind, &[u8])]) -> FlatTree {

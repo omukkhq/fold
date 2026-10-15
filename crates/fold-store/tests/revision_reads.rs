@@ -1,6 +1,3 @@
-#[cfg(test)]
-mod revisions_support;
-
 use fold_core::codes;
 use fold_core::revision::Revision;
 use fold_core::{ProposalId, TaskId};
@@ -17,7 +14,7 @@ INSERT INTO proposals (id, number, task_id, author_worker_id, title, created_at,
 INSERT INTO proposal_versions (id, proposal_id, version, base_revision_id, tree_hash, head_changeset_id, created_by, created_at) VALUES (1, 1, 1, 1, 't', 1, 'frontend', 0);
 ";
 
-use revisions_support::{append, child, count, exec, hash, id, init, integration};
+use crate::revisions_support::{append, child, count, exec, hash, id, init, integration};
 
 #[cfg(test)]
 mod chain_support {

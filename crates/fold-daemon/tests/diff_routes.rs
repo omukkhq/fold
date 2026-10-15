@@ -1,7 +1,5 @@
 #![cfg(test)]
 
-pub mod daemon_support;
-
 use std::fs::{self, OpenOptions};
 use std::future::Future;
 use std::pin::Pin;
@@ -9,8 +7,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use crate::daemon_support::{Opened, agent, t};
 use axum::http::StatusCode;
-use daemon_support::{Opened, agent, t};
 use fold_core::{Address, HumanName, MessageBody, RevisionId};
 use fold_daemon::mcp::{FoldServer, FooterPart, FooterSource};
 use fold_daemon::services::agents::SessionContext;

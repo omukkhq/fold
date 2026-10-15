@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+autotests = false
 
 [dependencies]
 axum = "0.8.9"
@@ -51,25 +52,5 @@ tracing-subscriber = "0.3.23"
 failpoints = ["dep:fail", "fail/failpoints"]
 
 [[test]]
-name = "workspaces_failpoints"
-required-features = ["failpoints"]
-
-[[test]]
-name = "workspaces_tools_failpoints"
-required-features = ["failpoints"]
-
-[[test]]
-name = "reconcile_failpoints"
-required-features = ["failpoints"]
-
-[[test]]
-name = "crash_integration"
-required-features = ["failpoints"]
-
-[[test]]
-name = "crash_checkpoint"
-required-features = ["failpoints"]
-
-[[test]]
-name = "crash_messages"
-required-features = ["failpoints"]
+name = "integration"
+path = "tests/main.rs"

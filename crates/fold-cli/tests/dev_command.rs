@@ -1,5 +1,3 @@
-#![cfg(not(feature = "dev-seed"))]
-
 use std::process::Command;
 
 #[test]

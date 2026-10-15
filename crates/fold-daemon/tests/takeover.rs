@@ -1,11 +1,9 @@
 #![cfg(test)]
 
-pub mod adoption_support;
-
 use std::fs;
 use std::time::Duration;
 
-use adoption_support::{
+use crate::adoption_support::{
     EDITED, Fixture, LEASE_MINUTES, by, details, names, r, snapshot, t, task_refusal,
     workspace_refusal, ws,
 };

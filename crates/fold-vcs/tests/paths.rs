@@ -1,14 +1,12 @@
 #![cfg(test)]
 
-pub mod common;
-
 use std::fs;
 
 use fold_core::tree::{EntryKind, FlatEntry};
 use fold_vcs::materialise::{remove_entry, write_entry};
 use fold_vcs::paths::{RepoPath, WorkspaceError, resolve};
 
-use common::*;
+use crate::common::*;
 
 #[test]
 fn bad_paths_are_refused() {

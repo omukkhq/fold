@@ -1,15 +1,12 @@
 #![cfg(test)]
 
-pub mod common;
-pub mod reviews_support;
-
 use std::sync::Arc;
 
-use common::invariants::assert_consistent;
+use crate::common::invariants::assert_consistent;
+use crate::reviews_support::{Fixture, by, names};
 use fold_core::events::types;
 use fold_core::{Address, MessageBody};
 use fold_daemon::services::messages::{MessageService, SendMessage};
-use reviews_support::{Fixture, by, names};
 
 fn messages(fx: &Fixture) -> MessageService {
     MessageService::new(

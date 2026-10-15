@@ -1,10 +1,11 @@
 #![cfg(test)]
 
-pub mod reviews_support;
-
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 
+use crate::reviews_support::{
+    Fixture, agent, by, details, human, names, p, refusal, t, workspace_refusal, ws,
+};
 use fold_core::object::ObjectHash;
 use fold_core::tree::ChangeCounts;
 use fold_core::{
@@ -17,9 +18,6 @@ use fold_daemon::services::workspaces::WorkspaceRef;
 use fold_store::reviews::list_versions;
 use fold_store::workspaces::{
     self, CheckpointKind, CheckpointReason, WorkspaceKind, WorkspaceState,
-};
-use reviews_support::{
-    Fixture, agent, by, details, human, names, p, refusal, t, workspace_refusal, ws,
 };
 use serde_json::json;
 

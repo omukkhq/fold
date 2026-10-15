@@ -1,7 +1,4 @@
-#[cfg(test)]
-mod common;
-
-use common::{count, exec, open};
+use crate::common::{count, exec, open};
 use fold_core::object::{ObjectKind, hash_object};
 use fold_core::{ChangesetId, ProposalId, RevisionId, TaskId, Timestamp, WorkerName, WorkspaceId};
 use fold_store::reviews::{self, NewProposal, NewVersion, ProposalState, RetiredState};

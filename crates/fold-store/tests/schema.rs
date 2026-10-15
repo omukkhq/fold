@@ -1,9 +1,6 @@
-#[cfg(test)]
-mod common;
-
 use std::collections::BTreeSet;
 
-use common::{count, exec, open};
+use crate::common::{count, exec, open};
 use fold_store::{Store, StoreError};
 
 const SEED: &str = "

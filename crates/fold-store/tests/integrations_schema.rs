@@ -1,8 +1,6 @@
 #![cfg(test)]
 
-mod common;
-
-use common::{count, exec, open};
+use crate::common::{count, exec, open};
 use fold_core::object::{ObjectKind, hash_object};
 use fold_core::revision::{Revision, StoredRevision};
 use fold_core::{IntegrationId, ProposalId, RevisionId, Timestamp};

@@ -1,7 +1,5 @@
 #![cfg(test)]
 
-pub mod common;
-
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 
@@ -10,7 +8,7 @@ use fold_vcs::index::StatIndex;
 use fold_vcs::materialise::{Batch, Synced, materialise, remove_entry, write_entry};
 use fold_vcs::paths::{RepoPath, resolve};
 
-use common::*;
+use crate::common::*;
 
 fn mode(path: &std::path::Path) -> u32 {
     fs::symlink_metadata(path).unwrap().permissions().mode() & 0o7777

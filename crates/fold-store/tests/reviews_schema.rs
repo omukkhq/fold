@@ -1,9 +1,6 @@
-#[cfg(test)]
-mod common;
-
 use std::borrow::Cow;
 
-use common::{count, exec, open};
+use crate::common::{count, exec, open};
 use fold_store::testing::assert_append_only;
 use fold_store::{Store, StoreError};
 use sqlx::Connection;

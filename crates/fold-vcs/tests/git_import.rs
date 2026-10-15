@@ -1,7 +1,5 @@
 #![cfg(test)]
 
-pub mod common;
-
 use std::collections::BTreeMap;
 use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
@@ -16,7 +14,7 @@ use fold_vcs::objects::ObjectStore;
 use fold_vcs::paths::RepoPath;
 use fold_vcs::scan::{DEFAULT_MAX_FILE_BYTES, SkipReason, Skipped};
 
-use common::*;
+use crate::common::*;
 
 const OPTS: GitImportOptions = GitImportOptions {
     max_file_bytes: DEFAULT_MAX_FILE_BYTES,

@@ -1,10 +1,3 @@
-#[path = "../benches/support/fixture.rs"]
-mod fixture;
-#[path = "../benches/support/limits.rs"]
-mod limits;
-#[path = "../benches/support/report.rs"]
-mod report;
-
 mod fixture_tests {
     use crate::fixture::*;
     use std::fs;

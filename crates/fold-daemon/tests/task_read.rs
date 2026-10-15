@@ -1,13 +1,13 @@
 #![cfg(test)]
 
-pub mod reviews_support;
+use crate::reviews_support;
 
+use crate::reviews_support::{Fixture, by, human, p, t, ws};
 use fold_core::reviews::{ProposalStanding, Verdict};
 use fold_core::{AgentName, TaskStatus};
 use fold_daemon::services::reviews::IntegrationOutcome;
 use fold_daemon::services::tasks::{self, HISTORY_LIMIT};
 use fold_store::workspaces;
-use reviews_support::{Fixture, by, human, p, t, ws};
 
 fn column(board: &tasks::Board, status: TaskStatus) -> &tasks::BoardColumn {
     board

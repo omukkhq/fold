@@ -1,7 +1,5 @@
 #![cfg(test)]
 
-pub mod common;
-
 use std::collections::BTreeMap;
 use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
@@ -23,7 +21,7 @@ use fold_vcs::sync::{
     ConflictedPath, MarkerLabels, SyncInput, SyncOutcome, sidecar, sync, unresolved, write_merge,
 };
 
-use common::*;
+use crate::common::*;
 
 struct Ws {
     _dir: tempfile::TempDir,

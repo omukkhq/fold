@@ -1,11 +1,8 @@
-#[cfg(test)]
-mod revisions_support;
-
+use crate::revisions_support::{append, child, count, exec, hash, id, init, integration, stored};
 use fold_core::codes;
 use fold_core::revision::Revision;
 use fold_store::testing::{TestProject, assert_append_only};
 use fold_store::{StoreError, workspaces};
-use revisions_support::{append, child, count, exec, hash, id, init, integration, stored};
 
 #[tokio::test]
 async fn initial_revision_has_no_parent_and_main_points_at_it() {

@@ -1,12 +1,12 @@
 #![cfg(test)]
 
-pub mod daemon_support;
+use crate::daemon_support;
 
 use std::fs::{self, File};
 use std::time::Duration;
 
+use crate::daemon_support::{Opened, t};
 use axum::http::StatusCode;
-use daemon_support::{Opened, t};
 use fold_core::TaskStatus;
 use fold_core::events::types;
 use fold_daemon::http::events::ChangeKind;

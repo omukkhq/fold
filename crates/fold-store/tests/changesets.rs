@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-pub mod seed;
+use crate::seed;
 
 use fold_core::{ChangesetId, RevisionId, TaskId, Timestamp};
 use fold_store::testing::{TestProject, assert_append_only};

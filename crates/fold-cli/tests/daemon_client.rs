@@ -1,5 +1,3 @@
-mod common;
-
 use std::path::Path;
 use std::sync::Arc;
 
@@ -14,7 +12,7 @@ use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
 
-use common::{DaemonGuard, Host, adapter, daemons, list_agents};
+use crate::common::{DaemonGuard, Host, adapter, daemons, list_agents};
 
 #[cfg(test)]
 fn config(socket: &Path, runtime_dir: &Path, fold_exe: &str) -> ClientConfig {

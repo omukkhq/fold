@@ -1,13 +1,11 @@
 #![cfg(test)]
 
-pub mod common;
-
 use std::fs;
 use std::path::PathBuf;
 
+use crate::common::acceptance::{Harness, SLUG};
+use crate::common::sse::{Frame, Sse};
 use axum::http::{Method, StatusCode};
-use common::acceptance::{Harness, SLUG};
-use common::sse::{Frame, Sse};
 use fold_daemon::http::events::{ChangeKind, LiveWorkspace};
 use fold_store::workspaces;
 use serde_json::{Value, json};

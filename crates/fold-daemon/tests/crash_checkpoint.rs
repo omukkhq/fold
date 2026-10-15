@@ -1,13 +1,10 @@
 #![cfg(test)]
 
-pub mod common;
-pub mod reviews_support;
-
-use common::invariants::assert_consistent;
+use crate::common::invariants::assert_consistent;
+use crate::reviews_support::{Fixture, by, names, t, ws};
 use fold_core::events::types;
 use fold_core::object::{ObjectKind, hash_object};
 use fold_vcs::objects::ObjectStore;
-use reviews_support::{Fixture, by, names, t, ws};
 
 const CHANGED: &str = "pub fn changed() {}\n";
 

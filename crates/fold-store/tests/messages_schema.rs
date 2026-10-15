@@ -1,7 +1,4 @@
-#[cfg(test)]
-mod common;
-
-use common::{count, exec, open};
+use crate::common::{count, exec, open};
 use fold_store::Store;
 use fold_store::testing::assert_append_only;
 use tempfile::TempDir;

@@ -1,11 +1,12 @@
 #![cfg(test)]
 
-pub mod reviews_support;
+use crate::reviews_support;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use crate::reviews_support::{Fixture, LIB, README, agent, by, human, p, t};
 use fold_core::object::ObjectKind;
 use fold_core::reviews::Verdict;
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
@@ -22,7 +23,6 @@ use fold_vcs::main_view;
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::platform::Capabilities;
 use fold_vcs::revision_store::write_initial_tree;
-use reviews_support::{Fixture, LIB, README, agent, by, human, p, t};
 use tempfile::TempDir;
 use tokio::io::AsyncReadExt;
 use tokio::net::UnixListener;

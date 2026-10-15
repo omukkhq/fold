@@ -1,12 +1,11 @@
 #![cfg(test)]
 
-pub mod reviews_support;
-
 use std::fs::Permissions;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::reviews_support::{Fixture, LIB, by, details, human, names, p, refusal, t, ws};
 use fold_core::object::{ObjectHash, ObjectKind};
 use fold_core::reviews::Verdict;
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree, Tree, flatten};
@@ -17,7 +16,6 @@ use fold_daemon::services::reviews::{
 use fold_store::workspaces;
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::revision_store::write_initial_tree;
-use reviews_support::{Fixture, LIB, by, details, human, names, p, refusal, t, ws};
 
 const COMMIT: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 

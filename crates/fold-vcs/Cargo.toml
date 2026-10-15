@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+autotests = false
 
 [dependencies]
 blake3 = "1.8.7"
@@ -26,3 +27,7 @@ tempfile = "3.27.0"
 
 [target."cfg(unix)".dependencies]
 libc = "0.2.190"
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

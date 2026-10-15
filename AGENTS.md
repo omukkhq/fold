@@ -43,6 +43,8 @@ make clean-keep-cargo      # the same, but keep the cargo target directory
 
 Before declaring Rust work done, run `make check-rust`; for web work, `make check-web`. A change to an HTTP route also runs `make gen-api` and commits the regenerated types. A change to a query also runs `make sqlx-prepare`.
 
+To run the tests of one file in `crates/<crate>/tests/`, select its module: `cargo nextest run -p <crate> --test integration -E 'test(/^<module>::/)'`.
+
 ## Rust
 
 1. **No `unsafe` without a `// SAFETY:` comment** that explains why the invariants hold. `unsafe_code` is allowed and `clippy::undocumented_unsafe_blocks` is denied, so the comment is what lets an `unsafe` block pass.
@@ -109,6 +111,7 @@ Before declaring Rust work done, run `make check-rust`; for web work, `make chec
 5. **Every product acceptance scenario has its own `acceptance_<n>_*` test** with three MCP clients as frontend, backend and review. Keep them passing.
 6. **Crash safety is tested with failpoints** (the `failpoints` feature): stop inside a command and check that a restarted daemon shows all of the change or none of it.
 7. **Hold the Rust workspace to 85% line coverage and `web/src/**/*.ts` to 85% line and 85% branch coverage, each on its own.** `.tsx` files aren't measured; their logic belongs in `.ts` modules. Raise a number with tests of real behaviour, never by excluding reachable code.
+8. **Each crate's integration tests build as one program.** `tests/main.rs` declares every file in `tests/` as a module, one sorted `mod` line each; a file without its line is never compiled. Shared helpers are declared there once as `#[cfg(test)] pub mod` and reached through `crate::`. A file that needs a feature, or its absence, carries `#[cfg(feature = "...")]` or `#[cfg(not(feature = "..."))]` on its `mod` line. nextest names a test `<module>::<function>`.
 
 ## Git
 

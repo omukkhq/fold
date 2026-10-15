@@ -1,7 +1,5 @@
 #![cfg(test)]
 
-pub mod common;
-
 use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
@@ -14,7 +12,7 @@ use fold_vcs::objects::ObjectStore;
 use fold_vcs::scan::{DEFAULT_MAX_FILE_BYTES, ScanOptions, SkipReason, scan};
 use fold_vcs::snapshot::{Snapshot, WarningReason, record, snapshot};
 
-use common::*;
+use crate::common::*;
 
 struct Fixture {
     _dir: tempfile::TempDir,

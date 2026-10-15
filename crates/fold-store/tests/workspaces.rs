@@ -1,9 +1,6 @@
 #![cfg(test)]
 
-#[cfg(test)]
-mod common;
-
-use common::{count, exec, open};
+use crate::common::{count, exec, open};
 use fold_core::{RevisionId, TaskId, Timestamp, WorkerName, WorkspaceId};
 use fold_store::workspaces::{
     self, ClosedState, NewTaskWorkspace, WorkspaceKind, WorkspaceRow, WorkspaceState,

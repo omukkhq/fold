@@ -1,9 +1,7 @@
-mod common;
-
 use serde_json::json;
 use tokio::io::AsyncReadExt;
 
-use common::{DaemonGuard, Host, adapter, daemons, list_agents};
+use crate::common::{DaemonGuard, Host, adapter, daemons, list_agents};
 
 #[tokio::test]
 async fn three_adapters_started_together_leave_one_daemon_and_read_the_same_state() {

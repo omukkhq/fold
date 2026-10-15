@@ -1,7 +1,5 @@
 #![cfg(test)]
 
-pub mod common;
-
 use std::fs::{self, File};
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::Path;
@@ -20,7 +18,7 @@ use fold_vcs::scan::{
     count_changes, rescan_paths, scan,
 };
 
-use common::*;
+use crate::common::*;
 
 fn options<'a>(rules: &'a IgnoreRules, caps: Capabilities, max: u64) -> ScanOptions<'a> {
     ScanOptions {
@@ -351,7 +349,7 @@ fn global_git_excludes_have_no_effect() {
     let status = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
-            "global_git_excludes_have_no_effect",
+            "scan::global_git_excludes_have_no_effect",
             "--nocapture",
         ])
         .env("FOLD_TEST_GLOBAL_ROOT", &root)

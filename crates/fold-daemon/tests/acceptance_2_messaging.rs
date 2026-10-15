@@ -1,8 +1,6 @@
 #![cfg(test)]
 
-pub mod common;
-
-use common::acceptance::{AGENTS, Harness, TOKEN, ids, message_notice, wire};
+use crate::common::acceptance::{AGENTS, Harness, TOKEN, ids, message_notice, wire};
 use fold_core::AgentName;
 use serde_json::json;
 

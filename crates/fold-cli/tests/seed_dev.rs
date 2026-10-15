@@ -1,5 +1,3 @@
-#![cfg(feature = "dev-seed")]
-
 use std::path::Path;
 use std::process::Output;
 use std::sync::Arc;

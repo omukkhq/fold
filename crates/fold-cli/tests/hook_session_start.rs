@@ -1,9 +1,3 @@
-#[expect(
-    dead_code,
-    reason = "this file uses only part of the shared host helpers"
-)]
-mod common;
-
 use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::sync::Arc;
@@ -15,7 +9,7 @@ use fold_daemon::{Daemon, DaemonConfig, RunningDaemon};
 use serde_json::json;
 use tokio::io::AsyncWriteExt;
 
-use common::Host;
+use crate::common::Host;
 
 const MESSAGING: [&str; 2] = [
     "CLAUDE_CODE_MESSAGING_SOCKET",

@@ -1,7 +1,5 @@
 #![cfg(test)]
 
-pub mod common;
-
 use std::path::{Path, PathBuf};
 
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
@@ -16,7 +14,7 @@ use fold_vcs::git_sync_map::SYNC_MAP_FILE;
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::revision_store::write_initial_tree;
 
-use common::*;
+use crate::common::*;
 
 struct Fixture {
     dir: tempfile::TempDir,

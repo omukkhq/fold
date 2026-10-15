@@ -1,11 +1,11 @@
 #![cfg(test)]
 
-pub mod reviews_support;
-
+use crate::reviews_support::{
+    Fixture, LEASE_MINUTES, agent, by, details, human, names, p, refusal, t,
+};
 use fold_core::events::types;
 use fold_core::{EventActor, TaskStatus, codes};
 use fold_store::tasks::claims;
-use reviews_support::{Fixture, LEASE_MINUTES, agent, by, details, human, names, p, refusal, t};
 use serde_json::json;
 
 #[tokio::test]

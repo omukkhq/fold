@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-pub mod common;
+use crate::common;
 
 use std::collections::HashSet;
 use std::fs::{self, File};
@@ -20,7 +20,7 @@ use fold_vcs::revision_store::write_revision;
 use fold_vcs::scan::{DEFAULT_MAX_FILE_BYTES, ScanOptions};
 use fold_vcs::snapshot::snapshot;
 
-use common::{HOST, blob, store, tree};
+use crate::common::{HOST, blob, store, tree};
 
 const OLD: Duration = Duration::from_secs(2 * 60 * 60);
 const YOUNG: Duration = Duration::from_secs(10 * 60);

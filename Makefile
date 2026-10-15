@@ -76,7 +76,7 @@ test: test-default-features ## Run every Rust test
 	cargo nextest run --workspace --all-features
 
 test-default-features: ## Run the tests that only build without features (the hidden dev command stays out of a normal build)
-	cargo nextest run -p fold-cli --test dev_command
+	cargo nextest run -p fold-cli --test integration -E 'test(/^dev_command::/)'
 
 test-fast: ## Run the Rust tests without the acceptance tests and failpoint tests
 	cargo nextest run --workspace --profile fast
