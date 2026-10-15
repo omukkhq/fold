@@ -1,6 +1,10 @@
 use fold_core::object::ObjectHash;
+use fold_core::reviews::{ReviewFact, Side, Verdict};
 use fold_core::tree::ChangeCounts;
-use fold_core::{ChangesetId, ProposalId, RevisionId, TaskId, Timestamp, WorkerName, WorkspaceId};
+use fold_core::{
+    ChangesetId, CommentId, EventActor, HumanName, ProposalId, RevisionId, TaskId, Timestamp,
+    WorkerName, WorkspaceId,
+};
 use sqlx::SqliteExecutor;
 
 use crate::error::StoreError;
@@ -453,4 +457,315 @@ pub async fn list_versions(
 
 fn time(millis: i64, column: &'static str) -> Result<Timestamp, StoreError> {
     Timestamp::from_millis(millis).map_err(|_| StoreError::Corrupt(column))
+}
+
+/// The current version of a proposal with the two trees its line comments read: `base_tree` is the tree of the version's base revision (side `old`) and `tree` the version's own (side `new`). `version_id` is a row id and stays inside the daemon.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewTarget {
+    pub version_id: i64,
+    pub version: u32,
+    pub base_tree: ObjectHash,
+    pub tree: ObjectHash,
+}
+
+/// Who writes a review or a comment, as the rows hold it: a worker row, or a human by the name of `human:<name>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewerRef<'a> {
+    Worker(i64),
+    Human(&'a HumanName),
+}
+
+impl<'a> ReviewerRef<'a> {
+    /// The worker and human columns.
+    fn columns(self) -> (Option<i64>, Option<&'a str>) {
+        match self {
+            ReviewerRef::Worker(id) => (Some(id), None),
+            ReviewerRef::Human(name) => (None, Some(name.as_str())),
+        }
+    }
+}
+
+/// Where a line comment points. `start_line` and `end_line` are 1-based and inclusive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LineRange<'a> {
+    pub path: &'a str,
+    pub side: Side,
+    pub start_line: u32,
+    pub end_line: u32,
+}
+
+/// A comment to insert under the review `review_id`; it takes that review's version and has no location when it is about the whole version.
+#[derive(Debug, Clone, Copy)]
+pub struct NewComment<'a> {
+    pub id: CommentId,
+    pub review_id: i64,
+    pub author: ReviewerRef<'a>,
+    pub location: Option<LineRange<'a>>,
+    pub reply_to: Option<CommentId>,
+    pub body: &'a str,
+}
+
+/// One stored comment with public ids only. `verdict` is the verdict of the review it came with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommentRow {
+    pub id: CommentId,
+    pub version: u32,
+    pub verdict: Verdict,
+    pub author: EventActor,
+    pub path: Option<String>,
+    pub side: Option<Side>,
+    pub start_line: Option<u32>,
+    pub end_line: Option<u32>,
+    pub reply_to: Option<CommentId>,
+    pub body: String,
+    pub created_at: Timestamp,
+}
+
+/// The current version of the proposal and its two trees, or `None` for a proposal that does not exist.
+pub async fn review_target(
+    executor: impl SqliteExecutor<'_>,
+    proposal: ProposalId,
+) -> Result<Option<ReviewTarget>, StoreError> {
+    let number = proposal.to_db();
+    let row = sqlx::query!(
+        r#"SELECT v.id AS "id!: i64", v.version, r.tree_hash AS base_tree, v.tree_hash
+           FROM proposal_versions v
+           JOIN proposals p ON p.id = v.proposal_id
+           JOIN revisions r ON r.id = v.base_revision_id
+           WHERE p.number = ?
+           ORDER BY v.version DESC
+           LIMIT 1"#,
+        number
+    )
+    .fetch_optional(executor)
+    .await?;
+    row.map(|row| {
+        Ok(ReviewTarget {
+            version_id: row.id,
+            version: u32::try_from(row.version)
+                .map_err(|_| StoreError::Corrupt("proposal_versions.version"))?,
+            base_tree: row
+                .base_tree
+                .parse()
+                .map_err(|_| StoreError::Corrupt("revisions.tree_hash"))?,
+            tree: row
+                .tree_hash
+                .parse()
+                .map_err(|_| StoreError::Corrupt("proposal_versions.tree_hash"))?,
+        })
+    })
+    .transpose()
+}
+
+/// Inserts a review of the version row `version_id` in the caller's write and returns its row id. The table is append-only, so a review is never changed afterwards.
+pub async fn insert_review(
+    tx: &mut WriteTx,
+    version_id: i64,
+    reviewer: ReviewerRef<'_>,
+    verdict: Verdict,
+    body: &str,
+    now: Timestamp,
+) -> Result<i64, StoreError> {
+    let (worker, human) = reviewer.columns();
+    let (verdict, now) = (verdict.as_str(), now.as_millis());
+    let id = sqlx::query_scalar!(
+        r#"INSERT INTO reviews (version_id, reviewer_worker_id, reviewer_human, verdict, body, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           RETURNING id AS "id!: i64""#,
+        version_id,
+        worker,
+        human,
+        verdict,
+        body,
+        now
+    )
+    .fetch_one(tx.conn())
+    .await?;
+    Ok(id)
+}
+
+/// Inserts a comment in the caller's write, on the version of its review.
+pub async fn insert_comment(
+    tx: &mut WriteTx,
+    new: &NewComment<'_>,
+    now: Timestamp,
+) -> Result<(), StoreError> {
+    let (worker, human) = new.author.columns();
+    let number = new.id.to_db();
+    let path = new.location.map(|range| range.path);
+    let side = new.location.map(|range| range.side.as_str());
+    let start = new.location.map(|range| i64::from(range.start_line));
+    let end = new.location.map(|range| i64::from(range.end_line));
+    let reply_to = new.reply_to.map(CommentId::to_db);
+    let now = now.as_millis();
+    let inserted = sqlx::query!(
+        "INSERT INTO review_comments (number, version_id, review_id, author_worker_id, author_human,
+                                      path, start_line, end_line, side, reply_to, body, created_at)
+         SELECT ?1, r.version_id, r.id, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11
+         FROM reviews r WHERE r.id = ?2",
+        number,
+        new.review_id,
+        worker,
+        human,
+        path,
+        start,
+        end,
+        side,
+        reply_to,
+        new.body,
+        now
+    )
+    .execute(tx.conn())
+    .await?
+    .rows_affected();
+    if inserted == 1 {
+        Ok(())
+    } else {
+        Err(StoreError::Invalid("the review does not exist"))
+    }
+}
+
+/// The proposal a comment belongs to, or `None` when no comment has this number.
+pub async fn comment_proposal(
+    executor: impl SqliteExecutor<'_>,
+    comment: CommentId,
+) -> Result<Option<ProposalId>, StoreError> {
+    let number = comment.to_db();
+    let found = sqlx::query_scalar!(
+        r#"SELECT p.number AS "number!: i64"
+           FROM review_comments c
+           JOIN proposal_versions v ON v.id = c.version_id
+           JOIN proposals p ON p.id = v.proposal_id
+           WHERE c.number = ?"#,
+        number
+    )
+    .fetch_optional(executor)
+    .await?;
+    found
+        .map(|value| ProposalId::try_from_db(value).ok_or(StoreError::Corrupt("proposals.number")))
+        .transpose()
+}
+
+/// The reviews of one version of the proposal. `seq` is each review's place in `(created_at, id)` order, counted from 1: the order the status cache reads the latest verdict in, so `fold_core::reviews::latest_verdict` over these facts and the board never disagree.
+pub async fn review_facts(
+    executor: impl SqliteExecutor<'_>,
+    proposal: ProposalId,
+    version: u32,
+) -> Result<Vec<ReviewFact>, StoreError> {
+    let (number, version) = (proposal.to_db(), i64::from(version));
+    let rows = sqlx::query!(
+        r#"SELECT r.verdict, w.name AS "worker?: String", r.reviewer_human
+           FROM reviews r
+           JOIN proposal_versions v ON v.id = r.version_id
+           JOIN proposals p ON p.id = v.proposal_id
+           LEFT JOIN workers w ON w.id = r.reviewer_worker_id
+           WHERE p.number = ?1 AND v.version = ?2
+           ORDER BY r.created_at, r.id"#,
+        number,
+        version
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .zip(1_u64..)
+        .map(|(row, seq)| {
+            Ok(ReviewFact {
+                verdict: parse_verdict(&row.verdict)?,
+                reviewer: actor(
+                    row.worker.as_deref(),
+                    row.reviewer_human.as_deref(),
+                    "reviews",
+                )?,
+                seq,
+            })
+        })
+        .collect()
+}
+
+/// The comments of the proposal in number order, only those on `version` when it is given.
+pub async fn list_comments(
+    executor: impl SqliteExecutor<'_>,
+    proposal: ProposalId,
+    version: Option<u32>,
+) -> Result<Vec<CommentRow>, StoreError> {
+    let number = proposal.to_db();
+    let version = version.map(i64::from);
+    let rows = sqlx::query!(
+        r#"SELECT c.number AS "number!: i64", v.version, r.verdict,
+                  w.name AS "worker?: String", c.author_human,
+                  c.path, c.side, c.start_line, c.end_line, c.reply_to, c.body, c.created_at
+           FROM review_comments c
+           JOIN reviews r ON r.id = c.review_id
+           JOIN proposal_versions v ON v.id = c.version_id
+           JOIN proposals p ON p.id = v.proposal_id
+           LEFT JOIN workers w ON w.id = c.author_worker_id
+           WHERE p.number = ?1 AND (?2 IS NULL OR v.version = ?2)
+           ORDER BY c.number"#,
+        number,
+        version
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            let line = |value: Option<i64>| {
+                value
+                    .map(|line| {
+                        u32::try_from(line).map_err(|_| StoreError::Corrupt("review_comments.line"))
+                    })
+                    .transpose()
+            };
+            Ok(CommentRow {
+                id: CommentId::try_from_db(row.number)
+                    .ok_or(StoreError::Corrupt("review_comments.number"))?,
+                version: u32::try_from(row.version)
+                    .map_err(|_| StoreError::Corrupt("proposal_versions.version"))?,
+                verdict: parse_verdict(&row.verdict)?,
+                author: actor(
+                    row.worker.as_deref(),
+                    row.author_human.as_deref(),
+                    "review_comments",
+                )?,
+                path: row.path,
+                side: row
+                    .side
+                    .map(|side| {
+                        Side::parse(&side).ok_or(StoreError::Corrupt("review_comments.side"))
+                    })
+                    .transpose()?,
+                start_line: line(row.start_line)?,
+                end_line: line(row.end_line)?,
+                reply_to: row
+                    .reply_to
+                    .map(|reply| {
+                        CommentId::try_from_db(reply)
+                            .ok_or(StoreError::Corrupt("review_comments.reply_to"))
+                    })
+                    .transpose()?,
+                body: row.body,
+                created_at: time(row.created_at, "review_comments.created_at")?,
+            })
+        })
+        .collect()
+}
+
+fn parse_verdict(text: &str) -> Result<Verdict, StoreError> {
+    Verdict::parse(text).ok_or(StoreError::Corrupt("reviews.verdict"))
+}
+
+/// The label of a review's or comment's writer: the worker's name or `human:<name>`.
+fn actor(
+    worker: Option<&str>,
+    human: Option<&str>,
+    table: &'static str,
+) -> Result<EventActor, StoreError> {
+    match (worker, human) {
+        (Some(worker), None) => WorkerName::parse(worker)
+            .map(|name| EventActor::worker(&name))
+            .map_err(|_| StoreError::Corrupt("workers.name")),
+        (None, Some(human)) => HumanName::parse(human)
+            .map(|name| EventActor::human(&name))
+            .map_err(|_| StoreError::Corrupt(table)),
+        _ => Err(StoreError::Corrupt(table)),
+    }
 }

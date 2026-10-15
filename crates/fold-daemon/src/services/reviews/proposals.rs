@@ -670,7 +670,7 @@ fn check_evidence(evidence: Option<&str>) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn require_open(
+pub(super) fn require_open(
     row: Option<ProposalRow>,
     proposal: ProposalId,
 ) -> Result<ProposalRow, ReviewError> {
@@ -682,7 +682,7 @@ fn require_open(
     }
 }
 
-fn proposal_not_found(proposal: ProposalId) -> ReviewError {
+pub(super) fn proposal_not_found(proposal: ProposalId) -> ReviewError {
     FoldError::new(
         codes::PROPOSAL_NOT_FOUND,
         format!("{proposal} does not exist"),

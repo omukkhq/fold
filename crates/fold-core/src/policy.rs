@@ -3,6 +3,7 @@ use thiserror::Error;
 use crate::actor::{Actor, AgentActor};
 use crate::agents::{Tag, WorkerName};
 use crate::error::{FoldError, codes};
+use crate::reviews::{Reviewer, Verdict};
 
 /// A refusal by a policy gate. The code is a stable error code, so every transport reports it unchanged.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -167,6 +168,43 @@ pub fn can_use_inbox(actor: &Actor) -> Result<&AgentActor, PolicyDenied> {
     }
 }
 
+/// A reviewer judges someone else's work, so no worker of the author's agent reviews it, whatever its tags. `comment` and `request_changes` are open to every other agent and to any human; `approve` and `reject` decide the proposal's fate, so they need the `integrator` tag or a human. The system never reviews. It returns the admitted reviewer.
+pub fn can_submit_verdict<'a>(
+    actor: &'a Actor,
+    verdict: Verdict,
+    author: &WorkerName,
+) -> Result<Reviewer<'a>, PolicyDenied> {
+    let agent = match actor {
+        Actor::Human { name } => return Ok(Reviewer::Human(name)),
+        Actor::System => {
+            return Err(PolicyDenied {
+                code: codes::HUMAN_REQUIRED,
+                message: "only an agent or a human can review a proposal",
+                hint: "ask an agent or a human to call submit_review",
+            });
+        }
+        Actor::Agent(agent) => agent,
+    };
+    if agent.agent == author.agent() {
+        return Err(PolicyDenied {
+            code: codes::AUTHOR_CANNOT_REVIEW,
+            message: "the author's agent cannot review its own proposal",
+            hint: "ask another agent or a human to review it",
+        });
+    }
+    match verdict {
+        Verdict::Comment | Verdict::RequestChanges => Ok(Reviewer::Agent(agent)),
+        Verdict::Approve | Verdict::Reject if agent.tags.iter().any(Tag::is_integrator) => {
+            Ok(Reviewer::Agent(agent))
+        }
+        Verdict::Approve | Verdict::Reject => Err(PolicyDenied {
+            code: codes::INTEGRATOR_REQUIRED,
+            message: "only an integrator or a human can approve or reject a proposal",
+            hint: "submit comment or request_changes, or ask an integrator",
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,5 +313,55 @@ mod tests {
             denied.to_string(),
             "only the author's agent, an integrator or a human can close a proposal"
         );
+    }
+
+    #[test]
+    fn verdict_rights_follow_the_author_and_the_integrator_tag() {
+        let author = worker("backend/api");
+        let author_integrator = agent("backend/ci", &["integrator"]);
+        let cases = [
+            ("author", agent("backend/api", &[]), None, None),
+            ("author's other worker", agent("backend", &[]), None, None),
+            ("author-integrator", author_integrator, None, None),
+            ("other agent", agent("frontend", &[]), Some(()), None),
+            (
+                "integrator",
+                agent("review", &["integrator"]),
+                Some(()),
+                Some(()),
+            ),
+            ("human", human(), Some(()), Some(())),
+        ];
+        for (case, actor, may_comment, may_decide) in cases {
+            for verdict in Verdict::ALL {
+                let result = can_submit_verdict(&actor, verdict, &author);
+                let allowed = match verdict {
+                    Verdict::Comment | Verdict::RequestChanges => may_comment,
+                    Verdict::Approve | Verdict::Reject => may_decide,
+                };
+                let expected = match (allowed, case.starts_with("author")) {
+                    (Some(()), _) => None,
+                    (None, true) => Some(codes::AUTHOR_CANNOT_REVIEW),
+                    (None, false) => Some(codes::INTEGRATOR_REQUIRED),
+                };
+                assert_eq!(outcome(result), expected, "{case} {verdict}");
+            }
+        }
+        for verdict in Verdict::ALL {
+            let result = can_submit_verdict(&Actor::System, verdict, &author);
+            assert_eq!(
+                outcome(result),
+                Some(codes::HUMAN_REQUIRED),
+                "system {verdict}"
+            );
+        }
+        let other = agent("frontend", &[]);
+        let admitted = can_submit_verdict(&other, Verdict::RequestChanges, &author).unwrap();
+        assert!(matches!(admitted, Reviewer::Agent(agent) if agent.agent.as_str() == "frontend"));
+        let tanim = human();
+        let admitted = can_submit_verdict(&tanim, Verdict::Reject, &author).unwrap();
+        assert!(matches!(admitted, Reviewer::Human(name) if name.as_str() == "tanim"));
+        let denied = can_submit_verdict(&other, Verdict::Approve, &author).unwrap_err();
+        assert!(denied.hint().contains("integrator"));
     }
 }

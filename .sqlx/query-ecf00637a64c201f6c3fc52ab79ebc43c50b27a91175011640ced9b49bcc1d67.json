@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT p.number AS \"number!: i64\"\n           FROM review_comments c\n           JOIN proposal_versions v ON v.id = c.version_id\n           JOIN proposals p ON p.id = v.proposal_id\n           WHERE c.number = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ecf00637a64c201f6c3fc52ab79ebc43c50b27a91175011640ced9b49bcc1d67"
+}

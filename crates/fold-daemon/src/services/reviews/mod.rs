@@ -8,11 +8,15 @@ use super::events::EventBus;
 use super::tasks::TaskError;
 use super::workspaces::{WorkspaceError, WorkspaceService};
 
+mod comments;
 mod proposals;
+mod verdicts;
 
+pub use comments::{CommentInput, CommentLocation, CommentView};
 pub use proposals::{
     ProposalDetail, ProposalFilter, ProposalSummary, Retirement, Turn, VersionView, retire_proposal,
 };
+pub use verdicts::SubmittedReview;
 
 #[derive(Debug, Error)]
 pub enum ReviewError {
@@ -82,5 +86,42 @@ impl ReviewService {
             clock,
             workspaces,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use fold_core::codes;
+
+    use super::*;
+
+    /// Every refusal of a workspace step keeps its own variant and code when a review command reports it.
+    #[test]
+    fn workspace_errors_map_to_the_same_review_error() {
+        let fold = ReviewError::from(WorkspaceError::Fold(FoldError::new(
+            codes::UNRESOLVED_CONFLICTS,
+            "conflicts",
+        )));
+        assert!(matches!(fold, ReviewError::Fold(_)));
+        assert_eq!(fold.code(), Some(codes::UNRESOLVED_CONFLICTS));
+
+        let store = ReviewError::from(WorkspaceError::Store(StoreError::Corrupt("t.c")));
+        assert!(matches!(
+            store,
+            ReviewError::Store(StoreError::Corrupt("t.c"))
+        ));
+        assert_eq!(store.code(), None);
+
+        let task = ReviewError::from(WorkspaceError::Task(TaskError::Fold(FoldError::new(
+            codes::ALREADY_CLAIMED,
+            "claimed",
+        ))));
+        assert!(matches!(task, ReviewError::Task(_)));
+        assert_eq!(task.code(), Some(codes::ALREADY_CLAIMED));
+
+        let event = ReviewError::from(WorkspaceError::Event(EventError::UnknownType));
+        assert!(matches!(event, ReviewError::Event(EventError::UnknownType)));
+        assert_eq!(event.code(), None);
+        assert_eq!(event.to_string(), "event type is not declared");
     }
 }

@@ -1,11 +1,13 @@
 use std::path::PathBuf;
 
 use fold_core::object::ObjectHash;
-use fold_core::tree::FlatTree;
+use fold_core::tree::{EntryKind, FlatTree};
 use fold_core::{ProposalId, RevisionId, TaskId, Timestamp};
 use fold_store::workspaces::{self, IntegrationKind, RevisionRow};
 use fold_vcs::browse::{self, DirEntry, FileContent};
 use fold_vcs::compare::{self as vcs, FileChange, State, Totals};
+use fold_vcs::diff::line_count;
+use fold_vcs::paths::RepoPath;
 
 use super::{WorkspaceError, WorkspaceService, blocking, open_objects};
 
@@ -194,5 +196,32 @@ impl WorkspaceService {
             .tree_hash;
         let paths = self.paths.clone();
         blocking(move || browse::read_file(&open_objects(&paths)?, &tree, &path)).await
+    }
+
+    /// The line count of each file asked for, read from stored trees in one blocking task. `None` for a path that is absent or names a directory, a symlink, a binary file or a file too large to show inline: nothing a line comment can point into.
+    pub(crate) async fn text_line_counts(
+        &self,
+        files: Vec<(ObjectHash, RepoPath)>,
+    ) -> Result<Vec<Option<u32>>, WorkspaceError> {
+        let paths = self.paths.clone();
+        blocking(move || {
+            let objects = open_objects(&paths)?;
+            files
+                .iter()
+                .map(
+                    |(tree, path)| match browse::read_file(&objects, tree, path) {
+                        Ok(file)
+                            if file.kind == EntryKind::File && !file.binary && !file.too_large =>
+                        {
+                            Ok(Some(line_count(&String::from_utf8_lossy(&file.bytes))))
+                        }
+                        Ok(_) => Ok(None),
+                        Err(error) if error.code() == fold_core::codes::NOT_FOUND => Ok(None),
+                        Err(error) => Err(error),
+                    },
+                )
+                .collect()
+        })
+        .await
     }
 }

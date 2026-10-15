@@ -10,11 +10,12 @@ use tower::ServiceExt;
 
 use fold_core::events::types;
 use fold_core::object::ObjectKind;
+use fold_core::reviews::Verdict;
 use fold_core::revision::Revision;
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
 use fold_core::{
-    Actor, AgentActor, AgentName, ProjectConfig, ProposalId, RevisionId, TaskDescription, TaskId,
-    TaskTitle, Timestamp, WorkerName, WorkspaceId,
+    Actor, AgentActor, AgentName, HumanName, ProjectConfig, ProposalId, RevisionId,
+    TaskDescription, TaskId, TaskTitle, Timestamp, WorkerName, WorkspaceId,
 };
 use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
@@ -967,6 +968,37 @@ async fn proposal_commands_update_the_proposal_and_checkpoints_of_the_state() {
 
     reviews
         .close_proposal(&actor, proposal, "another approach")
+        .await
+        .unwrap();
+    assert_eq!(fx.live.get(id).unwrap().view.proposal, None);
+}
+
+#[tokio::test]
+async fn a_reject_clears_the_proposal_of_the_state() {
+    let fx = Fixture::with_backend(Silent).await;
+    let (id, dir) = fx.create(&fx.frontend, 1).await;
+    let reviews = ReviewService::new(
+        fx.project.store().clone(),
+        fx.bus.clone(),
+        Arc::new(fx.project.clock().clone()),
+        fx.workspaces.clone(),
+    );
+    fs::write(dir.join("README.md"), "# demo\nfirst\n").unwrap();
+    let opened = reviews
+        .create_proposal(&by(&fx.frontend), t(1), "Change the readme", None)
+        .await
+        .unwrap();
+    let proposal = opened.summary.id;
+    assert_eq!(fx.live.get(id).unwrap().view.proposal, Some(proposal));
+    let human = Actor::human(HumanName::parse("tanim").unwrap());
+    reviews
+        .submit_review(
+            &human,
+            proposal,
+            Verdict::Reject,
+            "wrong approach",
+            Vec::new(),
+        )
         .await
         .unwrap();
     assert_eq!(fx.live.get(id).unwrap().view.proposal, None);

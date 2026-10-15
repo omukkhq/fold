@@ -105,6 +105,11 @@ define_codes! {
     CLAIM_NOT_STALE = "claim_not_stale",
     NOT_CLAIMED = "not_claimed",
     ALREADY_HOLDER = "already_holder",
+    AUTHOR_CANNOT_REVIEW = "author_cannot_review",
+    INTEGRATOR_REQUIRED = "integrator_required",
+    UNKNOWN_COMMENT_PATH = "unknown_comment_path",
+    INVALID_COMMENT_RANGE = "invalid_comment_range",
+    EMPTY_REVIEW = "empty_review",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

@@ -1,0 +1,158 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT c.number AS \"number!: i64\", v.version, r.verdict,\n                  w.name AS \"worker?: String\", c.author_human,\n                  c.path, c.side, c.start_line, c.end_line, c.reply_to, c.body, c.created_at\n           FROM review_comments c\n           JOIN reviews r ON r.id = c.review_id\n           JOIN proposal_versions v ON v.id = c.version_id\n           JOIN proposals p ON p.id = v.proposal_id\n           LEFT JOIN workers w ON w.id = c.author_worker_id\n           WHERE p.number = ?1 AND (?2 IS NULL OR v.version = ?2)\n           ORDER BY c.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_comments",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "version",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "name": "verdict",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "reviews",
+            "name": "verdict"
+          }
+        }
+      },
+      {
+        "name": "worker?: String",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workers",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "author_human",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "review_comments",
+            "name": "author_human"
+          }
+        }
+      },
+      {
+        "name": "path",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "review_comments",
+            "name": "path"
+          }
+        }
+      },
+      {
+        "name": "side",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "review_comments",
+            "name": "side"
+          }
+        }
+      },
+      {
+        "name": "start_line",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_comments",
+            "name": "start_line"
+          }
+        }
+      },
+      {
+        "name": "end_line",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_comments",
+            "name": "end_line"
+          }
+        }
+      },
+      {
+        "name": "reply_to",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_comments",
+            "name": "reply_to"
+          }
+        }
+      },
+      {
+        "name": "body",
+        "ordinal": 10,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "review_comments",
+            "name": "body"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 11,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_comments",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "fa1b88da42cb986230e51c293a8933798a70741923b3f86b4eb7caaf70923033"
+}

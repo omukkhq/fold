@@ -90,3 +90,8 @@ version_unchanged
 claim_not_stale
 not_claimed
 already_holder
+author_cannot_review
+integrator_required
+unknown_comment_path
+invalid_comment_range
+empty_review
