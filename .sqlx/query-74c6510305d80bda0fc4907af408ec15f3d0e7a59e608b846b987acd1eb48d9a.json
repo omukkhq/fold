@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT c.worker_id, w.name AS worker, c.acquired_at, c.renewed_at, c.stale_at\n           FROM claims c\n           JOIN tasks t ON t.id = c.task_id\n           JOIN workers w ON w.id = c.worker_id\n           WHERE t.number = ? AND c.kind = 'implementation' AND c.released_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "worker_id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "claims",
+            "name": "worker_id"
+          }
+        }
+      },
+      {
+        "name": "worker",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workers",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "acquired_at",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "claims",
+            "name": "acquired_at"
+          }
+        }
+      },
+      {
+        "name": "renewed_at",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "claims",
+            "name": "renewed_at"
+          }
+        }
+      },
+      {
+        "name": "stale_at",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "claims",
+            "name": "stale_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "74c6510305d80bda0fc4907af408ec15f3d0e7a59e608b846b987acd1eb48d9a"
+}

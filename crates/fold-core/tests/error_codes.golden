@@ -46,3 +46,5 @@ already_current
 workspace_changed_during_sync
 protocol_version_unsupported
 invalid_handshake
+not_claim_holder
+claim_not_found

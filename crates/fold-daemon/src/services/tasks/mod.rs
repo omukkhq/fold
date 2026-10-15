@@ -13,9 +13,11 @@ use thiserror::Error;
 
 use super::events::{EventBuffer, EventBus};
 
+mod claims;
 mod dependencies;
 mod recompute;
 
+pub use claims::{ClaimView, claim_view, renew_leases};
 pub use dependencies::{Edge, add_edge_in_tx};
 pub use recompute::{Recomputed, recompute};
 
@@ -91,17 +93,23 @@ fn label_view(row: tasks::LabelRow) -> LabelView {
     }
 }
 
-/// The task commands of one project. Each command is one write transaction; its events reach the bus only after the commit.
+/// The task commands of one project. Each command is one write transaction; its events reach the bus only after the commit. `lease_minutes` is the project's configured claim lease.
 #[derive(Clone)]
 pub struct TaskService {
     store: Store,
     bus: EventBus,
     clock: Arc<dyn Clock>,
+    lease_minutes: u64,
 }
 
 impl TaskService {
-    pub fn new(store: Store, bus: EventBus, clock: Arc<dyn Clock>) -> Self {
-        Self { store, bus, clock }
+    pub fn new(store: Store, bus: EventBus, clock: Arc<dyn Clock>, lease_minutes: u64) -> Self {
+        Self {
+            store,
+            bus,
+            clock,
+            lease_minutes,
+        }
     }
 
     pub async fn create_task(

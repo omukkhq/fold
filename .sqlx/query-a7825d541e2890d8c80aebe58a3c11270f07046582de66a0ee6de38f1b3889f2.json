@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO claims (kind, task_id, worker_id, acquired_at, renewed_at)\n         SELECT 'implementation', t.id, ?2, ?3, ?3 FROM tasks t WHERE t.number = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "a7825d541e2890d8c80aebe58a3c11270f07046582de66a0ee6de38f1b3889f2"
+}

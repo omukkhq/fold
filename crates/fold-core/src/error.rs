@@ -60,6 +60,8 @@ define_codes! {
     WORKSPACE_CHANGED_DURING_SYNC = "workspace_changed_during_sync",
     PROTOCOL_VERSION_UNSUPPORTED = "protocol_version_unsupported",
     INVALID_HANDSHAKE = "invalid_handshake",
+    NOT_CLAIM_HOLDER = "not_claim_holder",
+    CLAIM_NOT_FOUND = "claim_not_found",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

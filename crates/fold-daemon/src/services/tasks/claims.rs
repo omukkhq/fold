@@ -1,0 +1,206 @@
+use fold_core::claims::is_stale;
+use fold_core::events::types;
+use fold_core::{
+    EventActor, FoldError, NewEvent, TaskId, TaskStatus, Timestamp, WorkerName, codes,
+};
+use fold_store::agents::WorkerRow;
+use fold_store::tasks::claims::{self, ClaimRow, ReleaseReason};
+use fold_store::{Store, StoreError, WriteTx, tasks};
+use serde_json::json;
+
+use super::{TaskError, TaskService, task_not_found};
+use crate::services::events::EventBuffer;
+
+/// The implementation claim on a task as callers see it. `stale` is computed at read time from the project's lease.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimView {
+    pub task: TaskId,
+    pub holder: WorkerName,
+    pub acquired_at: Timestamp,
+    pub renewed_at: Timestamp,
+    pub stale: bool,
+}
+
+fn claim_view_of(row: ClaimRow, now: Timestamp, lease_minutes: u64) -> ClaimView {
+    ClaimView {
+        task: row.task,
+        holder: row.worker,
+        acquired_at: row.acquired_at,
+        stale: is_stale(row.renewed_at, now, lease_minutes),
+        renewed_at: row.renewed_at,
+    }
+}
+
+/// Implementation claims. The acting party is a resolved worker, because only workers hold claims; the lease is the project's `lease_minutes`.
+impl TaskService {
+    /// Takes the implementation claim on `task` for `worker`. A repeat call by the holder renews the claim and returns it without a second `claim.acquired`. A claim moves no card, so no status is written.
+    pub async fn claim_task(
+        &self,
+        worker: &WorkerRow,
+        task: TaskId,
+    ) -> Result<ClaimView, TaskError> {
+        let now = self.clock.now();
+        let lease_minutes = self.lease_minutes;
+        let mut buffer = EventBuffer::new();
+        let view = self
+            .store
+            .write(async |tx| claim_in_tx(tx, &mut buffer, worker, task, now, lease_minutes).await)
+            .await?;
+        self.bus.publish(buffer);
+        Ok(view)
+    }
+
+    /// Releases the claim `worker` holds on `task`. The task's workspace stays where it is.
+    pub async fn release_task(&self, worker: &WorkerRow, task: TaskId) -> Result<(), TaskError> {
+        let now = self.clock.now();
+        let lease_minutes = self.lease_minutes;
+        let mut buffer = EventBuffer::new();
+        self.store
+            .write(async |tx| {
+                if tasks::fetch(tx.conn(), task).await?.is_none() {
+                    return Err(task_not_found(task));
+                }
+                let Some(claim) = claims::unreleased_for_task(tx.conn(), task).await? else {
+                    return Err(FoldError::new(
+                        codes::CLAIM_NOT_FOUND,
+                        format!("{task} has no claim to release"),
+                    )
+                    .with_hint("call claim_task to take the task")
+                    .into());
+                };
+                if claim.worker_id != worker.id {
+                    let stale = is_stale(claim.renewed_at, now, lease_minutes);
+                    return Err(FoldError::new(
+                        codes::NOT_CLAIM_HOLDER,
+                        format!("{task} is claimed by {}", claim.worker),
+                    )
+                    .with_details([
+                        ("holder", json!(claim.worker.as_str())),
+                        ("stale", json!(stale)),
+                    ])
+                    .with_hint("only the holder releases a claim; call get_task to see the holder")
+                    .into());
+                }
+                let reason = ReleaseReason::Released;
+                claims::release(tx, task, worker.id, reason, now).await?;
+                let event = NewEvent::new(types::CLAIM_RELEASED, worker_actor(worker)?)?
+                    .task(task)
+                    .data(json!({
+                        "kind": "implementation",
+                        "worker": worker.name.as_str(),
+                        "reason": reason.as_str(),
+                    }))?;
+                buffer.append(tx, &event, now).await?;
+                Ok::<_, TaskError>(())
+            })
+            .await?;
+        self.bus.publish(buffer);
+        Ok(())
+    }
+
+    /// The claim on `task` at the clock's current time, or `None` when nobody holds it.
+    pub async fn claim_view(&self, task: TaskId) -> Result<Option<ClaimView>, TaskError> {
+        claim_view(&self.store, task, self.clock.now(), self.lease_minutes).await
+    }
+}
+
+/// The unreleased implementation claim on `task` read from the read pool, with `stale` decided at `now`.
+pub async fn claim_view(
+    store: &Store,
+    task: TaskId,
+    now: Timestamp,
+    lease_minutes: u64,
+) -> Result<Option<ClaimView>, TaskError> {
+    if tasks::get_by_number(store.read(), task).await?.is_none() {
+        return Err(task_not_found(task));
+    }
+    Ok(claims::unreleased_for_task(store.read(), task)
+        .await?
+        .map(|row| claim_view_of(row, now, lease_minutes)))
+}
+
+/// Renews every unreleased claim held by `worker_ids` inside the caller's transaction. The session touch calls it with every worker of the calling agent, so a lease and the agent's last call never disagree.
+pub async fn renew_leases(
+    tx: &mut WriteTx,
+    worker_ids: &[i64],
+    now: Timestamp,
+) -> Result<u64, StoreError> {
+    claims::renew(tx, worker_ids, now).await
+}
+
+/// The insert runs before any read of the holder, so the unique index on unreleased implementation claims decides a race and its violation becomes `already_claimed` or, for the holder, a renewal.
+async fn claim_in_tx(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    worker: &WorkerRow,
+    task: TaskId,
+    now: Timestamp,
+    lease_minutes: u64,
+) -> Result<ClaimView, TaskError> {
+    let row = tasks::fetch(tx.conn(), task)
+        .await?
+        .ok_or_else(|| task_not_found(task))?;
+    let closed = if row.archived_at.is_some() {
+        Some("archived")
+    } else if row.status == TaskStatus::Done {
+        Some("done")
+    } else {
+        None
+    };
+    if let Some(reason) = closed {
+        return Err(
+            FoldError::new(codes::TASK_CLOSED, format!("{task} is {reason}"))
+                .with_details([("reason", json!(reason))])
+                .with_hint(
+                    "a Done or archived task takes no claim; call get_ready_tasks for open work",
+                )
+                .into(),
+        );
+    }
+    match claims::insert_implementation(tx, task, worker.id, now).await {
+        Ok(()) => {}
+        Err(error) if error.unique_violation() => {
+            let holder = claims::unreleased_for_task(tx.conn(), task)
+                .await?
+                .ok_or(error)?;
+            if holder.worker_id == worker.id {
+                renew_leases(tx, &[worker.id], now).await?;
+                let renewed = ClaimRow {
+                    renewed_at: now,
+                    stale_at: None,
+                    ..holder
+                };
+                return Ok(claim_view_of(renewed, now, lease_minutes));
+            }
+            let stale = is_stale(holder.renewed_at, now, lease_minutes);
+            return Err(FoldError::new(
+                codes::ALREADY_CLAIMED,
+                format!("{task} is claimed by {}", holder.worker),
+            )
+            .with_details([
+                ("holder", json!(holder.worker.as_str())),
+                ("stale", json!(stale)),
+            ])
+            .with_hint(
+                "call takeover_claim when the holder's lease is stale, or call get_ready_tasks for other work",
+            )
+            .into());
+        }
+        Err(error) => return Err(error.into()),
+    }
+    let event = NewEvent::new(types::CLAIM_ACQUIRED, worker_actor(worker)?)?
+        .task(task)
+        .data(json!({"kind": "implementation", "worker": worker.name.as_str()}))?;
+    buffer.append(tx, &event, now).await?;
+    Ok(ClaimView {
+        task,
+        holder: worker.name.clone(),
+        acquired_at: now,
+        renewed_at: now,
+        stale: false,
+    })
+}
+
+fn worker_actor(worker: &WorkerRow) -> Result<EventActor, TaskError> {
+    Ok(EventActor::parse(worker.name.as_str())?)
+}

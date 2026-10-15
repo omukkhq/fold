@@ -36,6 +36,7 @@ fn service(project: &TestProject) -> (TaskService, EventBus) {
         project.store().clone(),
         bus.clone(),
         Arc::new(project.clock().clone()),
+        fold_core::ProjectConfig::default().lease_minutes,
     );
     (service, bus)
 }

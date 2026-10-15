@@ -12,6 +12,7 @@ use serde_json::json;
 use thiserror::Error;
 
 use crate::services::events::{EventBuffer, EventBus};
+use crate::services::tasks::renew_leases;
 
 #[derive(Debug, Error)]
 pub enum AgentError {
@@ -224,7 +225,7 @@ impl AgentService {
         Ok(worker.ok_or_else(worker_not_found)?)
     }
 
-    /// Stamps the session and the worker with the time of a tool call. The worker's activity is the tool name, followed by the task id when there is one.
+    /// Stamps the session and the worker with the time of a tool call and renews the claims of every worker of the agent in the same transaction. The worker's activity is the tool name, followed by the task id when there is one.
     pub async fn record_call(
         &self,
         ctx: &SessionContext,
@@ -240,7 +241,10 @@ impl AgentService {
         self.store
             .write(async |tx| {
                 agents::touch_session(tx.conn(), ctx.session_id, now).await?;
-                agents::touch_worker(tx.conn(), worker.id, now, &activity).await
+                agents::touch_worker(tx.conn(), worker.id, now, &activity).await?;
+                let workers = agents::worker_ids(tx.conn(), worker.agent_id).await?;
+                renew_leases(tx, &workers, now).await?;
+                Ok::<_, StoreError>(())
             })
             .await?;
         Ok(())

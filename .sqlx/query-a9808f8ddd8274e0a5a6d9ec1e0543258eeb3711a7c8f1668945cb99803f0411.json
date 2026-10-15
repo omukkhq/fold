@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE claims SET released_at = ?4, release_reason = ?3\n         WHERE kind = 'implementation' AND released_at IS NULL AND worker_id = ?2\n           AND task_id = (SELECT id FROM tasks WHERE number = ?1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "a9808f8ddd8274e0a5a6d9ec1e0543258eeb3711a7c8f1668945cb99803f0411"
+}

@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod claims;
 pub mod clock;
 pub mod config;
 pub mod dag;

@@ -4,6 +4,7 @@ use sqlx::{SqliteConnection, SqlitePool};
 use crate::error::StoreError;
 use crate::store::WriteTx;
 
+pub mod claims;
 pub mod completions;
 mod dependencies;
 mod recompute;

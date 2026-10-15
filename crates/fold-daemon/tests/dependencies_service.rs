@@ -35,6 +35,7 @@ async fn project_with_tasks(count: u32) -> (TestProject, TaskService, EventBus) 
         project.store().clone(),
         bus.clone(),
         Arc::new(project.clock().clone()),
+        fold_core::ProjectConfig::default().lease_minutes,
     );
     for _ in 0..count {
         service

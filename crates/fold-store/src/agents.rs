@@ -181,6 +181,19 @@ pub async fn find_worker(
     .transpose()
 }
 
+/// The row ids of every worker of agent `agent_id`, in id order.
+pub async fn worker_ids(
+    executor: impl SqliteExecutor<'_>,
+    agent_id: i64,
+) -> Result<Vec<i64>, StoreError> {
+    Ok(sqlx::query_scalar!(
+        r#"SELECT id AS "id!: i64" FROM workers WHERE agent_id = ? ORDER BY id"#,
+        agent_id
+    )
+    .fetch_all(executor)
+    .await?)
+}
+
 pub async fn main_worker(
     executor: impl SqliteExecutor<'_>,
     agent_id: i64,

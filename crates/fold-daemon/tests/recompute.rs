@@ -38,7 +38,12 @@ impl Fixture {
         let project = TestProject::new().await;
         let bus = EventBus::new();
         let clock = Arc::new(project.clock().clone());
-        let tasks = TaskService::new(project.store().clone(), bus, clock);
+        let tasks = TaskService::new(
+            project.store().clone(),
+            bus,
+            clock,
+            fold_core::ProjectConfig::default().lease_minutes,
+        );
         for _ in 0..count {
             tasks
                 .create_task(
