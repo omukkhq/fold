@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { byContent } from "@/test/content";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
 import {
@@ -636,14 +637,14 @@ describe("Request detail", () => {
     ).toBeTruthy();
     const body = screen.getByRole("region", { name: "Request" });
     expect(
-      within(body).getByRole("link", { name: "#T-9" }).getAttribute("href"),
+      within(body).getByRole("link", { name: "T-9" }).getAttribute("href"),
     ).toBe("/p/demo/t/T-9");
     expect(
       within(body)
-        .getByRole("link", { name: "@web/src/report.tsx" })
+        .getByRole("link", { name: "web/src/report.tsx" })
         .getAttribute("href"),
     ).toBe("/p/demo/repository?path=web%2Fsrc%2Freport.tsx");
-    expect(within(body).queryByRole("link", { name: "#T-1" })).toBeNull();
+    expect(within(body).queryByRole("link", { name: "T-1" })).toBeNull();
     expect(
       within(body)
         .getByRole("link", { name: "Download sample.csv" })
@@ -657,9 +658,9 @@ describe("Request detail", () => {
     expect(screen.queryByText("PDF download")).toBeNull();
     expect(screen.getByText("1 on v1, none on v2")).toBeTruthy();
     const comments = screen.getByRole("list", { name: "Comments" });
-    expect(within(comments).getByRole("link", { name: "#RQ-3" })).toBeTruthy();
+    expect(within(comments).getByRole("link", { name: "RQ-3" })).toBeTruthy();
     // The project has no P-3, so that mention names nothing and stays text.
-    expect(within(comments).queryByRole("link", { name: "#P-3" })).toBeNull();
+    expect(within(comments).queryByRole("link", { name: "P-3" })).toBeNull();
     const thread = await screen.findByRole("list", {
       name: "Clarification thread",
     });
@@ -806,7 +807,7 @@ describe("Request detail", () => {
       within(dialog).getByRole("button", { name: "Close request" }),
     );
     const closed = await screen.findByRole("region", { name: "Closed" });
-    expect(within(closed).getByRole("link", { name: "#T-9" })).toBeTruthy();
+    expect(within(closed).getByRole("link", { name: "T-9" })).toBeTruthy();
   });
 
   it("shows an error code on the action that failed and reads the request again", async () => {
@@ -842,13 +843,15 @@ describe("Request detail", () => {
     });
     expect(
       within(panel).getByText(
-        "Only review can approve, ask for changes, edit or close.",
+        byContent("Only @review can approve, ask for changes, edit or close."),
       ),
     ).toBeTruthy();
     expect(within(panel).queryAllByRole("button")).toEqual([]);
     expect(
       within(panel).getByText(
-        "review approves one version at a time. Each new version starts unapproved.",
+        byContent(
+          "@review approves one version at a time. Each new version starts unapproved.",
+        ),
       ),
     ).toBeTruthy();
     expect(screen.getByRole("combobox", { name: "Message" })).toHaveProperty(
@@ -883,7 +886,7 @@ describe("Request detail", () => {
     renderAt("/p/demo/requests/RQ-4");
     const box = await screen.findByRole("combobox", { name: "Message" });
     expect(box.getAttribute("placeholder")).toBe(
-      "Reply to backend about RQ-4…",
+      "Reply to @backend about RQ-4…",
     );
     await userEvent.type(box, "No, only what the page shows");
     await userEvent.click(screen.getByRole("button", { name: "Send" }));

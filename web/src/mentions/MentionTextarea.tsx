@@ -1,6 +1,6 @@
 import * as RadixPopover from "@radix-ui/react-popover";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp } from "lucide-react";
+import { ArrowDown, ArrowUp, Bot, FileText, Folder, User } from "lucide-react";
 import {
   forwardRef,
   useId,
@@ -22,6 +22,7 @@ import {
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { usePeople } from "./usePeople";
+import { rowIcon, type RowIcon } from "./suggest";
 import {
   GROUP_LABELS,
   activeMention,
@@ -257,6 +258,7 @@ export const MentionTextarea = forwardRef<
                         pick(suggestion);
                       }}
                     >
+                      <RowIconView icon={rowIcon(suggestion)} />
                       <span className={LOOKS[optionLook(suggestion)]}>
                         {optionMark(run.group)}
                         {suggestion.label}
@@ -280,3 +282,13 @@ export const MentionTextarea = forwardRef<
     </RadixPopover.Root>
   );
 });
+
+const ROW_ICONS = { user: User, bot: Bot, file: FileText, folder: Folder };
+
+function RowIconView({ icon }: { icon: RowIcon | null }) {
+  if (icon === null) return null;
+  const Icon = ROW_ICONS[icon];
+  return (
+    <Icon aria-hidden="true" size={13} className="shrink-0 text-text-muted" />
+  );
+}

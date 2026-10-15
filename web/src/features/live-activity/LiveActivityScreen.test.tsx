@@ -176,7 +176,7 @@ describe("LiveActivityScreen", () => {
     expect(
       await within(panel).findByRole("heading", { name: "Title T-1" }),
     ).toBeTruthy();
-    expect(within(panel).getByText("frontend/ui")).toBeTruthy();
+    expect(within(panel).getByText("@frontend/ui")).toBeTruthy();
   });
 
   it("links a working file, a checkpoint, a changeset and the task", async () => {
@@ -338,7 +338,7 @@ describe("LiveActivityScreen", () => {
     const stale = screen.getByRole("region", { name: "Workspace ws-2" });
     expect(within(stale).getByText("Stale")).toBeTruthy();
     expect(within(stale).queryByText("Stalled")).toBeNull();
-    expect(within(stale).getByText("backend")).toBeTruthy();
+    expect(within(stale).getByText("@backend")).toBeTruthy();
   });
 
   it("collapses long file lists behind Show more", async () => {

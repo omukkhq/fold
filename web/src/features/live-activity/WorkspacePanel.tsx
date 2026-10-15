@@ -1,8 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { repositoryQuery } from "@/api/repositoryQueries";
 import { Badge } from "../../components/badge/Badge";
-import { Avatar } from "../../components/avatar/Avatar";
 import { formatSince } from "../../format/time";
+import { PersonName } from "../../people/PersonName";
 import { attentionView } from "./attention";
 import { IdLink } from "./IdLink";
 import { taskHref } from "./links";
@@ -35,12 +35,7 @@ export function WorkspacePanel({ slug, panel, now }: WorkspacePanelProps) {
           {worker === null ? (
             "no worker"
           ) : (
-            <>
-              <span aria-hidden="true" className="flex">
-                <Avatar name={worker} />
-              </span>
-              {worker}
-            </>
+            <PersonName name={worker} className="text-bar" />
           )}
         </span>
         <IdLink href={taskHref(slug, entry.task)}>{entry.task}</IdLink>

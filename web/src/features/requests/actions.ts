@@ -1,5 +1,6 @@
 import type { RequestState, RequestSummary } from "@/api/requests";
-import { displayName } from "./present";
+import { atName } from "@/people/names";
+import { actorSegment, seg, type Segments } from "@/people/segments";
 
 export type RequestAction = "approve" | "request_changes" | "edit" | "close";
 
@@ -66,15 +67,17 @@ export function decisionText(
 export function versionsNote(
   request: RequestSummary,
   human: string | null,
-): string {
+): Segments {
   return isRequester(request, human)
-    ? "Approval applies to the version you see. If a new version arrives first, fold asks you to look again."
-    : `${displayName(request.requester)} approves one version at a time. Each new version starts unapproved.`;
+    ? [
+        "Approval applies to the version you see. If a new version arrives first, fold asks you to look again.",
+      ]
+    : seg`${actorSegment(request.requester)} approves one version at a time. Each new version starts unapproved.`;
 }
 
 /** What a non-requester reads in place of the actions. */
-export function viewerText(request: RequestSummary): string {
-  return `Only ${displayName(request.requester)} can approve, ask for changes, edit or close.`;
+export function viewerText(request: RequestSummary): Segments {
+  return seg`Only ${actorSegment(request.requester)} can approve, ask for changes, edit or close.`;
 }
 
 /** The note under the pending action. */
@@ -112,10 +115,10 @@ export function threadTarget(
   human: string | null,
 ): ThreadTarget {
   if (request.drafter !== null) {
-    return { to: undefined, label: displayName(request.drafter) };
+    return { to: undefined, label: atName(request.drafter) };
   }
   if (!isRequester(request, human)) {
-    return { to: [request.requester], label: displayName(request.requester) };
+    return { to: [request.requester], label: atName(request.requester) };
   }
   return { to: ["all"], label: "all agents" };
 }

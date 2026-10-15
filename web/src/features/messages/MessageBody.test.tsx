@@ -52,8 +52,8 @@ describe("MessageBody", () => {
     await show("See #T-12, @web/src/board.ts and P-3 but not `@web/x.ts`.");
     const links = screen.getAllByRole("link");
     expect(links.map((a) => [a.textContent, a.getAttribute("href")])).toEqual([
-      ["#T-12", "/p/demo/t/T-12"],
-      ["@web/src/board.ts", "/p/demo/repository?path=web%2Fsrc%2Fboard.ts"],
+      ["T-12", "/p/demo/t/T-12"],
+      ["web/src/board.ts", "/p/demo/repository?path=web%2Fsrc%2Fboard.ts"],
       ["P-3", "/p/demo/proposals/P-3"],
     ]);
   });

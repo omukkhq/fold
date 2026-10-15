@@ -9,10 +9,17 @@ import {
   pendingText,
   threadClosedText,
   threadTarget,
-  versionsNote,
-  viewerText,
+  versionsNote as versionsNoteSegments,
+  viewerText as viewerTextSegments,
   visibleActions,
 } from "./actions";
+import { segmentsText } from "@/people/segments";
+
+const versionsNote = (...args: Parameters<typeof versionsNoteSegments>) =>
+  segmentsText(versionsNoteSegments(...args));
+
+const viewerText = (...args: Parameters<typeof viewerTextSegments>) =>
+  segmentsText(viewerTextSegments(...args));
 
 describe("visibleActions", () => {
   it.each<[RequestState, string[]]>([
@@ -55,7 +62,7 @@ describe("texts", () => {
       "You asked for RQ-7, so you can close it. The cards come once an orchestrator drafts them. Anyone else sees no actions.",
     );
     expect(viewerText(requestSummary("RQ-4"))).toBe(
-      "Only tanim can approve, ask for changes, edit or close.",
+      "Only @tanim can approve, ask for changes, edit or close.",
     );
   });
 
@@ -72,10 +79,10 @@ describe("texts", () => {
       "Approval applies to the version you see. If a new version arrives first, fold asks you to look again.",
     );
     expect(versionsNote(r, "omar")).toBe(
-      "tanim approves one version at a time. Each new version starts unapproved.",
+      "@tanim approves one version at a time. Each new version starts unapproved.",
     );
     expect(versionsNote(r, null)).toBe(
-      "tanim approves one version at a time. Each new version starts unapproved.",
+      "@tanim approves one version at a time. Each new version starts unapproved.",
     );
   });
 
@@ -115,11 +122,11 @@ describe("threadTarget", () => {
       threadTarget(requestSummary("RQ-1", { drafter: "backend" }), "tanim"),
     ).toEqual({
       to: undefined,
-      label: "backend",
+      label: "@backend",
     });
     expect(threadTarget(requestSummary("RQ-1"), "ana")).toEqual({
       to: ["human:tanim"],
-      label: "tanim",
+      label: "@tanim",
     });
     expect(threadTarget(requestSummary("RQ-1"), "tanim")).toEqual({
       to: ["all"],

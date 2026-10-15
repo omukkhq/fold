@@ -15,8 +15,8 @@ import { formatAsOf } from "@/format/time";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { replySchema, type ReplyValues } from "./compose";
-import { deliveryLines, recipientNames } from "./delivery";
-import { replyTargets } from "./filters";
+import { deliveryLines, recipientActors } from "./delivery";
+import { replyPlaceholder } from "./filters";
 import { MessageBody } from "./MessageBody";
 import { threadTitle } from "./title";
 
@@ -30,7 +30,6 @@ interface ThreadPanelProps {
 
 export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
   const last = thread.messages.at(-1);
-  const targets = replyTargets(thread);
   const {
     control,
     handleSubmit,
@@ -89,16 +88,17 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
           <li key={message.id} className="flex flex-col gap-4">
             <article className="flex flex-col gap-4 rounded-m bg-surface px-12 py-10 inset-ring inset-ring-border-subtle">
               <p className="flex items-center gap-8 font-mono text-caption text-text-muted">
-                <PersonName name={message.sender} avatarClassName="font-ui" />
+                <PersonName name={message.sender} className="text-bar" />
                 <ArrowRight
                   aria-label="to"
                   role="img"
                   size={12}
                   className="shrink-0 text-text-faint"
                 />
-                <span className="min-w-0 truncate">
-                  {recipientNames(message)}
-                </span>
+                <PersonList
+                  names={recipientActors(message)}
+                  nameClassName="text-bar"
+                />
                 <span className="ml-auto font-ui text-meta text-text-faint">
                   {formatAsOf(now, message.sent_at)}
                 </span>
@@ -107,8 +107,13 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
             </article>
             <ul className="flex flex-col gap-2">
               {deliveryLines(message, now).map((line) => (
-                <li key={line} className="text-meta text-text-faint">
-                  {line}
+                <li
+                  key={line.actor}
+                  className="flex items-center gap-6 text-meta text-text-faint"
+                >
+                  {line.lead}
+                  <PersonName name={line.actor} className="text-bar" />
+                  {line.at === null ? null : ` · ${line.at}`}
                 </li>
               ))}
             </ul>
@@ -130,11 +135,7 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
                 slug={slug}
                 rows={1}
                 aria-label="Reply"
-                placeholder={
-                  targets.length > 0
-                    ? `Reply to ${targets.join(", ")}…`
-                    : "Reply…"
-                }
+                placeholder={replyPlaceholder(thread)}
                 readOnly={isSubmitting}
                 aria-invalid={errors.body ? true : undefined}
                 className="resize-none py-9"

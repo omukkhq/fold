@@ -1,64 +1,49 @@
-import { Avatar } from "@/components/avatar/Avatar";
 import { cn } from "@/lib/cn";
 import { bareName, isHumanName } from "./names";
 
 /**
- * An actor's name. A human always shows in Barlow in the link-text colour with no mark, so its classes come after `className`; an agent takes `className` whole and keeps its worker chip unless `chip` is false.
+ * A person as `@name` text: a human in the link-text colour, an agent or worker in the secondary colour, always Barlow 500.
+ * It takes the size of the text around it; where it stands for a value, the caller sets one type step larger through `className`. The font, weight and colour come after `className`, so a caller's mono or muted classes never change them.
  */
 export function PersonName({
   name,
   className,
-  avatarClassName,
-  chip = true,
 }: {
   /** `human:<name>` or an agent or worker name. */
   name: string;
   className?: string;
-  avatarClassName?: string;
-  chip?: boolean;
 }) {
-  if (isHumanName(name)) {
-    return (
-      <span
-        data-person="human"
-        className={cn(className, "font-ui text-primary-text")}
-      >
-        {bareName(name)}
-      </span>
-    );
-  }
-  if (!chip) {
-    return (
-      <span data-person="agent" className={className}>
-        {name}
-      </span>
-    );
-  }
+  const human = isHumanName(name);
   return (
     <span
-      data-person="agent"
-      className={cn("inline-flex items-center gap-6", className)}
+      data-person={human ? "human" : "agent"}
+      className={cn(
+        className,
+        "font-ui font-medium",
+        human ? "text-primary-text" : "text-secondary-text",
+      )}
     >
-      <Avatar name={name} className={avatarClassName} />
-      {name}
+      @{bareName(name)}
     </span>
   );
 }
 
-/** Names in a row, comma separated, each with its own colour. */
+/** People in a row, `@a, @b`; `nameClassName` sizes each name. */
 export function PersonList({
   names,
   className,
+  nameClassName,
 }: {
   names: readonly string[];
   className?: string;
+  nameClassName?: string;
 }) {
   return (
     <span className={className}>
       {names.map((name, index) => (
         <span key={name}>
           {index > 0 ? ", " : ""}
-          <PersonName name={name} chip={false} />
+          <PersonName name={name} className={nameClassName} />
         </span>
       ))}
     </span>

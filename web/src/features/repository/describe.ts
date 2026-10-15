@@ -5,11 +5,17 @@ import type {
   TreeEntry,
 } from "../../api/repository";
 import { formatAsOf } from "../../format/time";
+import {
+  actorSegment,
+  seg,
+  type Segment,
+  type Segments,
+} from "@/people/segments";
 
 export interface RevisionLines {
   title: string;
   /** Mono meta line: ids, who, and the time of day. */
-  meta: string;
+  meta: Segments;
 }
 
 /** What a revision row shows: a proposal integration names its proposal and task, a pull names the remote commit and the human. */
@@ -18,26 +24,28 @@ export function describeRevision(
   now: number,
 ): RevisionLines {
   const at = formatAsOf(now, revision.created_at);
-  const who = revision.author ?? "unknown";
+  const who: Segment =
+    revision.author === null ? "unknown" : actorSegment(revision.author);
   switch (revision.origin) {
     case "proposal":
       return {
         title: [revision.proposal ?? revision.id, revision.title]
           .filter((part) => part !== null)
           .join(" · "),
-        meta: [revision.task, who, at]
-          .filter((part) => part !== null)
-          .join(" · "),
+        meta:
+          revision.task === null
+            ? seg`${who} · ${at}`
+            : seg`${revision.task} · ${who} · ${at}`,
       };
     case "pull":
       return {
         title: `pull · ${revision.pull ?? ""}`,
-        meta: `${who} · ${at}`,
+        meta: seg`${who} · ${at}`,
       };
     case "initial":
       return {
         title: revision.title ?? "Initial revision",
-        meta: `${who} · ${at}`,
+        meta: seg`${who} · ${at}`,
       };
   }
 }

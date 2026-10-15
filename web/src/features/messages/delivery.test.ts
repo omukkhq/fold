@@ -2,11 +2,18 @@ import { describe, expect, it } from "vitest";
 import { message as baseMessage, recipient } from "@/test/messages";
 import {
   deliveryLines,
-  previewLine,
-  recipientNames,
+  previewLine as previewLineSegments,
+  recipientActors,
   recipientState,
-  routeLine,
+  routeLine as routeLineSegments,
 } from "./delivery";
+import { segmentsText } from "@/people/segments";
+
+const routeLine = (...args: Parameters<typeof routeLineSegments>) =>
+  segmentsText(routeLineSegments(...args));
+
+const previewLine = (...args: Parameters<typeof previewLineSegments>) =>
+  segmentsText(previewLineSegments(...args));
 
 const NOW = Date.UTC(2026, 9, 1, 12, 0, 0);
 
@@ -29,23 +36,34 @@ const message = baseMessage("m-1", {
 describe("delivery", () => {
   it("shows acknowledgement before delivery before neither", () => {
     const states = message.recipients.map((r) => recipientState(r, NOW));
-    expect(states[0]).toMatch(
-      /^acknowledged by frontend\/ui · \d\d:\d\d:\d\d$/,
-    );
-    expect(states[1]).toMatch(/^delivered to backend · \d\d:\d\d:\d\d$/);
-    expect(states[2]).toBe("not delivered to review");
-    expect(states[3]).toMatch(/^read by tanim · \d\d:\d\d:\d\d$/);
+    expect(states[0]).toMatchObject({
+      lead: "acknowledged by",
+      actor: "frontend/ui",
+    });
+    expect(states[0]?.at).toMatch(/^\d\d:\d\d:\d\d$/);
+    expect(states[1]).toMatchObject({ lead: "delivered to", actor: "backend" });
+    expect(states[2]).toEqual({
+      lead: "not delivered to",
+      actor: "review",
+      at: null,
+    });
+    expect(states[3]).toMatchObject({ lead: "read by", actor: "human:tanim" });
   });
   it("has a line per recipient", () => {
     const lines = deliveryLines(message, NOW);
     expect(lines).toHaveLength(4);
-    expect(lines[2]).toBe("not delivered to review");
+    expect(lines[2]?.lead).toBe("not delivered to");
+    expect(recipientActors(message)).toEqual([
+      "frontend/ui",
+      "backend",
+      "review",
+      "human:tanim",
+    ]);
   });
-  it("words the route and the preview without the human prefix", () => {
+  it("words the route and the preview as @names", () => {
     expect(routeLine(message)).toBe(
-      "tanim → frontend/ui, backend, review, tanim",
+      "@tanim → @frontend/ui, @backend, @review, @tanim",
     );
-    expect(recipientNames(message)).toBe("frontend/ui, backend, review, tanim");
-    expect(previewLine(message)).toBe("tanim: Hello");
+    expect(previewLine(message)).toBe("@tanim: Hello");
   });
 });

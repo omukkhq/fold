@@ -1,10 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { agentBarQuery } from "../api/agentBar";
-import { Avatar, PresenceDot } from "../components/avatar/Avatar";
+import { PresenceDot } from "../components/avatar/PresenceDot";
 import { cn } from "../lib/cn";
 import { focusRing } from "../lib/focus";
 import { useLiveStatus } from "../live/status";
 import { useNow } from "../live/useNow";
+import { PersonName } from "../people/PersonName";
 import { agentBoardPath, chipAgents, chipStateText } from "./agentChips";
 import { HrefLink } from "./HrefLink";
 
@@ -24,14 +25,11 @@ export function AgentChips({ slug }: { slug: string }) {
           <HrefLink
             href={agentBoardPath(slug, agent.name)}
             className={cn(
-              "inline-flex items-center gap-6 rounded-chip bg-surface py-3 pr-9 pl-4 inset-ring inset-ring-border hover:bg-sunken",
+              "inline-flex items-center gap-6 rounded-chip bg-surface px-9 py-3 text-meta inset-ring inset-ring-border hover:bg-sunken",
               focusRing,
             )}
           >
-            <Avatar name={agent.name} />
-            <span className="text-bar font-semibold text-text">
-              {agent.name}
-            </span>
+            <PersonName name={agent.name} className="text-bar" />
             <PresenceDot state={agent.presence} />
             <span className="text-meta text-text-muted">
               {chipStateText(agent, status, now)}

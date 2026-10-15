@@ -4,7 +4,6 @@ import {
   blockedText,
   blocksText,
   checklistText,
-  humanReviewText,
   messagesText,
   needsText,
   proposalLook,
@@ -124,16 +123,5 @@ describe("proposalLook", () => {
     expect(proposalLook(proposal("open"))).toBe("active");
     expect(proposalLook(proposal("approved"))).toBe("active");
     expect(proposalLook(proposal("integrated", "r8"))).toBe("merged");
-  });
-});
-
-describe("humanReviewText", () => {
-  it("names the reviewer when there is one", () => {
-    expect(
-      humanReviewText({ reviewer: "tanim", reason: "auth", set_by: "planner" }),
-    ).toBe("Human review · tanim");
-    expect(
-      humanReviewText({ reviewer: null, reason: "auth", set_by: "planner" }),
-    ).toBe("Human review");
   });
 });

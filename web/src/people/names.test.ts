@@ -5,6 +5,7 @@ import {
   isHumanName,
   personKind,
   personOf,
+  reviewerActor,
 } from "./names";
 
 const people = {
@@ -53,5 +54,12 @@ describe("agentNames", () => {
         { name: "review", workers: [] },
       ]),
     ).toEqual(["frontend", "frontend/ui", "review"]);
+  });
+});
+
+describe("reviewerActor", () => {
+  it("turns a bare reviewer name into a human actor", () => {
+    expect(reviewerActor("tanim")).toBe("human:tanim");
+    expect(reviewerActor(null)).toBeNull();
   });
 });

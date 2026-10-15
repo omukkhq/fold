@@ -56,3 +56,33 @@ describe("person mentions", () => {
     );
   });
 });
+
+describe("item and file mentions", () => {
+  it("draw a chip with the icon and without the mark", () => {
+    const { container } = render(
+      wrap(<MentionText text="see #T-9 and @web/src/a.ts" slug="demo" />),
+    );
+    const item = container.querySelector('a[data-mention="task"]');
+    expect(item?.textContent).toBe("T-9");
+    expect(item?.querySelector("svg")).toBeTruthy();
+    const file = container.querySelector('a[data-mention="path"]');
+    expect(file?.textContent).toBe("web/src/a.ts");
+    expect(file?.querySelector("svg")).toBeTruthy();
+  });
+
+  it("do the same in Markdown", () => {
+    const { container } = render(
+      wrap(
+        <Markdown mentions={{ slug: "demo" }}>
+          {"see #T-9 and @web/src/a.ts"}
+        </Markdown>,
+      ),
+    );
+    expect(container.querySelector('[data-mention="task"]')?.textContent).toBe(
+      "T-9",
+    );
+    expect(container.querySelector('[data-mention="path"]')?.textContent).toBe(
+      "web/src/a.ts",
+    );
+  });
+});

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { byContent } from "@/test/content";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   RouterProvider,
@@ -87,9 +88,17 @@ describe("AgentsScreen", () => {
     expect(within(card).getByText(/active · 1 session/)).toBeTruthy();
     expect(within(card).getByText("T-12 · ws-7")).toBeTruthy();
     expect(
-      within(card).getByText(/frontend\/ui · 3 changed files/),
+      within(card).getByText(byContent(/@frontend\/ui · 3 changed files/)),
     ).toBeTruthy();
     expect(within(card).queryByText("Stale")).toBeNull();
+    expect(within(card).getByRole("heading", { level: 2 }).textContent).toBe(
+      "@frontend",
+    );
+    const workers = within(card).getAllByText("@frontend/ui");
+    expect(workers.length).toBeGreaterThan(1);
+    for (const name of workers) {
+      expect(name.getAttribute("data-person")).toBe("agent");
+    }
   });
 
   it("draws the session lines, the stalled badge and the granter only when the payload carries them", async () => {
@@ -110,7 +119,9 @@ describe("AgentsScreen", () => {
       within(card).getByText(/pid 81231 · \/home\/tanim\/ledger/),
     ).toBeTruthy();
     expect(within(card).getByText("Stalled")).toBeTruthy();
-    expect(within(card).getByText(/integrator granted by tanim/)).toBeTruthy();
+    expect(
+      within(card).getByText(byContent(/integrator granted by @tanim/)),
+    ).toBeTruthy();
     const plain = screen.getByRole("region", { name: "Agent review" });
     expect(within(plain).queryByText(/pid/)).toBeNull();
     expect(within(plain).queryByText("Stalled")).toBeNull();

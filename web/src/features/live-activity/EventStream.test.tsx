@@ -66,7 +66,7 @@ describe("EventStream", () => {
       expect.stringContaining("created T-2"),
       expect.stringContaining("created T-1"),
     ]);
-    expect(within(items[0] ?? document.body).getByText("fold")).toBeTruthy();
+    expect(within(items[0] ?? document.body).getByText("@fold")).toBeTruthy();
   });
 
   it("shows a pending state, then the empty state for a project with no events", async () => {
@@ -145,9 +145,9 @@ describe("ReviewCheckouts", () => {
   it("shows the worker, the checkout, the last result and the not recordable mark", async () => {
     listReviewCheckouts.mockResolvedValue([checkout()]);
     wrap(<ReviewCheckouts slug="demo" />);
-    await screen.findByText("review/quality");
+    await screen.findByText("@review/quality");
     const row = screen.getByRole("region", { name: "Review checkouts" });
-    expect(within(row).getByText("review/quality")).toBeTruthy();
+    expect(within(row).getByText("@review/quality")).toBeTruthy();
     expect(row.textContent).toContain(
       "P-4 v2 in ws/review-p-4 · ran cargo nextest, 48 passed",
     );
@@ -165,7 +165,7 @@ describe("ReviewCheckouts", () => {
       checkout({ workspace: "ws-14", worker: null, last_command: undefined }),
     ]);
     wrap(<ReviewCheckouts slug="demo" />);
-    await screen.findByText("review/security");
+    await screen.findByText("@review/security");
     expect(screen.getAllByText("Review checkouts")).toHaveLength(3);
     expect(
       screen.getByText(
@@ -196,6 +196,6 @@ describe("ReviewCheckouts", () => {
     await screen.findByRole("alert");
     listReviewCheckouts.mockResolvedValue([checkout()]);
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
-    expect(await screen.findByText("review/quality")).toBeTruthy();
+    expect(await screen.findByText("@review/quality")).toBeTruthy();
   });
 });

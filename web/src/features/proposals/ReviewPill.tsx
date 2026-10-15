@@ -10,6 +10,9 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { ActorText } from "@/people/ActorText";
+import { isHumanName } from "@/people/names";
+import { PersonName } from "@/people/PersonName";
 import {
   PILL_CLASSES,
   type Pill,
@@ -49,22 +52,32 @@ export function ReviewPill({
       )}
     >
       <Icon aria-hidden="true" size={large ? 13 : 12} className="shrink-0" />
-      {pill.text}
+      {pill.segments ? (
+        <ActorText segments={pill.segments} personClassName="text-bar" />
+      ) : (
+        pill.text
+      )}
     </span>
   );
 }
 
 export function WaitingChip({ waiting }: { waiting: Waiting }) {
-  const Icon = waiting.human ? User : Bot;
+  const { actor } = waiting;
+  const human = actor === null || isHumanName(actor);
+  const Icon = human ? User : Bot;
   return (
-    <span className="inline-flex items-center gap-5 rounded-s bg-sunken px-8 py-2 text-meta leading-snug font-semibold text-text-muted">
+    <span className="inline-flex items-center gap-5 rounded-s bg-sunken px-8 py-2 text-meta leading-snug text-text-muted">
       <Icon
         role="img"
-        aria-label={waiting.human ? "human" : "agent"}
+        aria-label={human ? "human" : "agent"}
         size={12}
         className="shrink-0"
       />
-      {waiting.name}
+      {actor === null ? (
+        <span className="font-semibold">a human</span>
+      ) : (
+        <PersonName name={actor} className="text-bar" />
+      )}
     </span>
   );
 }

@@ -5,13 +5,15 @@ import { HrefLink } from "@/app/HrefLink";
 import { setIntegrator } from "@/api/agents";
 import type { AgentView } from "@/api/agents";
 import { keys } from "@/api/keys";
-import { Avatar, PresenceDot } from "@/components/avatar/Avatar";
+import { PresenceDot } from "@/components/avatar/PresenceDot";
 import { Badge } from "@/components/badge/Badge";
 import { Button } from "@/components/button/Button";
 import { Label } from "@/components/label/Label";
 import { formatSince } from "@/format/time";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
+import { ActorText } from "@/people/ActorText";
+import { PersonName } from "@/people/PersonName";
 import { IntegratorDialog } from "./IntegratorDialog";
 import {
   activityText,
@@ -72,10 +74,9 @@ export function AgentCard({ slug, agent, now }: AgentCardProps) {
     >
       <header className="flex flex-col gap-10 p-16">
         <div className="flex items-center gap-10">
-          <Avatar name={agent.name} className="size-32 text-caption" />
           <div className="flex min-w-0 flex-col gap-2">
-            <h2 className="text-item-title leading-snug font-semibold text-text">
-              {agent.name}
+            <h2 className="text-item-title leading-snug">
+              <PersonName name={agent.name} />
             </h2>
             <p className="flex items-center gap-6 text-code text-text-muted">
               <PresenceDot state={agent.presence} className="size-7" />
@@ -126,8 +127,8 @@ export function AgentCard({ slug, agent, now }: AgentCardProps) {
                   )}
                 >
                   <div className="flex items-center gap-8">
-                    <span className="min-w-0 flex-1 font-mono text-code leading-snug text-text">
-                      {worker.name}
+                    <span className="min-w-0 flex-1 text-code leading-snug">
+                      <PersonName name={worker.name} />
                     </span>
                     {badges.map((tone) => (
                       <Badge key={tone} tone={tone} />
@@ -166,7 +167,7 @@ export function AgentCard({ slug, agent, now }: AgentCardProps) {
               >
                 <IdLink {...claimTarget(slug, claim)} />
                 <span className="text-text-muted">
-                  {claim.kind} · {worker}
+                  {claim.kind} · <PersonName name={worker} />
                 </span>
                 {claimBadges(claim, agent.attention).map((tone) => (
                   <Badge key={tone} tone={tone} />
@@ -194,7 +195,7 @@ export function AgentCard({ slug, agent, now }: AgentCardProps) {
                   id={workspace.task}
                 />
                 <span className="text-text-muted">
-                  {worker} · {changedFilesText(workspace)}
+                  <PersonName name={worker} /> · {changedFilesText(workspace)}
                   {workspace.last_activity_at === null
                     ? ""
                     : ` · ${formatSince(now, workspace.last_activity_at)}`}
@@ -230,7 +231,8 @@ export function AgentCard({ slug, agent, now }: AgentCardProps) {
                     />
                   ) : null}
                   <span>
-                    {event.actor} · {formatSince(now, event.created_at)}
+                    <PersonName name={event.actor} /> ·{" "}
+                    {formatSince(now, event.created_at)}
                   </span>
                 </li>
               );
@@ -241,7 +243,7 @@ export function AgentCard({ slug, agent, now }: AgentCardProps) {
 
       <footer className="flex items-center gap-8 border-t border-border-subtle bg-bg px-16 py-10">
         <p className="min-w-0 flex-1 text-code text-text-muted">
-          {footLine(agent)}
+          <ActorText segments={footLine(agent)} personClassName="text-bar" />
         </p>
         <Button
           size="sm"

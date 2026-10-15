@@ -1,3 +1,5 @@
+import { atName } from "@/people/names";
+import { ActorText } from "@/people/ActorText";
 import { PersonName } from "@/people/PersonName";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
@@ -34,7 +36,7 @@ import {
 } from "./actions";
 import { changesSchema, type ChangesValues } from "./compose";
 import type { Failure } from "./errors";
-import { displayName, drafterLine, type CreatedTask } from "./present";
+import { drafterLine, type CreatedTask } from "./present";
 import { OVERLINE } from "./RequestContent";
 
 function Block({ title, children }: { title: string; children: ReactNode }) {
@@ -158,7 +160,7 @@ export function DecisionPanel({
                 onBlur={field.onBlur}
                 readOnly={busy}
                 aria-invalid={errors.comment ? true : undefined}
-                placeholder={`What should ${displayName(r.drafter ?? "the drafter")} change?`}
+                placeholder={`What should ${r.drafter === null ? "the drafter" : atName(r.drafter)} change?`}
               />
             )}
           />
@@ -222,7 +224,7 @@ export function ViewerPanel({ detail }: { detail: RequestDetail }) {
     <Block title="Decision">
       <p className="flex items-start gap-8 rounded-m bg-sunken px-12 py-10 text-bar leading-snug text-text-muted">
         <Lock aria-hidden="true" size={15} className="mt-2 shrink-0" />
-        {viewerText(detail.request)}
+        <ActorText segments={viewerText(detail.request)} />
       </p>
     </Block>
   );
@@ -385,8 +387,8 @@ export function ClosedPanel({
   return (
     <Block title="Closed">
       <p className="text-bar leading-snug text-text-muted">
-        {displayName(detail.request.requester)} closed the request. It only
-        reads now.
+        <PersonName name={detail.request.requester} /> closed the request. It
+        only reads now.
       </p>
       {detail.close_reason ? (
         <MentionText
@@ -417,10 +419,7 @@ export function DrafterBlock({
       ) : (
         <>
           <p className="flex items-center gap-8">
-            <PersonName
-              name={drafter}
-              className="font-mono text-code text-text"
-            />
+            <PersonName name={drafter} className="text-body" />
           </p>
           <p className="text-meta text-text-muted">
             {drafterLine(detail.drafts, drafter, now)}
@@ -461,7 +460,7 @@ export function VersionsBlock({
               v{d.version}
             </span>
             <span className="min-w-0 flex-1 truncate text-text-muted">
-              <PersonName name={d.author} chip={false} />
+              <PersonName name={d.author} className="text-bar" />
             </span>
             <span className="font-ui text-meta text-text-muted">
               {d.version === latest ? "current · " : ""}
@@ -471,7 +470,7 @@ export function VersionsBlock({
         ))}
       </ul>
       <p className="text-meta text-text-muted">
-        {versionsNote(detail.request, human)}
+        <ActorText segments={versionsNote(detail.request, human)} />
       </p>
     </Block>
   );

@@ -43,14 +43,14 @@ describe("describeRevision", () => {
       ),
     ).toEqual({
       title: "P-5 · Form field components",
-      meta: "T-15 · frontend/forms · 14:06:00",
+      meta: ["T-15 · ", { actor: "frontend/forms" }, " · 14:06:00"],
     });
   });
 
   it("leaves out the task and names an unknown author when the revision has none", () => {
     expect(
       describeRevision(revision({ proposal: "P-5", title: "x" }), NOW).meta,
-    ).toBe("unknown · 14:06:00");
+    ).toEqual(["unknown · 14:06:00"]);
   });
 
   it("names only the proposal when the revision carries no title", () => {
@@ -67,7 +67,7 @@ describe("describeRevision", () => {
       ),
     ).toEqual({
       title: "pull · 9f2c1ab",
-      meta: "human:tanim · 14:06:00",
+      meta: [{ actor: "human:tanim" }, " · 14:06:00"],
     });
   });
 

@@ -10,10 +10,13 @@ import type {
 } from "@/api/requests";
 import type { TaskStatus } from "@/api/board";
 import { formatAsOfMinute, formatSince } from "@/format/time";
-import { displayName } from "@/features/proposals/present";
 import { isHumanName } from "@/people/names";
-
-export { displayName };
+import {
+  actorSegment,
+  seg,
+  type Segment,
+  type Segments,
+} from "@/people/segments";
 
 export interface StateSpec {
   label: string;
@@ -103,46 +106,53 @@ export function joinIds(ids: readonly string[]): string {
   return `${ids.slice(0, -1).join(", ")} and ${ids.at(-1) ?? ""}`;
 }
 
-function stateClause(detail: RequestDetail, now: number): string {
+function stateClause(detail: RequestDetail, now: number): Segments {
   const r = detail.request;
   const latest = r.latest_version;
   const v = latest === null ? "" : `v${String(latest)}`;
   switch (r.state) {
     case "open":
-      return "no orchestrator has claimed it yet";
+      return ["no orchestrator has claimed it yet"];
     case "drafting":
-      return `${displayName(r.drafter ?? "an orchestrator")} is drafting${v ? ` the version after ${v}` : " the cards"}`;
+      return seg`${drafterSegment(r.drafter)} is drafting${v ? ` the version after ${v}` : " the cards"}`;
     case "draft_ready":
-      return `${v} waits for the requester`;
+      return [`${v} waits for the requester`];
     case "changes_requested":
-      return `${v} went back to the drafter`;
+      return [`${v} went back to the drafter`];
     case "approved": {
       const tasks = detail.tasks;
       const made =
         tasks.length === 0
           ? ""
           : ` · ${joinIds(tasks)} ${tasks.length === 1 ? "was" : "were"} created`;
-      return `${displayName(r.requester)} approved ${v} at ${formatAsOfMinute(now, r.updated_at)}${made}`;
+      return seg`${actorSegment(r.requester)} approved ${v} at ${formatAsOfMinute(now, r.updated_at)}${made}`;
     }
     case "closed":
-      return `closed ${formatSince(now, r.updated_at)}`;
+      return [`closed ${formatSince(now, r.updated_at)}`];
   }
 }
 
+/** The drafter as a segment, or plain words while no orchestrator has claimed the request. */
+export function drafterSegment(drafter: string | null): Segment {
+  return drafter === null ? "an orchestrator" : actorSegment(drafter);
+}
+
 /** The line under the heading: who asked and when, who drafts, and who acts next. */
-export function metaLine(detail: RequestDetail, now: number): string {
+export function metaLine(detail: RequestDetail, now: number): Segment[] {
   const r = detail.request;
-  const parts = [
-    `Requested by ${displayName(r.requester)} ${formatSince(now, r.created_at)}`,
+  const parts: Segments[] = [
+    seg`Requested by ${actorSegment(r.requester)} ${formatSince(now, r.created_at)}`,
   ];
   if (
     r.drafter !== null &&
     (r.state === "draft_ready" || r.state === "changes_requested")
   ) {
-    parts.push(`${displayName(r.drafter)} is the drafter`);
+    parts.push(seg`${actorSegment(r.drafter)} is the drafter`);
   }
   parts.push(stateClause(detail, now));
-  return parts.join(" · ");
+  return parts.flatMap((part, index) =>
+    index === 0 ? part : [" · ", ...part],
+  );
 }
 
 export function versionText(

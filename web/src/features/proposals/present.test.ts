@@ -1,3 +1,4 @@
+import { bareName, isHumanName } from "@/people/names";
 import { describe, expect, it } from "vitest";
 import type { Review } from "@/api/proposals";
 import {
@@ -8,13 +9,12 @@ import {
 } from "@/test/proposals";
 import {
   approvers,
+  claimLine,
   claimText,
   currentVersion,
-  displayName,
   evidenceLines,
   fileCount,
   filesText,
-  isHuman,
   listedReviews,
   reviewPill,
   reviewText,
@@ -62,7 +62,8 @@ describe("reviewPill", () => {
     expect(reviewPill(p4)).toEqual({
       tone: "human",
       icon: "human",
-      text: "Agent approved · needs tanim",
+      text: "Agent approved · needs @tanim",
+      segments: ["Agent approved · needs ", { actor: "human:tanim" }],
     });
     expect(reviewPill(p4, { long: true }).text).toBe(
       "Agent approved · waiting for human review",
@@ -123,31 +124,30 @@ describe("reviewPill", () => {
 
 describe("names and versions", () => {
   it("shows a human by name and a worker in full", () => {
-    expect(isHuman("human:tanim")).toBe(true);
-    expect(displayName("human:tanim")).toBe("tanim");
-    expect(displayName("backend/db")).toBe("backend/db");
+    expect(isHumanName("human:tanim")).toBe(true);
+    expect(bareName("human:tanim")).toBe("tanim");
+    expect(bareName("backend/db")).toBe("backend/db");
   });
 
   it("says who the proposal waits on from the turn", () => {
     expect(
       waitingOn(proposalSummary("P-4", { review_claim: "review/quality" })),
-    ).toEqual({ name: "review/quality", human: false });
+    ).toEqual({ actor: "review/quality" });
     expect(waitingOn(proposalSummary("P-4"))).toBeNull();
     const needsHuman = proposalSummary("P-4", {
       review_claim: "review/quality",
       latest_verdict: "approve",
       human_review: mark,
     });
-    expect(waitingOn(needsHuman)).toEqual({ name: "tanim", human: true });
+    expect(waitingOn(needsHuman)).toEqual({ actor: "human:tanim" });
     expect(
       waitingOn({
         ...needsHuman,
         human_review: { ...mark, reviewer: null },
       }),
-    ).toEqual({ name: "a human", human: true });
+    ).toEqual({ actor: null });
     expect(waitingOn({ ...needsHuman, human_approved: true })).toEqual({
-      name: "review/quality",
-      human: false,
+      actor: "review/quality",
     });
     expect(
       waitingOn(
@@ -156,7 +156,7 @@ describe("names and versions", () => {
           author: "frontend/styles",
         }),
       ),
-    ).toEqual({ name: "frontend/styles", human: false });
+    ).toEqual({ actor: "frontend/styles" });
     expect(
       waitingOn(proposalSummary("P-5", { state: "integrated", turn: null })),
     ).toBeNull();
@@ -204,8 +204,12 @@ describe("names and versions", () => {
     );
     expect(
       claimText(proposalSummary("P-4", { review_claim: "review/quality" })),
-    ).toBe("review claimed by review/quality");
-    expect(claimText(proposalSummary("P-3"))).toBe("review not claimed");
+    ).toEqual(["review claimed by ", { actor: "review/quality" }]);
+    expect(claimText(proposalSummary("P-3"))).toEqual(["review not claimed"]);
+    expect(claimLine(proposalSummary("P-3"))).toEqual(["unclaimed"]);
+    expect(
+      claimLine(proposalSummary("P-4", { review_claim: "review/quality" })),
+    ).toEqual(["claimed by ", { actor: "review/quality" }]);
   });
 });
 

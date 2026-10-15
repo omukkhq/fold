@@ -1,4 +1,5 @@
 import type { ProposalDetail } from "@/api/proposals";
+import { reviewerSegment, seg, segmentsText } from "@/people/segments";
 import { gateText, shownGates } from "./gates";
 
 export type HumanAction = "approve" | "request_changes" | "integrate";
@@ -42,8 +43,13 @@ export function integrateBlock(
   const gate = shownGates(proposal.gates).find((g) => g.status === "unmet");
   if (!gate) return null;
   if (gate.gate === "human_review") {
-    const who = proposal.summary.human_review?.reviewer ?? "a human";
-    return `Integrate waits for ${who} to approve v${String(proposal.summary.current_version)}.`;
+    const who = reviewerSegment(
+      proposal.summary.human_review?.reviewer ?? null,
+      "a human",
+    );
+    return segmentsText(
+      seg`Integrate waits for ${who} to approve v${String(proposal.summary.current_version)}.`,
+    );
   }
-  return `${gateText(gate, proposal, main)}, so you cannot integrate yet.`;
+  return `${segmentsText(gateText(gate, proposal, main))}, so you cannot integrate yet.`;
 }

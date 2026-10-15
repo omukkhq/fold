@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { byContent } from "@/test/content";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
 import {
@@ -431,18 +432,22 @@ describe("Proposals list", () => {
     if (!p4) throw new Error("no P-4 row");
     const cells = within(p4);
     expect(cells.getByText("T-3")).toBeTruthy();
-    expect(cells.getByText("backend/db")).toBeTruthy();
+    expect(cells.getByText("@backend/db")).toBeTruthy();
     expect(cells.getByText("v2 of 2")).toBeTruthy();
-    expect(cells.getByRole("img", { name: "human" })).toBeTruthy();
-    expect(cells.getByText("Agent approved · needs tanim")).toBeTruthy();
-    expect(cells.getByText("claimed by review/quality")).toBeTruthy();
-    expect(cells.getByText("Human review · tanim")).toBeTruthy();
+    expect(cells.getAllByText("@tanim")).toHaveLength(3);
+    expect(
+      cells.getByText(byContent("Agent approved · needs @tanim")),
+    ).toBeTruthy();
+    expect(
+      cells.getByText(byContent("claimed by @review/quality")),
+    ).toBeTruthy();
+    expect(cells.getByText("Human review").textContent).toContain("tanim");
     const p3 = within(rows)
       .getByRole("link", { name: "Login form styles" })
       .closest("tr");
     if (!p3) throw new Error("no P-3 row");
     expect(within(p3).getByText("Changes requested")).toBeTruthy();
-    expect(within(p3).getByRole("img", { name: "agent" })).toBeTruthy();
+    expect(within(p3).getAllByText("@frontend/styles")).toHaveLength(2);
     expect(
       screen
         .getByRole("link", { name: "Open · 3" })
@@ -635,11 +640,11 @@ describe("Proposal detail", () => {
     const { container } = renderAt("/p/demo/proposals/P-4");
     const thread = await screen.findByRole("list", { name: "Thread rc-1" });
     expect(
-      within(thread).getByRole("link", { name: "#T-9" }).getAttribute("href"),
+      within(thread).getByRole("link", { name: "T-9" }).getAttribute("href"),
     ).toBe("/p/demo/t/T-9");
     expect(
       within(thread)
-        .getByRole("link", { name: "@web/report.tsx" })
+        .getByRole("link", { name: "web/report.tsx" })
         .getAttribute("href"),
     ).toBe("/p/demo/repository?path=web%2Freport.tsx");
     expect(container).toBeTruthy();
@@ -647,11 +652,11 @@ describe("Proposal detail", () => {
       name: "Evidence from the author",
     });
     expect(
-      within(evidence).getByRole("link", { name: "#T-9" }).getAttribute("href"),
+      within(evidence).getByRole("link", { name: "T-9" }).getAttribute("href"),
     ).toBe("/p/demo/t/T-9");
     expect(
       within(evidence)
-        .getByRole("link", { name: "@web/report.tsx" })
+        .getByRole("link", { name: "web/report.tsx" })
         .getAttribute("href"),
     ).toBe("/p/demo/repository?path=web%2Freport.tsx");
     const panel = await integration();
@@ -667,7 +672,7 @@ describe("Proposal detail", () => {
     );
     const reviews = screen.getByRole("region", { name: "Reviews" });
     expect(
-      await within(reviews).findByRole("link", { name: "#T-9" }),
+      await within(reviews).findByRole("link", { name: "T-9" }),
     ).toBeTruthy();
   });
 
@@ -695,7 +700,9 @@ describe("Proposal detail", () => {
     const user = userEvent.setup();
     renderAt("/p/demo/proposals/P-4");
     const panel = await integration();
-    expect(within(panel).getByText(/Waiting for tanim/)).toBeTruthy();
+    expect(
+      within(panel).getByText(byContent(/Waiting for @tanim/)),
+    ).toBeTruthy();
     const reviews = screen.getByRole("region", { name: "Reviews" });
     const before = within(reviews).getAllByRole("listitem").length;
     const release = hold();
@@ -711,9 +718,11 @@ describe("Proposal detail", () => {
       expect(within(reviews).getAllByRole("listitem")).toHaveLength(before + 1);
     });
     expect(
-      within(reviews).getByText("tanim").parentElement?.textContent,
-    ).toMatch(/^tanim · v2/);
-    expect(within(panel).getByText(/Approved by tanim/)).toBeTruthy();
+      within(reviews).getByText("@tanim").closest("p")?.textContent,
+    ).toMatch(/^@tanim · v2/);
+    expect(
+      within(panel).getByText(byContent(/Approved by @tanim/)),
+    ).toBeTruthy();
     expect(
       writes("POST /api/v1/projects/demo/proposals/P-4/reviews")[0]?.body,
     ).toEqual({ verdict: "approve", body: "approved in the web interface" });
@@ -902,7 +911,7 @@ describe("Proposal detail", () => {
     ).toBeTruthy();
     expect(within(report).getByText("P-4 v2 · after line 3")).toBeTruthy();
     expect(
-      within(report).getByText(/backend\/db runs sync_workspace/),
+      within(report).getByText(byContent(/@backend\/db runs sync_workspace/)),
     ).toBeTruthy();
     expect(
       screen.getByText("Conflict with main r8 · back with the author"),
@@ -975,7 +984,7 @@ describe("Proposal detail", () => {
         .hasAttribute("disabled"),
     ).toBe(true);
     expect(
-      within(panel).getByText("Integrate waits for ana to approve v1."),
+      within(panel).getByText("Integrate waits for @ana to approve v1."),
     ).toBeTruthy();
   });
 

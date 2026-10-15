@@ -97,9 +97,9 @@ describe("ThreadPanel", () => {
     expect(
       within(screen.getByRole("article")).getByText("Which one?"),
     ).toBeTruthy();
-    expect(
-      screen.getByText("delivered to tanim", { exact: false }),
-    ).toBeTruthy();
+    const delivered = screen.getByText("delivered to", { exact: false });
+    expect(delivered.textContent).toContain("tanim");
+    expect(delivered.querySelector('[data-person="human"]')).toBeTruthy();
     expect(
       screen.getByRole("link", { name: "Open T-12" }).getAttribute("href"),
     ).toBe("/p/demo/t/T-12");

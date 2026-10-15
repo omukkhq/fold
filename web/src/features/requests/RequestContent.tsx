@@ -1,4 +1,5 @@
-import { PersonName } from "@/people/PersonName";
+import { ActorText } from "@/people/ActorText";
+import { PersonList, PersonName } from "@/people/PersonName";
 import {
   ArrowRight,
   ChevronRight,
@@ -20,7 +21,7 @@ import {
 } from "@/api/requests";
 import { HrefLink } from "@/app/HrefLink";
 import { Button } from "@/components/button/Button";
-import { recipientNames } from "@/features/messages/delivery";
+import { recipientActors } from "@/features/messages/delivery";
 import { Markdown } from "@/features/task/Markdown";
 import { formatAsOfMinute } from "@/format/time";
 import { cn } from "@/lib/cn";
@@ -33,7 +34,6 @@ import type { Failure } from "./errors";
 import {
   authorLine,
   commentsSummary,
-  displayName,
   edgeLines,
   edgesSummary,
   formatSize,
@@ -87,7 +87,12 @@ export function RequestHeader({
       <div className="flex flex-wrap items-center gap-8">
         <StatePill state={detail.request.state} />
         <KindBadge kind={kindOf(detail.request)} />
-        <p className="text-bar text-text-muted">{metaLine(detail, now)}</p>
+        <p className="text-bar text-text-muted">
+          <ActorText
+            segments={metaLine(detail, now)}
+            personClassName="text-body"
+          />
+        </p>
       </div>
     </header>
   );
@@ -254,9 +259,14 @@ export function DraftView({
     return (
       <Section title="Draft">
         <p className="rounded-m bg-surface px-14 py-12 text-body text-text-muted inset-ring inset-ring-border-subtle">
-          {detail.request.drafter === null
-            ? "No orchestrator has claimed the request yet. The cards appear here once one drafts them."
-            : `${displayName(detail.request.drafter)} is drafting the cards. They appear here when the draft is submitted.`}
+          {detail.request.drafter === null ? (
+            "No orchestrator has claimed the request yet. The cards appear here once one drafts them."
+          ) : (
+            <>
+              <PersonName name={detail.request.drafter} /> is drafting the
+              cards. They appear here when the draft is submitted.
+            </>
+          )}
         </p>
       </Section>
     );
@@ -270,10 +280,7 @@ export function DraftView({
         aside={tabs}
       >
         <p className="flex items-center gap-8 text-meta text-text-muted">
-          <PersonName
-            name={draft.author}
-            className="font-mono text-code text-text"
-          />
+          <PersonName name={draft.author} className="text-body" />
           {authorLine(draft, now)}
         </p>
         <ol className="flex flex-col gap-10">
@@ -334,10 +341,7 @@ function CommentCard({
   return (
     <li className="flex flex-col gap-6 rounded-m bg-surface px-12 py-10 inset-ring inset-ring-border-subtle">
       <p className="flex items-center gap-8 text-meta text-text-muted">
-        <PersonName
-          name={comment.author}
-          className="font-mono text-code text-text"
-        />
+        <PersonName name={comment.author} className="text-bar" />
         asked for changes on v{comment.version}
         <span className="ml-auto text-text-faint">
           {formatAsOfMinute(now, comment.created_at)}
@@ -395,14 +399,14 @@ function MessageCard({
   return (
     <li className="flex flex-col gap-6 rounded-m bg-surface px-12 py-10 inset-ring inset-ring-border-subtle">
       <p className="flex items-center gap-8 font-mono text-caption text-text-muted">
-        <PersonName name={message.sender} avatarClassName="font-ui" />
+        <PersonName name={message.sender} className="text-bar" />
         <ArrowRight
           aria-label="to"
           role="img"
           size={12}
           className="shrink-0 text-text-faint"
         />
-        <span className="min-w-0 truncate">{recipientNames(message)}</span>
+        <PersonList names={recipientActors(message)} nameClassName="text-bar" />
         <span className="ml-auto font-ui text-meta text-text-faint">
           {formatAsOfMinute(now, message.sent_at)}
         </span>

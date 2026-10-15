@@ -9,7 +9,7 @@ import {
   claimTarget,
   claimText,
   claimWorkspace,
-  footLine,
+  footLine as footLineSegments,
   hasIntegrator,
   isEditableTag,
   orderWorkers,
@@ -20,6 +20,10 @@ import {
   sessionLines,
   workerBadges,
 } from "./presence";
+import { segmentsText } from "@/people/segments";
+
+const footLine = (...args: Parameters<typeof footLineSegments>) =>
+  segmentsText(footLineSegments(...args));
 
 const NOW = Date.UTC(2026, 9, 1, 12, 0, 0);
 
@@ -266,7 +270,7 @@ describe("footLine with the integrator granter", () => {
           integrator_granted_by: "human:tanim",
         }),
       ),
-    ).toBe("integrator granted by tanim");
+    ).toBe("integrator granted by @tanim");
   });
 
   it("leaves the granter out when it is null or the tag is not held", () => {

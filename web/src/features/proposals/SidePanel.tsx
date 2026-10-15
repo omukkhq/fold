@@ -1,3 +1,4 @@
+import { ActorText } from "@/people/ActorText";
 import { PersonName } from "@/people/PersonName";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
@@ -150,7 +151,9 @@ function ConflictBlock({
         ))}
       </ul>
       <p className="text-code leading-snug text-text-muted">
-        {nextStepText(proposal.summary.author, report.version)}
+        <ActorText
+          segments={nextStepText(proposal.summary.author, report.version)}
+        />
       </p>
     </section>
   );
@@ -420,7 +423,10 @@ export function SidePanel({
                   className={cn("mt-2 shrink-0", spec.className)}
                 />
                 <span className="min-w-0 flex-1 text-bar leading-snug text-text">
-                  {gateText(gate, proposal, main)}
+                  <ActorText
+                    segments={gateText(gate, proposal, main)}
+                    personClassName="text-body"
+                  />
                 </span>
               </li>
             );
@@ -429,7 +435,7 @@ export function SidePanel({
         {summary ? (
           <p className="flex items-center gap-8 rounded-m bg-sunken px-10 py-8 text-code leading-snug text-text-muted">
             <Hourglass aria-hidden="true" size={14} className="shrink-0" />
-            {summary}
+            <ActorText segments={summary} personClassName="text-bar" />
           </p>
         ) : null}
         {integration ? (
@@ -447,7 +453,7 @@ export function SidePanel({
             <p className="font-mono text-caption text-text-muted">
               {integration.actor ? (
                 <>
-                  <PersonName name={integration.actor} chip={false} /> ·{" "}
+                  <PersonName name={integration.actor} /> ·{" "}
                 </>
               ) : null}
               v{integration.version} · {clock(integration.at)}
@@ -498,8 +504,7 @@ export function SidePanel({
                       className="text-bar leading-snug"
                     />
                     <p className="font-mono text-caption text-text-muted">
-                      <PersonName name={review.reviewer} chip={false} /> · v
-                      {review.version}
+                      <PersonName name={review.reviewer} /> · v{review.version}
                       {earlier ? " · earlier version" : ""} ·{" "}
                       {clock(review.created_at)}
                     </p>

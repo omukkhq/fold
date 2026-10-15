@@ -1,13 +1,11 @@
 import type { ThreadView } from "@/api/messages";
-import { isHumanName } from "@/people/names";
+import { atName, isHumanName } from "@/people/names";
 
 export interface ThreadFilter {
   agent?: string;
   task?: string;
   proposal?: string;
 }
-
-export const isHuman = isHumanName;
 
 /** The threads that match every set field, newest first. An agent matches by taking part in the thread. */
 export function filterThreads(
@@ -38,7 +36,7 @@ export function filterOptions(threads: ThreadView[]): {
 } {
   return {
     agents: sorted(
-      threads.flatMap((t) => t.participants).filter((p) => !isHuman(p)),
+      threads.flatMap((t) => t.participants).filter((p) => !isHumanName(p)),
     ),
     tasks: sorted(threads.flatMap((t) => (t.task === null ? [] : [t.task]))),
     proposals: sorted(
@@ -64,7 +62,15 @@ export function findThread(
 
 /** The recipients a reply in the thread reaches, for the composer's hint. */
 export function replyTargets(thread: ThreadView): string[] {
-  return thread.participants.filter((p) => !isHuman(p));
+  return thread.participants.filter((p) => !isHumanName(p));
+}
+
+/** The reply box's placeholder: `Reply to @frontend/ui, @backend…`, or `Reply…` when the thread has no agent. */
+export function replyPlaceholder(thread: ThreadView): string {
+  const targets = replyTargets(thread);
+  return targets.length > 0
+    ? `Reply to ${targets.map(atName).join(", ")}…`
+    : "Reply…";
 }
 
 /** The filter button's text: `Agent` while it shows every thread, `Agent: frontend` once set. */

@@ -1,3 +1,4 @@
+import { isHumanName } from "@/people/names";
 import { describe, expect, it } from "vitest";
 import type { ThreadView } from "@/api/messages";
 import { message, thread } from "@/test/messages";
@@ -6,7 +7,7 @@ import {
   filterOptions,
   filterThreads,
   findThread,
-  isHuman,
+  replyPlaceholder,
   replyTargets,
 } from "./filters";
 
@@ -95,11 +96,17 @@ describe("findThread", () => {
 
 describe("names", () => {
   it("tells humans from agents", () => {
-    expect(isHuman("human:tanim")).toBe(true);
-    expect(isHuman("frontend/ui")).toBe(false);
+    expect(isHumanName("human:tanim")).toBe(true);
+    expect(isHumanName("frontend/ui")).toBe(false);
   });
   it("replies to the agents of a thread", () => {
     expect(replyTargets(threads[0] as ThreadView)).toEqual(["fe/ui"]);
+  });
+  it("names the agents of the reply box as @names", () => {
+    expect(replyPlaceholder(threads[0] as ThreadView)).toBe("Reply to @fe/ui…");
+    expect(replyPlaceholder(thread("m-9", { participants: ["human:a"] }))).toBe(
+      "Reply…",
+    );
   });
 });
 

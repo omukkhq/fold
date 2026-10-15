@@ -12,6 +12,8 @@ import type {
   TaskIntegration,
 } from "@/api/tasks";
 import { formatSince } from "@/format/time";
+import { atName, reviewerActor } from "@/people/names";
+import { actorSegment, seg, type Segment } from "@/people/segments";
 
 export interface StatusLook {
   text: string;
@@ -86,9 +88,9 @@ const EVENT_VERBS: Partial<Record<TaskEvent["type"], string>> = {
 };
 
 /** `Claimed by frontend/ui · 13:40`; a type without a sentence shows its name. */
-export function historyText(event: TaskEvent): string {
+export function historyText(event: TaskEvent): Segment[] {
   const verb = EVENT_VERBS[event.type] ?? `${event.type} by`;
-  return `${verb} ${event.actor} · ${clockTime(event.created_at)}`;
+  return seg`${verb} ${actorSegment(event.actor)} · ${clockTime(event.created_at)}`;
 }
 
 export interface Collapsed<T> {
@@ -124,16 +126,11 @@ export function checkpointText(ck: CheckpointSummary): string {
 export function humanReviewLines(
   mark: HumanReviewMark,
   setAt: number | null,
-): { title: string; setBy: string } {
+): { reviewer: string | null; setBy: string; at: string | null } {
   return {
-    title:
-      mark.reviewer === null
-        ? "Required · any human"
-        : `Required · ${mark.reviewer}`,
-    setBy:
-      setAt === null
-        ? `Set by ${mark.set_by}`
-        : `Set by ${mark.set_by} · ${clockTime(setAt)}`,
+    reviewer: reviewerActor(mark.reviewer),
+    setBy: mark.set_by,
+    at: setAt === null ? null : clockTime(setAt),
   };
 }
 
@@ -148,8 +145,8 @@ export function reviewText(review: {
   reviewer: string;
   verdict: ReviewVerdict;
   version: number;
-}): string {
-  return `${review.reviewer} ${VERDICTS[review.verdict]} on v${String(review.version)}`;
+}): Segment[] {
+  return seg`${actorSegment(review.reviewer)} ${VERDICTS[review.verdict]} on v${String(review.version)}`;
 }
 
 const PROPOSAL_STATES: Record<CardProposalState, string> = {
@@ -164,8 +161,8 @@ export function proposalStateText(state: CardProposalState, version: number) {
   return `${PROPOSAL_STATES[state]} · v${String(version)}`;
 }
 
-export function integrationText(integration: TaskIntegration): string {
-  return `by ${integration.by} · ${clockTime(integration.at)}`;
+export function integrationText(integration: TaskIntegration): Segment[] {
+  return seg`by ${actorSegment(integration.by)} · ${clockTime(integration.at)}`;
 }
 
 /** `2 linked to T-12`. */
@@ -210,7 +207,7 @@ export function feedbackPlaceholder(
     return "Choose who reads the feedback";
   }
   if (to.kind === "holder") {
-    return `Write feedback to ${holder ?? "the claim holder"}…`;
+    return `Write feedback to ${holder === null ? "the claim holder" : atName(holder)}…`;
   }
   return to.kind === "tag"
     ? `Write feedback to every agent tagged ${to.name}…`

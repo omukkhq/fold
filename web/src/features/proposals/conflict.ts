@@ -5,7 +5,7 @@ import type {
   ConflictKind,
   ConflictReport,
 } from "@/api/proposals";
-import { displayName } from "./present";
+import { actorSegment, seg, type Segment } from "@/people/segments";
 
 const KIND_TEXTS: Record<ConflictKind, string> = {
   text: "Text conflict: both sides changed the same lines",
@@ -91,6 +91,6 @@ export function hunkSides(
 }
 
 /** What the author does next; the daemon sent them the same report. */
-export function nextStepText(author: string, version: number): string {
-  return `Next: ${displayName(author)} runs sync_workspace, resolves, and sends v${String(version + 1)}.`;
+export function nextStepText(author: string, version: number): Segment[] {
+  return seg`Next: ${actorSegment(author)} runs sync_workspace, resolves, and sends v${String(version + 1)}.`;
 }

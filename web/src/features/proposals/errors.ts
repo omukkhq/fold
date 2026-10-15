@@ -1,4 +1,5 @@
 import { ApiError, apiErrorCode } from "@/api/errors";
+import { atName } from "@/people/names";
 
 /** `inline` shows on the control whose write failed: the actions or the form. `banner` shows above the screen. */
 export type FailurePlace = "inline" | "banner";
@@ -66,7 +67,7 @@ const ENTRIES: Record<string, Entry> = {
     place: "inline",
     text: (d) =>
       typeof d.reviewer === "string"
-        ? `fold waits for ${d.reviewer} to approve this version.`
+        ? `fold waits for ${atName(d.reviewer)} to approve this version.`
         : "fold waits for a human to approve this version.",
   },
   prerequisites_not_done: {

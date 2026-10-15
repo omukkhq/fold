@@ -12,7 +12,20 @@ import {
   proposalSummary,
   review,
 } from "@/test/proposals";
-import { gateText, shownGates, waitingSummary } from "./gates";
+import {
+  gateText as gateTextSegments,
+  shownGates,
+  waitingSummary as waitingSummarySegments,
+} from "./gates";
+import { segmentsText } from "@/people/segments";
+
+const gateText = (...args: Parameters<typeof gateTextSegments>) =>
+  segmentsText(gateTextSegments(...args));
+
+const waitingSummary = (...args: Parameters<typeof waitingSummarySegments>) => {
+  const out = waitingSummarySegments(...args);
+  return out === null ? null : segmentsText(out);
+};
 
 const mark = {
   reviewer: "tanim",
@@ -109,7 +122,7 @@ describe("gateText", () => {
       },
     );
     expect(gateText(gate("approval"), approved, null)).toBe(
-      "Approved on v2 by review/quality and tanim",
+      "Approved on v2 by @review/quality and @tanim",
     );
     const changes = proposal(
       { latest_verdict: "request_changes" },
@@ -139,7 +152,7 @@ describe("gateText", () => {
     );
     const marked = proposal({ human_review: mark });
     expect(gateText(gate("human_review"), marked, null)).toBe(
-      'Human review by tanim · marked by backend: "schema work for a junior task"',
+      'Human review by @tanim · marked by @backend: "schema work for a junior task"',
     );
     expect(
       gateText(
@@ -153,7 +166,7 @@ describe("gateText", () => {
         ),
         null,
       ),
-    ).toBe("Approved by any human · marked by ana");
+    ).toBe("Approved by any human · marked by @ana");
   });
 
   it("lists the prerequisites that are not Done", () => {
@@ -238,10 +251,10 @@ describe("waitingSummary", () => {
     expect(
       waitingSummary(proposal({ conflicted: true, turn: "with_author" })),
     ).toBe(
-      "fold sent the report to backend/db. The task is back in In Progress until a new version arrives.",
+      "fold sent the report to @backend/db. The task is back in In Progress until a new version arrives.",
     );
     expect(waitingSummary(proposal({ turn: "with_author" }))).toBe(
-      "Waiting for backend/db to send a new version.",
+      "Waiting for @backend/db to send a new version.",
     );
   });
 
@@ -263,7 +276,7 @@ describe("waitingSummary", () => {
         ),
       ),
     ).toBe(
-      "Waiting for tanim. When tanim approves v2, review/quality integrates, or tanim can integrate here.",
+      "Waiting for @tanim. When @tanim approves v2, @review/quality integrates, or @tanim can integrate here.",
     );
     expect(
       waitingSummary(
@@ -334,7 +347,7 @@ describe("waitingSummary", () => {
         ),
       ),
     ).toBe(
-      "Every gate is met. Next, review/quality integrates, or a human can integrate here.",
+      "Every gate is met. Next, @review/quality integrates, or a human can integrate here.",
     );
   });
 });

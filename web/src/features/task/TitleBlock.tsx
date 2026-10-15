@@ -11,7 +11,6 @@ import {
   setTitle,
   type TaskDetail,
 } from "@/api/tasks";
-import { Avatar } from "@/components/avatar/Avatar";
 import { Button, IconButton } from "@/components/button/Button";
 import { Select, TextField } from "@/components/form/controls";
 import { Label } from "@/components/label/Label";
@@ -19,6 +18,7 @@ import { LABEL_NAMES } from "@/components/label/labelColors";
 import { Popover } from "@/components/overlay/Popover";
 import { useState } from "react";
 import { cn } from "@/lib/cn";
+import { PersonName } from "@/people/PersonName";
 import type { LiveStrip } from "./liveStrip";
 import { SmallAction, submit, WriteError } from "./parts";
 import {
@@ -211,11 +211,8 @@ function Strip({ strip }: { strip: LiveStrip }) {
           strip.stalled ? "bg-secondary" : "bg-primary",
         )}
       />
-      <span className="inline-flex shrink-0 items-center gap-6">
-        <Avatar name={strip.worker} />
-        <span className="font-mono text-meta text-primary-text">
-          {strip.worker}
-        </span>
+      <span className="shrink-0 text-bar">
+        <PersonName name={strip.worker} />
       </span>
       <span
         className={cn(

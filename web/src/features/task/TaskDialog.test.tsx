@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { byContent } from "@/test/content";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   RouterProvider,
@@ -593,7 +594,9 @@ describe("the task dialog route", () => {
     expect(
       within(proposal).getByRole("link", { name: "P-3" }).getAttribute("href"),
     ).toBe("/p/demo/proposals/P-3");
-    expect(within(proposal).getByText("review approved on v2")).toBeTruthy();
+    expect(
+      within(proposal).getByText("approved on v2", { exact: false }),
+    ).toBeTruthy();
     expect(
       within(proposal).getByRole("link", { name: "r9" }).getAttribute("href"),
     ).toBe("/p/demo/repository?revision=r9");
@@ -610,15 +613,23 @@ describe("the task dialog route", () => {
         .getAttribute("href"),
     ).toBe(`/p/demo/messages?thread=${messageId(30)}`);
     const history = region(dialog, "History");
-    expect(within(history).getByText(/Claimed by frontend\/ui/)).toBeTruthy();
+    expect(
+      within(history).getByText(byContent(/Claimed by @frontend\/ui/)),
+    ).toBeTruthy();
     expect(within(history).queryByText(/Edited by/)).toBeNull();
     await userEvent.click(
       within(history).getByRole("button", { name: "Show 1 more" }),
     );
-    expect(within(history).getByText(/Edited by human:tanim/)).toBeTruthy();
+    expect(
+      within(history).getByText(byContent(/Edited by @tanim/)),
+    ).toBeTruthy();
     const review = region(dialog, "Human review");
-    expect(within(review).getByText("Required · tanim")).toBeTruthy();
-    expect(within(review).getByText("Set by planner · 13:40")).toBeTruthy();
+    expect(within(review).getByText(/^Required ·/).textContent).toBe(
+      "Required ·@tanim",
+    );
+    expect(within(review).getByText(/^Set by/).textContent).toBe(
+      "Set by @planner · 13:40",
+    );
     expect(within(review).getByText("Auth work")).toBeTruthy();
   }, 20_000);
 
@@ -858,13 +869,13 @@ describe("the human edits", () => {
     );
     const link = await within(section).findByRole(
       "link",
-      { name: "#T-9" },
+      { name: "T-9" },
       WAIT,
     );
     expect(link.getAttribute("href")).toBe("/p/demo/t/T-9");
     expect(
       within(section)
-        .getByRole("link", { name: "@web/report.tsx" })
+        .getByRole("link", { name: "web/report.tsx" })
         .getAttribute("href"),
     ).toBe("/p/demo/repository?path=web%2Freport.tsx");
   }, 15_000);
@@ -1158,7 +1169,9 @@ describe("the human edits", () => {
     });
     const { dialog } = await openTask();
     const review = region(dialog, "Human review");
-    expect(within(review).getByText("Required · tanim")).toBeTruthy();
+    expect(within(review).getByText(/^Required ·/).textContent).toBe(
+      "Required ·@tanim",
+    );
     expect(within(review).queryAllByRole("button")).toHaveLength(0);
   }, 15_000);
 
@@ -1174,7 +1187,7 @@ describe("the human edits", () => {
     const messages = region(dialog, "Messages");
     const box = within(messages).getByRole("combobox", { name: "Feedback" });
     expect(box.getAttribute("placeholder")).toBe(
-      "Write feedback to frontend/ui…",
+      "Write feedback to @frontend/ui…",
     );
     await userEvent.type(box, "Use the shorter copy");
     await userEvent.click(
@@ -1213,13 +1226,13 @@ describe("the human edits", () => {
     );
     const item = await within(messages).findByRole(
       "link",
-      { name: "#T-9" },
+      { name: "T-9" },
       WAIT,
     );
     expect(item.getAttribute("href")).toBe("/p/demo/t/T-9");
     expect(
       within(messages)
-        .getByRole("link", { name: "@web/report.tsx" })
+        .getByRole("link", { name: "web/report.tsx" })
         .getAttribute("href"),
     ).toBe("/p/demo/repository?path=web%2Freport.tsx");
   }, 15_000);

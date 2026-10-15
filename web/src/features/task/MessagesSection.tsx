@@ -38,14 +38,12 @@ function Message({ slug, message }: { slug: string; message: TaskMessage }) {
   return (
     <li className="flex flex-col gap-4 rounded-m bg-surface px-12 py-10 inset-ring inset-ring-border-subtle">
       <div className="flex items-center gap-8">
-        <PersonName
-          name={message.sender}
-          className="font-mono text-caption text-text-muted"
-        />
+        <PersonName name={message.sender} className="text-bar" />
         <ArrowRight aria-label="to" size={12} className="text-text-faint" />
         <PersonList
           names={message.recipients.map((r) => r.name)}
           className="font-mono text-caption text-text-muted"
+          nameClassName="text-bar"
         />
         <HrefLink
           href={threadPath(slug, message.thread)}

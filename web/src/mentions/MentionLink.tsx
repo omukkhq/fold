@@ -8,10 +8,11 @@ import {
   MessageSquare,
   type LucideIcon,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { Children, type ReactNode } from "react";
 import { HrefLink } from "@/app/HrefLink";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
+import { chipLabel } from "./chip";
 
 const ICONS: Record<string, LucideIcon> = {
   task: ListChecks,
@@ -22,7 +23,7 @@ const ICONS: Record<string, LucideIcon> = {
   path: FileText,
 };
 
-/** A mention as a link chip: the icon says what it names, the text stays as written. */
+/** A person mention stays a coloured `@name`; an item or file mention is a link chip with its icon and no mark. */
 export function MentionLink({
   href,
   tag,
@@ -35,7 +36,10 @@ export function MentionLink({
 }) {
   if (tag === "human") {
     return (
-      <span data-mention="human" className="text-primary-text">
+      <span
+        data-mention="human"
+        className="font-ui font-medium text-primary-text"
+      >
         {children}
       </span>
     );
@@ -45,7 +49,10 @@ export function MentionLink({
       <HrefLink
         href={href}
         data-mention="agent"
-        className={cn("text-secondary-text hover:underline", focusRing)}
+        className={cn(
+          "font-ui font-medium text-secondary-text hover:underline",
+          focusRing,
+        )}
       >
         {children}
       </HrefLink>
@@ -62,7 +69,9 @@ export function MentionLink({
       )}
     >
       <Icon aria-hidden="true" size={12} className="shrink-0" />
-      {children}
+      {Children.map(children, (child) =>
+        typeof child === "string" ? chipLabel(child) : child,
+      )}
     </HrefLink>
   );
 }

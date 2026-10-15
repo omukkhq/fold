@@ -6,9 +6,13 @@ import {
   entryText,
   fileSides,
   hunkSides,
-  nextStepText,
+  nextStepText as nextStepTextSegments,
   reportTrees,
 } from "./conflict";
+import { segmentsText } from "@/people/segments";
+
+const nextStepText = (...args: Parameters<typeof nextStepTextSegments>) =>
+  segmentsText(nextStepTextSegments(...args));
 
 const report = conflictReport("P-6", 1);
 
@@ -51,7 +55,7 @@ describe("conflict report text", () => {
       { label: "P-6 v1", entry: `tree ${report.trees.version.slice(0, 7)}` },
     ]);
     expect(nextStepText("frontend/charts", 1)).toBe(
-      "Next: frontend/charts runs sync_workspace, resolves, and sends v2.",
+      "Next: @frontend/charts runs sync_workspace, resolves, and sends v2.",
     );
   });
 

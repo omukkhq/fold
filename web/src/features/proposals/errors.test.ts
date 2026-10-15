@@ -45,7 +45,7 @@ describe("describeFailure", () => {
     expect(
       describeFailure(refusal("human_approval_missing", { reviewer: "ana" }))
         .text,
-    ).toBe("fold waits for ana to approve this version.");
+    ).toBe("fold waits for @ana to approve this version.");
     expect(describeFailure(refusal("human_approval_missing")).text).toBe(
       "fold waits for a human to approve this version.",
     );

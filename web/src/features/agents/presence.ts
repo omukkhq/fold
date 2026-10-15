@@ -1,7 +1,7 @@
+import { actorSegment, seg, type Segment } from "@/people/segments";
 import type { BadgeTone } from "@/components/badge/badges";
 import { presenceSpec } from "@/components/avatar/presence";
 import { formatAsOf, formatSince } from "@/format/time";
-import { bareName } from "@/people/names";
 import type {
   AgentAttention,
   AgentView,
@@ -158,7 +158,7 @@ export function plainTags(agent: AgentView): string[] {
 }
 
 /** `2 claims · 2 workspaces · 1 open proposal`, or `1 review claim · integrator granted by tanim`; a count of zero is left out, and so is an unknown granter. */
-export function footLine(agent: AgentView): string {
+export function footLine(agent: AgentView): Segment[] {
   const claims = agentClaims(agent).map((row) => row.claim);
   const implementation = claims.filter((c) => c.kind === "implementation");
   const counts: [number, string][] = [
@@ -175,9 +175,9 @@ export function footLine(agent: AgentView): string {
     .map(([count, noun]) => plural(count, noun));
   const granter = agent.integrator_granted_by;
   if (hasIntegrator(agent) && granter) {
-    parts.push(`integrator granted by ${bareName(granter)}`);
+    return seg`${parts.join(" · ")}${parts.length > 0 ? " · " : ""}integrator granted by ${actorSegment(granter)}`;
   }
-  return parts.length > 0 ? parts.join(" · ") : "no claims";
+  return [parts.length > 0 ? parts.join(" · ") : "no claims"];
 }
 
 /** Each worker after its parent, with its depth, so the list reads as a tree. */

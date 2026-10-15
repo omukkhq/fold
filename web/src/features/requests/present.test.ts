@@ -21,11 +21,15 @@ import {
   joinIds,
   kindOf,
   listSummary,
-  metaLine,
+  metaLine as metaLineSegments,
   shownDraft,
   threadSummary,
   versionText,
 } from "./present";
+import { segmentsText } from "@/people/segments";
+
+const metaLine = (...args: Parameters<typeof metaLineSegments>) =>
+  segmentsText(metaLineSegments(...args));
 
 const HOUR = 3_600_000;
 
@@ -85,20 +89,20 @@ describe("metaLine", () => {
 
   it("says who acts next in each state", () => {
     expect(line({})).toBe(
-      "Requested by tanim 3 h ago · no orchestrator has claimed it yet",
+      "Requested by @tanim 3 h ago · no orchestrator has claimed it yet",
     );
     expect(line({ state: "drafting", drafter: "backend" })).toBe(
-      "Requested by tanim 3 h ago · backend is drafting the cards",
+      "Requested by @tanim 3 h ago · @backend is drafting the cards",
     );
     expect(
       line({ state: "drafting", drafter: "backend", latest_version: 1 }),
     ).toBe(
-      "Requested by tanim 3 h ago · backend is drafting the version after v1",
+      "Requested by @tanim 3 h ago · @backend is drafting the version after v1",
     );
     expect(
       line({ state: "draft_ready", drafter: "backend", latest_version: 2 }),
     ).toBe(
-      "Requested by tanim 3 h ago · backend is the drafter · v2 waits for the requester",
+      "Requested by @tanim 3 h ago · @backend is the drafter · v2 waits for the requester",
     );
     expect(
       line({
@@ -107,10 +111,10 @@ describe("metaLine", () => {
         latest_version: 1,
       }),
     ).toBe(
-      "Requested by tanim 3 h ago · backend is the drafter · v1 went back to the drafter",
+      "Requested by @tanim 3 h ago · @backend is the drafter · v1 went back to the drafter",
     );
     expect(line({ state: "closed", updated_at: now - 60_000 })).toBe(
-      "Requested by tanim 3 h ago · closed 1 min ago",
+      "Requested by @tanim 3 h ago · closed 1 min ago",
     );
   });
 
@@ -121,7 +125,7 @@ describe("metaLine", () => {
       updated_at: T0,
     };
     expect(line(approved, ["T-12", "T-13"])).toMatch(
-      /^Requested by tanim 3 h ago · tanim approved v2 at .+ · T-12 and T-13 were created$/,
+      /^Requested by @tanim 3 h ago · @tanim approved v2 at .+ · T-12 and T-13 were created$/,
     );
     expect(line(approved, ["T-12"])).toMatch(/T-12 was created$/);
     expect(line(approved)).toMatch(/approved v2 at [^·]+$/);

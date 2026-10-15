@@ -35,10 +35,7 @@ export function ThreadBox({
             )}
           >
             <p className="flex items-center gap-8 font-mono text-caption text-text-muted">
-              <PersonName
-                name={entry.comment.author}
-                avatarClassName="font-ui"
-              />
+              <PersonName name={entry.comment.author} className="text-meta" />
               <span className="min-w-0 truncate">
                 {commentNote(thread, entry)}
               </span>

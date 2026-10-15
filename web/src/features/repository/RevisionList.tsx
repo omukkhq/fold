@@ -2,6 +2,7 @@ import type { Revision } from "@/api/repository";
 import { Mono } from "@/components/mono/Mono";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
+import { ActorText } from "@/people/ActorText";
 import { describeRevision } from "./describe";
 
 interface RevisionListProps {
@@ -55,7 +56,7 @@ export function RevisionList({
                   {lines.title}
                 </span>
                 <Mono className="truncate text-label text-text-muted">
-                  {lines.meta}
+                  <ActorText segments={lines.meta} />
                 </Mono>
               </span>
             </button>

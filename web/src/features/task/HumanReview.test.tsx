@@ -90,7 +90,7 @@ describe("the human-review controls", () => {
       }),
     );
     const review = await screen.findByRole("region", { name: "Human review" });
-    expect(within(review).getByText("Required · any human")).toBeTruthy();
+    expect(within(review).getByText(/Required ·\s*any human/)).toBeTruthy();
     await userEvent.click(
       within(review).getByRole("button", { name: "Turn off human review" }),
     );

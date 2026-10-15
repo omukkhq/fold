@@ -16,6 +16,16 @@ export function bareName(actor: string): string {
   return isHumanName(actor) ? actor.slice(HUMAN_PREFIX.length) : actor;
 }
 
+/** `@tanim`, `@frontend/ui`: the person as plain text where markup is not possible, such as a placeholder. */
+export function atName(actor: string): string {
+  return `@${bareName(actor)}`;
+}
+
+/** A human reviewer the daemon holds as a bare name (`tanim`), as the actor `PersonName` takes; null when no one is named. */
+export function reviewerActor(reviewer: string | null): string | null {
+  return reviewer === null ? null : `${HUMAN_PREFIX}${reviewer}`;
+}
+
 /** The names a mention can point at. Agents hold both agent names and worker names (`frontend`, `frontend/ui`). */
 export interface People {
   humans: readonly string[];

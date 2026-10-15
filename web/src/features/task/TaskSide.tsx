@@ -23,7 +23,6 @@ import {
   type TaskDetail,
 } from "@/api/tasks";
 import { HrefLink } from "@/app/HrefLink";
-import { Avatar } from "@/components/avatar/Avatar";
 import { Button, IconButton } from "@/components/button/Button";
 import { TextField } from "@/components/form/controls";
 import { Mono } from "@/components/mono/Mono";
@@ -31,6 +30,8 @@ import { taskPath } from "@/features/board/card";
 import { formatAge } from "@/format/time";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
+import { ActorText } from "@/people/ActorText";
+import { PersonName } from "@/people/PersonName";
 import {
   canEditDependencies,
   groupDependencies,
@@ -112,10 +113,7 @@ function Responsible({ task, now }: { task: TaskDetail; now: number }) {
       {implementation ? (
         <>
           <span className="inline-flex items-center gap-6">
-            <Avatar name={implementation.holder} />
-            <span className="font-mono text-bar text-text">
-              {implementation.holder}
-            </span>
+            <PersonName name={implementation.holder} className="text-body" />
           </span>
           <p
             className={cn(
@@ -131,7 +129,8 @@ function Responsible({ task, now }: { task: TaskDetail; now: number }) {
       )}
       {review ? (
         <p className="text-meta leading-normal text-text-muted">
-          Review claim: <Mono>{review.holder}</Mono> · {claimNote(review, now)}
+          Review claim: <PersonName name={review.holder} className="text-bar" />{" "}
+          · {claimNote(review, now)}
         </p>
       ) : null}
     </SideGroup>
@@ -264,7 +263,10 @@ function Proposal({ slug, task }: { slug: string; task: TaskDetail }) {
                   key={`${review.reviewer}-${String(review.at)}`}
                   className="text-meta text-text-muted"
                 >
-                  {reviewText(review)}
+                  <ActorText
+                    segments={reviewText(review)}
+                    personClassName="text-bar"
+                  />
                 </li>
               ))}
             </ul>
@@ -284,7 +286,10 @@ function Proposal({ slug, task }: { slug: string; task: TaskDetail }) {
           <Mono href={revisionPath(slug, integration.revision)}>
             {integration.revision}
           </Mono>{" "}
-          {integrationText(integration)}
+          <ActorText
+            segments={integrationText(integration)}
+            personClassName="text-bar"
+          />
         </p>
       ) : null}
     </SideGroup>
@@ -404,9 +409,17 @@ function HumanReview({ slug, task }: { slug: string; task: TaskDetail }) {
     <SideGroup title="Human review">
       <p className="flex items-center gap-6 text-bar font-medium text-secondary-text">
         <UserCheck aria-hidden="true" size={13} />
-        {lines.title}
+        Required ·
+        {lines.reviewer === null ? (
+          "any human"
+        ) : (
+          <PersonName name={lines.reviewer} className="text-body" />
+        )}
       </p>
-      <p className="text-meta text-text-muted">{lines.setBy}</p>
+      <p className="flex flex-wrap items-center gap-x-6 text-meta text-text-muted">
+        Set by <PersonName name={lines.setBy} className="text-bar" />
+        {lines.at === null ? null : ` · ${lines.at}`}
+      </p>
       <p className="text-bar leading-normal text-text">{mark.reason}</p>
       {editable ? (
         <Button
@@ -615,7 +628,10 @@ function History({ task }: { task: TaskDetail }) {
             key={event.seq}
             className="text-meta leading-normal text-text-muted"
           >
-            {historyText(event)}
+            <ActorText
+              segments={historyText(event)}
+              personClassName="text-bar"
+            />
           </li>
         ))}
       </ul>

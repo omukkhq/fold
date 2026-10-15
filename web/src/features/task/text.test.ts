@@ -6,9 +6,9 @@ import {
   collapse,
   defaultRecipient,
   feedbackPlaceholder,
-  historyText,
+  historyText as historyTextSegments,
   humanReviewLines,
-  integrationText,
+  integrationText as integrationTextSegments,
   messageCountText,
   parseRecipient,
   proposalStateText,
@@ -16,6 +16,13 @@ import {
   reviewText,
   statusLook,
 } from "./text";
+import { segmentsText } from "@/people/segments";
+
+const historyText = (...args: Parameters<typeof historyTextSegments>) =>
+  segmentsText(historyTextSegments(...args));
+
+const integrationText = (...args: Parameters<typeof integrationTextSegments>) =>
+  segmentsText(integrationTextSegments(...args));
 
 const AT = new Date(2026, 9, 15, 13, 40, 5).getTime();
 const MINUTE = 60_000;
@@ -66,7 +73,7 @@ describe("historyText", () => {
         created_at: AT,
         seq: 1,
       }),
-    ).toBe("Claimed by frontend/ui · 13:40");
+    ).toBe("Claimed by @frontend/ui · 13:40");
     expect(
       historyText({
         type: "task.created",
@@ -74,7 +81,7 @@ describe("historyText", () => {
         created_at: AT,
         seq: 1,
       }),
-    ).toBe("Created by human:tanim · 13:40");
+    ).toBe("Created by @tanim · 13:40");
   });
 
   it("names a type that has no sentence", () => {
@@ -85,7 +92,7 @@ describe("historyText", () => {
         created_at: AT,
         seq: 1,
       }),
-    ).toBe("remote.pushed by fold · 13:40");
+    ).toBe("remote.pushed by @fold · 13:40");
   });
 });
 
@@ -132,19 +139,13 @@ describe("humanReviewLines", () => {
         { reviewer: "tanim", reason: "auth", set_by: "planner" },
         AT,
       ),
-    ).toEqual({
-      title: "Required · tanim",
-      setBy: "Set by planner · 13:40",
-    });
+    ).toEqual({ reviewer: "human:tanim", setBy: "planner", at: "13:40" });
     expect(
       humanReviewLines(
         { reviewer: null, reason: "auth", set_by: "planner" },
         null,
       ),
-    ).toEqual({
-      title: "Required · any human",
-      setBy: "Set by planner",
-    });
+    ).toEqual({ reviewer: null, setBy: "planner", at: null });
   });
 });
 
@@ -156,12 +157,12 @@ describe("proposal texts", () => {
         verdict: "request_changes",
         version: 2,
       }),
-    ).toBe("review requested changes on v2");
+    ).toEqual([{ actor: "review" }, " requested changes on v2"]);
     expect(
       (["comment", "approve", "reject"] as const).map((verdict) =>
-        reviewText({ reviewer: "r", verdict, version: 1 }),
+        segmentsText(reviewText({ reviewer: "r", verdict, version: 1 })),
       ),
-    ).toEqual(["r commented on v1", "r approved on v1", "r rejected on v1"]);
+    ).toEqual(["@r commented on v1", "@r approved on v1", "@r rejected on v1"]);
     expect(proposalStateText("open", 3)).toBe("waiting for review · v3");
     expect(proposalStateText("conflict", 1)).toBe("conflict · v1");
     expect(
@@ -171,7 +172,7 @@ describe("proposal texts", () => {
         by: "review",
         at: AT,
       }),
-    ).toBe("by review · 13:40");
+    ).toBe("by @review · 13:40");
     expect(messageCountText(2, "T-12")).toBe("2 linked to T-12");
   });
 });
@@ -201,7 +202,7 @@ describe("feedback recipients", () => {
 
   it("name the reader in the placeholder", () => {
     expect(feedbackPlaceholder({ kind: "holder" }, "frontend/ui")).toBe(
-      "Write feedback to frontend/ui…",
+      "Write feedback to @frontend/ui…",
     );
     expect(feedbackPlaceholder({ kind: "holder" }, null)).toBe(
       "Write feedback to the claim holder…",

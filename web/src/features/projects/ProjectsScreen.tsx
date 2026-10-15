@@ -4,10 +4,10 @@ import { useState } from "react";
 import { projectsQuery } from "@/api/queries";
 import { HrefLink } from "@/app/HrefLink";
 import { ThemeToggle } from "@/app/ThemeToggle";
-import { Avatar } from "@/components/avatar/Avatar";
 import { Mono } from "@/components/mono/Mono";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { cn } from "@/lib/cn";
+import { PersonName } from "@/people/PersonName";
 import { focusRing } from "@/lib/focus";
 import { lastChangeLine, summaryLine } from "./counts";
 
@@ -79,12 +79,9 @@ export function ProjectsScreen() {
                             overview.agents.map((agent) => (
                               <span
                                 key={agent.name}
-                                className="flex items-center gap-5 rounded-full py-2 pr-8 pl-3 inset-ring inset-ring-border"
+                                className="flex items-center gap-5 rounded-full px-8 py-2 text-code inset-ring inset-ring-border"
                               >
-                                <Avatar name={agent.name} />
-                                <span className="text-code text-text">
-                                  {agent.name}
-                                </span>
+                                <PersonName name={agent.name} />
                               </span>
                             ))
                           )}

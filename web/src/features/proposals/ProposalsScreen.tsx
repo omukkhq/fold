@@ -1,9 +1,10 @@
+import { ActorText } from "@/people/ActorText";
+import { HumanReviewBadge } from "@/people/HumanReviewBadge";
 import { PersonName } from "@/people/PersonName";
 import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { Check, GitMerge, GitPullRequest, UserRoundCheck } from "lucide-react";
 import { proposalsQuery } from "@/api/queries";
 import { HrefLink } from "@/app/HrefLink";
-import { Badge } from "@/components/badge/Badge";
 import { Button } from "@/components/button/Button";
 import { Menu } from "@/components/overlay/Menu";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
@@ -25,7 +26,7 @@ import {
   type ListSearch,
 } from "./filters";
 import { integratedRevisions } from "./integration";
-import { reviewPill, versionText, waitingOn } from "./present";
+import { claimLine, reviewPill, versionText, waitingOn } from "./present";
 import { ReviewPill, WaitingChip } from "./ReviewPill";
 
 interface ProposalsScreenProps {
@@ -193,17 +194,15 @@ export function ProposalsScreen({
                           {p.title}
                         </HrefLink>
                         {p.human_review ? (
-                          <Badge tone="human-review">
-                            {p.human_review.reviewer
-                              ? `Human review · ${p.human_review.reviewer}`
-                              : "Human review"}
-                          </Badge>
+                          <HumanReviewBadge
+                            reviewer={p.human_review.reviewer}
+                          />
                         ) : null}
                       </span>
                     </td>
                     <td className={cn(CELL, MONO)}>{p.task}</td>
                     <td className={cn(CELL, MONO)}>
-                      <PersonName name={p.author} chip={false} />
+                      <PersonName name={p.author} className="text-bar" />
                     </td>
                     <td className={cn(CELL, MONO)}>{versionText(p)}</td>
                     <td className={CELL}>
@@ -222,9 +221,7 @@ export function ProposalsScreen({
                           className="whitespace-nowrap"
                         />
                         <span className="font-mono text-caption whitespace-nowrap text-text-muted">
-                          {p.review_claim
-                            ? `claimed by ${p.review_claim}`
-                            : "unclaimed"}
+                          <ActorText segments={claimLine(p)} />
                         </span>
                       </span>
                     </td>

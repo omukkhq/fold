@@ -12,22 +12,21 @@ import {
 import type { BoardCard as BoardCardData, BoardProposal } from "@/api/board";
 import { keys } from "@/api/keys";
 import { HrefLink } from "@/app/HrefLink";
-import { Avatar } from "@/components/avatar/Avatar";
 import { Badge } from "@/components/badge/Badge";
 import { Card } from "@/components/card/Card";
 import { Label } from "@/components/label/Label";
 import { Mono } from "@/components/mono/Mono";
 import { Tooltip } from "@/components/overlay/Tooltip";
 import { cn } from "@/lib/cn";
+import { HumanReviewBadge } from "@/people/HumanReviewBadge";
+import { PersonName } from "@/people/PersonName";
 import type { LiveWorkspace } from "@/live/envelope";
 import { activityLine, liveFilesText, type ActivityLine } from "./activityLine";
 import { attentionMark, hasKind } from "./attention";
-import { agentOf } from "./filters";
 import {
   blockedText,
   blocksText,
   checklistText,
-  humanReviewText,
   messagesText,
   needsText,
   proposalLook,
@@ -183,19 +182,17 @@ export function BoardCard({
         ) : null}
       </div>
       {card.human_review ? (
-        <Badge tone="human-review" className="self-start">
-          {humanReviewText(card.human_review)}
-        </Badge>
+        <HumanReviewBadge
+          reviewer={card.human_review.reviewer}
+          className="self-start"
+        />
       ) : null}
       {card.proposal ? <ProposalPill proposal={card.proposal} /> : null}
       {hasFooter ? (
         <div className="flex items-center justify-between gap-8 border-t border-border-subtle pt-7">
           {card.worker ? (
-            <span className="inline-flex min-w-0 items-center gap-6">
-              <Avatar name={agentOf(card.worker)} />
-              <Mono className="truncate text-caption text-text-muted">
-                {card.worker}
-              </Mono>
+            <span className="min-w-0 truncate text-meta">
+              <PersonName name={card.worker} />
             </span>
           ) : (
             <span />

@@ -1,9 +1,4 @@
-import type {
-  BoardCard,
-  BoardProposal,
-  HumanReviewMark,
-  CardProposalState,
-} from "@/api/board";
+import type { BoardCard, BoardProposal, CardProposalState } from "@/api/board";
 
 /**
  * The task dialog's path; the dialog route renders the board beneath itself. `search` is the board's filters as a
@@ -94,10 +89,4 @@ export function proposalLook(proposal: BoardProposal): ProposalLook {
     default:
       return "active";
   }
-}
-
-export function humanReviewText(mark: HumanReviewMark): string {
-  return mark.reviewer === null
-    ? "Human review"
-    : `Human review · ${mark.reviewer}`;
 }

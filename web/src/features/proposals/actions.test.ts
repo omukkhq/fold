@@ -71,7 +71,7 @@ describe("integrateBlock", () => {
       },
     );
     expect(integrateBlock(p, "r8")).toBe(
-      "Integrate waits for tanim to approve v2.",
+      "Integrate waits for @tanim to approve v2.",
     );
     const anyHuman = {
       ...p,

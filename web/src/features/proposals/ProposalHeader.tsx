@@ -1,3 +1,5 @@
+import { ActorText } from "@/people/ActorText";
+import { segmentsText, type Segments } from "@/people/segments";
 import { PersonName } from "@/people/PersonName";
 import { ChevronRight, GitCompare, GitPullRequest } from "lucide-react";
 import type { ProposalDetail } from "@/api/proposals";
@@ -41,7 +43,9 @@ export function ProposalHeader({
       : null,
     current ? filesText(current, proposal.totals) : null,
     summary.state === "open" ? claimText(summary) : null,
-  ].filter((m): m is string => m !== null);
+  ]
+    .filter((m): m is string | Segments => m !== null)
+    .map((m): Segments => (typeof m === "string" ? [m] : m));
   return (
     <header className="flex flex-col gap-10 px-24 pt-18">
       <nav aria-label="Breadcrumb">
@@ -84,7 +88,7 @@ export function ProposalHeader({
       </div>
       <div className="flex flex-wrap items-center gap-x-16 gap-y-4 text-bar text-text-muted">
         <span className="flex items-center gap-6 text-text">
-          <PersonName name={summary.author} className="font-mono text-code" />
+          <PersonName name={summary.author} className="text-meta" />
         </span>
         <span>
           for{" "}
@@ -99,7 +103,9 @@ export function ProposalHeader({
           </HrefLink>
         </span>
         {meta.map((item) => (
-          <span key={item}>{item}</span>
+          <span key={segmentsText(item)}>
+            <ActorText segments={item} />
+          </span>
         ))}
       </div>
       <nav aria-label="Versions" className={TAB_LIST}>

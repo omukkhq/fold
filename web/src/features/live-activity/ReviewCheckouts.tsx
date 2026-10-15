@@ -1,7 +1,7 @@
 import { ScanEye } from "lucide-react";
 import type { ReactNode } from "react";
-import { Avatar } from "../../components/avatar/Avatar";
 import { cn } from "../../lib/cn";
+import { PersonName } from "../../people/PersonName";
 import { checkoutText } from "./eventStream";
 import { useReviewCheckouts } from "./useEventStream";
 
@@ -83,12 +83,7 @@ export function ReviewCheckouts({ slug }: { slug: string }) {
             {row.worker === null ? (
               "no worker"
             ) : (
-              <>
-                <span aria-hidden="true" className="flex">
-                  <Avatar name={row.worker} />
-                </span>
-                {row.worker}
-              </>
+              <PersonName name={row.worker} className="text-bar" />
             )}
           </span>
           <p className="min-w-0 flex-1 text-bar text-text-muted">

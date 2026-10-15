@@ -263,7 +263,7 @@ describe("BoardScreen", () => {
     expect(screen.getByText("Question for you")).toBeTruthy();
     expect(screen.getByText("Your review")).toBeTruthy();
     expect(screen.getByText("Stalled · needs you")).toBeTruthy();
-    expect(screen.getByText("Human review · tanim")).toBeTruthy();
+    expect(screen.getByText("Human review").textContent).toContain("tanim");
     expect(screen.getByText("Blocked by T-3")).toBeTruthy();
     expect(screen.getByText("needs T-2")).toBeTruthy();
     expect(

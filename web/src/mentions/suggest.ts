@@ -120,6 +120,17 @@ export function itemSuggestions(
   );
 }
 
+export type RowIcon = "user" | "bot" | "file" | "folder";
+
+/** The icon a People or Files row starts with; item rows have none. */
+export function rowIcon(suggestion: Suggestion): RowIcon | null {
+  if (suggestion.group === "people") {
+    return suggestion.detail === "human" ? "user" : "bot";
+  }
+  if (suggestion.group === "files") return suggestion.open ? "folder" : "file";
+  return null;
+}
+
 /** The humans, then the agents and workers, whose name starts with the typed part, at most five per kind. A name is written as it is, without `human:`. */
 export function personSuggestions(query: string, people: People): Suggestion[] {
   const q = query.toLowerCase();

@@ -1,3 +1,4 @@
+import { ActorText } from "@/people/ActorText";
 import { HrefLink } from "@/app/HrefLink";
 import type { ThreadView } from "@/api/messages";
 import { formatAsOf } from "@/format/time";
@@ -68,14 +69,21 @@ export function ThreadList({
               </span>
               <span className="flex items-center gap-8 font-mono text-label text-text-muted">
                 <span className="min-w-0 flex-1 truncate">
-                  {first ? routeLine(first) : ""}
+                  {first ? (
+                    <ActorText
+                      segments={routeLine(first)}
+                      personClassName="text-bar"
+                    />
+                  ) : (
+                    ""
+                  )}
                 </span>
                 {thread.task ? <span>{thread.task}</span> : null}
                 {thread.proposal ? <span>{thread.proposal}</span> : null}
               </span>
               {last ? (
                 <span className="truncate text-bar text-text-muted">
-                  {previewLine(last)}
+                  <ActorText segments={previewLine(last)} />
                 </span>
               ) : null}
             </HrefLink>

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  rowIcon,
   activeMention,
   applyPick,
   groupRuns,
@@ -254,5 +255,16 @@ describe("optionLook and optionMark", () => {
       "@",
       "#",
     ]);
+  });
+});
+
+describe("rowIcon", () => {
+  it("picks user, bot, file and folder, and none for an item", () => {
+    const base = { insert: "x", label: "x", detail: "", open: false };
+    expect(rowIcon({ ...base, group: "people", detail: "human" })).toBe("user");
+    expect(rowIcon({ ...base, group: "people", detail: "agent" })).toBe("bot");
+    expect(rowIcon({ ...base, group: "files" })).toBe("file");
+    expect(rowIcon({ ...base, group: "files", open: true })).toBe("folder");
+    expect(rowIcon({ ...base, group: "tasks" })).toBeNull();
   });
 });

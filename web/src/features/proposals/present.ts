@@ -6,7 +6,14 @@ import type {
   Review,
   Verdict,
 } from "@/api/proposals";
-import { bareName, isHumanName } from "@/people/names";
+import { reviewerActor } from "@/people/names";
+import {
+  actorSegment,
+  reviewerSegment,
+  seg,
+  segmentsText,
+  type Segments,
+} from "@/people/segments";
 
 export type PillTone = "danger" | "human" | "approved" | "neutral" | "done";
 
@@ -23,12 +30,9 @@ export interface Pill {
   tone: PillTone;
   icon: PillIcon;
   text: string;
+  /** The same text with its people as actors, for the pill to draw them as @names. */
+  segments?: Segments;
 }
-
-export const isHuman = isHumanName;
-
-/** A human shows by the name they signed in with, a worker by its full name. */
-export const displayName = bareName;
 
 function verdictsOn(version: number, reviews: readonly Review[]): Review[] {
   return reviews
@@ -95,12 +99,19 @@ export function reviewPill(
   }
   if (p.latest_verdict === "approve") {
     if (p.human_review && !p.human_approved) {
+      if (long) {
+        return {
+          tone: "human",
+          icon: "human",
+          text: "Agent approved · waiting for human review",
+        };
+      }
+      const segments = seg`Agent approved · needs ${reviewerSegment(p.human_review.reviewer, "a human")}`;
       return {
         tone: "human",
         icon: "human",
-        text: long
-          ? "Agent approved · waiting for human review"
-          : `Agent approved · needs ${p.human_review.reviewer ?? "a human"}`,
+        text: segmentsText(segments),
+        segments,
       };
     }
     return { tone: "approved", icon: "approved", text: "Approved" };
@@ -116,24 +127,22 @@ export const PILL_CLASSES: Record<PillTone, string> = {
   done: "bg-ink-soft text-text",
 };
 
+/** Whose turn it is: an actor, or null for any human when the human-review mark names no one. */
 export interface Waiting {
-  name: string;
-  human: boolean;
+  actor: string | null;
 }
 
 /**
  * The author while the turn is theirs. While it is the reviewer's, the human the mark names once an agent approved without the human approval, else the review claim's holder; nobody when none of them is named.
  */
 export function waitingOn(p: ProposalSummary): Waiting | null {
-  if (p.turn === "with_author") {
-    return { name: displayName(p.author), human: isHuman(p.author) };
-  }
+  if (p.turn === "with_author") return { actor: p.author };
   if (p.turn !== "with_reviewer") return null;
   if (p.latest_verdict === "approve" && p.human_review && !p.human_approved) {
-    return { name: p.human_review.reviewer ?? "a human", human: true };
+    return { actor: reviewerActor(p.human_review.reviewer) };
   }
   if (p.review_claim === null) return null;
-  return { name: displayName(p.review_claim), human: isHuman(p.review_claim) };
+  return { actor: p.review_claim };
 }
 
 /** `v2 of 2`: the current version is always the latest. */
@@ -199,10 +208,17 @@ export function filesText(
   return `${files} · +${String(totals.added_lines)} −${String(totals.removed_lines)}`;
 }
 
-export function claimText(p: ProposalSummary): string {
+export function claimText(p: ProposalSummary): Segments {
   return p.review_claim
-    ? `review claimed by ${p.review_claim}`
-    : "review not claimed";
+    ? seg`review claimed by ${actorSegment(p.review_claim)}`
+    : ["review not claimed"];
+}
+
+/** The list's claim line under the pill. */
+export function claimLine(p: ProposalSummary): Segments {
+  return p.review_claim
+    ? seg`claimed by ${actorSegment(p.review_claim)}`
+    : ["unclaimed"];
 }
 
 export function currentVersion(p: ProposalDetail): ProposalVersion | null {
