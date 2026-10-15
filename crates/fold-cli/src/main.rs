@@ -50,6 +50,8 @@ enum Command {
     Push(commands::remote::PushArgs),
     /// Run a Claude Code hook; the generated .claude/settings.json calls these
     Hook(hook::HookArgs),
+    /// Bring the commits of the Git remote into main; a conflict becomes a sync task
+    Pull(commands::remote::PullArgs),
 }
 
 /// clap prints a parse outcome, including `--help` and `--version`, and exits with its own code; a failed write is a runtime error with exit code 1.
@@ -105,6 +107,9 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         Some(Command::Hook(args)) => {
             hook::run(&args, out);
             Ok(())
+        }
+        Some(Command::Pull(args)) => {
+            commands::remote::run_pull(&args, out).map_err(Failure::Remote)
         }
         None => output::line(out, &output::version_line()).map_err(Failure::Write),
     }

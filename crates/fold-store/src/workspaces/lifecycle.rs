@@ -103,7 +103,8 @@ pub struct WorkspaceRow {
 pub struct NewTaskWorkspace<'a> {
     pub id: WorkspaceId,
     pub task: TaskId,
-    pub worker_id: i64,
+    /// `None` for the workspace of a sync task, which waits for the first claimant to adopt it.
+    pub worker_id: Option<i64>,
     pub path: &'a str,
     pub base: RevisionId,
     pub now: Timestamp,

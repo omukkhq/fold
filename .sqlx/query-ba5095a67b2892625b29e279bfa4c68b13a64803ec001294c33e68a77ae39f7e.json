@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT remote_commit FROM tasks WHERE number = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "remote_commit",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "remote_commit"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "ba5095a67b2892625b29e279bfa4c68b13a64803ec001294c33e68a77ae39f7e"
+}

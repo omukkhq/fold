@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
-use fold_core::{Actor, FoldError, NewEvent, RevisionId, codes, events::types, policy};
+use fold_core::{
+    Actor, Clock, FoldError, NewEvent, ProjectPaths, RevisionId, codes, events::types, policy,
+};
 use fold_store::workspaces::RevisionRow;
+use fold_store::{Store, StoreError};
 use fold_vcs::git::{CommitId, Git};
 use fold_vcs::git_export::{ExportRevision, ExportTarget, Signature, write_commits};
 use fold_vcs::git_remote::{
@@ -14,8 +17,8 @@ use serde_json::json;
 
 use super::{ProjectError, load_config};
 use crate::projects::ProjectHandle;
-use crate::services::events::EventBuffer;
-use crate::services::workspaces::{commit_message, unsynced};
+use crate::services::events::{EventBuffer, EventBus};
+use crate::services::workspaces::{commit_message, merge_parent, unsynced};
 
 /// What a push did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,8 +47,41 @@ pub async fn push(
     git: &Git,
 ) -> Result<PushOutcome, ProjectError> {
     policy::can_push(actor).map_err(FoldError::from)?;
-    let (handle, actor, git) = (Arc::clone(handle), actor.clone(), git.clone());
-    tokio::spawn(async move { run(&handle, &actor, &git).await })
+    push_with(RemoteContext::of(handle), actor, git).await
+}
+
+/// What a push needs of an open project. The automatic push keeps one instead of the project's handle, so it never keeps a closed project open.
+#[derive(Clone)]
+pub struct RemoteContext {
+    pub(crate) slug: String,
+    pub(crate) paths: ProjectPaths,
+    pub(crate) store: Store,
+    pub(crate) clock: Arc<dyn Clock>,
+    pub(crate) bus: EventBus,
+    pub(crate) remote_lock: Arc<tokio::sync::Mutex<()>>,
+}
+
+impl RemoteContext {
+    pub(crate) fn of(handle: &ProjectHandle) -> Self {
+        Self {
+            slug: handle.slug.clone(),
+            paths: handle.paths.clone(),
+            store: handle.store.clone(),
+            clock: handle.clock.clone(),
+            bus: handle.bus.clone(),
+            remote_lock: handle.remote_lock.clone(),
+        }
+    }
+}
+
+/// [`push`] without the policy check, for a caller that checked it: the push runs as its own task.
+pub(crate) async fn push_with(
+    context: RemoteContext,
+    actor: &Actor,
+    git: &Git,
+) -> Result<PushOutcome, ProjectError> {
+    let (actor, git) = (actor.clone(), git.clone());
+    tokio::spawn(async move { run(&context, &actor, &git).await })
         .await
         .unwrap_or_else(|error| {
             Err(FoldError::new(codes::INTERNAL_ERROR, format!("the push stopped: {error}")).into())
@@ -53,17 +89,13 @@ pub async fn push(
 }
 
 async fn run(
-    handle: &ProjectHandle,
+    handle: &RemoteContext,
     actor: &Actor,
     git: &Git,
 ) -> Result<PushOutcome, ProjectError> {
     let config = load_config(&handle.paths).await?.git;
     let Some(remote) = config.remote else {
-        return Err(
-            FoldError::new(codes::REMOTE_NOT_SET, "the project has no Git remote")
-                .with_hint("run fold remote set <url> in the project first")
-                .into(),
-        );
+        return Err(remote_not_set().into());
     };
     let branch = config.branch;
     let remote_guard = handle.remote_lock.clone().lock_owned().await;
@@ -93,7 +125,10 @@ async fn run(
             last: last.map(|(number, _)| number),
         });
     }
-    let revisions: Vec<ExportRevision> = rows.iter().map(export_revision).collect();
+    let revisions = rows
+        .iter()
+        .map(export_revision)
+        .collect::<Result<Vec<_>, StoreError>>()?;
     let (added, sent) = {
         let (git, branch) = (git.clone(), branch.clone());
         blocking(move || {
@@ -174,7 +209,7 @@ async fn run(
     })
 }
 
-fn export_revision(row: &RevisionRow) -> ExportRevision {
+fn export_revision(row: &RevisionRow) -> Result<ExportRevision, StoreError> {
     let fold = Signature {
         name: "fold".to_owned(),
         email: "fold@localhost".to_owned(),
@@ -187,14 +222,15 @@ fn export_revision(row: &RevisionRow) -> ExportRevision {
         Some(proposal) => author(&proposal.agent, &proposal.worker),
         None => fold.clone(),
     };
-    ExportRevision {
+    Ok(ExportRevision {
         number: row.number,
         tree: row.tree_hash,
         created_at: row.created_at,
         message: commit_message(row),
         author,
         committer: fold,
-    }
+        merge: merge_parent(row)?,
+    })
 }
 
 /// The worker that wrote a proposal as a Git author: `frontend/ui` is `frontend/ui <frontend.ui@fold.local>` and the main worker `frontend` is `frontend <frontend.frontend@fold.local>`. A deeper worker such as `frontend/ui/forms` gives `frontend.ui.forms@fold.local`.
@@ -209,7 +245,12 @@ fn author(agent: &str, worker: &str) -> Signature {
     }
 }
 
-fn diverged(revision: RevisionId, commit: &CommitId) -> FoldError {
+pub(super) fn remote_not_set() -> FoldError {
+    FoldError::new(codes::REMOTE_NOT_SET, "the project has no Git remote")
+        .with_hint("run fold remote set <url> in the project first")
+}
+
+pub(super) fn diverged(revision: RevisionId, commit: &CommitId) -> FoldError {
     FoldError::new(
         codes::EXPORT_DIVERGED,
         format!(
@@ -223,7 +264,7 @@ fn diverged(revision: RevisionId, commit: &CommitId) -> FoldError {
     ])
 }
 
-async fn blocking<T: Send + 'static>(
+pub(super) async fn blocking<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, FoldError> + Send + 'static,
 ) -> Result<T, ProjectError> {
     tokio::task::spawn_blocking(work)

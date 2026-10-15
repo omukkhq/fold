@@ -7,12 +7,12 @@ use fold_store::projects::ProjectRow;
 use fold_vcs::git::Git;
 use fold_vcs::platform::Capabilities;
 
-use crate::jobs::{self, MainMaterialiser, MainQueue};
+use crate::jobs::{self, AutoPush, MainMaterialiser, MainQueue};
 use crate::live::{LiveConfig, LiveState};
 use crate::push::{self, PushTargets, PushTask};
 use crate::services::agents::{AgentService, SeenPresence};
 use crate::services::events::EventBus;
-use crate::services::projects::load_config;
+use crate::services::projects::{RemoteContext, load_config};
 use crate::services::reviews::ReviewService;
 use crate::services::tasks::TaskService;
 use crate::services::workspaces::{WorkspaceLocks, WorkspaceService};
@@ -36,7 +36,7 @@ pub struct ProjectHandle {
     pub gc: tokio::sync::Mutex<()>,
     /// Keeps the sweep away from objects that are about to be named. A reused object must not be deleted between its refresh and the row that names it, and the sweep cannot see a row that is not committed. So every path that writes or refreshes objects and then records a row naming them holds this shared from its first object write until that transaction commits, and writes or refreshes each object less than the grace period before the row names it. The sweep holds it exclusive while it lists, checks and deletes objects. It is an `Arc` so a guard can move into blocking work and outlive an aborted caller.
     pub objects: Arc<tokio::sync::RwLock<()>>,
-    /// Held for a whole push, so two pushes of one project never run together. It is an `Arc` so the guard can move into the blocking Git work and outlive an aborted caller.
+    /// Held for a whole push or pull, so two of them never run together in one project; a pull takes the integration mutex after it. It is an `Arc` so the guard can move into the blocking Git work and outlive an aborted caller.
     pub remote_lock: Arc<tokio::sync::Mutex<()>>,
     /// One restore, sync or record per workspace at a time, across every session of the project.
     pub workspace_locks: Arc<WorkspaceLocks>,
@@ -49,6 +49,7 @@ pub struct ProjectHandle {
     _push_task: PushTask,
     /// Keeps `main/` on the head after each integration. It is the only writer of `main/` after `fold init`.
     pub main_view: MainMaterialiser,
+    _auto_push: AutoPush,
 }
 
 impl std::fmt::Debug for ProjectHandle {
@@ -105,6 +106,18 @@ impl ProjectHandle {
             Arc::clone(&capabilities),
             MainQueue::new(),
         );
+        let remote_lock = Arc::new(tokio::sync::Mutex::new(()));
+        let auto_push = jobs::auto_push(
+            RemoteContext {
+                slug: row.slug.clone(),
+                paths: paths.clone(),
+                store: store.clone(),
+                clock: clock.clone(),
+                bus: bus.clone(),
+                remote_lock: remote_lock.clone(),
+            },
+            Git::default(),
+        );
         Ok(Self {
             slug: row.slug.clone(),
             name: row.name.clone(),
@@ -117,13 +130,14 @@ impl ProjectHandle {
             integration: Arc::new(tokio::sync::Mutex::new(())),
             gc: tokio::sync::Mutex::new(()),
             objects: Arc::new(tokio::sync::RwLock::new(())),
-            remote_lock: Arc::new(tokio::sync::Mutex::new(())),
+            remote_lock,
             workspace_locks,
             capabilities,
             live,
             push,
             _push_task: push_task,
             main_view,
+            _auto_push: auto_push,
         })
     }
 

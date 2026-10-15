@@ -50,6 +50,9 @@ pub struct PushArgs {
     project: Option<PathBuf>,
 }
 
+/// `fold pull` takes the same options as `fold push`.
+pub type PullArgs = PushArgs;
+
 #[derive(Debug, Error)]
 pub enum RemoteError {
     #[error(transparent)]
@@ -68,7 +71,7 @@ pub enum RemoteError {
         message: String,
         hint: Option<String>,
     },
-    #[error("the daemon answered the push with a body fold cannot read")]
+    #[error("the daemon answered with a body fold cannot read")]
     Answer,
     #[error("cannot find the fold binary: {0}")]
     Exe(io::Error),
@@ -225,6 +228,22 @@ fn config_io(error: &io::Error) -> FoldError {
 
 /// Asks the daemon to push main to the project's Git remote, starting the daemon when none runs.
 pub fn run_push(args: &PushArgs, out: &mut impl Write) -> Result<(), RemoteError> {
+    let response = post_project(args, "push")?;
+    output::line(out, &push_summary(response)?)?;
+    Ok(())
+}
+
+/// Asks the daemon to bring the remote branch into main, starting the daemon when none runs.
+pub fn run_pull(args: &PullArgs, out: &mut impl Write) -> Result<(), RemoteError> {
+    let response = post_project(args, "pull")?;
+    for line in pull_summary(response)? {
+        output::line(out, &line)?;
+    }
+    Ok(())
+}
+
+/// Sends `POST /api/v1/projects/<slug>/<action>` over the socket as the human in the environment.
+fn post_project(args: &PushArgs, action: &str) -> Result<Response, RemoteError> {
     let dirs = Dirs::from_env();
     let host = init::host_paths(&dirs)?;
     let start = args.project.clone().unwrap_or_else(|| PathBuf::from("."));
@@ -241,29 +260,33 @@ pub fn run_push(args: &PushArgs, out: &mut impl Write) -> Result<(), RemoteError
         .enable_all()
         .build()
         .map_err(RemoteError::Runtime)?;
-    let response = runtime.block_on(async {
+    runtime.block_on(async {
         let slug = slug_for_dir_on_host(&host, &dir).await?;
-        let path = format!("/api/v1/projects/{slug}/push");
+        let path = format!("/api/v1/projects/{slug}/{action}");
         Ok::<_, RemoteError>(client.request(Method::POST, &path, None).await?)
-    })?;
-    output::line(out, &push_summary(response)?)?;
-    Ok(())
+    })
+}
+
+/// The error a refusal carries.
+fn refusal(response: &Response) -> Result<(), RemoteError> {
+    if (200..300).contains(&response.status) {
+        return Ok(());
+    }
+    let error = &response.body["error"];
+    Err(match (error["code"].as_str(), error["message"].as_str()) {
+        (Some(code), Some(message)) => RemoteError::Refused {
+            code: code.to_owned(),
+            message: message.to_owned(),
+            hint: error["details"]["hint"].as_str().map(str::to_owned),
+        },
+        _ => RemoteError::Answer,
+    })
 }
 
 /// The line `fold push` prints for the daemon's answer, or the error it carries.
 fn push_summary(response: Response) -> Result<String, RemoteError> {
+    refusal(&response)?;
     let body = &response.body;
-    if !(200..300).contains(&response.status) {
-        let error = &body["error"];
-        return Err(match (error["code"].as_str(), error["message"].as_str()) {
-            (Some(code), Some(message)) => RemoteError::Refused {
-                code: code.to_owned(),
-                message: message.to_owned(),
-                hint: error["details"]["hint"].as_str().map(str::to_owned),
-            },
-            _ => RemoteError::Answer,
-        });
-    }
     let text = |key: &str| body[key].as_str();
     let branch = text("branch").ok_or(RemoteError::Answer)?;
     let range = || match (text("first"), text("last")) {
@@ -288,6 +311,54 @@ fn push_summary(response: Response) -> Result<String, RemoteError> {
             range()?,
             commits()?
         )),
+        _ => Err(RemoteError::Answer),
+    }
+}
+
+/// The lines `fold pull` prints for the daemon's answer, or the error it carries: one line, and for a conflict one more per conflicted path.
+fn pull_summary(response: Response) -> Result<Vec<String>, RemoteError> {
+    refusal(&response)?;
+    let body = &response.body;
+    let text = |key: &str| body[key].as_str().ok_or(RemoteError::Answer);
+    let branch = text("branch")?;
+    let short = |commit: &str| commit.get(..7).unwrap_or(commit).to_owned();
+    match text("outcome")? {
+        "up_to_date" => Ok(vec![match body["remote_commit"].as_str() {
+            Some(commit) => format!(
+                "main is up to date with {branch}: it holds {}",
+                short(commit)
+            ),
+            None => format!("the remote has no branch {branch}; nothing to pull"),
+        }]),
+        "integrated" => Ok(vec![format!(
+            "pulled {} from {branch} into main as {}",
+            short(text("remote_commit")?),
+            text("revision")?
+        )]),
+        "conflicted" => {
+            let commit = short(text("remote_commit")?);
+            let task = text("task")?;
+            let conflicted = body["conflicted"].as_array().ok_or(RemoteError::Answer)?;
+            let paths = output::count(conflicted.len(), "path", "paths");
+            let mut lines = vec![if body["created"].as_bool().ok_or(RemoteError::Answer)? {
+                format!(
+                    "{commit} from {branch} conflicts with main in {paths}; main did not move. {task} resolves it in its workspace: an agent claims {task}, resolves the markers and opens a proposal"
+                )
+            } else {
+                format!(
+                    "{task} already resolves {commit} from {branch}; nothing was created ({paths} conflicted)"
+                )
+            }];
+            for conflict in conflicted {
+                let (Some(path), Some(kind)) =
+                    (conflict["path"].as_str(), conflict["kind"].as_str())
+                else {
+                    return Err(RemoteError::Answer);
+                };
+                lines.push(format!("  {path} ({kind})"));
+            }
+            Ok(lines)
+        }
         _ => Err(RemoteError::Answer),
     }
 }
@@ -451,6 +522,57 @@ mod tests {
             reply(200, json!({"outcome": "pushed"})),
         ] {
             assert!(matches!(push_summary(bad), Err(RemoteError::Answer)));
+        }
+    }
+
+    #[test]
+    fn pull_answers_read_as_lines_or_the_error_they_carry() {
+        let commit = "0123456789abcdef0123456789abcdef01234567";
+        let lines = |body| pull_summary(reply(200, body)).unwrap();
+        assert_eq!(
+            lines(json!({"outcome": "up_to_date", "branch": "main", "remote_commit": commit})),
+            ["main is up to date with main: it holds 0123456"]
+        );
+        assert_eq!(
+            lines(json!({"outcome": "up_to_date", "branch": "trunk", "remote_commit": null})),
+            ["the remote has no branch trunk; nothing to pull"]
+        );
+        assert_eq!(
+            lines(
+                json!({"outcome": "integrated", "branch": "main", "remote_commit": commit, "revision": "r4"})
+            ),
+            ["pulled 0123456 from main into main as r4"]
+        );
+        let conflicted = |created: bool| {
+            json!({"outcome": "conflicted", "branch": "main", "remote_commit": commit, "task": "T-3", "workspace": "ws-2", "created": created,
+                "conflicted": [{"path": "a.txt", "kind": "both_modified_text"}]})
+        };
+        assert_eq!(
+            lines(conflicted(true)),
+            [
+                "0123456 from main conflicts with main in 1 path; main did not move. T-3 resolves it in its workspace: an agent claims T-3, resolves the markers and opens a proposal",
+                "  a.txt (both_modified_text)"
+            ]
+        );
+        assert_eq!(
+            lines(conflicted(false))[0],
+            "T-3 already resolves 0123456 from main; nothing was created (1 path conflicted)"
+        );
+        let refused = json!({"error": {"code": "remote_not_set", "message": "m"}});
+        let error = pull_summary(reply(409, refused)).unwrap_err();
+        assert_eq!(error.code(), Some("remote_not_set"));
+        for bad in [
+            json!({"outcome": "integrated", "branch": "main", "remote_commit": commit}),
+            json!({"outcome": "conflicted", "branch": "main", "remote_commit": commit, "task": "T-3", "created": true}),
+            json!({"outcome": "conflicted", "branch": "main", "remote_commit": commit, "task": "T-3", "created": true, "conflicted": [{"path": "a"}]}),
+            json!({"outcome": "conflicted", "branch": "main", "remote_commit": commit, "task": "T-3", "conflicted": []}),
+            json!({"outcome": "other", "branch": "main"}),
+            json!({"outcome": "integrated"}),
+        ] {
+            assert!(matches!(
+                pull_summary(reply(200, bad)),
+                Err(RemoteError::Answer)
+            ));
         }
     }
 

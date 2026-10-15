@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT number AS \"number!: i64\" FROM tasks\n           WHERE remote_commit = ? AND archived_at IS NULL AND status != 'done'\n           ORDER BY number DESC\n           LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "09bd7a4bcd44d8ff734f2eeb1b722ef13c2860fadf59a941aac51f8039c8269e"
+}

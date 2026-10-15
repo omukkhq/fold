@@ -8,6 +8,7 @@ use fold_vcs::git_export::{
     ExportBase, ExportRevision, ExportTarget, Signature, TargetState, check_target, create_target,
     export,
 };
+use fold_vcs::git_remote::{MIRROR_DIR, fetch_remote_refs};
 use fold_vcs::git_sync_map::SyncMap;
 use fold_vcs::objects::ObjectStore;
 
@@ -30,7 +31,7 @@ pub enum GitExport {
 }
 
 impl WorkspaceService {
-    /// Appends the main revisions after the last one in `.fold/git-sync.map` to `main` in the Git repository `repo`, one commit each, creating a bare repository when the path is missing or an empty directory. The target must continue the mapped chain, or the export is refused with `export_diverged` before anything is written; with nothing new it reports up to date. The map gains the new commits only after `git fast-import` succeeds. The project's Git sync lock is held throughout, so concurrent exports, in this process or another, run one after the other.
+    /// Appends the main revisions after the last one in `.fold/git-sync.map` to `main` in the Git repository `repo`, one commit each, creating a bare repository when the path is missing or an empty directory. A revision that brought a remote commit in gets that commit as its second parent; the mirror's fetched refs are copied into `repo` first, so the commit is there. The target must continue the mapped chain, or the export is refused with `export_diverged` before anything is written; with nothing new it reports up to date. The map gains the new commits only after `git fast-import` succeeds. The project's Git sync lock is held throughout, so concurrent exports, in this process or another, run one after the other.
     pub async fn export_git(&self, repo: &Path) -> Result<GitExport, WorkspaceError> {
         let fold_dir = self.paths.fold_dir();
         // Held until the map is appended to, so a second export waits and then finds the first one's commits.
@@ -61,17 +62,21 @@ impl WorkspaceService {
             name: "fold".to_owned(),
             email: "fold@localhost".to_owned(),
         };
-        let revisions: Vec<ExportRevision> = rows
+        let revisions = rows
             .iter()
-            .map(|row| ExportRevision {
-                number: row.number,
-                tree: row.tree_hash,
-                created_at: row.created_at,
-                message: commit_message(row),
-                author: fold.clone(),
-                committer: fold.clone(),
+            .map(|row| {
+                Ok(ExportRevision {
+                    number: row.number,
+                    tree: row.tree_hash,
+                    created_at: row.created_at,
+                    message: commit_message(row),
+                    author: fold.clone(),
+                    committer: fold.clone(),
+                    merge: merge_parent(row)?,
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, StoreError>>()?;
+        let merges = revisions.iter().any(|revision| revision.merge.is_some());
         let (git, repo) = (self.git.clone(), repo.to_owned());
         let added = blocking(move || {
             let target = ExportTarget {
@@ -80,6 +85,9 @@ impl WorkspaceService {
             };
             if state == TargetState::Missing {
                 create_target(&git, &target)?;
+            }
+            if merges {
+                fetch_remote_refs(&git, &repo, &fold_dir.join(MIRROR_DIR))?;
             }
             let objects = ObjectStore::open(&fold_dir)?;
             let mut map = map;
@@ -128,6 +136,19 @@ pub(crate) async fn unsynced(
             Ok((rows, None))
         }
     }
+}
+
+/// The second parent of the commit a revision becomes: the remote commit its integration brought in, a pull or the proposal of a sync task.
+pub(crate) fn merge_parent(row: &RevisionRow) -> Result<Option<CommitId>, StoreError> {
+    row.integration
+        .as_ref()
+        .and_then(|integration| integration.remote_commit.as_deref())
+        .map(|commit| {
+            commit
+                .parse()
+                .map_err(|_| StoreError::Corrupt("integrations.remote_commit"))
+        })
+        .transpose()
 }
 
 /// The message of the commit a revision becomes. An integrated proposal gives its id and title as the subject and names the revision, the task and the integrating actor; an imported `r1` names its source; any other revision, a plain-init `r1` or a pull among them, is `fold r<n>`.

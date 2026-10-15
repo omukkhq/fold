@@ -111,6 +111,7 @@ fn revision(number: u32, tree: ObjectHash, message: &str) -> ExportRevision {
         message: message.to_owned(),
         author: fold.clone(),
         committer: fold,
+        merge: None,
     }
 }
 

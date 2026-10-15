@@ -32,6 +32,7 @@ mod reconcile;
 mod repository;
 mod stalls;
 mod sync;
+mod sync_task;
 
 pub use adoption::AdoptReason;
 pub(crate) use adoption::adopt_if_orphaned;
@@ -42,8 +43,8 @@ pub(crate) use changesets::ProposalSnapshot;
 pub use changesets::RecordedChanges;
 pub use checkpoints::{CheckpointView, Restored};
 pub use compare::{ResolvedState, StateComparison, StateKind, StateRef, StateSummary};
-pub(crate) use git::unsynced;
 pub use git::{GitExport, MAIN_REF, commit_message};
+pub(crate) use git::{merge_parent, unsynced};
 pub use lifecycle::{
     ArchiveReason, CreatedWorkspace, WorkspaceDetails, WorkspaceRef, WorkspaceView, archive_in_tx,
 };
@@ -54,6 +55,7 @@ pub use repository::{
 };
 pub use stalls::check_stalls;
 pub use sync::Synced;
+pub use sync_task::{SyncTaskCreated, SyncWorkspace, short_commit};
 
 #[derive(Debug, Error)]
 pub enum WorkspaceError {

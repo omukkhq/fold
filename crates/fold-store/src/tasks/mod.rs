@@ -3,7 +3,7 @@ use fold_core::{
     EventActor, HumanName, LabelColor, LabelName, TaskDescription, TaskId, TaskStatus, TaskTitle,
     Timestamp,
 };
-use sqlx::{SqliteConnection, SqlitePool};
+use sqlx::{SqliteConnection, SqliteExecutor, SqlitePool};
 
 use crate::error::StoreError;
 use crate::store::WriteTx;
@@ -192,6 +192,54 @@ pub async fn update_text(
     .execute(tx.conn())
     .await?;
     expect_one(result.rows_affected())
+}
+
+/// Marks a task created in this transaction as the sync task of `remote_commit`. A trigger keeps the commit once it is set.
+pub async fn set_remote_commit(
+    tx: &mut WriteTx,
+    task: TaskId,
+    remote_commit: &str,
+) -> Result<(), StoreError> {
+    let number = task.to_db();
+    let result = sqlx::query!(
+        "UPDATE tasks SET remote_commit = ?2 WHERE number = ?1",
+        number,
+        remote_commit
+    )
+    .execute(tx.conn())
+    .await?;
+    expect_one(result.rows_affected())
+}
+
+/// The remote commit a sync task resolves; `None` for every other task.
+pub async fn remote_commit(
+    executor: impl SqliteExecutor<'_>,
+    task: TaskId,
+) -> Result<Option<String>, StoreError> {
+    let number = task.to_db();
+    let commit = sqlx::query_scalar!("SELECT remote_commit FROM tasks WHERE number = ?", number)
+        .fetch_optional(executor)
+        .await?;
+    Ok(commit.flatten())
+}
+
+/// The newest sync task of `remote_commit` that is neither Done nor archived.
+pub async fn open_sync_task(
+    executor: impl SqliteExecutor<'_>,
+    remote_commit: &str,
+) -> Result<Option<TaskId>, StoreError> {
+    let number = sqlx::query_scalar!(
+        r#"SELECT number AS "number!: i64" FROM tasks
+           WHERE remote_commit = ? AND archived_at IS NULL AND status != 'done'
+           ORDER BY number DESC
+           LIMIT 1"#,
+        remote_commit
+    )
+    .fetch_optional(executor)
+    .await?;
+    number
+        .map(|number| TaskId::try_from_db(number).ok_or(StoreError::Corrupt("tasks.number")))
+        .transpose()
 }
 
 /// Stamps `updated_at` without changing anything else.

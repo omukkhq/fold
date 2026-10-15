@@ -432,7 +432,11 @@ async fn pull_integration_updates_main_dir_and_sends_no_message_or_push() {
     }
     let pull = PullIntegration {
         remote_commit: "4b825dc642cb6eb9a060e54bf8d69288fbee4904".to_owned(),
-        sync_base: r(1),
+        branch: "main".to_owned(),
+        base_tree: workspaces::get_by_number(n.fx.project.store().read(), r(1))
+            .await
+            .unwrap()
+            .tree_hash,
         remote_tree: write_initial_tree(&objects, tree).unwrap(),
     };
 

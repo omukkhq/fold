@@ -5,22 +5,25 @@ use std::time::Duration;
 use fold_core::checkpoint_policy::quiet_checkpoint_due;
 use fold_core::events::types;
 use fold_core::object::ObjectHash;
-use fold_core::{FoldError, ProjectPaths, RevisionId, Timestamp, WorkspaceId, codes};
+use fold_core::{
+    Actor, FoldError, NewEvent, ProjectPaths, RevisionId, Timestamp, WorkspaceId, codes,
+};
 use fold_store::{Store, StoreError, workspaces};
 use fold_vcs::git::Git;
 use fold_vcs::main_view;
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::paths::WorkspaceError;
 use fold_vcs::platform::Capabilities;
-use tokio::sync::broadcast::error::RecvError;
+use serde_json::json;
+use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio::sync::{Semaphore, broadcast, watch};
 use tokio::task::{JoinHandle, JoinSet};
 
 use crate::daemon::AppState;
 use crate::projects::ProjectHandle;
 use crate::services::agents::AgentError;
-use crate::services::events::{BusMessage, EventBus};
-use crate::services::projects;
+use crate::services::events::{BusMessage, EventBuffer, EventBus};
+use crate::services::projects::{self, RemoteContext};
 use crate::services::tasks::sweep_leases;
 use crate::services::workspaces::{
     QuietCheckpoint, Reconciliation, WorkspaceService, capabilities, check_stalls,
@@ -658,6 +661,83 @@ fn rewrite_main(
         tracing::warn!(revision = %target, links = done.degraded.len(), "main view wrote symlinks as regular files; the platform cannot create symlinks");
     }
     Ok(())
+}
+
+/// The automatic push of one project. Dropping it stops the task; a push already started finishes in its own task.
+#[derive(Debug)]
+pub struct AutoPush(JoinHandle<()>);
+
+impl Drop for AutoPush {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Starts `auto_push` for one project: after every committed integration of either kind, which the bus carries only after its commit, it runs the push of `fold push` as `fold` when `[git].push_on_integrate` is true, read at that moment. A push covers every revision so far, so the integrations that arrive while one waits or runs need one more push at most. A failed push appends `remote.push_failed` in its own transaction and logs the project and the code only; the integration it follows stands either way.
+pub fn auto_push(context: RemoteContext, git: Git) -> AutoPush {
+    let receiver = context.bus.subscribe();
+    AutoPush(tokio::spawn(run_auto_push(context, git, receiver)))
+}
+
+async fn run_auto_push(
+    context: RemoteContext,
+    git: Git,
+    mut receiver: broadcast::Receiver<BusMessage>,
+) {
+    loop {
+        match receiver.recv().await {
+            Ok(BusMessage::Durable(event)) if event.event_type == types::INTEGRATION_SUCCEEDED => {}
+            // A missed event may have been an integration; a push is cheap when nothing is new.
+            Err(RecvError::Lagged(_)) => {}
+            Ok(_) => continue,
+            Err(RecvError::Closed) => return,
+        }
+        // Everything queued so far was committed before it was sent, so the push below covers it.
+        while !matches!(
+            receiver.try_recv(),
+            Err(TryRecvError::Empty | TryRecvError::Closed)
+        ) {}
+        push_after_integration(&context, &git).await;
+    }
+}
+
+async fn push_after_integration(context: &RemoteContext, git: &Git) {
+    let config = match projects::load_config(&context.paths).await {
+        Ok(config) => config.git,
+        Err(error) => {
+            tracing::warn!(project = %context.slug, code = error.code().unwrap_or(codes::INTERNAL_ERROR), "the automatic push skipped an integration; the configuration is invalid");
+            return;
+        }
+    };
+    if !config.push_on_integrate {
+        return;
+    }
+    let Err(error) = projects::push_with(context.clone(), &Actor::System, git).await else {
+        return;
+    };
+    let code = error.code().unwrap_or(codes::INTERNAL_ERROR);
+    tracing::warn!(project = %context.slug, code, "the automatic push failed");
+    let event = match NewEvent::new(types::REMOTE_PUSH_FAILED, Actor::System.event_actor())
+        .and_then(|event| event.data(json!({"branch": config.branch, "code": code})))
+    {
+        Ok(event) => event,
+        Err(_) => return,
+    };
+    let now = context.clock.now();
+    let recorded = context
+        .store
+        .write(async |tx| -> Result<EventBuffer, StoreError> {
+            let mut buffer = EventBuffer::new();
+            buffer.append(tx, &event, now).await?;
+            Ok(buffer)
+        })
+        .await;
+    match recorded {
+        Ok(buffer) => context.bus.publish(buffer),
+        Err(error) => {
+            tracing::warn!(project = %context.slug, code = error.code().unwrap_or(codes::INTERNAL_ERROR), "remote.push_failed was not recorded");
+        }
+    }
 }
 
 #[cfg(test)]

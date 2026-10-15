@@ -9,7 +9,7 @@ use super::actor::Human;
 use super::error::{ApiError, ApiJson, ErrorEnvelope};
 use super::{Project, SocketOnly};
 use crate::daemon::AppState;
-use crate::services::projects::{self, PushOutcome};
+use crate::services::projects::{self, PullOutcome, PushOutcome};
 use fold_core::{Presence, TaskStatus, Timestamp};
 use fold_vcs::git::Git;
 
@@ -19,6 +19,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(show))
         .routes(routes!(collect_garbage))
         .routes(routes!(push))
+        .routes(routes!(pull))
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -325,5 +326,129 @@ pub async fn push(
     Project(handle): Project,
 ) -> Result<Json<PushResult>, ApiError> {
     let outcome = projects::push(&handle, &human.actor(), &Git::default()).await?;
+    Ok(Json(outcome.into()))
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PullState {
+    /// Main holds the remote branch already, or the remote has no such branch.
+    UpToDate,
+    /// The remote commit merged cleanly into main as a new revision.
+    Integrated,
+    /// The merge conflicted and main did not move; the sync task resolves it.
+    Conflicted,
+}
+
+/// One path whose merge conflicted.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PullConflict {
+    pub path: String,
+    /// `both_modified_text`, `both_modified_binary`, `modify_delete`, `add_add` or `type_change`.
+    pub kind: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PullResult {
+    pub outcome: PullState,
+    /// The remote branch.
+    pub branch: String,
+    /// The fetched tip of the remote branch; absent when the remote has no such branch.
+    pub remote_commit: Option<String>,
+    /// The revision the pull integration made; absent unless integrated.
+    #[schema(example = "r18")]
+    pub revision: Option<String>,
+    /// The sync task that resolves a conflict; absent unless conflicted.
+    #[schema(example = "T-12")]
+    pub task: Option<String>,
+    /// The sync task's workspace; absent unless conflicted.
+    #[schema(example = "ws-9")]
+    pub workspace: Option<String>,
+    /// In path order; empty unless conflicted.
+    pub conflicted: Vec<PullConflict>,
+    /// False when an open sync task for the same commit existed already and nothing was created.
+    pub created: bool,
+}
+
+impl From<PullOutcome> for PullResult {
+    fn from(outcome: PullOutcome) -> Self {
+        match outcome {
+            PullOutcome::UpToDate {
+                branch,
+                remote_commit,
+            } => Self {
+                outcome: PullState::UpToDate,
+                branch,
+                remote_commit: remote_commit.map(|commit| commit.to_string()),
+                revision: None,
+                task: None,
+                workspace: None,
+                conflicted: Vec::new(),
+                created: false,
+            },
+            PullOutcome::Integrated {
+                branch,
+                remote_commit,
+                revision,
+            } => Self {
+                outcome: PullState::Integrated,
+                branch,
+                remote_commit: Some(remote_commit.to_string()),
+                revision: Some(revision.to_string()),
+                task: None,
+                workspace: None,
+                conflicted: Vec::new(),
+                created: false,
+            },
+            PullOutcome::Conflicted {
+                branch,
+                remote_commit,
+                task,
+                workspace,
+                conflicted,
+                created,
+            } => Self {
+                outcome: PullState::Conflicted,
+                branch,
+                remote_commit: Some(remote_commit.to_string()),
+                revision: None,
+                task: Some(task.to_string()),
+                workspace: workspace.map(|workspace| workspace.to_string()),
+                conflicted: conflicted
+                    .into_iter()
+                    .map(|conflict| PullConflict {
+                        path: conflict.path,
+                        kind: conflict.kind.as_str().to_owned(),
+                    })
+                    .collect(),
+                created,
+            },
+        }
+    }
+}
+
+/// Brings the remote branch into main: a clean merge integrates, a conflict creates a sync task with a workspace that holds the merge. Socket only; the human comes from `x-fold-human`.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/pull",
+    operation_id = "pull_project",
+    params(("slug" = String, Path, description = "The project slug")),
+    responses(
+        (status = 200, description = "Main holds the remote branch, or a sync task resolves the conflict", body = PullResult),
+        (status = 400, description = "The human name is not valid", body = ErrorEnvelope),
+        (status = 401, description = "The request names no human", body = ErrorEnvelope),
+        (status = 404, description = "Not on the socket, or the slug is not registered", body = ErrorEnvelope),
+        (status = 409, description = "No remote is set, main moved during every attempt, the mirror diverged, or the config or sync map is invalid", body = ErrorEnvelope),
+        (status = 502, description = "A Git command failed", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open, git is not on PATH, or the objects of the integration could not be stored", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn pull(
+    _socket: SocketOnly,
+    human: Human,
+    Project(handle): Project,
+) -> Result<Json<PullResult>, ApiError> {
+    let outcome = projects::pull(&handle, &human.actor(), &Git::default()).await?;
     Ok(Json(outcome.into()))
 }

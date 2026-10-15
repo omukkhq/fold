@@ -48,7 +48,11 @@ async fn move_main(fx: &Fixture, files: &[(&str, &[u8])]) {
     }
     let pull = PullIntegration {
         remote_commit: COMMIT.to_owned(),
-        sync_base: r(1),
+        branch: "main".to_owned(),
+        base_tree: workspaces::get_by_number(fx.project.store().read(), r(1))
+            .await
+            .unwrap()
+            .tree_hash,
         remote_tree: write_initial_tree(&objects, tree).unwrap(),
     };
     let outcome = fx.reviews.integrate_pull(&human(), pull).await.unwrap();

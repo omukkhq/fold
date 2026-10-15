@@ -30,11 +30,14 @@ use crate::daemon::DaemonState;
 use crate::projects::{ProjectHandle, Slot};
 
 mod gc;
+mod pull;
 mod remote;
 mod web_auth;
 
 pub use gc::{GcReport, gc};
-pub use remote::{PushOutcome, push};
+pub use pull::{PullOutcome, PulledConflict, pull};
+pub(crate) use remote::push_with;
+pub use remote::{PushOutcome, RemoteContext, push};
 pub use web_auth::{
     DEFAULT_SESSION_LIFETIME, SignedIn, WEB_TOUCH_INTERVAL, check_web_session, create_web_session,
     create_web_token, create_web_token_on_host, end_web_session, list_web_tokens,

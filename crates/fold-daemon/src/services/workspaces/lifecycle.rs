@@ -469,7 +469,7 @@ async fn insert_in_tx(
     let new = NewTaskWorkspace {
         id,
         task,
-        worker_id: worker.id,
+        worker_id: Some(worker.id),
         path,
         base,
         now,
@@ -570,12 +570,12 @@ pub(super) fn workspace_exists(live: &WorkspaceRow) -> FoldError {
     .with_hint("call get_workspace to use the existing workspace")
 }
 
-fn io_error(error: io::Error) -> FoldError {
+pub(super) fn io_error(error: io::Error) -> FoldError {
     VcsError::from(error).into()
 }
 
 /// A new empty directory `ws/.new-<pid>-<n>`. A name that exists, from an earlier daemon with the same process id, is skipped rather than reused.
-fn staging_dir(ws_dir: &Path) -> Result<PathBuf, FoldError> {
+pub(super) fn staging_dir(ws_dir: &Path) -> Result<PathBuf, FoldError> {
     loop {
         let number = STAGING_COUNTER.fetch_add(1, Ordering::Relaxed);
         let dir = ws_dir.join(format!(".new-{}-{number}", std::process::id()));
@@ -588,7 +588,7 @@ fn staging_dir(ws_dir: &Path) -> Result<PathBuf, FoldError> {
 }
 
 /// Renames `staging` to the first name after the `taken` ones that no row lists and nothing holds on disk, and returns the name relative to `root` with the full path. `name` gives the directory for a count of earlier directories. A rename never replaces a directory with entries, a file or a symlink, so whatever already holds a name stays untouched. It does replace an empty directory, which holds nothing to lose; a concurrent create's directory is never empty, because materialise leaves `.fold/tmp` in it.
-fn rename_into_place(
+pub(super) fn rename_into_place(
     staging: &Path,
     root: &Path,
     name: &dyn Fn(u32) -> String,

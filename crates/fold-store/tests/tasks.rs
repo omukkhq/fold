@@ -334,3 +334,62 @@ async fn deleting_a_label_or_a_task_drops_its_links() {
         1
     );
 }
+
+#[tokio::test]
+async fn a_sync_task_is_found_by_its_commit_until_done_or_archived_and_keeps_it() {
+    let project = TestProject::new().await;
+    for number in 1..=4 {
+        add(&project, number, "task").await.unwrap();
+    }
+    let read = project.store().read();
+    assert_eq!(tasks::open_sync_task(read, "c1").await.unwrap(), None);
+    project
+        .store()
+        .write(async |tx| {
+            for number in [1, 2, 3] {
+                tasks::set_remote_commit(tx, id(number), "c1").await?;
+            }
+            tasks::set_remote_commit(tx, id(4), "c2").await
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        tasks::open_sync_task(read, "c1").await.unwrap(),
+        Some(id(3))
+    );
+    assert_eq!(
+        tasks::remote_commit(read, id(4)).await.unwrap().as_deref(),
+        Some("c2")
+    );
+    project
+        .store()
+        .write(async |tx| {
+            sqlx::query("UPDATE tasks SET status = 'done' WHERE number = 3")
+                .execute(tx.conn())
+                .await?;
+            sqlx::query("UPDATE tasks SET archived_at = 5 WHERE number = 2")
+                .execute(tx.conn())
+                .await?;
+            Ok::<_, StoreError>(())
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        tasks::open_sync_task(read, "c1").await.unwrap(),
+        Some(id(1))
+    );
+    let changed = project
+        .store()
+        .write(async |tx| tasks::set_remote_commit(tx, id(1), "c3").await)
+        .await;
+    assert!(changed.is_err());
+    assert_eq!(
+        tasks::remote_commit(read, id(1)).await.unwrap().as_deref(),
+        Some("c1")
+    );
+    let missing = project
+        .store()
+        .write(async |tx| tasks::set_remote_commit(tx, id(9), "c1").await)
+        .await;
+    assert!(missing.is_err());
+}

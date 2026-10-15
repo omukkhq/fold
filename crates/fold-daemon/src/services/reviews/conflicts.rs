@@ -69,7 +69,11 @@ impl ReviewService {
                     .ok_or(StoreError::Corrupt("counters.next"))?;
                 let new = NewIntegration {
                     number: integration,
-                    subject: IntegrationSubject::Proposal { proposal, version },
+                    subject: IntegrationSubject::Proposal {
+                        proposal,
+                        version,
+                        remote_commit: None,
+                    },
                     actor: label.as_str(),
                     created_at: now,
                 };

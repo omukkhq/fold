@@ -1,7 +1,9 @@
 use fold_core::merge::ConflictReport;
 use fold_core::reviews::{HumanReviewMark, ReviewFact};
 use fold_core::revision::StoredRevision;
-use fold_core::{IntegrationId, ProposalId, TaskId, TaskStatus, Timestamp, WorkspaceId};
+use fold_core::{
+    IntegrationId, ProposalId, RevisionId, TaskId, TaskStatus, Timestamp, WorkspaceId,
+};
 use sqlx::{SqliteConnection, SqliteExecutor};
 
 use super::{ProposalRow, ReviewTarget, get_proposal, review_facts, review_target};
@@ -53,11 +55,17 @@ pub async fn integration_facts(
     }))
 }
 
-/// What an integration brings onto main: a version of a proposal, or the newest commit of the Git remote.
+/// What an integration brings onto main: a version of a proposal, or the newest commit of the Git remote. A proposal of a sync task carries the remote commit its task resolves, so the Git writers see it as merged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntegrationSubject<'a> {
-    Proposal { proposal: ProposalId, version: u32 },
-    Pull { remote_commit: &'a str },
+    Proposal {
+        proposal: ProposalId,
+        version: u32,
+        remote_commit: Option<&'a str>,
+    },
+    Pull {
+        remote_commit: &'a str,
+    },
 }
 
 /// One integration attempt as the `integrations` row records it. `number` comes from the `integration` counter; `actor` is a worker name or `human:<name>`.
@@ -172,11 +180,15 @@ async fn insert(
 ) -> Result<(), StoreError> {
     let number = new.number.to_db();
     let (kind, proposal, version, remote_commit) = match new.subject {
-        IntegrationSubject::Proposal { proposal, version } => (
+        IntegrationSubject::Proposal {
+            proposal,
+            version,
+            remote_commit,
+        } => (
             "proposal",
             Some(proposal.to_db()),
             Some(i64::from(version)),
-            None,
+            remote_commit,
         ),
         IntegrationSubject::Pull { remote_commit } => ("pull", None, None, Some(remote_commit)),
     };
@@ -208,4 +220,25 @@ async fn insert(
     .execute(tx.conn())
     .await?;
     Ok(())
+}
+
+/// The newest main revision whose succeeded integration brought a remote commit in, a pull or the proposal of a sync task, with that commit.
+pub async fn latest_remote_commit(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Option<(RevisionId, String)>, StoreError> {
+    let row = sqlx::query!(
+        r#"SELECT r.number AS "number!: i64", i.remote_commit AS "remote_commit!: String"
+           FROM integrations i JOIN revisions r ON r.id = i.revision_id
+           WHERE i.result = 'succeeded' AND i.remote_commit IS NOT NULL
+           ORDER BY r.number DESC
+           LIMIT 1"#
+    )
+    .fetch_optional(executor)
+    .await?;
+    row.map(|row| {
+        RevisionId::try_from_db(row.number)
+            .map(|number| (number, row.remote_commit))
+            .ok_or(StoreError::Corrupt("revisions.number"))
+    })
+    .transpose()
 }

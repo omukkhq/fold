@@ -123,10 +123,12 @@ fn remote_tree(fx: &Fixture, readme: &str) -> ObjectHash {
     write_initial_tree(&objects, tree).unwrap()
 }
 
+/// A pull whose sync base is `r1`'s tree.
 fn pull(fx: &Fixture, readme: &str) -> PullIntegration {
     PullIntegration {
         remote_commit: COMMIT.to_owned(),
-        sync_base: r(1),
+        branch: "main".to_owned(),
+        base_tree: remote_tree(fx, "# demo\n"),
         remote_tree: remote_tree(fx, readme),
     }
 }
@@ -829,7 +831,10 @@ async fn pull_integration_records_kind_pull_the_remote_commit_and_remote_pulled(
         names(&events),
         vec!["integration.succeeded", "main.advanced", "remote.pulled"]
     );
-    assert_eq!(events[2].data["remote_commit"], COMMIT);
+    assert_eq!(
+        events[2].data,
+        serde_json::json!({"branch": "main", "remote_commit": COMMIT, "revision": "r2"})
+    );
     assert_eq!(events[2].revision, Some(r(2)));
     assert_eq!(events[1].data["previous"], "r1");
 }

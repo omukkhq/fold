@@ -69,6 +69,29 @@ pub fn fetch_branch(git: &Git, mirror: &Path, branch: &str) -> Result<Option<Com
     git.ref_commit(mirror, &tracking)
 }
 
+/// Where [`fetch_remote_refs`] keeps the remote commits in another repository, apart from that repository's own remote-tracking refs.
+pub const FETCHED_REFS: &str = "refs/fold/origin";
+
+/// Copies every ref the mirror at `mirror` fetched from `origin` into `repo` under [`FETCHED_REFS`], with the commits they reach, so a commit written there can name a pulled commit as its parent. A local operation: nothing reaches the network. Blocking.
+pub fn fetch_remote_refs(git: &Git, repo: &Path, mirror: &Path) -> Result<(), FoldError> {
+    let refspec = format!("+refs/remotes/{ORIGIN}/*:{FETCHED_REFS}/*");
+    // Canonical, so the source is an absolute path that Git cannot read as an option or a URL.
+    let source = mirror.canonicalize().map_err(|error| mirror_io(&error))?;
+    let mut command = git.command(repo);
+    command
+        .args(["fetch", "--quiet", "--no-tags", "--end-of-options"])
+        .arg(source)
+        .arg(refspec);
+    let status = Git::spawn(&mut command, "fetch")?
+        .wait()
+        .map_err(|error| wait_error(&error, "fetch"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(failed("fetch", status))
+    }
+}
+
 /// Whether `ancestor` is `descendant` or one of its ancestors. Blocking.
 pub fn is_ancestor(
     git: &Git,
@@ -162,7 +185,7 @@ pub fn remote_ahead(branch: &str, remote_commit: Option<&CommitId>) -> FoldError
 fn mirror_io(error: &io::Error) -> FoldError {
     FoldError::new(
         codes::WORKSPACE_IO,
-        format!("cannot create the Git mirror: {}", error.kind()),
+        format!("cannot create or read the Git mirror: {}", error.kind()),
     )
 }
 

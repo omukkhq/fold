@@ -35,6 +35,8 @@ pub struct ExportRevision {
     pub message: String,
     pub author: Signature,
     pub committer: Signature,
+    /// The second parent: the remote commit a pull, or the sync task that resolved one, brought into this revision. Writing it makes the remote accept the commit as a fast-forward of its branch.
+    pub merge: Option<CommitId>,
 }
 
 /// The last exported revision: the commit the next one continues and the fold tree it holds.
@@ -300,11 +302,14 @@ fn write_stream(
             (0, None) => None,
             (index, _) => Some(format!(":{index}")),
         };
+        out.write_all(b"\n").map_err(pipe)?;
         if let Some(from) = from {
-            out.write_all(format!("\nfrom {from}\n").as_bytes())
+            out.write_all(format!("from {from}\n").as_bytes())
                 .map_err(pipe)?;
-        } else {
-            out.write_all(b"\n").map_err(pipe)?;
+        }
+        if let Some(merge) = &revision.merge {
+            out.write_all(format!("merge {merge}\n").as_bytes())
+                .map_err(pipe)?;
         }
         // Deletions come first, so a path that turns from a file into a directory, or back, is free before it is written.
         for path in previous.keys().filter(|path| !current.contains_key(*path)) {

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE tasks SET remote_commit = ?2 WHERE number = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "a7455c9a866263a09de7c987296f874bd69fe67800b7ed7b2a4831de3a486ffd"
+}

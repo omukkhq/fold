@@ -13,7 +13,7 @@ use fold_store::reviews::{
 };
 use fold_store::tasks::claims::{self, ReleaseReason};
 use fold_store::tasks::completions::{self, CompletionKind};
-use fold_store::{StoreError, WriteTx, counters, workspaces};
+use fold_store::{StoreError, WriteTx, counters, tasks, workspaces};
 use fold_vcs::integrate::MergeOutcome;
 use serde_json::json;
 
@@ -43,11 +43,12 @@ pub enum IntegrationOutcome {
     Conflicted(Vec<Conflict>),
 }
 
-/// A clean `fold pull`: the newest commit of the Git remote, its tree already in the object store, and the fold revision of the last synced commit, which is the merge base.
+/// A clean `fold pull`: the newest commit of the remote branch with its tree, and the tree of the sync base, the newest commit fold main and the remote share, which is the merge base. Both trees are already in the object store. The base is a Git tree rather than a fold revision, because the revision that brought a commit in holds the merge with main, not the commit's own tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PullIntegration {
     pub remote_commit: String,
-    pub sync_base: RevisionId,
+    pub branch: String,
+    pub base_tree: ObjectHash,
     pub remote_tree: ObjectHash,
 }
 
@@ -129,6 +130,7 @@ enum Subject {
     },
     Pull {
         remote_commit: String,
+        branch: String,
     },
 }
 
@@ -309,7 +311,7 @@ impl ReviewService {
             Subject::Proposal { proposal, .. } => {
                 tracing::info!(proposal = %proposal, revision = %next, integration = %integration, "proposal integrated");
             }
-            Subject::Pull { remote_commit } => {
+            Subject::Pull { remote_commit, .. } => {
                 tracing::info!(remote_commit = %remote_commit, revision = %next, integration = %integration, "remote commit integrated");
             }
         }
@@ -386,7 +388,11 @@ impl ReviewService {
                     .ok_or(StoreError::Corrupt("counters.next"))?;
                 let new = NewIntegration {
                     number: integration,
-                    subject: IntegrationSubject::Proposal { proposal, version },
+                    subject: IntegrationSubject::Proposal {
+                        proposal,
+                        version,
+                        remote_commit: None,
+                    },
                     actor: label.as_str(),
                     created_at: now,
                 };
@@ -412,7 +418,7 @@ impl ReviewService {
         }
     }
 
-    /// Step 2 of a pull: only a named human brings remote commits in, and the merge base is the last synced revision.
+    /// Step 2 of a pull: only a named human brings remote commits in, and the merge base is the tree of the sync base.
     async fn pull_plan(&self, actor: &Actor, pull: &PullIntegration) -> Result<Plan, Step> {
         if !actor.is_human() {
             return Err(FoldError::new(
@@ -434,13 +440,13 @@ impl ReviewService {
             .with_details([("field", json!("remote_commit"))])
             .into());
         }
-        let base = workspaces::get_by_number(self.store.read(), pull.sync_base).await?;
         Ok(Plan {
-            base_tree: base.tree_hash,
+            base_tree: pull.base_tree,
             other_tree: pull.remote_tree,
             workspace: None,
             subject: Subject::Pull {
                 remote_commit: commit.to_owned(),
+                branch: pull.branch.clone(),
             },
         })
     }
@@ -492,9 +498,12 @@ impl Commit<'_> {
                 let facts = self
                     .recheck(tx, *proposal, *version_id, *expected_version)
                     .await?;
+                // A sync task's integration marks the remote commit it resolves as merged, for the sync base walk and the Git writers.
+                let remote_commit = tasks::remote_commit(tx.conn(), *task).await?;
                 let subject = IntegrationSubject::Proposal {
                     proposal: *proposal,
                     version: *version,
+                    remote_commit: remote_commit.as_deref(),
                 };
                 let succeeded = NewEvent::new(types::INTEGRATION_SUCCEEDED, label.clone())?
                     .task(*task)
@@ -507,7 +516,10 @@ impl Commit<'_> {
                 self.advance(tx, buffer, &label, subject, succeeded).await?;
                 self.complete(tx, buffer, &label, facts).await
             }
-            Subject::Pull { remote_commit } => {
+            Subject::Pull {
+                remote_commit,
+                branch,
+            } => {
                 let subject = IntegrationSubject::Pull {
                     remote_commit: remote_commit.as_str(),
                 };
@@ -521,8 +533,9 @@ impl Commit<'_> {
                 let pulled = NewEvent::new(types::REMOTE_PULLED, label)?
                     .revision(revision)
                     .data(json!({
-                        "revision": revision.to_string(),
+                        "branch": branch,
                         "remote_commit": remote_commit,
+                        "revision": revision.to_string(),
                     }))?;
                 buffer.append(tx, &pulled, self.now).await?;
                 buffer.extend(recompute(tx, &[], self.now).await?.events);

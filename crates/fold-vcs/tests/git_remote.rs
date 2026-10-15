@@ -9,8 +9,8 @@ use fold_core::{RevisionId, Timestamp, codes};
 use fold_vcs::git::{CommitId, Git};
 use fold_vcs::git_export::{ExportBase, ExportRevision, ExportTarget, Signature, write_commits};
 use fold_vcs::git_remote::{
-    MIRROR_DIR, fetch_branch, fold_ref, is_ancestor, prepare_mirror, push_branch, remote_ref,
-    set_ref,
+    FETCHED_REFS, MIRROR_DIR, fetch_branch, fetch_remote_refs, fold_ref, is_ancestor,
+    prepare_mirror, push_branch, remote_ref, set_ref,
 };
 use fold_vcs::git_sync_map::SYNC_MAP_FILE;
 use fold_vcs::objects::ObjectStore;
@@ -78,6 +78,7 @@ impl Fixture {
             message: format!("fold r{number}\n"),
             author: fold.clone(),
             committer: fold,
+            merge: None,
         }
     }
 
@@ -316,4 +317,57 @@ fn a_remote_rewritten_to_the_ext_transport_runs_no_command() {
         assert_eq!(error.code(), codes::GIT_FAILED);
     }
     assert!(!marker.exists());
+}
+
+#[test]
+fn a_pulled_commit_is_the_second_parent_and_the_remote_takes_the_merge_without_force() {
+    let fixture = Fixture::new();
+    let remote = fixture.remote("remote.git");
+    let mirror = fixture.mirror();
+    prepare_mirror(&fixture.git, &mirror, remote.to_str().unwrap()).unwrap();
+    let first = fixture.write(None, &[fixture.revision(1, b"one\n")]);
+    push_branch(&fixture.git, &mirror, "main").unwrap();
+    git(
+        fixture.dir.path(),
+        &["clone", "--quiet", remote.to_str().unwrap(), "clone"],
+    );
+    let clone = fixture.path("clone");
+    write(&clone, "b.txt", b"theirs\n");
+    git(&clone, &["add", "b.txt"]);
+    git(&clone, &["commit", "--quiet", "-m", "theirs"]);
+    git(&clone, &["push", "--quiet", "origin", "main"]);
+    let theirs = fetch_branch(&fixture.git, &mirror, "main")
+        .unwrap()
+        .unwrap();
+
+    let base = ExportBase {
+        commit: first[0].1.clone(),
+        tree: fixture.revision(1, b"one\n").tree,
+    };
+    let merged = ExportRevision {
+        merge: Some(theirs.clone()),
+        ..fixture.revision(2, b"two\n")
+    };
+    let written = fixture.write(Some(&base), &[merged]);
+    push_branch(&fixture.git, &mirror, "main").unwrap();
+    assert_eq!(head(&remote), written[0].1.as_str());
+    let parents = git(&remote, &["log", "-1", "--format=%P", "main"]);
+    assert_eq!(
+        parents.trim(),
+        format!("{} {}", first[0].1.as_str(), theirs.as_str())
+    );
+
+    // Another repository gets the mirror's remote commits under its own namespace, so a commit there can name them.
+    let other = fixture.remote("other.git");
+    fetch_remote_refs(&fixture.git, &other, &mirror).unwrap();
+    // The push moved the mirror's tracking ref to the merge, which reaches the pulled commit.
+    assert_eq!(
+        git(&other, &["rev-parse", &format!("{FETCHED_REFS}/main")]).trim(),
+        written[0].1.as_str()
+    );
+    assert!(fixture.git.has_commit(&other, &theirs).unwrap());
+    let error = fetch_remote_refs(&fixture.git, &other, &fixture.path("absent")).unwrap_err();
+    assert_eq!(error.code(), codes::WORKSPACE_IO);
+    let error = fetch_remote_refs(&fixture.git, &other, &fixture.path("clone/b.txt")).unwrap_err();
+    assert_eq!(error.code(), codes::GIT_FAILED);
 }

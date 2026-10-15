@@ -478,7 +478,6 @@ INSERT INTO changesets (id, number, workspace_id, task_id, base_revision_id, tre
 INSERT INTO proposals (id, number, task_id, author_worker_id, title, created_at, updated_at) VALUES (1, 4, 1, 1, 'Database schema for reports', 0, 0);
 INSERT INTO proposal_versions (id, proposal_id, version, base_revision_id, tree_hash, head_changeset_id, created_by, created_at) VALUES (1, 1, 1, 1, 't', 1, 'frontend', 0);
 INSERT INTO integrations (id, number, kind, proposal_id, version_id, result, actor, created_at) VALUES (1, 1, 'proposal', 1, 1, 'succeeded', 'backend.worker-a', 0);
-INSERT INTO integrations (id, number, kind, remote_commit, result, actor, created_at) VALUES (2, 2, 'pull', 'abc123', 'succeeded', 'human:ana', 0);
 ";
 
 #[tokio::test]
@@ -499,9 +498,30 @@ async fn exported_commits_carry_the_revision_messages() {
     let store = Store::open_project(&ProjectPaths::new(&root))
         .await
         .unwrap();
+    // The pulled commit sits in the mirror, as a fetch leaves it.
+    let pulled = source_repo(&host.path("remote"));
+    let mirror = root.join(".fold/git");
+    fs::create_dir_all(&mirror).unwrap();
+    git(&mirror, &["init", "--quiet", "--bare"]);
+    let remote = host.path("remote");
+    git(
+        &mirror,
+        &[
+            "fetch",
+            "--quiet",
+            remote.to_str().unwrap(),
+            "+refs/heads/main:refs/remotes/origin/main",
+        ],
+    );
+    let pull = format!(
+        "INSERT INTO integrations (id, number, kind, remote_commit, result, actor, created_at) VALUES (2, 2, 'pull', '{pulled}', 'succeeded', 'human:ana', 0);"
+    );
     store
         .write(async |tx| -> Result<(), fold_store::StoreError> {
             sqlx::raw_sql(PARENTS).execute(tx.conn()).await?;
+            sqlx::raw_sql(sqlx::AssertSqlSafe(pull))
+                .execute(tx.conn())
+                .await?;
             Ok(())
         })
         .await
@@ -527,6 +547,9 @@ async fn exported_commits_carry_the_revision_messages() {
         .map(|commit| message(&target, commit))
         .collect();
     assert_eq!(found, expected);
+    // The pull revision's commit names the pulled commit as its second parent.
+    let parents = git(&target, &["log", "-1", "--format=%P", &commits[1]]);
+    assert_eq!(parents.trim(), format!("{} {pulled}", commits[2]));
 }
 
 #[tokio::test]

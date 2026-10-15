@@ -332,6 +332,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/pull": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Brings the remote branch into main: a clean merge integrates, a conflict creates a sync task with a workspace that holds the merge. Socket only; the human comes from `x-fold-human`. */
+        post: operations["pull_project"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/push": {
         parameters: {
             query?: never;
@@ -1631,6 +1648,40 @@ export interface components {
             /** Format: int32 */
             version: number;
         };
+        /** @description One path whose merge conflicted. */
+        PullConflict: {
+            /** @description `both_modified_text`, `both_modified_binary`, `modify_delete`, `add_add` or `type_change`. */
+            kind: string;
+            path: string;
+        };
+        PullResult: {
+            /** @description The remote branch. */
+            branch: string;
+            /** @description In path order; empty unless conflicted. */
+            conflicted: components["schemas"]["PullConflict"][];
+            /** @description False when an open sync task for the same commit existed already and nothing was created. */
+            created: boolean;
+            outcome: components["schemas"]["PullState"];
+            /** @description The fetched tip of the remote branch; absent when the remote has no such branch. */
+            remote_commit?: string | null;
+            /**
+             * @description The revision the pull integration made; absent unless integrated.
+             * @example r18
+             */
+            revision?: string | null;
+            /**
+             * @description The sync task that resolves a conflict; absent unless conflicted.
+             * @example T-12
+             */
+            task?: string | null;
+            /**
+             * @description The sync task's workspace; absent unless conflicted.
+             * @example ws-9
+             */
+            workspace?: string | null;
+        };
+        /** @enum {string} */
+        PullState: "up_to_date" | "integrated" | "conflicted";
         PushResult: {
             /** @description The remote branch. */
             branch: string;
@@ -4193,6 +4244,101 @@ export interface operations {
                 };
             };
             /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    pull_project: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Main holds the remote branch, or a sync task resolves the conflict */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PullResult"];
+                };
+            };
+            /** @description The human name is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not on the socket, or the slug is not registered */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description No remote is set, main moved during every attempt, the mirror diverged, or the config or sync map is invalid */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description A Git command failed */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open, git is not on PATH, or the objects of the integration could not be stored */
             503: {
                 headers: {
                     [name: string]: unknown;

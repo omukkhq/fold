@@ -51,7 +51,7 @@ impl Project {
         let new = NewTaskWorkspace {
             id: ws(number),
             task: t(task),
-            worker_id: 1,
+            worker_id: Some(1),
             path,
             base: RevisionId::from_number(1).unwrap(),
             now: at(10),
@@ -154,7 +154,7 @@ async fn an_unknown_task_or_base_inserts_nothing() {
     let new = NewTaskWorkspace {
         id: ws(1),
         task: t(1),
-        worker_id: 1,
+        worker_id: Some(1),
         path: "ws/t-1",
         base: RevisionId::from_number(7).unwrap(),
         now: at(10),

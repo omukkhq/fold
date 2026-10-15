@@ -6,7 +6,9 @@ use common::{count, exec, open};
 use fold_core::object::{ObjectKind, hash_object};
 use fold_core::revision::{Revision, StoredRevision};
 use fold_core::{IntegrationId, ProposalId, RevisionId, Timestamp};
-use fold_store::reviews::{IntegrationSubject, NewIntegration, insert_refused, insert_succeeded};
+use fold_store::reviews::{
+    IntegrationSubject, NewIntegration, insert_refused, insert_succeeded, latest_remote_commit,
+};
 use fold_store::testing::assert_append_only;
 use fold_store::workspaces::{IntegrationKind, create_initial_revision, initial_revision};
 use fold_store::{Store, StoreError};
@@ -55,6 +57,7 @@ fn proposal_attempt(number: u32) -> NewIntegration<'static> {
         subject: IntegrationSubject::Proposal {
             proposal: ProposalId::from_number(1).unwrap(),
             version: 1,
+            remote_commit: None,
         },
         actor: "review",
         created_at: now(),
@@ -167,6 +170,40 @@ async fn a_succeeded_proposal_records_its_proposal_and_version() {
             "SELECT COUNT(*) FROM integrations
              WHERE number = 1 AND kind = 'proposal' AND proposal_id = 1 AND version_id = 1
                AND remote_commit IS NULL AND actor = 'review'",
+        )
+        .await,
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_sync_tasks_proposal_carries_its_remote_commit_and_is_the_latest_one() {
+    let (_dir, store, first) = seeded().await;
+    assert_eq!(latest_remote_commit(store.read()).await.unwrap(), None);
+    let attempt = NewIntegration {
+        subject: IntegrationSubject::Proposal {
+            proposal: ProposalId::from_number(1).unwrap(),
+            version: 1,
+            remote_commit: Some("0123abcd"),
+        },
+        ..proposal_attempt(2)
+    };
+    let stored = second(&first, integration(2));
+
+    store
+        .write(async |tx| insert_succeeded(tx, &attempt, &stored).await)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        latest_remote_commit(store.read()).await.unwrap(),
+        Some((RevisionId::from_number(2).unwrap(), "0123abcd".to_owned()))
+    );
+    assert_eq!(
+        count(
+            &store,
+            "SELECT COUNT(*) FROM integrations
+             WHERE number = 2 AND kind = 'proposal' AND remote_commit = '0123abcd'",
         )
         .await,
         1
