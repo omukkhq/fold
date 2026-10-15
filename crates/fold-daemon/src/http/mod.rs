@@ -5,8 +5,10 @@ pub mod auth;
 pub mod error;
 pub mod events;
 pub mod host;
+pub mod messages;
 pub mod openapi;
 pub mod projects;
+pub mod tasks;
 pub mod workspaces;
 
 use axum::extract::{FromRequestParts, MatchedPath, RawPathParams, Request};
@@ -32,8 +34,10 @@ pub enum Transport {
 fn guarded_routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .merge(agents::routes())
+        .merge(messages::routes())
         .merge(projects::routes())
         .merge(workspaces::routes())
+        .merge(tasks::routes())
 }
 
 /// Every `/api` route with its declaration, so a route and its schema cannot drift apart.

@@ -120,6 +120,34 @@ impl TaskService {
         Ok(())
     }
 
+    /// Moves an item to `position`, counted from 0, in `checklist` (its own when `None`), which must belong to the same task; a checklist of that name that does not exist yet is created. A position past the end puts the item last. Both checklists end with dense positions. A move that changes nothing appends no event; any other appends one `checklist.item_updated` naming the item. Order is not a status input, so nothing is recomputed.
+    pub async fn move_checklist_item(
+        &self,
+        actor: &Actor,
+        item: ChecklistItemId,
+        position: u32,
+        checklist: Option<ChecklistName>,
+    ) -> Result<ChecklistItemView, TaskError> {
+        let now = self.clock.now();
+        let mut buffer = EventBuffer::new();
+        self.store
+            .write(async |tx| {
+                move_item_in_tx(
+                    tx,
+                    &mut buffer,
+                    actor,
+                    item,
+                    position,
+                    checklist.as_ref(),
+                    now,
+                )
+                .await
+            })
+            .await?;
+        self.bus.publish(buffer);
+        self.checklist_item(item).await
+    }
+
     pub async fn checklist_item(
         &self,
         item: ChecklistItemId,
@@ -210,7 +238,7 @@ async fn open_task(tx: &mut WriteTx, task: TaskId) -> Result<TaskRow, TaskError>
     Ok(row)
 }
 
-async fn add_item_in_tx(
+pub(super) async fn add_item_in_tx(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,
     actor: &Actor,
@@ -374,5 +402,70 @@ async fn remove_item_in_tx(
         buffer.append(tx, &event, now).await?;
     }
     buffer.extend(recompute(tx, &[row.task], now).await?.events);
+    Ok(())
+}
+
+async fn move_item_in_tx(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    actor: &Actor,
+    item: ChecklistItemId,
+    position: u32,
+    checklist: Option<&ChecklistName>,
+    now: Timestamp,
+) -> Result<(), TaskError> {
+    let row = checklists::fetch_item(tx.conn(), item)
+        .await?
+        .ok_or_else(|| item_not_found(item))?;
+    let task = row.task;
+    open_task(tx, task).await?;
+    let source = row.checklist;
+    let target = checklist.cloned().unwrap_or_else(|| source.clone());
+    if target != source && checklists::ensure_checklist(tx, task, &target, now).await? {
+        let event = NewEvent::new(types::CHECKLIST_CREATED, actor.event_actor())?
+            .task(task)
+            .data(json!({"checklist": target.as_str()}))?;
+        buffer.append(tx, &event, now).await?;
+    }
+    let items = checklists::items(tx.conn(), task).await?;
+    let order = |name: &ChecklistName| -> Vec<ChecklistItemId> {
+        items
+            .iter()
+            .filter(|other| other.checklist == *name && other.id != item)
+            .map(|other| other.id)
+            .collect()
+    };
+    let before = items
+        .iter()
+        .filter(|other| other.checklist == source)
+        .position(|other| other.id == item);
+    let mut placed = order(&target);
+    let index = usize::try_from(position)
+        .unwrap_or(usize::MAX)
+        .min(placed.len());
+    if target == source && before == Some(index) {
+        return Ok(());
+    }
+    placed.insert(index, item);
+    let left = order(&source);
+    let lists: Vec<(&ChecklistName, &[ChecklistItemId])> = if target == source {
+        vec![(&target, &placed)]
+    } else {
+        vec![(&source, &left), (&target, &placed)]
+    };
+    checklists::arrange(tx, task, &lists).await?;
+    let mut fields = vec!["position"];
+    if target != source {
+        fields.push("checklist");
+    }
+    let event = NewEvent::new(types::CHECKLIST_ITEM_UPDATED, actor.event_actor())?
+        .task(task)
+        .data(json!({
+            "item": item.to_string(),
+            "fields": fields,
+            "checklist": target.as_str(),
+            "position": index,
+        }))?;
+    buffer.append(tx, &event, now).await?;
     Ok(())
 }

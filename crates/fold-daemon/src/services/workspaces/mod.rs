@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
-use fold_core::{Clock, EventError, FoldError, ProjectPaths, WorkspaceId, codes};
+use fold_core::{Clock, EventError, FoldError, ProjectConfig, ProjectPaths, WorkspaceId, codes};
 use fold_store::{Store, StoreError};
 use fold_vcs::git::Git;
 use fold_vcs::objects::ObjectStore;
@@ -10,7 +10,7 @@ use thiserror::Error;
 use tokio::sync::{OwnedMutexGuard, RwLock};
 
 use super::events::EventBus;
-use super::projects::{ProjectError, load_config};
+use super::projects::{Lease, ProjectError, load_config};
 use super::tasks::TaskError;
 use crate::projects::ProjectHandle;
 
@@ -72,7 +72,7 @@ impl From<ProjectError> for WorkspaceError {
     }
 }
 
-/// Commands and reads for the revisions, `main` and the workspaces of one project. Each command is one write transaction; its events reach the bus only after the commit. `lease_minutes` is the project's configured claim lease, so the claim a create takes follows the rules of `claim_task`.
+/// Commands and reads for the revisions, `main` and the workspaces of one project. Each command is one write transaction; its events reach the bus only after the commit. `lease` is the project's claim lease, so the claim a create takes follows the rules of `claim_task`.
 #[derive(Clone)]
 pub struct WorkspaceService {
     store: Store,
@@ -80,7 +80,7 @@ pub struct WorkspaceService {
     clock: Arc<dyn Clock>,
     paths: ProjectPaths,
     git: Git,
-    lease_minutes: u64,
+    lease: Lease,
     /// Probed by the first command that touches files and shared by every clone of the service; in the daemon, by every service of the project.
     caps: Arc<OnceLock<Capabilities>>,
     /// The project's object lock (`ProjectHandle::objects`): a command that writes objects and then records a row naming them holds it shared from its first object write until that row commits.
@@ -92,7 +92,7 @@ impl std::fmt::Debug for WorkspaceService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WorkspaceService")
             .field("paths", &self.paths)
-            .field("lease_minutes", &self.lease_minutes)
+            .field("lease", &self.lease)
             .finish_non_exhaustive()
     }
 }
@@ -112,26 +112,33 @@ impl WorkspaceService {
             clock,
             paths,
             git,
-            lease_minutes,
+            lease: Lease::Minutes(lease_minutes),
             caps: Arc::new(OnceLock::new()),
             objects: Arc::new(RwLock::new(())),
             ops: Arc::new(WorkspaceLocks::default()),
         }
     }
 
-    /// The service of an open project in the daemon. It shares the project's object lock, workspace locks and capabilities probe, so every session's commands and garbage collection keep out of each other's way. The claim lease is read from `config.toml` here, once per service.
-    pub async fn for_project(handle: &ProjectHandle, git: Git) -> Result<Self, WorkspaceError> {
-        let config = load_config(&handle.paths).await?;
-        Ok(Self::new(
+    /// The service of an open project in the daemon. It shares the project's object lock, workspace locks and capabilities probe, so every session's commands and garbage collection keep out of each other's way. The claim lease is read from `config.toml` by each command that needs it, so an invalid file refuses no session or route.
+    pub fn for_project(handle: &ProjectHandle, git: Git) -> Self {
+        Self::new(
             handle.store.clone(),
             handle.bus.clone(),
             handle.clock.clone(),
             handle.paths.clone(),
             git,
-            config.lease_minutes,
+            ProjectConfig::default().lease_minutes,
         )
+        .with_project_config()
         .with_locks(handle.objects.clone(), handle.workspace_locks.clone())
-        .with_capabilities(handle.capabilities.clone()))
+        .with_capabilities(handle.capabilities.clone())
+    }
+
+    /// Reads the claim lease from the service's project `config.toml` on every command that takes a claim; an invalid file fails that command with `invalid_config`.
+    #[must_use]
+    pub fn with_project_config(mut self) -> Self {
+        self.lease = Lease::Config(self.paths.clone());
+        self
     }
 
     /// Shares one capabilities probe with every other service of the project.

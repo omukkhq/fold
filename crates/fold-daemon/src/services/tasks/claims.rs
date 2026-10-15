@@ -10,7 +10,7 @@ use fold_store::tasks::claims::{self, ClaimRow, ReleaseReason};
 use fold_store::{Store, StoreError, WriteTx, tasks};
 use serde_json::json;
 
-use super::{TaskError, TaskService, task_not_found};
+use super::{TaskError, TaskService, recompute, task_not_found};
 use crate::services::events::EventBuffer;
 
 /// The implementation claim on a task as callers see it. `stale` is computed at read time from the project's lease.
@@ -33,13 +33,13 @@ fn claim_view_of(row: ClaimRow, now: Timestamp, lease_minutes: u64) -> ClaimView
     }
 }
 
-/// Implementation claims. `policy::can_claim` admits only an agent, and the claim belongs to the agent's acting worker; the lease is the project's `lease_minutes`.
+/// Implementation claims. `policy::can_claim` admits only an agent, and the claim belongs to the agent's acting worker; the lease is the project's `lease_minutes`, read before the command's transaction.
 impl TaskService {
     /// Takes the implementation claim on `task` for the actor's worker. A repeat call by the holder renews the claim and returns it without a second `claim.acquired`. A claim moves no card, so no status is written.
     pub async fn claim_task(&self, actor: &Actor, task: TaskId) -> Result<ClaimView, TaskError> {
         let claimant = policy::can_claim(actor).map_err(FoldError::from)?;
         let now = self.clock.now();
-        let lease_minutes = self.lease_minutes;
+        let lease_minutes = self.lease_minutes().await?;
         let mut buffer = EventBuffer::new();
         let view = self
             .store
@@ -56,7 +56,7 @@ impl TaskService {
     pub async fn release_task(&self, actor: &Actor, task: TaskId) -> Result<(), TaskError> {
         let claimant = policy::can_claim(actor).map_err(FoldError::from)?;
         let now = self.clock.now();
-        let lease_minutes = self.lease_minutes;
+        let lease_minutes = self.lease_minutes().await?;
         let mut buffer = EventBuffer::new();
         self.store
             .write(async |tx| {
@@ -102,9 +102,40 @@ impl TaskService {
         Ok(())
     }
 
+    /// Moves the stale implementation claim on `task` to the actor's worker in one transaction: the old claim is released with `taken_over`, the new one inserted, and `claim.taken_over` names both workers. A claim whose lease has not run out is refused with `claim_not_stale`.
+    pub async fn takeover_claim(
+        &self,
+        actor: &Actor,
+        task: TaskId,
+    ) -> Result<ClaimView, TaskError> {
+        let claimant = policy::can_claim(actor).map_err(FoldError::from)?;
+        let now = self.clock.now();
+        let lease_minutes = self.lease_minutes().await?;
+        let mut buffer = EventBuffer::new();
+        let view = self
+            .store
+            .write(async |tx| {
+                let worker = worker_row(tx, claimant).await?;
+                takeover_in_tx(tx, &mut buffer, &worker, task, now, lease_minutes).await
+            })
+            .await?;
+        self.bus.publish(buffer);
+        Ok(view)
+    }
+
     /// The claim on `task` at the clock's current time, or `None` when nobody holds it.
     pub async fn claim_view(&self, task: TaskId) -> Result<Option<ClaimView>, TaskError> {
-        claim_view(&self.store, task, self.clock.now(), self.lease_minutes).await
+        let now = self.clock.now();
+        if tasks::get_by_number(self.store.read(), task)
+            .await?
+            .is_none()
+        {
+            return Err(task_not_found(task));
+        }
+        match claims::unreleased_for_task(self.store.read(), task).await? {
+            Some(row) => Ok(Some(claim_view_of(row, now, self.lease_minutes().await?))),
+            None => Ok(None),
+        }
     }
 }
 
@@ -230,4 +261,68 @@ pub(crate) fn already_claimed(holder: &ClaimRow, now: Timestamp, lease_minutes: 
         "call takeover_claim when the holder's lease is stale, or call get_ready_tasks for other work",
     )
     .into()
+}
+
+async fn takeover_in_tx(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    worker: &WorkerRow,
+    task: TaskId,
+    now: Timestamp,
+    lease_minutes: u64,
+) -> Result<ClaimView, TaskError> {
+    let row = tasks::fetch(tx.conn(), task)
+        .await?
+        .ok_or_else(|| task_not_found(task))?;
+    if let Some(refusal) = closed_refusal(&row) {
+        return Err(refusal);
+    }
+    let Some(holder) = claims::unreleased_for_task(tx.conn(), task).await? else {
+        return Err(FoldError::new(
+            codes::NOT_CLAIMED,
+            format!("{task} has no claim to take over"),
+        )
+        .with_hint("call claim_task to take the task")
+        .into());
+    };
+    if holder.worker_id == worker.id {
+        return Err(FoldError::new(
+            codes::ALREADY_HOLDER,
+            format!("{task} is already claimed by {}", worker.name),
+        )
+        .with_details([("holder", json!(worker.name.as_str()))])
+        .with_hint("the claim is yours; call get_task to see it")
+        .into());
+    }
+    if !is_stale(holder.renewed_at, now, lease_minutes) {
+        return Err(FoldError::new(
+            codes::CLAIM_NOT_STALE,
+            format!("the claim of {} on {task} is not stale", holder.worker),
+        )
+        .with_details([
+            ("holder", json!(holder.worker.as_str())),
+            ("renewed_at", json!(holder.renewed_at)),
+            ("lease_minutes", json!(lease_minutes)),
+        ])
+        .with_hint("wait until the lease runs out, or call get_ready_tasks for other work")
+        .into());
+    }
+    claims::release(tx, task, holder.worker_id, ReleaseReason::TakenOver, now).await?;
+    claims::insert_implementation(tx, task, worker.id, now).await?;
+    let event = NewEvent::new(types::CLAIM_TAKEN_OVER, EventActor::worker(&worker.name))?
+        .task(task)
+        .data(json!({
+            "kind": "implementation",
+            "from": holder.worker.as_str(),
+            "to": worker.name.as_str(),
+        }))?;
+    buffer.append(tx, &event, now).await?;
+    buffer.extend(recompute(tx, &[task], now).await?.events);
+    Ok(ClaimView {
+        task,
+        holder: worker.name.clone(),
+        acquired_at: now,
+        renewed_at: now,
+        stale: false,
+    })
 }

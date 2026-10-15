@@ -408,3 +408,46 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn a_reply_goes_to_the_parent_sender() {
+    use fold_core::messages::reply_addresses;
+    let recipients = [Target::Human(human("tanim")), Target::Human(human("ana"))];
+    let tanim = Sender::Human(human("tanim"));
+    assert_eq!(
+        reply_addresses(&Sender::Worker(worker("frontend")), &recipients, &tanim),
+        addresses(&["frontend"])
+    );
+    assert_eq!(
+        reply_addresses(&Sender::Worker(worker("frontend/ui")), &recipients, &tanim),
+        addresses(&["frontend/ui"])
+    );
+    assert_eq!(
+        reply_addresses(&Sender::Human(human("ana")), &recipients, &tanim),
+        addresses(&["human:ana"])
+    );
+}
+
+#[test]
+fn a_reply_to_your_own_message_or_to_fold_goes_to_the_other_recipients() {
+    use fold_core::messages::reply_addresses;
+    let tanim = Sender::Human(human("tanim"));
+    let recipients = [
+        Target::Worker(worker("backend")),
+        Target::Human(human("tanim")),
+        Target::Worker(worker("frontend/ui")),
+    ];
+    assert_eq!(
+        reply_addresses(&tanim, &recipients, &tanim),
+        addresses(&["backend", "frontend/ui"])
+    );
+    assert_eq!(
+        reply_addresses(
+            &Sender::Fold,
+            &recipients,
+            &Sender::Worker(worker("backend"))
+        ),
+        addresses(&["human:tanim", "frontend/ui"])
+    );
+    assert!(reply_addresses(&tanim, &[Target::Human(human("tanim"))], &tanim).is_empty());
+}

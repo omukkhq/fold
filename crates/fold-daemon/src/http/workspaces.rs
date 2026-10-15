@@ -27,8 +27,8 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(read_revision_file))
 }
 
-async fn service(project: &Project) -> Result<WorkspaceService, ApiError> {
-    Ok(WorkspaceService::for_project(&project.0, Git::default()).await?)
+fn service(project: &Project) -> WorkspaceService {
+    WorkspaceService::for_project(&project.0, Git::default())
 }
 
 fn revision(text: &str) -> Result<RevisionId, ApiError> {
@@ -343,13 +343,7 @@ pub struct PathQuery {
     )
 )]
 pub async fn get_repository_state(project: Project) -> Result<Json<RepositoryView>, ApiError> {
-    Ok(Json(
-        service(&project)
-            .await?
-            .get_repository_state()
-            .await?
-            .into(),
-    ))
+    Ok(Json(service(&project).get_repository_state().await?.into()))
 }
 
 /// Main revisions, newest first, one page at a time.
@@ -372,7 +366,6 @@ pub async fn list_revisions(
 ) -> Result<Json<RevisionPageView>, ApiError> {
     let before = query.before.as_deref().map(revision).transpose()?;
     let page = service(&project)
-        .await?
         .list_revisions(query.limit, before)
         .await?;
     Ok(Json(page.into()))
@@ -399,7 +392,7 @@ pub async fn get_revision(
     project: Project,
     Path((_slug, r)): Path<(String, String)>,
 ) -> Result<Json<RevisionDetailView>, ApiError> {
-    let detail = service(&project).await?.get_revision(revision(&r)?).await?;
+    let detail = service(&project).get_revision(revision(&r)?).await?;
     Ok(Json(detail.into()))
 }
 
@@ -427,10 +420,7 @@ pub async fn read_revision_tree(
     ApiQuery(query): ApiQuery<PathQuery>,
 ) -> Result<Json<TreeView>, ApiError> {
     let path = query.path.unwrap_or_default();
-    let entries = service(&project)
-        .await?
-        .read_tree(revision(&r)?, &path)
-        .await?;
+    let entries = service(&project).read_tree(revision(&r)?, &path).await?;
     Ok(Json(tree_view(path, entries)))
 }
 
@@ -458,10 +448,7 @@ pub async fn read_revision_file(
     ApiQuery(query): ApiQuery<PathQuery>,
 ) -> Result<Json<FileContentView>, ApiError> {
     let path = query.path.unwrap_or_default();
-    let content = service(&project)
-        .await?
-        .read_file(revision(&r)?, &path)
-        .await?;
+    let content = service(&project).read_file(revision(&r)?, &path).await?;
     Ok(Json(file_view(path, content)))
 }
 

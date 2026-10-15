@@ -1,0 +1,182 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT r.id AS \"row!: i64\", rw.name AS recipient, r.addressed_as, r.delivered_at,\n                  m.number, m.thread_id, m.reply_to, m.sender_kind,\n                  w.name AS \"worker?: String\", m.sender_human, t.number AS \"task?: i64\",\n                  p.number AS \"proposal?: i64\", m.body, m.created_at\n           FROM message_recipients r\n           JOIN workers rw ON rw.id = r.worker_id\n           JOIN messages m ON m.id = r.message_id\n           LEFT JOIN workers w ON w.id = m.sender_worker_id\n           LEFT JOIN tasks t ON t.id = m.task_id\n           LEFT JOIN proposals p ON p.id = m.proposal_id\n           WHERE r.worker_id IN (SELECT value FROM json_each(?)) AND r.acked_at IS NULL\n           ORDER BY m.number, rw.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "row!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "message_recipients",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "recipient",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workers",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "addressed_as",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "message_recipients",
+            "name": "addressed_as"
+          }
+        }
+      },
+      {
+        "name": "delivered_at",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "message_recipients",
+            "name": "delivered_at"
+          }
+        }
+      },
+      {
+        "name": "number",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "thread_id",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "thread_id"
+          }
+        }
+      },
+      {
+        "name": "reply_to",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "reply_to"
+          }
+        }
+      },
+      {
+        "name": "sender_kind",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "sender_kind"
+          }
+        }
+      },
+      {
+        "name": "worker?: String",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workers",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "sender_human",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "sender_human"
+          }
+        }
+      },
+      {
+        "name": "task?: i64",
+        "ordinal": 10,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "proposal?: i64",
+        "ordinal": 11,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "body",
+        "ordinal": 12,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "body"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 13,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "2788c7692ccc7395d06af271b9167bab8340d6877911903235bacb76b04a0d0a"
+}

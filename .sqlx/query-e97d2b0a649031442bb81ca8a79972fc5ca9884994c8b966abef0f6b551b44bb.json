@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT t.number AS \"task!: i64\", w.number AS \"workspace!: i64\"\n           FROM workspaces w\n           JOIN tasks t ON t.id = w.task_id\n           WHERE w.kind = 'task' AND w.state IN ('active', 'missing') AND t.archived_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "task!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "workspace!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "workspaces",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "e97d2b0a649031442bb81ca8a79972fc5ca9884994c8b966abef0f6b551b44bb"
+}

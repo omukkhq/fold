@@ -136,7 +136,10 @@ impl WorkspaceService {
     ) -> Result<WorkspaceView, WorkspaceError> {
         let claimant = policy::can_claim(actor).map_err(FoldError::from)?;
         let now = self.clock.now();
-        let (base, taken) = self.check_create(claimant, task, now).await?;
+        let lease_minutes = self.lease.minutes().await?;
+        let (base, taken) = self
+            .check_create(claimant, task, now, lease_minutes)
+            .await?;
         let placed = self.place(task, taken, base.tree_hash).await?;
         #[cfg(feature = "failpoints")]
         fail::fail_point!("workspace_create_after_rename", |_| {
@@ -146,7 +149,6 @@ impl WorkspaceService {
             )))
         });
         let mut buffer = EventBuffer::new();
-        let lease_minutes = self.lease_minutes;
         let written = self
             .store
             .write(async |tx| {
@@ -274,6 +276,7 @@ impl WorkspaceService {
         claimant: &AgentActor,
         task: TaskId,
         now: Timestamp,
+        lease_minutes: u64,
     ) -> Result<(workspaces::RevisionRow, Vec<String>), WorkspaceError> {
         let read = self.store.read();
         let row = tasks::get_by_number(read, task)
@@ -285,7 +288,7 @@ impl WorkspaceService {
         if let Some(holder) = claims::unreleased_for_task(read, task).await?
             && holder.worker != claimant.worker
         {
-            return Err(already_claimed(&holder, now, self.lease_minutes).into());
+            return Err(already_claimed(&holder, now, lease_minutes).into());
         }
         if let Some(live) = workspaces::live_task_workspace(read, task).await? {
             return Err(workspace_exists(&live).into());

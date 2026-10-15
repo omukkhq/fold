@@ -13,11 +13,13 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::UnixStream;
 
 use super::FoldServer;
-use super::error::{ErrorBody, from_agent, from_project, from_workspace};
+use super::error::{ErrorBody, from_agent, from_project};
 use crate::daemon::AppState;
 use crate::services::agents::{AgentService, SessionContext};
 use crate::services::events::EventService;
+use crate::services::messages::MessageService;
 use crate::services::projects;
+use crate::services::tasks::TaskService;
 use crate::services::workspaces::WorkspaceService;
 use crate::socket::HandshakeHandler;
 
@@ -91,7 +93,7 @@ where
         Ok(Err(error)) => Err(error),
         Err(_) => Err(invalid("no handshake line arrived within 5 seconds")),
     };
-    let ((agents, events, workspaces, session, project), rest) = match opened {
+    let ((agents, events, workspaces, tasks, messages, session, project), rest) = match opened {
         Ok(opened) => opened,
         Err(error) => {
             if write
@@ -109,7 +111,14 @@ where
         .await
         .is_ok()
     {
-        let server = FoldServer::new(agents.clone(), events, workspaces, session.clone());
+        let server = FoldServer::new(
+            agents.clone(),
+            events,
+            workspaces,
+            tasks,
+            messages,
+            session.clone(),
+        );
         // Bytes the client sent after its line belong to MCP.
         let read = Cursor::new(rest).chain(read);
         match server.serve((read, write)).await {
@@ -211,6 +220,8 @@ async fn open(
         AgentService,
         EventService,
         WorkspaceService,
+        TaskService,
+        MessageService,
         SessionContext,
         String,
     ),
@@ -223,9 +234,13 @@ async fn open(
         .map_err(from_project)?;
     let agents = handle.agents();
     let events = EventService::new(handle.store.clone(), handle.bus.clone());
-    let workspaces = WorkspaceService::for_project(&handle, Git::default())
-        .await
-        .map_err(from_workspace)?;
+    let workspaces = WorkspaceService::for_project(&handle, Git::default());
+    let messages = MessageService::new(
+        handle.store.clone(),
+        state.registry.clone(),
+        handle.bus.clone(),
+        handle.clock.clone(),
+    );
     let mut session = agents.start_session(hello.pid).await.map_err(from_agent)?;
     if let Some(agent) = agent
         && let Err(error) = agents.register_agent(&mut session, &agent, &[]).await
@@ -233,7 +248,15 @@ async fn open(
         let _ = agents.end_session(&session).await;
         return Err(from_agent(error));
     }
-    Ok((agents, events, workspaces, session, handle.slug.clone()))
+    Ok((
+        agents,
+        events,
+        workspaces,
+        handle.tasks.clone(),
+        messages,
+        session,
+        handle.slug.clone(),
+    ))
 }
 
 fn invalid(message: &str) -> FoldError {

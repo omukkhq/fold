@@ -11,6 +11,7 @@ mod dependencies;
 mod ready;
 mod recompute;
 mod removal;
+mod views;
 
 pub use dependencies::{EdgeRow, delete_edge, edges, edges_conn, fetch_edge, insert_edge};
 pub use ready::{ReadyRow, ReadySnapshot, ready_snapshot};
@@ -18,6 +19,9 @@ pub use recompute::{LoadedFacts, load_facts, write_cache};
 pub use removal::{
     TaskHistory, delete, delete_edges_touching, delete_linked_items, history, linked_item_owners,
     set_archived,
+};
+pub use views::{
+    BoardSnapshot, ChecklistCounts, TaskRef, board_snapshot, live_workspace, task_refs,
 };
 
 /// A task as stored. The row id stays inside this crate; callers address a task by its public number.

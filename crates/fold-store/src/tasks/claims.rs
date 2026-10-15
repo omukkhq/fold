@@ -9,6 +9,7 @@ use crate::store::WriteTx;
 pub enum ReleaseReason {
     Released,
     TaskArchived,
+    TakenOver,
 }
 
 impl ReleaseReason {
@@ -16,6 +17,7 @@ impl ReleaseReason {
         match self {
             ReleaseReason::Released => "released",
             ReleaseReason::TaskArchived => "task_archived",
+            ReleaseReason::TakenOver => "taken_over",
         }
     }
 }

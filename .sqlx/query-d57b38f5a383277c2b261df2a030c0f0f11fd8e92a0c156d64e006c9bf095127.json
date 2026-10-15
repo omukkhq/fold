@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT DISTINCT m.thread_id AS \"thread!: i64\"\n           FROM messages m\n           WHERE m.sender_kind = 'worker'\n             AND EXISTS (\n                 SELECT 1 FROM message_recipients r\n                 WHERE r.message_id = m.id AND r.addressed_as IN ('human', 'humans')\n             )\n             AND NOT EXISTS (\n                 SELECT 1 FROM messages later\n                 WHERE later.thread_id = m.thread_id\n                   AND later.number > m.number\n                   AND later.sender_kind = 'human'\n             )",
+  "describe": {
+    "columns": [
+      {
+        "name": "thread!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "thread_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d57b38f5a383277c2b261df2a030c0f0f11fd8e92a0c156d64e006c9bf095127"
+}

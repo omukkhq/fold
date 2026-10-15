@@ -6,6 +6,8 @@ use fold_core::WorkerName;
 use fold_daemon::mcp::{FoldServer, FooterPart, FooterSource, INSTRUCTIONS};
 use fold_daemon::services::agents::{AgentService, SessionContext};
 use fold_daemon::services::events::{EventBus, EventService};
+use fold_daemon::services::messages::MessageService;
+use fold_daemon::services::tasks::TaskService;
 use fold_daemon::services::workspaces::WorkspaceService;
 use fold_store::agents;
 use fold_store::testing::TestProject;
@@ -60,7 +62,19 @@ async fn connect_with(
         Git::default(),
         30,
     );
-    let mut server = FoldServer::new(agents, events, workspaces, session.clone());
+    let tasks = TaskService::new(
+        project.store().clone(),
+        EventBus::new(),
+        Arc::new(project.clock().clone()),
+        30,
+    );
+    let messages = MessageService::new(
+        project.store().clone(),
+        project.registry().clone(),
+        EventBus::new(),
+        Arc::new(project.clock().clone()),
+    );
+    let mut server = FoldServer::new(agents, events, workspaces, tasks, messages, session.clone());
     for source in sources {
         server = server.with_footer_source(source);
     }
@@ -226,7 +240,7 @@ async fn any_other_tool_before_registration_names_register_agent() {
 
     call(&client, "register_agent", json!({"name": "frontend"})).await;
     let unknown = client
-        .call_tool(CallToolRequestParams::new("claim_task"))
+        .call_tool(CallToolRequestParams::new("no_such_tool"))
         .await;
     assert!(unknown.is_err(), "an unknown tool is a protocol error");
 }
@@ -419,6 +433,27 @@ async fn the_server_lists_described_tools_and_sends_the_workflow() {
             "record_changes",
             "sync_workspace",
             "abandon_workspace",
+            "get_task_graph",
+            "get_ready_tasks",
+            "get_task",
+            "create_task",
+            "update_task",
+            "delete_task",
+            "archive_task",
+            "add_dependency",
+            "remove_dependency",
+            "add_checklist_item",
+            "update_checklist_item",
+            "move_checklist_item",
+            "remove_checklist_item",
+            "create_label",
+            "claim_task",
+            "release_task",
+            "takeover_claim",
+            "send_message",
+            "get_inbox",
+            "get_thread",
+            "acknowledge_message"
         ]
     );
     for tool in &tools {

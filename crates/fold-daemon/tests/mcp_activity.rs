@@ -11,6 +11,7 @@ use fold_core::{
 use fold_daemon::mcp::{FoldServer, FooterPart, FooterSource};
 use fold_daemon::services::agents::{AgentService, SessionContext};
 use fold_daemon::services::events::{EventBus, EventService};
+use fold_daemon::services::messages::MessageService;
 use fold_daemon::services::tasks::{CreateTask, TaskService};
 use fold_daemon::services::workspaces::WorkspaceService;
 use fold_store::events;
@@ -143,6 +144,13 @@ impl Fixture {
             self.agents.clone(),
             events,
             self.workspaces.clone(),
+            self.tasks.clone(),
+            MessageService::new(
+                self.project.store().clone(),
+                self.project.registry().clone(),
+                EventBus::new(),
+                Arc::new(self.project.clock().clone()),
+            ),
             session.clone(),
         )
         .with_footer_source(Arc::new(Fixed));

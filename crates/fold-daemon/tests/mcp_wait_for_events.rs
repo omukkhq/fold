@@ -97,6 +97,15 @@ impl Fixture {
         )
     }
 
+    fn messages(&self) -> MessageService {
+        MessageService::new(
+            self.store().clone(),
+            self.project.registry().clone(),
+            self.bus.clone(),
+            Arc::new(self.project.clock().clone()),
+        )
+    }
+
     /// An adapter session of agent `name` over an in-memory stream, already registered and caught up with every stored event.
     async fn connect(&self, name: &str) -> Session {
         let events = EventService::new(self.store().clone(), self.bus.clone());
@@ -105,6 +114,8 @@ impl Fixture {
             self.agents.clone(),
             events,
             self.workspaces(),
+            self.tasks.clone(),
+            self.messages(),
             context.clone(),
         );
         let (client_end, server_end) = tokio::io::duplex(256 * 1024);
@@ -547,7 +558,14 @@ async fn the_event_tools_need_a_registered_agent() {
     let fx = Fixture::new().await;
     let events = EventService::new(fx.store().clone(), fx.bus.clone());
     let context = fx.agents.start_session(9).await.unwrap();
-    let server = FoldServer::new(fx.agents.clone(), events, fx.workspaces(), context);
+    let server = FoldServer::new(
+        fx.agents.clone(),
+        events,
+        fx.workspaces(),
+        fx.tasks.clone(),
+        fx.messages(),
+        context,
+    );
     let (client_end, server_end) = tokio::io::duplex(64 * 1024);
     tokio::spawn(async move {
         if let Ok(running) = server.serve(server_end).await {

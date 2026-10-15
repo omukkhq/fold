@@ -1,13 +1,14 @@
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
 
-use fold_core::{Clock, FoldError, ProjectPaths, codes};
+use fold_core::{Clock, FoldError, ProjectConfig, ProjectPaths, codes};
 use fold_store::Store;
 use fold_store::projects::ProjectRow;
 use fold_vcs::platform::Capabilities;
 
 use crate::services::agents::{AgentService, SeenPresence};
 use crate::services::events::EventBus;
+use crate::services::tasks::TaskService;
 use crate::services::workspaces::WorkspaceLocks;
 
 /// An open project: its database, its clock and the live state shared by every request. Later domains add their state here.
@@ -21,6 +22,8 @@ pub struct ProjectHandle {
     pub bus: EventBus,
     /// What the calls and the presence job last saw of each agent's presence.
     pub presence: SeenPresence,
+    /// Reads the claim lease from the project's configuration on each use, so every transport applies the same lease.
+    pub tasks: TaskService,
     /// Held for the whole integration procedure.
     pub integration: tokio::sync::Mutex<()>,
     /// Held for a whole garbage collection run, so a second run is refused instead of queued.
@@ -56,14 +59,23 @@ impl ProjectHandle {
             tracing::warn!(project = %row.slug, code = error.code().unwrap_or("store_error"), %error, "project failed to open");
             unavailable(&row.slug)
         })?;
+        let bus = EventBus::new();
+        let tasks = TaskService::new(
+            store.clone(),
+            bus.clone(),
+            clock.clone(),
+            ProjectConfig::default().lease_minutes,
+        )
+        .with_project_config(paths.clone());
         Ok(Self {
             slug: row.slug.clone(),
             name: row.name.clone(),
             paths,
             store,
             clock,
-            bus: EventBus::new(),
+            bus,
             presence: SeenPresence::new(),
+            tasks,
             integration: tokio::sync::Mutex::new(()),
             gc: tokio::sync::Mutex::new(()),
             objects: Arc::new(tokio::sync::RwLock::new(())),

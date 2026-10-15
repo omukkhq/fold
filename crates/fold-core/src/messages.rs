@@ -337,6 +337,30 @@ pub fn resolve(
     Ok(rows.list)
 }
 
+/// The recipients of a reply that names none: the parent's sender, so an answer reaches whoever asked. When the replier sent the parent itself, or `fold` did, the reply goes to the parent's other recipients instead. An empty list resolves to `recipient_not_found`.
+pub fn reply_addresses(
+    parent_sender: &Sender,
+    parent_recipients: &[Target],
+    replier: &Sender,
+) -> Vec<Address> {
+    let sender = match parent_sender {
+        Sender::Worker(worker) if parent_sender != replier => Some(Address::of_worker(worker)),
+        Sender::Human(name) if parent_sender != replier => Some(Address::Human(name.clone())),
+        Sender::Worker(_) | Sender::Human(_) | Sender::Fold => None,
+    };
+    if let Some(address) = sender {
+        return vec![address];
+    }
+    parent_recipients
+        .iter()
+        .filter(|target| !replier.is(target))
+        .map(|target| match target {
+            Target::Worker(worker) => Address::of_worker(worker),
+            Target::Human(name) => Address::Human(name.clone()),
+        })
+        .collect()
+}
+
 #[derive(Default)]
 struct Rows {
     list: Vec<Recipient>,

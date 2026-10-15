@@ -12,7 +12,7 @@ use serde_json::json;
 use thiserror::Error;
 
 use crate::services::events::{EventBuffer, EventBus};
-use crate::services::projects::{ProjectError, load_config};
+use crate::services::projects::{Lease, ProjectError};
 use crate::services::tasks::renew_leases;
 
 mod overview;
@@ -73,14 +73,6 @@ pub struct RegisteredWorker {
     pub created: bool,
 }
 
-/// Where the overview takes the claim lease from, which it needs to mark a claim stale.
-#[derive(Debug, Clone)]
-enum Lease {
-    Minutes(u64),
-    /// Read from the project's configuration on every overview, as the other services read it.
-    Config(ProjectPaths),
-}
-
 /// Commands and lookups for agents, sessions and workers. A command reads the time from `clock`, appends its events in its write transaction and publishes them after the commit. `seen` is shared by every service and the presence job of one project, so they agree on when presence changed.
 #[derive(Clone)]
 pub struct AgentService {
@@ -129,10 +121,7 @@ impl AgentService {
     }
 
     async fn lease_minutes(&self) -> Result<u64, AgentError> {
-        match &self.lease {
-            Lease::Minutes(minutes) => Ok(*minutes),
-            Lease::Config(paths) => Ok(load_config(paths).await?.lease_minutes),
-        }
+        Ok(self.lease.minutes().await?)
     }
 
     /// Inserts the session row when an adapter connects. The session has no agent until `register_agent` binds it, and no event is stored until then.

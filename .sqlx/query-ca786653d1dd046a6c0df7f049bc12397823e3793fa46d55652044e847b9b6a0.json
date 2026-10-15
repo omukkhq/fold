@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE message_recipients SET acked_at = ?1 WHERE id IN (SELECT value FROM json_each(?2))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "ca786653d1dd046a6c0df7f049bc12397823e3793fa46d55652044e847b9b6a0"
+}

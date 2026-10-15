@@ -155,6 +155,18 @@ pub fn can_close_proposal(actor: &Actor, author: &WorkerName) -> Result<(), Poli
     }
 }
 
+/// Only an agent's worker has an inbox, because a recipient row that delivery and acknowledgement change names a worker. A human reads and answers messages through the thread listing instead.
+pub fn can_use_inbox(actor: &Actor) -> Result<&AgentActor, PolicyDenied> {
+    match actor {
+        Actor::Agent(agent) => Ok(agent),
+        Actor::Human { .. } | Actor::System => Err(PolicyDenied {
+            code: codes::INVALID_REQUEST,
+            message: "only an agent's worker has an inbox",
+            hint: "read the threads on the Messages screen or with GET /messages",
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

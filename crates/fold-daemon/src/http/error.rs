@@ -12,6 +12,7 @@ use serde_json::{Map, Value};
 use utoipa::ToSchema;
 
 use crate::services::agents::AgentError;
+use crate::services::messages::MessageError;
 use crate::services::projects::ProjectError;
 use crate::services::tasks::TaskError;
 use crate::services::workspaces::WorkspaceError;
@@ -41,12 +42,29 @@ fn status_of(code: &str) -> Option<StatusCode> {
         | codes::AGENT_NOT_FOUND
         | codes::REVISION_NOT_FOUND
         | codes::WORKSPACE_NOT_FOUND
-        | codes::PATH_NOT_IN_COMPARISON => Some(StatusCode::NOT_FOUND),
+        | codes::PATH_NOT_IN_COMPARISON
+        | codes::TASK_NOT_FOUND
+        | codes::LABEL_NOT_FOUND
+        | codes::DEPENDENCY_NOT_FOUND
+        | codes::CHECKLIST_ITEM_NOT_FOUND
+        | codes::CLAIM_NOT_FOUND
+        | codes::NOT_CLAIMED
+        | codes::WORKER_NOT_FOUND
+        | codes::PROPOSAL_NOT_FOUND
+        | codes::MESSAGE_NOT_FOUND
+        | codes::RECIPIENT_NOT_FOUND
+        | codes::UNKNOWN_HUMAN => Some(StatusCode::NOT_FOUND),
         codes::INVALID_REQUEST
         | codes::INVALID_NAME
         | codes::INVALID_ID
         | codes::INVALID_PATH
-        | codes::INVALID_STATE_REF => Some(StatusCode::BAD_REQUEST),
+        | codes::INVALID_STATE_REF
+        | codes::INVALID_TASK_TITLE
+        | codes::INVALID_LABEL_NAME
+        | codes::INVALID_LABEL_COLOR
+        | codes::INVALID_TASK_STATUS
+        | codes::INVALID_CHECKLIST_NAME
+        | codes::INVALID_STEP_TEXT => Some(StatusCode::BAD_REQUEST),
         codes::HUMAN_NAME_REQUIRED | codes::AUTH_REQUIRED | codes::INVALID_TOKEN => {
             Some(StatusCode::UNAUTHORIZED)
         }
@@ -59,7 +77,15 @@ fn status_of(code: &str) -> Option<StatusCode> {
         | codes::REMOTE_AHEAD
         | codes::EXPORT_DIVERGED
         | codes::GIT_SYNC_MAP_INVALID
-        | codes::INVALID_CONFIG => Some(StatusCode::CONFLICT),
+        | codes::INVALID_CONFIG
+        | codes::TASK_CLOSED
+        | codes::LABEL_EXISTS
+        | codes::DEPENDENCY_EXISTS
+        | codes::DEPENDENCY_CYCLE
+        | codes::ALREADY_CLAIMED
+        | codes::ALREADY_HOLDER
+        | codes::CLAIM_NOT_STALE
+        | codes::NOT_CLAIM_HOLDER => Some(StatusCode::CONFLICT),
         codes::GIT_FAILED => Some(StatusCode::BAD_GATEWAY),
         _ => None,
     }
@@ -124,6 +150,18 @@ impl From<WorkspaceError> for ApiError {
             WorkspaceError::Store(error) => error.into(),
             WorkspaceError::Task(error) => error.into(),
             WorkspaceError::Event(error) => {
+                Self(FoldError::new(codes::INTERNAL_ERROR, error.to_string()))
+            }
+        }
+    }
+}
+
+impl From<MessageError> for ApiError {
+    fn from(error: MessageError) -> Self {
+        match error {
+            MessageError::Fold(error) => error.into(),
+            MessageError::Store(error) => error.into(),
+            MessageError::Event(error) => {
                 Self(FoldError::new(codes::INTERNAL_ERROR, error.to_string()))
             }
         }
@@ -249,10 +287,18 @@ mod tests {
             (codes::GIT_SYNC_MAP_INVALID, StatusCode::CONFLICT),
             (codes::INVALID_CONFIG, StatusCode::CONFLICT),
             (codes::GIT_FAILED, StatusCode::BAD_GATEWAY),
+            (codes::TASK_NOT_FOUND, StatusCode::NOT_FOUND),
+            (codes::INVALID_ID, StatusCode::BAD_REQUEST),
+            (codes::DEPENDENCY_CYCLE, StatusCode::CONFLICT),
+            (codes::ALREADY_CLAIMED, StatusCode::CONFLICT),
+            (codes::MESSAGE_NOT_FOUND, StatusCode::NOT_FOUND),
+            (codes::RECIPIENT_NOT_FOUND, StatusCode::NOT_FOUND),
+            (codes::PROPOSAL_NOT_FOUND, StatusCode::NOT_FOUND),
+            (codes::UNKNOWN_HUMAN, StatusCode::NOT_FOUND),
         ] {
             assert_eq!(status_of(code), Some(status));
         }
-        assert_eq!(status_of(codes::ALREADY_CLAIMED), None);
+        assert_eq!(status_of(codes::OBJECT_CORRUPT), None);
         assert_eq!(status_of(codes::INTERNAL_ERROR), None);
     }
 
@@ -278,7 +324,7 @@ mod tests {
         );
         let body = body_of(FoldError::new(codes::NOT_FOUND, "absent")).await;
         assert_eq!(body["error"]["details"], serde_json::json!({}));
-        let body = body_of(FoldError::new(codes::ALREADY_CLAIMED, "T-1").with_hint("wait")).await;
+        let body = body_of(FoldError::new(codes::OBJECT_CORRUPT, "T-1").with_hint("wait")).await;
         assert_eq!(body["error"]["details"], serde_json::json!({}));
     }
 
@@ -315,6 +361,28 @@ mod tests {
         .into();
         assert_eq!(error.code(), codes::ALREADY_CLAIMED);
         let ApiError(error) = WorkspaceError::Event(fold_core::EventError::UnknownType).into();
+        assert_eq!(error.code(), codes::INTERNAL_ERROR);
+    }
+
+    #[test]
+    fn task_errors_keep_their_code_and_a_bad_event_is_internal() {
+        let ApiError(error) =
+            TaskError::Fold(FoldError::new(codes::TASK_NOT_FOUND, "absent")).into();
+        assert_eq!(error.code(), codes::TASK_NOT_FOUND);
+        let ApiError(error) = TaskError::Store(StoreError::Corrupt("tasks.number")).into();
+        assert_eq!(error.code(), codes::INTERNAL_ERROR);
+        let ApiError(error) = TaskError::Event(fold_core::EventError::UnknownType).into();
+        assert_eq!(error.code(), codes::INTERNAL_ERROR);
+    }
+
+    #[test]
+    fn message_errors_keep_their_code_and_a_bad_event_is_internal() {
+        let ApiError(error) =
+            MessageError::Fold(FoldError::new(codes::MESSAGE_NOT_FOUND, "absent")).into();
+        assert_eq!(error.code(), codes::MESSAGE_NOT_FOUND);
+        let ApiError(error) = MessageError::Store(StoreError::Corrupt("messages.number")).into();
+        assert_eq!(error.code(), codes::INTERNAL_ERROR);
+        let ApiError(error) = MessageError::Event(fold_core::EventError::UnknownType).into();
         assert_eq!(error.code(), codes::INTERNAL_ERROR);
     }
 

@@ -9,6 +9,8 @@ use std::sync::Arc;
 use fold_daemon::mcp::{FoldServer, FooterPart, FooterSource};
 use fold_daemon::services::agents::{AgentService, SessionContext};
 use fold_daemon::services::events::{EventBus, EventService};
+use fold_daemon::services::messages::MessageService;
+use fold_daemon::services::tasks::TaskService;
 use fold_store::testing::TestProject;
 use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::service::RunningService;
@@ -33,6 +35,24 @@ impl FooterSource for Fixed {
     }
 }
 
+fn tasks(project: &TestProject) -> TaskService {
+    TaskService::new(
+        project.store().clone(),
+        EventBus::new(),
+        Arc::new(project.clock().clone()),
+        30,
+    )
+}
+
+fn messages(project: &TestProject) -> MessageService {
+    MessageService::new(
+        project.store().clone(),
+        project.registry().clone(),
+        EventBus::new(),
+        Arc::new(project.clock().clone()),
+    )
+}
+
 fn events(project: &TestProject) -> EventService {
     EventService::new(project.store().clone(), EventBus::new())
 }
@@ -47,8 +67,15 @@ async fn connect(project: &TestProject) -> Client {
         Arc::new(project.clock().clone()),
     );
     let session = agents.start_session(7).await.unwrap();
-    let server = FoldServer::new(agents, events(project), service(project), session)
-        .with_footer_source(Arc::new(Fixed(FooterPart::Unread, 2)));
+    let server = FoldServer::new(
+        agents,
+        events(project),
+        service(project),
+        tasks(project),
+        messages(project),
+        session,
+    )
+    .with_footer_source(Arc::new(Fixed(FooterPart::Unread, 2)));
     let (client_end, server_end) = tokio::io::duplex(64 * 1024);
     tokio::spawn(async move {
         if let Ok(running) = server.serve(server_end).await {
@@ -267,7 +294,14 @@ async fn repository_tools_need_a_registered_agent() {
         Arc::new(project.clock().clone()),
     );
     let session = agents.start_session(8).await.unwrap();
-    let server = FoldServer::new(agents, events(&project), service(&project), session);
+    let server = FoldServer::new(
+        agents,
+        events(&project),
+        service(&project),
+        tasks(&project),
+        messages(&project),
+        session,
+    );
     let (client_end, server_end) = tokio::io::duplex(64 * 1024);
     tokio::spawn(async move {
         if let Ok(running) = server.serve(server_end).await {

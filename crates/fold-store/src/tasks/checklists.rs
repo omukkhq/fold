@@ -303,3 +303,50 @@ pub async fn progress(conn: &mut SqliteConnection, task: TaskId) -> Result<(u32,
         |value: i64| u32::try_from(value).map_err(|_| StoreError::Corrupt("checklist_items"));
     Ok((count(row.done)?, count(row.total)?))
 }
+
+/// Gives every item in `lists` its checklist (by name, on `task`) and its index in the list as its position. `checklist_items_one_per_position` is checked row by row, so a plain renumbering would collide midway: the items first take distinct negative positions, which no stored item holds, and then their final ones. Each list must name every item its checklist keeps, so the positions end dense from 0.
+pub async fn arrange(
+    tx: &mut WriteTx,
+    task: TaskId,
+    lists: &[(&ChecklistName, &[ChecklistItemId])],
+) -> Result<(), StoreError> {
+    let number = task.to_db();
+    let mut parked: i64 = 0;
+    for (checklist, items) in lists {
+        let name = checklist.as_str();
+        for item in *items {
+            parked -= 1;
+            let item = item.to_db();
+            let result = sqlx::query!(
+                "UPDATE checklist_items SET position = ?4, checklist_id = (
+                     SELECT c.id FROM checklists c JOIN tasks t ON t.id = c.task_id
+                     WHERE t.number = ?1 AND c.name = ?2)
+                 WHERE number = ?3",
+                number,
+                name,
+                item,
+                parked
+            )
+            .execute(tx.conn())
+            .await?;
+            if result.rows_affected() != 1 {
+                return Err(StoreError::Invalid("the checklist item does not exist"));
+            }
+        }
+    }
+    for (_, items) in lists {
+        for (position, item) in items.iter().enumerate() {
+            let item = item.to_db();
+            let position = i64::try_from(position)
+                .map_err(|_| StoreError::Invalid("too many checklist items"))?;
+            sqlx::query!(
+                "UPDATE checklist_items SET position = ?2 WHERE number = ?1",
+                item,
+                position
+            )
+            .execute(tx.conn())
+            .await?;
+        }
+    }
+    Ok(())
+}

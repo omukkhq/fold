@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE message_recipients SET delivered_at = ?1\n         WHERE id IN (SELECT value FROM json_each(?2)) AND delivered_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "d1f76752fca081d3512e71662d44abb3d7d1c0d9a3864a71f7d9c65b2ca3c866"
+}

@@ -497,9 +497,7 @@ async fn garbage_collection_waits_for_a_record_to_commit() {
             .await
             .unwrap(),
     );
-    let service = WorkspaceService::for_project(&handle, Git::default())
-        .await
-        .unwrap();
+    let service = WorkspaceService::for_project(&handle, Git::default());
     let fixture = Arc::new(Project::over(&project, &handle.store, Some(service)));
     let actor = fixture.seed().await;
     fs::write(fixture.lib(), b"a file no object holds yet\n").unwrap();

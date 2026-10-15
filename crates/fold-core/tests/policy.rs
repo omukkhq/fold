@@ -152,6 +152,21 @@ fn only_a_human_sends_feedback() {
 }
 
 #[test]
+fn only_an_agents_worker_has_an_inbox() {
+    use fold_core::policy::can_use_inbox;
+    let worker = agent("frontend/ui", &[]);
+    assert_eq!(
+        can_use_inbox(&worker).unwrap().worker.as_str(),
+        "frontend/ui"
+    );
+    for actor in [human("tanim"), Actor::System] {
+        let denied = can_use_inbox(&actor).unwrap_err();
+        assert_eq!(denied.code(), codes::INVALID_REQUEST);
+        assert!(denied.hint().contains("GET /messages"));
+    }
+}
+
+#[test]
 fn only_a_human_or_the_daemon_pushes() {
     use fold_core::policy::can_push;
     assert!(can_push(&human("tanim")).is_ok());

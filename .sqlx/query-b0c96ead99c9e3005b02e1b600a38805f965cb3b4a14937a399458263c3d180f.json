@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT r.id AS \"row!: i64\", m.number\n           FROM message_recipients r JOIN messages m ON m.id = r.message_id\n           WHERE r.worker_id = ?1 AND r.acked_at IS NULL AND m.number BETWEEN ?2 AND ?3\n           ORDER BY m.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "row!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "message_recipients",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "number",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "b0c96ead99c9e3005b02e1b600a38805f965cb3b4a14937a399458263c3d180f"
+}

@@ -4,6 +4,8 @@ pub mod events;
 pub mod footer;
 pub mod handshake;
 pub mod identity;
+pub mod messages;
+pub mod tasks;
 pub mod workspaces;
 
 use std::sync::Arc;
@@ -21,6 +23,8 @@ use tokio::sync::Mutex;
 
 use crate::services::agents::{AgentService, SessionContext};
 use crate::services::events::EventService;
+use crate::services::messages::MessageService;
+use crate::services::tasks::TaskService;
 use crate::services::workspaces::WorkspaceService;
 use error::{from_agent, tool_error};
 pub use footer::{FooterCounts, FooterPart, FooterSource, footer};
@@ -33,6 +37,8 @@ pub struct FoldServer {
     agents: AgentService,
     events: EventService,
     workspaces: WorkspaceService,
+    tasks: TaskService,
+    messages: MessageService,
     /// Held across the `register_agent` command, which binds the session.
     session: Mutex<SessionContext>,
     footer: Vec<Arc<dyn FooterSource>>,
@@ -45,21 +51,29 @@ impl std::fmt::Debug for FoldServer {
 }
 
 impl FoldServer {
-    /// Every server counts the new events of its agent in the footer.
+    /// Every server counts the unread messages and the new events of its agent in the footer.
     pub fn new(
         agents: AgentService,
         events: EventService,
         workspaces: WorkspaceService,
+        tasks: TaskService,
+        messages: MessageService,
         session: SessionContext,
     ) -> Self {
+        let unread: Arc<dyn FooterSource> = Arc::new(messages::UnreadFooter::new(
+            agents.clone(),
+            messages.clone(),
+        ));
         let new_events: Arc<dyn FooterSource> =
             Arc::new(events::NewEventsFooter::new(agents.clone(), events.clone()));
         Self {
             agents,
             events,
             workspaces,
+            tasks,
+            messages,
             session: Mutex::new(session),
-            footer: vec![new_events],
+            footer: vec![unread, new_events],
         }
     }
 
@@ -108,6 +122,16 @@ impl FoldServer {
             (events::WAIT_FOR_EVENTS, Some(worker)) => {
                 events::wait_for_events(self, worker, &arguments, context).await?
             }
+            (messages::ACKNOWLEDGE_MESSAGE, Some(worker)) => {
+                messages::acknowledge_message(self, worker, &arguments).await?
+            }
+            (messages::GET_INBOX, Some(worker)) => {
+                messages::get_inbox(self, worker, &arguments).await?
+            }
+            (messages::GET_THREAD, Some(_)) => messages::get_thread(self, &arguments).await?,
+            (messages::SEND_MESSAGE, Some(worker)) => {
+                messages::send_message(self, worker, &arguments).await?
+            }
             (workspaces::GET_REPOSITORY_STATE, _) => {
                 workspaces::get_repository_state(self, &arguments).await?
             }
@@ -116,7 +140,12 @@ impl FoldServer {
                 workspaces::compare_revisions(self, &arguments).await?
             }
             (_, Some(_)) => {
-                match workspaces::call(self, tool, as_worker.as_ref(), &arguments).await? {
+                let value =
+                    match workspaces::call(self, tool, as_worker.as_ref(), &arguments).await? {
+                        Some(value) => Some(value),
+                        None => tasks::call(self, tool, as_worker.as_ref(), &arguments).await?,
+                    };
+                match value {
                     Some(value) => value,
                     None => return Ok(None),
                 }
@@ -189,6 +218,8 @@ impl ServerHandler for FoldServer {
         tools.extend(agents::tools());
         tools.extend(events::tools());
         tools.extend(workspaces::tools());
+        tools.extend(tasks::tools());
+        tools.extend(messages::tools());
         Ok(ListToolsResult::with_all_items(tools))
     }
 

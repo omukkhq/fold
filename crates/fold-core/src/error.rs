@@ -102,6 +102,9 @@ define_codes! {
     PROPOSAL_NOT_OPEN = "proposal_not_open",
     NOT_PROPOSAL_AUTHOR = "not_proposal_author",
     VERSION_UNCHANGED = "version_unchanged",
+    CLAIM_NOT_STALE = "claim_not_stale",
+    NOT_CLAIMED = "not_claimed",
+    ALREADY_HOLDER = "already_holder",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

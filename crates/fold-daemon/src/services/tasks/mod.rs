@@ -3,8 +3,9 @@ use std::sync::Arc;
 
 use fold_core::events::types;
 use fold_core::{
-    Actor, Clock, EventError, FoldError, IdKind, LabelColor, LabelName, NewEvent, TaskDescription,
-    TaskId, TaskStatus, TaskTitle, Timestamp, codes,
+    Actor, ChecklistName, Clock, DependencyOrigin, EventError, FoldError, IdKind, LabelColor,
+    LabelName, NewEvent, ProjectPaths, TaskDescription, TaskId, TaskStatus, TaskTitle, Timestamp,
+    codes,
 };
 use fold_store::tasks::{self, NewTask};
 use fold_store::{Store, StoreError, WriteTx, counters};
@@ -12,14 +13,18 @@ use serde_json::json;
 use thiserror::Error;
 
 use super::events::{EventBuffer, EventBus};
+use super::projects::{Lease, ProjectError};
 
+mod attention;
 mod checklists;
 mod claims;
 mod dependencies;
 mod ready;
 mod recompute;
 mod removal;
+mod views;
 
+pub use attention::{AttentionItem, AttentionKind, attention};
 pub use checklists::{
     ChecklistItemPatch, ChecklistItemView, ChecklistProgress, ChecklistView, ItemContent,
     NewChecklistItem,
@@ -29,6 +34,10 @@ pub(crate) use claims::{already_claimed, claim_in_tx, closed_refusal, worker_row
 pub use dependencies::{Edge, add_edge_in_tx};
 pub use ready::ReadyTask;
 pub use recompute::{Recomputed, recompute};
+pub use views::{
+    BOARD_DONE_LIMIT, Board, BoardCard, BoardColumn, ChecklistCounts, DetailChecklist, DetailEdge,
+    DetailItem, GraphTask, HumanReviewMark, TaskDetail, TaskRef,
+};
 
 /// Refusals carry a stable code; anything else is a database failure.
 #[derive(Debug, Error)]
@@ -40,6 +49,15 @@ pub enum TaskError {
     /// A command built an event the declared types refuse: a defect in the command, not in the input.
     #[error(transparent)]
     Event(#[from] EventError),
+}
+
+impl From<ProjectError> for TaskError {
+    fn from(error: ProjectError) -> Self {
+        match error {
+            ProjectError::Fold(error) => Self::Fold(error),
+            ProjectError::Store(error) => Self::Store(error),
+        }
+    }
 }
 
 impl TaskError {
@@ -102,23 +120,35 @@ fn label_view(row: tasks::LabelRow) -> LabelView {
     }
 }
 
-/// The task commands of one project. Each command is one write transaction; its events reach the bus only after the commit. `lease_minutes` is the project's configured claim lease.
+/// The task commands of one project. Each command is one write transaction; its events reach the bus only after the commit.
 #[derive(Clone)]
 pub struct TaskService {
     store: Store,
     bus: EventBus,
     clock: Arc<dyn Clock>,
-    lease_minutes: u64,
+    lease: Lease,
 }
 
 impl TaskService {
+    /// The claim lease is `lease_minutes` until [`TaskService::with_project_config`] sets the project's own.
     pub fn new(store: Store, bus: EventBus, clock: Arc<dyn Clock>, lease_minutes: u64) -> Self {
         Self {
             store,
             bus,
             clock,
-            lease_minutes,
+            lease: Lease::Minutes(lease_minutes),
         }
+    }
+
+    /// Reads the lease from the project's `.fold/config.toml` on every claim command and every read of a claim; an invalid file fails those calls with its configuration error and leaves every other task call working.
+    #[must_use]
+    pub fn with_project_config(mut self, paths: ProjectPaths) -> Self {
+        self.lease = Lease::Config(paths);
+        self
+    }
+
+    async fn lease_minutes(&self) -> Result<u64, TaskError> {
+        Ok(self.lease.minutes().await?)
     }
 
     pub async fn create_task(
@@ -126,13 +156,48 @@ impl TaskService {
         actor: &Actor,
         input: CreateTask,
     ) -> Result<TaskView, TaskError> {
+        self.create_linked_task(actor, input, &[], None).await
+    }
+
+    /// Creates a task with a direct edge to each task in `needs` and, with a `parent`, a linked item on the parent's `Subtasks` checklist, so the parent needs the new task. Everything is one transaction: a refusal of any edge, such as a cycle, leaves nothing behind. A task named twice in `needs` gets one edge.
+    pub async fn create_linked_task(
+        &self,
+        actor: &Actor,
+        input: CreateTask,
+        needs: &[TaskId],
+        parent: Option<TaskId>,
+    ) -> Result<TaskView, TaskError> {
         let now = self.clock.now();
+        let mut needs = needs.to_vec();
+        let mut seen = BTreeSet::new();
+        needs.retain(|need| seen.insert(*need));
         let mut buffer = EventBuffer::new();
         let id = self
             .store
             .write(async |tx| {
                 let id = create_in_tx(tx, &mut buffer, actor, &input, now).await?;
-                buffer.extend(recompute(tx, &[id], now).await?.events);
+                for need in &needs {
+                    add_edge_in_tx(
+                        tx,
+                        &mut buffer,
+                        id,
+                        *need,
+                        DependencyOrigin::Direct,
+                        actor,
+                        now,
+                    )
+                    .await?;
+                }
+                let mut seeds = vec![id];
+                if let Some(parent) = parent {
+                    let item = NewChecklistItem {
+                        content: ItemContent::Linked(id),
+                        checklist: Some(ChecklistName::subtasks()),
+                    };
+                    checklists::add_item_in_tx(tx, &mut buffer, actor, parent, &item, now).await?;
+                    seeds.push(parent);
+                }
+                buffer.extend(recompute(tx, &seeds, now).await?.events);
                 Ok::<_, TaskError>(id)
             })
             .await?;

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::services::agents::AgentError;
 use crate::services::events::EventsError;
+use crate::services::messages::MessageError;
 use crate::services::projects::ProjectError;
 use crate::services::tasks::TaskError;
 use crate::services::workspaces::WorkspaceError;
@@ -13,6 +14,8 @@ use crate::services::workspaces::WorkspaceError;
 const HINTS: &[(&str, &str)] = &[
     (codes::AGENT_NOT_REGISTERED, "call register_agent"),
     (codes::INVALID_EVENT_FILTER, "call get_events"),
+    (codes::MESSAGE_NOT_FOUND, "call get_inbox"),
+    (codes::RECIPIENT_NOT_FOUND, "call list_agents"),
     (codes::WORKER_NOT_FOUND, "call register_worker"),
     (
         codes::PROJECT_NOT_FOUND,
@@ -57,6 +60,9 @@ pub struct ErrorBody {
     pub code: String,
     pub message: String,
     pub hint: Option<String>,
+    /// The error's named fields, such as `reason` for `invalid_request`; left out when it has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl From<&FoldError> for ErrorBody {
@@ -66,6 +72,7 @@ impl From<&FoldError> for ErrorBody {
             code: error.code().to_owned(),
             message: error.message().to_owned(),
             hint,
+            details: error.details().cloned(),
         }
     }
 }
@@ -112,6 +119,28 @@ pub fn from_workspace(error: WorkspaceError) -> FoldError {
     }
 }
 
+pub fn from_task(error: TaskError) -> FoldError {
+    match error {
+        TaskError::Fold(error) => error,
+        TaskError::Store(error) => from_store(error),
+        TaskError::Event(error) => {
+            tracing::error!(%error, "tool call failed to build an event");
+            FoldError::new(codes::INTERNAL_ERROR, "internal error")
+        }
+    }
+}
+
+pub fn from_message(error: MessageError) -> FoldError {
+    match error {
+        MessageError::Fold(error) => error,
+        MessageError::Store(error) => from_store(error),
+        MessageError::Event(error) => {
+            tracing::error!(%error, "tool call failed to build an event");
+            FoldError::new(codes::INTERNAL_ERROR, "internal error")
+        }
+    }
+}
+
 pub fn from_project(error: ProjectError) -> FoldError {
     match error {
         ProjectError::Fold(error) => error,
@@ -140,6 +169,12 @@ mod tests {
         assert_eq!(ErrorBody::from(&own).hint.as_deref(), Some("ask a human"));
         let bare = FoldError::new(codes::INVALID_NAME, "bad");
         assert_eq!(ErrorBody::from(&bare).hint, None);
+        assert_eq!(ErrorBody::from(&bare).details, None);
+        let detailed = bare.with_details([("reason", serde_json::json!("self_dependency"))]);
+        assert_eq!(
+            serde_json::to_value(ErrorBody::from(&detailed)).unwrap()["details"],
+            serde_json::json!({"reason": "self_dependency"})
+        );
         assert_eq!(
             hint_for(codes::PROJECT_NOT_FOUND),
             Some("run fold init in the project root")
@@ -162,6 +197,12 @@ mod tests {
         )));
         assert_eq!(missing.code(), codes::PROJECT_NOT_FOUND);
         let store = from_project(ProjectError::Store(StoreError::Corrupt("projects.root")));
+        let task = from_task(TaskError::Fold(FoldError::new(codes::TASK_NOT_FOUND, "x")));
+        assert_eq!(task.code(), codes::TASK_NOT_FOUND);
+        let task = from_task(TaskError::Store(StoreError::Corrupt("tasks.number")));
+        assert_eq!(task.code(), codes::INTERNAL_ERROR);
+        let task = from_task(TaskError::Event(fold_core::EventError::InvalidActor));
+        assert_eq!(task.code(), codes::INTERNAL_ERROR);
         assert_eq!(store.code(), codes::INTERNAL_ERROR);
         assert_eq!(fold.code(), codes::INVALID_NAME);
         let task = from_workspace(WorkspaceError::Task(TaskError::Fold(FoldError::new(

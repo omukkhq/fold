@@ -74,6 +74,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/board": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The board read model. */
+        get: operations["get_board"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/checklist-items/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Removes an item; a linked item takes its edge with it. */
+        delete: operations["remove_checklist_item"];
+        options?: never;
+        head?: never;
+        /** Edits or ticks a plain step, or moves an item inside its task. One request is either an edit or a move. */
+        patch: operations["update_checklist_item"];
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A named human's feedback on a task or reply to a message. Feedback goes to the task's claim holder unless `to` names recipients; a reply answers a question to humans, which clears the task's `question` attention. The message changes no task state. */
+        post: operations["send_feedback"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/gc": {
         parameters: {
             query?: never;
@@ -85,6 +137,41 @@ export interface paths {
         put?: never;
         /** Collects the project's garbage: prunes checkpoints, removes closed workspace directories past their retention and deletes unreferenced objects. Socket only; used by `fold gc`. */
         post: operations["run_gc"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/labels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every label of the project. */
+        get: operations["list_labels"];
+        put?: never;
+        /** Creates a label that tasks can carry. */
+        post: operations["create_label"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The project's threads, the newest message first. Any message of a thread can be read here; it changes no task state. */
+        get: operations["list_messages"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -193,6 +280,128 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every task that is not archived. */
+        get: operations["list_tasks"];
+        put?: never;
+        /** Creates a task with its edges and its parent link in one transaction; a refused edge creates nothing. */
+        post: operations["create_task"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/tasks/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One task with its checklists, dependencies, claim and workspace. An archived task is found too. */
+        get: operations["get_task"];
+        put?: never;
+        post?: never;
+        /** Deletes a task that never had a workspace, a proposal, a completion or a message. */
+        delete: operations["delete_task"];
+        options?: never;
+        head?: never;
+        /** Changes the title, the description or the label set. */
+        patch: operations["update_task"];
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/tasks/{id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Hides a task from the board and removes its edges, keeping its history. */
+        post: operations["archive_task"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/tasks/{id}/checklist-items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Adds a plain step or a linked child task to a checklist of the task. */
+        post: operations["add_checklist_item"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/tasks/{id}/dependencies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Makes the task need another task. */
+        post: operations["add_dependency"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/tasks/{id}/dependencies/{needs}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Removes a direct edge. An edge of a linked checklist item goes only with its item. */
+        delete: operations["remove_dependency"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/threads/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The thread that a message belongs to, every message in number order. */
+        get: operations["show_thread"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/session": {
         parameters: {
             query?: never;
@@ -246,6 +455,14 @@ export interface components {
             /** @description Every tag of the agent after the change, sorted. */
             tags: string[];
         };
+        AttentionItem: {
+            kind: components["schemas"]["AttentionKind"];
+        };
+        /**
+         * @description Why a task needs a person. The daemon computes every kind; clients derive none.
+         * @enum {string}
+         */
+        AttentionKind: "question" | "human_review" | "stalled" | "stale_claim";
         AuthoredProposal: {
             conflicted: boolean;
             /** @example P-3 */
@@ -253,6 +470,57 @@ export interface components {
             /** @example T-12 */
             task: string;
             title: string;
+        };
+        BoardCard: {
+            attention: components["schemas"]["AttentionItem"][];
+            blocked: boolean;
+            /** @description The direct prerequisites that are not Done. */
+            blocked_by: string[];
+            /**
+             * Format: int32
+             * @description How many open tasks wait directly for this one; 0 once it is Done.
+             */
+            blocks: number;
+            checklist: components["schemas"]["ChecklistCounts"];
+            /**
+             * Format: int64
+             * @description UTC milliseconds of the completion record; null until the task is Done.
+             */
+            completed_at: number | null;
+            human_review: components["schemas"]["HumanReviewMark"] | null;
+            labels: components["schemas"]["Label"][];
+            /**
+             * Format: int32
+             * @description How many messages name the task.
+             */
+            messages: number;
+            /** @description Every direct prerequisite, as public task ids. */
+            needs: string[];
+            status: components["schemas"]["TaskStatus"];
+            /** @example T-12 */
+            task: string;
+            title: string;
+            /** @description The worker holding the implementation claim, `agent` or `agent/worker`. */
+            worker: string | null;
+            /**
+             * @description The live task workspace.
+             * @example ws-9
+             */
+            workspace: string | null;
+        };
+        BoardColumn: {
+            /** @description Backlog to Review hold every task in number order. Done holds the most recently completed tasks, newest first. */
+            cards: components["schemas"]["BoardCard"][];
+            status: components["schemas"]["TaskStatus"];
+            /**
+             * Format: int32
+             * @description Every task with this status. In the Done column it can exceed the number of cards.
+             */
+            total: number;
+        };
+        /** @description The five columns in board order: backlog, todo, in_progress, review, done. Archived tasks are left out. */
+        BoardView: {
+            columns: components["schemas"]["BoardColumn"][];
         };
         /** @enum {string} */
         ChangeKind: "added" | "modified" | "deleted" | "renamed";
@@ -269,6 +537,76 @@ export interface components {
             /** Format: int32 */
             removed_lines: number;
         };
+        Checklist: {
+            items: components["schemas"]["ChecklistItem"][];
+            name: string;
+        };
+        /** @description Plain steps and linked items counted apart, over every checklist of the task. */
+        ChecklistCounts: {
+            /** Format: int32 */
+            linked_done: number;
+            /** Format: int32 */
+            linked_total: number;
+            /** Format: int32 */
+            steps_done: number;
+            /** Format: int32 */
+            steps_total: number;
+        };
+        /** @description A checklist item inside a task: a plain step, or a linked child task that fold ticks when the child is Done. */
+        ChecklistItem: {
+            done: boolean;
+            /** @example ci-4 */
+            id: string;
+            /** @enum {string} */
+            kind: "step";
+            text: string;
+        } | {
+            done: boolean;
+            /** @example ci-5 */
+            id: string;
+            /** @enum {string} */
+            kind: "linked";
+            status: components["schemas"]["TaskStatus"];
+            /**
+             * @description The child task.
+             * @example T-13
+             */
+            task: string;
+            title: string;
+        };
+        /** @description Either an edit (`text`, `done`) or a move (`position`, `checklist`), never both in one request. */
+        ChecklistItemPatchBody: {
+            /** @description Moves the item into this checklist of the same task, last unless `position` is given. */
+            checklist?: string | null;
+            /** @description Ticks or unticks a plain step. */
+            done?: boolean | null;
+            /**
+             * Format: int32
+             * @description Moves the item to this place, counted from 0; past the end puts it last.
+             */
+            position?: number | null;
+            /** @description The new text of a plain step. */
+            text?: string | null;
+        };
+        /** @description A checklist item as its own write returns it. */
+        ChecklistItemView: {
+            checklist: string;
+            done: boolean;
+            /** @example ci-4 */
+            id: string;
+            /**
+             * @description The child of a linked item; null for a plain step.
+             * @example T-13
+             */
+            linked_task: string | null;
+            /**
+             * @description The task that owns the item.
+             * @example T-12
+             */
+            task: string;
+            /** @description The text of a plain step; null for a linked item. */
+            text: string | null;
+        };
         CheckpointSummary: {
             /** @description False for a checkpoint an agent recorded explicitly. */
             automatic: boolean;
@@ -281,6 +619,8 @@ export interface components {
             id: string;
             label: string | null;
         };
+        /** @enum {string} */
+        ClaimKind: "implementation";
         /** @description One changed file of a comparison. A binary file is compared by hash only, so its line counts are 0; a hash is null on the side where the file does not exist. */
         ComparedFile: {
             /** Format: int32 */
@@ -302,6 +642,33 @@ export interface components {
             files: number;
             /** Format: int32 */
             removed_lines: number;
+        };
+        CreateLabelBody: {
+            /**
+             * @description One of sage, slate, teal, ink, gold, moss, plum, stone.
+             * @example sage
+             */
+            color: string;
+            name: string;
+        };
+        CreateTaskBody: {
+            /** @description Markdown; empty when left out. */
+            description?: string | null;
+            /** @description Names of existing labels. */
+            labels?: string[];
+            /** @description Tasks the new task needs; each adds one direct edge. */
+            needs?: string[];
+            /** @description The task to split: the new task becomes a linked item of its `Subtasks` checklist. */
+            parent?: string | null;
+            /** @description One line, not empty. */
+            title: string;
+        };
+        DependencyBody: {
+            /**
+             * @description The task this task needs.
+             * @example T-3
+             */
+            needs: string;
         };
         /** @description A stored event. The related ids are public ids. */
         DurableEvent: {
@@ -333,6 +700,16 @@ export interface components {
         };
         /** @enum {string} */
         DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged";
+        /**
+         * @description `needs`: this task needs the other task. `needed_by`: the other task needs this one.
+         * @enum {string}
+         */
+        EdgeDirection: "needs" | "needed_by";
+        /**
+         * @description A `checklist` edge belongs to a linked checklist item and goes only with it.
+         * @enum {string}
+         */
+        EdgeOrigin: "direct" | "checklist";
         ErrorBody: {
             /** @description A stable code; branch on it, never on the message. */
             code: string;
@@ -360,6 +737,17 @@ export interface components {
             /** @enum {string} */
             kind: "snapshot";
         });
+        /** @description A human's feedback on a task, or reply to a message. */
+        FeedbackRequest: {
+            /** @description Plain text with some visible character. */
+            body: string;
+            /** @description The message to answer, such as `m-31`. The reply joins its thread and takes its task. */
+            reply_to?: string | null;
+            /** @description The task the feedback is about, such as `T-12`. Needed when `reply_to` is left out. */
+            task?: string | null;
+            /** @description The recipients, as an agent, `agent/worker`, `tag:<tag>`, `all`, `human:<name>` or `humans`. Left out, feedback goes to the task's claim holder and a reply to the parent's sender. */
+            to?: string[] | null;
+        };
         /** @enum {string} */
         FileChangeKind: "added" | "modified" | "deleted" | "renamed" | "mode_changed";
         FileContentView: {
@@ -441,6 +829,22 @@ export interface components {
         };
         /** @enum {string} */
         HeldClaimKind: "implementation" | "review";
+        HumanReviewMark: {
+            /** @description The named human whose approval integration waits for; null when any human may approve. */
+            reviewer: string | null;
+        };
+        Label: {
+            /**
+             * @description One of sage, slate, teal, ink, gold, moss, plum, stone.
+             * @example sage
+             */
+            color: string;
+            name: string;
+        };
+        LabelList: {
+            /** @description In name order. */
+            labels: components["schemas"]["Label"][];
+        };
         /** @description What an active workspace holds right now. These are working changes, never history. */
         LiveWorkspace: {
             /**
@@ -469,9 +873,47 @@ export interface components {
             /** @example ws-9 */
             workspace: string;
         };
+        /** @description A stored message with public ids only. */
+        MessageView: {
+            /** @description Plain text. */
+            body: string;
+            /** @example m-31 */
+            id: string;
+            /** @example P-3 */
+            proposal: string | null;
+            recipients: components["schemas"]["RecipientView"][];
+            /** @example m-30 */
+            reply_to: string | null;
+            /**
+             * @description A worker, `human:<name>` or `fold`.
+             * @example frontend/ui
+             */
+            sender: string;
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            sent_at: number;
+            /** @example T-12 */
+            task: string | null;
+            /**
+             * @description The id of the thread's first message.
+             * @example m-31
+             */
+            thread: string;
+        };
         /** @description On loopback, the name the person works under. */
         NameSignIn: {
             name: string;
+        };
+        /** @description Exactly one of `text` and `linked_task`. */
+        NewChecklistItemBody: {
+            /** @description The checklist name; the task's first checklist when left out. A new name creates the checklist. */
+            checklist?: string | null;
+            /** @description A child task to link; the task then needs it. */
+            linked_task?: string | null;
+            /** @description The text of a plain step. */
+            text?: string | null;
         };
         OpenProject: {
             /** @description The slug of a project already in the registry. */
@@ -515,6 +957,23 @@ export interface components {
         };
         /** @enum {string} */
         PushState: "up_to_date" | "pushed" | "recorded";
+        /** @description One recipient row. Names starting `human:` are humans. */
+        RecipientView: {
+            /**
+             * Format: int64
+             * @description UTC milliseconds; null until the recipient acknowledged it.
+             */
+            acknowledged_at: number | null;
+            /** @description How the sender reached this recipient: `agent`, `worker`, `tag`, `all`, `human` or `humans`. */
+            addressed_as: string;
+            /**
+             * Format: int64
+             * @description UTC milliseconds; null until an inbox returned the row.
+             */
+            delivered_at: number | null;
+            /** @example frontend/ui */
+            name: string;
+        };
         RepositoryView: {
             /**
              * @description The revision `main` names; null only before `r1` exists.
@@ -585,6 +1044,128 @@ export interface components {
             seq: number;
             workspaces: components["schemas"]["LiveWorkspace"][];
         };
+        TaskClaim: {
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            claimed_at: number;
+            /** @description The worker, `agent` or `agent/worker`. */
+            holder: string;
+            kind: components["schemas"]["ClaimKind"];
+            /**
+             * Format: int64
+             * @description UTC milliseconds of the last lease renewal.
+             */
+            renewed_at: number;
+            /** @description True once the lease ran out without a renewal. */
+            stale: boolean;
+        };
+        TaskEdge: {
+            direction: components["schemas"]["EdgeDirection"];
+            origin: components["schemas"]["EdgeOrigin"];
+            status: components["schemas"]["TaskStatus"];
+            /**
+             * @description The task at the other end of the edge.
+             * @example T-3
+             */
+            task: string;
+            title: string;
+        };
+        TaskList: {
+            /** @description In number order. */
+            tasks: components["schemas"]["TaskSummary"][];
+        };
+        /**
+         * @description A calculated board status; it is also the board's column key.
+         * @enum {string}
+         */
+        TaskStatus: "backlog" | "todo" | "in_progress" | "review" | "done";
+        TaskSummary: {
+            blocked: boolean;
+            labels: components["schemas"]["Label"][];
+            status: components["schemas"]["TaskStatus"];
+            /** @example T-12 */
+            task: string;
+            title: string;
+        };
+        TaskView: {
+            /**
+             * Format: int64
+             * @description UTC milliseconds; null while the task is on the board.
+             */
+            archived_at: number | null;
+            attention: components["schemas"]["AttentionItem"][];
+            blocked: boolean;
+            /** @description The first checklist is `Subtasks` when the task was split. */
+            checklists: components["schemas"]["Checklist"][];
+            claims: components["schemas"]["TaskClaim"][];
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            created_at: number;
+            /** @description The worker or human that created the task. */
+            created_by: string;
+            /** @description Prerequisites and dependents together; `direction` tells them apart. */
+            dependencies: components["schemas"]["TaskEdge"][];
+            /** @description Markdown. */
+            description: string;
+            human_review: components["schemas"]["HumanReviewMark"] | null;
+            labels: components["schemas"]["Label"][];
+            progress: components["schemas"]["ChecklistCounts"];
+            status: components["schemas"]["TaskStatus"];
+            /** @example T-12 */
+            task: string;
+            title: string;
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            updated_at: number;
+            /**
+             * @description The live task workspace.
+             * @example ws-9
+             */
+            workspace: string | null;
+        };
+        /** @description One page of threads, the newest message first. */
+        ThreadList: {
+            items: components["schemas"]["ThreadView"][];
+            /**
+             * @description Pass as `before` for the next page; null on the last page.
+             * @example m-40
+             */
+            next: string | null;
+        };
+        /** @description A thread with every message in number order. */
+        ThreadView: {
+            /** @description True while the thread holds a question to a human that no human has answered; a human reply clears it. */
+            awaiting_human: boolean;
+            /**
+             * @description The id of the thread's first message.
+             * @example m-31
+             */
+            id: string;
+            /**
+             * Format: int64
+             * @description UTC milliseconds of the newest message.
+             */
+            last_at: number;
+            messages: components["schemas"]["MessageView"][];
+            /** @description Every sender and recipient in the order they first appear. */
+            participants: string[];
+            /**
+             * @description The first proposal a message of the thread is linked to.
+             * @example P-3
+             */
+            proposal: string | null;
+            /**
+             * @description The first task a message of the thread is linked to.
+             * @example T-12
+             */
+            task: string | null;
+        };
         /** @description Off loopback, a web token from `fold token create`. */
         TokenSignIn: {
             token: string;
@@ -608,6 +1189,13 @@ export interface components {
             entries: components["schemas"]["TreeEntryView"][];
             /** @description The directory listed; empty for the root. */
             path: string;
+        };
+        /** @description Fields left out stay as they are. */
+        UpdateTaskBody: {
+            description?: string | null;
+            /** @description The whole new label set, by name. */
+            labels?: string[] | null;
+            title?: string | null;
         };
         WorkerEntry: {
             /** @description The last tool the worker called, followed by its task id when the call named one, such as `claim_task T-12`. */
@@ -1096,6 +1684,333 @@ export interface operations {
             };
         };
     };
+    get_board: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The five columns in order */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoardView"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    remove_checklist_item: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The checklist item id, such as ci-4 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The item is removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `invalid_id` or `invalid_name` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `checklist_item_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `task_closed`: the task is archived */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    update_checklist_item: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The checklist item id, such as ci-4 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChecklistItemPatchBody"];
+            };
+        };
+        responses: {
+            /** @description The item after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChecklistItemView"];
+                };
+            };
+            /** @description `invalid_request` (also with `details.reason` `linked_item`), `invalid_id`, `invalid_name`, `invalid_step_text` or `invalid_checklist_name` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `checklist_item_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `task_closed`: the task is archived */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    send_feedback: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FeedbackRequest"];
+            };
+        };
+        responses: {
+            /** @description The stored message */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageView"];
+                };
+            };
+            /** @description `invalid_request`: no `task` or `reply_to`, an empty body or a malformed request; `invalid_id` or `invalid_name`: an id or recipient is malformed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `task_not_found`, `message_not_found`, `proposal_not_found`, `unknown_human`, `recipient_not_found` (also when the task has no claim holder and `to` is left out) or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     run_gc: {
         parameters: {
             query?: never;
@@ -1159,6 +2074,254 @@ export interface operations {
             };
             /** @description A run of this project is in progress (`gc_in_progress`) */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    list_labels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The labels in name order */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LabelList"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    create_label: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateLabelBody"];
+            };
+        };
+        responses: {
+            /** @description The created label */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Label"];
+                };
+            };
+            /** @description `invalid_request`, `invalid_name`, `invalid_label_name` or `invalid_label_color` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `label_exists` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    list_messages: {
+        parameters: {
+            query?: {
+                /** @description Threads in which this agent (any of its workers) or this exact `agent/worker` sent or received a message. */
+                agent?: string;
+                /** @description Threads with a message linked to this task, such as `T-12`. */
+                task?: string;
+                /** @description Threads with a message linked to this proposal, such as `P-3`. */
+                proposal?: string;
+                /** @description Only threads with a question to a human that no human has answered. */
+                awaiting_human?: boolean;
+                /** @description The `next` of the previous page. */
+                before?: string;
+                /** @description The page size: 50 when left out, at most 200. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of threads */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThreadList"];
+                };
+            };
+            /** @description `invalid_request`, `invalid_id` or `invalid_name`: a filter is malformed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_not_found` */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1646,6 +2809,847 @@ export interface operations {
                 };
             };
             /** @description The revision, the directory or the slug does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    list_tasks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The tasks in number order */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskList"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    create_task: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateTaskBody"];
+            };
+        };
+        responses: {
+            /** @description The created task */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskView"];
+                };
+            };
+            /** @description `invalid_request`, `invalid_id`, `invalid_name`, `invalid_task_title` or `invalid_label_name` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `task_not_found`, `label_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `dependency_cycle` or `task_closed` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_task: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The task id, such as T-12 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The task */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskView"];
+                };
+            };
+            /** @description `invalid_id` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `task_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `invalid_config`: the task has a claim and the project configuration that sets its lease is invalid */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    delete_task: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The task id, such as T-12 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The task is deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `invalid_request` with `details.reason` `task_has_history`, `invalid_id` or `invalid_name` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `task_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    update_task: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The task id, such as T-12 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateTaskBody"];
+            };
+        };
+        responses: {
+            /** @description The updated task */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskView"];
+                };
+            };
+            /** @description `invalid_request`, `invalid_id`, `invalid_name`, `invalid_task_title` or `invalid_label_name` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `task_not_found`, `label_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `task_closed`: the task is archived */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    archive_task: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The task id, such as T-12 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The task is archived */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `invalid_request` with `details.reason` `proposal_open`, `invalid_id` or `invalid_name` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `task_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `task_closed`: the task is already archived */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    add_checklist_item: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The task id, such as T-12 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewChecklistItemBody"];
+            };
+        };
+        responses: {
+            /** @description The new item */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChecklistItemView"];
+                };
+            };
+            /** @description `invalid_request`, `invalid_id`, `invalid_name`, `invalid_step_text` or `invalid_checklist_name` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `task_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `dependency_cycle`, `dependency_exists` or `task_closed` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    add_dependency: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The task that waits, such as T-12 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DependencyBody"];
+            };
+        };
+        responses: {
+            /** @description The edge is added */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `invalid_request` with `details.reason` `self_dependency`, `invalid_id` or `invalid_name` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `task_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `dependency_cycle` with the cycle in `details.cycle`, `dependency_exists` or `task_closed` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    remove_dependency: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The task that waits, such as T-12 */
+                id: string;
+                /** @description The task it needs, such as T-3 */
+                needs: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The edge is removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `invalid_request` with `details.reason` `checklist_origin`, `invalid_id` or `invalid_name` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `dependency_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    show_thread: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The id of the thread's first message, or of any message of the thread */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The thread */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThreadView"];
+                };
+            };
+            /** @description `invalid_id`: the id is not a message id */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `message_not_found` or `project_not_found` */
             404: {
                 headers: {
                     [name: string]: unknown;

@@ -14,6 +14,15 @@ use thiserror::Error;
 
 use crate::services::events::{EventBuffer, EventBus};
 
+mod inbox;
+mod threads;
+
+pub use inbox::{InboxItem, unread_count};
+pub use threads::{
+    DEFAULT_THREAD_LIMIT, Feedback, MAX_THREAD_LIMIT, ThreadPage, ThreadQuery, ThreadView,
+    tasks_awaiting_human,
+};
+
 #[derive(Debug, Error)]
 pub enum MessageError {
     #[error(transparent)]

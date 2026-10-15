@@ -18,6 +18,7 @@ use tempfile::TempDir;
 use tokio::io::{
     AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, DuplexStream, ReadHalf, WriteHalf,
 };
+use tower::ServiceExt as _;
 
 #[cfg(test)]
 const WAIT: Duration = Duration::from_secs(10);
@@ -359,6 +360,59 @@ async fn fold_agent_binds_the_agent_and_a_second_connection_reuses_it() {
             .await,
         1
     );
+    host.daemon.shutdown().await;
+}
+
+/// The `error` object of a tool call that must fail.
+#[cfg(test)]
+async fn tool_error(client: &Client, tool: &str, arguments: Value) -> Value {
+    let Value::Object(arguments) = arguments else {
+        panic!("arguments must be an object");
+    };
+    let result = client
+        .call_tool(CallToolRequestParams::new(tool.to_owned()).with_arguments(arguments))
+        .await
+        .unwrap();
+    assert_eq!(result.is_error, Some(true), "{tool} succeeded: {result:?}");
+    let body: Value = serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap();
+    body["error"].clone()
+}
+
+#[tokio::test]
+async fn an_invalid_config_refuses_no_session_and_fails_only_the_commands_that_need_the_lease() {
+    let host = Host::start().await;
+    std::fs::write(host._project.paths().config(), "lease_minutes = 0\n").unwrap();
+    let (answer, rest) = handshake(host.state(), &host.hello(&host.root, Some("frontend"))).await;
+    assert_eq!(answer, Answer::accepted("app"));
+    let client = mcp(rest).await;
+    let created = client
+        .call_tool(
+            CallToolRequestParams::new("create_task")
+                .with_arguments(json!({"title": "Leased"}).as_object().unwrap().clone()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.is_error, Some(false), "{created:?}");
+    for (tool, arguments) in [
+        ("claim_task", json!({"id": "T-1"})),
+        ("create_workspace", json!({"task": "T-1"})),
+    ] {
+        let error = tool_error(&client, tool, arguments).await;
+        assert_eq!(error["code"], "invalid_config", "{tool}");
+        assert!(
+            error["hint"].as_str().unwrap().contains("config.toml"),
+            "{tool}: {error}"
+        );
+    }
+    let response = fold_daemon::http::router(host.state())
+        .oneshot(
+            axum::http::Request::get("/api/v1/projects/app/repository")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
     host.daemon.shutdown().await;
 }
 

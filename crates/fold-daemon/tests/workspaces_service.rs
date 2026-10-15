@@ -846,6 +846,6 @@ async fn a_local_service_takes_the_configured_lease_and_refuses_a_bad_config() {
     )
     .await
     .unwrap();
-    assert!(format!("{service:?}").contains("lease_minutes: 7"));
+    assert!(format!("{service:?}").contains("Minutes(7)"));
     service.close().await;
 }

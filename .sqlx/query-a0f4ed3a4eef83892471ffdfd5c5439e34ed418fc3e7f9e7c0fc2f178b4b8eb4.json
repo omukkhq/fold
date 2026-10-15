@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT t.number AS \"number!: i64\", w.name AS worker\n           FROM claims c\n           JOIN tasks t ON t.id = c.task_id\n           JOIN workers w ON w.id = c.worker_id\n           WHERE c.kind = 'implementation' AND c.released_at IS NULL AND t.archived_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "worker",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workers",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "a0f4ed3a4eef83892471ffdfd5c5439e34ed418fc3e7f9e7c0fc2f178b4b8eb4"
+}

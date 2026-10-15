@@ -13,6 +13,7 @@ use fold_core::{
 use fold_daemon::mcp::{FoldServer, FooterPart, FooterSource};
 use fold_daemon::services::agents::{AgentService, SessionContext};
 use fold_daemon::services::events::{EventBus, EventService};
+use fold_daemon::services::messages::MessageService;
 use fold_daemon::services::tasks::{CreateTask, TaskService};
 use fold_daemon::services::workspaces::WorkspaceService;
 use fold_store::events;
@@ -68,6 +69,7 @@ struct Fixture {
     bus: EventBus,
     agents: AgentService,
     workspaces: WorkspaceService,
+    tasks: TaskService,
 }
 
 #[cfg(test)]
@@ -117,7 +119,17 @@ impl Fixture {
             bus,
             agents,
             workspaces,
+            tasks,
         }
+    }
+
+    fn messages(&self) -> MessageService {
+        MessageService::new(
+            self.project.store().clone(),
+            self.project.registry().clone(),
+            self.bus.clone(),
+            Arc::new(self.project.clock().clone()),
+        )
     }
 
     /// A session of agent `name` over an in-memory stream, registered.
@@ -128,6 +140,8 @@ impl Fixture {
             self.agents.clone(),
             events,
             self.workspaces.clone(),
+            self.tasks.clone(),
+            self.messages(),
             session,
         )
         .with_footer_source(Arc::new(OneUnread));
@@ -503,8 +517,15 @@ async fn the_workspace_tools_need_a_registered_agent() {
     let fx = Fixture::new().await;
     let events = EventService::new(fx.project.store().clone(), fx.bus.clone());
     let session = fx.agents.start_session(9).await.unwrap();
-    let server = FoldServer::new(fx.agents.clone(), events, fx.workspaces.clone(), session)
-        .with_footer_source(Arc::new(OneUnread));
+    let server = FoldServer::new(
+        fx.agents.clone(),
+        events,
+        fx.workspaces.clone(),
+        fx.tasks.clone(),
+        fx.messages(),
+        session,
+    )
+    .with_footer_source(Arc::new(OneUnread));
     let (client_end, server_end) = tokio::io::duplex(64 * 1024);
     tokio::spawn(async move {
         if let Ok(running) = server.serve(server_end).await {

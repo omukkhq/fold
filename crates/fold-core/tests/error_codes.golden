@@ -87,3 +87,6 @@ proposal_exists
 proposal_not_open
 not_proposal_author
 version_unchanged
+claim_not_stale
+not_claimed
+already_holder

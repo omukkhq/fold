@@ -389,6 +389,29 @@ async fn check_source(source: &Path, kind: SourceKind, flag: &str) -> Result<Sou
     Ok(Source { path, text, kind })
 }
 
+/// Where a service takes the claim lease from: a fixed length, or the project's `.fold/config.toml` read on each use. Reading on use means an edit applies without a restart and an invalid file fails only the calls that need the lease, never a session or a whole project.
+#[derive(Debug, Clone)]
+pub enum Lease {
+    Minutes(u64),
+    Config(ProjectPaths),
+}
+
+impl Lease {
+    /// The lease length now. An invalid file is its `invalid_config` refusal with a hint to fix it.
+    pub async fn minutes(&self) -> Result<u64, ProjectError> {
+        match self {
+            Lease::Minutes(minutes) => Ok(*minutes),
+            Lease::Config(paths) => match load_config(paths).await {
+                Ok(config) => Ok(config.lease_minutes),
+                Err(ProjectError::Fold(error)) => Err(ProjectError::Fold(
+                    error.with_hint("ask a human to fix .fold/config.toml"),
+                )),
+                Err(error) => Err(error),
+            },
+        }
+    }
+}
+
 /// The settings of a project, or the defaults when `.fold/config.toml` does not exist.
 pub async fn load_config(paths: &ProjectPaths) -> Result<ProjectConfig, ProjectError> {
     let path = paths.config();

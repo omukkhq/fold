@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE checklist_items SET position = ?2 WHERE number = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "e1cb4fac171df3adf52e6446ab16dfcc281f42971ed87330dd8080c9a04b95fd"
+}
