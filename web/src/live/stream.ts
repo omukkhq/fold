@@ -36,7 +36,7 @@ export interface StreamHandle {
 
 /**
  * Stored events are numbered without holes, so a jump past `lastSeq + 1` means one was lost. Live frames are not stored:
- * a `workspace_changed` frame has no `seq` and never moves the cursor, and a snapshot moves it to the newest stored event it reports.
+ * a `workspace_changed` or `agent_presence_changed` frame has no `seq` and never moves the cursor, and a snapshot moves it to the newest stored event it reports.
  */
 export function startStream(options: StreamOptions): StreamHandle {
   const { transport, handlers } = options;
@@ -62,7 +62,10 @@ export function startStream(options: StreamOptions): StreamHandle {
       handlers.onEvent(parsed);
       return;
     }
-    if (parsed.kind === "workspace_changed") {
+    if (
+      parsed.kind === "workspace_changed" ||
+      parsed.kind === "agent_presence_changed"
+    ) {
       handlers.onEvent(parsed);
       return;
     }

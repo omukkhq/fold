@@ -135,12 +135,33 @@ async fn mcp(rest: Rest) -> Client {
 }
 
 #[cfg(test)]
+/// The `list_agents` result reduced to each agent's name, tags, presence and worker names.
 async fn list_agents(client: &Client) -> Value {
     let result = client
         .call_tool(CallToolRequestParams::new("list_agents"))
         .await
         .unwrap();
-    serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap()
+    let listed: Value = serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap();
+    let agents: Vec<Value> = listed["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|agent| {
+            let workers: Vec<&Value> = agent["workers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|worker| &worker["name"])
+                .collect();
+            json!({
+                "name": agent["name"],
+                "tags": agent["tags"],
+                "presence": agent["presence"],
+                "workers": workers,
+            })
+        })
+        .collect();
+    json!({ "agents": agents })
 }
 
 #[tokio::test]
@@ -327,7 +348,7 @@ async fn fold_agent_binds_the_agent_and_a_second_connection_reuses_it() {
     );
     assert_eq!(
         list_agents(&client).await,
-        json!({"agents": [{"agent": "frontend", "tags": [], "workers": ["frontend"]}]})
+        json!({"agents": [{"name": "frontend", "tags": [], "presence": "active", "workers": ["frontend"]}]})
     );
 
     let (unset, _rest) = handshake(host.state(), &host.hello(&host.root, Some(""))).await;
@@ -378,7 +399,7 @@ async fn the_daemon_socket_serves_the_handshake() {
     let client: Client = ().serve((read, write)).await.unwrap();
     assert_eq!(
         list_agents(&client).await,
-        json!({"agents": [{"agent": "review", "tags": [], "workers": ["review"]}]})
+        json!({"agents": [{"name": "review", "tags": [], "presence": "active", "workers": ["review"]}]})
     );
     drop(client);
     host.daemon.shutdown().await;

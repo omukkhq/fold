@@ -221,11 +221,7 @@ async fn open(
     let handle = projects::open_for_dir(state, &hello.cwd)
         .await
         .map_err(from_project)?;
-    let agents = AgentService::new(
-        handle.store.clone(),
-        handle.bus.clone(),
-        handle.clock.clone(),
-    );
+    let agents = handle.agents();
     let events = EventService::new(handle.store.clone(), handle.bus.clone());
     let config = projects::load_config(&handle.paths)
         .await

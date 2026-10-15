@@ -13,6 +13,7 @@ pub mod merge;
 pub mod messages;
 pub mod object;
 pub mod policy;
+pub mod presence;
 pub mod projects;
 pub mod readiness;
 pub mod revision;
@@ -40,6 +41,7 @@ pub use messages::{
     ResolveError, Sender, Target,
 };
 pub use policy::PolicyDenied;
+pub use presence::{ACTIVE_WINDOW_MS, Presence, SessionFact, presence_of};
 pub use projects::{choose_slug, slugify};
 pub use status::TaskStatus;
 pub use task::{

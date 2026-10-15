@@ -99,6 +99,7 @@ define_event_types! {
     REMOTE_PULL_CONFLICTED = "remote.pull_conflicted",
     MESSAGE_SENT = "message.sent",
     MESSAGE_ACKNOWLEDGED = "message.acknowledged",
+    AGENT_PRESENCE_CHANGED = "agent.presence_changed",
 }
 
 impl EventType {
@@ -114,9 +115,9 @@ impl EventType {
         self.0
     }
 
-    /// `workspace.changed` is the only live type: it is sent on the bus and never stored.
+    /// `workspace.changed` and `agent.presence_changed` are the live types: they are sent on the bus and never stored.
     pub fn is_live(self) -> bool {
-        self == types::WORKSPACE_CHANGED
+        self == types::WORKSPACE_CHANGED || self == types::AGENT_PRESENCE_CHANGED
     }
 }
 
@@ -313,7 +314,7 @@ pub struct Event {
     pub created_at: Timestamp,
 }
 
-/// A working-change notice. It has no `seq` because it is never stored.
+/// A working-change or presence notice. It has no `seq` because it is never stored.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LiveEvent {
     #[serde(rename = "type")]

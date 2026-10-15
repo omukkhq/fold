@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT agent_id AS \"agent_id!: i64\", last_call_at\n           FROM sessions WHERE agent_id IS NOT NULL AND ended_at IS NULL\n           ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "name": "agent_id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "agent_id"
+          }
+        }
+      },
+      {
+        "name": "last_call_at",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "last_call_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "c032dc2f2947fd0d8ee796453c30a203b62e8bade6f430b7f6bd2def58869a61"
+}

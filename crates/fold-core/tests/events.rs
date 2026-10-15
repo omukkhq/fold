@@ -67,7 +67,11 @@ const PLAN: [&str; 54] = [
 fn all_equals_the_plans_event_types() {
     let declared: Vec<&str> = EventType::ALL.iter().map(|t| t.as_str()).collect();
     let mut expected: Vec<&str> = PLAN.to_vec();
-    expected.extend(["message.sent", "message.acknowledged"]);
+    expected.extend([
+        "message.sent",
+        "message.acknowledged",
+        "agent.presence_changed",
+    ]);
     assert_eq!(declared, expected);
 }
 
@@ -116,9 +120,12 @@ fn parse_accepts_declared_names_and_refuses_the_rest() {
 }
 
 #[test]
-fn only_workspace_changed_is_live() {
+fn workspace_changed_and_presence_changed_are_the_live_types() {
     let live: Vec<_> = EventType::ALL.iter().filter(|t| t.is_live()).collect();
-    assert_eq!(live, vec![&types::WORKSPACE_CHANGED]);
+    assert_eq!(
+        live,
+        vec![&types::WORKSPACE_CHANGED, &types::AGENT_PRESENCE_CHANGED]
+    );
 }
 
 #[test]
@@ -181,10 +188,12 @@ fn actors_are_workers_humans_or_fold() {
 #[test]
 fn new_events_refuse_live_types_and_non_object_data() {
     let fold = EventActor::fold();
-    assert_eq!(
-        NewEvent::new(types::WORKSPACE_CHANGED, fold.clone()),
-        Err(EventError::LiveNotStored)
-    );
+    for live in [types::WORKSPACE_CHANGED, types::AGENT_PRESENCE_CHANGED] {
+        assert_eq!(
+            NewEvent::new(live, fold.clone()),
+            Err(EventError::LiveNotStored)
+        );
+    }
     let event = NewEvent::new(types::TASK_CREATED, fold).unwrap();
     assert_eq!(event.data, json!({}));
     assert_eq!(
@@ -245,6 +254,16 @@ fn live_events_have_no_seq_and_need_a_live_type() {
     assert_eq!(
         LiveEvent::new(types::WORKSPACE_CHANGED, workspace, json!(1)),
         Err(EventError::DataNotObject)
+    );
+    let presence = LiveEvent::new(
+        types::AGENT_PRESENCE_CHANGED,
+        None,
+        json!({"agent": "frontend", "presence": "idle"}),
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_string(&presence).unwrap(),
+        r#"{"type":"agent.presence_changed","workspace":null,"data":{"agent":"frontend","presence":"idle"}}"#
     );
 }
 

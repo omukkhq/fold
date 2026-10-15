@@ -1,10 +1,10 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use fold_core::events::types;
 use fold_core::{
     Actor, AgentActor, AgentName, Clock, EventActor, EventError, FoldError, INTEGRATOR_TAG,
-    NewEvent, Tag, TaskId, Timestamp, WorkerName, codes, policy,
+    NewEvent, ProjectConfig, ProjectPaths, Tag, TaskId, Timestamp, WorkerName, codes, policy,
+    presence_of,
 };
 use fold_store::agents::{self, AgentRow, WorkerRow};
 use fold_store::{Store, StoreError, WriteTx};
@@ -12,7 +12,17 @@ use serde_json::json;
 use thiserror::Error;
 
 use crate::services::events::{EventBuffer, EventBus};
+use crate::services::projects::{ProjectError, load_config};
 use crate::services::tasks::renew_leases;
+
+mod overview;
+mod presence;
+
+pub use overview::{
+    AgentOverview, ClaimSummary, MAX_OVERVIEW_EVENTS, OverviewFilter, ProposalSummary,
+    WorkerOverview, WorkspaceSummary,
+};
+pub use presence::SeenPresence;
 
 #[derive(Debug, Error)]
 pub enum AgentError {
@@ -22,6 +32,15 @@ pub enum AgentError {
     Store(#[from] StoreError),
     #[error(transparent)]
     Event(#[from] EventError),
+}
+
+impl From<ProjectError> for AgentError {
+    fn from(error: ProjectError) -> Self {
+        match error {
+            ProjectError::Fold(error) => Self::Fold(error),
+            ProjectError::Store(error) => Self::Store(error),
+        }
+    }
 }
 
 /// What one adapter connection knows about itself. `session_id` is a database row id and stays inside the daemon.
@@ -40,15 +59,6 @@ pub struct Registered {
     pub created: bool,
 }
 
-/// One line of the agent directory.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentSummary {
-    pub agent: AgentName,
-    pub tags: Vec<Tag>,
-    /// The main worker first, then the children by name.
-    pub workers: Vec<WorkerName>,
-}
-
 /// An agent and its whole tag set after a tag command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentTags {
@@ -63,12 +73,22 @@ pub struct RegisteredWorker {
     pub created: bool,
 }
 
-/// Commands and lookups for agents, sessions and workers. A command reads the time from `clock`, appends its events in its write transaction and publishes them after the commit.
+/// Where the overview takes the claim lease from, which it needs to mark a claim stale.
+#[derive(Debug, Clone)]
+enum Lease {
+    Minutes(u64),
+    /// Read from the project's configuration on every overview, as the other services read it.
+    Config(ProjectPaths),
+}
+
+/// Commands and lookups for agents, sessions and workers. A command reads the time from `clock`, appends its events in its write transaction and publishes them after the commit. `seen` is shared by every service and the presence job of one project, so they agree on when presence changed.
 #[derive(Clone)]
 pub struct AgentService {
     store: Store,
     bus: EventBus,
     clock: Arc<dyn Clock>,
+    lease: Lease,
+    seen: SeenPresence,
 }
 
 impl std::fmt::Debug for AgentService {
@@ -78,8 +98,41 @@ impl std::fmt::Debug for AgentService {
 }
 
 impl AgentService {
+    /// The lease is the default of a project without configuration until [`AgentService::with_lease_minutes`] or [`AgentService::with_project_config`] sets the project's own. The seen presence is the service's own until [`AgentService::with_seen_presence`] shares the project's.
     pub fn new(store: Store, bus: EventBus, clock: Arc<dyn Clock>) -> Self {
-        Self { store, bus, clock }
+        Self {
+            store,
+            bus,
+            clock,
+            lease: Lease::Minutes(ProjectConfig::default().lease_minutes),
+            seen: SeenPresence::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn with_lease_minutes(mut self, lease_minutes: u64) -> Self {
+        self.lease = Lease::Minutes(lease_minutes);
+        self
+    }
+
+    /// Reads the lease from the project's `.fold/config.toml` on every overview; an invalid file fails the overview with its configuration error.
+    #[must_use]
+    pub fn with_project_config(mut self, paths: ProjectPaths) -> Self {
+        self.lease = Lease::Config(paths);
+        self
+    }
+
+    #[must_use]
+    pub fn with_seen_presence(mut self, seen: SeenPresence) -> Self {
+        self.seen = seen;
+        self
+    }
+
+    async fn lease_minutes(&self) -> Result<u64, AgentError> {
+        match &self.lease {
+            Lease::Minutes(minutes) => Ok(*minutes),
+            Lease::Config(paths) => Ok(load_config(paths).await?.lease_minutes),
+        }
     }
 
     /// Inserts the session row when an adapter connects. The session has no agent until `register_agent` binds it, and no event is stored until then.
@@ -177,35 +230,6 @@ impl AgentService {
         Ok(registered)
     }
 
-    /// Every agent with its tags and workers, ordered by name. The three reads share one read transaction, so they see one state.
-    pub async fn list_agents(&self) -> Result<Vec<AgentSummary>, AgentError> {
-        let mut tx = self.store.read().begin().await.map_err(StoreError::from)?;
-        let rows = agents::list_agents(&mut *tx).await?;
-        let tags = agents::all_tags(&mut *tx).await?;
-        let mut workers = agents::all_workers(&mut *tx).await?;
-        tx.commit().await.map_err(StoreError::from)?;
-        workers.sort_by(|a, b| (!a.name.is_main(), &a.name).cmp(&(!b.name.is_main(), &b.name)));
-        let mut tags_of: HashMap<i64, Vec<Tag>> = HashMap::new();
-        for (agent_id, tag) in tags {
-            tags_of.entry(agent_id).or_default().push(tag);
-        }
-        let mut workers_of: HashMap<i64, Vec<WorkerName>> = HashMap::new();
-        for worker in workers {
-            workers_of
-                .entry(worker.agent_id)
-                .or_default()
-                .push(worker.name);
-        }
-        Ok(rows
-            .into_iter()
-            .map(|row| AgentSummary {
-                tags: tags_of.remove(&row.id).unwrap_or_default(),
-                workers: workers_of.remove(&row.id).unwrap_or_default(),
-                agent: row.name,
-            })
-            .collect())
-    }
-
     /// The agent the session is bound to, or `agent_not_registered`.
     pub async fn require_agent(&self, ctx: &SessionContext) -> Result<AgentRow, AgentError> {
         let missing = || {
@@ -298,7 +322,7 @@ impl AgentService {
         Ok(worker.ok_or_else(worker_not_found)?)
     }
 
-    /// Stamps the session and the worker with the time of a tool call and renews the claims of every worker of the agent in the same transaction. The worker's activity is the tool name, followed by the task id when there is one.
+    /// Stamps the session and the worker with the time of a tool call and renews the claims of every worker of the agent in the same transaction. The worker's activity is the tool name, followed by the task id when there is one. After the commit it sends a live `agent.presence_changed` when the call made the agent active.
     pub async fn record_call(
         &self,
         ctx: &SessionContext,
@@ -311,14 +335,23 @@ impl AgentService {
             Some(task) => format!("{tool} {task}"),
             None => tool.to_owned(),
         };
-        self.store
+        let (before, after) = self
+            .store
             .write(async |tx| {
+                let before = agents::open_session_calls(tx.conn(), worker.agent_id).await?;
                 agents::touch_session(tx.conn(), ctx.session_id, now).await?;
                 agents::touch_worker(tx.conn(), worker.id, now, &activity).await?;
+                let after = agents::open_session_calls(tx.conn(), worker.agent_id).await?;
                 let workers = agents::worker_ids(tx.conn(), worker.agent_id).await?;
                 renew_leases(tx, &workers, now).await?;
-                Ok::<_, StoreError>(())
+                Ok::<_, StoreError>((
+                    presence_of(now, &presence::facts(&before)),
+                    presence_of(now, &presence::facts(&after)),
+                ))
             })
+            .await?;
+        self.seen
+            .after_call(&self.bus, &worker.name.agent(), before, after)
             .await?;
         Ok(())
     }

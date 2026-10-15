@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT p.author_worker_id, p.number AS \"number!: i64\", t.number AS \"task!: i64\",\n                  p.title, p.conflicted AS \"conflicted: bool\"\n           FROM proposals p\n           JOIN tasks t ON t.id = p.task_id\n           WHERE p.state = 'open'\n           ORDER BY p.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "author_worker_id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "author_worker_id"
+          }
+        }
+      },
+      {
+        "name": "number!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "task!: i64",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "title",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "name": "conflicted: bool",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "conflicted"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "496422e4c65cdd2353a9eb55766a0bd35735d8f6d15c308e291788dd6b4e1e72"
+}

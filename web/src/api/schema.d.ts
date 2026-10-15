@@ -39,6 +39,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every agent with its presence, workers, claims, live workspaces and open proposals. It reads only; presence is calculated at the time of the request. */
+        get: operations["list_agents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/agents/{name}/tags/integrator": {
         parameters: {
             query?: never;
@@ -199,10 +216,43 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description One agent with its presence, calculated by the daemon at the time of the request. */
+        AgentEntry: {
+            /** @description The newest events the agent's workers performed, newest first; empty unless `events` is asked for. */
+            events: components["schemas"]["DurableEvent"][];
+            /**
+             * Format: int64
+             * @description UTC milliseconds of the newest call of any of the agent's sessions; null before the first.
+             */
+            last_call_at: number | null;
+            name: string;
+            presence: components["schemas"]["PresenceState"];
+            /**
+             * Format: int64
+             * @description How many of the agent's sessions are connected.
+             */
+            sessions: number;
+            /** @description Sorted. */
+            tags: string[];
+            /** @description The main worker first, then the children by name. */
+            workers: components["schemas"]["WorkerEntry"][];
+        };
+        /** @description Every agent of the project in registration order. */
+        AgentList: {
+            agents: components["schemas"]["AgentEntry"][];
+        };
         AgentTagList: {
             agent: string;
             /** @description Every tag of the agent after the change, sorted. */
             tags: string[];
+        };
+        AuthoredProposal: {
+            conflicted: boolean;
+            /** @example P-3 */
+            id: string;
+            /** @example T-12 */
+            task: string;
+            title: string;
         };
         /** @enum {string} */
         ChangeKind: "added" | "modified" | "deleted" | "renamed";
@@ -296,13 +346,16 @@ export interface components {
         ErrorEnvelope: {
             error: components["schemas"]["ErrorBody"];
         };
-        /** @description One frame of a project's event stream, told apart by `kind`: a stored event, a live workspace change, or the snapshot sent after a replay. */
+        /** @description One frame of a project's event stream, told apart by `kind`: a stored event, a live workspace change, a live presence change, or the snapshot sent after a replay. */
         EventEnvelope: (components["schemas"]["DurableEvent"] & {
             /** @enum {string} */
             kind: "event";
         }) | (components["schemas"]["LiveWorkspace"] & {
             /** @enum {string} */
             kind: "workspace_changed";
+        }) | (components["schemas"]["PresenceChange"] & {
+            /** @enum {string} */
+            kind: "agent_presence_changed";
         }) | (components["schemas"]["Snapshot"] & {
             /** @enum {string} */
             kind: "snapshot";
@@ -366,6 +419,28 @@ export interface components {
             /** @description Count what a run would remove and change nothing. */
             dry_run?: boolean;
         };
+        HeldClaim: {
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            acquired_at: number;
+            kind: components["schemas"]["HeldClaimKind"];
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            renewed_at: number;
+            /** @description True once the lease has run out without a renewal. */
+            stale: boolean;
+            /**
+             * @description For a review claim, the task of the reviewed proposal.
+             * @example T-12
+             */
+            task: string;
+        };
+        /** @enum {string} */
+        HeldClaimKind: "implementation" | "review";
         /** @description What an active workspace holds right now. These are working changes, never history. */
         LiveWorkspace: {
             /**
@@ -406,6 +481,17 @@ export interface components {
             name: string;
             slug: string;
         };
+        /** @description An agent's presence after it crossed a boundary: `active` after a call of an agent that was not active, and the new presence once an active agent's window passes or its last session ends. It is the `data` of the live `agent.presence_changed` event. */
+        PresenceChange: {
+            /** @example frontend */
+            agent: string;
+            presence: components["schemas"]["PresenceState"];
+        };
+        /**
+         * @description `active`: a connected session called in the last two minutes. `idle`: a session is connected and none is active. `offline`: no session is connected.
+         * @enum {string}
+         */
+        PresenceState: "active" | "idle" | "offline";
         ProjectList: {
             projects: components["schemas"]["ProjectSummary"][];
         };
@@ -523,6 +609,53 @@ export interface components {
             /** @description The directory listed; empty for the root. */
             path: string;
         };
+        WorkerEntry: {
+            /** @description The last tool the worker called, followed by its task id when the call named one, such as `claim_task T-12`. */
+            activity: string | null;
+            claims: components["schemas"]["HeldClaim"][];
+            /**
+             * Format: int64
+             * @description UTC milliseconds; null before the first call.
+             */
+            last_call_at: number | null;
+            /** @description `agent` or `agent/worker`. */
+            name: string;
+            /** @description Null for the main worker. */
+            parent: string | null;
+            /** @description Open proposals the worker wrote. */
+            proposals: components["schemas"]["AuthoredProposal"][];
+            /** @description Workspaces in state `active` or `missing`. */
+            workspaces: components["schemas"]["WorkerWorkspace"][];
+        };
+        WorkerWorkspace: {
+            /**
+             * @description The revision the workspace is based on.
+             * @example r17
+             */
+            base: string;
+            /**
+             * Format: int32
+             * @description The workspace row's cached count.
+             */
+            changed_files: number;
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            last_activity_at: number | null;
+            /** @example ck-88 */
+            latest_checkpoint: string | null;
+            state: components["schemas"]["WorkerWorkspaceState"];
+            /** @example T-12 */
+            task: string;
+            /** @example ws-9 */
+            ws: string;
+        };
+        /**
+         * @description A missing workspace's directory is gone from disk, but it still holds the task in progress.
+         * @enum {string}
+         */
+        WorkerWorkspaceState: "active" | "missing";
     };
     responses: never;
     parameters: never;
@@ -698,6 +831,95 @@ export interface operations {
             };
             /** @description The slug is not registered */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    list_agents: {
+        parameters: {
+            query?: {
+                /** @description How many of each agent's newest events to include; values above 50 give 50, and none are included when it is left out. */
+                events?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every agent in registration order */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentList"];
+                };
+            };
+            /** @description `invalid_request`: `events` is not a whole number */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie; `invalid_token`: the cookie holds a token the registry does not have */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `invalid_config`: the project's config.toml has a bad lease value */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

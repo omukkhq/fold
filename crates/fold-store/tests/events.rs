@@ -218,6 +218,40 @@ async fn append_refuses_live_types_and_non_object_data() {
 }
 
 #[tokio::test]
+async fn newest_by_agent_reads_the_agent_and_its_children_only() {
+    let project = TestProject::new().await;
+    let by = |actor: &str| {
+        NewEvent::new(types::TASK_UPDATED, EventActor::parse(actor).unwrap()).unwrap()
+    };
+    let batch = [
+        "fe",
+        "fe-two",
+        "fe/ui",
+        "fed",
+        "fe-two/ui",
+        "fe/ui/deep",
+        "fold",
+        "fe",
+    ]
+    .map(by)
+    .to_vec();
+    append_all(&project, batch).await;
+    let agent = fold_core::AgentName::parse("fe").unwrap();
+    let newest = events::newest_by_agent(project.store().read(), &agent, 10)
+        .await
+        .unwrap();
+    let seen: Vec<(u64, &str)> = newest.iter().map(|e| (e.seq, e.actor.as_str())).collect();
+    assert_eq!(
+        seen,
+        [(8, "fe"), (6, "fe/ui/deep"), (3, "fe/ui"), (1, "fe")]
+    );
+    let two = events::newest_by_agent(project.store().read(), &agent, 2)
+        .await
+        .unwrap();
+    assert_eq!(two.iter().map(|e| e.seq).collect::<Vec<_>>(), [8, 6]);
+}
+
+#[tokio::test]
 async fn read_after_caps_the_page_at_one_thousand() {
     let project = TestProject::new().await;
     let batch = (0..1005).map(|_| new_event(types::TASK_UPDATED)).collect();

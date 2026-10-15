@@ -6,7 +6,8 @@ use fold_core::{
     WorkspaceId,
 };
 use fold_daemon::http::events::{
-    ChangeKind, ChangedFile, CheckpointSummary, EventEnvelope, LiveWorkspace, Snapshot,
+    ChangeKind, ChangedFile, CheckpointSummary, EventEnvelope, LiveWorkspace, PresenceChange,
+    Snapshot,
 };
 use fold_daemon::http::openapi::{base, check_operations, to_json};
 use serde_json::{Value, json};
@@ -151,6 +152,7 @@ fn document_declares_the_event_envelope() {
         [
             ("event", "DurableEvent"),
             ("workspace_changed", "LiveWorkspace"),
+            ("agent_presence_changed", "PresenceChange"),
             ("snapshot", "Snapshot"),
         ]
         .map(|(kind, target)| (kind.to_owned(), target.to_owned()))
@@ -169,6 +171,17 @@ fn document_declares_the_event_envelope() {
         .collect();
     assert_eq!(declared, durable);
     assert!(!declared.contains(types::WORKSPACE_CHANGED.as_str()));
+    assert!(!declared.contains(types::AGENT_PRESENCE_CHANGED.as_str()));
+
+    let presence = schema(&doc, "PresenceChange");
+    assert_eq!(
+        names(&presence["required"]),
+        ["agent", "presence"].map(str::to_owned).into()
+    );
+    assert_eq!(
+        presence["properties"]["presence"]["$ref"],
+        "#/components/schemas/PresenceState"
+    );
 
     let snapshot = schema(&doc, "Snapshot");
     assert_eq!(
@@ -229,6 +242,20 @@ fn live_variants_serialise_with_their_kind() {
     assert_eq!(
         serde_json::from_value::<EventEnvelope>(wire).unwrap(),
         changed
+    );
+
+    let presence = EventEnvelope::AgentPresenceChanged(PresenceChange {
+        agent: "frontend".to_owned(),
+        presence: fold_core::Presence::Idle,
+    });
+    let wire = serde_json::to_value(&presence).unwrap();
+    assert_eq!(
+        wire,
+        json!({"kind": "agent_presence_changed", "agent": "frontend", "presence": "idle"})
+    );
+    assert_eq!(
+        serde_json::from_value::<EventEnvelope>(wire).unwrap(),
+        presence
     );
 
     let snapshot = EventEnvelope::Snapshot(Snapshot {

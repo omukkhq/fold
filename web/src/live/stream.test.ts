@@ -44,10 +44,24 @@ const live = () =>
     checkpoints: [],
     proposal: null,
   })}\n\n`;
+/** An `agent_presence_changed` frame is live too: no `seq`, no `id` line. */
+const presence = () =>
+  `data: ${JSON.stringify({
+    kind: "agent_presence_changed",
+    agent: "frontend",
+    presence: "idle",
+  })}\n\n`;
 const snap = (seq: number) =>
   `data: ${JSON.stringify({ kind: "snapshot", seq, workspaces: [] })}\n\n`;
-const label = (e: EventEnvelope) =>
-  e.kind === "workspace_changed" ? "live" : `event ${String(e.seq)}`;
+const label = (e: EventEnvelope) => {
+  if (e.kind === "workspace_changed") {
+    return "live";
+  }
+  if (e.kind === "agent_presence_changed") {
+    return `presence ${e.agent} ${e.presence}`;
+  }
+  return `event ${String(e.seq)}`;
+};
 
 /** An in-memory connection the test feeds by hand. */
 class Pipe {
@@ -340,6 +354,24 @@ describe("startStream", () => {
     h.pipes[1]?.end();
     await vi.advanceTimersByTimeAsync(1000);
     expect(h.cursors).toEqual([null, null, 5]);
+    h.handle.stop();
+  });
+
+  it("delivers every agent_presence_changed frame without moving the cursor", async () => {
+    const h = harness();
+    await vi.advanceTimersByTimeAsync(0);
+    h.pipes[0]?.push(frame(4) + presence() + frame(5) + presence());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.log).toEqual([
+      "open",
+      "event 4",
+      "presence frontend idle",
+      "event 5",
+      "presence frontend idle",
+    ]);
+    h.pipes[0]?.end();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(h.cursors).toEqual([null, 5]);
     h.handle.stop();
   });
 

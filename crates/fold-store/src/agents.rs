@@ -1,7 +1,13 @@
-use fold_core::{AgentName, Tag, Timestamp, WorkerName};
-use sqlx::SqliteExecutor;
+use std::collections::HashMap;
+
+use fold_core::{
+    AgentName, CheckpointId, ProposalId, RevisionId, Tag, TaskId, Timestamp, WorkerName,
+    WorkspaceId,
+};
+use sqlx::{SqliteConnection, SqliteExecutor};
 
 use crate::error::StoreError;
+use crate::workspaces::WorkspaceState;
 
 /// Row ids of these tables stay inside the daemon; the public handles are the names.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -360,12 +366,11 @@ pub async fn end_open_sessions(
     Ok(result.rows_affected())
 }
 
-/// Every agent, ordered by name.
+/// Every agent in registration order.
 pub async fn list_agents(executor: impl SqliteExecutor<'_>) -> Result<Vec<AgentRow>, StoreError> {
-    let rows =
-        sqlx::query!(r#"SELECT id AS "id!: i64", name, created_at FROM agents ORDER BY name"#)
-            .fetch_all(executor)
-            .await?;
+    let rows = sqlx::query!(r#"SELECT id AS "id!: i64", name, created_at FROM agents ORDER BY id"#)
+        .fetch_all(executor)
+        .await?;
     rows.into_iter()
         .map(|row| {
             Ok(AgentRow {
@@ -429,4 +434,243 @@ pub async fn remove_tag(
     .execute(executor)
     .await?;
     Ok(result.rows_affected() == 1)
+}
+
+/// The sessions of one agent as presence and the agent overview read them.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AgentSessions {
+    /// The `last_call_at` of every open session.
+    pub open: Vec<Option<Timestamp>>,
+    /// The newest `last_call_at` of any session, open or ended.
+    pub newest_call: Option<Timestamp>,
+}
+
+/// The sessions of every agent that has one, by agent row id. Sessions that never bound an agent are left out.
+pub async fn sessions_by_agent(
+    conn: &mut SqliteConnection,
+) -> Result<HashMap<i64, AgentSessions>, StoreError> {
+    let newest = sqlx::query!(
+        r#"SELECT agent_id AS "agent_id!: i64", MAX(last_call_at) AS "newest: i64"
+           FROM sessions WHERE agent_id IS NOT NULL
+           GROUP BY agent_id"#
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    let open = sqlx::query!(
+        r#"SELECT agent_id AS "agent_id!: i64", last_call_at
+           FROM sessions WHERE agent_id IS NOT NULL AND ended_at IS NULL
+           ORDER BY id"#
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    let mut sessions = HashMap::with_capacity(newest.len());
+    for row in newest {
+        let entry = AgentSessions {
+            open: Vec::new(),
+            newest_call: optional_time(row.newest, "sessions.last_call_at")?,
+        };
+        sessions.insert(row.agent_id, entry);
+    }
+    for row in open {
+        let at = optional_time(row.last_call_at, "sessions.last_call_at")?;
+        sessions.entry(row.agent_id).or_default().open.push(at);
+    }
+    Ok(sessions)
+}
+
+/// The `last_call_at` of every open session of one agent, which is what its presence reads.
+pub async fn open_session_calls(
+    executor: impl SqliteExecutor<'_>,
+    agent_id: i64,
+) -> Result<Vec<Option<Timestamp>>, StoreError> {
+    let rows = sqlx::query_scalar!(
+        r#"SELECT last_call_at FROM sessions WHERE agent_id = ? AND ended_at IS NULL"#,
+        agent_id
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|at| optional_time(at, "sessions.last_call_at"))
+        .collect()
+}
+
+/// The `last_call_at` of every open, bound session, with its agent's name. An agent without an open session is absent.
+pub async fn open_session_calls_by_agent(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Vec<(AgentName, Option<Timestamp>)>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT a.name, s.last_call_at
+           FROM sessions s JOIN agents a ON a.id = s.agent_id
+           WHERE s.ended_at IS NULL"#
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            let name =
+                AgentName::parse(&row.name).map_err(|_| StoreError::Corrupt("agents.name"))?;
+            Ok((
+                name,
+                optional_time(row.last_call_at, "sessions.last_call_at")?,
+            ))
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaimKind {
+    Implementation,
+    Review,
+}
+
+impl ClaimKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ClaimKind::Implementation => "implementation",
+            ClaimKind::Review => "review",
+        }
+    }
+
+    fn parse(text: &str) -> Result<Self, StoreError> {
+        match text {
+            "implementation" => Ok(ClaimKind::Implementation),
+            "review" => Ok(ClaimKind::Review),
+            _ => Err(StoreError::Corrupt("claims.kind")),
+        }
+    }
+}
+
+/// An unreleased claim of either kind. A review claim names a proposal, and `task` is that proposal's task.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeldClaim {
+    pub worker_id: i64,
+    pub kind: ClaimKind,
+    pub task: TaskId,
+    pub acquired_at: Timestamp,
+    pub renewed_at: Timestamp,
+}
+
+/// Every unreleased claim, oldest first.
+pub async fn held_claims(executor: impl SqliteExecutor<'_>) -> Result<Vec<HeldClaim>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT c.worker_id, c.kind, COALESCE(t.number, pt.number) AS "task!: i64",
+                  c.acquired_at, c.renewed_at
+           FROM claims c
+           LEFT JOIN tasks t ON t.id = c.task_id
+           LEFT JOIN proposals p ON p.id = c.proposal_id
+           LEFT JOIN tasks pt ON pt.id = p.task_id
+           WHERE c.released_at IS NULL
+           ORDER BY c.acquired_at, c.id"#
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(HeldClaim {
+                worker_id: row.worker_id,
+                kind: ClaimKind::parse(&row.kind)?,
+                task: TaskId::try_from_db(row.task).ok_or(StoreError::Corrupt("tasks.number"))?,
+                acquired_at: time(row.acquired_at, "claims.acquired_at")?,
+                renewed_at: time(row.renewed_at, "claims.renewed_at")?,
+            })
+        })
+        .collect()
+}
+
+/// A workspace in state `active` or `missing` with an owner. `changed_files` and `last_activity_at` are the row's cached values, so they read the same with or without the watcher.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnedWorkspace {
+    pub worker_id: i64,
+    pub id: WorkspaceId,
+    pub task: TaskId,
+    pub state: WorkspaceState,
+    pub base: RevisionId,
+    pub changed_files: u32,
+    pub last_activity_at: Option<Timestamp>,
+    /// The newest checkpoint that is not pruned.
+    pub latest_checkpoint: Option<CheckpointId>,
+}
+
+/// Every live workspace that has an owner, by workspace number.
+pub async fn owned_live_workspaces(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Vec<OwnedWorkspace>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT w.worker_id AS "worker_id!: i64", w.number AS "number!: i64",
+                  t.number AS "task!: i64", w.state, r.number AS "base!: i64",
+                  w.changed_files, w.last_activity_at,
+                  (SELECT MAX(c.number) FROM checkpoints c
+                   WHERE c.workspace_id = w.id AND c.pruned_at IS NULL) AS "checkpoint: i64"
+           FROM workspaces w
+           JOIN tasks t ON t.id = w.task_id
+           JOIN revisions r ON r.id = w.base_revision_id
+           WHERE w.state IN ('active', 'missing') AND w.worker_id IS NOT NULL
+           ORDER BY w.number"#
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(OwnedWorkspace {
+                worker_id: row.worker_id,
+                id: WorkspaceId::try_from_db(row.number)
+                    .ok_or(StoreError::Corrupt("workspaces.number"))?,
+                task: TaskId::try_from_db(row.task).ok_or(StoreError::Corrupt("tasks.number"))?,
+                state: WorkspaceState::parse(&row.state)?,
+                base: RevisionId::try_from_db(row.base)
+                    .ok_or(StoreError::Corrupt("revisions.number"))?,
+                changed_files: u32::try_from(row.changed_files)
+                    .map_err(|_| StoreError::Corrupt("workspaces.changed_files"))?,
+                last_activity_at: optional_time(
+                    row.last_activity_at,
+                    "workspaces.last_activity_at",
+                )?,
+                latest_checkpoint: row
+                    .checkpoint
+                    .map(|number| {
+                        CheckpointId::try_from_db(number)
+                            .ok_or(StoreError::Corrupt("checkpoints.number"))
+                    })
+                    .transpose()?,
+            })
+        })
+        .collect()
+}
+
+/// An open proposal and the worker that wrote it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthoredProposal {
+    pub author_worker_id: i64,
+    pub id: ProposalId,
+    pub task: TaskId,
+    pub title: String,
+    pub conflicted: bool,
+}
+
+/// Every open proposal, by proposal number.
+pub async fn open_proposals(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Vec<AuthoredProposal>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT p.author_worker_id, p.number AS "number!: i64", t.number AS "task!: i64",
+                  p.title, p.conflicted AS "conflicted: bool"
+           FROM proposals p
+           JOIN tasks t ON t.id = p.task_id
+           WHERE p.state = 'open'
+           ORDER BY p.number"#
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(AuthoredProposal {
+                author_worker_id: row.author_worker_id,
+                id: ProposalId::try_from_db(row.number)
+                    .ok_or(StoreError::Corrupt("proposals.number"))?,
+                task: TaskId::try_from_db(row.task).ok_or(StoreError::Corrupt("tasks.number"))?,
+                title: row.title,
+                conflicted: row.conflicted,
+            })
+        })
+        .collect()
 }

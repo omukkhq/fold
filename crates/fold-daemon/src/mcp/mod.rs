@@ -1,3 +1,4 @@
+pub mod agents;
 pub mod error;
 pub mod events;
 pub mod footer;
@@ -99,7 +100,8 @@ impl FoldServer {
         let value = match (tool, &resolved) {
             (identity::REGISTER_AGENT, _) => identity::register_agent(self, &arguments).await?,
             (identity::REGISTER_WORKER, _) => identity::register_worker(self, &arguments).await?,
-            (identity::LIST_AGENTS, _) => identity::list_agents(self, &arguments).await?,
+            (agents::LIST_AGENTS, _) => agents::list_agents(self, &arguments).await?,
+            (agents::GET_ACTIVITY, Some(_)) => agents::get_activity(self, &arguments).await?,
             (events::GET_EVENTS, Some(worker)) => {
                 events::get_events(self, worker, &arguments).await?
             }
@@ -178,6 +180,7 @@ impl ServerHandler for FoldServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         let mut tools = identity::tools();
+        tools.extend(agents::tools());
         tools.extend(events::tools());
         tools.extend(workspaces::tools());
         Ok(ListToolsResult::with_all_items(tools))

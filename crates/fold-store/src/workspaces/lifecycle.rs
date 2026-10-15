@@ -51,7 +51,7 @@ impl WorkspaceState {
         matches!(self, WorkspaceState::Active | WorkspaceState::Missing)
     }
 
-    fn parse(text: &str) -> Result<Self, StoreError> {
+    pub(crate) fn parse(text: &str) -> Result<Self, StoreError> {
         match text {
             "active" => Ok(WorkspaceState::Active),
             "missing" => Ok(WorkspaceState::Missing),

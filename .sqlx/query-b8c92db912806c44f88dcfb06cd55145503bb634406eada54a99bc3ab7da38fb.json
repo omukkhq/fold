@@ -1,0 +1,105 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT w.worker_id AS \"worker_id!: i64\", w.number AS \"number!: i64\",\n                  t.number AS \"task!: i64\", w.state, r.number AS \"base!: i64\",\n                  w.changed_files, w.last_activity_at,\n                  (SELECT MAX(c.number) FROM checkpoints c\n                   WHERE c.workspace_id = w.id AND c.pruned_at IS NULL) AS \"checkpoint: i64\"\n           FROM workspaces w\n           JOIN tasks t ON t.id = w.task_id\n           JOIN revisions r ON r.id = w.base_revision_id\n           WHERE w.state IN ('active', 'missing') AND w.worker_id IS NOT NULL\n           ORDER BY w.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "worker_id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "workspaces",
+            "name": "worker_id"
+          }
+        }
+      },
+      {
+        "name": "number!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "workspaces",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "task!: i64",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "state",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workspaces",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "name": "base!: i64",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "revisions",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "changed_files",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "workspaces",
+            "name": "changed_files"
+          }
+        }
+      },
+      {
+        "name": "last_activity_at",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "workspaces",
+            "name": "last_activity_at"
+          }
+        }
+      },
+      {
+        "name": "checkpoint: i64",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "b8c92db912806c44f88dcfb06cd55145503bb634406eada54a99bc3ab7da38fb"
+}

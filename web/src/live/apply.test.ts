@@ -1,7 +1,13 @@
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { keys } from "../api/keys";
-import { applyEvent, domainOf, invalidateProject, patchBoard } from "./apply";
+import {
+  applyEvent,
+  domainOf,
+  invalidateProject,
+  patchBoard,
+  patchPresence,
+} from "./apply";
 import {
   isEventEnvelope,
   type EventEnvelope,
@@ -237,6 +243,70 @@ describe("patch rules", () => {
     ]);
     expect(hit(keys.workspaces(slug))).toBe(false);
     expect(hit(keys.activity(slug))).toBe(false);
+  });
+
+  it("patches the presence of the named agent in every agent list with no refetch", () => {
+    client.setQueryData(keys.agents(slug), [
+      { name: "frontend", presence: "active", tags: [] },
+      { name: "backend", presence: "active", tags: [] },
+    ]);
+    client.setQueryData(keys.agentBar(slug), [
+      { name: "frontend", presence: "active", working: 1, stalled: 0 },
+    ]);
+    const targets = { agents: ["frontend"], tags: [] };
+    client.setQueryData(keys.messageTargets(slug), targets);
+    applyEvent(
+      client,
+      slug,
+      guarded({
+        kind: "agent_presence_changed",
+        agent: "frontend",
+        presence: "idle",
+      }),
+    );
+    expect(client.getQueryData(keys.agents(slug))).toEqual([
+      { name: "frontend", presence: "idle", tags: [] },
+      { name: "backend", presence: "active", tags: [] },
+    ]);
+    expect(client.getQueryData(keys.agentBar(slug))).toEqual([
+      { name: "frontend", presence: "idle", working: 1, stalled: 0 },
+    ]);
+    expect(client.getQueryData(keys.messageTargets(slug))).toBe(targets);
+    expect(invalidated).toEqual([]);
+  });
+
+  it("refetches an agent list that does not hold the agent and leaves other projects alone", () => {
+    client.setQueryData(keys.agents(slug), [
+      { name: "backend", presence: "idle" },
+    ]);
+    client.setQueryData(keys.agents("other"), [
+      { name: "frontend", presence: "active" },
+    ]);
+    applyEvent(
+      client,
+      slug,
+      guarded({
+        kind: "agent_presence_changed",
+        agent: "frontend",
+        presence: "active",
+      }),
+    );
+    expect(hit(keys.agents(slug))).toBe(true);
+    expect(hit(keys.activity(slug))).toBe(false);
+    expect(client.getQueryData(keys.agents("other"))).toEqual([
+      { name: "frontend", presence: "active" },
+    ]);
+  });
+
+  it("patches only a list of records that holds the agent", () => {
+    const frame = { agent: "frontend", presence: "offline" } as const;
+    expect(patchPresence(undefined, frame)).toBeNull();
+    expect(patchPresence({ agents: [] }, frame)).toBeNull();
+    expect(patchPresence(["frontend"], frame)).toBeNull();
+    expect(patchPresence([{ name: "backend" }], frame)).toBeNull();
+    expect(
+      patchPresence([{ name: "frontend", presence: "idle" }], frame),
+    ).toEqual([{ name: "frontend", presence: "offline" }]);
   });
 
   it("replaces every live state on a snapshot and drops absent ones", () => {

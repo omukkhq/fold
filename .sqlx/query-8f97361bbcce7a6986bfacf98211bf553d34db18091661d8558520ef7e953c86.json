@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT a.name, s.last_call_at\n           FROM sessions s JOIN agents a ON a.id = s.agent_id\n           WHERE s.ended_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "name",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "last_call_at",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "last_call_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "8f97361bbcce7a6986bfacf98211bf553d34db18091661d8558520ef7e953c86"
+}

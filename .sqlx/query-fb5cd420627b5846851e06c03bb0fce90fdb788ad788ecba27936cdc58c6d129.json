@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id AS \"id!: i64\", name, created_at FROM agents ORDER BY name",
+  "query": "SELECT id AS \"id!: i64\", name, created_at FROM agents ORDER BY id",
   "describe": {
     "columns": [
       {
@@ -46,5 +46,5 @@
       false
     ]
   },
-  "hash": "3b156e1c11527da2e9f1481ef1728eab4fbce80eabe8e6adb215765ba7d5ab07"
+  "hash": "fb5cd420627b5846851e06c03bb0fce90fdb788ad788ecba27936cdc58c6d129"
 }

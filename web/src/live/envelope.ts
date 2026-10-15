@@ -9,6 +9,10 @@ export type WorkspaceChanged = Extract<
   { kind: "workspace_changed" }
 >;
 export type SnapshotFrame = Extract<EventEnvelope, { kind: "snapshot" }>;
+export type PresenceChanged = Extract<
+  EventEnvelope,
+  { kind: "agent_presence_changed" }
+>;
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -32,6 +36,12 @@ const CHANGE_KINDS: readonly unknown[] = [
   "deleted",
   "renamed",
 ] satisfies components["schemas"]["ChangeKind"][];
+
+const PRESENCE_STATES: readonly unknown[] = [
+  "active",
+  "idle",
+  "offline",
+] satisfies components["schemas"]["PresenceState"][];
 
 function isChangedFile(value: unknown): boolean {
   return (
@@ -98,6 +108,11 @@ export function isEventEnvelope(value: unknown): value is EventEnvelope {
       return isStoredEvent(value);
     case "workspace_changed":
       return isLiveWorkspace(value);
+    case "agent_presence_changed":
+      return (
+        typeof value.agent === "string" &&
+        PRESENCE_STATES.includes(value.presence)
+      );
     case "snapshot":
       return (
         isSeq(value.seq) &&

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT last_call_at FROM sessions WHERE agent_id = ? AND ended_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "last_call_at",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "last_call_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "b7fb090dddcec0468bb2875c72a385d433e6860dc646935b3665d82c3fe455e7"
+}

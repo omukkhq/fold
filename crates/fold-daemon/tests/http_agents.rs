@@ -28,7 +28,16 @@ struct Fixture {
 #[cfg(test)]
 impl Fixture {
     async fn new() -> Self {
+        Self::with_config(None).await
+    }
+
+    /// The project with `config` as its `.fold/config.toml`, written before the daemon opens it.
+    async fn with_config(config: Option<&str>) -> Self {
         let project = TestProject::new().await;
+        if let Some(config) = config {
+            std::fs::create_dir_all(project.paths().fold_dir()).unwrap();
+            std::fs::write(project.paths().config(), config).unwrap();
+        }
         let clock = Arc::new(project.clock().clone());
         let state: AppState = Arc::new(DaemonState {
             registry: project.registry().clone(),
@@ -292,4 +301,223 @@ async fn both_routes_declare_their_errors() {
         }
     }
     assert!(fold_daemon::http::openapi::check_operations(&fold_daemon::http::openapi()).is_ok());
+}
+
+const AGENTS: &str = "/api/v1/projects/demo/agents";
+
+#[cfg(test)]
+impl Fixture {
+    fn agents(&self) -> AgentService {
+        AgentService::new(
+            self.handle.store.clone(),
+            self.handle.bus.clone(),
+            self.handle.clock.clone(),
+        )
+    }
+
+    /// Registers `name` in a new session and returns that session.
+    async fn register(&self, name: &str) -> fold_daemon::services::agents::SessionContext {
+        let agents = self.agents();
+        let mut ctx = agents.start_session(2).await.unwrap();
+        agents
+            .register_agent(&mut ctx, &AgentName::parse(name).unwrap(), &[])
+            .await
+            .unwrap();
+        ctx
+    }
+
+    fn advance(&self, millis: i64) {
+        let now = self.project.now().as_millis();
+        self.project
+            .clock()
+            .set(Timestamp::from_millis(now + millis).unwrap());
+    }
+}
+
+#[tokio::test]
+async fn the_agents_route_returns_the_overview_in_registration_order() {
+    let fixture = Fixture::new().await;
+    let registered = fixture.project.now().as_millis();
+    let backend = fixture.register("backend").await;
+    fixture
+        .agents()
+        .register_worker(&backend, "api", None)
+        .await
+        .unwrap();
+    let (status, body) = call(fixture.http(), Method::GET, AGENTS, &[]).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let names: Vec<&str> = body["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|agent| agent["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        ["review", "backend"],
+        "registration order, not names"
+    );
+    assert_eq!(
+        body["agents"][1],
+        json!({
+            "name": "backend",
+            "tags": [],
+            "presence": "active",
+            "last_call_at": registered,
+            "sessions": 1,
+            "workers": [
+                {"name": "backend", "parent": null, "last_call_at": null, "activity": null,
+                 "claims": [], "workspaces": [], "proposals": []},
+                {"name": "backend/api", "parent": "backend", "last_call_at": null, "activity": null,
+                 "claims": [], "workspaces": [], "proposals": []},
+            ],
+            "events": [],
+        })
+    );
+    assert_eq!(body["agents"][0]["tags"], json!(["review"]));
+
+    fixture.advance(120_000);
+    let (_, body) = call(fixture.socket(), Method::GET, AGENTS, &[]).await;
+    assert_eq!(body["agents"][1]["presence"], "idle");
+    fixture.agents().end_session(&backend).await.unwrap();
+    let (_, body) = call(fixture.http(), Method::GET, AGENTS, &[]).await;
+    assert_eq!(body["agents"][1]["presence"], "offline");
+    assert_eq!(body["agents"][1]["sessions"], 0);
+}
+
+#[tokio::test]
+async fn events_returns_at_most_the_requested_number_newest_first() {
+    let fixture = Fixture::new().await;
+    let backend = fixture.register("backend").await;
+    let agents = fixture.agents();
+    for index in 0..60 {
+        agents
+            .register_worker(&backend, &format!("w{index}"), None)
+            .await
+            .unwrap();
+    }
+    let (status, body) = call(
+        fixture.http(),
+        Method::GET,
+        &format!("{AGENTS}?events=3"),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let events = body["agents"][1]["events"].as_array().unwrap();
+    assert_eq!(events.len(), 3);
+    let seqs: Vec<u64> = events.iter().map(|e| e["seq"].as_u64().unwrap()).collect();
+    assert!(
+        seqs.windows(2).all(|pair| pair[0] > pair[1]),
+        "newest first: {seqs:?}"
+    );
+    assert_eq!(events[0]["type"], "worker.registered");
+    assert_eq!(events[0]["actor"], "backend");
+    assert_eq!(events[0]["data"]["worker"], "backend/w59");
+    let review = body["agents"][0]["events"].as_array().unwrap();
+    assert!(review.len() <= 3);
+    assert!(
+        review.iter().all(|e| e["actor"] == "review"),
+        "only the agent's own events"
+    );
+
+    let (_, body) = call(
+        fixture.http(),
+        Method::GET,
+        &format!("{AGENTS}?events=100"),
+        &[],
+    )
+    .await;
+    assert_eq!(
+        body["agents"][1]["events"].as_array().unwrap().len(),
+        50,
+        "clamped to 50"
+    );
+    let (_, body) = call(
+        fixture.http(),
+        Method::GET,
+        &format!("{AGENTS}?events=0"),
+        &[],
+    )
+    .await;
+    assert_eq!(body["agents"][1]["events"], json!([]));
+
+    for query in ["events=abc", "events=-1", "events=3.5"] {
+        let (status, body) = call(
+            fixture.http(),
+            Method::GET,
+            &format!("{AGENTS}?{query}"),
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{query}");
+        assert_eq!(code(&body), "invalid_request", "{query}");
+    }
+}
+
+#[tokio::test]
+async fn the_route_judges_stale_claims_by_the_configured_lease() {
+    use fold_core::{Actor, AgentActor, TaskDescription, TaskTitle, WorkerName};
+    use fold_daemon::services::tasks::{CreateTask, TaskService};
+
+    let fixture = Fixture::with_config(Some("lease_minutes = 1\n")).await;
+    fixture.register("backend").await;
+    let tasks = TaskService::new(
+        fixture.handle.store.clone(),
+        fixture.handle.bus.clone(),
+        fixture.handle.clock.clone(),
+        1,
+    );
+    let backend = Actor::Agent(AgentActor {
+        agent: AgentName::parse("backend").unwrap(),
+        worker: WorkerName::parse("backend").unwrap(),
+        tags: Vec::new(),
+    });
+    let task = tasks
+        .create_task(
+            &backend,
+            CreateTask {
+                title: TaskTitle::parse("task").unwrap(),
+                description: TaskDescription::new("body"),
+                labels: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    tasks.claim_task(&backend, task.id).await.unwrap();
+    fixture.advance(59_999);
+    let (_, body) = call(fixture.http(), Method::GET, AGENTS, &[]).await;
+    assert_eq!(body["agents"][1]["workers"][0]["claims"][0]["stale"], false);
+    fixture.advance(1);
+    let (_, body) = call(fixture.http(), Method::GET, AGENTS, &[]).await;
+    let claim = &body["agents"][1]["workers"][0]["claims"][0];
+    assert_eq!(claim["task"], task.id.to_string());
+    assert_eq!(claim["kind"], "implementation");
+    assert_eq!(claim["stale"], true);
+}
+
+#[tokio::test]
+async fn an_invalid_configuration_fails_the_overview_and_leaves_the_project_open() {
+    let fixture = Fixture::new().await;
+    std::fs::create_dir_all(fixture.project.paths().fold_dir()).unwrap();
+    std::fs::write(
+        fixture.project.paths().config(),
+        "lease_minutes = \"soon\"\n",
+    )
+    .unwrap();
+    let (status, body) = call(fixture.http(), Method::GET, AGENTS, &[]).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(code(&body), "invalid_config");
+    let (status, body) = call(
+        fixture.socket(),
+        Method::PUT,
+        PATH,
+        &[("x-fold-human", "ana")],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    std::fs::write(fixture.project.paths().config(), "lease_minutes = 3\n").unwrap();
+    let (status, body) = call(fixture.http(), Method::GET, AGENTS, &[]).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
 }

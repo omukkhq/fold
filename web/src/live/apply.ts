@@ -5,6 +5,7 @@ import {
   liveWorkspaceOf,
   type EventEnvelope,
   type LiveWorkspace,
+  type PresenceChanged,
   type StoredEvent,
 } from "./envelope";
 
@@ -203,6 +204,47 @@ function invalidationKeys(
   }
 }
 
+/** Returns the agent list with the named agent's presence replaced, or null when the cache is not a list of named records or does not hold the agent. */
+export function patchPresence(
+  agents: unknown,
+  frame: Pick<PresenceChanged, "agent" | "presence">,
+): unknown[] | null {
+  if (!Array.isArray(agents) || !agents.every(isRecord)) {
+    return null;
+  }
+  if (!agents.some((agent) => agent.name === frame.agent)) {
+    return null;
+  }
+  return agents.map((agent) =>
+    agent.name === frame.agent ? { ...agent, presence: frame.presence } : agent,
+  );
+}
+
+/** The agent lists under the agents prefix take the new presence in place; a list that cannot take it, such as one that does not hold the agent yet, is refetched. Caches without presence records, such as the message targets, are left alone. */
+function applyPresence(
+  queryClient: QueryClient,
+  slug: string,
+  frame: PresenceChanged,
+): void {
+  for (const query of queryClient
+    .getQueryCache()
+    .findAll({ queryKey: keys.agents(slug) })) {
+    const data = query.state.data;
+    if (!Array.isArray(data)) {
+      continue;
+    }
+    const next = patchPresence(data, frame);
+    if (next) {
+      queryClient.setQueryData(query.queryKey, next);
+    } else {
+      void queryClient.invalidateQueries({
+        queryKey: query.queryKey,
+        exact: true,
+      });
+    }
+  }
+}
+
 /** Refetches every observed query of the project after stored events went missing. Live workspace state comes only from the stream, so it is left for the next snapshot. */
 export function invalidateProject(
   queryClient: QueryClient,
@@ -269,6 +311,10 @@ export function applyEvent(
       keys.workspaceLive(slug, event.workspace),
       liveWorkspaceOf(event),
     );
+    return;
+  }
+  if (event.kind === "agent_presence_changed") {
+    applyPresence(queryClient, slug, event);
     return;
   }
   const domain = domainOf(event.type);

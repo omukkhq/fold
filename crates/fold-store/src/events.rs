@@ -184,6 +184,30 @@ pub async fn touching_after(
     rows.into_iter().map(EventRecord::into_event).collect()
 }
 
+/// The newest `limit` events that a worker of `agent` performed, newest first. The actor column holds the worker name, so the agent's own name or a name under `agent/` matches. The children are the range from `agent/` up to `agent0`, because `0` follows `/`; a range, unlike a pattern built from a parameter, can use `events_actor_seq`.
+pub async fn newest_by_agent(
+    executor: impl SqliteExecutor<'_>,
+    agent: &AgentName,
+    limit: usize,
+) -> Result<Vec<Event>, StoreError> {
+    let agent = agent.as_str();
+    let limit = i64::try_from(limit.min(MAX_PAGE)).unwrap_or(MAX_PAGE as i64);
+    let rows = sqlx::query_as!(
+        EventRecord,
+        r#"SELECT seq AS "seq!: i64", type AS event_type, actor, task_id, proposal_id,
+                  workspace_id, revision_id, data, created_at
+           FROM events
+           WHERE actor = ?1 OR (actor >= ?1 || '/' AND actor < ?1 || '0')
+           ORDER BY seq DESC
+           LIMIT ?2"#,
+        agent,
+        limit
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter().map(EventRecord::into_event).collect()
+}
+
 /// The `seq` the agent has read up to, or 0 when it never moved its cursor.
 pub async fn cursor(executor: impl SqliteExecutor<'_>, agent_id: i64) -> Result<u64, StoreError> {
     let last = sqlx::query_scalar!(

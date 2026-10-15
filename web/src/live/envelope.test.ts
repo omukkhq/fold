@@ -80,6 +80,27 @@ describe("isEventEnvelope", () => {
     expect(isEventEnvelope({ ...snapshot(), workspaces: [] })).toBe(true);
   });
 
+  it("accepts an agent_presence_changed frame of each presence and refuses a malformed one", () => {
+    for (const presence of ["active", "idle", "offline"]) {
+      expect(
+        isEventEnvelope({
+          kind: "agent_presence_changed",
+          agent: "frontend",
+          presence,
+        }),
+        presence,
+      ).toBe(true);
+    }
+    for (const bad of [
+      { kind: "agent_presence_changed", agent: "frontend", presence: "away" },
+      { kind: "agent_presence_changed", agent: 3, presence: "idle" },
+      { kind: "agent_presence_changed", presence: "idle" },
+      { kind: "agent_presence_changed", agent: "frontend" },
+    ]) {
+      expect(isEventEnvelope(bad), JSON.stringify(bad)).toBe(false);
+    }
+  });
+
   it("accepts a workspace_changed frame without seq", () => {
     const frame = changed();
     expect("seq" in frame).toBe(false);

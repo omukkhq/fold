@@ -170,7 +170,7 @@ async fn register_worker_names_the_worker_and_its_parent() {
 }
 
 #[tokio::test]
-async fn list_agents_shows_each_agent_with_its_tags_and_workers() {
+async fn list_agents_shows_each_agent_with_its_tags_and_workers_in_registration_order() {
     let project = TestProject::new().await;
     let reader = connect(&project).await;
     assert_eq!(
@@ -187,12 +187,28 @@ async fn list_agents_shows_each_agent_with_its_tags_and_workers() {
     call(&frontend, "register_worker", json!({"name": "a"})).await;
     let backend = connect(&project).await;
     call(&backend, "register_agent", json!({"name": "backend"})).await;
+    let listed = call(&reader, "list_agents", json!({})).await;
+    let summary: Vec<Value> = listed["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|agent| {
+            let workers: Vec<&Value> = agent["workers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|worker| &worker["name"])
+                .collect();
+            json!({"name": agent["name"], "tags": agent["tags"], "workers": workers})
+        })
+        .collect();
     assert_eq!(
-        call(&reader, "list_agents", json!({})).await,
-        json!({"agents": [
-            {"agent": "backend", "tags": [], "workers": ["backend"]},
-            {"agent": "frontend", "tags": ["ui", "web"], "workers": ["frontend", "frontend/a"]},
-        ]})
+        summary,
+        vec![
+            json!({"name": "frontend", "tags": ["ui", "web"], "workers": ["frontend", "frontend/a"]}),
+            json!({"name": "backend", "tags": [], "workers": ["backend"]}),
+        ],
+        "registration order, the main worker first"
     );
 }
 
@@ -388,6 +404,7 @@ async fn the_server_lists_described_tools_and_sends_the_workflow() {
         [
             "register_agent",
             "register_worker",
+            "get_activity",
             "list_agents",
             "get_events",
             "wait_for_events",

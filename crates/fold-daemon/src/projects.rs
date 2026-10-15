@@ -5,6 +5,7 @@ use fold_core::{Clock, FoldError, ProjectPaths, codes};
 use fold_store::Store;
 use fold_store::projects::ProjectRow;
 
+use crate::services::agents::{AgentService, SeenPresence};
 use crate::services::events::EventBus;
 
 /// An open project: its database, its clock and the live state shared by every request. Later domains add their state here.
@@ -16,6 +17,8 @@ pub struct ProjectHandle {
     /// Services and jobs read the time only through this clock.
     pub clock: Arc<dyn Clock>,
     pub bus: EventBus,
+    /// What the calls and the presence job last saw of each agent's presence.
+    pub presence: SeenPresence,
     /// Held for the whole integration procedure.
     pub integration: tokio::sync::Mutex<()>,
     /// Held for a whole garbage collection run, so a second run is refused instead of queued.
@@ -54,11 +57,19 @@ impl ProjectHandle {
             store,
             clock,
             bus: EventBus::new(),
+            presence: SeenPresence::new(),
             integration: tokio::sync::Mutex::new(()),
             gc: tokio::sync::Mutex::new(()),
             objects: Arc::new(tokio::sync::RwLock::new(())),
             remote_lock: Arc::new(tokio::sync::Mutex::new(())),
         })
+    }
+
+    /// The agent service of this project: its store, bus, clock, configured lease and seen presence.
+    pub fn agents(&self) -> AgentService {
+        AgentService::new(self.store.clone(), self.bus.clone(), self.clock.clone())
+            .with_project_config(self.paths.clone())
+            .with_seen_presence(self.presence.clone())
     }
 }
 

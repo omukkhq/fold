@@ -15,10 +15,9 @@ use tokio::task::JoinHandle;
 
 use crate::config::DaemonConfig;
 use crate::http::{self, assets::AssetSource};
-use crate::jobs::{self, GcDaily};
+use crate::jobs::{self, Job};
 use crate::mcp;
 use crate::projects::Projects;
-use crate::services::agents::AgentService;
 use crate::socket::SocketServer;
 
 /// How long open HTTP connections get to finish after shutdown starts.
@@ -123,12 +122,7 @@ impl Daemon {
             let _ = state.projects.open(&row, clock.clone()).await;
         }
         for handle in state.projects.handles() {
-            let agents = AgentService::new(
-                handle.store.clone(),
-                handle.bus.clone(),
-                handle.clock.clone(),
-            );
-            if let Err(error) = agents.close_orphan_sessions().await {
+            if let Err(error) = handle.agents().close_orphan_sessions().await {
                 tracing::error!(project = %handle.slug, %error, "could not end orphan sessions");
             }
         }
@@ -150,6 +144,7 @@ impl Daemon {
             .local_addr()
             .map_err(DaemonError::io("read the HTTP address"))?;
         let gc_daily = jobs::spawn_gc_daily(state.clone(), jobs::JOB_TICK, stopped.clone());
+        let presence = jobs::spawn_presence(state.clone(), jobs::PRESENCE_TICK, stopped.clone());
         let http = tokio::spawn(serve_http(listener, http::router(state.clone()), stopped));
         tracing::info!(%http_addr, "daemon started");
         Ok(RunningDaemon {
@@ -159,6 +154,7 @@ impl Daemon {
             socket,
             http,
             gc_daily,
+            presence,
             stop,
             _lock: lock,
         })
@@ -173,7 +169,8 @@ pub struct RunningDaemon {
     http_addr: SocketAddr,
     socket: SocketServer,
     http: JoinHandle<()>,
-    gc_daily: GcDaily,
+    gc_daily: Job,
+    presence: Job,
     stop: watch::Sender<bool>,
     /// The advisory lock lives as long as this file is open.
     _lock: File,
@@ -208,13 +205,9 @@ impl RunningDaemon {
             abort.abort();
         }
         self.gc_daily.stopped(DRAIN_TIMEOUT).await;
+        self.presence.stopped(DRAIN_TIMEOUT).await;
         for handle in self.state.projects.handles() {
-            let agents = AgentService::new(
-                handle.store.clone(),
-                handle.bus.clone(),
-                handle.clock.clone(),
-            );
-            if let Err(error) = agents.close_sessions_at_shutdown().await {
+            if let Err(error) = handle.agents().close_sessions_at_shutdown().await {
                 tracing::error!(project = %handle.slug, %error, "could not end sessions");
             }
             if let Err(error) = handle.store.close().await {

@@ -5,16 +5,15 @@ use rmcp::schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::FoldServer;
 use super::error::from_agent;
+use super::{FoldServer, agents};
 
 pub const REGISTER_AGENT: &str = "register_agent";
 pub const REGISTER_WORKER: &str = "register_worker";
-pub const LIST_AGENTS: &str = "list_agents";
 
 /// The tools a session may call before it has an agent.
 pub fn is_identity_tool(name: &str) -> bool {
-    matches!(name, REGISTER_AGENT | REGISTER_WORKER | LIST_AGENTS)
+    matches!(name, REGISTER_AGENT | REGISTER_WORKER | agents::LIST_AGENTS)
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -43,14 +42,6 @@ pub struct RegisterWorkerInput {
     pub as_worker: Option<String>,
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-pub struct ListAgentsInput {
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
-}
-
 pub fn tools() -> Vec<Tool> {
     vec![
         Tool::new(
@@ -62,11 +53,6 @@ pub fn tools() -> Vec<Tool> {
             REGISTER_WORKER,
             "Register a child worker of your agent, for a subagent that works under your name.",
             schema_for_type::<RegisterWorkerInput>(),
-        ),
-        Tool::new(
-            LIST_AGENTS,
-            "List every agent of the project with its tags and workers.",
-            schema_for_type::<ListAgentsInput>(),
         ),
     ]
 }
@@ -132,20 +118,4 @@ pub async fn register_worker(
         "worker": worker.as_str(),
         "parent": worker.parent().as_ref().map(WorkerName::as_str),
     }))
-}
-
-pub async fn list_agents(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
-    let _: ListAgentsInput = parse(arguments)?;
-    let agents = server.agents.list_agents().await.map_err(from_agent)?;
-    let agents: Vec<Value> = agents
-        .iter()
-        .map(|summary| {
-            json!({
-                "agent": summary.agent.as_str(),
-                "tags": summary.tags.iter().map(Tag::as_str).collect::<Vec<_>>(),
-                "workers": summary.workers.iter().map(WorkerName::as_str).collect::<Vec<_>>(),
-            })
-        })
-        .collect();
-    Ok(json!({ "agents": agents }))
 }

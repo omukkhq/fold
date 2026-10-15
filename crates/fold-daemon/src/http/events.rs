@@ -1,13 +1,15 @@
 use std::borrow::Cow;
 
 use fold_core::events::{Event, EventType};
-use fold_core::{CheckpointId, ProposalId, RevisionId, TaskId, Timestamp, WorkspaceId};
+use fold_core::{CheckpointId, Presence, ProposalId, RevisionId, TaskId, Timestamp, WorkspaceId};
 use serde::{Deserialize, Serialize};
 use utoipa::openapi::schema::{ObjectBuilder, SchemaType, Type};
 use utoipa::openapi::{RefOr, Schema};
 use utoipa::{PartialSchema, ToSchema};
 
-/// One frame of a project's event stream, told apart by `kind`: a stored event, a live workspace change, or the snapshot sent after a replay.
+use super::agents::PresenceState;
+
+/// One frame of a project's event stream, told apart by `kind`: a stored event, a live workspace change, a live presence change, or the snapshot sent after a replay.
 // The `event` variant serialises as the stored `Event` plus `kind`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -15,6 +17,7 @@ pub enum EventEnvelope {
     #[schema(value_type = DurableEvent)]
     Event(Event),
     WorkspaceChanged(LiveWorkspace),
+    AgentPresenceChanged(PresenceChange),
     Snapshot(Snapshot),
 }
 
@@ -44,7 +47,7 @@ pub struct DurableEvent {
     pub created_at: Timestamp,
 }
 
-/// Every stored event type. `workspace.changed` is live and arrives only as the `workspace_changed` variant.
+/// Every stored event type. The live types arrive only as their own variants: `workspace.changed` as `workspace_changed` and `agent.presence_changed` as `agent_presence_changed`.
 pub struct DurableEventType;
 
 impl DurableEventType {
@@ -69,6 +72,15 @@ impl ToSchema for DurableEventType {
     fn name() -> Cow<'static, str> {
         Cow::Borrowed("DurableEventType")
     }
+}
+
+/// An agent's presence after it crossed a boundary: `active` after a call of an agent that was not active, and the new presence once an active agent's window passes or its last session ends. It is the `data` of the live `agent.presence_changed` event.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct PresenceChange {
+    #[schema(example = "frontend")]
+    pub agent: String,
+    #[schema(value_type = PresenceState)]
+    pub presence: Presence,
 }
 
 /// The newest durable sequence number and every live workspace, sent after a replay so a client starts from current state.

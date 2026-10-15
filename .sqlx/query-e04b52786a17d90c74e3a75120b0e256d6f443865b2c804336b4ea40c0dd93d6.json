@@ -1,0 +1,33 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT agent_id AS \"agent_id!: i64\", MAX(last_call_at) AS \"newest: i64\"\n           FROM sessions WHERE agent_id IS NOT NULL\n           GROUP BY agent_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "agent_id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "agent_id"
+          }
+        }
+      },
+      {
+        "name": "newest: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "e04b52786a17d90c74e3a75120b0e256d6f443865b2c804336b4ea40c0dd93d6"
+}
