@@ -8,14 +8,15 @@ use crate::error::StoreError;
 
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// Every object hash a row refers to: each revision's own hash and tree, and the trees of every changeset, every proposal version and every unpruned checkpoint. The bases of workspaces are revisions, so they are covered. One statement reads all of them, so the list is one consistent snapshot.
+/// Every object hash a row refers to: each revision's own hash and tree, the trees of every changeset, every proposal version and every unpruned checkpoint, and the blob of every request attachment. The bases of workspaces are revisions, so they are covered. One statement reads all of them, so the list is one consistent snapshot.
 pub async fn gc_roots<'e>(db: impl SqliteExecutor<'e>) -> Result<Vec<ObjectHash>, StoreError> {
     let rows = sqlx::query_scalar!(
         r#"SELECT hash AS "hash!: String" FROM revisions
            UNION SELECT tree_hash FROM revisions
            UNION SELECT tree_hash FROM changesets
            UNION SELECT tree_hash FROM proposal_versions
-           UNION SELECT tree_hash FROM checkpoints WHERE pruned_at IS NULL"#
+           UNION SELECT tree_hash FROM checkpoints WHERE pruned_at IS NULL
+           UNION SELECT object FROM request_attachments"#
     )
     .fetch_all(db)
     .await?;

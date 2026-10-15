@@ -111,3 +111,9 @@ daemon_unreachable
 integration_conflicted
 seed_exists
 project_incomplete
+request_not_found
+request_not_open
+requester_required
+drafter_required
+orchestrator_required
+invalid_draft

@@ -126,6 +126,12 @@ define_codes! {
     INTEGRATION_CONFLICTED = "integration_conflicted",
     SEED_EXISTS = "seed_exists",
     PROJECT_INCOMPLETE = "project_incomplete",
+    REQUEST_NOT_FOUND = "request_not_found",
+    REQUEST_NOT_OPEN = "request_not_open",
+    REQUESTER_REQUIRED = "requester_required",
+    DRAFTER_REQUIRED = "drafter_required",
+    ORCHESTRATOR_REQUIRED = "orchestrator_required",
+    INVALID_DRAFT = "invalid_draft",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

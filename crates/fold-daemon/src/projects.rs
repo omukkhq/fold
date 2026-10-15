@@ -88,6 +88,7 @@ impl ProjectHandle {
             Arc::clone(&capabilities),
         );
         let workspace_locks = Arc::new(WorkspaceLocks::default());
+        let objects = Arc::new(tokio::sync::RwLock::new(()));
         let tasks = TaskService::new(
             store.clone(),
             bus.clone(),
@@ -96,7 +97,8 @@ impl ProjectHandle {
         )
         .with_project_config(paths.clone())
         .with_live(live.clone())
-        .with_workspace_locks(workspace_locks.clone());
+        .with_workspace_locks(workspace_locks.clone())
+        .with_objects(&paths, objects.clone());
         let push = PushTargets::new();
         let push_task = push::run(store.clone(), &bus, push.clone());
         let main_view = jobs::spawn_main_materialiser(
@@ -129,7 +131,7 @@ impl ProjectHandle {
             tasks,
             integration: Arc::new(tokio::sync::Mutex::new(())),
             gc: tokio::sync::Mutex::new(()),
-            objects: Arc::new(tokio::sync::RwLock::new(())),
+            objects,
             remote_lock,
             workspace_locks,
             capabilities,

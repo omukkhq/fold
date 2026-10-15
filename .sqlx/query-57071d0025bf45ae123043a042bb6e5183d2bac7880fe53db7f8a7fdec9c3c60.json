@@ -1,0 +1,28 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS (SELECT 1 FROM sessions WHERE agent_id = ?1 AND ended_at IS NULL) AS \"open!: bool\",\n                  (SELECT MAX(ended_at) FROM sessions WHERE agent_id = ?1) AS \"last_end?: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "open!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "last_end?: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "57071d0025bf45ae123043a042bb6e5183d2bac7880fe53db7f8a7fdec9c3c60"
+}

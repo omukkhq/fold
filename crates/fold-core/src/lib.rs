@@ -18,6 +18,7 @@ pub mod presence;
 pub mod projects;
 pub mod push;
 pub mod readiness;
+pub mod requests;
 pub mod reviews;
 pub mod revision;
 pub mod stall;
@@ -37,7 +38,7 @@ pub use events::{
 };
 pub use ids::{
     ChangesetId, ChecklistItemId, CheckpointId, CommentId, IdKind, IdParseError, IntegrationId,
-    MessageId, ProposalId, RevisionId, TaskId, WebTokenId, WorkspaceId,
+    MessageId, ProposalId, RequestId, RevisionId, TaskId, WebTokenId, WorkspaceId,
 };
 pub use layout::{HostPaths, ProjectPaths, review_checkout_path, task_workspace_path};
 pub use messages::{

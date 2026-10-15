@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE requests SET state = 'closed', close_reason = ?2, updated_at = ?3 WHERE number = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "51cee88094299c53fcc232fb9005db9ae90c5b81e0205c4ee35bee86dd049e7a"
+}

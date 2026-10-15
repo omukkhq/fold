@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT d.id AS \"id!: i64\", d.version, d.author, d.note, d.created_at\n           FROM request_drafts d JOIN requests r ON r.id = d.request_id\n           WHERE r.number = ? ORDER BY d.version",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "request_drafts",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "version",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "request_drafts",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "name": "author",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "request_drafts",
+            "name": "author"
+          }
+        }
+      },
+      {
+        "name": "note",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "request_drafts",
+            "name": "note"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "request_drafts",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "9c769a1ece352232a52bfda5423aae264c2c7762b16a69a0505edd537ebe630a"
+}

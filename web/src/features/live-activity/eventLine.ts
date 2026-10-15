@@ -74,6 +74,23 @@ function workspaceOf(event: DurableEvent): string {
   return event.workspace ?? "a workspace";
 }
 
+function requestOf(event: DurableEvent): string {
+  const request = text(event.data.request) ?? "a request";
+  const version = count(event.data.version);
+  return version === null ? request : `${request} v${String(version)}`;
+}
+
+function approvedText(event: DurableEvent): string {
+  const list: unknown[] = Array.isArray(event.data.tasks)
+    ? event.data.tasks
+    : [];
+  const tasks = list.flatMap((task) => text(task) ?? []);
+  const request = text(event.data.request) ?? "a request";
+  return tasks.length === 0
+    ? `approved ${request}`
+    : `approved ${request} as ${tasks.join(", ")}`;
+}
+
 function fixed(line: string): (event: DurableEvent) => string {
   return () => line;
 }
@@ -386,6 +403,34 @@ const SPECS: Record<EventType, Spec> = {
       }
       return `acknowledged ${ids[0] ?? "a message"}`;
     },
+  },
+  "request.created": {
+    icon: MessageSquare,
+    text: (e) => `created ${requestOf(e)}`,
+  },
+  "request.claimed": {
+    icon: Hand,
+    text: (e) =>
+      e.data.taken_over === true
+        ? `took over ${requestOf(e)}`
+        : `claimed ${requestOf(e)}`,
+  },
+  "request.released": {
+    icon: Undo2,
+    text: (e) => `released ${requestOf(e)}`,
+  },
+  "request.draft_submitted": {
+    icon: FilePen,
+    text: (e) => `drafted ${requestOf(e)}`,
+  },
+  "request.changes_requested": {
+    icon: X,
+    text: (e) => `requested changes on ${requestOf(e)}`,
+  },
+  "request.approved": { icon: Check, text: approvedText, emphasis: true },
+  "request.closed": {
+    icon: X,
+    text: (e) => `closed ${requestOf(e)}`,
   },
 };
 

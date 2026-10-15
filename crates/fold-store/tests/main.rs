@@ -22,6 +22,7 @@ mod messages_schema;
 mod proposals_schema;
 mod registry;
 mod removal;
+mod requests_schema;
 mod reviews_schema;
 mod revision_reads;
 mod revisions;

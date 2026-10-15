@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO request_attachments (request_id, position, name, media_type, size, object, created_at)\n         SELECT id, ?2, ?3, ?4, ?5, ?6, ?7 FROM requests WHERE number = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "22bb0f6ea97d4032836c4795362bbd213dc76174d2d27746267ac24d43ab4ae4"
+}

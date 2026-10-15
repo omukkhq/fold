@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO request_comments (request_id, version, author, body, created_at)\n         SELECT id, ?2, ?3, ?4, ?5 FROM requests WHERE number = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "95b02a340618eaad242477e0938779e9e63f4e4b203b429786179f8a66c8b9d0"
+}

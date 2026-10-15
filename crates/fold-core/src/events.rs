@@ -99,6 +99,13 @@ define_event_types! {
     REMOTE_PULL_CONFLICTED = "remote.pull_conflicted",
     MESSAGE_SENT = "message.sent",
     MESSAGE_ACKNOWLEDGED = "message.acknowledged",
+    REQUEST_CREATED = "request.created",
+    REQUEST_CLAIMED = "request.claimed",
+    REQUEST_RELEASED = "request.released",
+    REQUEST_DRAFT_SUBMITTED = "request.draft_submitted",
+    REQUEST_CHANGES_REQUESTED = "request.changes_requested",
+    REQUEST_APPROVED = "request.approved",
+    REQUEST_CLOSED = "request.closed",
     AGENT_PRESENCE_CHANGED = "agent.presence_changed",
 }
 

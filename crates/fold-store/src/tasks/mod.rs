@@ -16,6 +16,7 @@ mod human_review;
 mod ready;
 mod recompute;
 mod removal;
+pub mod requests;
 mod views;
 
 pub use dependencies::{

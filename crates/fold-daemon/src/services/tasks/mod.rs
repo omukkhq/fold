@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use fold_core::events::types;
@@ -25,6 +26,7 @@ mod leases;
 mod ready;
 mod recompute;
 mod removal;
+mod requests;
 mod views;
 
 pub use attention::{AttentionItem, AttentionKind, attention, stalled_tasks};
@@ -39,6 +41,10 @@ pub use fold_core::reviews::HumanReviewMark;
 pub use leases::sweep_leases;
 pub use ready::ReadyTask;
 pub use recompute::{Recomputed, recompute};
+pub use requests::{
+    ApprovedRequest, NewRequestAttachment, RequestAttachment, RequestComment, RequestDetail,
+    RequestDraft, RequestFilter, RequestView, SubmitDraft,
+};
 /// Whether `actor` may turn the human review mark on, change it or clear it: the rule that governs the human-review routes, read for a task view.
 pub fn can_change_human_review(actor: &Actor) -> bool {
     fold_core::policy::can_clear_human_review(actor).is_ok()
@@ -139,6 +145,14 @@ pub struct TaskService {
     live: Option<LiveState>,
     /// The project's workspace locks (`ProjectHandle::workspace_locks`): a claim that adopts a workspace, and an archive that closes one, wait for a sync, restore or record there to finish.
     ops: Arc<WorkspaceLocks>,
+    /// Where request attachments are stored, with the project's object lock (`ProjectHandle::objects`). Without it a request with attachments is refused.
+    objects: Option<ObjectAccess>,
+}
+
+#[derive(Clone)]
+struct ObjectAccess {
+    fold_dir: PathBuf,
+    lock: Arc<tokio::sync::RwLock<()>>,
 }
 
 impl TaskService {
@@ -151,7 +165,22 @@ impl TaskService {
             lease: Lease::Minutes(lease_minutes),
             live: None,
             ops: Arc::new(WorkspaceLocks::default()),
+            objects: None,
         }
+    }
+
+    /// Stores request attachments in the project's object store under the project's object lock, which garbage collection takes for its sweep.
+    #[must_use]
+    pub fn with_objects(
+        mut self,
+        paths: &ProjectPaths,
+        lock: Arc<tokio::sync::RwLock<()>>,
+    ) -> Self {
+        self.objects = Some(ObjectAccess {
+            fold_dir: paths.fold_dir(),
+            lock,
+        });
+        self
     }
 
     /// Reads the lease from the project's `.fold/config.toml` on every claim command and every read of a claim; an invalid file fails those calls with its configuration error and leaves every other task call working.

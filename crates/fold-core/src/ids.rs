@@ -47,10 +47,11 @@ pub enum IdKind {
     Comment,
     Integration,
     ChecklistItem,
+    Request,
 }
 
 impl IdKind {
-    pub const ALL: [IdKind; 10] = [
+    pub const ALL: [IdKind; 11] = [
         IdKind::Task,
         IdKind::Proposal,
         IdKind::Changeset,
@@ -61,6 +62,7 @@ impl IdKind {
         IdKind::Comment,
         IdKind::Integration,
         IdKind::ChecklistItem,
+        IdKind::Request,
     ];
 
     pub const fn prefix(self) -> &'static str {
@@ -75,6 +77,7 @@ impl IdKind {
             IdKind::Comment => "rc-",
             IdKind::Integration => "i-",
             IdKind::ChecklistItem => "ci-",
+            IdKind::Request => "RQ-",
         }
     }
 
@@ -90,6 +93,7 @@ impl IdKind {
             IdKind::Comment => "comment",
             IdKind::Integration => "integration",
             IdKind::ChecklistItem => "checklist_item",
+            IdKind::Request => "request",
         }
     }
 }
@@ -204,6 +208,11 @@ define_id!(
     IdKind::ChecklistItem
 );
 define_id!(
+    /// The public id of a request; the `request` counter numbers them.
+    RequestId,
+    IdKind::Request
+);
+define_id!(
     @prefixed
     /// The public id of a web sign-in token: `web_tokens.number`, unique across the host registry rather than one project. A revoked token keeps its row and its number, so a number is never handed out twice.
     WebTokenId,
@@ -241,6 +250,7 @@ mod tests {
             round_trip!(CommentId, n);
             round_trip!(IntegrationId, n);
             round_trip!(ChecklistItemId, n);
+            round_trip!(RequestId, n);
         }
     }
 
@@ -301,6 +311,11 @@ mod tests {
             "c-3".parse::<ChecklistItemId>(),
             Err(IdParseError::WrongPrefix)
         );
+        let request = RequestId::from_number(4).unwrap();
+        assert_eq!(serde_json::to_string(&request).unwrap(), "\"RQ-4\"");
+        assert_eq!("rq-4".parse::<RequestId>(), Err(IdParseError::WrongPrefix));
+        assert_eq!("RQ-4".parse::<RevisionId>(), Err(IdParseError::WrongPrefix));
+        assert_eq!(IdKind::Request.counter_key(), "request");
     }
 
     #[test]
@@ -311,8 +326,8 @@ mod tests {
         prefixes.dedup();
         keys.sort_unstable();
         keys.dedup();
-        assert_eq!(prefixes.len(), 10);
-        assert_eq!(keys.len(), 10);
+        assert_eq!(prefixes.len(), 11);
+        assert_eq!(keys.len(), 11);
     }
 
     #[test]

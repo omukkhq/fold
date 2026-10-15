@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT t.number AS \"number!: i64\" FROM tasks t JOIN requests r ON r.id = t.request_id\n           WHERE r.number = ? ORDER BY t.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "85e0aba658cce963dbc313a37735f9830270baec58ed3208e3d461da2c0856de"
+}

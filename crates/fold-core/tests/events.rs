@@ -70,6 +70,13 @@ fn all_equals_the_plans_event_types() {
     expected.extend([
         "message.sent",
         "message.acknowledged",
+        "request.created",
+        "request.claimed",
+        "request.released",
+        "request.draft_submitted",
+        "request.changes_requested",
+        "request.approved",
+        "request.closed",
         "agent.presence_changed",
     ]);
     assert_eq!(declared, expected);

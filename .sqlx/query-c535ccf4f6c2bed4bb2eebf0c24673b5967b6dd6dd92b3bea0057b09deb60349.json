@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO request_drafts (request_id, version, author, note, created_at)\n           SELECT id, ?2, ?3, ?4, ?5 FROM requests WHERE number = ?1\n           RETURNING id AS \"id!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "request_drafts",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "c535ccf4f6c2bed4bb2eebf0c24673b5967b6dd6dd92b3bea0057b09deb60349"
+}

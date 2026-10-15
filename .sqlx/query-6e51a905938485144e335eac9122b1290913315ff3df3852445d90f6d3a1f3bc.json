@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT key, title, description FROM request_draft_cards WHERE draft_id = ? ORDER BY position",
+  "describe": {
+    "columns": [
+      {
+        "name": "key",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "request_draft_cards",
+            "name": "key"
+          }
+        }
+      },
+      {
+        "name": "title",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "request_draft_cards",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "name": "description",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "request_draft_cards",
+            "name": "description"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "6e51a905938485144e335eac9122b1290913315ff3df3852445d90f6d3a1f3bc"
+}

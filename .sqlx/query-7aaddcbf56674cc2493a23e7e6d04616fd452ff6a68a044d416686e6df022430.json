@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE requests SET drafter_worker_id = NULL, drafter_since = NULL, state = ?2, updated_at = ?3\n         WHERE number = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "7aaddcbf56674cc2493a23e7e6d04616fd452ff6a68a044d416686e6df022430"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO request_draft_edges (draft_id, prerequisite_key, dependent_key)\n             VALUES (?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "20dd01b97421c27cce40e9906030eada9a0f0f4f114fb7309cb1617285f7fea4"
+}

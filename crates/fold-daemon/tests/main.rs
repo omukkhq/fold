@@ -85,6 +85,7 @@ mod recompute_guard;
 mod reconcile;
 #[cfg(feature = "failpoints")]
 mod reconcile_failpoints;
+mod requests;
 mod restart_sessions;
 mod review_checkouts;
 mod review_claims;

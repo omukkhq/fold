@@ -181,6 +181,24 @@ describe("eventLine", () => {
       "acknowledged 2 messages",
     );
     expect(line("message.acknowledged")).toBe("acknowledged a message");
+    expect(line("request.created", { request: "RQ-4" })).toBe("created RQ-4");
+    expect(line("request.created")).toBe("created a request");
+    expect(line("request.claimed", { request: "RQ-4" })).toBe("claimed RQ-4");
+    expect(line("request.claimed", { request: "RQ-4", taken_over: true })).toBe(
+      "took over RQ-4",
+    );
+    expect(line("request.released", { request: "RQ-4" })).toBe("released RQ-4");
+    expect(
+      line("request.draft_submitted", { request: "RQ-4", version: 2 }),
+    ).toBe("drafted RQ-4 v2");
+    expect(
+      line("request.changes_requested", { request: "RQ-4", version: 1 }),
+    ).toBe("requested changes on RQ-4 v1");
+    expect(
+      line("request.approved", { request: "RQ-4", tasks: ["T-12", "T-13", 5] }),
+    ).toBe("approved RQ-4 as T-12, T-13");
+    expect(line("request.approved")).toBe("approved a request");
+    expect(line("request.closed", { request: "RQ-4" })).toBe("closed RQ-4");
     expect(line("proposal.opened", { version: 1 })).toBe(
       "opened P-4 v1 for T-12",
     );
@@ -215,7 +233,7 @@ describe("eventLine", () => {
     expect(eventLine(event("main.advanced")).text).toBe("main advanced to r17");
   });
 
-  it("marks integrations and main moves as emphasised, approvals by their verdict", () => {
+  it("marks integrations, main moves and request approvals as emphasised, review approvals by their verdict", () => {
     const emphasised = EVENT_TYPES.filter(
       (type) => eventLine(event(type)).emphasis,
     );
@@ -223,6 +241,7 @@ describe("eventLine", () => {
       "proposal.integrated",
       "integration.succeeded",
       "main.advanced",
+      "request.approved",
     ]);
   });
 });

@@ -1,0 +1,86 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT a.position, a.name, a.media_type, a.size, a.object, a.created_at\n         FROM request_attachments a JOIN requests r ON r.id = a.request_id\n         WHERE r.number = ? ORDER BY a.position",
+  "describe": {
+    "columns": [
+      {
+        "name": "position",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "request_attachments",
+            "name": "position"
+          }
+        }
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "request_attachments",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "media_type",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "request_attachments",
+            "name": "media_type"
+          }
+        }
+      },
+      {
+        "name": "size",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "request_attachments",
+            "name": "size"
+          }
+        }
+      },
+      {
+        "name": "object",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "request_attachments",
+            "name": "object"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "request_attachments",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "1d6b7d438d5007528fa495b4728b96deda7e7fca7d260b40db0ebf4f31d3eb99"
+}
