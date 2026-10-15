@@ -152,7 +152,7 @@ pub async fn serve(State(state): State<AppState>, request: Request) -> Response 
     let Lookup::Found(asset) = found else {
         return ApiError(
             FoldError::new(codes::WEB_NOT_BUILT, "the web application is not built")
-                .with_hint("run `make web-build`, or pass `--web-dir <path>` to `fold serve`"),
+                .with_hint("run `make web-build`, or pass `--web-dir <path>` to `fld serve`"),
         )
         .into_response();
     };

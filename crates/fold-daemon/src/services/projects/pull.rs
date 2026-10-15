@@ -66,7 +66,7 @@ struct SyncBase {
     fast_forward: Option<RevisionId>,
 }
 
-/// Brings the branch of the remote `remote`, or of the only remote without a name, into fold main, for the named human who runs `fold pull`. The branch is fetched into the mirror `.fold/git` under the project's remote lock and Git sync lock, which are held to the end, so a push or the commit of an integration never runs at the same time. Main's missing commits are written first, so the mirror holds main's whole history; the sync base is the best common ancestor of the remote tip and main's newest commit, and without one it is `r1`'s tree.
+/// Brings the branch of the remote `remote`, or of the only remote without a name, into fold main, for the named human who runs `fld pull`. The branch is fetched into the mirror `.fold/git` under the project's remote lock and Git sync lock, which are held to the end, so a push or the commit of an integration never runs at the same time. Main's missing commits are written first, so the mirror holds main's whole history; the sync base is the best common ancestor of the remote tip and main's newest commit, and without one it is `r1`'s tree.
 ///
 /// A tip that is main's newest commit or one of its ancestors, or a remote with no such branch, is up to date. A tip that an open sync task already resolves names that task and creates nothing. Otherwise the remote tree is merged onto main against the sync base under the integration mutex: a clean merge goes through the pull entry of the integration procedure, so it is an integration of kind `pull` whose compare-and-swap protects main, and a conflict creates the sync task and its workspace while the mutex is still held. When the remote only added to main's newest commit, the new revision is the remote commit and the map gains `r<n> <tip>` after the commit, so no commit is written for it. The pull runs as its own task, so a caller that stops waiting never leaves an integration without its map line.
 pub async fn pull(
@@ -80,7 +80,7 @@ pub async fn pull(
             codes::HUMAN_REQUIRED,
             "only a human brings the remote branch into main",
         )
-        .with_hint("ask a human to run fold pull")
+        .with_hint("ask a human to run fld pull")
         .into());
     }
     let (handle, actor, git) = (Arc::clone(handle), actor.clone(), git.clone());
@@ -276,7 +276,7 @@ async fn run(
         codes::HEAD_MOVED,
         format!("main moved during each of {ATTEMPTS} pull attempts"),
     )
-    .with_hint("run fold pull again")
+    .with_hint("run fld pull again")
     .into())
 }
 

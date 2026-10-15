@@ -93,7 +93,7 @@ fn id(n: u32) -> RevisionId {
     RevisionId::from_number(n).unwrap()
 }
 
-/// `r1` from `fold init`, `r2` integrating proposal `P-5` of `T-3` by `backend`, and `r3` pulled from remote commit `abc123` by `human`, each with real objects. The rows of [`ROWS`] exist too.
+/// `r1` from `fld init`, `r2` integrating proposal `P-5` of `T-3` by `backend`, and `r3` pulled from remote commit `abc123` by `human`, each with real objects. The rows of [`ROWS`] exist too.
 pub async fn three_revisions(project: &TestProject) {
     let objects = objects(project);
     let r1 =

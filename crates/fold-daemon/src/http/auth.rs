@@ -51,7 +51,7 @@ pub async fn require_session(
                 codes::AUTH_REQUIRED,
                 "this route needs the cookie of a live session",
             )
-            .with_hint("sign in with a token from `fold token create`"),
+            .with_hint("sign in with a token from `fld token create`"),
         )
         .into_response(),
         Err(error) => ApiError::from(error).into_response(),
@@ -74,7 +74,7 @@ async fn signed_in(state: &AppState, headers: &HeaderMap) -> Result<Option<Human
 fn invalid_token() -> ApiError {
     ApiError(
         FoldError::new(codes::INVALID_TOKEN, "the token is not valid")
-            .with_hint("create a new token with `fold token create`"),
+            .with_hint("create a new token with `fld token create`"),
     )
 }
 
@@ -88,7 +88,7 @@ pub struct SessionStatus {
     pub authenticated: bool,
 }
 
-/// Off loopback, a web token from `fold token create`.
+/// Off loopback, a web token from `fld token create`.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TokenSignIn {
@@ -222,7 +222,7 @@ pub async fn create_session(
                 "this daemon listens off loopback and takes a token, not a name",
             )
             .with_hint(
-                "create a token with `fold token create <human>` and post { \"token\": \"...\" }",
+                "create a token with `fld token create <human>` and post { \"token\": \"...\" }",
             ),
         )),
     }

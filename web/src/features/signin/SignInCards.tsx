@@ -126,7 +126,7 @@ export function TokenCard({ pending, error, onSubmit }: CardProps) {
         </Button>
       </form>
       <Mono className="text-meta text-text-muted">
-        fold token create &lt;name&gt;
+        fld token create &lt;name&gt;
       </Mono>
     </Card>
   );

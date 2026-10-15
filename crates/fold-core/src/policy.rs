@@ -60,7 +60,7 @@ pub fn can_push(actor: &Actor) -> Result<(), PolicyDenied> {
         Actor::Agent(_) => Err(PolicyDenied {
             code: codes::HUMAN_REQUIRED,
             message: "only a human can push main to the Git remote",
-            hint: "ask a human to run fold push",
+            hint: "ask a human to run fld push",
         }),
     }
 }
@@ -77,7 +77,7 @@ pub fn can_set_tag(actor: &Actor, tag: &Tag, add: bool) -> Result<(), PolicyDeni
         } else {
             "only a human can remove the integrator tag"
         },
-        hint: "ask a human to run fold agent tag <agent> integrator",
+        hint: "ask a human to run fld agent tag <agent> integrator",
     })
 }
 

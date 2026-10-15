@@ -156,7 +156,7 @@ impl Probe {
         ] {
             std::fs::create_dir_all(path).expect("probe directory");
         }
-        let stub = dir.join("bin/fold");
+        let stub = dir.join("bin/fld");
         std::fs::write(&stub, MCP_STUB).expect("write the MCP stub");
         executable(&stub);
         let mcp_config = dir.join("mcp.json");
@@ -1010,7 +1010,7 @@ fn executable(path: &Path) {
         .expect("make the file executable");
 }
 
-/// A project with a note to read, `ask` rules that force a permission request, a `deny` rule, and SessionStart and Stop hooks that answer the way `fold hook` does: the Stop hook blocks once and lets every stop with `stop_hook_active` pass.
+/// A project with a note to read, `ask` rules that force a permission request, a `deny` rule, and SessionStart and Stop hooks that answer the way `fld hook` does: the Stop hook blocks once and lets every stop with `stop_hook_active` pass.
 #[cfg(test)]
 fn write_project(root: &Path, dir: &Path) {
     std::fs::write(

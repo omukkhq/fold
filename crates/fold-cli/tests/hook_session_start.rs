@@ -66,7 +66,7 @@ async fn start(host: &Host) -> (RunningDaemon, PathBuf, Arc<ProjectHandle>) {
     (daemon, socket, handle)
 }
 
-/// `fold hook session-start` with `stdin`, run in `cwd`, with none of the session variables but those in `env`.
+/// `fld hook session-start` with `stdin`, run in `cwd`, with none of the session variables but those in `env`.
 #[cfg(test)]
 async fn hook(host: &Host, socket: &Path, cwd: &Path, env: &[(&str, &str)], stdin: &str) -> Output {
     let socket = socket.to_str().unwrap();
@@ -187,7 +187,7 @@ async fn failures_exit_0_with_one_line_naming_the_code() {
         assert!(output.stdout.is_empty(), "{stdin}");
         assert_eq!(
             text(&output.stderr),
-            format!("fold hook session-start: {code}\n"),
+            format!("fld hook session-start: {code}\n"),
             "{stdin}"
         );
     }
@@ -203,7 +203,7 @@ async fn failures_exit_0_with_one_line_naming_the_code() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(
         text(&output.stderr),
-        "fold hook session-start: invalid_name\n"
+        "fld hook session-start: invalid_name\n"
     );
     daemon.shutdown().await;
 }
@@ -238,7 +238,7 @@ async fn an_unreachable_daemon_exits_0_with_one_line() {
     assert!(output.stdout.is_empty());
     assert_eq!(
         text(&output.stderr),
-        "fold hook session-start: runtime_dir_missing\n"
+        "fld hook session-start: runtime_dir_missing\n"
     );
     assert!(!absent.exists());
 
@@ -250,6 +250,6 @@ async fn an_unreachable_daemon_exits_0_with_one_line() {
     assert!(output.stdout.is_empty());
     assert_eq!(
         text(&output.stderr),
-        "fold hook session-start: daemon_unreachable\n"
+        "fld hook session-start: daemon_unreachable\n"
     );
 }

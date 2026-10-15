@@ -194,7 +194,7 @@ pub fn parse_hello(line: &[u8]) -> Result<Hello, FoldError> {
                 codes::PROTOCOL_VERSION_UNSUPPORTED,
                 format!("this daemon speaks handshake version {PROTOCOL_VERSION}"),
             )
-            .with_hint("run the fold binary of the running daemon, or restart the daemon"));
+            .with_hint("run the fld binary of the running daemon, or restart the daemon"));
         }
         None => return Err(invalid("the handshake line has no protocol version")),
     }

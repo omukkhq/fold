@@ -173,7 +173,7 @@ fn only_a_human_or_the_daemon_pushes() {
     assert!(can_push(&Actor::System).is_ok());
     let denied = can_push(&agent("frontend/ui", &["integrator"])).unwrap_err();
     assert_eq!(denied.code(), codes::HUMAN_REQUIRED);
-    assert!(denied.hint().contains("fold push"));
+    assert!(denied.hint().contains("fld push"));
 }
 
 #[test]

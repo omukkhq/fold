@@ -7,7 +7,7 @@ use super::fixture::{Sizes, append_line, path_of, prepend_line};
 use super::session::Session;
 use super::{BenchResult, fail};
 
-/// The three `fold mcp` sessions of the integration target. `review` carries the integrator tag.
+/// The three `fld mcp` sessions of the integration target. `review` carries the integrator tag.
 pub struct Agents<'a> {
     pub frontend: &'a Session,
     pub backend: &'a Session,

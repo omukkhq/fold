@@ -60,7 +60,7 @@ impl ServiceError {
 fn no_service_manager() -> ServiceError {
     ServiceError::Refused(
         FoldError::new(codes::INVALID_REQUEST, "no service manager support")
-            .with_hint("run `fold serve` under the host's own supervisor")
+            .with_hint("run `fld serve` under the host's own supervisor")
             .with_details([("reason", serde_json::json!("no_service_manager"))]),
     )
 }
@@ -185,32 +185,32 @@ mod tests {
         args: SetupArgs,
     }
 
-    const GOLDEN: &str = "[Unit]\nDescription=fold daemon\nAfter=default.target\n\n[Service]\nType=simple\nExecStart=/usr/bin/fold serve\nRestart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n";
+    const GOLDEN: &str = "[Unit]\nDescription=fold daemon\nAfter=default.target\n\n[Service]\nType=simple\nExecStart=/usr/bin/fld serve\nRestart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n";
 
     #[test]
     fn the_unit_matches_the_golden_text() {
-        assert_eq!(render_unit(Path::new("/usr/bin/fold")), GOLDEN);
+        assert_eq!(render_unit(Path::new("/usr/bin/fld")), GOLDEN);
     }
 
     #[test]
     fn a_path_with_spaces_is_quoted_and_percent_signs_are_doubled() {
-        let unit = render_unit(Path::new("/opt/my apps/fold"));
-        assert!(unit.contains("ExecStart=\"/opt/my apps/fold\" serve\n"));
-        let unit = render_unit(Path::new("/opt/100%/fold"));
-        assert!(unit.contains("ExecStart=/opt/100%%/fold serve\n"));
-        let unit = render_unit(Path::new("/opt/$HOME/fold"));
-        assert!(unit.contains("ExecStart=/opt/$$HOME/fold serve\n"));
+        let unit = render_unit(Path::new("/opt/my apps/fld"));
+        assert!(unit.contains("ExecStart=\"/opt/my apps/fld\" serve\n"));
+        let unit = render_unit(Path::new("/opt/100%/fld"));
+        assert!(unit.contains("ExecStart=/opt/100%%/fld serve\n"));
+        let unit = render_unit(Path::new("/opt/$HOME/fld"));
+        assert!(unit.contains("ExecStart=/opt/$$HOME/fld serve\n"));
         let unit = render_unit(Path::new("/opt/a b/50%/fo\"ld"));
         assert!(unit.contains("ExecStart=\"/opt/a b/50%%/fo\\\"ld\" serve\n"));
     }
 
     #[test]
     fn setup_parses_its_flag() {
-        let bare = Wrapper::try_parse_from(["fold"]).unwrap();
+        let bare = Wrapper::try_parse_from(["fld"]).unwrap();
         assert!(!bare.args.no_start);
-        let flagged = Wrapper::try_parse_from(["fold", "--no-start"]).unwrap();
+        let flagged = Wrapper::try_parse_from(["fld", "--no-start"]).unwrap();
         assert!(flagged.args.no_start);
-        assert!(Wrapper::try_parse_from(["fold", "install"]).is_err());
+        assert!(Wrapper::try_parse_from(["fld", "install"]).is_err());
     }
 
     fn host(config_home: &Path, linux: bool) -> Host {
@@ -234,7 +234,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let host = host(dir.path(), true);
         let mut out = Vec::new();
-        install(&host, Path::new("/usr/bin/fold"), true, &mut out).unwrap();
+        install(&host, Path::new("/usr/bin/fld"), true, &mut out).unwrap();
         let unit = dir.path().join("systemd/user/fold.service");
         assert_eq!(std::fs::read_to_string(&unit).unwrap(), GOLDEN);
         let text = String::from_utf8(out).unwrap();
@@ -242,7 +242,7 @@ mod tests {
         assert!(text.contains("loginctl enable-linger ana"));
 
         let before = std::fs::read(&unit).unwrap();
-        install(&host, Path::new("/usr/bin/fold"), true, &mut Vec::new()).unwrap();
+        install(&host, Path::new("/usr/bin/fld"), true, &mut Vec::new()).unwrap();
         assert_eq!(std::fs::read(&unit).unwrap(), before);
         let names: Vec<_> = std::fs::read_dir(unit.parent().unwrap()).unwrap().collect();
         assert_eq!(names.len(), 1);
@@ -256,7 +256,7 @@ mod tests {
         std::fs::create_dir_all(&linger).unwrap();
         std::fs::write(linger.join("ana"), "").unwrap();
         let mut out = Vec::new();
-        install(&host, Path::new("/usr/bin/fold"), true, &mut out).unwrap();
+        install(&host, Path::new("/usr/bin/fld"), true, &mut out).unwrap();
         assert!(!String::from_utf8(out).unwrap().contains("linger"));
     }
 
@@ -266,7 +266,7 @@ mod tests {
         for (linux, no_start) in [(true, false), (false, false), (false, true)] {
             let error = install(
                 &host(dir.path(), linux),
-                Path::new("/usr/bin/fold"),
+                Path::new("/usr/bin/fld"),
                 no_start,
                 &mut Vec::new(),
             )
@@ -275,7 +275,7 @@ mod tests {
             assert_eq!(error.to_string(), "no service manager support");
             assert_eq!(
                 error.hint(),
-                Some("run `fold serve` under the host's own supervisor")
+                Some("run `fld serve` under the host's own supervisor")
             );
             let ServiceError::Refused(inner) = &error else {
                 panic!("expected a refusal, got {error:?}");
@@ -306,7 +306,7 @@ mod tests {
         let mut host = host(dir.path(), true);
         host.path = Some(std::env::join_paths([&bin]).unwrap());
         let mut out = Vec::new();
-        install(&host, Path::new("/usr/bin/fold"), false, &mut out).unwrap();
+        install(&host, Path::new("/usr/bin/fld"), false, &mut out).unwrap();
         assert_eq!(
             std::fs::read_to_string(&log).unwrap(),
             "--user daemon-reload\n--user enable --now fold.service\n"
@@ -318,7 +318,7 @@ mod tests {
         );
 
         std::fs::write(&script, "#!/bin/sh\nexit 3\n").unwrap();
-        let error = install(&host, Path::new("/usr/bin/fold"), false, &mut Vec::new()).unwrap_err();
+        let error = install(&host, Path::new("/usr/bin/fld"), false, &mut Vec::new()).unwrap_err();
         assert_eq!(error.code(), Some("service_install_failed"));
         assert!(error.to_string().contains("daemon-reload"));
     }
@@ -337,7 +337,7 @@ mod tests {
         let mut no_home = host(dir.path(), true);
         no_home.dirs.config_home = None;
         let error =
-            install(&no_home, Path::new("/usr/bin/fold"), true, &mut Vec::new()).unwrap_err();
+            install(&no_home, Path::new("/usr/bin/fld"), true, &mut Vec::new()).unwrap_err();
         assert!(matches!(error, ServiceError::NoHome));
         assert_eq!(error.code(), None);
         assert_eq!(error.hint(), None);
@@ -352,7 +352,7 @@ mod tests {
         std::fs::write(blocked.path().join("systemd"), "").unwrap();
         let error = install(
             &host(blocked.path(), true),
-            Path::new("/usr/bin/fold"),
+            Path::new("/usr/bin/fld"),
             true,
             &mut Vec::new(),
         )
@@ -367,7 +367,7 @@ mod tests {
         let mut full: &mut [u8] = &mut [];
         let error = install(
             &host(dir.path(), true),
-            Path::new("/usr/bin/fold"),
+            Path::new("/usr/bin/fld"),
             true,
             &mut full,
         )

@@ -24,7 +24,7 @@ impl ClaudeMessage {
     }
 }
 
-/// Hooks under `-p`: the project's SessionStart hook runs with `source` `startup`, or `resume` after `--resume`, and its `additionalContext` reaches the model. A Stop hook's `decision: block` gives the model one more turn with the reason; the next Stop carries `stop_hook_active: true`, so a hook that lets that stop pass, as `fold hook stop` does, ends the turn without a loop and the `result` comes once, after the extra turn.
+/// Hooks under `-p`: the project's SessionStart hook runs with `source` `startup`, or `resume` after `--resume`, and its `additionalContext` reaches the model. A Stop hook's `decision: block` gives the model one more turn with the reason; the next Stop carries `stop_hook_active: true`, so a hook that lets that stop pass, as `fld hook stop` does, ends the turn without a loop and the `result` comes once, after the extra turn.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(tag = "subtype", rename_all = "snake_case")]
 pub enum SystemMessage {

@@ -59,7 +59,7 @@ async fn an_adapter_outside_every_project_writes_one_line_and_exits_1() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert_eq!(
         stderr,
-        "fold mcp: project_not_found: no registered project holds this directory (run fold init in the project root)\n"
+        "fld mcp: project_not_found: no registered project holds this directory (run fld init in the project root)\n"
     );
     guard.stop().await;
 }
@@ -82,7 +82,7 @@ async fn an_adapter_whose_daemon_stops_writes_one_line_and_exits_1() {
         .unwrap();
     assert_eq!(
         stderr,
-        "fold mcp: the daemon closed the session; start a new session to reconnect\n"
+        "fld mcp: the daemon closed the session; start a new session to reconnect\n"
     );
     drop(client);
 }

@@ -52,7 +52,7 @@ pub struct Session {
     server: JoinHandle<()>,
 }
 
-/// Project `demo` open in daemon state, with `r1` holding `README.md` and `main/` showing it as `fold init` leaves it, and one adapter session for each of [`AGENTS`], connected over in-memory streams through the same handshake `fold mcp` performs with `FOLD_AGENT` set. `review` holds `integrator`, granted by the human [`HUMAN`] over the socket.
+/// Project `demo` open in daemon state, with `r1` holding `README.md` and `main/` showing it as `fld init` leaves it, and one adapter session for each of [`AGENTS`], connected over in-memory streams through the same handshake `fld mcp` performs with `FOLD_AGENT` set. `review` holds `integrator`, granted by the human [`HUMAN`] over the socket.
 pub struct Harness {
     pub project: TestProject,
     /// Holds the fake inbox sockets.
@@ -139,7 +139,7 @@ impl Harness {
         harness
     }
 
-    /// Project `demo` made by `fold init --from source`, so `r1` holds the files of `source`, with the three sessions connected and no tag granted. Returns what init reported.
+    /// Project `demo` made by `fld init --from source`, so `r1` holds the files of `source`, with the three sessions connected and no tag granted. Returns what init reported.
     pub async fn start_initialized(source: &Path) -> (Self, InitializedProject) {
         let mut initialized = None;
         let project = TestProject::initialized(async |root, host, clock| {
@@ -344,7 +344,7 @@ impl Harness {
         .await;
     }
 
-    /// Binds a fake inbox for `agent` and reports it through the session-start hook route, as `fold hook session-start` does when Claude Code sets `CLAUDE_CODE_MESSAGING_SOCKET` and `CLAUDE_CODE_MESSAGING_TOKEN`.
+    /// Binds a fake inbox for `agent` and reports it through the session-start hook route, as `fld hook session-start` does when Claude Code sets `CLAUDE_CODE_MESSAGING_SOCKET` and `CLAUDE_CODE_MESSAGING_TOKEN`.
     pub async fn register_inbox(&self, agent: &str) -> FakeInbox {
         let inbox = FakeInbox::bind(self.dir.path().join(format!("{agent}.sock")));
         let hook = json!({

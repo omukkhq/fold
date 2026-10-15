@@ -259,7 +259,7 @@ pub fn remote_ahead(branch: &str, remote_commit: Option<&CommitId>) -> FoldError
         codes::REMOTE_AHEAD,
         format!("the remote branch {branch} has commits that fold main does not have"),
     )
-    .with_hint("run fold pull to bring the remote commits into main, then fold push again");
+    .with_hint("run fld pull to bring the remote commits into main, then fld push again");
     match remote_commit {
         Some(commit) => error.with_details([
             ("branch", json!(branch)),
@@ -299,7 +299,7 @@ mod tests {
         assert_eq!(remote_ref("origin", "main"), "refs/remotes/origin/main");
         let error = remote_ahead("main", None);
         assert_eq!(error.code(), codes::REMOTE_AHEAD);
-        assert!(error.hint().unwrap().contains("fold pull"));
+        assert!(error.hint().unwrap().contains("fld pull"));
     }
 
     #[test]

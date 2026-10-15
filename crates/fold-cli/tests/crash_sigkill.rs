@@ -29,7 +29,7 @@ const WAIT: Duration = Duration::from_secs(20);
 const SLUG: &str = "crash";
 const HUMAN: &str = "tanim";
 
-/// `fold init crash` with one file in `r1`, then, in this process, the agent `frontend` takes `T-1`, adds `src/new.rs` in its workspace and opens `P-1`.
+/// `fld init crash` with one file in `r1`, then, in this process, the agent `frontend` takes `T-1`, adds `src/new.rs` in its workspace and opens `P-1`.
 async fn project(host: &Host) -> ProjectPaths {
     let source = host.dir.path().join("source");
     std::fs::create_dir_all(source.join("src")).unwrap();
@@ -91,7 +91,7 @@ async fn project(host: &Host) -> ProjectPaths {
     paths
 }
 
-/// `fold serve` on the private socket `socket`, with `failpoints` as `FAILPOINTS` when given, once it accepts connections.
+/// `fld serve` on the private socket `socket`, with `failpoints` as `FAILPOINTS` when given, once it accepts connections.
 async fn serve(host: &Host, socket: &Path, failpoints: Option<&str>) -> Child {
     let mut command = host.fold(&["serve", "--socket", socket.to_str().unwrap()], &host.root);
     command
@@ -191,7 +191,7 @@ async fn proposal(socket: &Path) -> Value {
     answer.body
 }
 
-/// SIGKILL stops a real `fold serve` while it sleeps inside the integration transaction. The restarted daemon shows main at `r1`, the proposal open and the task in Review, the project passes every invariant, and integrating again succeeds.
+/// SIGKILL stops a real `fld serve` while it sleeps inside the integration transaction. The restarted daemon shows main at `r1`, the proposal open and the task in Review, the project passes every invariant, and integrating again succeeds.
 #[tokio::test]
 async fn a_daemon_killed_inside_the_integration_transaction_shows_none_of_it() {
     let host = Host::new().await;
@@ -249,8 +249,5 @@ async fn a_daemon_killed_inside_the_integration_transaction_shows_none_of_it() {
     store.close().await.unwrap();
     daemon.start_kill().unwrap();
     daemon.wait().await.unwrap();
-    assert!(
-        daemons(&socket).is_empty(),
-        "a fold serve outlived the test"
-    );
+    assert!(daemons(&socket).is_empty(), "a fld serve outlived the test");
 }

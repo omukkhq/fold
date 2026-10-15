@@ -28,11 +28,11 @@ pub struct RemoteArgs {
 
 #[derive(Subcommand, Debug)]
 enum RemoteCommand {
-    /// Add or change a remote Git repository that fold push and fold pull sync main with
+    /// Add or change a remote Git repository that fld push and fld pull sync main with
     Set(SetArgs),
     /// Delete a remote and the refs fetched from it
     Remove(RemoveArgs),
-    /// List the remotes: name, branch and URL; also what `fold remote` with no subcommand prints
+    /// List the remotes: name, branch and URL; also what `fld remote` with no subcommand prints
     List,
 }
 
@@ -64,7 +64,7 @@ pub struct PushArgs {
     project: Option<PathBuf>,
 }
 
-/// `fold pull` takes the same arguments as `fold push`.
+/// `fld pull` takes the same arguments as `fld push`.
 pub type PullArgs = PushArgs;
 
 #[derive(Debug, Error)]
@@ -87,7 +87,7 @@ pub enum RemoteError {
     },
     #[error("the daemon answered with a body fold cannot read")]
     Answer,
-    #[error("cannot find the fold binary: {0}")]
+    #[error("cannot find the fld binary: {0}")]
     Exe(io::Error),
     #[error("cannot read the project directory: {0}")]
     Cwd(io::Error),
@@ -175,7 +175,7 @@ fn set(
                     "the remote has no default branch to sync with",
                 )
                 .with_hint(format!(
-                    "name the branch: fold remote set {} <url> <branch>",
+                    "name the branch: fld remote set {} <url> <branch>",
                     args.name
                 ))
                 .with_details([("reason", serde_json::json!("no_default_branch"))])
@@ -211,7 +211,7 @@ fn remove(paths: &ProjectPaths, name: &str, out: &mut impl Write) -> Result<(), 
 fn list(paths: &ProjectPaths, out: &mut impl Write) -> Result<(), RemoteError> {
     let config = ProjectConfig::from_toml(&read_config(&paths.config())?)?;
     if config.remotes.is_empty() {
-        output::line(out, "no remotes: run fold remote set <name> <url>")?;
+        output::line(out, "no remotes: run fld remote set <name> <url>")?;
         return Ok(());
     }
     let only = config.remotes.len() == 1;
@@ -366,7 +366,7 @@ fn without_remote(text: &str, name: &str) -> Result<String, FoldError> {
             codes::REMOTE_NOT_SET,
             format!("the project has no Git remote named {name}"),
         )
-        .with_hint("run fold remote list to see the remotes"));
+        .with_hint("run fld remote list to see the remotes"));
     }
     if remotes_table(&mut doc)?.is_empty() {
         doc.remove(REMOTES_SECTION);
@@ -459,7 +459,7 @@ fn refusal(response: &Response) -> Result<(), RemoteError> {
     })
 }
 
-/// The line `fold push` prints for the daemon's answer, or the error it carries.
+/// The line `fld push` prints for the daemon's answer, or the error it carries.
 fn push_summary(response: Response) -> Result<String, RemoteError> {
     refusal(&response)?;
     let body = &response.body;
@@ -487,7 +487,7 @@ fn push_summary(response: Response) -> Result<String, RemoteError> {
     }
 }
 
-/// The lines `fold pull` prints for the daemon's answer, or the error it carries: one line, and for a conflict one more per conflicted path.
+/// The lines `fld pull` prints for the daemon's answer, or the error it carries: one line, and for a conflict one more per conflicted path.
 fn pull_summary(response: Response) -> Result<Vec<String>, RemoteError> {
     refusal(&response)?;
     let body = &response.body;
@@ -559,7 +559,7 @@ mod tests {
 
     #[test]
     fn remote_commands_parse_the_name_the_url_and_the_branch() {
-        let parsed = Remote::try_parse_from(["fold", "set", "origin", "../app.git"]).unwrap();
+        let parsed = Remote::try_parse_from(["fld", "set", "origin", "../app.git"]).unwrap();
         let Some(RemoteCommand::Set(set)) = parsed.args.command else {
             panic!("expected set");
         };
@@ -568,7 +568,7 @@ mod tests {
             ("origin", "../app.git", None)
         );
         let parsed = Remote::try_parse_from([
-            "fold",
+            "fld",
             "set",
             "backup",
             "git@x:a.git",
@@ -582,34 +582,28 @@ mod tests {
             panic!("expected set");
         };
         assert_eq!(set.branch.as_deref(), Some("trunk"));
-        let parsed = Remote::try_parse_from(["fold", "remove", "origin"]).unwrap();
+        let parsed = Remote::try_parse_from(["fld", "remove", "origin"]).unwrap();
         assert!(
             matches!(parsed.args.command, Some(RemoteCommand::Remove(ref remove)) if remove.name == "origin")
         );
         assert!(matches!(
-            Remote::try_parse_from(["fold", "list"])
+            Remote::try_parse_from(["fld", "list"])
                 .unwrap()
                 .args
                 .command,
             Some(RemoteCommand::List)
         ));
         assert!(
-            Remote::try_parse_from(["fold"])
+            Remote::try_parse_from(["fld"])
                 .unwrap()
                 .args
                 .command
                 .is_none()
         );
-        assert!(Remote::try_parse_from(["fold", "set", "origin"]).is_err());
-        let push = Push::try_parse_from(["fold", "backup", "--project", "app"]).unwrap();
+        assert!(Remote::try_parse_from(["fld", "set", "origin"]).is_err());
+        let push = Push::try_parse_from(["fld", "backup", "--project", "app"]).unwrap();
         assert_eq!(push.args.remote.as_deref(), Some("backup"));
-        assert!(
-            Push::try_parse_from(["fold"])
-                .unwrap()
-                .args
-                .remote
-                .is_none()
-        );
+        assert!(Push::try_parse_from(["fld"]).unwrap().args.remote.is_none());
     }
 
     #[test]
@@ -749,10 +743,10 @@ mod tests {
             push_summary(reply(200, empty)).unwrap(),
             "backup/trunk is up to date"
         );
-        let refused = json!({"error": {"code": "remote_ahead", "message": "m", "details": {"hint": "run fold pull"}}});
+        let refused = json!({"error": {"code": "remote_ahead", "message": "m", "details": {"hint": "run fld pull"}}});
         let error = push_summary(reply(409, refused)).unwrap_err();
         assert_eq!(error.code(), Some("remote_ahead"));
-        assert_eq!(error.to_string(), "m (run fold pull)");
+        assert_eq!(error.to_string(), "m (run fld pull)");
         for bad in [
             reply(500, json!(null)),
             reply(
@@ -908,7 +902,7 @@ mod tests {
         let gitbin = Git::default();
         let mut out = Vec::new();
         list(&paths, &mut out).unwrap();
-        assert_eq!(text(out), "no remotes: run fold remote set <name> <url>\n");
+        assert_eq!(text(out), "no remotes: run fld remote set <name> <url>\n");
         let mut out = Vec::new();
         set(
             &paths,

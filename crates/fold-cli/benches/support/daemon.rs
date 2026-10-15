@@ -6,7 +6,7 @@ use tokio::process::Child;
 use super::host::Host;
 use super::{BenchResult, fail};
 
-/// The `fold serve` process of the run, on a free loopback port.
+/// The `fld serve` process of the run, on a free loopback port.
 pub struct Daemon {
     child: Child,
 }

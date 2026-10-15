@@ -54,7 +54,7 @@ pub enum AgentError {
     Project(#[from] ProjectError),
     #[error("cannot read the working directory: {0}")]
     Cwd(io::Error),
-    #[error("cannot find the fold binary: {0}")]
+    #[error("cannot find the fld binary: {0}")]
     Exe(io::Error),
     #[error("cannot start the async runtime: {0}")]
     Runtime(io::Error),

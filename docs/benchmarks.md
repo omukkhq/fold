@@ -1,6 +1,6 @@
 # Benchmarks
 
-`make bench` measures the five runtime budgets against a real `fold serve` process and a seeded 10 000-file, 200 MB repository, and exits non-zero when a target misses its limit. `make bench-smoke` runs the same harness on a fixture 100 times smaller and does not enforce the limits. `FOLD_BENCH_LIMIT_SCALE=<factor>` multiplies every limit, for example `FOLD_BENCH_LIMIT_SCALE=3 make bench` on a slower device, and `FOLD_BENCH_DIR=<dir>` picks the disk. Each run writes `target/bench/results.json` and `target/bench/results.md` with the host description, the scale and the fold version.
+`make bench` measures the five runtime budgets against a real `fld serve` process and a seeded 10 000-file, 200 MB repository, and exits non-zero when a target misses its limit. `make bench-smoke` runs the same harness on a fixture 100 times smaller and does not enforce the limits. `FOLD_BENCH_LIMIT_SCALE=<factor>` multiplies every limit, for example `FOLD_BENCH_LIMIT_SCALE=3 make bench` on a slower device, and `FOLD_BENCH_DIR=<dir>` picks the disk. Each run writes `target/bench/results.json` and `target/bench/results.md` with the host description, the scale and the fold version.
 
 ## Development computer
 

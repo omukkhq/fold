@@ -45,7 +45,7 @@ pub enum GcError {
     Project(#[from] ProjectError),
     #[error("no daemon socket is known: set XDG_RUNTIME_DIR or pass --socket")]
     NoSocket,
-    #[error("{0}; start it with fold serve")]
+    #[error("{0}; start it with fld serve")]
     Client(#[from] ClientError),
     #[error("{message}")]
     Refused { code: String, message: String },
@@ -149,13 +149,13 @@ mod tests {
     #[test]
     fn parses_dry_run_and_socket() {
         let parsed =
-            Wrapper::try_parse_from(["fold", "--dry-run", "--socket", "/tmp/f.sock"]).unwrap();
+            Wrapper::try_parse_from(["fld", "--dry-run", "--socket", "/tmp/f.sock"]).unwrap();
         assert!(parsed.args.dry_run);
         assert_eq!(
             parsed.args.socket.as_deref(),
             Some(Path::new("/tmp/f.sock"))
         );
-        let bare = Wrapper::try_parse_from(["fold"]).unwrap();
+        let bare = Wrapper::try_parse_from(["fld"]).unwrap();
         assert!(!bare.args.dry_run && bare.args.socket.is_none());
     }
 

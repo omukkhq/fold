@@ -424,3 +424,146 @@ fn the_skill_uses_exactly_the_four_verdicts() {
         assert!(SKILL.contains(&format!("`{verdict}`")), "{verdict}");
     }
 }
+
+const SUBCOMMANDS: [&str; 13] = [
+    "init", "serve", "mcp", "doctor", "setup", "gc", "agent", "token", "remote", "push", "pull",
+    "hook", "dev",
+];
+
+/// Lines that name the old binary on purpose: the hook prefix that `fld init --refresh` replaces in files written for it, and the fixture that proves the refresh replaces its server and hooks.
+const LEGACY_LINES: [(&str, &str); 4] = [
+    ("crates/fold-cli/src/claude_files.rs", "const HOOK_PREFIXES"),
+    (
+        "crates/fold-cli/src/claude_files.rs",
+        "/// `fold hook` is what files",
+    ),
+    (
+        "crates/fold-cli/tests/claude_files.rs",
+        r#""fold": {"command": "fold", "args": ["serve"]}"#,
+    ),
+    (
+        "crates/fold-cli/tests/claude_files.rs",
+        r#""command": "fold hook old-start""#,
+    ),
+];
+
+/// Spellings, with the spaces taken out, that run a plain `fold` executable from JSON, TOML or Rust.
+const PLAIN_LAUNCHES: [&str; 3] = [
+    "\"command\":\"fold\"",
+    "command=\"fold\"",
+    "Command::new(\"fold\")",
+];
+
+fn text_files(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        if path.is_dir() {
+            if name != "target" && name != "node_modules" && name != "dist" {
+                text_files(&path, found);
+            }
+        } else if name != "templates.rs" {
+            found.push(path);
+        }
+    }
+}
+
+/// Whether `line` names a plain `fold` executable: `fold` as a word followed by a subcommand, a flag or the word binary, a path that ends in `bin/fold`, `release/fold` or `debug/fold`, or a launch from [`PLAIN_LAUNCHES`].
+fn names_plain_fold(line: &str) -> bool {
+    let compact: String = line.split_whitespace().collect();
+    if PLAIN_LAUNCHES.iter().any(|launch| compact.contains(launch)) {
+        return true;
+    }
+    let word_char = |c: char| c.is_alphanumeric() || c == '_' || c == '-';
+    for dir in ["bin/fold", "release/fold", "debug/fold"] {
+        for (at, _) in line.match_indices(dir) {
+            if !line[at + dir.len()..].starts_with(|c: char| word_char(c) || c == '.') {
+                return true;
+            }
+        }
+    }
+    if line.contains("`fold` binary") {
+        return true;
+    }
+    line.match_indices("fold ").any(|(at, _)| {
+        let named = line[..at]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !(word_char(c) || "./".contains(c)));
+        let after = &line[at + 5..];
+        let word: String = after.chars().take_while(|c| word_char(*c)).collect();
+        named
+            && (SUBCOMMANDS.contains(&word.as_str()) || word == "binary" || after.starts_with("--"))
+    })
+}
+
+#[test]
+fn the_plain_fold_check_tells_commands_from_product_prose() {
+    for command in [
+        "run `fold init` first",
+        "fold mcp",
+        "cd x && fold init",
+        "`fold --version` prints it",
+        r#"  "command": "fold","#,
+        r#"[mcp_servers.fold] command = "fold""#,
+        r#"Command::new("fold")"#,
+        "mv fld-x86_64-linux ~/.local/bin/fold",
+        "target/release/fold is the binary",
+        "the `fold` binary",
+        "find the fold binary",
+        r#"{"command": "fold hook stop"}"#,
+    ] {
+        assert!(names_plain_fold(command), "{command}");
+    }
+    for prose in [
+        "fold plans, builds, reviews and integrates",
+        "the `fold` MCP server",
+        "a message from `fold` that names the file",
+        "Whether fold pushes to this remote",
+        "`.fold/git`, `FOLD_AGENT` and `mcp__fold`",
+        "$XDG_RUNTIME_DIR/fold/fold.sock",
+        "fold-native proposals, fold-cli and fold's crates",
+        "~/.local/bin/folder",
+        r#"  "command": "fld","#,
+        "run fld init in the project root",
+        "fld hook session-start",
+    ] {
+        assert!(!names_plain_fold(prose), "{prose}");
+    }
+}
+
+/// The executable is `fld`: no generated file, hint, doc or test names a plain `fold` binary with a subcommand.
+#[test]
+fn no_text_calls_a_plain_fold_binary() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut files = [
+        "README.md",
+        "AGENTS.md",
+        "Makefile",
+        ".pre-commit-config.yaml",
+    ]
+    .map(|name| root.join(name))
+    .to_vec();
+    for part in ["crates", "docs", "scripts", "web/src"] {
+        text_files(&root.join(part), &mut files);
+    }
+    let mut offenders = Vec::new();
+    for file in &files {
+        let Ok(text) = std::fs::read_to_string(file) else {
+            continue;
+        };
+        let relative = file.strip_prefix(&root).unwrap_or(file);
+        for (number, line) in text.lines().enumerate() {
+            let legacy = LEGACY_LINES
+                .iter()
+                .any(|(path, part)| relative == std::path::Path::new(path) && line.contains(part));
+            if !legacy && names_plain_fold(line) {
+                offenders.push(format!("{}:{}", relative.display(), number + 1));
+            }
+        }
+    }
+    assert!(offenders.is_empty(), "plain `fold` command: {offenders:?}");
+}

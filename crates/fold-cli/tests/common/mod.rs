@@ -80,9 +80,9 @@ impl Host {
         self.runtime_base().join("fold").join("fold.sock")
     }
 
-    /// `fold <args>` with this host's environment, run in `cwd`.
+    /// `fld <args>` with this host's environment, run in `cwd`.
     pub fn fold(&self, args: &[&str], cwd: &Path) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_fold"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_fld"));
         command
             .args(args)
             .current_dir(cwd)
@@ -100,7 +100,7 @@ impl Host {
     }
 }
 
-/// A `fold mcp` process driven by an rmcp client over its stdio. Cancelling the client closes the adapter's stdin, which ends the session.
+/// A `fld mcp` process driven by an rmcp client over its stdio. Cancelling the client closes the adapter's stdin, which ends the session.
 pub async fn adapter(mut command: Command) -> (Client, Child) {
     let mut child = command.spawn().unwrap();
     let stdout = child.stdout.take().unwrap();
@@ -117,7 +117,7 @@ pub async fn list_agents(client: &Client) -> Value {
     serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap()
 }
 
-/// The pids of the `fold serve` processes that use `socket`.
+/// The pids of the `fld serve` processes that use `socket`.
 pub fn daemons(socket: &Path) -> Vec<i32> {
     let socket = socket.to_string_lossy().into_owned();
     std::fs::read_dir("/proc")

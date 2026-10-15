@@ -19,10 +19,10 @@ pub const DEFAULT_REVISION_PAGE: usize = 50;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RevisionOrigin {
-    /// `r1`, from `fold init` or an import.
+    /// `r1`, from `fld init` or an import.
     Initial,
     Proposal,
-    /// A revision `fold pull` made from a remote commit.
+    /// A revision `fld pull` made from a remote commit.
     Pull,
 }
 

@@ -108,7 +108,7 @@ impl Fixture {
 }
 
 fn good_mcp() -> String {
-    serde_json::json!({ MCP_SERVERS_KEY: { MCP_SERVER_NAME: { "command": "fold", "args": ["mcp"] } } })
+    serde_json::json!({ MCP_SERVERS_KEY: { MCP_SERVER_NAME: { "command": "fld", "args": ["mcp"] } } })
         .to_string()
 }
 
@@ -263,7 +263,7 @@ fn a_missing_or_dead_socket_warns_with_fold_serve() {
     let missing = socket_check(Some(&path), Some(SocketState::Missing));
     assert_eq!(
         (missing.status, missing.fix.as_deref()),
-        (Status::Warn, Some("fold serve"))
+        (Status::Warn, Some("fld serve"))
     );
     drop(bind(&path));
     mode(&path, 0o600);
@@ -272,7 +272,7 @@ fn a_missing_or_dead_socket_warns_with_fold_serve() {
     let dead = socket_check(Some(&path), Some(state));
     assert_eq!(
         (dead.status, dead.fix.as_deref()),
-        (Status::Warn, Some("fold serve"))
+        (Status::Warn, Some("fld serve"))
     );
 }
 
@@ -344,7 +344,7 @@ fn http_is_ok_with_a_listener_and_a_warning_without() {
     let check = http_check(addr);
     assert_eq!(
         (check.status, check.fix.as_deref()),
-        (Status::Warn, Some("fold serve"))
+        (Status::Warn, Some("fld serve"))
     );
 }
 
@@ -463,7 +463,7 @@ fn git_is_a_warning_when_missing() {
         (check.status, check.fix.as_deref()),
         (Status::Warn, Some("install git"))
     );
-    assert!(check.message.contains("fold pull"));
+    assert!(check.message.contains("fld pull"));
     executable(&fixture.path("bin/git"));
     host.path = Some(std::env::join_paths([fixture.path("bin")]).unwrap());
     assert_eq!(git_check(&host).status, Status::Ok);
@@ -480,7 +480,7 @@ fn a_probe_with_no_proc_and_no_systemd_fails_nothing() {
     assert_eq!(service.message, "no service manager support");
     assert_eq!(
         service.fix.as_deref(),
-        Some("fold serve, started by the host's own supervisor")
+        Some("fld serve, started by the host's own supervisor")
     );
     for check in [linger_check(&host), inotify_limit_check(&host)] {
         assert_eq!(
@@ -605,7 +605,7 @@ fn a_git_history_without_the_last_mapped_commit_names_the_repair() {
     let check = find(&checks, "git history");
     assert_eq!(check.status, Status::Warn);
     assert!(check.message.contains("the commit of r1"), "{check:?}");
-    assert!(check.fix.as_deref().unwrap().contains("fold pull"));
+    assert!(check.fix.as_deref().unwrap().contains("fld pull"));
 
     let commit = run(&[
         "commit-tree",
@@ -973,7 +973,7 @@ fn an_agents_file_without_the_markers_gives_the_claude_files_warning() {
     let check = find(&checks, "claude files");
     assert_eq!(check.status, Status::Warn);
     assert!(check.message.contains("AGENTS.md lacks the fold section"));
-    assert_eq!(check.fix.as_deref(), Some("fold init --refresh"));
+    assert_eq!(check.fix.as_deref(), Some("fld init --refresh"));
     assert_eq!(
         failed(&[Section {
             title: String::new(),

@@ -19,7 +19,7 @@ const NAMESPACE_VAR: &str = "FOLD_TEST_OFFLINE_NAMESPACE";
 const PROOF: &str = "offline proof:";
 const PUBLIC_ADDRESS: &str = "1.1.1.1:443";
 
-/// The directory `fold init --from` reads: `r1` holds exactly these files.
+/// The directory `fld init --from` reads: `r1` holds exactly these files.
 const SOURCE: [(&str, &str); 3] = [
     ("README.md", "# demo\n"),
     ("src/app.txt", "start the app\n"),

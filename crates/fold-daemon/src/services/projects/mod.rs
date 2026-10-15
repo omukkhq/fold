@@ -722,7 +722,7 @@ fn incomplete(paths: &ProjectPaths) -> FoldError {
         ),
     )
     .with_hint(format!(
-        "if no other fold init is running there, delete {} and run fold init again",
+        "if no other fld init is running there, delete {} and run fld init again",
         paths.fold_dir().display()
     ))
 }
@@ -824,7 +824,7 @@ pub async fn list(state: &DaemonState) -> Result<Vec<ProjectEntry>, ProjectError
     Ok(entries)
 }
 
-/// Opens a project that `fold init` registered after the daemon started. An open project returns its handle again; a slug the registry does not hold is `project_not_found`.
+/// Opens a project that `fld init` registered after the daemon started. An open project returns its handle again; a slug the registry does not hold is `project_not_found`.
 pub async fn open(state: &DaemonState, slug: &str) -> Result<Arc<ProjectHandle>, ProjectError> {
     let row = projects::find_project(state.registry.read(), slug)
         .await?
@@ -861,7 +861,7 @@ async fn row_for_dir(registry: &Store, cwd: &Path) -> Result<projects::ProjectRo
                 codes::PROJECT_NOT_FOUND,
                 "no registered project holds this directory",
             )
-            .with_hint("run the command inside a project directory, or fold init one")
+            .with_hint("run the command inside a project directory, or fld init one")
             .into()
         })
 }

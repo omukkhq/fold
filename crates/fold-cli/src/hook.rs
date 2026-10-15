@@ -11,9 +11,9 @@ use serde_json::{Value, json};
 use crate::output;
 use crate::serve::{self, Dirs};
 
-/// How long `fold hook session-start` waits for a daemon it starts.
+/// How long `fld hook session-start` waits for a daemon it starts.
 const START_TIMEOUT: Duration = Duration::from_secs(5);
-/// How long either hook waits for the daemon's answer, and `fold hook stop` for the socket.
+/// How long either hook waits for the daemon's answer, and `fld hook stop` for the socket.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(2);
 /// Claude Code's hook input is a small JSON object; anything longer is refused unread.
 const MAX_INPUT: u64 = 1 << 20;
@@ -56,7 +56,7 @@ pub fn run(args: &HookArgs, out: &mut impl Write) {
         Ok(None) => Ok(()),
         Err(code) => output::line(
             &mut io::stderr().lock(),
-            &format!("fold hook {name}: {code}"),
+            &format!("fld hook {name}: {code}"),
         ),
     };
     // Claude Code may close the pipe first; the session goes on either way.

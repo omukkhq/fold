@@ -235,7 +235,7 @@ pub struct GcCounts {
     pub checkpoints_pruned: u64,
 }
 
-/// Collects the project's garbage: prunes checkpoints, removes closed workspace directories past their retention and deletes unreferenced objects. Socket only; used by `fold gc`.
+/// Collects the project's garbage: prunes checkpoints, removes closed workspace directories past their retention and deletes unreferenced objects. Socket only; used by `fld gc`.
 #[utoipa::path(
     post,
     path = "/api/v1/projects/{slug}/gc",

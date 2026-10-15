@@ -119,7 +119,7 @@ async fn a_daemon_that_stops_while_it_starts_is_reported() {
         .unwrap_err();
     assert!(matches!(error, ClientError::StartFailed), "{error}");
 
-    let error = connect(&config(&missing, dir.path(), "/nonexistent/fold"))
+    let error = connect(&config(&missing, dir.path(), "/nonexistent/fld"))
         .await
         .unwrap_err();
     assert!(matches!(error, ClientError::Io { .. }), "{error}");

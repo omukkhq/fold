@@ -25,7 +25,7 @@ use crate::services::tasks::{CreateTask, create_in_tx, recompute};
 /// The most conflicted paths a sync task's description lists; the rest are counted.
 const LISTED_PATHS: usize = 200;
 
-/// A `fold pull` whose merge conflicted, as the sync task records it.
+/// A `fld pull` whose merge conflicted, as the sync task records it.
 #[derive(Debug, Clone)]
 pub struct SyncWorkspace {
     /// The name of the remote the pull fetched from.
@@ -216,13 +216,13 @@ fn sync_title(remote: &str, branch: &str, commit: &str) -> Result<TaskTitle, Fol
             codes::INVALID_CONFIG,
             "the branch name does not make a task title",
         )
-        .with_hint("set a branch name without control characters with fold remote set")
+        .with_hint("set a branch name without control characters with fld remote set")
     })
 }
 
 fn sync_description(sync: &SyncWorkspace, conflicted: &[ConflictedPath]) -> TaskDescription {
     let mut text = format!(
-        "`fold pull` brought in the commit `{commit}` of `{remote}/{branch}`, and it changes the same paths as fold main. This task's workspace holds the remote's version with main `{head}` merged into it; resolve it so main gets both sides.\n\n**Conflicted paths** ({count}):\n\n",
+        "`fld pull` brought in the commit `{commit}` of `{remote}/{branch}`, and it changes the same paths as fold main. This task's workspace holds the remote's version with main `{head}` merged into it; resolve it so main gets both sides.\n\n**Conflicted paths** ({count}):\n\n",
         commit = sync.remote_commit,
         remote = sync.remote,
         branch = sync.branch,
@@ -243,7 +243,7 @@ fn sync_description(sync: &SyncWorkspace, conflicted: &[ConflictedPath]) -> Task
         ));
     }
     text.push_str(&format!(
-        "\n**Reading the markers.** In a text conflict, the lines after `<<<<<<< workspace` are the remote's, the lines after `||||||| {base}` are the sync base's, and the lines after `=======` up to `>>>>>>> main {head}` are main's. Every other conflict keeps the remote's version at the path and puts main's beside it as `<path>.fold-main`. Edit each path to the result both sides need, delete the markers and the `.fold-main` copies, then record the changes and open a proposal. Its integration marks the remote commit as merged, and the next `fold push` sends it as a merge.\n",
+        "\n**Reading the markers.** In a text conflict, the lines after `<<<<<<< workspace` are the remote's, the lines after `||||||| {base}` are the sync base's, and the lines after `=======` up to `>>>>>>> main {head}` are main's. Every other conflict keeps the remote's version at the path and puts main's beside it as `<path>.fold-main`. Edit each path to the result both sides need, delete the markers and the `.fold-main` copies, then record the changes and open a proposal. Its integration marks the remote commit as merged, and the next `fld push` sends it as a merge.\n",
         base = sync.base_label,
         head = sync.head,
     ));

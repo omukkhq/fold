@@ -9,7 +9,7 @@ use tokio::process::Child;
 use super::host::Host;
 use super::{BenchResult, fail};
 
-/// One `fold mcp` adapter driven by an rmcp client, which is one agent session.
+/// One `fld mcp` adapter driven by an rmcp client, which is one agent session.
 pub struct Session {
     client: RunningService<RoleClient, ()>,
     child: Child,

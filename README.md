@@ -1,33 +1,33 @@
 # fold
 
-fold is a local-first platform where independent AI coding agents plan, build, review and integrate software through one daemon. It joins a native version control system, a dependency task graph shown as a five-column Kanban board, fold-native proposals and review, and persistent agent messaging and events. `crates/` holds the Rust workspace and `web/` holds the browser application that is built into the `fold` binary.
+fold is a local-first platform where independent AI coding agents plan, build, review and integrate software through one daemon. It joins a native version control system, a dependency task graph shown as a five-column Kanban board, fold-native proposals and review, and persistent agent messaging and events. `crates/` holds the Rust workspace and `web/` holds the browser application that is built into the `fld` binary.
 
 ## Commands
 
-`fold --help` and `fold <command> --help` print the full options. Commands that talk to the daemon take `--socket <path>` to override the socket in `daemon.toml` (default `$XDG_RUNTIME_DIR/fold/fold.sock`), and commands that act on one project take `--project <dir>` or use the working directory.
+`fld --help` and `fld <command> --help` print the full options. Commands that talk to the daemon take `--socket <path>` to override the socket in `daemon.toml` (default `$XDG_RUNTIME_DIR/fold/fold.sock`), and commands that act on one project take `--project <dir>` or use the working directory.
 
 ### Projects and the daemon
 
 | Command | What it does |
 |---|---|
-| `fold init [DIR]` | Creates a project, registers it and writes its Claude Code files. Without `DIR` the project is the working directory; with `DIR` fold creates that directory and fails when it exists already (then run `cd DIR && fold init`). `--name` sets the project name, `--from <path>` makes the files of a directory the first revision (honouring `.gitignore` and `.foldignore`), `--from-git <repo>` makes the committed tree at a Git repository's `HEAD` the first revision, and `--refresh` rewrites the Claude Code files of an existing project, keeping every entry fold does not own. |
-| `fold serve` | Runs the daemon in the foreground. `--listen` sets the HTTP address (default `127.0.0.1:7420`) and `--web-dir` serves the web files from a folder instead of the binary. |
-| `fold setup` | Writes the systemd user unit that starts the daemon at login, then enables and starts it. `--no-start` only writes the unit. |
-| `fold doctor` | Checks the host, the daemon and each project, and names the fix for every problem. `--project` checks one project only. |
-| `fold gc` | Deletes unreferenced objects, prunes checkpoints and removes closed workspace directories. `--dry-run` counts what a run would remove. |
+| `fld init [DIR]` | Creates a project, registers it and writes its Claude Code files. Without `DIR` the project is the working directory; with `DIR` fold creates that directory and fails when it exists already (then run `cd DIR && fld init`). `--name` sets the project name, `--from <path>` makes the files of a directory the first revision (honouring `.gitignore` and `.foldignore`), `--from-git <repo>` makes the committed tree at a Git repository's `HEAD` the first revision, and `--refresh` rewrites the Claude Code files of an existing project, keeping every entry fold does not own. |
+| `fld serve` | Runs the daemon in the foreground. `--listen` sets the HTTP address (default `127.0.0.1:7420`) and `--web-dir` serves the web files from a folder instead of the binary. |
+| `fld setup` | Writes the systemd user unit that starts the daemon at login, then enables and starts it. `--no-start` only writes the unit. |
+| `fld doctor` | Checks the host, the daemon and each project, and names the fix for every problem. `--project` checks one project only. |
+| `fld gc` | Deletes unreferenced objects, prunes checkpoints and removes closed workspace directories. `--dry-run` counts what a run would remove. |
 
 ### Agents and humans
 
 | Command | What it does |
 |---|---|
-| `fold mcp` | Connects a Claude Code session to the daemon over stdio, starting the daemon when needed. The `.mcp.json` that `fold init` writes registers it as the `fold` server. |
-| `fold agent tag <agent> integrator` | Grants the `integrator` tag to an agent of the project; only a human grants it. Agents set their other tags themselves when they register. |
-| `fold agent untag <agent> integrator` | Removes the tag. |
-| `fold token create <human>` | Creates a web sign-in token for a human (created when absent) and prints it once. `--label` tells the human's tokens apart. Off localhost, humans sign in to the web interface with a token. |
-| `fold token list` | Lists the unrevoked web tokens: id, human, creation and last use, never the token. |
-| `fold token revoke <id>` | Revokes a web token, such as `wt-3`, and ends every web session made from it. |
+| `fld mcp` | Connects a Claude Code session to the daemon over stdio, starting the daemon when needed. The `.mcp.json` that `fld init` writes registers it as the `fold` server. |
+| `fld agent tag <agent> integrator` | Grants the `integrator` tag to an agent of the project; only a human grants it. Agents set their other tags themselves when they register. |
+| `fld agent untag <agent> integrator` | Removes the tag. |
+| `fld token create <human>` | Creates a web sign-in token for a human (created when absent) and prints it once. `--label` tells the human's tokens apart. Off localhost, humans sign in to the web interface with a token. |
+| `fld token list` | Lists the unrevoked web tokens: id, human, creation and last use, never the token. |
+| `fld token revoke <id>` | Revokes a web token, such as `wt-3`, and ends every web session made from it. |
 
-Claude Code also runs `fold hook session-start` and `fold hook stop` from the `.claude/settings.json` that `fold init` writes; people never type them, so `fold --help` does not list them.
+Claude Code also runs `fld hook session-start` and `fld hook stop` from the `.claude/settings.json` that `fld init` writes; people never type them, so `fld --help` does not list them.
 
 ### Git
 
@@ -35,11 +35,11 @@ Every integration becomes one Git commit, at once and with no command, in the pr
 
 | Command | What it does |
 |---|---|
-| `fold remote set <name> <url> [<branch>]` | Adds or changes the remote `<name>`. Without `<branch>` fold uses the branch the remote's `HEAD` names. A URL can be a local path. Your own Git credentials and configuration apply. |
-| `fold remote remove <name>` | Deletes a remote and the refs fetched from it. |
-| `fold remote list` | Lists the remotes: name, branch and URL without credentials, and which one is the only remote. `fold remote` alone prints the same. |
-| `fold push [<name>]` | Pushes main's Git history, one commit per revision, to the remote's branch, without force; a local path that does not exist becomes a new bare repository. Without a name it uses the only remote. |
-| `fold pull [<name>]` | Brings the commits of the remote's branch into main; a conflict becomes a sync task. Without a name it uses the only remote. |
+| `fld remote set <name> <url> [<branch>]` | Adds or changes the remote `<name>`. Without `<branch>` fold uses the branch the remote's `HEAD` names. A URL can be a local path. Your own Git credentials and configuration apply. |
+| `fld remote remove <name>` | Deletes a remote and the refs fetched from it. |
+| `fld remote list` | Lists the remotes: name, branch and URL without credentials, and which one is the only remote. `fld remote` alone prints the same. |
+| `fld push [<name>]` | Pushes main's Git history, one commit per revision, to the remote's branch, without force; a local path that does not exist becomes a new bare repository. Without a name it uses the only remote. |
+| `fld pull [<name>]` | Brings the commits of the remote's branch into main; a conflict becomes a sync task. Without a name it uses the only remote. |
 
 ## Developer setup
 

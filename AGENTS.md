@@ -1,6 +1,6 @@
 # AGENTS.md
 
-fold: a local-first platform where independent AI coding agents plan, build, review and integrate software through one daemon. It joins a native version control system (content-addressed objects, workspaces, checkpoints, changesets, three-way merge, atomic integration), a dependency task graph shown as a five-column Kanban board whose status is always calculated, fold-native proposals and review, and persistent agent messaging and events. `crates/` is the Rust workspace: `fold-core` (pure decisions), `fold-vcs` (objects and workspace files), `fold-store` (SQLite), `fold-daemon` (services, live state, HTTP, SSE, MCP) and `fold-cli` (the `fold` binary). `web/` is the browser application: Vite + React, managed by bun, built into the binary. Claude Code sessions connect through `fold mcp`, a stdio adapter to the daemon's Unix socket. The screens are drawn in `~/programming/pencil/fold.pen`, one frame per screen, named by code (`W02`, `W03`, …). This file holds the rules for writing code here.
+fold: a local-first platform where independent AI coding agents plan, build, review and integrate software through one daemon. It joins a native version control system (content-addressed objects, workspaces, checkpoints, changesets, three-way merge, atomic integration), a dependency task graph shown as a five-column Kanban board whose status is always calculated, fold-native proposals and review, and persistent agent messaging and events. `crates/` is the Rust workspace: `fold-core` (pure decisions), `fold-vcs` (objects and workspace files), `fold-store` (SQLite), `fold-daemon` (services, live state, HTTP, SSE, MCP) and `fold-cli` (the `fld` binary). `web/` is the browser application: Vite + React, managed by bun, built into the binary. Claude Code sessions connect through `fld mcp`, a stdio adapter to the daemon's Unix socket. The screens are drawn in `~/programming/pencil/fold.pen`, one frame per screen, named by code (`W02`, `W03`, …). This file holds the rules for writing code here.
 
 ## General
 
@@ -36,7 +36,7 @@ make check-rust            # the Rust half of check
 make check-web             # the web half of check
 make acceptance            # the acceptance tests only
 make seed-dev              # development only: a throwaway project with agents, tasks, workspaces and a proposal
-make release               # web build, then fold for x86_64 Linux into dist/
+make release               # web build, then fld for x86_64 Linux into dist/
 make clean                 # delete build output and dev projects
 make clean-keep-cargo      # the same, but keep the cargo target directory
 ```
@@ -82,7 +82,7 @@ To run the tests of one file in `crates/<crate>/tests/`, select its module: `car
 2. **The main head moves only through the integration procedure,** under the project's integration mutex, by compare-and-swap. A published revision is never partial.
 3. **Done means a completion record,** written in the same transaction as the integration (or by the container rule in `recompute`). A failed integration never completes a task.
 4. **Proposal versions never change.** Approvals belong to the version they reviewed; a new version starts unapproved.
-5. **fold writes into a workspace only on create, sync and restore,** and never copies unrecorded changes between workspaces. Nothing deletes a workspace directory except `fold gc` after the retention period.
+5. **fold writes into a workspace only on create, sync and restore,** and never copies unrecorded changes between workspaces. Nothing deletes a workspace directory except `fld gc` after the retention period.
 6. **Messages never change task state,** never stand in for a dependency and never stand in for a claim.
 7. **Every path from an agent or a tree is checked** to be relative, normalised and inside its workspace before it is read or written. Symlinks are recorded, never followed.
 8. **Log ids, never content.** No file content, diff text, message body, review body or token in a log line or an error detail.

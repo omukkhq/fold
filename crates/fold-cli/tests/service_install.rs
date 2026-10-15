@@ -22,7 +22,7 @@ impl Sandbox {
 
     /// The environment holds no real home and a `PATH` of the sandbox only, so no run reaches the user's service manager.
     fn fold(&self, args: &[&str], path: &Path, xdg_config: Option<&Path>) -> io::Result<Output> {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_fold"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_fld"));
         command
             .args(args)
             .env_clear()
@@ -78,7 +78,7 @@ fn no_start_writes_the_unit_under_the_default_config_directory() {
         .unwrap();
     assert!(output.status.success(), "{}", stderr(&output));
     let unit = sandbox.path("home/.config/systemd/user/fold.service");
-    let exe = env!("CARGO_BIN_EXE_fold");
+    let exe = env!("CARGO_BIN_EXE_fld");
     if exe.contains([' ', '%', '"', '\\']) {
         return;
     }
@@ -139,6 +139,6 @@ fn a_host_without_systemctl_is_refused_with_invalid_request() {
         text.contains("invalid_request: no service manager support"),
         "{text}"
     );
-    assert!(text.contains("hint: run `fold serve` under the host's own supervisor"));
+    assert!(text.contains("hint: run `fld serve` under the host's own supervisor"));
     assert!(!sandbox.path("home/.config").exists());
 }

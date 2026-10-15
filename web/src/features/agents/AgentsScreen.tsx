@@ -20,7 +20,7 @@ export function AgentsScreen({ slug }: { slug: string }) {
       </div>
       {data.length === 0 ? (
         <EmptyPanel icon={Bot} title="No agent has connected">
-          Start an agent session with fold mcp; its workers, claims and
+          Start an agent session with fld mcp; its workers, claims and
           workspaces appear here.
         </EmptyPanel>
       ) : (

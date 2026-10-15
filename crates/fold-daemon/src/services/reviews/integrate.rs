@@ -43,7 +43,7 @@ pub enum IntegrationOutcome {
     Conflicted(Vec<Conflict>),
 }
 
-/// A clean `fold pull`: the newest commit of the remote branch with its tree, and the tree of the sync base, the newest commit fold main and the remote share, which is the merge base. Both trees are already in the object store. The base is a Git tree rather than a fold revision, because the revision that brought a commit in holds the merge with main, not the commit's own tree.
+/// A clean `fld pull`: the newest commit of the remote branch with its tree, and the tree of the sync base, the newest commit fold main and the remote share, which is the merge base. Both trees are already in the object store. The base is a Git tree rather than a fold revision, because the revision that brought a commit in holds the merge with main, not the commit's own tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PullIntegration {
     pub remote_commit: String,
@@ -176,7 +176,7 @@ impl ReviewService {
         })
     }
 
-    /// Integrates the newest commit of the Git remote onto main, by the named human who ran `fold pull`; an agent is refused with `human_required`. There is no proposal, task or review, so only the merge decides. A clean merge moves main and records a `pull` integration with the remote commit and `remote.pulled`; a conflicting one writes nothing and returns the conflicts to the caller.
+    /// Integrates the newest commit of the Git remote onto main, by the named human who ran `fld pull`; an agent is refused with `human_required`. There is no proposal, task or review, so only the merge decides. A clean merge moves main and records a `pull` integration with the remote commit and `remote.pulled`; a conflicting one writes nothing and returns the conflicts to the caller.
     pub async fn integrate_pull(
         &self,
         actor: &Actor,
@@ -211,7 +211,7 @@ impl ReviewService {
             codes::HEAD_MOVED,
             format!("main moved during each of {ATTEMPTS} integration attempts"),
         )
-        .with_hint("call integrate_proposal again, or run fold pull again")
+        .with_hint("call integrate_proposal again, or run fld pull again")
         .into())
     }
 
@@ -438,9 +438,9 @@ impl ReviewService {
         if !actor.is_human() {
             return Err(FoldError::new(
                 codes::HUMAN_REQUIRED,
-                "only the human who runs fold pull integrates remote commits",
+                "only the human who runs fld pull integrates remote commits",
             )
-            .with_hint("ask a human to run fold pull")
+            .with_hint("ask a human to run fld pull")
             .into());
         }
         let commit = pull.remote_commit.as_str();

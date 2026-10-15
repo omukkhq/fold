@@ -31,7 +31,7 @@ impl Sandbox {
 
     /// Runs the binary in `cwd` with no real home, so no run touches the user's registry or daemon.
     async fn fold(&self, cwd: &Path, args: &[&str]) -> Output {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_fold"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_fld"));
         command
             .args(args)
             .current_dir(cwd)
@@ -136,5 +136,5 @@ async fn fold_gc_prints_the_counts_of_the_project_it_runs_in() {
 
     let stopped = sandbox.fold(&project, &["gc", "--socket", socket]).await;
     assert!(!stopped.status.success());
-    assert!(String::from_utf8_lossy(&stopped.stderr).contains("fold serve"));
+    assert!(String::from_utf8_lossy(&stopped.stderr).contains("fld serve"));
 }

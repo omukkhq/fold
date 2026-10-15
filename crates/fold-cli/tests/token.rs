@@ -31,7 +31,7 @@ impl Host {
     }
 
     async fn fold(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_fold"))
+        Command::new(env!("CARGO_BIN_EXE_fld"))
             .args(args)
             .current_dir(self.path())
             .env("HOME", self.path())

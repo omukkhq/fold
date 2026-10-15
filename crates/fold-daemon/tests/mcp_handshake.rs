@@ -279,7 +279,7 @@ async fn a_cwd_outside_every_project_gets_project_not_found() {
         )
         .await;
         assert_eq!(code, "project_not_found");
-        assert_eq!(hint.as_deref(), Some("run fold init in the project root"));
+        assert_eq!(hint.as_deref(), Some("run fld init in the project root"));
     }
     assert_eq!(host.count("SELECT count(*) FROM sessions").await, 0);
     host.daemon.shutdown().await;

@@ -15,7 +15,7 @@ pub struct Refusal {
     pub code: String,
 }
 
-/// An MCP session over the daemon socket, opened with the same handshake as `fold mcp`.
+/// An MCP session over the daemon socket, opened with the same handshake as `fld mcp`.
 pub struct Agent {
     name: &'static str,
     client: RunningService<RoleClient, ()>,

@@ -61,7 +61,7 @@ impl WorkspaceService {
         }
         let head = workspaces::head(self.store.read()).await?.ok_or_else(|| {
             FoldError::new(codes::REVISION_NOT_FOUND, "main has no revision")
-                .with_hint("run fold init to create the first revision")
+                .with_hint("run fld init to create the first revision")
         })?;
         if head.number == row.base {
             let conflicted = workspaces::list_conflicts(self.store.read(), workspace).await?;

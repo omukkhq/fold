@@ -33,7 +33,7 @@ impl Sandbox {
     }
 
     fn fold_in(&self, cwd: &Path, args: &[&str]) -> Output {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_fold"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_fld"));
         // Coverage runs name the profile file through this variable.
         if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
             command.env("LLVM_PROFILE_FILE", profile);
@@ -54,7 +54,7 @@ fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
-/// The warnings `fold init` prints for a `CLAUDE.md` above the temporary directory, which belongs to the machine running the test.
+/// The warnings `fld init` prints for a `CLAUDE.md` above the temporary directory, which belongs to the machine running the test.
 #[cfg(test)]
 fn machine_warnings(project: &Path) -> String {
     let root = project.canonicalize().unwrap();

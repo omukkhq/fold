@@ -28,8 +28,8 @@ bin=$(cd "$(dirname "$bin")" && pwd)/$(basename "$bin")
 root=$(cd "$(dirname "$0")/.." && pwd)
 
 step=version
-want="fold $(sed -n '/^\[workspace\.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' "$root/Cargo.toml" | head -n 1)"
-[ "$want" != "fold " ] || fail "cannot read the workspace version from Cargo.toml"
+want="fld $(sed -n '/^\[workspace\.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' "$root/Cargo.toml" | head -n 1)"
+[ "$want" != "fld " ] || fail "cannot read the workspace version from Cargo.toml"
 got=$("$bin" --version 2>&1) || fail "'$bin --version' exited with an error: $got"
 [ "$got" = "$want" ] || fail "expected '$want', got '$got'"
 
@@ -55,7 +55,7 @@ done
 [ -S "$socket" ] || fail "no socket at $socket after 10 seconds"
 
 step=init
-"$bin" init "$work/project" >"$work/init.log" 2>&1 || fail "fold init exited with an error: $(tail -n 5 "$work/init.log")"
+"$bin" init "$work/project" >"$work/init.log" 2>&1 || fail "fld init exited with an error: $(tail -n 5 "$work/init.log")"
 
 base="http://127.0.0.1:$port"
 step=root

@@ -53,9 +53,9 @@ impl Host {
         self.path().join("run")
     }
 
-    /// `fold <args>` with the isolated folders, run in `cwd`.
+    /// `fld <args>` with the isolated folders, run in `cwd`.
     pub fn fold(&self, args: &[&str], cwd: &Path) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_fold"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_fld"));
         command
             .args(args)
             .current_dir(cwd)
@@ -72,7 +72,7 @@ impl Host {
         command
     }
 
-    /// Runs `fold <args>` to the end and returns its standard output.
+    /// Runs `fld <args>` to the end and returns its standard output.
     pub async fn run(
         &self,
         args: &[&str],
@@ -84,7 +84,7 @@ impl Host {
         let output = command.output().await?;
         if !output.status.success() {
             return fail(format!(
-                "fold {} failed: {}",
+                "fld {} failed: {}",
                 args.first().copied().unwrap_or_default(),
                 String::from_utf8_lossy(&output.stderr)
             ));

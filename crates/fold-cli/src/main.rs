@@ -18,7 +18,7 @@ use std::io::{self, Write};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "fold", version)]
+#[command(name = "fld", version)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -120,7 +120,7 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
 }
 
 fn main() -> anyhow::Result<()> {
-    // Not locked here: `fold mcp` writes stdout from a tokio blocking thread, which would wait forever for a lock that this thread holds.
+    // Not locked here: `fld mcp` writes stdout from a tokio blocking thread, which would wait forever for a lock that this thread holds.
     match run(std::env::args_os(), &mut io::stdout()) {
         Ok(()) => Ok(()),
         Err(Failure::Parse(error)) => error.exit(),
@@ -143,7 +143,7 @@ fn main() -> anyhow::Result<()> {
             None => error.into(),
         }),
         Err(Failure::Mcp(error)) => {
-            let _ = output::line(&mut io::stderr().lock(), &format!("fold mcp: {error}"));
+            let _ = output::line(&mut io::stderr().lock(), &format!("fld mcp: {error}"));
             std::process::exit(1)
         }
         Err(Failure::Doctor(error)) => Err(match error.code() {
@@ -193,25 +193,25 @@ mod tests {
 
     #[test]
     fn no_subcommand_prints_the_version_line() {
-        let (result, out) = run_with(&["fold"]);
+        let (result, out) = run_with(&["fld"]);
         assert!(result.is_ok());
-        assert_eq!(out, "fold 0.1.0\n");
+        assert_eq!(out, "fld 0.1.0\n");
     }
 
     #[test]
     fn version_flag_is_reported_as_display_version() {
-        let (result, out) = run_with(&["fold", "--version"]);
+        let (result, out) = run_with(&["fld", "--version"]);
         let Err(Failure::Parse(error)) = result else {
             panic!("expected a parse failure, got {result:?}");
         };
         assert_eq!(error.kind(), ErrorKind::DisplayVersion);
-        assert_eq!(error.to_string().trim(), "fold 0.1.0");
+        assert_eq!(error.to_string().trim(), "fld 0.1.0");
         assert!(out.is_empty());
     }
 
     #[test]
     fn unknown_argument_is_rejected_without_output() {
-        let (result, out) = run_with(&["fold", "--bogus"]);
+        let (result, out) = run_with(&["fld", "--bogus"]);
         assert_eq!(parse_kind(result), ErrorKind::UnknownArgument);
         assert!(out.is_empty());
     }
@@ -219,7 +219,7 @@ mod tests {
     #[test]
     fn a_failed_write_is_not_a_parse_failure() {
         let mut full: &mut [u8] = &mut [];
-        let result = run([OsString::from("fold")], &mut full);
+        let result = run([OsString::from("fld")], &mut full);
         let Err(Failure::Write(error)) = result else {
             panic!("expected a write failure, got {result:?}");
         };

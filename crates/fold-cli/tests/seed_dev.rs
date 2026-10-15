@@ -50,7 +50,7 @@ impl Host {
     }
 
     async fn seed(&self) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_fold"))
+        Command::new(env!("CARGO_BIN_EXE_fld"))
             .args(["dev", "seed", "--dir"])
             .arg(self.project())
             .arg("--socket")

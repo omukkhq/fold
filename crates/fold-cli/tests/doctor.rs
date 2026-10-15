@@ -23,7 +23,7 @@ impl Sandbox {
 
     /// The environment holds no real home, no runtime directory and an empty `PATH`, so a run sees only the sandbox.
     fn fold(&self, args: &[&str]) -> io::Result<Output> {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_fold"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_fld"));
         command
             .args(args)
             .current_dir(self.dir.path())
@@ -68,14 +68,14 @@ fn warnings_alone_exit_0_and_every_project_in_the_registry_is_checked() {
     assert!(text.starts_with("host\n"), "{text}");
     assert!(text.contains("project alpha\n") && text.contains("project beta\n"));
     assert!(text.contains("warn socket: no daemon socket at"));
-    assert!(text.contains("fix: fold serve"));
+    assert!(text.contains("fix: fld serve"));
     assert!(text.contains("warn git: git is not on PATH"));
     assert!(text.contains("fix: install git"));
     assert!(text.contains("warn claude: claude is not on PATH"));
     assert!(text.contains("fix: install Claude Code"));
     assert!(text.contains("ok   database: quick_check is ok and journal_mode is wal"));
     assert!(text.contains("warn claude files: .mcp.json is missing"));
-    assert_eq!(text.matches("fix: fold init --refresh").count(), 1);
+    assert_eq!(text.matches("fix: fld init --refresh").count(), 1);
 }
 
 #[test]
@@ -158,7 +158,7 @@ fn a_run_without_arguments_reports_the_platform_checks() {
 #[test]
 fn a_host_without_a_home_stops_with_the_invalid_host_paths_code() {
     let sandbox = Sandbox::new().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_fold"))
+    let output = Command::new(env!("CARGO_BIN_EXE_fld"))
         .arg("doctor")
         .env_clear()
         .current_dir(sandbox.dir.path())

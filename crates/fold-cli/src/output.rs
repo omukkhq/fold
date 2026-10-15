@@ -2,7 +2,7 @@ use std::fmt::Display;
 use std::io::{self, Write};
 
 pub fn version_line() -> String {
-    format!("fold {}", env!("CARGO_PKG_VERSION"))
+    format!("fld {}", env!("CARGO_PKG_VERSION"))
 }
 
 pub fn line(out: &mut impl Write, text: &str) -> io::Result<()> {
@@ -68,7 +68,7 @@ mod tests {
 
     #[test]
     fn version_line_names_the_workspace_version() {
-        assert_eq!(version_line(), "fold 0.1.0");
+        assert_eq!(version_line(), "fld 0.1.0");
     }
 
     #[test]

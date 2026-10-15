@@ -105,7 +105,7 @@ pub fn run(args: &InitArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), Ini
     }
     let initialised = initialise(args, dirs, out);
     if initialised.is_err() {
-        // Init created the directory; an empty one would only make the next `fold init DIR` fail.
+        // Init created the directory; an empty one would only make the next `fld init DIR` fail.
         let _ = std::fs::remove_dir(dir);
     }
     initialised.map(|_| ())
@@ -116,7 +116,7 @@ fn dir_exists(dir: &Path) -> FoldError {
         codes::INVALID_REQUEST,
         format!("{} exists already", dir.display()),
     )
-    .with_hint(format!("cd {} && fold init", dir.display()))
+    .with_hint(format!("cd {} && fld init", dir.display()))
     .with_details([("reason", serde_json::json!("dir_exists"))])
 }
 
@@ -302,7 +302,7 @@ mod tests {
     #[test]
     fn init_parses_dir_name_and_socket() {
         let parsed = Wrapper::try_parse_from([
-            "fold",
+            "fld",
             "~/scratch",
             "--name",
             "Scratch",
@@ -319,26 +319,18 @@ mod tests {
             parsed.args.socket.as_deref(),
             Some(Path::new("/tmp/f.sock"))
         );
-        let bare = Wrapper::try_parse_from(["fold", "dir"]).unwrap();
+        let bare = Wrapper::try_parse_from(["fld", "dir"]).unwrap();
         assert!(bare.args.name.is_none() && bare.args.socket.is_none() && bare.args.from.is_none());
         assert!(bare.args.from_git.is_none());
-        let git = Wrapper::try_parse_from(["fold", "dir", "--from-git", "../repo"]).unwrap();
+        let git = Wrapper::try_parse_from(["fld", "dir", "--from-git", "../repo"]).unwrap();
         assert_eq!(git.args.from_git.as_deref(), Some(Path::new("../repo")));
-        assert!(
-            Wrapper::try_parse_from(["fold", "dir", "--from", "a", "--from-git", "b"]).is_err()
-        );
-        assert!(
-            Wrapper::try_parse_from(["fold"])
-                .unwrap()
-                .args
-                .dir
-                .is_none()
-        );
-        let refresh = Wrapper::try_parse_from(["fold", "--refresh"]).unwrap();
+        assert!(Wrapper::try_parse_from(["fld", "dir", "--from", "a", "--from-git", "b"]).is_err());
+        assert!(Wrapper::try_parse_from(["fld"]).unwrap().args.dir.is_none());
+        let refresh = Wrapper::try_parse_from(["fld", "--refresh"]).unwrap();
         assert!(refresh.args.refresh && refresh.args.dir.is_none());
         for flag in ["--name", "--from", "--from-git", "--socket"] {
             assert!(
-                Wrapper::try_parse_from(["fold", "dir", "--refresh", flag, "x"]).is_err(),
+                Wrapper::try_parse_from(["fld", "dir", "--refresh", flag, "x"]).is_err(),
                 "{flag}"
             );
         }
@@ -443,7 +435,7 @@ mod tests {
         assert_eq!(error.code(), Some("invalid_request"));
         assert_eq!(
             error.hint(),
-            Some(format!("cd {} && fold init", dir.path().display()).as_str())
+            Some(format!("cd {} && fld init", dir.path().display()).as_str())
         );
         assert!(matches!(error, InitError::Refused(_)));
         assert!(!dir.path().join(".fold").exists());

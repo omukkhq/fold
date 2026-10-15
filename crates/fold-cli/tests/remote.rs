@@ -35,9 +35,9 @@ impl Sandbox {
         self.path("fold.sock")
     }
 
-    /// `fold <args>` in the sandbox with no real home, no runtime directory and `path` as `PATH`.
+    /// `fld <args>` in the sandbox with no real home, no runtime directory and `path` as `PATH`.
     fn command(&self, path: &str, args: &[&str]) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_fold"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_fld"));
         // Coverage runs name the profile file through this variable.
         if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
             command.env("LLVM_PROFILE_FILE", profile);
@@ -86,7 +86,7 @@ impl Sandbox {
         remote
     }
 
-    /// `fold serve` on the sandbox socket with `path` as `PATH`, stopped when the guard drops.
+    /// `fld serve` on the sandbox socket with `path` as `PATH`, stopped when the guard drops.
     fn serve(&self, path: &str) -> Daemon {
         let _ = fs::remove_file(self.socket());
         let socket = self.socket();
@@ -279,7 +279,7 @@ fn push_goes_through_the_daemon_and_needs_git_on_its_path() {
         sandbox.push(&project)
     };
     assert!(stderr(&unset).contains("remote_not_set"), "{unset:?}");
-    assert!(stderr(&unset).contains("fold remote set"), "{unset:?}");
+    assert!(stderr(&unset).contains("fld remote set"), "{unset:?}");
     let set = sandbox.fold(&[
         "remote",
         "set",

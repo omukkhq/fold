@@ -25,7 +25,7 @@ pub async fn gc(project: &ProjectHandle, dry_run: bool) -> Result<GcReport, Proj
             codes::GC_IN_PROGRESS,
             format!("garbage collection of project {} is running", project.slug),
         )
-        .with_hint("wait for the running collection to finish, then run fold gc again")
+        .with_hint("wait for the running collection to finish, then run fld gc again")
         .into());
     };
     let now = project.clock.now();

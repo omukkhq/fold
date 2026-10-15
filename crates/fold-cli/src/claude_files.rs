@@ -18,11 +18,12 @@ pub const ALLOW_FOLD_TOOLS: &str = "mcp__fold";
 pub const DENY_MAIN: [&str; 2] = ["Edit(/main/**)", "Write(/main/**)"];
 /// The Claude Code hook events and the fold command each one runs.
 pub const HOOKS: [(&str, &str); 2] = [
-    ("SessionStart", "fold hook session-start"),
-    ("Stop", "fold hook stop"),
+    ("SessionStart", "fld hook session-start"),
+    ("Stop", "fld hook stop"),
 ];
 /// A hook command that starts with this belongs to fold, and a refresh replaces it.
-const HOOK_PREFIX: &str = "fold hook";
+/// `fold hook` is what files written before the binary became `fld` hold; a refresh replaces those too.
+const HOOK_PREFIXES: [&str; 2] = ["fld hook", "fold hook"];
 
 pub const AGENTS_FILE: &str = "AGENTS.md";
 /// fold's own text in `AGENTS.md` sits between these lines.
@@ -108,7 +109,7 @@ fn malformed(path: &Path, problem: &str) -> ClaudeFileError {
             ("reason", json!(MALFORMED_REASON)),
             ("path", json!(path.display().to_string())),
         ])
-        .with_hint("correct or move the file, then run fold init --refresh"),
+        .with_hint("correct or move the file, then run fld init --refresh"),
     )
 }
 
@@ -169,7 +170,7 @@ fn merge_mcp(object: &mut Map<String, Value>) -> Result<(), &'static str> {
     servers.insert(
         MCP_SERVER_NAME.to_owned(),
         json!({
-            "command": "fold",
+            "command": "fld",
             "args": ["mcp"],
             "env": {"FOLD_AGENT": "${FOLD_AGENT:-}"},
         }),
@@ -224,7 +225,12 @@ fn merge_settings(object: &mut Map<String, Value>) -> Result<(), &'static str> {
 fn is_fold_hook(hook: &Value) -> bool {
     hook.get("command")
         .and_then(Value::as_str)
-        .is_some_and(|command| command.trim_start().starts_with(HOOK_PREFIX))
+        .is_some_and(|command| {
+            let command = command.trim_start();
+            HOOK_PREFIXES
+                .iter()
+                .any(|prefix| command.starts_with(prefix))
+        })
 }
 
 /// The text of `AGENTS.md` with `section` between the markers. A file without markers keeps its bytes as the prefix and gains the section after one blank line; a file with one pair keeps every byte outside it. Markers count only as whole lines. The error says what is wrong with the markers.
@@ -307,7 +313,7 @@ pub fn shadowing_files(root: &Path, home: Option<&Path>) -> Vec<PathBuf> {
     found
 }
 
-/// The line `fold init` prints for one file from [`shadowing_files`].
+/// The line `fld init` prints for one file from [`shadowing_files`].
 pub fn shadowing_warning(path: &Path) -> String {
     format!(
         "warning: {} makes Claude Code skip AGENTS.md; move its text into AGENTS.md and delete it",

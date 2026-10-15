@@ -522,7 +522,7 @@ impl Drop for MainMaterialiser {
     }
 }
 
-/// Starts the `main_materialiser` of one project: it queues the revision of each committed `main.advanced` on `bus`, a proposal integration and a pull alike, and rewrites `main/` to the newest queued revision with [`main_view::update`]. At start it queues the current head, so a revision committed before a crash or a stop that never reached `main/` is written then. A project without a marker shows `r1`, which `fold init` wrote. A failed or cut-off rewrite is logged and leaves the marker on the revision `main/` last finished showing, with the rewrite it began noted, so the next queued revision, or the head at the next start, starts from what `main/` holds.
+/// Starts the `main_materialiser` of one project: it queues the revision of each committed `main.advanced` on `bus`, a proposal integration and a pull alike, and rewrites `main/` to the newest queued revision with [`main_view::update`]. At start it queues the current head, so a revision committed before a crash or a stop that never reached `main/` is written then. A project without a marker shows `r1`, which `fld init` wrote. A failed or cut-off rewrite is logged and leaves the marker on the revision `main/` last finished showing, with the rewrite it began noted, so the next queued revision, or the head at the next start, starts from what `main/` holds.
 pub fn spawn_main_materialiser(
     store: Store,
     bus: &EventBus,
@@ -673,7 +673,7 @@ impl Drop for AutoCommit {
     }
 }
 
-/// Starts `auto_commit` for one project. It writes the commit of every revision that has none into `.fold/git` once at the start, which catches up an integration a stopped daemon never committed, and again after every committed integration of either kind, which the bus carries only after its commit. After an integration it then runs the push of `fold push` as `fold` to each remote whose `push_on_integrate` is true, read at that moment. A commit covers every revision so far, so the integrations that arrive while one runs need one more run at most. A failed commit appends `git.commit_failed` and a failed push `remote.push_failed`, each in its own transaction, and logs the project and the code only; the integration stands either way.
+/// Starts `auto_commit` for one project. It writes the commit of every revision that has none into `.fold/git` once at the start, which catches up an integration a stopped daemon never committed, and again after every committed integration of either kind, which the bus carries only after its commit. After an integration it then runs the push of `fld push` as `fold` to each remote whose `push_on_integrate` is true, read at that moment. A commit covers every revision so far, so the integrations that arrive while one runs need one more run at most. A failed commit appends `git.commit_failed` and a failed push `remote.push_failed`, each in its own transaction, and logs the project and the code only; the integration stands either way.
 pub fn auto_commit(context: RemoteContext, git: Git) -> AutoCommit {
     let receiver = context.bus.subscribe();
     AutoCommit(tokio::spawn(run_auto_commit(context, git, receiver)))

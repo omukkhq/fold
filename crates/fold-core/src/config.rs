@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{FoldError, codes};
 
-/// The commented file `fold init` writes to `.fold/config.toml`. Every value line is commented out and holds the default.
+/// The commented file `fld init` writes to `.fold/config.toml`. Every value line is commented out and holds the default.
 pub const CONFIG_TEMPLATE: &str = include_str!("config_template.toml");
 
 /// The per-project settings of `.fold/config.toml`. Every key is optional in the file and a value of 0 is refused.
@@ -40,7 +40,7 @@ impl Default for GitConfig {
     }
 }
 
-/// One `[remotes.<name>]` section: a Git repository that `fold push` and `fold pull` sync main with.
+/// One `[remotes.<name>]` section: a Git repository that `fld push` and `fld pull` sync main with.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RemoteConfig {

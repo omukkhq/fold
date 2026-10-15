@@ -31,7 +31,7 @@ pub enum ClientError {
     HumanInvalid,
     #[error("the daemon did not open {} within 10 seconds", path.display())]
     StartTimeout { path: PathBuf },
-    #[error("the daemon stopped while it started; run fold serve to see why")]
+    #[error("the daemon stopped while it started; run fld serve to see why")]
     StartFailed,
     #[error(
         "XDG_RUNTIME_DIR is not set, so fold cannot start the daemon; set it, or pass --socket of a running daemon"
@@ -59,7 +59,7 @@ pub struct ClientConfig {
     pub socket: PathBuf,
     /// `$XDG_RUNTIME_DIR/fold`, which holds `start.lock`. Without it a client reaches a running daemon but cannot start one.
     pub runtime_dir: Option<PathBuf>,
-    /// The binary started as `fold serve --socket <socket>`. `None` makes a client that never starts a daemon: an absent socket is [`ClientError::NoDaemon`].
+    /// The binary started as `fld serve --socket <socket>`. `None` makes a client that never starts a daemon: an absent socket is [`ClientError::NoDaemon`].
     pub fold_exe: Option<PathBuf>,
 }
 

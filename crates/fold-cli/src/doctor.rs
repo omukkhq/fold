@@ -299,7 +299,7 @@ fn socket_check(path: Option<&Path>, state: Option<SocketState>) -> Check {
         return Check::warn(
             "socket",
             "no socket path: XDG_RUNTIME_DIR is not set",
-            "export XDG_RUNTIME_DIR=/run/user/$(id -u), or pass --socket <path> to fold serve and fold doctor",
+            "export XDG_RUNTIME_DIR=/run/user/$(id -u), or pass --socket <path> to fld serve and fld doctor",
         );
     };
     let shown = path.display();
@@ -313,12 +313,12 @@ fn socket_check(path: Option<&Path>, state: Option<SocketState>) -> Check {
         SocketState::Missing => Check::warn(
             "socket",
             format!("no daemon socket at {shown}"),
-            "fold serve",
+            "fld serve",
         ),
         SocketState::Dead => Check::warn(
             "socket",
             format!("the daemon does not answer on {shown}"),
-            "fold serve",
+            "fld serve",
         ),
     }
 }
@@ -366,7 +366,7 @@ fn http_check(listen: std::net::SocketAddr) -> Check {
         Err(_) => Check::warn(
             "http",
             format!("{listen} does not accept connections"),
-            "fold serve",
+            "fld serve",
         ),
     }
 }
@@ -377,7 +377,7 @@ fn git_check(host: &Host) -> Check {
     } else {
         Check::warn(
             "git",
-            "git is not on PATH; fold needs it for the Git commit of every integration, --from-git, fold remote, fold push and fold pull",
+            "git is not on PATH; fold needs it for the Git commit of every integration, --from-git, fld remote, fld push and fld pull",
             "install git",
         )
     }
@@ -494,7 +494,7 @@ fn service_manager_check(host: &Host) -> Check {
         Check::warn(
             "service manager",
             "no service manager support",
-            "fold serve, started by the host's own supervisor",
+            "fld serve, started by the host's own supervisor",
         )
     }
 }
@@ -951,7 +951,7 @@ fn git_history_check(paths: &ProjectPaths, host: &Host) -> Check {
             format!(
                 ".fold/git does not hold {commit}, the commit of {revision}, so new revisions get no Git commit"
             ),
-            "run fold remote set <name> <url> with a repository that holds that commit, then fold pull <name>",
+            "run fld remote set <name> <url> with a repository that holds that commit, then fld pull <name>",
         ),
     }
 }
@@ -966,7 +966,7 @@ fn claude_files_check(root: &Path) -> Check {
     if problems.is_empty() {
         Check::ok("claude files", "the fold entries are in place")
     } else {
-        Check::warn("claude files", problems.join("; "), "fold init --refresh")
+        Check::warn("claude files", problems.join("; "), "fld init --refresh")
     }
 }
 

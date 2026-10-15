@@ -237,7 +237,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Collects the project's garbage: prunes checkpoints, removes closed workspace directories past their retention and deletes unreferenced objects. Socket only; used by `fold gc`. */
+        /** Collects the project's garbage: prunes checkpoints, removes closed workspace directories past their retention and deletes unreferenced objects. Socket only; used by `fld gc`. */
         post: operations["run_gc"];
         delete?: never;
         options?: never;
@@ -2542,7 +2542,7 @@ export interface components {
              */
             task: string | null;
         };
-        /** @description Off loopback, a web token from `fold token create`. */
+        /** @description Off loopback, a web token from `fld token create`. */
         TokenSignIn: {
             token: string;
         };

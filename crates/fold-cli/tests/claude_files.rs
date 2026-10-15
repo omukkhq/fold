@@ -11,7 +11,7 @@ use tempfile::TempDir;
 const MCP_GOLDEN: &str = r#"{
   "mcpServers": {
     "fold": {
-      "command": "fold",
+      "command": "fld",
       "args": [
         "mcp"
       ],
@@ -39,7 +39,7 @@ const SETTINGS_GOLDEN: &str = r#"{
         "hooks": [
           {
             "type": "command",
-            "command": "fold hook session-start"
+            "command": "fld hook session-start"
           }
         ]
       }
@@ -49,7 +49,7 @@ const SETTINGS_GOLDEN: &str = r#"{
         "hooks": [
           {
             "type": "command",
-            "command": "fold hook stop"
+            "command": "fld hook stop"
           }
         ]
       }
@@ -124,9 +124,9 @@ fn a_refresh_keeps_foreign_entries_in_their_order_and_replaces_stale_fold_ones()
     let dir = TempDir::new().unwrap();
     let root = dir.path();
     std::fs::create_dir_all(root.join(".claude")).unwrap();
-    let mcp = r#"{"other": 1, "mcpServers": {"zeta": {"command": "z-mcp"}, "fold": {"command": "/old/fold", "args": ["serve"]}, "alpha": {"command": "a-mcp", "env": {"Z": "1", "A": "2"}}}}"#;
+    let mcp = r#"{"other": 1, "mcpServers": {"zeta": {"command": "z-mcp"}, "fold": {"command": "fold", "args": ["serve"]}, "alpha": {"command": "a-mcp", "env": {"Z": "1", "A": "2"}}}}"#;
     std::fs::write(root.join(MCP_FILE), mcp).unwrap();
-    let settings = r#"{"model": "opus", "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo bye"}]}], "SessionStart": [{"hooks": [{"type": "command", "command": "fold hook old-start"}, {"type": "command", "command": "notify-send hi"}]}, {"matcher": "resume", "hooks": [{"type": "command", "command": "fold hook session-start"}]}], "PreToolUse": [{"matcher": "Bash", "hooks": [{"command": "guard", "type": "command"}]}]}, "permissions": {"deny": ["Read(.env)"], "allow": ["Bash(ls)", "mcp__fold"]}, "env": {"B": "2", "A": "1"}}"#;
+    let settings = r#"{"model": "opus", "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo bye"}]}, {"hooks": [{"type": "command", "command": "fold hook stop"}]}], "SessionStart": [{"hooks": [{"type": "command", "command": "fold hook old-start"}, {"type": "command", "command": "notify-send hi"}]}, {"matcher": "resume", "hooks": [{"type": "command", "command": "fld hook session-start"}]}], "PreToolUse": [{"matcher": "Bash", "hooks": [{"command": "guard", "type": "command"}]}]}, "permissions": {"deny": ["Read(.env)"], "allow": ["Bash(ls)", "mcp__fold"]}, "env": {"B": "2", "A": "1"}}"#;
     std::fs::write(root.join(SETTINGS_FILE), settings).unwrap();
     claude_files::write(root).unwrap();
 
@@ -137,7 +137,7 @@ fn a_refresh_keeps_foreign_entries_in_their_order_and_replaces_stale_fold_ones()
       "command": "z-mcp"
     },
     "fold": {
-      "command": "fold",
+      "command": "fld",
       "args": [
         "mcp"
       ],
@@ -172,7 +172,7 @@ fn a_refresh_keeps_foreign_entries_in_their_order_and_replaces_stale_fold_ones()
         "hooks": [
           {
             "type": "command",
-            "command": "fold hook stop"
+            "command": "fld hook stop"
           }
         ]
       }
@@ -190,7 +190,7 @@ fn a_refresh_keeps_foreign_entries_in_their_order_and_replaces_stale_fold_ones()
         "hooks": [
           {
             "type": "command",
-            "command": "fold hook session-start"
+            "command": "fld hook session-start"
           }
         ]
       }
@@ -441,7 +441,7 @@ impl Sandbox {
     }
 
     fn fold_in(&self, args: &[&str], cwd: &Path) -> Output {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_fold"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_fld"));
         command
             .args(args)
             .current_dir(cwd)

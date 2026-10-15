@@ -72,7 +72,7 @@ async fn send_to_frontend(daemon: &RunningDaemon, handle: &ProjectHandle) {
         .unwrap();
 }
 
-/// `fold hook stop` with `stdin`, run in the project root; `socket` is passed as `--socket` when given.
+/// `fld hook stop` with `stdin`, run in the project root; `socket` is passed as `--socket` when given.
 #[cfg(test)]
 async fn hook(host: &Host, socket: Option<&Path>, agent: Option<&str>, stdin: &str) -> Output {
     let mut args = vec!["hook", "stop"];
@@ -157,7 +157,7 @@ async fn malformed_input_and_unknown_agents_exit_0_with_one_line() {
         let output = hook(&host, Some(&socket), Some(agent), &stdin).await;
         assert_eq!(output.status.code(), Some(0), "{stdin}");
         assert!(output.stdout.is_empty(), "{stdin}");
-        assert_eq!(text(&output.stderr), format!("fold hook stop: {code}\n"));
+        assert_eq!(text(&output.stderr), format!("fld hook stop: {code}\n"));
     }
     daemon.shutdown().await;
 }
@@ -174,7 +174,7 @@ async fn without_a_running_daemon_the_hook_starts_none() {
     .await;
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stdout.is_empty());
-    assert_eq!(text(&output.stderr), "fold hook stop: daemon_unreachable\n");
+    assert_eq!(text(&output.stderr), "fld hook stop: daemon_unreachable\n");
     assert!(!host.default_socket().exists());
     assert!(daemons(&host.default_socket()).is_empty());
 }

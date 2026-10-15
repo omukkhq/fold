@@ -20,7 +20,7 @@ const REPOSITORY_VARIABLES: &[&str] = &[
     "GIT_WORK_TREE",
 ];
 
-/// The `git` program, found on `PATH` unless a path is given. fold needs it for the project's own Git history, a Git import, `fold remote` and push and pull. Arguments go to the process directly, never through a shell.
+/// The `git` program, found on `PATH` unless a path is given. fold needs it for the project's own Git history, a Git import, `fld remote` and push and pull. Arguments go to the process directly, never through a shell.
 #[derive(Debug, Clone)]
 pub struct Git {
     program: PathBuf,

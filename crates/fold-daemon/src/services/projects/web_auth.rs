@@ -54,7 +54,7 @@ pub async fn create_web_token(
     Ok(token)
 }
 
-/// [`create_web_token`] for `fold token create`, which writes the host registry without a running daemon.
+/// [`create_web_token`] for `fld token create`, which writes the host registry without a running daemon.
 pub async fn create_web_token_on_host(
     host: &HostPaths,
     clock: &dyn Clock,
@@ -72,7 +72,7 @@ pub async fn list_web_tokens(registry: &Store) -> Result<Vec<WebTokenEntry>, Sto
     projects::list_web_tokens(registry.read()).await
 }
 
-/// [`list_web_tokens`] for `fold token list`, which reads the host registry without a running daemon.
+/// [`list_web_tokens`] for `fld token list`, which reads the host registry without a running daemon.
 pub async fn list_web_tokens_on_host(host: &HostPaths) -> Result<Vec<WebTokenEntry>, ProjectError> {
     let registry = Store::open_registry(&host.registry_db()).await?;
     let tokens = list_web_tokens(&registry).await;
@@ -96,12 +96,12 @@ pub async fn revoke_web_token(
             codes::TOKEN_NOT_FOUND,
             format!("no unrevoked web token is {id}"),
         )
-        .with_hint("list the tokens with `fold token list`")
+        .with_hint("list the tokens with `fld token list`")
         .into())
     }
 }
 
-/// [`revoke_web_token`] for `fold token revoke`. A running daemon reads `web_tokens` and `web_sessions` on every check, so the revocation holds from its next request.
+/// [`revoke_web_token`] for `fld token revoke`. A running daemon reads `web_tokens` and `web_sessions` on every check, so the revocation holds from its next request.
 pub async fn revoke_web_token_on_host(
     host: &HostPaths,
     clock: &dyn Clock,

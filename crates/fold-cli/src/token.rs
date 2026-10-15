@@ -39,7 +39,7 @@ struct CreateArgs {
 
 #[derive(Args, Debug)]
 struct RevokeArgs {
-    /// The token id that `fold token list` shows, such as wt-3
+    /// The token id that `fld token list` shows, such as wt-3
     id: String,
 }
 
@@ -66,7 +66,7 @@ impl TokenError {
     }
 }
 
-/// Reads and writes the registry directly, the way `fold init` does, so every command works while the daemon is down; a running daemon reads `web_tokens` and `web_sessions` on every check, so a new token signs in and a revoked one stops at once.
+/// Reads and writes the registry directly, the way `fld init` does, so every command works while the daemon is down; a running daemon reads `web_tokens` and `web_sessions` on every check, so a new token signs in and a revoked one stops at once.
 pub fn run(args: &TokenArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), TokenError> {
     let host = host_paths(dirs)?;
     let runtime = tokio::runtime::Builder::new_current_thread()

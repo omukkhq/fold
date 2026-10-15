@@ -13,7 +13,7 @@ use crate::common::{Host, daemons};
 
 const WAIT: Duration = Duration::from_secs(20);
 
-/// `fold serve` on the private socket `socket`, once it accepts connections.
+/// `fld serve` on the private socket `socket`, once it accepts connections.
 async fn serve(host: &Host, socket: &Path) -> Child {
     let mut command = host.fold(&["serve", "--socket", socket.to_str().unwrap()], &host.root);
     command
@@ -36,7 +36,7 @@ async fn kill(mut daemon: Child) {
     daemon.wait().await.unwrap();
 }
 
-/// The OS lock on `daemon.lock` decides: a second `fold serve` on the same host is refused with `daemon_already_running` while the first runs, even on another socket. SIGKILL releases the lock and leaves the socket file behind, and the next `fold serve` replaces that file and serves.
+/// The OS lock on `daemon.lock` decides: a second `fld serve` on the same host is refused with `daemon_already_running` while the first runs, even on another socket. SIGKILL releases the lock and leaves the socket file behind, and the next `fld serve` replaces that file and serves.
 #[tokio::test]
 async fn a_second_daemon_is_refused_until_the_first_is_killed() {
     let host = Host::new().await;
@@ -77,6 +77,6 @@ async fn a_second_daemon_is_refused_until_the_first_is_killed() {
     kill(again).await;
     assert!(
         daemons(&socket).is_empty() && daemons(&other).is_empty(),
-        "a fold serve outlived the test"
+        "a fld serve outlived the test"
     );
 }

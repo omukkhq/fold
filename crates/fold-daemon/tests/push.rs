@@ -98,7 +98,7 @@ impl Project {
         }
     }
 
-    /// Adds `remote` as the remote `origin`, as `fold remote set` does.
+    /// Adds `remote` as the remote `origin`, as `fld remote set` does.
     fn set_remote(&self, remote: &Path) {
         let config = self.paths.config();
         let mut text = fs::read_to_string(&config).unwrap();
@@ -647,7 +647,7 @@ async fn an_imported_commit_missing_from_the_project_repository_is_fetched_from_
     let ProjectError::Fold(refused) = refused else {
         panic!("expected a refusal");
     };
-    assert!(refused.hint().unwrap().contains("fold pull"));
+    assert!(refused.hint().unwrap().contains("fld pull"));
     assert_eq!(project.map(), format!("r1 {head}\n"));
 
     fs::rename(&moved, &work).unwrap();
@@ -764,7 +764,7 @@ async fn the_push_route_is_socket_only_and_names_the_human() {
         body["error"]["details"]["hint"]
             .as_str()
             .unwrap()
-            .contains("fold remote set")
+            .contains("fld remote set")
     );
     daemon.shutdown().await;
 }

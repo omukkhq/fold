@@ -99,7 +99,7 @@ describe("Projects screen", () => {
     expect(await screen.findByText("No projects yet")).toBeTruthy();
     expect(
       within(screen.getByRole("region", { name: "No projects yet" })).getByText(
-        "fold init <dir>",
+        "fld init <dir>",
       ),
     ).toBeTruthy();
   });

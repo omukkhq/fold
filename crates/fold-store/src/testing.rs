@@ -78,7 +78,7 @@ impl TestProject {
         }
     }
 
-    /// A project that `init` creates the way `fold init` does, so a test sees the layout, `r1` and the registry row that init writes. `init` gets the project root, which does not exist yet, the host paths whose registry database the fixture opens afterwards, and the fixture's clock.
+    /// A project that `init` creates the way `fld init` does, so a test sees the layout, `r1` and the registry row that init writes. `init` gets the project root, which does not exist yet, the host paths whose registry database the fixture opens afterwards, and the fixture's clock.
     pub async fn initialized(init: impl AsyncFnOnce(&Path, &HostPaths, &ManualClock)) -> Self {
         let dir = TempDir::new().expect("create the project directory");
         let paths = ProjectPaths::new(dir.path().join("project"));

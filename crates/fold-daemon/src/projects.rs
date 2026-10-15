@@ -47,7 +47,7 @@ pub struct ProjectHandle {
     /// The Claude Code inbox sockets of the project's agents. They live in memory only, so a restarted daemon has none until the session-start hooks run again.
     pub push: PushTargets,
     _push_task: PushTask,
-    /// Keeps `main/` on the head after each integration. It is the only writer of `main/` after `fold init`.
+    /// Keeps `main/` on the head after each integration. It is the only writer of `main/` after `fld init`.
     pub main_view: MainMaterialiser,
     /// Commits each integration to `.fold/git` and pushes it when the configuration asks.
     _auto_commit: AutoCommit,
@@ -62,7 +62,7 @@ impl std::fmt::Debug for ProjectHandle {
 }
 
 impl ProjectHandle {
-    /// Opens the project database, which applies its pending migrations. A missing database is not created: the registry only lists projects that `fold init` set up. The live state takes its intervals from the configuration read here; an invalid configuration gives it the defaults, and the commands that read the configuration report the error.
+    /// Opens the project database, which applies its pending migrations. A missing database is not created: the registry only lists projects that `fld init` set up. The live state takes its intervals from the configuration read here; an invalid configuration gives it the defaults, and the commands that read the configuration report the error.
     pub async fn open(row: &ProjectRow, clock: Arc<dyn Clock>) -> Result<Self, FoldError> {
         let paths = ProjectPaths::new(&row.root);
         let present = tokio::fs::try_exists(paths.db()).await.unwrap_or(false);

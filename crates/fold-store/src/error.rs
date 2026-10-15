@@ -10,7 +10,7 @@ pub enum StoreError {
     #[error("migration error: {0}")]
     Migrate(#[source] MigrateError),
     #[error(
-        "the {database} database is still locked after {} s; another fold process (a daemon, fold serve or fold init) holds its write lock: stop that process or let it finish, then try again",
+        "the {database} database is still locked after {} s; another fold process (a daemon, fld serve or fld init) holds its write lock: stop that process or let it finish, then try again",
         waited.as_secs()
     )]
     Locked {

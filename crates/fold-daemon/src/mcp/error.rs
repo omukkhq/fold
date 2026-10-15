@@ -18,10 +18,7 @@ const HINTS: &[(&str, &str)] = &[
     (codes::MESSAGE_NOT_FOUND, "call get_inbox"),
     (codes::RECIPIENT_NOT_FOUND, "call list_agents"),
     (codes::WORKER_NOT_FOUND, "call register_worker"),
-    (
-        codes::PROJECT_NOT_FOUND,
-        "run fold init in the project root",
-    ),
+    (codes::PROJECT_NOT_FOUND, "run fld init in the project root"),
     (
         codes::REVISION_NOT_FOUND,
         "call get_repository_state for the head and the recent revisions",
@@ -190,7 +187,7 @@ mod tests {
         );
         assert_eq!(
             hint_for(codes::PROJECT_NOT_FOUND),
-            Some("run fold init in the project root")
+            Some("run fld init in the project root")
         );
     }
 

@@ -38,7 +38,7 @@ pub enum PushOutcome {
     },
 }
 
-/// Writes the commits that `.fold/git` lacks for main, as every integration does, then pushes the `[git]` branch of `.fold/git` to the branch of the remote `remote`, never with force, and appends `remote.pushed` in one transaction. Without a name the push goes to the only remote. The configuration is read on every call, so `fold remote set` takes effect without a restart. A remote that is an absolute local path that does not exist is created as a bare repository first. A remote branch with commits that main lacks fails with `remote_ahead` before anything is sent; one already on main's newest commit is up to date. A push never changes main, tasks, workspaces or claims, and a failed one writes no event. The project's remote lock and its Git sync lock are held throughout, so pushes, pulls and the commit of each integration run one after the other. The push runs as its own task, so a caller that stops waiting never leaves the remote moved without its event.
+/// Writes the commits that `.fold/git` lacks for main, as every integration does, then pushes the `[git]` branch of `.fold/git` to the branch of the remote `remote`, never with force, and appends `remote.pushed` in one transaction. Without a name the push goes to the only remote. The configuration is read on every call, so `fld remote set` takes effect without a restart. A remote that is an absolute local path that does not exist is created as a bare repository first. A remote branch with commits that main lacks fails with `remote_ahead` before anything is sent; one already on main's newest commit is up to date. A push never changes main, tasks, workspaces or claims, and a failed one writes no event. The project's remote lock and its Git sync lock are held throughout, so pushes, pulls and the commit of each integration run one after the other. The push runs as its own task, so a caller that stops waiting never leaves the remote moved without its event.
 pub async fn push(
     handle: &Arc<ProjectHandle>,
     actor: &Actor,
@@ -231,10 +231,10 @@ pub(crate) fn first_unreached(
 
 pub(super) fn remote_not_set() -> FoldError {
     FoldError::new(codes::REMOTE_NOT_SET, "the project has no Git remote")
-        .with_hint("run fold remote set <name> <url> in the project first")
+        .with_hint("run fld remote set <name> <url> in the project first")
 }
 
-/// The remote `name` names, or the only remote when `name` is `None`. No remote, an unknown name and several remotes without a name are refused with a hint that names `fold remote list`.
+/// The remote `name` names, or the only remote when `name` is `None`. No remote, an unknown name and several remotes without a name are refused with a hint that names `fld remote list`.
 pub(crate) fn select_remote(
     config: &ProjectConfig,
     name: Option<&str>,
@@ -249,7 +249,7 @@ pub(crate) fn select_remote(
                     codes::REMOTE_NOT_SET,
                     format!("the project has no Git remote named {name}"),
                 )
-                .with_hint("run fold remote list to see the remotes")
+                .with_hint("run fld remote list to see the remotes")
             }),
         None => {
             let mut remotes = config.remotes.iter();
@@ -260,7 +260,7 @@ pub(crate) fn select_remote(
                     codes::INVALID_REQUEST,
                     "the project has several Git remotes, so the command must name one",
                 )
-                .with_hint("run fold remote list, then name the remote")
+                .with_hint("run fld remote list, then name the remote")
                 .with_details([("reason", json!("several_remotes"))])),
             }
         }

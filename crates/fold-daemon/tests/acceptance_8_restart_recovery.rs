@@ -155,7 +155,7 @@ impl Scene {
     }
 }
 
-/// Writes `r1` into `main/` and the marker the way `fold init` does, so the test can hold `main/` to the head.
+/// Writes `r1` into `main/` and the marker the way `fld init` does, so the test can hold `main/` to the head.
 async fn materialise_main(harness: &Harness) {
     let paths = harness.project.paths().clone();
     let tree = head_tree(&harness.handle.store).await;

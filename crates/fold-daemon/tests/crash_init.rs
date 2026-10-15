@@ -45,7 +45,7 @@ impl Host {
         ProjectPaths::new(self.root().canonicalize().unwrap())
     }
 
-    /// `fold init app --from source`.
+    /// `fld init app --from source`.
     async fn init(&self) -> Result<InitializedProject, ProjectError> {
         init_project_from(
             &self.paths,
@@ -159,7 +159,7 @@ async fn an_init_stopped_inside_the_import_is_refused_and_nothing_is_deleted() {
             .contains(&paths.root().display().to_string())
     );
     assert!(error.hint().unwrap().contains(&format!(
-        "delete {} and run fold init again",
+        "delete {} and run fld init again",
         paths.fold_dir().display()
     )));
     assert_eq!(files(host.dir.path()), before);

@@ -219,7 +219,7 @@ fn time(millis: i64, column: &'static str) -> Result<Timestamp, StoreError> {
     Timestamp::from_millis(millis).map_err(|_| StoreError::Corrupt(column))
 }
 
-/// What `fold token list` shows of a token: never its hash.
+/// What `fld token list` shows of a token: never its hash.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebTokenEntry {
     pub id: WebTokenId,

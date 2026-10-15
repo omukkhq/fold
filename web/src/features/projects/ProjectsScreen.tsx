@@ -37,16 +37,16 @@ export function ProjectsScreen() {
             </div>
             <p className="flex items-center gap-8 rounded-m bg-sunken px-12 py-7 text-bar text-text-muted">
               Add a project:
-              <Mono className="text-text">fold init &lt;dir&gt;</Mono>
+              <Mono className="text-text">fld init &lt;dir&gt;</Mono>
             </p>
           </div>
           {projects.length === 0 ? (
             <EmptyPanel
               icon={FolderGit2}
               title="No projects yet"
-              action={<Mono className="text-text">fold init &lt;dir&gt;</Mono>}
+              action={<Mono className="text-text">fld init &lt;dir&gt;</Mono>}
             >
-              Run fold init in a project directory. It appears here when the
+              Run fld init in a project directory. It appears here when the
               daemon has registered it.
             </EmptyPanel>
           ) : (

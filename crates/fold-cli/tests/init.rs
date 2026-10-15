@@ -38,7 +38,7 @@ impl Sandbox {
     }
 
     fn fold_in(&self, cwd: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_fold"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_fld"));
         command
             .args(args)
             .current_dir(cwd)
@@ -63,7 +63,7 @@ fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
-/// The warnings `fold init` prints for a `CLAUDE.md` above the temporary directory, which belongs to the machine running the test.
+/// The warnings `fld init` prints for a `CLAUDE.md` above the temporary directory, which belongs to the machine running the test.
 #[cfg(test)]
 fn machine_warnings(project: &Path) -> String {
     let root = project.canonicalize().unwrap();
@@ -315,7 +315,7 @@ fn a_second_init_prints_project_exists_and_keeps_the_first_project() {
     let refused = String::from_utf8_lossy(&named.stderr).into_owned();
     assert!(refused.contains("invalid_request"), "{refused}");
     assert!(
-        refused.contains(&format!("cd {} && fold init", project.display())),
+        refused.contains(&format!("cd {} && fld init", project.display())),
         "{refused}"
     );
     let second = sandbox.fold_in(&project, &["init"], &[]);

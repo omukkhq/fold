@@ -36,7 +36,7 @@ async fn until(mut done: impl FnMut() -> bool) {
     .expect("the condition within the wait");
 }
 
-/// The fixture with `main/` showing `r1` and the marker naming it, as `fold init` leaves a project.
+/// The fixture with `main/` showing `r1` and the marker naming it, as `fld init` leaves a project.
 struct Project {
     fx: Fixture,
 }
