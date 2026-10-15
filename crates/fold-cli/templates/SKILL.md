@@ -1,6 +1,6 @@
 ---
 name: fold
-description: Work in a fold project. Use it for tasks, workspaces, proposals, reviews and messages: register an agent, find and claim tasks, edit files in a task workspace, open and review proposals, integrate them, and read and send messages through the fold MCP tools.
+description: Work in a fold project. Use it for tasks, workspaces, proposals, reviews, requests and messages: register an agent, find and claim tasks, edit files in a task workspace, open and review proposals, integrate them, turn requests into tasks, and read and send messages through the fold MCP tools.
 ---
 
 # fold
@@ -21,7 +21,7 @@ Only a human gives the `integrator` tag. An agent with that tag may approve, rej
 
 To message another orchestrator, use the native `SendMessage` of Claude Code. Use `send_message`, `get_inbox`, `get_thread` and `acknowledge_message` only where native messaging is not available, and to write to humans.
 
-Addresses for `send_message(to[], body, task?, proposal?, reply_to?)`:
+Addresses for `send_message(to[], body, task?, proposal?, request?, reply_to?)`:
 
 - `frontend` is the agent `frontend` and its main worker.
 - `frontend/ui` is the worker `ui` of the agent `frontend`.
@@ -30,7 +30,7 @@ Addresses for `send_message(to[], body, task?, proposal?, reply_to?)`:
 - `humans` is every human.
 - `all` is every agent.
 
-To answer a message, pass its id as `reply_to`: the reply joins its thread. `get_inbox` lists your unread messages, and `get_thread(thread)` shows one conversation. Call `acknowledge_message(id, up_to?)` when you have read a message. With `up_to` true it acknowledges every message up to `id`.
+To answer a message, pass its id as `reply_to`: the reply joins its thread. `get_inbox` lists your unread messages, `get_thread(thread)` shows one conversation, and `get_thread(request)` shows the clarification thread of a request. Call `acknowledge_message(id, up_to?)` when you have read a message. With `up_to` true it acknowledges every message up to `id`.
 
 A message does not change a task. It is not a claim and not a dependency. When a conversation decides something about the work, put the result into the task graph: create the task, add the dependency or update the description.
 
@@ -87,6 +87,25 @@ A reviewer reads proposals, asks for changes and integrates the proposals that a
 6. If the proposal is ready, call `integrate_proposal(id, expected_version?)`. Pass the version you reviewed as `expected_version`: if a newer version exists, the call fails with `stale_version`. fold checks the approvals, the human review mark and the prerequisite tasks before it moves `main/`.
 7. Call `release_review(id)` when you stop the review.
 
+## Requests
+
+A request asks for work in plain words. Anyone can create one: a human in the web interface, or any worker with `create_request(body, attachments?, ws?)`. Give only the message. Do not give a title or a kind, because the orchestrator writes them. To attach files such as a log or a screenshot, give their paths inside your own workspace as `attachments` and that workspace as `ws`. A request holds at most 10 files of at most 10 MiB each.
+
+In the text of a request, `#` names a fold item and `@` names a file: `#T-12` is a task, `#P-3` a proposal, `#RQ-2` a request, `#r17` a revision, `#ws-9` a workspace, `#ck-88` a checkpoint and `#m-210` a message; `@web/src/board.ts` is a file in `main/` and `@ws-9:web/src/board.ts` a file in a workspace. Write mentions the same way in a request, a draft note, a comment and a message about a request. fold keeps the text as it is written and checks no mention. Read each item with its tool, such as `get_task` or `get_proposal`, and read each file in `main/` or in its workspace.
+
+An orchestrator (the main worker of an agent) turns a request into cards:
+
+1. When a request is created, every agent except the requester's agent gets a push. Call `list_requests(state?, kind?, mine?)` to see the requests, and `get_request(id, version?)` to read one: the message, the attachments, the latest draft (or the draft `version`), the comments of the requester, the id of the clarification thread and the tasks of an approval.
+2. Call `claim_request(id, kind, title)`. The kind is `bug`, `feature` or `question`, as you read the message. Write the title from the message: one line, at most 200 characters.
+3. When the message is not clear, ask with `send_message(to[], body, request)`. The message goes into the clarification thread of the request, and `get_thread(request)` reads that thread. Anyone can write there. A message does not change the request.
+4. Write the draft with `submit_request_draft(id, cards[], edges[]?, note?, kind?, title?)`. A draft has 1 to 20 cards. Each card has a `key`, a `title` and a `description` in the task template below. Each edge names the `prerequisite` card and the `dependent` card. Write dependencies as edges, never as text in a description.
+5. When the requester asks for changes, you get a push. Read the comment with `get_request`, then submit the next version.
+6. Call `release_request(id)` when you cannot finish the draft. Another orchestrator can then claim the request.
+
+Only the requester decides. The requester approves the latest version with `approve_request_draft(id, expected_version)`, asks for changes with `request_draft_changes(id, version, comment)`, writes the next version with `edit_request_draft(id, cards[], edges[]?, note?)`, or closes the request with `close_request(id, reason)`. When an agent is the requester, it gets a push for each new version from the drafter.
+
+The approval creates one task for each card and one dependency for each edge, in one step. fold calculates the column of each new task: a task whose prerequisites are not Done is in Backlog, and the other tasks are in Todo. The drafter gets a push with the new task ids.
+
 ## Task template
 
 Write the description of every task in this form:
@@ -110,15 +129,21 @@ Every error has a stable `code`, a message and a hint that names the next tool. 
 | Code | What to do |
 | --- | --- |
 | `agent_not_registered` | Call `register_agent`. |
-| `already_claimed` | Call `get_ready_tasks` and choose another task. |
-| `dependency_cycle` | Call `get_task_graph` and remove the edge that closes the cycle. |
+| `already_claimed` | Call `get_ready_tasks` and choose another task. For a request, call `list_requests` and choose another request. |
+| `dependency_cycle` | Call `get_task_graph` and remove the edge that closes the cycle. In a request draft, remove the edge between the cards. |
 | `not_approved` | Call `get_proposal`. The current version needs an approval. |
 | `human_approval_missing` | Call `get_proposal`. A human must approve first. |
 | `prerequisites_not_done` | Call `get_proposal`. A task that this one needs is not Done. |
 | `integrator_required` | Call `get_proposal`. An agent with the `integrator` tag or a human must integrate. |
-| `stale_version` | Call `get_proposal`, review the newest version and integrate again. |
+| `stale_version` | Call `get_proposal`, review the newest version and integrate again. For a request, call `get_request` and read the latest version. |
 | `changes_requested` | Call `get_proposal`. A review of the current version asks for changes. |
-| `invalid_request` | Read `details.reason`. With `proposal_open` from `abandon_workspace`, call `close_proposal`. |
+| `invalid_request` | Read `details.reason`. With `proposal_open` from `abandon_workspace`, call `close_proposal`. With `state` from a request tool, call `get_request`: the request is not in the state for that step. With `too_many_attachments` or `attachment_too_large` from `create_request`, attach fewer or smaller files. |
+| `orchestrator_required` | Only the main worker of an agent claims a request. Ask your orchestrator to call `claim_request`. |
+| `request_not_found` | Call `list_requests` and use an id from the list. |
+| `request_not_open` | The request is approved or closed. Call `get_request` to read it. |
+| `requester_required` | Only the requester approves, asks for changes, edits or closes. Call `get_request` to see the requester, and ask with `send_message`. |
+| `drafter_required` | Only the agent of the drafter drafts or releases. Call `claim_request` first, or `get_request` to see the drafter. |
+| `invalid_draft` | Read `details.reason`, correct the cards or the edges, and submit again. |
 
 ## Never
 
@@ -127,5 +152,6 @@ Every error has a stable `code`, a message and a hint that names the next tool. 
 - Never tick a linked checklist item. fold ticks it when the child task is Done.
 - Never clear the human review mark.
 - Never approve your own proposal.
+- Never approve a request you did not create.
 - Never treat a message as a claim or as a dependency.
 - Never move a card or set a status. fold calculates the status.

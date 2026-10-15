@@ -12,6 +12,7 @@ pub mod reviews_support;
 #[cfg(test)]
 pub mod workspaces_support;
 
+mod acceptance_10_requests;
 mod acceptance_1_three_sessions;
 mod acceptance_2_messaging;
 mod acceptance_3_parallel_workspaces;

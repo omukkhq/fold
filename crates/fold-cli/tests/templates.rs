@@ -68,18 +68,7 @@ const FOLD_TOOLS: [&str; 61] = [
 ];
 
 /// The tools of `FOLD_TOOLS` that the MCP server lists and the skill does not teach yet. A tool leaves this list in the change that teaches it.
-const PENDING_TOOLS: [&str; 10] = [
-    "create_request",
-    "list_requests",
-    "get_request",
-    "claim_request",
-    "release_request",
-    "submit_request_draft",
-    "request_draft_changes",
-    "edit_request_draft",
-    "approve_request_draft",
-    "close_request",
-];
+const PENDING_TOOLS: [&str; 0] = [];
 
 /// Every code of the error table and the named `invalid_request` reasons.
 const FOLD_ERROR_CODES: [&str; 114] = [
@@ -203,7 +192,7 @@ const FOLD_ERROR_CODES: [&str; 114] = [
 const PENDING_ERROR_CODES: [&str; 1] = ["too_large"];
 
 /// The `invalid_request` reasons that have a name.
-const INVALID_REQUEST_REASONS: [&str; 7] = [
+const INVALID_REQUEST_REASONS: [&str; 9] = [
     "self_dependency",
     "checklist_origin",
     "linked_item",
@@ -211,6 +200,8 @@ const INVALID_REQUEST_REASONS: [&str; 7] = [
     "proposal_open",
     "malformed_claude_file",
     "no_service_manager",
+    "too_many_attachments",
+    "attachment_too_large",
 ];
 
 const NON_TOOL_NAMES: [&str; 11] = [
@@ -227,13 +218,14 @@ const NON_TOOL_NAMES: [&str; 11] = [
     "reply_to",
 ];
 
-const SECTIONS: [&str; 10] = [
+const SECTIONS: [&str; 11] = [
     "Identity",
     "Messaging",
     "Noticing news",
     "Orchestrator",
     "Worker",
     "Reviewer",
+    "Requests",
     "Task template",
     "Subagents",
     "Errors",

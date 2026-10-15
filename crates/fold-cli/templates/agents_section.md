@@ -12,7 +12,7 @@ The fold workflow in short:
 4. Open a proposal for the task.
 5. Answer the review, and open a new version of the proposal if it asks for changes.
 
-The `fold` skill holds the full workflow for orchestrators, workers and reviewers. Load it before you start.
+The `fold` skill holds the full workflow for orchestrators, workers and reviewers, and for requests. Load it before you start.
 
 Rules for files:
 
