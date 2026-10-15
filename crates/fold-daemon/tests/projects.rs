@@ -132,14 +132,24 @@ async fn init_twice_is_refused_with_project_exists() {
             .is_file()
     );
 
-    // An unregistered `.fold/` left by a crash is refused too.
+    // An unregistered `.fold/` without a database is an init that stopped early: refused, kept, and no database is created in it.
     let stale = host.root("stale");
     std::fs::create_dir_all(stale.join(".fold")).unwrap();
     let error = init_project(&host.paths, &stale, None, &host.clock)
         .await
         .unwrap_err();
-    assert_eq!(code(&error), Some("project_exists"));
-    assert!(stale.join(".fold").is_dir());
+    assert_eq!(code(&error), Some("project_incomplete"));
+    let ProjectError::Fold(error) = error else {
+        panic!("a fold error");
+    };
+    let fold_dir = stale.canonicalize().unwrap().join(".fold");
+    assert!(
+        error
+            .hint()
+            .unwrap()
+            .contains(&format!("delete {}", fold_dir.display()))
+    );
+    assert_eq!(std::fs::read_dir(&fold_dir).unwrap().count(), 0);
 
     let registry = host.registry().await;
     let rows = projects::list_projects(registry.read()).await.unwrap();

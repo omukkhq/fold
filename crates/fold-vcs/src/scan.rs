@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::fs::{File, Metadata, OpenOptions};
+use std::fs::Metadata;
 use std::io::{self, Read};
 use std::path::Path;
 
@@ -13,10 +13,10 @@ use crate::platform::{Capabilities, DirHandle, is_executable};
 
 pub const DEFAULT_MAX_FILE_BYTES: u64 = 52_428_800;
 const READ_BUFFER: usize = 64 * 1024;
-const READ_TRIES: usize = 3;
+pub(crate) const READ_TRIES: usize = 3;
 
 #[cfg(test)]
-type ReadHook = Option<Box<dyn FnMut(&[u8], &File)>>;
+type ReadHook = Option<Box<dyn FnMut(&[u8], &std::fs::File)>>;
 
 #[cfg(test)]
 thread_local! {
@@ -28,7 +28,7 @@ thread_local! {
 #[cfg(test)]
 pub(crate) fn with_rewrites_during_reads<T>(name: &'static str, body: impl FnOnce() -> T) -> T {
     let mut tick = 0;
-    AFTER_READ.set(Some(Box::new(move |read: &[u8], file: &File| {
+    AFTER_READ.set(Some(Box::new(move |read: &[u8], file: &std::fs::File| {
         if read == name.as_bytes() {
             tick += 1;
             let time = std::time::SystemTime::UNIX_EPOCH
@@ -483,25 +483,6 @@ fn is_at_or_below(path: &RepoPath, prefix: &RepoPath) -> bool {
         .is_some_and(|rest| rest.is_empty() || rest.starts_with(b"/"))
 }
 
-/// Opens the file at `path` for reading only when it is a regular file: a symlink put in its place is not followed and a FIFO does not block the open. `None` when something other than a regular file is there now.
-pub(crate) fn open_regular(path: &Path) -> io::Result<Option<(File, Metadata)>> {
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
-    let file = match options.open(path) {
-        Ok(file) => file,
-        #[cfg(unix)]
-        Err(error) if error.raw_os_error() == Some(libc::ELOOP) => return Ok(None),
-        Err(error) => return Err(error),
-    };
-    let meta = file.metadata()?;
-    Ok(meta.is_file().then_some((file, meta)))
-}
-
 /// Hashes the file `name` in `dir` as a blob. The read counts only when the size and modification time are the same before and after it, and the name still holds a regular file; otherwise it is read again, up to three times in all.
 pub(crate) fn hash_stable(dir: &DirHandle, name: &[u8]) -> io::Result<Reading> {
     read_stable_into(dir, name, None)
@@ -616,6 +597,42 @@ mod tests {
         let path = RepoPath::parse(b"gone").unwrap();
         walk.dir(&handle, Some(&path)).unwrap();
         assert!(walk.out.entries.is_empty());
+    }
+
+    #[test]
+    fn a_directory_swapped_for_a_symlink_during_the_scan_is_never_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("secret"), b"outside").unwrap();
+        let root = dir.path().join("ws");
+        fs::create_dir_all(root.join("sub")).unwrap();
+        fs::write(root.join("sub/inner"), b"inner").unwrap();
+        let rules = IgnoreRules::new(&root);
+        let opts = ScanOptions {
+            rules: &rules,
+            max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+            caps: HOST,
+            recorded: None,
+        };
+        let mut index = StatIndex::empty(HOST);
+        let sub = root.join("sub");
+        let moved = dir.path().join("moved");
+        let target = outside.clone();
+        let found = crate::platform::with_swap_before_entering(
+            b"sub",
+            move || {
+                fs::rename(&sub, &moved).unwrap();
+                std::os::unix::fs::symlink(&target, &sub).unwrap();
+            },
+            || scan(&root, &mut index, &opts),
+        )
+        .unwrap();
+
+        let paths: Vec<&[u8]> = found.entries.keys().map(Vec::as_slice).collect();
+        assert_eq!(paths, [b"sub".as_slice()]);
+        assert_eq!(found.entries[b"sub".as_slice()].kind, EntryKind::Symlink);
+        assert!(found.unstable.is_empty() && found.skipped.is_empty());
     }
 
     #[test]

@@ -314,6 +314,41 @@ fn a_second_init_prints_project_exists_and_keeps_the_first_project() {
 }
 
 #[test]
+fn an_init_the_registry_does_not_know_is_finished_with_its_claude_files() {
+    let sandbox = Sandbox::new();
+    let project = sandbox.path("scratch");
+    let first = sandbox.fold(&["init", project.to_str().unwrap()]);
+    assert!(first.status.success(), "{first:?}");
+    // A registry that lost the row leaves `.fold/` as an init stopped before the registry insert does.
+    std::fs::remove_dir_all(sandbox.path("data")).unwrap();
+    std::fs::remove_file(project.join(claude_files::MCP_FILE)).unwrap();
+
+    let source = sandbox.path("source");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(source.join("new.txt"), "not read\n").unwrap();
+
+    let second = sandbox.fold(&[
+        "init",
+        project.to_str().unwrap(),
+        "--name",
+        "Again",
+        "--from",
+        source.to_str().unwrap(),
+    ]);
+    assert!(second.status.success(), "{second:?}");
+    assert_eq!(
+        stdout(&second),
+        format!(
+            "initialised project again at {}\nfinished an init that had stopped before it registered the project\nr1 keeps the files that the stopped init imported; the source given now is not read\nr1: 0 files, 0 bytes\n{}",
+            project.canonicalize().unwrap().display(),
+            machine_warnings(&project)
+        )
+    );
+    assert!(project.join(claude_files::MCP_FILE).is_file());
+    assert!(sandbox.registry_path().is_file());
+}
+
+#[test]
 fn name_sets_the_slug_and_no_ignore_files_are_written() {
     let sandbox = Sandbox::new();
     let project = sandbox.path("dir");

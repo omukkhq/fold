@@ -10,6 +10,28 @@ use rustix::io::Errno;
 
 static PROBE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(test)]
+type ChildHook = Option<(&'static [u8], Box<dyn FnOnce()>)>;
+
+#[cfg(test)]
+thread_local! {
+    /// Runs once in [`DirHandle::child`] just before the named directory is opened, so a test can swap it at exactly the point between a walk listing it and entering it.
+    static BEFORE_CHILD: std::cell::RefCell<ChildHook> = const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `body` while the first [`DirHandle::child`] on this thread that opens a directory named `name` runs `swap` just before it opens it.
+#[cfg(test)]
+pub(crate) fn with_swap_before_entering<T>(
+    name: &'static [u8],
+    swap: impl FnOnce() + 'static,
+    body: impl FnOnce() -> T,
+) -> T {
+    BEFORE_CHILD.set(Some((name, Box::new(swap))));
+    let out = body();
+    BEFORE_CHILD.set(None);
+    out
+}
+
 /// What the host file system can hold. Probed once per open project, by its first command that needs it; tests build one by hand so every fallback runs on any host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Capabilities {
@@ -233,6 +255,14 @@ impl DirHandle {
 
     /// `None` when `name` is there but is a symlink or anything else that is not a directory.
     pub(crate) fn child(&self, name: &[u8]) -> io::Result<Option<Self>> {
+        #[cfg(test)]
+        BEFORE_CHILD.with_borrow_mut(|hook| {
+            if hook.as_ref().is_some_and(|(wanted, _)| *wanted == name)
+                && let Some((_, swap)) = hook.take()
+            {
+                swap();
+            }
+        });
         let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
         match rustix::fs::openat(&self.0, name, flags, Mode::empty()) {
             Ok(fd) => Ok(Some(Self(fd))),

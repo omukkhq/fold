@@ -115,6 +115,21 @@ pub(crate) fn initialise(
         out,
         &format!("initialised project {} at {root}", project.slug),
     )?;
+    if project.resumed {
+        output::line(
+            out,
+            "finished an init that had stopped before it registered the project",
+        )?;
+        if args.from.is_some() || args.from_git.is_some() {
+            output::line(
+                out,
+                &format!(
+                    "{} keeps the files that the stopped init imported; the source given now is not read",
+                    project.revision
+                ),
+            )?;
+        }
+    }
     let imported = &project.imported;
     output::line(
         out,

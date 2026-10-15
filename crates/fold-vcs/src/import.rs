@@ -1,4 +1,4 @@
-use std::fs::{self, Metadata};
+use std::fs::Metadata;
 use std::io::{self, Read};
 use std::path::Path;
 
@@ -8,10 +8,10 @@ use fold_core::{FoldError, codes};
 
 use crate::ignore::IgnoreRules;
 use crate::objects::{ObjectError, ObjectStore};
-use crate::paths::{RepoPath, os_bytes};
-use crate::platform::{Capabilities, is_executable};
+use crate::paths::RepoPath;
+use crate::platform::{Capabilities, DirHandle, is_executable};
 use crate::revision_store::write_initial_tree;
-use crate::scan::{SkipReason, Skipped, open_regular};
+use crate::scan::{READ_TRIES, SkipReason, Skipped};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ImportOptions {
@@ -47,7 +47,8 @@ pub fn import_dir(
         bytes: 0,
         skipped: Vec::new(),
     };
-    walk.dir(source, None)?;
+    let root = DirHandle::open(source).map_err(|error| source_error(&error))?;
+    walk.dir(&root, None)?;
     walk.skipped.sort_by(|a, b| a.path.cmp(&b.path));
     let files = walk.entries.len();
     let tree = write_initial_tree(objects, walk.entries)?;
@@ -69,29 +70,20 @@ struct Walk<'a> {
 }
 
 impl Walk<'_> {
-    fn dir(&mut self, folder: &Path, prefix: Option<&RepoPath>) -> Result<(), FoldError> {
-        let reader = match (fs::read_dir(folder), prefix) {
-            (Ok(reader), _) => reader,
-            (Err(error), Some(_)) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-            (Err(error), Some(prefix)) if error.kind() == io::ErrorKind::PermissionDenied => {
-                self.skip(prefix, SkipReason::Unreadable);
+    /// Lists the directory from its handle, so every entry found is inside it.
+    fn dir(&mut self, dir: &DirHandle, prefix: Option<&RepoPath>) -> Result<(), FoldError> {
+        let names = match dir.names() {
+            Ok(names) => names,
+            Err(error) if prefix.is_some() && error.kind() == io::ErrorKind::NotFound => {
                 return Ok(());
             }
-            (Err(error), _) => return Err(source_error(&error)),
+            Err(error) => return Err(source_error(&error)),
         };
-        for entry in reader {
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(source_error(&error)),
-            };
-            let Some(name) = os_bytes(&entry.file_name()) else {
-                continue;
-            };
+        for name in names {
             let Ok(path) = RepoPath::child(prefix, &name) else {
                 continue;
             };
-            let meta = match entry.metadata() {
+            let meta = match dir.metadata(&name) {
                 Ok(meta) => meta,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
                 Err(_) => {
@@ -103,26 +95,64 @@ impl Walk<'_> {
                 continue;
             }
             if meta.is_dir() {
-                self.dir(&entry.path(), Some(&path))?;
+                self.subdir(dir, &name, &path)?;
             } else {
-                self.entry(&path, &entry.path(), &meta)?;
+                self.entry(dir, &name, &path, &meta)?;
             }
         }
         Ok(())
     }
 
-    fn entry(&mut self, path: &RepoPath, located: &Path, meta: &Metadata) -> Result<(), FoldError> {
-        if meta.file_type().is_symlink() {
-            return match fs::read_link(located) {
-                Ok(target) => match os_bytes(target.as_os_str()) {
-                    Some(text) => self.store(path, EntryKind::Symlink, &mut text.as_slice()),
-                    None => {
-                        self.skip(path, SkipReason::Special);
-                        Ok(())
-                    }
-                },
-                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+    /// A directory is entered through a handle opened without following a symlink. One swapped for something else since it was listed imports as what is there now, unless that is ignored; one that keeps changing between a directory and something else is skipped as unreadable.
+    fn subdir(
+        &mut self,
+        parent: &DirHandle,
+        name: &[u8],
+        path: &RepoPath,
+    ) -> Result<(), FoldError> {
+        for _ in 0..READ_TRIES {
+            match parent.child(name) {
+                Ok(Some(child)) => return self.dir(&child, Some(path)),
+                Ok(None) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+                Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                    self.skip(path, SkipReason::Unreadable);
+                    return Ok(());
+                }
+                Err(error) => return Err(source_error(&error)),
+            }
+            let now = match parent.metadata(name) {
+                Ok(now) => now,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
                 Err(_) => {
+                    self.skip(path, SkipReason::Unreadable);
+                    return Ok(());
+                }
+            };
+            if now.is_dir() {
+                continue;
+            }
+            if self.rules.is_ignored_below(path, false) {
+                return Ok(());
+            }
+            return self.entry(parent, name, path, &now);
+        }
+        self.skip(path, SkipReason::Unreadable);
+        Ok(())
+    }
+
+    fn entry(
+        &mut self,
+        parent: &DirHandle,
+        name: &[u8],
+        path: &RepoPath,
+        meta: &Metadata,
+    ) -> Result<(), FoldError> {
+        if meta.file_type().is_symlink() {
+            return match parent.read_link(name) {
+                Ok(Some(target)) => self.store(path, EntryKind::Symlink, &mut target.as_slice()),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+                Ok(None) | Err(_) => {
                     self.skip(path, SkipReason::Unreadable);
                     Ok(())
                 }
@@ -132,8 +162,8 @@ impl Walk<'_> {
             self.skip(path, SkipReason::Special);
             return Ok(());
         }
-        // The size and mode come from the opened file, so a path swapped after the directory listing cannot pass for what was listed.
-        let (mut file, meta) = match open_regular(located) {
+        // The size and mode come from the opened file, so a name swapped after the directory listing cannot pass for what was listed.
+        let (mut file, meta) = match parent.open_regular(name) {
             Ok(Some(opened)) => opened,
             Ok(None) => {
                 self.skip(path, SkipReason::Special);
@@ -312,6 +342,43 @@ mod tests {
                 reason: SkipReason::TooLarge
             }]
         );
+    }
+
+    #[test]
+    fn a_directory_swapped_for_a_symlink_during_the_walk_is_never_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("secret"), b"outside").unwrap();
+        let source = dir.path().join("source");
+        std::fs::create_dir_all(source.join("sub")).unwrap();
+        std::fs::write(source.join("sub/inner"), b"inner").unwrap();
+        std::fs::write(source.join("top"), b"top").unwrap();
+        let objects = ObjectStore::open(&dir.path().join(".fold")).unwrap();
+        let rules = IgnoreRules::new(&source);
+        let opts = ImportOptions {
+            max_file_bytes: 1024,
+            caps: Capabilities::probe(&dir.path().join(".fold")).unwrap(),
+        };
+        let sub = source.join("sub");
+        let moved = dir.path().join("moved");
+        let target = outside.clone();
+        let imported = crate::platform::with_swap_before_entering(
+            b"sub",
+            move || {
+                std::fs::rename(&sub, &moved).unwrap();
+                std::os::unix::fs::symlink(&target, &sub).unwrap();
+            },
+            || import_dir(&objects, &source, &rules, &opts),
+        )
+        .unwrap();
+
+        let load = |hash: &ObjectHash| crate::snapshot::load_tree(&objects, hash);
+        let entries = fold_core::tree::flatten(&imported.tree, &load).unwrap();
+        let paths: Vec<&[u8]> = entries.keys().map(Vec::as_slice).collect();
+        assert_eq!(paths, [b"sub".as_slice(), b"top"]);
+        assert_eq!(entries[b"sub".as_slice()].kind, EntryKind::Symlink);
+        assert!(imported.skipped.is_empty(), "{:?}", imported.skipped);
     }
 
     #[test]

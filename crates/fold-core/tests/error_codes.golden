@@ -110,3 +110,4 @@ integration_failed
 daemon_unreachable
 integration_conflicted
 seed_exists
+project_incomplete

@@ -30,6 +30,8 @@ mod conflicts;
 #[cfg(feature = "failpoints")]
 mod crash_checkpoint;
 #[cfg(feature = "failpoints")]
+mod crash_init;
+#[cfg(feature = "failpoints")]
 mod crash_integration;
 #[cfg(feature = "failpoints")]
 mod crash_messages;

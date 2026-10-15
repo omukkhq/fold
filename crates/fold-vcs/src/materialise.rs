@@ -69,6 +69,58 @@ pub fn materialise(
     Ok(done)
 }
 
+/// Writes into `root` each file and symlink of the tree that is missing there, and creates `root` when it does not exist. A path that holds anything is left as it is: [`materialise`] renames each entry into place whole, so after one that stopped part-way the paths it reached hold their content and only the missing ones need writing. Returns how many entries were written.
+pub fn fill_missing(
+    objects: &ObjectStore,
+    tree: &ObjectHash,
+    root: &Path,
+    opts: &MaterialiseOptions,
+) -> Result<usize, WorkspaceError> {
+    let mut batch = Batch::open(root)?;
+    batch.root_handle()?;
+    let mut written = 0;
+    fill_tree(objects, tree, None, opts, &mut batch, &mut written)?;
+    batch.finish()?;
+    Ok(written)
+}
+
+fn fill_tree(
+    objects: &ObjectStore,
+    hash: &ObjectHash,
+    prefix: Option<&RepoPath>,
+    opts: &MaterialiseOptions,
+    batch: &mut Batch,
+    written: &mut usize,
+) -> Result<(), WorkspaceError> {
+    let tree = Tree::decode(&objects.read_expecting(hash, ObjectKind::Tree)?.payload)?;
+    for entry in tree.entries {
+        let path = RepoPath::child(prefix, &entry.name)?;
+        if entry.kind == EntryKind::Directory {
+            fill_tree(objects, &entry.hash, Some(&path), opts, batch, written)?;
+            continue;
+        }
+        let (parents, name) = path.parents_and_name();
+        let held = batch.open_dirs(&parents, &path)?;
+        let present = match held.as_ref().and_then(|held| held.last()) {
+            None => false,
+            Some(parent) => match parent.metadata(name) {
+                Ok(_) => true,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+                Err(error) => return Err(error.into()),
+            },
+        };
+        if !present {
+            let flat = FlatEntry {
+                kind: entry.kind,
+                hash: entry.hash,
+            };
+            batch.write_entry(objects, &path, &flat, opts)?;
+            *written += 1;
+        }
+    }
+    Ok(())
+}
+
 fn prepare_target(root: &Path) -> Result<(), WorkspaceError> {
     match fs::read_dir(root) {
         Ok(mut entries) => {

@@ -1,29 +1,32 @@
 use std::collections::BTreeSet;
+use std::fs::{File, TryLockError};
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
+use fold_core::object::{ObjectHash, ObjectKind};
 use fold_core::projects::find_root;
-use fold_core::tree::FlatTree;
+use fold_core::tree::{FlatTree, Tree};
 use fold_core::{
     AgentName, CONFIG_TEMPLATE, Clock, FoldError, HostPaths, HumanName, Presence, ProjectConfig,
     ProjectPaths, RevisionId, SessionFact, TaskStatus, Timestamp, choose_slug, codes, presence_of,
     slugify,
 };
 use fold_store::projects::{self, HumanRow, ProjectRow};
-use fold_store::workspaces::{create_initial_revision, initial_revision};
+use fold_store::workspaces::{RevisionRow, create_initial_revision, head, initial_revision};
 use fold_store::{Store, StoreError};
+use fold_vcs::gc::mark;
 use fold_vcs::git::{CommitId, Git};
 use fold_vcs::git_import::{GitImportOptions, archive_tree};
 use fold_vcs::git_sync_map::SyncMap;
 use fold_vcs::ignore::IgnoreRules;
 use fold_vcs::import::{ImportOptions, ImportResult, import_dir};
 use fold_vcs::main_view;
-use fold_vcs::materialise::{MaterialiseOptions, materialise};
+use fold_vcs::materialise::{MaterialiseOptions, fill_missing, materialise};
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::paths::WorkspaceError;
 use fold_vcs::platform::Capabilities;
-use fold_vcs::revision_store::{write_initial_tree, write_revision};
+use fold_vcs::revision_store::{read_revision, write_initial_tree, write_revision};
 use thiserror::Error;
 
 use crate::daemon::DaemonState;
@@ -75,6 +78,8 @@ pub struct InitializedProject {
     pub imported: ImportResult,
     /// The commit a Git import read, which `.fold/git-sync.map` records as `r1`.
     pub git_commit: Option<CommitId>,
+    /// True when this init finished one that had stopped before it registered the project. `imported` then holds what `revision` records, with no skipped paths: the stopped run's list is gone.
+    pub resumed: bool,
 }
 
 /// An import source that passed the checks: an existing directory, canonical, with a UTF-8 path.
@@ -99,7 +104,7 @@ pub async fn init_project(
     init_project_from(host, root, name, None, clock).await
 }
 
-/// Creates `.fold/` in `root`, migrates the project database, writes the commented config, records `r1` from `source` (or the empty tree) as `main`, fills `main/` read-only and only then registers the project under a free slug. Init is a host command, so it has no actor and appends no event. A failure after `.fold/` exists removes the directory this call made and puts `main/` back as it was: absent or empty, the only states init accepts. `source` is only read, so a project directory at or below it is refused.
+/// Creates `.fold/` in `root`, migrates the project database, writes the commented config, records `r1` from `source` (or the empty tree) as `main`, fills `main/` read-only and only then registers the project under a free slug. Init is a host command, so it has no actor and appends no event. A failure after `.fold/` exists removes the directory this call made and puts `main/` back as it was: absent or empty, the only states init accepts. A `.fold/` that the registry does not know is an init that stopped part-way: when its database is complete the init finishes it, and otherwise it is refused with `project_incomplete` and nothing is removed. `source` is only read, so a project directory at or below it is refused.
 pub async fn init_project_from(
     host: &HostPaths,
     root: &Path,
@@ -187,7 +192,16 @@ async fn create_and_register(
         return Err(exists(root).into());
     }
     let paths = ProjectPaths::new(root);
-    create_fold_dir(&paths).await?;
+    if !create_fold_dir(&paths).await? {
+        return finish_stopped(registry, &paths, root_text, name, clock).await;
+    }
+    let _init = match lock_fold_dir(&paths).await {
+        Ok(lock) => lock,
+        Err(error) => {
+            remove_created(&paths, None).await;
+            return Err(error);
+        }
+    };
     let main = match check_main(&paths).await {
         Ok(main) => main,
         Err(error) => {
@@ -198,6 +212,11 @@ async fn create_and_register(
     match populate_and_register(registry, &paths, root_text, name, source, clock).await {
         Ok(project) => Ok(project),
         Err(error) => {
+            // A fired failpoint stands for a crash at that point, and a crashed process removes nothing.
+            #[cfg(feature = "failpoints")]
+            if error.code() == Some(codes::FAILPOINT) {
+                return Err(error);
+            }
             remove_created(&paths, Some(main)).await;
             Err(error)
         }
@@ -223,8 +242,31 @@ async fn populate_and_register(
     let closed = project_store.close().await;
     let (revision, imported, git_commit) = first?;
     closed?;
+    #[cfg(feature = "failpoints")]
+    fail::fail_point!("init_before_register", |_| Err(fired(
+        "init_before_register"
+    )));
+    let row = register(registry, root_text, name, now).await?;
+    Ok(InitializedProject {
+        slug: row.slug,
+        name: row.name,
+        root: PathBuf::from(row.root),
+        revision,
+        imported,
+        git_commit,
+        resumed: false,
+    })
+}
+
+/// Inserts the registry row under a free slug made from `name`.
+async fn register(
+    registry: &Store,
+    root_text: &str,
+    name: String,
+    now: Timestamp,
+) -> Result<ProjectRow, ProjectError> {
     let base = slugify(&name);
-    let row = registry
+    registry
         .write(async |tx| -> Result<ProjectRow, ProjectError> {
             let existing: BTreeSet<String> = projects::slugs(tx).await?.into_iter().collect();
             let row = ProjectRow {
@@ -238,7 +280,57 @@ async fn populate_and_register(
                 Err(error) => Err(error.into()),
             }
         })
-        .await?;
+        .await
+}
+
+/// Finishes an init that stopped after it made `.fold/` and before it registered the project. A migrated database whose `main` names a revision with every object below it in the store is a project the stopped run completed, except perhaps for `main/` and the registry row: the files `main/` lacks are written and the project is registered. Anything less is refused with `project_incomplete`, and so is a `.fold/` that a running init holds. Nothing is removed in either case, and no database is created in a `.fold/` that has none.
+async fn finish_stopped(
+    registry: &Store,
+    paths: &ProjectPaths,
+    root_text: &str,
+    name: String,
+    clock: &dyn Clock,
+) -> Result<InitializedProject, ProjectError> {
+    let Some(_init) = try_lock_fold_dir(paths).await? else {
+        return Err(incomplete(paths).into());
+    };
+    let db = paths.db();
+    let has_db = tokio::task::spawn_blocking(move || db.is_file()).await;
+    if !has_db.unwrap_or(false) {
+        return Err(incomplete(paths).into());
+    }
+    let store = Store::open_project(paths).await?;
+    let row = head(store.read()).await;
+    let closed = store.close().await;
+    let row = row?;
+    closed?;
+    let Some(head) = row else {
+        return Err(incomplete(paths).into());
+    };
+    check_kept_main(paths).await?;
+    let fold_dir = paths.fold_dir();
+    let main = paths.main_dir();
+    let revision = head.number;
+    let finished = blocking(move || {
+        let objects = ObjectStore::open(&fold_dir).map_err(FoldError::from)?;
+        let Some(imported) = stored_contents(&objects, &head)? else {
+            return Ok(None);
+        };
+        let caps = Capabilities::probe(&fold_dir).map_err(|error| io_error(&error))?;
+        let opts = MaterialiseOptions {
+            read_only: true,
+            caps,
+        };
+        fill_missing(&objects, &head.tree_hash, &main, &opts).map_err(FoldError::from)?;
+        main_view::write_marker(&fold_dir, head.number).map_err(|error| io_error(&error))?;
+        let git_commit = SyncMap::load(&fold_dir)?.commit_of(head.number).cloned();
+        Ok(Some((imported, git_commit)))
+    })
+    .await?;
+    let Some((imported, git_commit)) = finished else {
+        return Err(incomplete(paths).into());
+    };
+    let row = register(registry, root_text, name, clock.now()).await?;
     Ok(InitializedProject {
         slug: row.slug,
         name: row.name,
@@ -246,10 +338,47 @@ async fn populate_and_register(
         revision,
         imported,
         git_commit,
+        resumed: true,
     })
 }
 
-/// Objects first, then the one transaction that inserts `r1` and creates `main`, then the sync map that names `r1`, then `main/`.
+/// What `row` records, when its revision object holds the row's tree and every object it reaches is in the store; `None` when one is missing or the object names another tree.
+fn stored_contents(
+    objects: &ObjectStore,
+    row: &RevisionRow,
+) -> Result<Option<ImportResult>, ProjectError> {
+    for hash in mark(objects, [row.hash])? {
+        if !objects.contains(&hash).map_err(FoldError::from)? {
+            return Ok(None);
+        }
+    }
+    if read_revision(objects, &row.hash)?.tree != row.tree_hash {
+        return Ok(None);
+    }
+    let load = |hash: &ObjectHash| -> Result<Tree, FoldError> {
+        let object = objects.read_expecting(hash, ObjectKind::Tree)?;
+        Ok(Tree::decode(&object.payload)?)
+    };
+    let entries = fold_core::tree::flatten(&row.tree_hash, &load)?;
+    let mut bytes = 0u64;
+    for entry in entries.values() {
+        bytes = bytes.saturating_add(objects.blob_size(&entry.hash).map_err(FoldError::from)?);
+    }
+    Ok(Some(ImportResult {
+        tree: row.tree_hash,
+        files: entries.len(),
+        bytes,
+        skipped: Vec::new(),
+    }))
+}
+
+/// The error a fired failpoint returns, as a crash at that point would stop the init.
+#[cfg(feature = "failpoints")]
+fn fired(name: &str) -> ProjectError {
+    FoldError::new(codes::FAILPOINT, format!("{name} fired")).into()
+}
+
+/// Objects first, then the sync map that names `r1`, then the one transaction that inserts `r1` and creates `main`, then `main/`. The map comes before the row, so a database that holds `r1` always has the map that a Git import needs.
 async fn create_first_revision(
     store: &Store,
     paths: &ProjectPaths,
@@ -279,7 +408,10 @@ async fn create_first_revision(
                     caps,
                 };
                 let rules = IgnoreRules::new(&source);
-                (import_dir(&objects, &source, &rules, &opts)?, None)
+                let imported = import_dir(&objects, &source, &rules, &opts)?;
+                #[cfg(feature = "failpoints")]
+                fail::fail_point!("init_after_import", |_| Err(fired("init_after_import")));
+                (imported, None)
             }
             (None, _) => {
                 let empty = ImportResult {
@@ -296,17 +428,18 @@ async fn create_first_revision(
         Ok((objects, caps, imported, stored, git_commit))
     })
     .await?;
+    if let Some(commit) = git_commit.clone() {
+        let fold_dir = paths.fold_dir();
+        let synced = (stored.revision().number, commit);
+        blocking(move || Ok(SyncMap::load(&fold_dir)?.append(&[synced])?)).await?;
+    }
     let import_source = source.map(|source| source.text.as_str());
     let row = create_initial_revision(store, &stored, import_source).await?;
     let main = paths.main_dir();
     let tree = imported.tree;
     let fold_dir = paths.fold_dir();
-    let synced = git_commit.clone().map(|commit| (row.number, commit));
     let number = row.number;
     blocking(move || {
-        if let Some(synced) = synced {
-            SyncMap::load(&fold_dir)?.append(&[synced])?;
-        }
         let opts = MaterialiseOptions {
             read_only: true,
             caps,
@@ -440,17 +573,42 @@ async fn prepare_root(root: &Path) -> Result<PathBuf, ProjectError> {
     flatten(made).map_err(|error| io_error(&error))
 }
 
-/// `create_dir` fails when `.fold/` exists, so two inits of one directory cannot both proceed.
-async fn create_fold_dir(paths: &ProjectPaths) -> Result<(), ProjectError> {
+/// False when `.fold/` already exists. `create_dir` fails then, so two inits of one directory cannot both create it.
+async fn create_fold_dir(paths: &ProjectPaths) -> Result<bool, ProjectError> {
     let dir = paths.fold_dir();
     let made = tokio::task::spawn_blocking(move || std::fs::create_dir(dir)).await;
     match flatten(made) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-            Err(exists(paths.root()).into())
-        }
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(false),
         Err(error) => Err(io_error(&error)),
     }
+}
+
+/// Every init holds this lock on `.fold/` until it returns, so a second init never finishes or registers a project that a running one is still writing, and a crashed one leaves no lock behind. A creating init waits for it: only a second init that found no database can hold it then.
+async fn lock_fold_dir(paths: &ProjectPaths) -> Result<File, ProjectError> {
+    let dir = paths.fold_dir();
+    let locked = tokio::task::spawn_blocking(move || {
+        let file = File::open(dir)?;
+        file.lock()?;
+        Ok(file)
+    })
+    .await;
+    flatten(locked).map_err(|error| io_error(&error))
+}
+
+/// [`lock_fold_dir`] without waiting: `None` while another init holds the lock.
+async fn try_lock_fold_dir(paths: &ProjectPaths) -> Result<Option<File>, ProjectError> {
+    let dir = paths.fold_dir();
+    let locked = tokio::task::spawn_blocking(move || {
+        let file = File::open(dir)?;
+        match file.try_lock() {
+            Ok(()) => Ok(Some(file)),
+            Err(TryLockError::WouldBlock) => Ok(None),
+            Err(TryLockError::Error(error)) => Err(error),
+        }
+    })
+    .await;
+    flatten(locked).map_err(|error| io_error(&error))
 }
 
 async fn write_config(paths: &ProjectPaths) -> Result<(), ProjectError> {
@@ -483,6 +641,25 @@ async fn check_main(paths: &ProjectPaths) -> Result<MainDir, ProjectError> {
     match flatten(found) {
         Ok(Some(main)) => Ok(main),
         Ok(None) => {
+            let main = paths.main_dir().to_string_lossy().into_owned();
+            Err(FoldError::from(WorkspaceError::TargetNotEmpty(main)).into())
+        }
+        Err(error) => Err(io_error(&error)),
+    }
+}
+
+/// A stopped init may have filled `main/` in part, so any directory there is kept; a symlink or a file in its place is refused, so nothing is written through it.
+async fn check_kept_main(paths: &ProjectPaths) -> Result<(), ProjectError> {
+    let main = paths.main_dir();
+    let found = tokio::task::spawn_blocking(move || match std::fs::symlink_metadata(&main) {
+        Ok(meta) => Ok(meta.is_dir()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(error),
+    })
+    .await;
+    match flatten(found) {
+        Ok(true) => Ok(()),
+        Ok(false) => {
             let main = paths.main_dir().to_string_lossy().into_owned();
             Err(FoldError::from(WorkspaceError::TargetNotEmpty(main)).into())
         }
@@ -528,6 +705,20 @@ fn exists(root: &Path) -> FoldError {
         format!("{} is already a fold project", root.display()),
     )
     .with_hint("open the project that exists there instead of running init again")
+}
+
+fn incomplete(paths: &ProjectPaths) -> FoldError {
+    FoldError::new(
+        codes::PROJECT_INCOMPLETE,
+        format!(
+            "{} holds a fold project that is not registered and not complete",
+            paths.root().display()
+        ),
+    )
+    .with_hint(format!(
+        "if no other fold init is running there, delete {} and run fold init again",
+        paths.fold_dir().display()
+    ))
 }
 
 fn io_error(error: &io::Error) -> ProjectError {
