@@ -68,3 +68,27 @@ The session-start hook of each session registered its inbox socket with the daem
 5. Start `backend` again with `FOLD_AGENT=backend claude --name backend` and ask: "Call get_inbox." **Expected:** the inbox holds the message from step 4.
 
 Result: date, fold version, Claude Code version, pass or fail, notes.
+
+## Acceptance 3: independent parallel work
+
+The automated test is `acceptance_3_parallel_workspaces_do_not_change_each_other` in `crates/fold-daemon/tests/acceptance_3_parallel_workspaces.rs`. `make acceptance` runs it.
+
+1. In `review`, ask: "Create the tasks 'Build the login screen' and 'Add the login endpoint'. They need no edge between them." In `frontend` and `backend`, ask each to claim one of them with `claim_task`. **Expected:** both claims succeed, each with a different holder.
+2. In `frontend` and `backend` at the same time, ask: "Call create_workspace for your task, then write `shared/config.txt` and one file of your own in the workspace." Give the two sessions different content for `shared/config.txt`. **Expected:** each result names its own workspace, for example `ws-1` and `ws-2`.
+3. In each of the two sessions, ask: "Call get_workspace_changes for your workspace." **Expected:** each result lists its own two files as `added` and no file of the other workspace. The two `shared/config.txt` files in the two workspace directories hold different content.
+4. In `review`, ask: "Call get_task for both tasks and get_repository_state." **Expected:** both tasks are `in_progress`, and the head is `r1`.
+5. Leave both workspaces untouched for the quiet period (`auto_checkpoint_quiet_seconds` in `.fold/config.toml`, 120 by default). Then ask each session: "Call list_checkpoints for your workspace." **Expected:** each result lists one automatic checkpoint with the reason `quiet`, and the two checkpoint ids differ. The head is still `r1`.
+
+Result: date, fold version, Claude Code version, pass or fail, notes.
+
+## Acceptance 4: a change is live and main is untouched
+
+The automated tests are `acceptance_4_change_is_live_and_main_is_untouched` and `acceptance_4_revert_clears_changes` in `crates/fold-daemon/tests/acceptance_4_live_diff.rs`. `make acceptance` runs both.
+
+1. In `frontend`, ask: "Create a task, claim it and create its workspace." Open the live activity screen of the project in the web interface and leave it open. **Expected:** the screen lists the workspace with no changed files.
+2. In `frontend`, edit `README.md` in the workspace: add one line. Do not reload the screen. **Expected:** within a few seconds the screen lists `README.md` as `modified` with `+1 -0`.
+3. In the web interface, open the diff of the workspace against `r1`, then the diff of `README.md`. **Expected:** the file list holds `README.md` only, and the file diff shows the new line as added.
+4. In `review`, ask: "Call get_repository_state, then compare_revisions from r1 to the workspace." **Expected:** the head is still `r1` and the comparison lists `README.md` as `modified`.
+5. In `frontend`, put the original line back in `README.md`. **Expected:** the screen shows the workspace with no changed files, and the head is still `r1`.
+
+Result: date, fold version, Claude Code version, pass or fail, notes.
