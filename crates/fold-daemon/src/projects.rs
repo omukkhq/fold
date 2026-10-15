@@ -6,6 +6,7 @@ use fold_store::Store;
 use fold_store::projects::ProjectRow;
 use fold_vcs::platform::Capabilities;
 
+use crate::jobs;
 use crate::live::{LiveConfig, LiveState};
 use crate::push::{self, PushTargets, PushTask};
 use crate::services::agents::{AgentService, SeenPresence};
@@ -167,7 +168,7 @@ impl Projects {
             .collect()
     }
 
-    /// Opens `row` unless it is already open, in which case the same handle comes back.
+    /// Opens `row` unless it is already open, in which case the same handle comes back. A new handle has its workspaces reconciled with their directories before any request can reach it.
     pub async fn open(
         &self,
         row: &ProjectRow,
@@ -178,6 +179,9 @@ impl Projects {
             return Ok(handle);
         }
         let outcome = ProjectHandle::open(row, clock).await.map(Arc::new);
+        if let Ok(handle) = &outcome {
+            jobs::reconcile_workspaces(handle).await;
+        }
         let slot = match &outcome {
             Ok(handle) => Slot::Open(handle.clone()),
             Err(_) => Slot::Unavailable,

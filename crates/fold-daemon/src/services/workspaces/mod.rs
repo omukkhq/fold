@@ -20,12 +20,14 @@ use crate::projects::ProjectHandle;
 
 mod adoption;
 mod auto;
+mod changes;
 mod changesets;
 mod checkpoints;
 mod compare;
 mod files;
 mod git;
 mod lifecycle;
+mod reconcile;
 mod repository;
 mod sync;
 
@@ -33,6 +35,7 @@ pub use adoption::AdoptReason;
 pub(crate) use adoption::adopt_if_orphaned;
 pub use auto::{AutoCheckpoint, QuietCheckpoint};
 pub(crate) use auto::{auto_checkpoint_in_tx, pruned_event};
+pub use changes::{WorkspaceChanges, WorkspaceEntry};
 pub(crate) use changesets::ProposalSnapshot;
 pub use changesets::RecordedChanges;
 pub use checkpoints::{CheckpointView, Restored};
@@ -42,6 +45,7 @@ pub use git::{GitExport, MAIN_REF, commit_message};
 pub use lifecycle::{
     ArchiveReason, CreatedWorkspace, WorkspaceDetails, WorkspaceRef, WorkspaceView, archive_in_tx,
 };
+pub use reconcile::{Reconciled, Reconciliation};
 pub use repository::{
     DEFAULT_REVISION_PAGE, RECENT_REVISIONS, RepositoryState, RevisionDetail, RevisionOrigin,
     RevisionPage, RevisionSummary,

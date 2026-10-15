@@ -17,7 +17,7 @@ use crate::objects::ObjectStore;
 use crate::paths::{RepoPath, WorkspaceError, os_bytes, resolve};
 use crate::platform::Capabilities;
 use crate::scan::{self, DEFAULT_MAX_FILE_BYTES, ScanOptions, Skipped, StableRead};
-use crate::snapshot::{keep_base, load_tree, remove_below};
+use crate::snapshot::{Warning, WarningReason, keep_base, load_tree, remove_below};
 
 /// One changed path. A hash is `None` on the side where the path does not exist. Line counts are zero for a binary file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,6 +53,9 @@ pub struct FileDiff {
     pub old_path: Option<RepoPath>,
     pub change: ChangeKind,
     pub binary: bool,
+    /// The content hash on each side; `None` on the side where the path does not exist.
+    pub old_hash: Option<ObjectHash>,
+    pub new_hash: Option<ObjectHash>,
     /// A side is larger than [`MAX_INLINE_BYTES`], so no hunks are built. Its content is not checked, so it is not marked binary.
     pub too_large: bool,
     /// Empty for a binary or too-large file and for a rename or mode change, whose content is the same on both sides.
@@ -96,6 +99,13 @@ pub fn load_flat(objects: &ObjectStore, tree: &ObjectHash) -> Result<FlatTree, F
     flatten(tree, &|hash| load_tree(objects, hash))
 }
 
+/// The working side of a comparison and the files the scan could not read, sorted by path. Each such file keeps its base entry, so it never shows as deleted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkingState {
+    pub state: State,
+    pub warnings: Vec<Warning>,
+}
+
 /// The working files of the workspace at `root` as a comparison side. It writes nothing: the stat index at `index_path` is only read, to skip hashing files whose metadata did not move, and no object is stored. A path the scan skips or finds unstable keeps what `base_tree` has there, as a snapshot would record it.
 pub fn working_state(
     objects: &ObjectStore,
@@ -103,7 +113,7 @@ pub fn working_state(
     index_path: &Path,
     base_tree: &ObjectHash,
     caps: Capabilities,
-) -> Result<State, FoldError> {
+) -> Result<WorkingState, FoldError> {
     let base = load_flat(objects, base_tree)?;
     let rules = IgnoreRules::new(root);
     let mut index = StatIndex::load(index_path, caps);
@@ -115,15 +125,26 @@ pub fn working_state(
     };
     let scanned = scan::scan(root, &mut index, &opts)?;
     let mut entries = scanned.entries;
-    let unrecorded = scanned
+    let mut warnings: Vec<Warning> = scanned
         .skipped
-        .iter()
-        .map(|skipped| &skipped.path)
-        .chain(&scanned.unstable);
-    for path in unrecorded {
-        keep_base(&mut entries, &base, path);
+        .into_iter()
+        .map(|skipped| Warning {
+            path: skipped.path,
+            reason: WarningReason::Skipped(skipped.reason),
+        })
+        .chain(scanned.unstable.into_iter().map(|path| Warning {
+            path,
+            reason: WarningReason::Unstable,
+        }))
+        .collect();
+    warnings.sort_by(|a, b| a.path.cmp(&b.path));
+    for warning in &warnings {
+        keep_base(&mut entries, &base, &warning.path);
     }
-    Ok(State::working(root.to_path_buf(), entries))
+    Ok(WorkingState {
+        state: State::working(root.to_path_buf(), entries),
+        warnings,
+    })
 }
 
 /// What [`refresh_working`] found besides the entries.
@@ -308,6 +329,8 @@ pub fn file_diff(
         old_path: found.renamed_from,
         change: found.change,
         binary: !too_large && text.is_none(),
+        old_hash: found.old.map(|entry| entry.hash),
+        new_hash: found.new.map(|entry| entry.hash),
         too_large,
         hunks,
     })

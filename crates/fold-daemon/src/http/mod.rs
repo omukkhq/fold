@@ -2,6 +2,7 @@ pub mod actor;
 pub mod agents;
 pub mod assets;
 pub mod auth;
+pub mod diff;
 pub mod error;
 pub mod events;
 pub mod host;
@@ -34,6 +35,7 @@ pub enum Transport {
 fn guarded_routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .merge(agents::routes())
+        .merge(diff::routes())
         .merge(events::routes())
         .merge(messages::routes())
         .merge(projects::routes())

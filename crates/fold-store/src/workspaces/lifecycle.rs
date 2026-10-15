@@ -246,7 +246,25 @@ pub async fn set_worker(
     Ok(changed == 1)
 }
 
-/// One statement serves every read so the rows always map the same way. `task` with `live_only` reads the live task workspace; `task` alone the newest task workspace.
+/// A workspace row as both reads select it, before its columns are checked.
+struct RawWorkspace {
+    number: i64,
+    task: i64,
+    worker_id: Option<i64>,
+    worker: Option<String>,
+    kind: String,
+    path: String,
+    base: i64,
+    proposal: Option<i64>,
+    state: String,
+    changed_files: i64,
+    conflicted: i64,
+    last_activity_at: Option<i64>,
+    created_at: i64,
+    closed_at: Option<i64>,
+}
+
+/// One statement serves every single-row read so the rows always map the same way. `task` with `live_only` reads the live task workspace; `task` alone the newest task workspace.
 async fn select(
     executor: impl SqliteExecutor<'_>,
     workspace: Option<WorkspaceId>,
@@ -255,7 +273,8 @@ async fn select(
 ) -> Result<Option<WorkspaceRow>, StoreError> {
     let workspace = workspace.map(WorkspaceId::to_db);
     let task = task.map(TaskId::to_db);
-    let row = sqlx::query!(
+    let row = sqlx::query_as!(
+        RawWorkspace,
         r#"SELECT w.number AS "number!: i64",
                   t.number AS "task!: i64",
                   w.worker_id,
@@ -286,41 +305,104 @@ async fn select(
     )
     .fetch_optional(executor)
     .await?;
-    row.map(|row| {
-        Ok(WorkspaceRow {
-            id: number(row.number, WorkspaceId::try_from_db, "workspaces.number")?,
-            task: number(row.task, TaskId::try_from_db, "tasks.number")?,
-            worker_id: row.worker_id,
-            worker: row
-                .worker
-                .map(|name| {
-                    WorkerName::parse(&name).map_err(|_| StoreError::Corrupt("workers.name"))
-                })
-                .transpose()?,
-            kind: WorkspaceKind::parse(&row.kind)?,
-            path: row.path,
-            base: number(row.base, RevisionId::try_from_db, "revisions.number")?,
-            proposal: row
-                .proposal
-                .map(|value| number(value, ProposalId::try_from_db, "proposals.number"))
-                .transpose()?,
-            state: WorkspaceState::parse(&row.state)?,
-            changed_files: u32::try_from(row.changed_files)
-                .map_err(|_| StoreError::Corrupt("workspaces.changed_files"))?,
-            conflicted: u32::try_from(row.conflicted)
-                .map_err(|_| StoreError::Corrupt("workspace_conflicts count"))?,
-            last_activity_at: row
-                .last_activity_at
-                .map(|millis| timestamp(millis, "workspaces.last_activity_at"))
-                .transpose()?,
-            created_at: timestamp(row.created_at, "workspaces.created_at")?,
-            closed_at: row
-                .closed_at
-                .map(|millis| timestamp(millis, "workspaces.closed_at"))
-                .transpose()?,
-        })
+    row.map(workspace_row).transpose()
+}
+
+/// Every task workspace in state `active` or `missing`, by number. Review checkouts are left out.
+pub async fn list_live_task_workspaces(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Vec<WorkspaceRow>, StoreError> {
+    let rows = sqlx::query_as!(
+        RawWorkspace,
+        r#"SELECT w.number AS "number!: i64",
+                  t.number AS "task!: i64",
+                  w.worker_id,
+                  k.name AS "worker?: String",
+                  w.kind,
+                  w.path,
+                  r.number AS "base!: i64",
+                  p.number AS "proposal?: i64",
+                  w.state,
+                  w.changed_files,
+                  (SELECT COUNT(*) FROM workspace_conflicts c WHERE c.workspace_id = w.id) AS "conflicted!: i64",
+                  w.last_activity_at,
+                  w.created_at,
+                  w.closed_at
+           FROM workspaces w
+           JOIN tasks t ON t.id = w.task_id
+           JOIN revisions r ON r.id = w.base_revision_id
+           LEFT JOIN workers k ON k.id = w.worker_id
+           LEFT JOIN proposals p ON p.id = w.proposal_id
+           WHERE w.kind = 'task' AND w.state IN ('active', 'missing')
+           ORDER BY w.number"#
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter().map(workspace_row).collect()
+}
+
+fn workspace_row(row: RawWorkspace) -> Result<WorkspaceRow, StoreError> {
+    Ok(WorkspaceRow {
+        id: number(row.number, WorkspaceId::try_from_db, "workspaces.number")?,
+        task: number(row.task, TaskId::try_from_db, "tasks.number")?,
+        worker_id: row.worker_id,
+        worker: row
+            .worker
+            .map(|name| WorkerName::parse(&name).map_err(|_| StoreError::Corrupt("workers.name")))
+            .transpose()?,
+        kind: WorkspaceKind::parse(&row.kind)?,
+        path: row.path,
+        base: number(row.base, RevisionId::try_from_db, "revisions.number")?,
+        proposal: row
+            .proposal
+            .map(|value| number(value, ProposalId::try_from_db, "proposals.number"))
+            .transpose()?,
+        state: WorkspaceState::parse(&row.state)?,
+        changed_files: u32::try_from(row.changed_files)
+            .map_err(|_| StoreError::Corrupt("workspaces.changed_files"))?,
+        conflicted: u32::try_from(row.conflicted)
+            .map_err(|_| StoreError::Corrupt("workspace_conflicts count"))?,
+        last_activity_at: row
+            .last_activity_at
+            .map(|millis| timestamp(millis, "workspaces.last_activity_at"))
+            .transpose()?,
+        created_at: timestamp(row.created_at, "workspaces.created_at")?,
+        closed_at: row
+            .closed_at
+            .map(|millis| timestamp(millis, "workspaces.closed_at"))
+            .transpose()?,
     })
-    .transpose()
+}
+
+/// Moves a live task workspace between `active` and `missing` as its directory comes and goes: `present` moves a missing one to `active`, and an absent directory moves an active one to `missing`. Both states keep the workspace the task's live one, so nothing else changes. False, with nothing changed, when the workspace is not a task workspace in the other state.
+pub async fn set_directory_present(
+    tx: &mut WriteTx,
+    workspace: WorkspaceId,
+    present: bool,
+) -> Result<bool, StoreError> {
+    let workspace = workspace.to_db();
+    let (from, to) = if present {
+        (
+            WorkspaceState::Missing.as_str(),
+            WorkspaceState::Active.as_str(),
+        )
+    } else {
+        (
+            WorkspaceState::Active.as_str(),
+            WorkspaceState::Missing.as_str(),
+        )
+    };
+    let changed = sqlx::query!(
+        "UPDATE workspaces SET state = ?3
+         WHERE number = ?1 AND kind = 'task' AND state = ?2",
+        workspace,
+        from,
+        to
+    )
+    .execute(tx.conn())
+    .await?
+    .rows_affected();
+    Ok(changed == 1)
 }
 
 /// Moves the workspace's base to `base`, as a finished sync and a restore do. False when the workspace or the revision does not exist, and then nothing changes.

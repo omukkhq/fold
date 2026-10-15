@@ -667,7 +667,17 @@ async fn a_file_rewritten_on_every_read_keeps_its_base_entry_with_a_warning() {
         })
     };
     fs::write(dir.join("README.md"), "# demo\nsteady\n").unwrap();
-    let state = fx.live.rescan(id).await;
+    // A writer thread the scheduler holds back for three whole reads lets one scan see the file steady, so the workspace is scanned until a scan sees it change.
+    let state = tokio::time::timeout(WAIT, async {
+        loop {
+            match fx.live.rescan(id).await {
+                Ok(state) if state.warnings.is_empty() => {}
+                other => return other,
+            }
+        }
+    })
+    .await
+    .expect("no scan saw the file change");
     running.store(false, Ordering::Relaxed);
     writer.join().unwrap();
     let state = state.unwrap();

@@ -57,3 +57,7 @@ required-features = ["failpoints"]
 [[test]]
 name = "workspaces_tools_failpoints"
 required-features = ["failpoints"]
+
+[[test]]
+name = "reconcile_failpoints"
+required-features = ["failpoints"]

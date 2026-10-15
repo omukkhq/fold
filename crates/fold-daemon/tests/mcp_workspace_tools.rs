@@ -541,7 +541,7 @@ async fn the_workspace_tools_need_a_registered_agent() {
 #[test]
 fn every_workspace_tool_field_has_a_description() {
     let tools = fold_daemon::mcp::workspaces::tools();
-    assert_eq!(tools.len(), 11);
+    assert_eq!(tools.len(), 12);
     for tool in &tools {
         assert!(tool.description.is_some(), "{}", tool.name);
         let properties = tool.input_schema["properties"].as_object().unwrap();

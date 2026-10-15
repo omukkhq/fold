@@ -1,17 +1,19 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use fold_core::checkpoint_policy::quiet_checkpoint_due;
 use fold_core::{Timestamp, WorkspaceId, codes};
+use fold_store::workspaces;
 use fold_vcs::git::Git;
-use tokio::sync::watch;
-use tokio::task::JoinHandle;
+use tokio::sync::{Semaphore, watch};
+use tokio::task::{JoinHandle, JoinSet};
 
 use crate::daemon::AppState;
 use crate::projects::ProjectHandle;
 use crate::services::agents::AgentError;
 use crate::services::projects;
-use crate::services::workspaces::{QuietCheckpoint, WorkspaceService};
+use crate::services::workspaces::{QuietCheckpoint, Reconciliation, WorkspaceService};
 
 /// How often a running daemon's jobs look at the clock.
 pub const JOB_TICK: Duration = Duration::from_secs(60);
@@ -26,6 +28,45 @@ pub const LIVE_TICK: Duration = Duration::from_secs(1);
 
 /// How often the quiet-period job looks at each workspace's live state. It is short against the two-minute quiet period, so a burst's checkpoint comes at most this much late.
 pub const AUTO_CHECKPOINT_TICK: Duration = Duration::from_secs(10);
+
+/// How many workspaces [`reconcile_workspaces`] scans at once.
+pub const RECONCILE_PARALLEL: usize = 4;
+
+/// Reconciles every task workspace in state `active` or `missing` with its directory when a project opens, before it serves requests: see [`WorkspaceService::reconcile_workspace`]. Up to [`RECONCILE_PARALLEL`] run at once. A workspace whose reconciliation fails is logged and left as it was; the others go on. Returns what was done, by workspace id.
+pub async fn reconcile_workspaces(handle: &ProjectHandle) -> Vec<Reconciliation> {
+    let service = WorkspaceService::for_project(handle, Git::default());
+    let rows = match workspaces::list_live_task_workspaces(handle.store.read()).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::error!(project = %handle.slug, code = error.code().unwrap_or("store_error"), "the workspaces were not reconciled");
+            return Vec::new();
+        }
+    };
+    let permits = Arc::new(Semaphore::new(RECONCILE_PARALLEL));
+    let mut running = JoinSet::new();
+    for row in rows {
+        let (service, permits) = (service.clone(), Arc::clone(&permits));
+        running.spawn(async move {
+            let _permit = permits.acquire_owned().await;
+            (row.id, service.reconcile_workspace(row.id).await)
+        });
+    }
+    let mut done = Vec::new();
+    while let Some(joined) = running.join_next().await {
+        match joined {
+            Ok((_, Ok(reconciled))) => done.push(reconciled),
+            Ok((workspace, Err(error))) => tracing::error!(
+                project = %handle.slug,
+                workspace = %workspace,
+                code = error.code().unwrap_or(codes::INTERNAL_ERROR),
+                "a workspace was not reconciled"
+            ),
+            Err(_) => tracing::error!(project = %handle.slug, "a workspace reconciliation stopped"),
+        }
+    }
+    done.sort_by_key(|reconciled| reconciled.workspace);
+    done
+}
 
 /// When the daily collection is due: every [`GC_INTERVAL`] of clock time after the start, never at the start itself. A clock that jumps past several due times runs once, and the next due time stays on the grid of the start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

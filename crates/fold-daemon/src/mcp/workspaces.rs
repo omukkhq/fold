@@ -13,7 +13,9 @@ use serde_json::{Value, json};
 
 use super::FoldServer;
 use super::error::{from_agent, from_workspace};
-use crate::services::workspaces::{RevisionSummary, StateRef, StateSummary, WorkspaceRef};
+use crate::services::workspaces::{
+    RevisionSummary, StateRef, StateSummary, WorkspaceChanges, WorkspaceRef,
+};
 
 pub const GET_REPOSITORY_STATE: &str = "get_repository_state";
 pub const GET_REVISION: &str = "get_revision";
@@ -21,6 +23,7 @@ pub const COMPARE_REVISIONS: &str = "compare_revisions";
 
 pub const CREATE_WORKSPACE: &str = "create_workspace";
 pub const GET_WORKSPACE: &str = "get_workspace";
+pub const GET_WORKSPACE_CHANGES: &str = "get_workspace_changes";
 pub const RECORD_CHECKPOINT: &str = "record_checkpoint";
 pub const LIST_CHECKPOINTS: &str = "list_checkpoints";
 pub const RESTORE_CHECKPOINT: &str = "restore_checkpoint";
@@ -80,6 +83,16 @@ pub struct GetWorkspaceInput {
     /// A task such as T-12, to read its live workspace, or its newest one when none is live.
     #[serde(default)]
     pub task: Option<String>,
+    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
+    #[serde(rename = "as", default)]
+    pub as_worker: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct GetWorkspaceChangesInput {
+    /// The workspace, such as ws-9.
+    pub ws: String,
     /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
     #[serde(rename = "as", default)]
     pub as_worker: Option<String>,
@@ -180,6 +193,11 @@ pub fn tools() -> Vec<Tool> {
             schema_for_type::<GetWorkspaceInput>(),
         ),
         Tool::new(
+            GET_WORKSPACE_CHANGES,
+            "Scan a workspace now and list its working changes against its base revision: a summary line, each changed file with its kind and line counts, the last activity time, the checkpoint count and the open proposal. These are unrecorded changes, not history.",
+            schema_for_type::<GetWorkspaceChangesInput>(),
+        ),
+        Tool::new(
             RECORD_CHECKPOINT,
             "Record the current files of your workspace as a checkpoint you can restore later.",
             schema_for_type::<RecordCheckpointInput>(),
@@ -245,6 +263,51 @@ fn file_line(file: &FileChange) -> Value {
         line["binary"] = json!(true);
     }
     line
+}
+
+fn changes_value(changes: &WorkspaceChanges) -> Value {
+    let view = &changes.live.view;
+    let files: Vec<Value> = view
+        .files
+        .iter()
+        .map(|file| {
+            let mut line = json!({
+                "path": file.path,
+                "change": file.change,
+                "added": file.added_lines,
+                "removed": file.removed_lines,
+            });
+            if let Some(old) = &file.previous_path {
+                line["old_path"] = json!(old);
+            }
+            if file.binary {
+                line["binary"] = json!(true);
+            }
+            line
+        })
+        .collect();
+    let mut value = json!({
+        "workspace": view.workspace.to_string(),
+        "base": view.base.to_string(),
+        "summary": view.summary,
+        "files": files,
+        "last_activity_at": view.last_activity_at,
+        "checkpoints": view.checkpoints.len(),
+        "proposal": view.proposal.map(|id| id.to_string()),
+    });
+    let warnings = &changes.live.warnings;
+    if !warnings.is_empty() {
+        value["unreadable"] = json!(
+            warnings
+                .iter()
+                .map(|warning| warning.path.to_string())
+                .collect::<Vec<_>>()
+        );
+    }
+    if let Some(checkpoint) = changes.unfinished {
+        value["unfinished_write"] = json!(checkpoint.to_string());
+    }
+    value
 }
 
 fn state_line(state: &StateSummary) -> Value {
@@ -433,6 +496,16 @@ pub async fn call(
                 "latest_checkpoint": details.latest_checkpoint.map(|id| id.to_string()),
                 "latest_changeset": details.latest_changeset.map(|id| id.to_string()),
             })
+        }
+        GET_WORKSPACE_CHANGES => {
+            let input: GetWorkspaceChangesInput = parse(arguments)?;
+            let workspace = id::<WorkspaceId>(&input.ws, "ws", "ws-9")?;
+            let changes = server
+                .workspaces
+                .changes(workspace)
+                .await
+                .map_err(from_workspace)?;
+            changes_value(&changes)
         }
         RECORD_CHECKPOINT => {
             let input: RecordCheckpointInput = parse(arguments)?;

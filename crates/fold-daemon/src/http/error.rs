@@ -87,8 +87,10 @@ fn status_of(code: &str) -> Option<StatusCode> {
         | codes::ALREADY_CLAIMED
         | codes::ALREADY_HOLDER
         | codes::CLAIM_NOT_STALE
-        | codes::NOT_CLAIM_HOLDER => Some(StatusCode::CONFLICT),
+        | codes::NOT_CLAIM_HOLDER
+        | codes::WORKSPACE_NOT_ACTIVE => Some(StatusCode::CONFLICT),
         codes::GIT_FAILED => Some(StatusCode::BAD_GATEWAY),
+        codes::WORKSPACE_IO => Some(StatusCode::INTERNAL_SERVER_ERROR),
         _ => None,
     }
 }
@@ -283,6 +285,8 @@ mod tests {
             (codes::INVALID_STATE_REF, StatusCode::BAD_REQUEST),
             (codes::PROJECT_UNAVAILABLE, StatusCode::SERVICE_UNAVAILABLE),
             (codes::GC_IN_PROGRESS, StatusCode::CONFLICT),
+            (codes::WORKSPACE_NOT_ACTIVE, StatusCode::CONFLICT),
+            (codes::WORKSPACE_IO, StatusCode::INTERNAL_SERVER_ERROR),
             (codes::AGENT_NOT_FOUND, StatusCode::NOT_FOUND),
             (codes::INVALID_NAME, StatusCode::BAD_REQUEST),
             (codes::HUMAN_NAME_REQUIRED, StatusCode::UNAUTHORIZED),

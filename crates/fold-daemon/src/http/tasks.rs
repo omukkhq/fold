@@ -81,7 +81,7 @@ impl From<service::AttentionItem> for AttentionItem {
     }
 }
 
-fn attention(items: Vec<service::AttentionItem>) -> Vec<AttentionItem> {
+pub(super) fn attention(items: Vec<service::AttentionItem>) -> Vec<AttentionItem> {
     items.into_iter().map(AttentionItem::from).collect()
 }
 

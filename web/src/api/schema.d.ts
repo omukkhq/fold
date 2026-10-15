@@ -109,6 +109,23 @@ export interface paths {
         patch: operations["update_checklist_item"];
         trace?: never;
     };
+    "/api/v1/projects/{slug}/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Compares two states, calculated on request: the changed files with line counts, or the hunks of one file when `path` is given. A workspace side is its working files, read with the scanner's stable read; a file that keeps changing keeps its base entry and comes back as a warning. */
+        get: operations["get_diff"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/events": {
         parameters: {
             query?: never;
@@ -419,6 +436,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/workspaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The project's active and missing task workspaces with their live states and the attention items of their tasks. */
+        get: operations["list_workspaces"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/workspaces/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One workspace in any state, in the shape of a list entry. */
+        get: operations["get_workspace"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/workspaces/{id}/changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The working changes of an active task workspace after a full scan, compared against its own base revision. */
+        get: operations["get_workspace_changes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/session": {
         parameters: {
             query?: never;
@@ -554,6 +622,11 @@ export interface components {
         };
         /** @enum {string} */
         ChangeKind: "added" | "modified" | "deleted" | "renamed";
+        /**
+         * @description Where the files of a comparison come from.
+         * @enum {string}
+         */
+        ChangeSource: "working" | "recorded";
         ChangedFile: {
             /** Format: int32 */
             added_lines: number;
@@ -665,6 +738,24 @@ export interface components {
             /** Format: int32 */
             removed_lines: number;
         };
+        /** @description One side of a comparison as the daemon resolved its reference. */
+        ComparedState: {
+            /**
+             * @description The base revision of a workspace; null for every other kind.
+             * @example r7
+             */
+            base: string | null;
+            /** @description The public id, such as `r7`, `C-18`, `ck-31` or `ws-7`. */
+            id: string;
+            kind: components["schemas"]["StateKindView"];
+            /**
+             * @description The task of a changeset, a checkpoint or a workspace.
+             * @example T-12
+             */
+            task: string | null;
+            /** @description The worker of a workspace. */
+            worker: string | null;
+        };
         ComparisonTotals: {
             /** Format: int32 */
             added_lines: number;
@@ -672,6 +763,17 @@ export interface components {
             files: number;
             /** Format: int32 */
             removed_lines: number;
+        };
+        /** @description The changed files of a comparison, without hunks. */
+        ComparisonView: {
+            /** @description In path order. */
+            files: components["schemas"]["ComparedFile"][];
+            from: components["schemas"]["ComparedState"];
+            source: components["schemas"]["ChangeSource"];
+            to: components["schemas"]["ComparedState"];
+            totals: components["schemas"]["ComparisonTotals"];
+            /** @description Working files that could not be read, by path. */
+            warnings: components["schemas"]["FileWarning"][];
         };
         CreateLabelBody: {
             /**
@@ -700,6 +802,33 @@ export interface components {
              */
             needs: string;
         };
+        /** @enum {string} */
+        DiffLineKind: "context" | "added" | "removed";
+        DiffLineView: {
+            kind: components["schemas"]["DiffLineKind"];
+            /**
+             * Format: int32
+             * @description The 1-based line number on the new side; null for a removed line.
+             */
+            new_no: number | null;
+            /** @description The last line of a file that does not end with a line terminator. */
+            no_newline: boolean;
+            /**
+             * Format: int32
+             * @description The 1-based line number on the old side; null for an added line.
+             */
+            old_no: number | null;
+            /** @description The line as the file holds it, with its line terminator. */
+            text: string;
+        };
+        /** @description A file list without `path`, one file's hunks with it; `view` tells them apart. */
+        DiffView: (components["schemas"]["ComparisonView"] & {
+            /** @enum {string} */
+            view: "files";
+        }) | (components["schemas"]["FileDiffView"] & {
+            /** @enum {string} */
+            view: "file";
+        });
         /** @description A stored event. The related ids are public ids. */
         DurableEvent: {
             /** @description A worker (`frontend`, `frontend/ui`), a human (`human:ana`) or `fold`. */
@@ -793,6 +922,29 @@ export interface components {
             /** @description The file is larger than 1 MiB, so only its size and hash are given; it is not checked for binary content. */
             too_large: boolean;
         };
+        /** @description The hunks of one changed file. A binary or too-large file has its hashes and no hunks. */
+        FileDiffView: {
+            binary: boolean;
+            change: components["schemas"]["FileChangeKind"];
+            /** @description Empty for a binary or too-large file and for a rename or mode change, whose content is the same on both sides. */
+            hunks: components["schemas"]["HunkView"][];
+            new_hash: string | null;
+            /** @description The content hash on each side; null on the side where the file does not exist. */
+            old_hash: string | null;
+            path: string;
+            /** @description The path before a rename; null for every other change. */
+            previous_path: string | null;
+            source: components["schemas"]["ChangeSource"];
+            /** @description A side is larger than 1 MiB, so no hunks are built; its content is not checked for binary. */
+            too_large: boolean;
+        };
+        /** @description A working file that could not be read. It keeps its base entry, so it never shows as deleted. */
+        FileWarning: {
+            path: string;
+            reason: components["schemas"]["FileWarningReason"];
+        };
+        /** @enum {string} */
+        FileWarningReason: "unstable" | "too_large" | "special" | "unreadable" | "changed_during_snapshot";
         /** @description The counts of one garbage collection run. */
         GcCounts: {
             /**
@@ -862,6 +1014,18 @@ export interface components {
         HumanReviewMark: {
             /** @description The named human whose approval integration waits for; null when any human may approve. */
             reviewer: string | null;
+        };
+        /** @description A unified hunk. A start is the 1-based number of the first line of its side, or of the line before the hunk (0 at the top) when that side has no lines in it. */
+        HunkView: {
+            lines: components["schemas"]["DiffLineView"][];
+            /** Format: int32 */
+            new_lines: number;
+            /** Format: int32 */
+            new_start: number;
+            /** Format: int32 */
+            old_lines: number;
+            /** Format: int32 */
+            old_start: number;
         };
         Label: {
             /**
@@ -1096,6 +1260,8 @@ export interface components {
             seq: number;
             workspaces: components["schemas"]["LiveWorkspace"][];
         };
+        /** @enum {string} */
+        StateKindView: "revision" | "changeset" | "checkpoint" | "workspace" | "tree";
         TaskClaim: {
             /**
              * Format: int64
@@ -1254,6 +1420,8 @@ export interface components {
             labels?: string[] | null;
             title?: string | null;
         };
+        /** @enum {string} */
+        WatchModeView: "watching" | "degraded";
         WorkerEntry: {
             /** @description The last tool the worker called, followed by its task id when the call named one, such as `claim_task T-12`. */
             activity: string | null;
@@ -1301,6 +1469,75 @@ export interface components {
          * @enum {string}
          */
         WorkerWorkspaceState: "active" | "missing";
+        /** @description The working changes of an active task workspace, read after a full scan. */
+        WorkspaceChangesView: components["schemas"]["LiveWorkspace"] & {
+            /** @description Always `working`. */
+            source: components["schemas"]["ChangeSource"];
+            /**
+             * @description The checkpoint of a sync or restore that stopped after it began to write files. Its agent finishes it with `sync_workspace` or `restore_checkpoint`; until then `record_changes` refuses.
+             * @example ck-88
+             */
+            unfinished_write: string | null;
+            /** @description Files the scan could not read, by path. */
+            warnings: components["schemas"]["FileWarning"][];
+            watch: components["schemas"]["WatchModeView"];
+        };
+        /** @description A workspace with its live state and the attention items of its task. */
+        WorkspaceEntryView: {
+            /** @description Why the task needs a person; empty when nothing does. */
+            attention: components["schemas"]["AttentionItem"][];
+            /**
+             * @description The revision the workspace is based on.
+             * @example r17
+             */
+            base: string;
+            /**
+             * Format: int32
+             * @description Changed files as the live state last saved them.
+             */
+            changed_files: number;
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            closed_at: number | null;
+            /**
+             * Format: int32
+             * @description Paths a sync left conflicted.
+             */
+            conflicted: number;
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            created_at: number;
+            /** @example ws-9 */
+            id: string;
+            kind: components["schemas"]["WorkspaceKindView"];
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            last_activity_at: number | null;
+            live: components["schemas"]["LiveWorkspace"] | null;
+            /** @description The worker that owns the workspace, such as `frontend/ui`. */
+            owner: string | null;
+            /** @description Relative to the project root. */
+            path: string;
+            /** @example P-3 */
+            proposal: string | null;
+            state: components["schemas"]["WorkspaceStateView"];
+            /** @example T-12 */
+            task: string;
+        };
+        /** @enum {string} */
+        WorkspaceKindView: "task" | "review";
+        WorkspaceListView: {
+            /** @description The active and missing task workspaces, by id. */
+            workspaces: components["schemas"]["WorkspaceEntryView"][];
+        };
+        /** @enum {string} */
+        WorkspaceStateView: "active" | "missing" | "archived" | "abandoned";
     };
     responses: never;
     parameters: never;
@@ -1986,6 +2223,99 @@ export interface operations {
                 };
             };
             /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_diff: {
+        parameters: {
+            query: {
+                /** @description The old side: a revision `r17`, a changeset `C-40`, a checkpoint `ck-88` or the working files of a workspace `ws-9`. */
+                from: string;
+                /** @description The new side, in the same forms as `from`. A workspace is compared as its working files. */
+                to: string;
+                /** @description One changed file, such as `src/lib.rs`: its new path for a rename, its old path for a deletion. With it the answer holds that file's hunks; without it, the list of changed files. */
+                path?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file list, or one file's hunks */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiffView"];
+                };
+            };
+            /** @description A reference or the path is not valid (`invalid_state_ref`, `invalid_path`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description A state, the path in the comparison or the slug does not exist (`revision_not_found`, `workspace_not_found`, `not_found`, `path_not_in_comparison`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description A workspace is missing or closed (`workspace_not_active`) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description A working file could not be read (`workspace_io`), or an internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -3805,6 +4135,241 @@ export interface operations {
                 };
             };
             /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    list_workspaces: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The live task workspaces */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceListView"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The slug is not registered */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_workspace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The workspace, such as ws-9 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The workspace */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceEntryView"];
+                };
+            };
+            /** @description The workspace id is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The workspace or the slug does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_workspace_changes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The workspace, such as ws-9 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The working changes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceChangesView"];
+                };
+            };
+            /** @description The workspace id is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The workspace or the slug does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The workspace is missing, closed or a review checkout (`workspace_not_active`) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description A working file could not be read (`workspace_io`), or an internal error */
             500: {
                 headers: {
                     [name: string]: unknown;

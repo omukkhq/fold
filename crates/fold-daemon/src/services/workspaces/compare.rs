@@ -9,6 +9,7 @@ use fold_store::Store;
 use fold_store::workspaces::{self, WorkspaceState};
 use fold_vcs::compare::{self as vcs, FileChange, FileDiff, State, Totals};
 use fold_vcs::paths::RepoPath;
+use fold_vcs::snapshot::Warning;
 use serde_json::json;
 
 use super::{WorkspaceError, WorkspaceService, blocking, capabilities, open_objects};
@@ -116,6 +117,8 @@ pub struct ResolvedState {
     /// The stored tree; `None` for working files, which no tree records.
     pub tree: Option<ObjectHash>,
     pub state: State,
+    /// Working files the scan could not read, by path; each keeps its base entry. Empty for a recorded state.
+    pub warnings: Vec<Warning>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,6 +127,8 @@ pub struct StateComparison {
     pub to: StateSummary,
     pub files: Vec<FileChange>,
     pub totals: Totals,
+    /// The warnings of both sides, `from` first.
+    pub warnings: Vec<Warning>,
 }
 
 /// Where a state's entries come from before any file is read.
@@ -142,12 +147,13 @@ impl WorkspaceService {
         let (summary, source) = self.locate(state).await?;
         let paths = self.paths.clone();
         let probed = Arc::clone(&self.caps);
-        let (tree, state) = blocking(move || {
+        let (tree, state, warnings) = blocking(move || {
             let objects = open_objects(&paths)?;
             match source {
                 Source::Tree(tree) => Ok((
                     Some(tree),
                     State::recorded(vcs::load_flat(&objects, &tree)?),
+                    Vec::new(),
                 )),
                 Source::Working {
                     workspace,
@@ -159,8 +165,8 @@ impl WorkspaceService {
                     }
                     let caps = capabilities(&probed, &paths)?;
                     let index = paths.workspace_index(workspace);
-                    let state = vcs::working_state(&objects, &root, &index, &base, caps)?;
-                    Ok((None, state))
+                    let working = vcs::working_state(&objects, &root, &index, &base, caps)?;
+                    Ok((None, working.state, working.warnings))
                 }
             }
         })
@@ -169,6 +175,7 @@ impl WorkspaceService {
             summary,
             tree,
             state,
+            warnings,
         })
     }
 
@@ -184,6 +191,8 @@ impl WorkspaceService {
         );
         let paths = self.paths.clone();
         let (from_state, to_state) = (from.state, to.state);
+        let mut warnings = from.warnings;
+        warnings.extend(to.warnings);
         let comparison = blocking(move || {
             let objects = open_objects(&paths)?;
             vcs::compare(&objects, &from_state, &to_state)
@@ -194,6 +203,7 @@ impl WorkspaceService {
             to: to.summary,
             files: comparison.files,
             totals: comparison.totals,
+            warnings,
         })
     }
 

@@ -1,10 +1,13 @@
 use axum::Json;
 use axum::extract::Path;
 use fold_core::tree::EntryKind;
-use fold_core::{FoldError, ProposalId, RevisionId, TaskId, Timestamp};
+use fold_core::{CheckpointId, FoldError, ProposalId, RevisionId, TaskId, Timestamp, WorkspaceId};
+use fold_store::workspaces::{WorkspaceKind, WorkspaceState};
 use fold_vcs::browse::{DirEntry, FileContent};
 use fold_vcs::compare::{ChangeKind, FileChange, Totals};
 use fold_vcs::git::Git;
+use fold_vcs::scan::SkipReason;
+use fold_vcs::snapshot::{Warning, WarningReason};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::router::OpenApiRouter;
@@ -12,10 +15,13 @@ use utoipa_axum::routes;
 
 use super::Project;
 use super::error::{ApiError, ApiQuery, ErrorEnvelope};
+use super::events::LiveWorkspace;
+use super::tasks::{AttentionItem, attention};
 use crate::daemon::AppState;
+use crate::live::WatchMode;
 use crate::services::workspaces::{
     RepositoryState, RevisionDetail, RevisionOrigin, RevisionPage, RevisionSummary,
-    WorkspaceService,
+    WorkspaceChanges, WorkspaceEntry, WorkspaceService,
 };
 
 pub fn routes() -> OpenApiRouter<AppState> {
@@ -25,14 +31,21 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(get_revision))
         .routes(routes!(read_revision_tree))
         .routes(routes!(read_revision_file))
+        .routes(routes!(list_workspaces))
+        .routes(routes!(get_workspace))
+        .routes(routes!(get_workspace_changes))
 }
 
-fn service(project: &Project) -> WorkspaceService {
+pub(super) fn service(project: &Project) -> WorkspaceService {
     WorkspaceService::for_project(&project.0, Git::default())
 }
 
 fn revision(text: &str) -> Result<RevisionId, ApiError> {
     Ok(text.parse::<RevisionId>().map_err(FoldError::from)?)
+}
+
+fn workspace_id(text: &str) -> Result<WorkspaceId, ApiError> {
+    Ok(text.parse::<WorkspaceId>().map_err(FoldError::from)?)
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -313,6 +326,199 @@ fn file_view(path: String, content: FileContent) -> FileContentView {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceKindView {
+    Task,
+    /// A read-only checkout of a proposal version for its reviewer.
+    Review,
+}
+
+impl From<WorkspaceKind> for WorkspaceKindView {
+    fn from(kind: WorkspaceKind) -> Self {
+        match kind {
+            WorkspaceKind::Task => Self::Task,
+            WorkspaceKind::Review => Self::Review,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceStateView {
+    Active,
+    /// The directory is gone; the workspace still holds its task in progress.
+    Missing,
+    Archived,
+    Abandoned,
+}
+
+impl From<WorkspaceState> for WorkspaceStateView {
+    fn from(state: WorkspaceState) -> Self {
+        match state {
+            WorkspaceState::Active => Self::Active,
+            WorkspaceState::Missing => Self::Missing,
+            WorkspaceState::Archived => Self::Archived,
+            WorkspaceState::Abandoned => Self::Abandoned,
+        }
+    }
+}
+
+/// A workspace with its live state and the attention items of its task.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct WorkspaceEntryView {
+    #[schema(value_type = String, example = "ws-9")]
+    pub id: WorkspaceId,
+    #[schema(value_type = String, example = "T-12")]
+    pub task: TaskId,
+    /// The worker that owns the workspace, such as `frontend/ui`.
+    #[schema(required = true)]
+    pub owner: Option<String>,
+    pub kind: WorkspaceKindView,
+    /// Relative to the project root.
+    pub path: String,
+    /// The revision the workspace is based on.
+    #[schema(value_type = String, example = "r17")]
+    pub base: RevisionId,
+    pub state: WorkspaceStateView,
+    #[schema(value_type = Option<String>, required = true, example = "P-3")]
+    pub proposal: Option<ProposalId>,
+    /// Changed files as the live state last saved them.
+    pub changed_files: u32,
+    /// Paths a sync left conflicted.
+    pub conflicted: u32,
+    /// UTC milliseconds.
+    #[schema(value_type = Option<i64>, required = true)]
+    pub last_activity_at: Option<Timestamp>,
+    /// UTC milliseconds.
+    #[schema(value_type = i64)]
+    pub created_at: Timestamp,
+    /// UTC milliseconds.
+    #[schema(value_type = Option<i64>, required = true)]
+    pub closed_at: Option<Timestamp>,
+    /// The working changes now; null for a missing or closed workspace and for a review checkout.
+    #[schema(required = true)]
+    pub live: Option<LiveWorkspace>,
+    /// Why the task needs a person; empty when nothing does.
+    pub attention: Vec<AttentionItem>,
+}
+
+impl From<WorkspaceEntry> for WorkspaceEntryView {
+    fn from(entry: WorkspaceEntry) -> Self {
+        let workspace = entry.workspace;
+        Self {
+            id: workspace.id,
+            task: workspace.task,
+            owner: workspace.worker.map(|worker| worker.as_str().to_owned()),
+            kind: workspace.kind.into(),
+            path: workspace.path,
+            base: workspace.base,
+            state: workspace.state.into(),
+            proposal: workspace.proposal,
+            changed_files: workspace.changed_files,
+            conflicted: workspace.conflicted,
+            last_activity_at: workspace.last_activity_at,
+            created_at: workspace.created_at,
+            closed_at: workspace.closed_at,
+            live: entry.live.map(|live| live.view.clone()),
+            attention: attention(entry.attention),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct WorkspaceListView {
+    /// The active and missing task workspaces, by id.
+    pub workspaces: Vec<WorkspaceEntryView>,
+}
+
+/// Where the files of a comparison come from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangeSource {
+    /// A side is the working files of a workspace: changes nobody recorded yet, never history.
+    Working,
+    /// Both sides are recorded states.
+    Recorded,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FileWarningReason {
+    /// The file kept changing over three reads.
+    Unstable,
+    /// The file is over the size limit.
+    TooLarge,
+    /// A socket, FIFO or device.
+    Special,
+    /// The file could not be read for lack of permission.
+    Unreadable,
+    /// The file changed between the scan and the moment its content was stored.
+    ChangedDuringSnapshot,
+}
+
+/// A working file that could not be read. It keeps its base entry, so it never shows as deleted.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FileWarning {
+    pub path: String,
+    pub reason: FileWarningReason,
+}
+
+impl From<&Warning> for FileWarning {
+    fn from(warning: &Warning) -> Self {
+        let reason = match warning.reason {
+            WarningReason::Unstable => FileWarningReason::Unstable,
+            WarningReason::ChangedDuringSnapshot => FileWarningReason::ChangedDuringSnapshot,
+            WarningReason::Skipped(SkipReason::TooLarge) => FileWarningReason::TooLarge,
+            WarningReason::Skipped(SkipReason::Special) => FileWarningReason::Special,
+            WarningReason::Skipped(SkipReason::Unreadable) => FileWarningReason::Unreadable,
+        };
+        Self {
+            path: warning.path.to_string(),
+            reason,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WatchModeView {
+    Watching,
+    /// The platform refused a watch, so the workspace is scanned on a timer.
+    Degraded,
+}
+
+/// The working changes of an active task workspace, read after a full scan.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct WorkspaceChangesView {
+    /// Always `working`.
+    pub source: ChangeSource,
+    #[serde(flatten)]
+    pub live: LiveWorkspace,
+    pub watch: WatchModeView,
+    /// Files the scan could not read, by path.
+    pub warnings: Vec<FileWarning>,
+    /// The checkpoint of a sync or restore that stopped after it began to write files. Its agent finishes it with `sync_workspace` or `restore_checkpoint`; until then `record_changes` refuses.
+    #[schema(value_type = Option<String>, required = true, example = "ck-88")]
+    pub unfinished_write: Option<CheckpointId>,
+}
+
+impl From<WorkspaceChanges> for WorkspaceChangesView {
+    fn from(changes: WorkspaceChanges) -> Self {
+        let state = &changes.live;
+        Self {
+            source: ChangeSource::Working,
+            live: state.view.clone(),
+            watch: match state.watch {
+                WatchMode::Watching => WatchModeView::Watching,
+                WatchMode::Degraded => WatchModeView::Degraded,
+            },
+            warnings: state.warnings.iter().map(FileWarning::from).collect(),
+            unfinished_write: changes.unfinished,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct RevisionListQuery {
@@ -450,6 +656,79 @@ pub async fn read_revision_file(
     let path = query.path.unwrap_or_default();
     let content = service(&project).read_file(revision(&r)?, &path).await?;
     Ok(Json(file_view(path, content)))
+}
+
+/// The project's active and missing task workspaces with their live states and the attention items of their tasks.
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{slug}/workspaces",
+    operation_id = "list_workspaces",
+    params(("slug" = String, Path, description = "The project slug")),
+    responses(
+        (status = 200, description = "The live task workspaces", body = WorkspaceListView),
+        (status = 404, description = "The slug is not registered", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn list_workspaces(project: Project) -> Result<Json<WorkspaceListView>, ApiError> {
+    let entries = service(&project).list_workspaces().await?;
+    Ok(Json(WorkspaceListView {
+        workspaces: entries.into_iter().map(WorkspaceEntryView::from).collect(),
+    }))
+}
+
+/// One workspace in any state, in the shape of a list entry.
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{slug}/workspaces/{id}",
+    operation_id = "get_workspace",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("id" = String, Path, description = "The workspace, such as ws-9"),
+    ),
+    responses(
+        (status = 200, description = "The workspace", body = WorkspaceEntryView),
+        (status = 400, description = "The workspace id is not valid", body = ErrorEnvelope),
+        (status = 404, description = "The workspace or the slug does not exist", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn get_workspace(
+    project: Project,
+    Path((_slug, id)): Path<(String, String)>,
+) -> Result<Json<WorkspaceEntryView>, ApiError> {
+    let entry = service(&project)
+        .workspace_entry(workspace_id(&id)?)
+        .await?;
+    Ok(Json(entry.into()))
+}
+
+/// The working changes of an active task workspace after a full scan, compared against its own base revision.
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{slug}/workspaces/{id}/changes",
+    operation_id = "get_workspace_changes",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("id" = String, Path, description = "The workspace, such as ws-9"),
+    ),
+    responses(
+        (status = 200, description = "The working changes", body = WorkspaceChangesView),
+        (status = 400, description = "The workspace id is not valid", body = ErrorEnvelope),
+        (status = 404, description = "The workspace or the slug does not exist", body = ErrorEnvelope),
+        (status = 409, description = "The workspace is missing, closed or a review checkout (`workspace_not_active`)", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "A working file could not be read (`workspace_io`), or an internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn get_workspace_changes(
+    project: Project,
+    Path((_slug, id)): Path<(String, String)>,
+) -> Result<Json<WorkspaceChangesView>, ApiError> {
+    let changes = service(&project).changes(workspace_id(&id)?).await?;
+    Ok(Json(changes.into()))
 }
 
 #[cfg(test)]

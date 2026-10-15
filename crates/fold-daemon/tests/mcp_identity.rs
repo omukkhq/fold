@@ -427,6 +427,7 @@ async fn the_server_lists_described_tools_and_sends_the_workflow() {
             "compare_revisions",
             "create_workspace",
             "get_workspace",
+            "get_workspace_changes",
             "record_checkpoint",
             "list_checkpoints",
             "restore_checkpoint",
