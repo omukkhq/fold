@@ -535,7 +535,8 @@ async fn takeover_claim_moves_only_a_stale_claim() {
         .tasks
         .takeover_claim(&agent("backend"), t(1))
         .await
-        .unwrap();
+        .unwrap()
+        .claim;
     assert_eq!(claim.holder.as_str(), "backend");
     assert!(!claim.stale);
     let events = fx.events_after(head).await;

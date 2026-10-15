@@ -27,20 +27,40 @@ impl TaskService {
     }
 
     /// Hides a task that has started: removes its edges and the linked checklist items pointing at it, archives its live task workspace and releases its implementation claim. Its rows and events stay, and its status cache stays as it was. Dependents recompute in the same transaction. An open proposal must be closed first; archiving never closes it.
+    ///
+    /// The operation lock of the live workspace is taken before the transaction, so the archive waits for a sync, restore or record that is writing there, and no command writes in the workspace after it is archived.
     pub async fn archive_task(&self, actor: &Actor, id: TaskId) -> Result<TaskView, TaskError> {
         let actor = &actor.event_actor();
-        let now = self.clock.now();
-        let mut buffer = EventBuffer::new();
-        let archived = self
-            .store
-            .write(async |tx| archive_in_tx(tx, &mut buffer, actor, id, now).await)
-            .await?;
-        self.bus.publish(buffer);
-        if let (Some(live), Some(workspace)) = (&self.live, archived) {
-            live.detach(workspace).await;
+        loop {
+            let locked = workspaces::live_task_workspace(self.store.read(), id)
+                .await?
+                .map(|live| live.id);
+            let _op = match locked {
+                Some(workspace) => Some(self.ops.lock(workspace).await),
+                None => None,
+            };
+            let now = self.clock.now();
+            let mut buffer = EventBuffer::new();
+            let step = self
+                .store
+                .write(async |tx| archive_in_tx(tx, &mut buffer, actor, id, locked, now).await)
+                .await?;
+            let Archive::Done(archived) = step else {
+                continue;
+            };
+            self.bus.publish(buffer);
+            if let (Some(live), Some(workspace)) = (&self.live, archived) {
+                live.detach(workspace).await;
+            }
+            return self.get(id).await;
         }
-        self.get(id).await
     }
+}
+
+/// What the transaction of an archive did. `Moved` writes nothing: the task's live workspace is no longer the one whose lock the command holds, and the command reads it again.
+enum Archive {
+    Done(Option<WorkspaceId>),
+    Moved,
 }
 
 async fn delete_in_tx(
@@ -90,8 +110,9 @@ async fn archive_in_tx(
     buffer: &mut EventBuffer,
     actor: &EventActor,
     id: TaskId,
+    locked: Option<WorkspaceId>,
     now: Timestamp,
-) -> Result<Option<WorkspaceId>, TaskError> {
+) -> Result<Archive, TaskError> {
     let row = tasks::fetch(tx.conn(), id)
         .await?
         .ok_or_else(|| task_not_found(id))?;
@@ -105,6 +126,10 @@ async fn archive_in_tx(
             ],
             "the task is already archived; call get_task_graph to pick an open task",
         ));
+    }
+    let workspace = workspaces::live_task_workspace(tx.conn(), id).await?;
+    if workspace.as_ref().map(|live| live.id) != locked {
+        return Ok(Archive::Moved);
     }
     let open_proposal = tasks::load_facts(tx, &[id])
         .await?
@@ -122,7 +147,6 @@ async fn archive_in_tx(
         ));
     }
     let seeds = detach(tx, buffer, actor, id, now).await?;
-    let workspace = workspaces::live_task_workspace(tx.conn(), id).await?;
     if let Some(live) = &workspace {
         let reason = ArchiveReason::TaskArchived;
         workspace_service::archive_in_tx::<TaskError>(tx, buffer, actor, live.id, reason, now)
@@ -144,7 +168,7 @@ async fn archive_in_tx(
     let event = NewEvent::new(types::TASK_ARCHIVED, actor.clone())?.task(id);
     buffer.append(tx, &event, now).await?;
     buffer.extend(recompute(tx, &seeds, now).await?.events);
-    Ok(workspace.map(|live| live.id))
+    Ok(Archive::Done(workspace.map(|live| live.id)))
 }
 
 /// Removes the linked checklist items pointing at `id` and every edge into or out of it, appends their events, and returns the tasks that needed `id`: the seeds of the recompute, collected before the edges go.

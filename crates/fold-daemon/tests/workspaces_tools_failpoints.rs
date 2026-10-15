@@ -9,15 +9,15 @@ use fold_core::object::ObjectKind;
 use fold_core::revision::Revision;
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
 use fold_core::{
-    Actor, AgentName, ChangesetId, CheckpointId, EventFilter, RevisionId, TaskDescription, TaskId,
-    TaskTitle, Timestamp, WorkspaceId,
+    Actor, AgentName, ChangesetId, CheckpointId, EventFilter, HumanName, RevisionId,
+    TaskDescription, TaskId, TaskTitle, Timestamp, WorkspaceId,
 };
 use fold_daemon::projects::ProjectHandle;
 use fold_daemon::services::agents::AgentService;
 use fold_daemon::services::events::EventBus;
 use fold_daemon::services::projects::gc;
 use fold_daemon::services::tasks::{CreateTask, TaskService};
-use fold_daemon::services::workspaces::{WorkspaceError, WorkspaceService};
+use fold_daemon::services::workspaces::{WorkspaceError, WorkspaceLocks, WorkspaceService};
 use fold_store::Store;
 use fold_store::events;
 use fold_store::projects::ProjectRow;
@@ -56,6 +56,7 @@ impl Project {
     fn over(project: &TestProject, store: &Store, workspaces: Option<WorkspaceService>) -> Self {
         let bus = EventBus::new();
         let clock = Arc::new(project.clock().clone());
+        let ops = Arc::new(WorkspaceLocks::default());
         let workspaces = workspaces.unwrap_or_else(|| {
             WorkspaceService::new(
                 store.clone(),
@@ -65,12 +66,13 @@ impl Project {
                 Git::default(),
                 5,
             )
+            .with_locks(Arc::new(tokio::sync::RwLock::new(())), ops.clone())
         });
         Self {
             store: store.clone(),
             root: project.paths().root().to_owned(),
             agents: AgentService::new(store.clone(), bus.clone(), clock.clone()),
-            tasks: TaskService::new(store.clone(), bus, clock, 5),
+            tasks: TaskService::new(store.clone(), bus, clock, 5).with_workspace_locks(ops),
             workspaces,
         }
     }
@@ -537,5 +539,202 @@ async fn garbage_collection_waits_for_a_record_to_commit() {
         .unwrap();
     let objects = ObjectStore::open(&project.paths().fold_dir()).unwrap();
     assert!(objects.contains(&changeset.tree).unwrap());
+    scenario.teardown();
+}
+
+/// Registers the agent `backend` and returns its actor.
+#[cfg(test)]
+async fn second_agent(fixture: &Project) -> Actor {
+    let mut session = fixture.agents.start_session(2).await.unwrap();
+    fixture
+        .agents
+        .register_agent(&mut session, &AgentName::parse("backend").unwrap(), &[])
+        .await
+        .unwrap();
+    fixture.agents.actor(&session, None).await.unwrap()
+}
+
+/// A takeover that reaches a workspace while its stale owner's sync is writing waits for the sync to finish, so no file changes after the new owner has it, and the old owner's next sync is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_takeover_waits_for_the_old_owners_sync_and_later_ones_are_refused() {
+    let scenario = fail::FailScenario::setup();
+    let project = TestProject::new().await;
+    let fixture = Arc::new(Project::over(&project, project.store(), None));
+    let frontend = fixture.seed().await;
+    let backend = second_agent(&fixture).await;
+    fixture.move_main(THEIRS).await;
+    project
+        .clock()
+        .advance(Duration::from_secs(5 * 60))
+        .unwrap();
+
+    let gate = Gate::install("workspace_sync_before_merge");
+    let sync = tokio::spawn({
+        let (fixture, actor) = (Arc::clone(&fixture), frontend.clone());
+        async move { fixture.workspaces.sync_workspace(&actor, ws(1)).await }
+    });
+    gate.wait_reached().await;
+    let mut takeover = tokio::spawn({
+        let (fixture, actor) = (Arc::clone(&fixture), backend.clone());
+        async move {
+            fixture
+                .tasks
+                .takeover_claim(&actor, TaskId::from_number(1).unwrap())
+                .await
+        }
+    });
+    let waited = tokio::time::timeout(STALL, &mut takeover).await.is_err();
+    gate.open();
+    assert!(
+        waited,
+        "the takeover moved the workspace while its sync was writing"
+    );
+    sync.await.unwrap().unwrap();
+    let claimed = tokio::time::timeout(WAIT, takeover)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    fail::remove("workspace_sync_before_merge");
+    assert_eq!(claimed.workspace, Some(ws(1)));
+    let synced = fixture.event_seq("workspace.synced").await;
+    let adopted = fixture.event_seq("workspace.adopted").await;
+    assert!(synced[0] < adopted[0]);
+
+    let after = files(&fixture.root.join("ws/t-1"));
+    fixture.move_main(b"later\n").await;
+    let refused = fixture
+        .workspaces
+        .sync_workspace(&frontend, ws(1))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code(), Some("not_workspace_owner"));
+    assert_eq!(files(&fixture.root.join("ws/t-1")), after);
+    scenario.teardown();
+}
+
+/// The same for a claim that adopts a released workspace while its old owner restores a checkpoint there.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_adoption_waits_for_the_old_owners_restore_and_later_ones_are_refused() {
+    let scenario = fail::FailScenario::setup();
+    let project = TestProject::new().await;
+    let fixture = Arc::new(Project::over(&project, project.store(), None));
+    let frontend = fixture.seed().await;
+    let backend = second_agent(&fixture).await;
+    let first = fixture
+        .workspaces
+        .record_checkpoint(&frontend, ws(1), Some("mine"))
+        .await
+        .unwrap();
+    fs::write(fixture.lib(), b"later\n").unwrap();
+    fixture
+        .tasks
+        .release_task(&frontend, TaskId::from_number(1).unwrap())
+        .await
+        .unwrap();
+
+    let gate = Gate::install("workspace_restore_before_write");
+    let restore = tokio::spawn({
+        let (fixture, actor) = (Arc::clone(&fixture), frontend.clone());
+        async move {
+            fixture
+                .workspaces
+                .restore_checkpoint(&actor, first.id)
+                .await
+        }
+    });
+    gate.wait_reached().await;
+    let mut claim = tokio::spawn({
+        let (fixture, actor) = (Arc::clone(&fixture), backend.clone());
+        async move {
+            fixture
+                .tasks
+                .claim_task(&actor, TaskId::from_number(1).unwrap())
+                .await
+        }
+    });
+    let waited = tokio::time::timeout(STALL, &mut claim).await.is_err();
+    gate.open();
+    assert!(
+        waited,
+        "the claim adopted the workspace while its restore was writing"
+    );
+    restore.await.unwrap().unwrap();
+    let claimed = tokio::time::timeout(WAIT, claim)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    fail::remove("workspace_restore_before_write");
+    assert!(claimed.adopted);
+    assert_eq!(fs::read(fixture.lib()).unwrap(), MINE);
+
+    let after = files(&fixture.root.join("ws/t-1"));
+    let refused = fixture
+        .workspaces
+        .restore_checkpoint(&frontend, first.id)
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code(), Some("not_workspace_owner"));
+    assert_eq!(files(&fixture.root.join("ws/t-1")), after);
+    scenario.teardown();
+}
+
+/// An archive that reaches a workspace while its owner's sync is writing waits for the sync to finish. The workspace is then archived, and no later sync writes in it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_archive_waits_for_a_running_sync_and_later_ones_are_refused() {
+    let scenario = fail::FailScenario::setup();
+    let project = TestProject::new().await;
+    let fixture = Arc::new(Project::over(&project, project.store(), None));
+    let frontend = fixture.seed().await;
+    fixture.move_main(THEIRS).await;
+
+    let gate = Gate::install("workspace_sync_before_merge");
+    let sync = tokio::spawn({
+        let (fixture, actor) = (Arc::clone(&fixture), frontend.clone());
+        async move { fixture.workspaces.sync_workspace(&actor, ws(1)).await }
+    });
+    gate.wait_reached().await;
+    let mut archive = tokio::spawn({
+        let fixture = Arc::clone(&fixture);
+        async move {
+            let human = Actor::human(HumanName::parse("ana").unwrap());
+            fixture
+                .tasks
+                .archive_task(&human, TaskId::from_number(1).unwrap())
+                .await
+        }
+    });
+    let waited = tokio::time::timeout(STALL, &mut archive).await.is_err();
+    gate.open();
+    assert!(
+        waited,
+        "the archive closed the workspace while its sync was writing"
+    );
+    sync.await.unwrap().unwrap();
+    tokio::time::timeout(WAIT, archive)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    fail::remove("workspace_sync_before_merge");
+    let synced = fixture.event_seq("workspace.synced").await;
+    let archived = fixture.event_seq("workspace.archived").await;
+    assert!(synced[0] < archived[0]);
+    let row = workspaces::get_workspace(fixture.store.read(), ws(1))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.state, workspaces::WorkspaceState::Archived);
+
+    let after = files(&fixture.root.join("ws/t-1"));
+    fixture.move_main(b"later\n").await;
+    let refused = fixture
+        .workspaces
+        .sync_workspace(&frontend, ws(1))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code(), Some("workspace_not_active"));
+    assert_eq!(files(&fixture.root.join("ws/t-1")), after);
     scenario.teardown();
 }

@@ -15,6 +15,7 @@ use thiserror::Error;
 use super::events::{EventBuffer, EventBus};
 use super::projects::{Lease, ProjectError};
 use crate::live::LiveState;
+use crate::services::workspaces::WorkspaceLocks;
 
 mod attention;
 mod checklists;
@@ -30,7 +31,7 @@ pub use checklists::{
     ChecklistItemPatch, ChecklistItemView, ChecklistProgress, ChecklistView, ItemContent,
     NewChecklistItem,
 };
-pub use claims::{ClaimView, claim_view, renew_leases};
+pub use claims::{ClaimView, Claimed, claim_view, renew_leases};
 pub(crate) use claims::{already_claimed, claim_in_tx, closed_refusal, worker_row};
 pub use dependencies::{Edge, add_edge_in_tx};
 pub use ready::ReadyTask;
@@ -129,6 +130,8 @@ pub struct TaskService {
     clock: Arc<dyn Clock>,
     lease: Lease,
     live: Option<LiveState>,
+    /// The project's workspace locks (`ProjectHandle::workspace_locks`): a claim that adopts a workspace, and an archive that closes one, wait for a sync, restore or record there to finish.
+    ops: Arc<WorkspaceLocks>,
 }
 
 impl TaskService {
@@ -140,6 +143,7 @@ impl TaskService {
             clock,
             lease: Lease::Minutes(lease_minutes),
             live: None,
+            ops: Arc::new(WorkspaceLocks::default()),
         }
     }
 
@@ -154,7 +158,14 @@ impl TaskService {
         Ok(self.lease.minutes().await?)
     }
 
-    /// Lets archiving a task stop the live state of the workspace it archives.
+    /// Shares the workspace locks of the project's `WorkspaceService`. A service without them adopts or archives a workspace while a workspace command may still be writing its files.
+    #[must_use]
+    pub fn with_workspace_locks(mut self, ops: Arc<WorkspaceLocks>) -> Self {
+        self.ops = ops;
+        self
+    }
+
+    /// Lets archiving a task stop the live state of the workspace it archives, and a claim that adopts a workspace name its new owner there.
     #[must_use]
     pub fn with_live(mut self, live: LiveState) -> Self {
         self.live = Some(live);

@@ -214,7 +214,8 @@ impl Fixture {
             .workspaces
             .create_workspace(&by(worker), t(task))
             .await
-            .unwrap();
+            .unwrap()
+            .workspace;
         (view.id, self.project.paths().root().join(view.path))
     }
 
@@ -918,7 +919,8 @@ async fn archiving_a_task_through_the_routes_detaches_its_workspace() {
     let view = WorkspaceService::for_project(&handle, Git::default())
         .create_workspace(&by(&fx.frontend), t(1))
         .await
-        .unwrap();
+        .unwrap()
+        .workspace;
     assert!(handle.live.get(view.id).is_some());
     let request = Request::builder()
         .method(Method::POST)
@@ -1027,7 +1029,8 @@ async fn the_live_job_ticks_every_open_project() {
     let view = workspaces
         .create_workspace(&by(&fx.frontend), t(1))
         .await
-        .unwrap();
+        .unwrap()
+        .workspace;
     wait(&mut progress, &|seen| seen.cycles >= 1).await;
     assert_eq!(handle.live.all().len(), 1);
     let dir = fx.project.paths().root().join(&view.path);
@@ -1080,4 +1083,56 @@ async fn the_live_job_ticks_every_open_project() {
         handle.live.get(view.id).unwrap().view.checkpoints.len(),
         kept
     );
+}
+
+/// The worker named in the newest live event for `workspace` on the bus right now.
+#[cfg(test)]
+fn published_worker(receiver: &mut Receiver<BusMessage>, workspace: WorkspaceId) -> String {
+    drain_live(receiver, workspace)
+        .pop()
+        .expect("a live event for the workspace")
+        .worker
+}
+
+#[tokio::test]
+async fn an_adopted_workspace_names_its_new_owner_in_the_live_state() {
+    let fx = Fixture::new().await;
+    let (first, _) = fx.create(&fx.frontend, 1).await;
+    fx.wait_for(first, |state| state.view.worker == "frontend")
+        .await;
+    let mut bus = fx.bus.subscribe();
+    fx.advance(LEASE_MINUTES * 60);
+    let taken = fx
+        .tasks
+        .takeover_claim(&by(&fx.backend), t(1))
+        .await
+        .unwrap();
+    assert!(taken.adopted);
+    assert_eq!(fx.live.get(first).unwrap().view.worker, "backend");
+    assert_eq!(published_worker(&mut bus, first), "backend");
+
+    let (second, _) = fx.create(&fx.frontend, 2).await;
+    fx.wait_for(second, |state| state.view.worker == "frontend")
+        .await;
+    fx.tasks
+        .release_task(&by(&fx.frontend), t(2))
+        .await
+        .unwrap();
+    drain_live(&mut bus, second);
+    let claimed = fx.tasks.claim_task(&by(&fx.backend), t(2)).await.unwrap();
+    assert!(claimed.adopted);
+    assert_eq!(fx.live.get(second).unwrap().view.worker, "backend");
+    assert_eq!(published_worker(&mut bus, second), "backend");
+
+    fx.tasks.release_task(&by(&fx.backend), t(2)).await.unwrap();
+    let created = fx
+        .workspaces
+        .create_workspace(&by(&fx.frontend), t(2))
+        .await
+        .unwrap();
+    assert!(created.adopted);
+    assert_eq!(created.workspace.id, second);
+    assert_eq!(fx.live.get(second).unwrap().view.worker, "frontend");
+    assert_eq!(published_worker(&mut bus, second), "frontend");
+    assert_eq!(fx.live.all().len(), 2, "an adoption keeps the pipeline");
 }

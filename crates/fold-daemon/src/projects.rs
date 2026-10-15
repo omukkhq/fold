@@ -77,6 +77,7 @@ impl ProjectHandle {
             LiveConfig::from_project(&config),
             Arc::clone(&capabilities),
         );
+        let workspace_locks = Arc::new(WorkspaceLocks::default());
         let tasks = TaskService::new(
             store.clone(),
             bus.clone(),
@@ -84,7 +85,8 @@ impl ProjectHandle {
             ProjectConfig::default().lease_minutes,
         )
         .with_project_config(paths.clone())
-        .with_live(live.clone());
+        .with_live(live.clone())
+        .with_workspace_locks(workspace_locks.clone());
         Ok(Self {
             slug: row.slug.clone(),
             name: row.name.clone(),
@@ -98,7 +100,7 @@ impl ProjectHandle {
             gc: tokio::sync::Mutex::new(()),
             objects: Arc::new(tokio::sync::RwLock::new(())),
             remote_lock: Arc::new(tokio::sync::Mutex::new(())),
-            workspace_locks: Arc::new(WorkspaceLocks::default()),
+            workspace_locks,
             capabilities,
             live,
         })

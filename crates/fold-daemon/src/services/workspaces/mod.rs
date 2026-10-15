@@ -18,6 +18,7 @@ use super::tasks::TaskError;
 use crate::live::LiveState;
 use crate::projects::ProjectHandle;
 
+mod adoption;
 mod changesets;
 mod checkpoints;
 mod compare;
@@ -27,6 +28,8 @@ mod lifecycle;
 mod repository;
 mod sync;
 
+pub use adoption::AdoptReason;
+pub(crate) use adoption::adopt_if_orphaned;
 pub(crate) use changesets::ProposalSnapshot;
 pub use changesets::RecordedChanges;
 pub use checkpoints::{CheckpointView, Restored};
@@ -34,7 +37,9 @@ pub use compare::{ResolvedState, StateComparison, StateKind, StateRef, StateSumm
 pub(crate) use files::checkpoint_in_tx;
 pub(crate) use git::unsynced;
 pub use git::{GitExport, MAIN_REF, commit_message};
-pub use lifecycle::{ArchiveReason, WorkspaceDetails, WorkspaceRef, WorkspaceView, archive_in_tx};
+pub use lifecycle::{
+    ArchiveReason, CreatedWorkspace, WorkspaceDetails, WorkspaceRef, WorkspaceView, archive_in_tx,
+};
 pub use repository::{
     DEFAULT_REVISION_PAGE, RECENT_REVISIONS, RepositoryState, RevisionDetail, RevisionOrigin,
     RevisionPage, RevisionSummary,
@@ -168,7 +173,7 @@ impl WorkspaceService {
         self
     }
 
-    /// Keeps the live state of the workspaces this service creates and closes. A service without it, such as one a host command opens, starts no watcher.
+    /// Keeps the live state of the workspaces this service creates, adopts and closes. A service without it, such as one a host command opens, starts no watcher.
     #[must_use]
     pub fn with_live(mut self, live: LiveState) -> Self {
         self.live = Some(live);

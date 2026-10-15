@@ -556,3 +556,42 @@ fn every_workspace_tool_field_has_a_description() {
         }
     }
 }
+
+#[tokio::test]
+async fn a_stale_claim_and_a_released_workspace_move_to_the_next_agent() {
+    let fx = Fixture::new().await;
+    let frontend = fx.connect("frontend").await;
+    let backend = fx.connect("backend").await;
+
+    call(&frontend, "create_workspace", json!({"task": "T-1"})).await;
+    let lib = fx.file("ws/t-1", "src/lib.rs");
+    fs::write(&lib, MINE).unwrap();
+    fx.project
+        .clock()
+        .advance(std::time::Duration::from_secs(5 * 60))
+        .unwrap();
+    assert_eq!(
+        call(&backend, "takeover_claim", json!({"id": "T-1"})).await,
+        json!({"id": "T-1", "holder": "backend", "workspace": "ws-1"})
+    );
+    assert_eq!(fs::read(&lib).unwrap(), MINE);
+    let workspace = call(&backend, "get_workspace", json!({"ws": "ws-1"})).await;
+    assert_eq!(workspace["worker"], "backend");
+    let old = call_err(&frontend, "record_checkpoint", json!({"ws": "ws-1"})).await;
+    assert_eq!(old["code"], "not_workspace_owner");
+
+    call(&frontend, "create_workspace", json!({"task": "T-2"})).await;
+    call(&frontend, "release_task", json!({"id": "T-2"})).await;
+    assert_eq!(
+        call(&backend, "create_workspace", json!({"task": "T-2"})).await,
+        json!({"workspace": "ws-2", "path": "ws/t-2", "base": "r1", "task": "T-2", "adopted": true})
+    );
+    assert!(
+        fx.event_types()
+            .await
+            .iter()
+            .filter(|kind| *kind == "workspace.adopted")
+            .count()
+            == 2
+    );
+}

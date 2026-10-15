@@ -227,6 +227,25 @@ pub async fn touch(
     Ok(touched == 1)
 }
 
+/// Gives a live workspace to the worker `worker_id`, as an adoption does. Only `worker_id` changes: the directory, the base, the changes and the conflicted paths stay. False when the workspace is not live or does not exist, and then nothing changes.
+pub async fn set_worker(
+    tx: &mut WriteTx,
+    workspace: WorkspaceId,
+    worker_id: i64,
+) -> Result<bool, StoreError> {
+    let workspace = workspace.to_db();
+    let changed = sqlx::query!(
+        "UPDATE workspaces SET worker_id = ?2
+         WHERE number = ?1 AND state IN ('active', 'missing')",
+        workspace,
+        worker_id
+    )
+    .execute(tx.conn())
+    .await?
+    .rows_affected();
+    Ok(changed == 1)
+}
+
 /// One statement serves every read so the rows always map the same way. `task` with `live_only` reads the live task workspace; `task` alone the newest task workspace.
 async fn select(
     executor: impl SqliteExecutor<'_>,

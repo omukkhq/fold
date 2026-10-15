@@ -21,7 +21,7 @@ pub use lifecycle::{
     ClosedState, NewReviewCheckout, NewTaskWorkspace, WorkspaceKind, WorkspaceRow, WorkspaceState,
     active_review_checkout, close, get_workspace, insert_review_checkout, insert_task_workspace,
     latest_task_workspace, live_task_workspace, review_checkout_paths, set_base,
-    set_sync_checkpoint, sync_checkpoint, task_workspace_paths, touch,
+    set_sync_checkpoint, set_worker, sync_checkpoint, task_workspace_paths, touch,
 };
 pub use refs::{advance_main, create_main};
 pub use revisions::{

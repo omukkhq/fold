@@ -8,7 +8,7 @@ use fold_core::object::ObjectHash;
 use fold_core::tree::{ChangeKind as FileChangeKind, ChangeTally, FlatTree};
 use fold_core::{
     Clock, EventActor, FoldError, LiveEvent, NewEvent, ProjectConfig, ProjectPaths, ProposalId,
-    RevisionId, TaskId, Timestamp, WorkspaceId, codes,
+    RevisionId, TaskId, Timestamp, WorkerName, WorkspaceId, codes,
 };
 use fold_store::Store;
 use fold_store::workspaces::{self, Checkpoint, CheckpointKind, WorkspaceKind, WorkspaceState};
@@ -476,6 +476,11 @@ impl LiveState {
                 tracing::warn!(workspace = %workspace, code = error.code().unwrap_or("store_error"), "the live checkpoints were not read");
             }
         }
+    }
+
+    /// Names the new owner after the commit that adopted the workspace. The pipeline keeps running: the directory, the base and the changes are the same.
+    pub fn set_worker(&self, workspace: WorkspaceId, worker: &WorkerName) {
+        self.update(workspace, |view| view.worker = worker.to_string());
     }
 
     /// Sets the open proposal after the commit that opened or closed it.

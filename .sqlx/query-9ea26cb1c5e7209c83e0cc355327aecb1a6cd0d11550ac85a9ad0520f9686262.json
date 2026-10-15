@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE workspaces SET worker_id = ?2\n         WHERE number = ?1 AND state IN ('active', 'missing')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "9ea26cb1c5e7209c83e0cc355327aecb1a6cd0d11550ac85a9ad0520f9686262"
+}

@@ -122,7 +122,12 @@ impl Fixture {
     }
 
     async fn create(&self, worker: &WorkerRow, task: u32) -> Result<WorkspaceView, WorkspaceError> {
-        self.workspaces.create_workspace(&by(worker), t(task)).await
+        let created = self
+            .workspaces
+            .create_workspace(&by(worker), t(task))
+            .await?;
+        assert!(!created.adopted);
+        Ok(created.workspace)
     }
 
     async fn abandon(

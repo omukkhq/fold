@@ -118,6 +118,23 @@ impl ArchiveReason {
     }
 }
 
+/// What `create_workspace` returns: the task's workspace, and whether the create adopted an orphaned one instead of making a new directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreatedWorkspace {
+    pub workspace: WorkspaceView,
+    pub adopted: bool,
+}
+
+/// What step 1 of a create decided.
+enum CreatePlan {
+    /// The task's live workspace, which no claim holder owns.
+    Adopt(WorkspaceRow),
+    Create {
+        base: workspaces::RevisionRow,
+        taken: Vec<String>,
+    },
+}
+
 /// The directory a create renamed into place, with the index of what it wrote.
 struct Placed {
     path: String,
@@ -128,18 +145,44 @@ struct Placed {
 impl WorkspaceService {
     /// Creates the task workspace of `task` for the actor's worker: a copy of the current main revision under `ws/`, recorded with that revision as its base. A workspace belongs to the implementation claim, so `policy::can_claim` admits only an agent; its worker must hold the claim or the task must be unclaimed, and then the create takes it. The task moves to In Progress, also from Backlog, where it keeps its blocked indicator.
     ///
+    /// A task whose live workspace is orphaned, with no owner or an owner that no longer holds the claim, keeps that workspace: the create takes the claim, adopts it and makes nothing new. A live workspace whose owner holds the claim, or that is already the actor's own, is `workspace_exists`.
+    ///
     /// The files are written and renamed into place before the transaction that inserts the row, so no row ever names a directory that is not complete. When the transaction fails the directory is removed again: it has no row, and nobody was told its path.
     pub async fn create_workspace(
         &self,
         actor: &Actor,
         task: TaskId,
-    ) -> Result<WorkspaceView, WorkspaceError> {
+    ) -> Result<CreatedWorkspace, WorkspaceError> {
         let claimant = policy::can_claim(actor).map_err(FoldError::from)?;
         let now = self.clock.now();
         let lease_minutes = self.lease.minutes().await?;
-        let (base, taken) = self
+        let plan = match self
             .check_create(claimant, task, now, lease_minutes)
-            .await?;
+            .await?
+        {
+            CreatePlan::Adopt(orphan) => {
+                match self
+                    .adopt_on_create(claimant, task, orphan.id, now, lease_minutes)
+                    .await?
+                {
+                    Some(workspace) => {
+                        return Ok(CreatedWorkspace {
+                            workspace,
+                            adopted: true,
+                        });
+                    }
+                    None => {
+                        self.check_create(claimant, task, now, lease_minutes)
+                            .await?
+                    }
+                }
+            }
+            plan @ CreatePlan::Create { .. } => plan,
+        };
+        let (base, taken) = match plan {
+            CreatePlan::Create { base, taken } => (base, taken),
+            CreatePlan::Adopt(live) => return Err(workspace_exists(&live).into()),
+        };
         let placed = self.place(task, taken, base.tree_hash).await?;
         #[cfg(feature = "failpoints")]
         fail::fail_point!("workspace_create_after_rename", |_| {
@@ -192,7 +235,10 @@ impl WorkspaceService {
         {
             tracing::warn!(workspace = %id, code = error.code().unwrap_or("store_error"), "the live state did not start");
         }
-        self.get(WorkspaceRef::Workspace(id)).await
+        Ok(CreatedWorkspace {
+            workspace: self.get(WorkspaceRef::Workspace(id)).await?,
+            adopted: false,
+        })
     }
 
     /// Abandons a live workspace of the actor's worker, which `policy::can_abandon_workspace` requires to be the owner: it becomes `abandoned` and `closed_at` is set, and the task goes back to Todo or Backlog. The directory and the claim stay. Refused while the task has an open proposal; the author closes it first, and nothing closes it on the worker's behalf. `reason` is the worker's short explanation, which `workspace.abandoned` carries.
@@ -278,14 +324,14 @@ impl WorkspaceService {
         Ok(row.status)
     }
 
-    /// Step 1 of a create: the refusals that need no files, read before anything is written. The transaction checks the claim and the live workspace again.
+    /// Step 1 of a create: the refusals that need no files, read before anything is written, and whether an orphaned workspace is adopted instead. The transaction checks the claim and the live workspace again.
     async fn check_create(
         &self,
         claimant: &AgentActor,
         task: TaskId,
         now: Timestamp,
         lease_minutes: u64,
-    ) -> Result<(workspaces::RevisionRow, Vec<String>), WorkspaceError> {
+    ) -> Result<CreatePlan, WorkspaceError> {
         let read = self.store.read();
         let row = tasks::get_by_number(read, task)
             .await?
@@ -293,20 +339,25 @@ impl WorkspaceService {
         if let Some(refusal) = closed_refusal(&row) {
             return Err(refusal.into());
         }
-        if let Some(holder) = claims::unreleased_for_task(read, task).await?
+        let holder = claims::unreleased_for_task(read, task).await?;
+        if let Some(holder) = &holder
             && holder.worker != claimant.worker
         {
-            return Err(already_claimed(&holder, now, lease_minutes).into());
+            return Err(already_claimed(holder, now, lease_minutes).into());
         }
         if let Some(live) = workspaces::live_task_workspace(read, task).await? {
-            return Err(workspace_exists(&live).into());
+            let held = holder.is_some_and(|holder| live.worker_id == Some(holder.worker_id));
+            if held || live.worker.as_ref() == Some(&claimant.worker) {
+                return Err(workspace_exists(&live).into());
+            }
+            return Ok(CreatePlan::Adopt(live));
         }
         let base = workspaces::head(read).await?.ok_or_else(|| {
             FoldError::new(codes::REVISION_NOT_FOUND, "main has no revision")
                 .with_hint("run fold init to create the first revision")
         })?;
         let taken = workspaces::task_workspace_paths(read, task).await?;
-        Ok((base, taken))
+        Ok(CreatePlan::Create { base, taken })
     }
 
     /// Step 2 of a create: materialises `tree` into a staging directory under `ws/` and renames it to the task's next directory name. A name that `taken` lists for an earlier workspace of the task, or that some directory already holds, such as one left by a create that stopped before its row, is skipped, so a name is never shared.
@@ -507,7 +558,7 @@ async fn abandon_in_tx(
     Ok(())
 }
 
-fn workspace_exists(live: &WorkspaceRow) -> FoldError {
+pub(super) fn workspace_exists(live: &WorkspaceRow) -> FoldError {
     FoldError::new(
         codes::WORKSPACE_EXISTS,
         format!("{} already has the workspace {}", live.task, live.id),

@@ -291,7 +291,7 @@ async fn every_task_tool_succeeds_and_ends_with_the_footer() {
     );
     assert_eq!(
         ok(&client, "claim_task", json!({"id": "T-1"})).await,
-        json!({"id": "T-1", "holder": "frontend"})
+        json!({"id": "T-1", "holder": "frontend", "workspace": null})
     );
     let graph = ok(&client, "get_task_graph", json!({})).await;
     assert_eq!(
@@ -435,7 +435,7 @@ async fn takeover_claim_waits_for_a_stale_lease() {
         .unwrap();
     assert_eq!(
         ok(&backend, "takeover_claim", json!({"id": "T-1"})).await,
-        json!({"id": "T-1", "holder": "backend"})
+        json!({"id": "T-1", "holder": "backend", "workspace": null})
     );
     let task = ok(&backend, "get_task", json!({"id": "T-1"})).await;
     assert_eq!(task["claim"]["holder"], "backend");

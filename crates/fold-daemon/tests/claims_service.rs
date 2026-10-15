@@ -169,7 +169,10 @@ async fn two_workers_claim_at_once_and_one_is_refused_naming_the_holder() {
             let barrier = barrier.clone();
             tokio::spawn(async move {
                 barrier.wait().await;
-                service.claim_task(&by(&worker), t(1)).await
+                service
+                    .claim_task(&by(&worker), t(1))
+                    .await
+                    .map(|claimed| claimed.claim)
             })
         };
         let front = spawn_claim(fixture.frontend.main.clone());
@@ -221,7 +224,8 @@ async fn the_holder_repeating_the_call_renews_the_claim() {
         .tasks
         .claim_task(&by(&fixture.frontend.main), t(1))
         .await
-        .unwrap();
+        .unwrap()
+        .claim;
     let acquired = fixture.project.now();
     // Past the lease, so the repeat both renews and clears the stale flag.
     let later = fixture.advance(minutes(LEASE_MINUTES + 1));
@@ -231,7 +235,8 @@ async fn the_holder_repeating_the_call_renews_the_claim() {
         .tasks
         .claim_task(&by(&fixture.frontend.main), t(1))
         .await
-        .unwrap();
+        .unwrap()
+        .claim;
     assert_eq!(
         again,
         ClaimView {
@@ -312,7 +317,8 @@ async fn only_the_holder_releases_and_the_claim_frees_the_task() {
         .tasks
         .claim_task(&by(&fixture.backend.main), t(1))
         .await
-        .unwrap();
+        .unwrap()
+        .claim;
     assert_eq!(view.holder, WorkerName::parse("backend").unwrap());
     assert_eq!(view.acquired_at, released_at);
 }
@@ -653,7 +659,7 @@ async fn a_three_level_worker_claims_and_releases() {
         .actor(&fixture.frontend.ctx, Some(&deep.name))
         .await
         .unwrap();
-    let view = fixture.tasks.claim_task(&actor, t(2)).await.unwrap();
+    let view = fixture.tasks.claim_task(&actor, t(2)).await.unwrap().claim;
     assert_eq!(view.holder.as_str(), "frontend/ui/deep");
     fixture.tasks.release_task(&actor, t(2)).await.unwrap();
     let actors: Vec<String> = fixture

@@ -2,16 +2,18 @@ use fold_core::claims::is_stale;
 use fold_core::events::types;
 use fold_core::{
     Actor, AgentActor, EventActor, FoldError, NewEvent, TaskId, TaskStatus, Timestamp, WorkerName,
-    codes, policy,
+    WorkspaceId, codes, policy,
 };
 use fold_store::agents::{self, WorkerRow};
 use fold_store::tasks::TaskRow;
 use fold_store::tasks::claims::{self, ClaimRow, ReleaseReason};
-use fold_store::{Store, StoreError, WriteTx, tasks};
+use fold_store::{Store, StoreError, WriteTx, tasks, workspaces};
 use serde_json::json;
+use tokio::sync::OwnedMutexGuard;
 
 use super::{TaskError, TaskService, recompute, task_not_found};
 use crate::services::events::EventBuffer;
+use crate::services::workspaces::{AdoptReason, adopt_if_orphaned};
 
 /// The implementation claim on a task as callers see it. `stale` is computed at read time from the project's lease.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +23,15 @@ pub struct ClaimView {
     pub acquired_at: Timestamp,
     pub renewed_at: Timestamp,
     pub stale: bool,
+}
+
+/// What `claim_task` and `takeover_claim` return: the claim, and the task's live workspace when it now belongs to the claim's holder, adopted by the command or already its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Claimed {
+    pub claim: ClaimView,
+    pub workspace: Option<WorkspaceId>,
+    /// The command adopted `workspace` from another worker or from no owner.
+    pub adopted: bool,
 }
 
 fn claim_view_of(row: ClaimRow, now: Timestamp, lease_minutes: u64) -> ClaimView {
@@ -35,21 +46,65 @@ fn claim_view_of(row: ClaimRow, now: Timestamp, lease_minutes: u64) -> ClaimView
 
 /// Implementation claims. `policy::can_claim` admits only an agent, and the claim belongs to the agent's acting worker; the lease is the project's `lease_minutes`, read before the command's transaction.
 impl TaskService {
-    /// Takes the implementation claim on `task` for the actor's worker. A repeat call by the holder renews the claim and returns it without a second `claim.acquired`. A claim moves no card, so no status is written.
-    pub async fn claim_task(&self, actor: &Actor, task: TaskId) -> Result<ClaimView, TaskError> {
+    /// Takes the implementation claim on `task` for the actor's worker. A repeat call by the holder renews the claim and returns it without a second `claim.acquired`. A live workspace of the task that no claim holder owns, left by a worker that released the claim, is adopted with `workspace.adopted`. A claim moves no card; an adoption runs `recompute`, which leaves the status as it is.
+    pub async fn claim_task(&self, actor: &Actor, task: TaskId) -> Result<Claimed, TaskError> {
         let claimant = policy::can_claim(actor).map_err(FoldError::from)?;
         let now = self.clock.now();
         let lease_minutes = self.lease_minutes().await?;
+        let candidate = self.adoption_lock(task, claimant).await?;
         let mut buffer = EventBuffer::new();
-        let view = self
+        let claimed = self
             .store
             .write(async |tx| {
                 let worker = worker_row(tx, claimant).await?;
-                claim_in_tx(tx, &mut buffer, &worker, task, now, lease_minutes).await
+                let claim = claim_in_tx(tx, &mut buffer, &worker, task, now, lease_minutes).await?;
+                let adopted = match &candidate {
+                    Some((workspace, _)) => {
+                        let reason = AdoptReason::Released;
+                        adopt_if_orphaned(tx, &mut buffer, task, *workspace, &worker, reason, now)
+                            .await?
+                    }
+                    None => None,
+                };
+                if adopted.is_some() {
+                    buffer.extend(recompute(tx, &[task], now).await?.events);
+                }
+                let was_adopted = adopted.is_some();
+                let workspace = holder_workspace(tx, task, &worker, adopted).await?;
+                Ok::<_, TaskError>(Claimed {
+                    claim,
+                    workspace,
+                    adopted: was_adopted,
+                })
             })
             .await?;
         self.bus.publish(buffer);
-        Ok(view)
+        self.adopted_live(&claimed);
+        Ok(claimed)
+    }
+
+    /// The live workspace of `task` that the claimant might adopt, because another worker or nobody owns it, with its operation lock held. The lock is taken before the command's transaction, so an adoption waits for a sync, restore or record of the old owner that is writing there, and no file changes once the new owner has the workspace.
+    async fn adoption_lock(
+        &self,
+        task: TaskId,
+        claimant: &AgentActor,
+    ) -> Result<Option<(WorkspaceId, OwnedMutexGuard<()>)>, TaskError> {
+        let Some(live) = workspaces::live_task_workspace(self.store.read(), task).await? else {
+            return Ok(None);
+        };
+        if live.worker.as_ref() == Some(&claimant.worker) {
+            return Ok(None);
+        }
+        Ok(Some((live.id, self.ops.lock(live.id).await)))
+    }
+
+    /// Names the new owner in the live state of the workspace a claim command adopted, after its commit.
+    fn adopted_live(&self, claimed: &Claimed) {
+        if let (true, Some(live), Some(workspace)) =
+            (claimed.adopted, &self.live, claimed.workspace)
+        {
+            live.set_worker(workspace, &claimed.claim.holder);
+        }
     }
 
     /// Releases the claim the actor's worker holds on `task`. The task's workspace stays where it is.
@@ -102,25 +157,30 @@ impl TaskService {
         Ok(())
     }
 
-    /// Moves the stale implementation claim on `task` to the actor's worker in one transaction: the old claim is released with `taken_over`, the new one inserted, and `claim.taken_over` names both workers. A claim whose lease has not run out is refused with `claim_not_stale`.
-    pub async fn takeover_claim(
-        &self,
-        actor: &Actor,
-        task: TaskId,
-    ) -> Result<ClaimView, TaskError> {
+    /// Moves the stale implementation claim on `task` and the task's live workspace to the actor's worker in one transaction: the old claim is released with `taken_over`, the new one inserted, `claim.taken_over` names both workers, and the workspace is adopted with `workspace.adopted`. Only the workspace's owner changes; its directory and files stay as they are. A claim whose lease has not run out is refused with `claim_not_stale`.
+    pub async fn takeover_claim(&self, actor: &Actor, task: TaskId) -> Result<Claimed, TaskError> {
         let claimant = policy::can_claim(actor).map_err(FoldError::from)?;
         let now = self.clock.now();
         let lease_minutes = self.lease_minutes().await?;
+        let candidate = self.adoption_lock(task, claimant).await?;
+        let workspace = candidate.as_ref().map(|(workspace, _)| *workspace);
         let mut buffer = EventBuffer::new();
-        let view = self
+        let claimed = self
             .store
             .write(async |tx| {
                 let worker = worker_row(tx, claimant).await?;
-                takeover_in_tx(tx, &mut buffer, &worker, task, now, lease_minutes).await
+                let step = Takeover {
+                    task,
+                    workspace,
+                    now,
+                    lease_minutes,
+                };
+                takeover_in_tx(tx, &mut buffer, &worker, step).await
             })
             .await?;
         self.bus.publish(buffer);
-        Ok(view)
+        self.adopted_live(&claimed);
+        Ok(claimed)
     }
 
     /// The claim on `task` at the clock's current time, or `None` when nobody holds it.
@@ -263,14 +323,26 @@ pub(crate) fn already_claimed(holder: &ClaimRow, now: Timestamp, lease_minutes: 
     .into()
 }
 
+/// The inputs of a takeover's transaction. `workspace` is the live workspace whose operation lock the command holds.
+struct Takeover {
+    task: TaskId,
+    workspace: Option<WorkspaceId>,
+    now: Timestamp,
+    lease_minutes: u64,
+}
+
 async fn takeover_in_tx(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,
     worker: &WorkerRow,
-    task: TaskId,
-    now: Timestamp,
-    lease_minutes: u64,
-) -> Result<ClaimView, TaskError> {
+    step: Takeover,
+) -> Result<Claimed, TaskError> {
+    let Takeover {
+        task,
+        workspace,
+        now,
+        lease_minutes,
+    } = step;
     let row = tasks::fetch(tx.conn(), task)
         .await?
         .ok_or_else(|| task_not_found(task))?;
@@ -317,12 +389,41 @@ async fn takeover_in_tx(
             "to": worker.name.as_str(),
         }))?;
     buffer.append(tx, &event, now).await?;
+    let adopted = match workspace {
+        Some(workspace) => {
+            let reason = AdoptReason::TakenOver;
+            adopt_if_orphaned(tx, buffer, task, workspace, worker, reason, now).await?
+        }
+        None => None,
+    };
     buffer.extend(recompute(tx, &[task], now).await?.events);
-    Ok(ClaimView {
-        task,
-        holder: worker.name.clone(),
-        acquired_at: now,
-        renewed_at: now,
-        stale: false,
+    let was_adopted = adopted.is_some();
+    let workspace = holder_workspace(tx, task, worker, adopted).await?;
+    Ok(Claimed {
+        adopted: was_adopted,
+        claim: ClaimView {
+            task,
+            holder: worker.name.clone(),
+            acquired_at: now,
+            renewed_at: now,
+            stale: false,
+        },
+        workspace,
     })
+}
+
+/// The workspace `adopted` just now, else the task's live workspace when `worker` already owns it.
+async fn holder_workspace(
+    tx: &mut WriteTx,
+    task: TaskId,
+    worker: &WorkerRow,
+    adopted: Option<workspaces::WorkspaceRow>,
+) -> Result<Option<WorkspaceId>, TaskError> {
+    if let Some(adopted) = adopted {
+        return Ok(Some(adopted.id));
+    }
+    Ok(workspaces::live_task_workspace(tx.conn(), task)
+        .await?
+        .filter(|live| live.worker_id == Some(worker.id))
+        .map(|live| live.id))
 }

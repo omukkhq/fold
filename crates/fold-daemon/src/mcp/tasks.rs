@@ -14,7 +14,7 @@ use super::FoldServer;
 use super::error::{from_agent, from_task};
 use super::identity::parse;
 use crate::services::tasks::{
-    ChecklistItemPatch, ClaimView, CreateTask, DetailEdge, ItemContent, LabelView,
+    ChecklistItemPatch, ClaimView, Claimed, CreateTask, DetailEdge, ItemContent, LabelView,
     NewChecklistItem, TaskDetail, TaskPatch,
 };
 
@@ -264,7 +264,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             CLAIM_TASK,
-            "Claim a task before you change files for it. A repeat call by the holder renews the claim.",
+            "Claim a task before you change files for it. A repeat call by the holder renews the claim. A workspace left by a worker that released the task becomes yours; the result names it.",
             schema_for_type::<TaskIdInput>(),
         ),
         Tool::new(
@@ -274,7 +274,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             TAKEOVER_CLAIM,
-            "Take over a claim whose lease has run out, when its holder has stopped working.",
+            "Take over a claim whose lease has run out, when its holder has stopped working. The task's workspace moves to you with its files as they are; the result names it.",
             schema_for_type::<TaskIdInput>(),
         ),
     ]
@@ -300,6 +300,13 @@ fn labels_json(labels: &[LabelView]) -> Vec<&str> {
 
 fn claim_json(task: TaskId, holder: Option<&WorkerName>) -> Value {
     json!({"id": task, "holder": holder.map(WorkerName::as_str)})
+}
+
+/// The claim with the workspace the holder works in, adopted or already its own; `null` when it has none yet.
+fn claimed_json(claimed: &Claimed) -> Value {
+    let mut value = claim_json(claimed.claim.task, Some(&claimed.claim.holder));
+    value["workspace"] = json!(claimed.workspace.map(|ws| ws.to_string()));
+    value
 }
 
 fn edge_json(edge: &DetailEdge) -> Value {
@@ -667,11 +674,11 @@ async fn claim_task(
 ) -> Result<Value, FoldError> {
     let tasks = &server.tasks;
     let input: TaskIdInput = parse(arguments)?;
-    let claim = tasks
+    let claimed = tasks
         .claim_task(actor, id(&input.id)?)
         .await
         .map_err(from_task)?;
-    Ok(claim_json(claim.task, Some(&claim.holder)))
+    Ok(claimed_json(&claimed))
 }
 
 async fn release_task(
@@ -693,9 +700,9 @@ async fn takeover_claim(
 ) -> Result<Value, FoldError> {
     let tasks = &server.tasks;
     let input: TaskIdInput = parse(arguments)?;
-    let claim = tasks
+    let claimed = tasks
         .takeover_claim(actor, id(&input.id)?)
         .await
         .map_err(from_task)?;
-    Ok(claim_json(claim.task, Some(&claim.holder)))
+    Ok(claimed_json(&claimed))
 }

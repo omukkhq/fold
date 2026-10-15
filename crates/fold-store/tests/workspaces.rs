@@ -246,6 +246,63 @@ async fn reads_map_the_row_with_public_ids() {
 }
 
 #[tokio::test]
+async fn set_worker_moves_only_the_owner_of_a_live_workspace() {
+    let project = seeded().await;
+    exec(
+        &project.store,
+        "INSERT INTO agents (id, name, created_at) VALUES (2, 'frontend', 0)",
+    )
+    .await
+    .unwrap();
+    exec(
+        &project.store,
+        "INSERT INTO workers (id, agent_id, name, created_at) VALUES (2, 2, 'frontend', 0)",
+    )
+    .await
+    .unwrap();
+    project.insert(1, 1, "ws/t-1").await.unwrap();
+    let set = async |number: u32, worker: i64| {
+        project
+            .store
+            .write(async |tx| workspaces::set_worker(tx, ws(number), worker).await)
+            .await
+            .unwrap()
+    };
+    let before = workspaces::get_workspace(project.store.read(), ws(1))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(set(1, 2).await);
+    let after = workspaces::get_workspace(project.store.read(), ws(1))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        after,
+        WorkspaceRow {
+            worker_id: Some(2),
+            worker: Some(WorkerName::parse("frontend").unwrap()),
+            ..before
+        }
+    );
+    exec(&project.store, "UPDATE workspaces SET state = 'missing'")
+        .await
+        .unwrap();
+    assert!(set(1, 1).await);
+    assert!(project.close(1, ClosedState::Abandoned).await);
+    assert!(!set(1, 2).await);
+    assert!(!set(9, 2).await);
+    assert_eq!(
+        count(
+            &project.store,
+            "SELECT COUNT(*) FROM workspaces WHERE worker_id = 1"
+        )
+        .await,
+        1
+    );
+}
+
+#[tokio::test]
 async fn a_review_checkout_is_not_a_task_workspace() {
     let project = seeded().await;
     exec(

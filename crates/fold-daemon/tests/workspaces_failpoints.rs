@@ -157,7 +157,8 @@ async fn a_create_stopped_after_the_rename_leaves_no_row() {
         .workspaces
         .create_workspace(&worker, t(1))
         .await
-        .unwrap();
+        .unwrap()
+        .workspace;
     assert_eq!(view.path, "ws/t-1-2");
     assert!(orphan.join("a.txt").is_file());
     let task = restarted.tasks.get(t(1)).await.unwrap();

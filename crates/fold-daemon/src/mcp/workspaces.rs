@@ -171,7 +171,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             CREATE_WORKSPACE,
-            "Create the task workspace for a task: a copy of main under ws/ where you make your changes. It claims the task for your worker and moves it to In Progress.",
+            "Create the task workspace for a task: a copy of main under ws/ where you make your changes. It claims the task for your worker and moves it to In Progress. A workspace left by a worker that released the task is adopted instead, with its files as they are, and adopted is true.",
             schema_for_type::<CreateWorkspaceInput>(),
         ),
         Tool::new(
@@ -387,17 +387,18 @@ pub async fn call(
             let input: CreateWorkspaceInput = parse(arguments)?;
             let task = id::<TaskId>(&input.task, "task", "T-12")?;
             let actor = actor(server, as_worker).await?;
-            let view = server
+            let created = server
                 .workspaces
                 .create_workspace(&actor, task)
                 .await
                 .map_err(from_workspace)?;
+            let view = created.workspace;
             json!({
                 "workspace": view.id.to_string(),
                 "path": view.path,
                 "base": view.base.to_string(),
                 "task": view.task.to_string(),
-                "adopted": false,
+                "adopted": created.adopted,
             })
         }
         GET_WORKSPACE => {
