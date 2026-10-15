@@ -39,6 +39,20 @@ export async function listWorkspaces(slug: string): Promise<WorkspaceEntry[]> {
   return workspaces;
 }
 
+/** The entries of one directory (`""` is the root) of an active workspace's working files, in name order. Rejects with `workspace_not_active` for a workspace that is not active. */
+export async function getWorkspaceTree(
+  slug: string,
+  id: string,
+  dir: string,
+): Promise<Schemas["WorkspaceTreeEntryView"][]> {
+  const { entries } = await unwrap(
+    api.GET("/api/v1/projects/{slug}/workspaces/{id}/tree", {
+      params: { path: { slug, id }, query: { path: dir } },
+    }),
+  );
+  return entries;
+}
+
 /** One workspace in any state. Rejects with `workspace_not_found`. */
 export async function getWorkspace(
   slug: string,

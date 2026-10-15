@@ -218,13 +218,14 @@ const NON_TOOL_NAMES: [&str; 11] = [
     "reply_to",
 ];
 
-const SECTIONS: [&str; 11] = [
+const SECTIONS: [&str; 12] = [
     "Identity",
     "Messaging",
     "Noticing news",
     "Orchestrator",
     "Worker",
     "Reviewer",
+    "Mentions",
     "Requests",
     "Task template",
     "Subagents",

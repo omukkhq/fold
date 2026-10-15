@@ -4,18 +4,35 @@ import { MentionLink } from "./MentionLink";
 import { mentionHref, splitMentions, type Known } from "./parse";
 import { mentionTag } from "./remark";
 
-/** Plain text with its mentions linked; React escapes every string, so markup in the text shows as typed. */
-export function MentionText({
-  text,
-  slug,
-  known,
-  className,
-}: {
+interface MentionProps {
   text: string;
   slug: string;
   known?: Known;
-  className?: string;
-}) {
+}
+
+/** The text with its mentions linked, inline in the caller's element; React escapes every string, so markup in the text shows as typed. */
+export function MentionInline({ text, slug, known }: MentionProps) {
+  return splitMentions(text, known).map((segment, index) => (
+    <Fragment key={index}>
+      {segment.mention ? (
+        <MentionLink
+          href={mentionHref(slug, segment.mention)}
+          tag={mentionTag(segment.mention)}
+        >
+          {segment.text}
+        </MentionLink>
+      ) : (
+        segment.text
+      )}
+    </Fragment>
+  ));
+}
+
+/** Plain text with its mentions linked, as a paragraph of body text. */
+export function MentionText({
+  className,
+  ...props
+}: MentionProps & { className?: string }) {
   return (
     <p
       className={cn(
@@ -23,20 +40,7 @@ export function MentionText({
         className,
       )}
     >
-      {splitMentions(text, known).map((segment, index) => (
-        <Fragment key={index}>
-          {segment.mention ? (
-            <MentionLink
-              href={mentionHref(slug, segment.mention)}
-              tag={mentionTag(segment.mention)}
-            >
-              {segment.text}
-            </MentionLink>
-          ) : (
-            segment.text
-          )}
-        </Fragment>
-      ))}
+      <MentionInline {...props} />
     </p>
   );
 }

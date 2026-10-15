@@ -13,7 +13,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useId, useState } from "react";
-import { useForm } from "react-hook-form";
+import { Controller, useForm } from "react-hook-form";
 import type {
   ConflictReport,
   GateStatus,
@@ -23,7 +23,8 @@ import type {
 } from "@/api/proposals";
 import { HrefLink } from "@/app/HrefLink";
 import { Button } from "@/components/button/Button";
-import { controlClasses } from "@/components/form/Field";
+import { MentionInline, MentionText } from "@/mentions/MentionText";
+import { MentionTextarea } from "@/mentions/MentionTextarea";
 import { formatAsOfMinute } from "@/format/time";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
@@ -156,14 +157,16 @@ function ConflictBlock({
 }
 
 function RequestChangesForm({
+  slug,
   onSubmit,
   onCancel,
 }: {
+  slug: string;
   onSubmit: (body: string) => Promise<void>;
   onCancel: () => void;
 }) {
   const {
-    register,
+    control,
     handleSubmit,
     formState: { errors, isSubmitting },
   } = useForm<RequestChangesValues>({
@@ -184,14 +187,24 @@ function RequestChangesForm({
       onSubmit={(event) => void submit(event)}
       className="flex flex-col gap-8"
     >
-      <textarea
-        rows={3}
-        aria-label="What needs to change"
-        autoFocus
-        readOnly={isSubmitting}
-        aria-invalid={errors.body ? true : undefined}
-        className={cn(controlClasses, "resize-y py-9", focusRing)}
-        {...register("body")}
+      <Controller
+        control={control}
+        name="body"
+        render={({ field }) => (
+          <MentionTextarea
+            slug={slug}
+            rows={3}
+            aria-label="What needs to change"
+            autoFocus
+            readOnly={isSubmitting}
+            aria-invalid={errors.body ? true : undefined}
+            className="resize-y py-9"
+            ref={field.ref}
+            value={field.value}
+            onValueChange={field.onChange}
+            onBlur={field.onBlur}
+          />
+        )}
       />
       {errors.body ? (
         <p className="text-meta font-medium text-danger">
@@ -258,6 +271,7 @@ function HumanActions({
       <p className="text-code text-text-muted">You are reviewing as {human}</p>
       {requesting ? (
         <RequestChangesForm
+          slug={slug}
           onSubmit={async (body) => {
             await actions.onRequestChanges(body);
             setRequesting(false);
@@ -474,9 +488,11 @@ export function SidePanel({
                     className={cn("mt-2 shrink-0", spec.className)}
                   />
                   <div className="flex min-w-0 flex-1 flex-col gap-2">
-                    <p className="text-bar leading-snug text-text">
-                      {reviewText(review)}
-                    </p>
+                    <MentionText
+                      text={reviewText(review)}
+                      slug={slug}
+                      className="text-bar leading-snug"
+                    />
                     <p className="font-mono text-caption text-text-muted">
                       {displayName(review.reviewer)} · v{review.version}
                       {earlier ? " · earlier version" : ""} ·{" "}
@@ -504,7 +520,7 @@ export function SidePanel({
                 key={index}
                 className={line.command ? "text-text" : "text-text-muted"}
               >
-                {line.text}
+                <MentionInline text={line.text} slug={slug} />
               </span>
             ))}
           </pre>

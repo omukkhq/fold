@@ -3,7 +3,7 @@ use axum::extract::Path;
 use fold_core::tree::EntryKind;
 use fold_core::{CheckpointId, FoldError, ProposalId, RevisionId, TaskId, Timestamp, WorkspaceId};
 use fold_store::workspaces::{WorkspaceKind, WorkspaceState};
-use fold_vcs::browse::{DirEntry, FileContent};
+use fold_vcs::browse::{DirEntry, FileContent, FlatDirEntry};
 use fold_vcs::compare::{ChangeKind, FileChange, Totals};
 use fold_vcs::git::Git;
 use fold_vcs::scan::SkipReason;
@@ -34,6 +34,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(list_workspaces))
         .routes(routes!(get_workspace))
         .routes(routes!(get_workspace_changes))
+        .routes(routes!(read_workspace_tree))
 }
 
 pub(super) fn service(project: &Project) -> WorkspaceService {
@@ -301,6 +302,41 @@ fn tree_view(path: String, entries: Vec<DirEntry>) -> TreeView {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+pub struct WorkspaceTreeEntryView {
+    pub name: String,
+    /// Relative to the workspace's root.
+    pub path: String,
+    pub kind: TreeEntryKind,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct WorkspaceTreeView {
+    /// The directory listed; empty for the root.
+    pub path: String,
+    /// In name order.
+    pub entries: Vec<WorkspaceTreeEntryView>,
+}
+
+fn workspace_tree_view(path: String, entries: Vec<FlatDirEntry>) -> WorkspaceTreeView {
+    let entries = entries
+        .into_iter()
+        .map(|entry| {
+            let name = String::from_utf8_lossy(&entry.name).into_owned();
+            WorkspaceTreeEntryView {
+                path: if path.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{path}/{name}")
+                },
+                name,
+                kind: entry.kind.into(),
+            }
+        })
+        .collect();
+    WorkspaceTreeView { path, entries }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
 pub struct FileContentView {
     pub path: String,
     pub kind: TreeEntryKind,
@@ -509,6 +545,37 @@ impl From<WatchMode> for WatchModeView {
             WatchMode::Degraded => Self::Degraded,
         }
     }
+}
+
+/// The entries of one directory of an active task workspace as its files are now, for suggesting `@ws-N:` paths.
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{slug}/workspaces/{id}/tree",
+    operation_id = "read_workspace_tree",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("id" = String, Path, description = "The workspace, such as ws-9"),
+        PathQuery,
+    ),
+    responses(
+        (status = 200, description = "The directory's entries", body = WorkspaceTreeView),
+        (status = 400, description = "The workspace id or the path is not valid", body = ErrorEnvelope),
+        (status = 404, description = "The workspace, the directory or the slug does not exist", body = ErrorEnvelope),
+        (status = 409, description = "The workspace is not active", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn read_workspace_tree(
+    project: Project,
+    Path((_slug, id)): Path<(String, String)>,
+    ApiQuery(query): ApiQuery<PathQuery>,
+) -> Result<Json<WorkspaceTreeView>, ApiError> {
+    let path = query.path.unwrap_or_default();
+    let entries = service(&project)
+        .read_workspace_tree(workspace_id(&id)?, &path)
+        .await?;
+    Ok(Json(workspace_tree_view(path, entries)))
 }
 
 /// The working changes of an active task workspace, read after a full scan.

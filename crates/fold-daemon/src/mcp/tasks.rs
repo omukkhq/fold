@@ -72,7 +72,7 @@ pub struct TaskIdInput {
 pub struct CreateTaskInput {
     /// The title: one line, not empty.
     pub title: String,
-    /// The description in Markdown. Leave it out for an empty one.
+    /// The description in Markdown. Leave it out for an empty one. In the text `#` names a fold item (#T-12) and `@` names a file (@web/src/board.ts); the daemon parses nothing.
     #[serde(default)]
     pub description: Option<String>,
     /// Names of existing labels to attach. Call create_label first for a new one.
@@ -97,7 +97,7 @@ pub struct UpdateTaskInput {
     /// The new title. Leave it out to keep the title.
     #[serde(default)]
     pub title: Option<String>,
-    /// The new description in Markdown. Leave it out to keep the description.
+    /// The new description in Markdown. Leave it out to keep the description. In the text `#` names a fold item (#T-12) and `@` names a file (@web/src/board.ts); the daemon parses nothing.
     #[serde(default)]
     pub description: Option<String>,
     /// The whole new label set, by name. Leave it out to keep the labels; pass an empty list to remove them all.

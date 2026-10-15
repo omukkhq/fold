@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { agentBarQuery } from "@/api/agentBar";
-import { boardQuery } from "@/api/board";
+import { boardCards, boardQuery } from "@/api/board";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { ReconnectingBanner } from "@/components/states/ReconnectingBanner";
 import { cn } from "@/lib/cn";
@@ -14,7 +14,7 @@ import {
   LoadingColumns,
 } from "./BoardColumns";
 import { BoardToolbar } from "./BoardToolbar";
-import { boardCards, groupColumns } from "./columns";
+import { groupColumns } from "./columns";
 import { applyFilters, labelOptions, needsYouCount } from "./filters";
 import { isFiltered, type BoardSearch } from "./search";
 import { reconnectAsOf, summaryText } from "./view";

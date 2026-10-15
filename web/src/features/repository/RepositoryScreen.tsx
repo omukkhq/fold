@@ -2,6 +2,11 @@ import { useQuery } from "@tanstack/react-query";
 import { FolderLock } from "lucide-react";
 import { useState } from "react";
 import { olderNotListed } from "@/api/pages";
+import {
+  repositoryQuery,
+  revisionsQuery,
+  treeQuery,
+} from "@/api/repositoryQueries";
 import { Mono } from "@/components/mono/Mono";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
@@ -9,8 +14,7 @@ import { Skeleton } from "@/components/states/Skeleton";
 import { CompareBar } from "./CompareBar";
 import { FileView } from "./FileView";
 import { mainCopyText } from "./describe";
-import { repositoryQuery, revisionsQuery } from "./queries";
-import { parentDirs } from "./search";
+import { folderAt, parentDirs, parentOf } from "./search";
 import { RevisionList } from "./RevisionList";
 import { TreeView } from "./TreeView";
 
@@ -38,6 +42,23 @@ export function RepositoryScreen({
   const [openPath, setOpenPath] = useState<string | null>(path ?? null);
   // The clock is read once per mount: the row times are a snapshot, not a ticking display.
   const [now] = useState(() => Date.now());
+
+  const listed = revisions.data?.items;
+  const shownRevision =
+    listed?.find((r) => r.id === revision)?.id ?? listed?.[0]?.id;
+  // One lookup of the entry's parent decides whether a mentioned path is a folder or a file; until it answers, the path opens nothing.
+  const lookup = useQuery({
+    ...treeQuery(slug, shownRevision ?? "", parentOf(path ?? "")),
+    enabled: path !== undefined && shownRevision !== undefined,
+  });
+  const folder =
+    path !== undefined && lookup.data ? folderAt(lookup.data, path) : null;
+  const deciding = path !== undefined && openPath === path && lookup.isPending;
+  if (folder && path !== undefined && openPath === path) {
+    // Adjusting state while rendering: the folder opens in the tree instead of as a file, and the file view never asks for it.
+    setOpenPath(null);
+    setExpanded(new Set([...expanded, path]));
+  }
 
   if (revisions.isPending) {
     return (
@@ -132,7 +153,7 @@ export function RepositoryScreen({
           onToggle={toggle}
           onOpenFile={setOpenPath}
         />
-        {openPath === null ? null : (
+        {openPath === null || deciding ? null : (
           <FileView slug={slug} revision={selected} path={openPath} />
         )}
         {mainCopy === null ? null : (

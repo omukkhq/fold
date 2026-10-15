@@ -31,6 +31,8 @@ import { applyEvent } from "@/live/apply";
 import { liveStatusStore } from "@/live/status";
 import { agent, worker } from "@/test/agents";
 import { daemon, noContent, ok, refuse, type Call } from "@/test/daemon";
+import { expectMentionPopover } from "@/test/mentionBox";
+import { mentionRoutes } from "@/test/mentionRoutes";
 import { boardCard, boardView, liveWorkspace, taskView } from "@/test/payloads";
 import { routeTree } from "@/routeTree.gen";
 import { ThemeProvider } from "@/theme/ThemeProvider";
@@ -718,6 +720,15 @@ describe("creating a task", () => {
     expect(router.state.location.pathname).toBe("/p/demo/t/T-17");
   }, 15_000);
 
+  it("suggests items and files in the new task description", async () => {
+    mentionRoutes();
+    setup("/p/demo/t/new");
+    const dialog = await screen.findByRole("dialog", {}, WAIT);
+    await expectMentionPopover(
+      within(dialog).getByRole("combobox", { name: "Description" }),
+    );
+  }, 15_000);
+
   it("offers New task on the empty board and adds the task to it", async () => {
     tasks.clear();
     const router = setup("/p/ledger/board").router;
@@ -811,7 +822,9 @@ describe("the human edits", () => {
     await userEvent.click(
       within(section).getByRole("button", { name: "Edit the description" }),
     );
-    const field = within(section).getByRole("textbox", { name: "Description" });
+    const field = within(section).getByRole("combobox", {
+      name: "Description",
+    });
     await userEvent.clear(field);
     await userEvent.type(field, "Only **this** now");
     await userEvent.click(
@@ -825,6 +838,35 @@ describe("the human edits", () => {
     expect(
       await within(section).findByText("this", { selector: "strong" }, WAIT),
     ).toBeTruthy();
+  }, 15_000);
+
+  it("suggests items and files in the description editor and links them once saved", async () => {
+    mentionRoutes();
+    const { dialog } = await openTask();
+    const section = region(dialog, "Description");
+    await userEvent.click(
+      within(section).getByRole("button", { name: "Edit the description" }),
+    );
+    const field = within(section).getByRole("combobox", {
+      name: "Description",
+    });
+    await userEvent.clear(field);
+    await expectMentionPopover(field);
+    await userEvent.type(field, "report.tsx");
+    await userEvent.click(
+      within(section).getByRole("button", { name: "Save description" }),
+    );
+    const link = await within(section).findByRole(
+      "link",
+      { name: "#T-9" },
+      WAIT,
+    );
+    expect(link.getAttribute("href")).toBe("/p/demo/t/T-9");
+    expect(
+      within(section)
+        .getByRole("link", { name: "@web/report.tsx" })
+        .getAttribute("href"),
+    ).toBe("/p/demo/repository?path=web%2Freport.tsx");
   }, 15_000);
 
   it("puts an existing label on the task, takes it off, and creates a new one", async () => {
@@ -1130,7 +1172,7 @@ describe("the human edits", () => {
   it("sends feedback to the claim holder with a pending state", async () => {
     const { dialog } = await openTask();
     const messages = region(dialog, "Messages");
-    const box = within(messages).getByRole("textbox", { name: "Feedback" });
+    const box = within(messages).getByRole("combobox", { name: "Feedback" });
     expect(box.getAttribute("placeholder")).toBe(
       "Write feedback to frontend/ui…",
     );
@@ -1154,7 +1196,32 @@ describe("the human edits", () => {
     await waitFor(() => {
       expect(within(messages).getByText("1 linked to T-2")).toBeTruthy();
     }, WAIT);
-    expect(within(messages).getByText("Use the shorter copy")).toBeTruthy();
+    expect(
+      within(messages).getByText("Use the shorter copy", { selector: "p" }),
+    ).toBeTruthy();
+  }, 15_000);
+
+  it("suggests items and files in the feedback box and links them once sent", async () => {
+    mentionRoutes();
+    const { dialog } = await openTask();
+    const messages = region(dialog, "Messages");
+    const box = within(messages).getByRole("combobox", { name: "Feedback" });
+    await expectMentionPopover(box);
+    await userEvent.type(box, "report.tsx");
+    await userEvent.click(
+      within(messages).getByRole("button", { name: "Send" }),
+    );
+    const item = await within(messages).findByRole(
+      "link",
+      { name: "#T-9" },
+      WAIT,
+    );
+    expect(item.getAttribute("href")).toBe("/p/demo/t/T-9");
+    expect(
+      within(messages)
+        .getByRole("link", { name: "@web/report.tsx" })
+        .getAttribute("href"),
+    ).toBe("/p/demo/repository?path=web%2Freport.tsx");
   }, 15_000);
 
   it("lets the feedback box address an agent from the agent list", async () => {

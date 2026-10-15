@@ -1,19 +1,47 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { daemon } from "@/test/daemon";
+import { expectMentionPopover } from "@/test/mentionBox";
+import { mentionRoutes } from "@/test/mentionRoutes";
 import { ApiError } from "@/api/errors";
 import { FeedbackDialog } from "./FeedbackDialog";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  daemon.reset();
+});
+
+vi.mock("@/api/client", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/api/client")>();
+  const { daemon: fake } = await import("@/test/daemon");
+  return { ...real, api: fake.api };
+});
 
 function setup(onSend: (task: string, body: string) => Promise<void>) {
   const onOpenChange = vi.fn();
-  render(<FeedbackDialog open onOpenChange={onOpenChange} onSend={onSend} />);
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <FeedbackDialog
+        slug="demo"
+        open
+        onOpenChange={onOpenChange}
+        onSend={onSend}
+      />
+    </QueryClientProvider>,
+  );
   return onOpenChange;
 }
 
 describe("FeedbackDialog", () => {
+  it("suggests items and files in the message box", async () => {
+    mentionRoutes();
+    setup(vi.fn(() => Promise.resolve()));
+    await expectMentionPopover(screen.getByLabelText("Message"));
+  });
+
   it("validates before it sends", async () => {
     const onSend = vi.fn(() => Promise.resolve());
     setup(onSend);

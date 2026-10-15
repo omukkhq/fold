@@ -182,6 +182,7 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
         />
       ) : null}
       <FeedbackDialog
+        slug={slug}
         open={feedback}
         onOpenChange={setFeedback}
         onSend={async (task, body) => {

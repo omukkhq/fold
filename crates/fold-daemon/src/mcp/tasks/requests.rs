@@ -291,7 +291,9 @@ fn kind(text: &str) -> Result<RequestKind, FoldError> {
             format!("{text} is not a request kind"),
         )
         .with_details([("reason", json!("kind"))])
-        .with_hint("give kind as bug, feature or question")
+        .with_hint(
+            "give kind as bug, feature or question, or call list_requests to see the kinds in use",
+        )
     })
 }
 
@@ -303,7 +305,7 @@ fn state(text: &str) -> Result<RequestState, FoldError> {
         )
         .with_details([("reason", json!("state"))])
         .with_hint(
-            "give state as open, drafting, draft_ready, changes_requested, approved or closed",
+            "give state as open, drafting, draft_ready, changes_requested, approved or closed; call list_requests to see each request with its state",
         )
     })
 }

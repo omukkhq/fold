@@ -1,5 +1,5 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useForm } from "react-hook-form";
+import { Controller, useForm } from "react-hook-form";
 import { ArrowRight, Send, SquareKanban } from "lucide-react";
 import { HrefLink } from "@/app/HrefLink";
 import type { ThreadView } from "@/api/messages";
@@ -9,7 +9,7 @@ import {
   buttonClasses,
   buttonIconClass,
 } from "@/components/button/buttonStyles";
-import { controlClasses } from "@/components/form/Field";
+import { MentionTextarea } from "@/mentions/MentionTextarea";
 import { failureText } from "@/format/failure";
 import { formatAsOf } from "@/format/time";
 import { cn } from "@/lib/cn";
@@ -32,7 +32,7 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
   const last = thread.messages.at(-1);
   const targets = replyTargets(thread);
   const {
-    register,
+    control,
     handleSubmit,
     reset,
     setError,
@@ -127,16 +127,28 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
         className="flex flex-col gap-6 border-t border-border-subtle px-18 py-12"
       >
         <div className="flex items-center gap-8">
-          <textarea
-            rows={1}
-            aria-label="Reply"
-            placeholder={
-              targets.length > 0 ? `Reply to ${targets.join(", ")}…` : "Reply…"
-            }
-            readOnly={isSubmitting}
-            aria-invalid={errors.body ? true : undefined}
-            className={cn(controlClasses, "resize-none py-9", focusRing)}
-            {...register("body")}
+          <Controller
+            control={control}
+            name="body"
+            render={({ field }) => (
+              <MentionTextarea
+                slug={slug}
+                rows={1}
+                aria-label="Reply"
+                placeholder={
+                  targets.length > 0
+                    ? `Reply to ${targets.join(", ")}…`
+                    : "Reply…"
+                }
+                readOnly={isSubmitting}
+                aria-invalid={errors.body ? true : undefined}
+                className="resize-none py-9"
+                ref={field.ref}
+                value={field.value}
+                onValueChange={field.onChange}
+                onBlur={field.onBlur}
+              />
+            )}
           />
           <Button
             type="submit"

@@ -5,6 +5,7 @@ import { isApiError } from "./errors";
 import {
   getWorkspace,
   getWorkspaceChanges,
+  getWorkspaceTree,
   listWorkspaces,
 } from "./workspaces";
 
@@ -27,6 +28,16 @@ describe("the workspace seam", () => {
     const entry = workspaceEntry("ws-2", { state: "archived", live: null });
     stubFetch({ [`GET ${BASE}/workspaces/ws-2`]: { body: entry } });
     expect((await getWorkspace("demo", "ws-2")).live).toBeNull();
+  });
+
+  it("lists one directory of the working files", async () => {
+    const entries = [{ name: "a.ts", path: "src/a.ts", kind: "file" }];
+    stubFetch({
+      [`GET ${BASE}/workspaces/ws-1/tree`]: {
+        body: { path: "src", entries },
+      },
+    });
+    expect(await getWorkspaceTree("demo", "ws-1", "src")).toEqual(entries);
   });
 
   it("reads the working changes and rejects a workspace that is not active", async () => {

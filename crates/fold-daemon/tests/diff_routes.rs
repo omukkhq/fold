@@ -328,6 +328,60 @@ async fn recorded_states_list_the_files_the_comparison_module_does() {
 }
 
 #[tokio::test]
+async fn the_workspace_tree_lists_the_working_files_of_one_directory() {
+    let fx = Opened::new().await;
+    let (id, dir) = fx.create(1).await;
+    edit(&dir);
+
+    let (status, root) = fx.get(&format!("/workspaces/{id}/tree")).await;
+    assert_eq!(status, StatusCode::OK, "{root}");
+    let listed = |tree: &Value| -> Vec<(String, String)> {
+        tree["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| {
+                (
+                    e["path"].as_str().unwrap().to_owned(),
+                    e["kind"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect()
+    };
+    let top = listed(&root);
+    assert!(top.contains(&("src".to_owned(), "directory".to_owned())));
+    assert!(top.contains(&("README.md".to_owned(), "file".to_owned())));
+
+    let (_, src) = fx.get(&format!("/workspaces/{id}/tree?path=src")).await;
+    assert_eq!(src["path"], "src");
+    assert_eq!(listed(&src), [("src/new.rs".to_owned(), "file".to_owned())]);
+
+    for (path, status, expected) in [
+        ("path=nope", StatusCode::NOT_FOUND, "not_found"),
+        ("path=README.md", StatusCode::NOT_FOUND, "not_found"),
+        ("path=../x", StatusCode::BAD_REQUEST, "invalid_path"),
+    ] {
+        let (got, body) = fx.get(&format!("/workspaces/{id}/tree?{path}")).await;
+        assert_eq!((got, code(&body)), (status, expected), "{path}");
+    }
+    let (status, body) = fx.get("/workspaces/ws-99/tree").await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::NOT_FOUND, "workspace_not_found")
+    );
+
+    fx.workspaces()
+        .abandon_workspace(&agent("frontend"), id, "the approach does not work")
+        .await
+        .unwrap();
+    let (status, body) = fx.get(&format!("/workspaces/{id}/tree")).await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::CONFLICT, "workspace_not_active")
+    );
+}
+
+#[tokio::test]
 async fn bad_references_unknown_ids_and_bad_paths_give_their_codes() {
     let fx = Opened::new().await;
     let (id, _) = fx.create(1).await;

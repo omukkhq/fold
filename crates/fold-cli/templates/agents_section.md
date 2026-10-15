@@ -14,6 +14,8 @@ The fold workflow in short:
 
 The `fold` skill holds the full workflow for orchestrators, workers and reviewers, and for requests. Load it before you start.
 
+In text for people (messages, review comments, evidence, task descriptions), write `#T-12` to name a fold item and `@path` to name a file. The `fold` skill lists the marks.
+
 Rules for files:
 
 - Edit files only inside your own workspace under `ws/`.

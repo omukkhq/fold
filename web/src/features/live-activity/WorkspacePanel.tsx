@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { repositoryQuery } from "../repository/queries";
+import { repositoryQuery } from "@/api/repositoryQueries";
 import { Badge } from "../../components/badge/Badge";
 import { Avatar } from "../../components/avatar/Avatar";
 import { formatSince } from "../../format/time";

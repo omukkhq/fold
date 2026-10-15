@@ -15,7 +15,7 @@ import { Skeleton } from "@/components/states/Skeleton";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { formatSize, isOpenable, symlinkLabel } from "./describe";
-import { treeQuery } from "./queries";
+import { treeQuery } from "@/api/repositoryQueries";
 
 interface TreeViewProps {
   slug: string;

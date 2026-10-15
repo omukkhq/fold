@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { TaskStatus } from "@/api/board";
+import { boardCards, type TaskStatus } from "@/api/board";
 import { boardCard, boardView } from "@/test/payloads";
 import {
   COLUMNS,
-  boardCards,
   groupColumns,
   hintText,
   moreText,

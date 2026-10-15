@@ -24,6 +24,8 @@ import { createAppRouter } from "@/app/router";
 import { applyEvent } from "@/live/apply";
 import { isEventEnvelope } from "@/live/envelope";
 import { daemon, ok, refuse, type Call } from "@/test/daemon";
+import { expectMentionPopover } from "@/test/mentionBox";
+import { mentionRoutes } from "@/test/mentionRoutes";
 import {
   conflictReport,
   humanGates,
@@ -155,7 +157,8 @@ function seed(): void {
           proposalVersion(2, {
             base: "r8",
             changeset: "C-18",
-            evidence: "$ cargo nextest run -p db\n    48 passed, 0 failed",
+            evidence:
+              "$ cargo nextest run -p db\n    48 passed, 0 failed for #T-9 in @web/report.tsx",
           }),
         ],
         reviews: [
@@ -584,16 +587,88 @@ describe("Proposal detail", () => {
         .getAttribute("aria-busy"),
     ).toBe("true");
     expect(
-      screen.queryByText("owner_id and report_date need defaults."),
+      screen.queryByText("owner_id and report_date need defaults.", {
+        selector: "p",
+      }),
     ).toBeNull();
     release();
     expect(
-      await screen.findByText("owner_id and report_date need defaults."),
+      await screen.findByText("owner_id and report_date need defaults.", {
+        selector: "p",
+      }),
     ).toBeTruthy();
     expect(screen.getByText("on v2 · lines 2–4")).toBeTruthy();
     expect(
       writes("POST /api/v1/projects/demo/proposals/P-4/comments")[1]?.body,
     ).toMatchObject({ start_line: 2, end_line: 4, side: "new" });
+  });
+
+  it("suggests items and files in the line comment and the request-changes box", async () => {
+    mentionRoutes();
+    const user = userEvent.setup();
+    const { container } = renderAt("/p/demo/proposals/P-4");
+    await user.click(await lineCell(container, "new:4"));
+    const form = await screen.findByRole("form", {
+      name: "Comment on line 4 · new side · tanim",
+    });
+    await expectMentionPopover(within(form).getByLabelText("Comment"));
+    const panel = await integration();
+    await user.click(
+      within(panel).getByRole("button", { name: "Request changes" }),
+    );
+    await expectMentionPopover(
+      within(panel).getByLabelText("What needs to change"),
+    );
+  });
+
+  it("links the mentions in a comment thread and in a review", async () => {
+    comments.set("P-4", [
+      reviewComment(1, 2, {
+        author: "backend/db",
+        path: SCHEMA,
+        start_line: 3,
+        end_line: 3,
+        body: "Context in #T-9, code in @web/report.tsx.",
+      }),
+    ]);
+    const user = userEvent.setup();
+    const { container } = renderAt("/p/demo/proposals/P-4");
+    const thread = await screen.findByRole("list", { name: "Thread rc-1" });
+    expect(
+      within(thread).getByRole("link", { name: "#T-9" }).getAttribute("href"),
+    ).toBe("/p/demo/t/T-9");
+    expect(
+      within(thread)
+        .getByRole("link", { name: "@web/report.tsx" })
+        .getAttribute("href"),
+    ).toBe("/p/demo/repository?path=web%2Freport.tsx");
+    expect(container).toBeTruthy();
+    const evidence = screen.getByRole("region", {
+      name: "Evidence from the author",
+    });
+    expect(
+      within(evidence).getByRole("link", { name: "#T-9" }).getAttribute("href"),
+    ).toBe("/p/demo/t/T-9");
+    expect(
+      within(evidence)
+        .getByRole("link", { name: "@web/report.tsx" })
+        .getAttribute("href"),
+    ).toBe("/p/demo/repository?path=web%2Freport.tsx");
+    const panel = await integration();
+    await user.click(
+      within(panel).getByRole("button", { name: "Request changes" }),
+    );
+    await user.type(
+      within(panel).getByLabelText("What needs to change"),
+      "Fix #T-9 first",
+    );
+    await user.click(
+      within(panel).getByRole("button", { name: "Send request" }),
+    );
+    const reviews = screen.getByRole("region", { name: "Reviews" });
+    expect(
+      await within(reviews).findByRole("link", { name: "#T-9" }),
+    ).toBeTruthy();
   });
 
   it("shows a comment refusal on the form", async () => {

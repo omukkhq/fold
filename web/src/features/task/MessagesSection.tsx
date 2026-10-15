@@ -2,7 +2,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Send } from "lucide-react";
 import { useId } from "react";
-import { useForm, useWatch } from "react-hook-form";
+import { Controller, useForm, useWatch } from "react-hook-form";
 import { keys } from "@/api/keys";
 import { olderNotListed } from "@/api/pages";
 import {
@@ -17,8 +17,10 @@ import { HrefLink } from "@/app/HrefLink";
 import { Avatar } from "@/components/avatar/Avatar";
 import { Button } from "@/components/button/Button";
 import { controlClasses } from "@/components/form/Field";
+import { MessageBody } from "@/features/messages/MessageBody";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
+import { MentionTextarea } from "@/mentions/MentionTextarea";
 import { threadPath } from "./links";
 import { SectionHead, submit, WriteError } from "./parts";
 import { feedbackSchema, type FeedbackForm } from "./schemas";
@@ -57,9 +59,7 @@ function Message({ slug, message }: { slug: string; message: TaskMessage }) {
           {clockTime(message.sent_at)}
         </HrefLink>
       </div>
-      <p className="text-body leading-normal whitespace-pre-wrap text-text">
-        {message.body}
-      </p>
+      <MessageBody body={message.body} slug={slug} />
     </li>
   );
 }
@@ -145,14 +145,24 @@ function FeedbackBox({
         <label className="sr-only" htmlFor={`${id}-body`}>
           Feedback
         </label>
-        <input
-          id={`${id}-body`}
-          autoComplete="off"
-          disabled={write.isPending}
-          placeholder={feedbackPlaceholder(to, holder)}
-          aria-invalid={errors.body ? true : undefined}
-          className={cn(controlClasses, focusRing, "min-w-0 flex-1")}
-          {...form.register("body")}
+        <Controller
+          control={form.control}
+          name="body"
+          render={({ field }) => (
+            <MentionTextarea
+              slug={slug}
+              id={`${id}-body`}
+              rows={1}
+              disabled={write.isPending}
+              placeholder={feedbackPlaceholder(to, holder)}
+              aria-invalid={errors.body ? true : undefined}
+              className="min-w-0 flex-1 resize-none py-9"
+              ref={field.ref}
+              value={field.value}
+              onValueChange={field.onChange}
+              onBlur={field.onBlur}
+            />
+          )}
         />
         <Button
           type="submit"

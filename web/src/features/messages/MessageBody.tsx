@@ -1,22 +1,37 @@
 import { Fragment } from "react";
 import { HrefLink } from "@/app/HrefLink";
+import { MentionLink } from "@/mentions/MentionLink";
+import { mentionHref, splitMentions } from "@/mentions/parse";
+import { mentionTag } from "@/mentions/remark";
 import { linkify } from "./linkify";
 
-/** The body as text with linked ids; React escapes every string, so HTML in a body shows as typed. */
+/** The body as text with linked `#` and `@` mentions and bare ids; React escapes every string, so HTML in a body shows as typed. */
 export function MessageBody({ body, slug }: { body: string; slug: string }) {
   return (
     <p className="text-body leading-normal whitespace-pre-wrap text-text">
-      {linkify(body, slug).map((segment, index) => (
+      {splitMentions(body).map((part, index) => (
         <Fragment key={index}>
-          {segment.href ? (
-            <HrefLink
-              href={segment.href}
-              className="font-mono text-code text-primary-text hover:underline"
+          {part.mention ? (
+            <MentionLink
+              href={mentionHref(slug, part.mention)}
+              tag={mentionTag(part.mention)}
             >
-              {segment.text}
-            </HrefLink>
+              {part.text}
+            </MentionLink>
           ) : (
-            segment.text
+            linkify(part.text, slug).map((segment, at) =>
+              segment.href ? (
+                <HrefLink
+                  key={at}
+                  href={segment.href}
+                  className="font-mono text-code text-primary-text hover:underline"
+                >
+                  {segment.text}
+                </HrefLink>
+              ) : (
+                <Fragment key={at}>{segment.text}</Fragment>
+              ),
+            )
           )}
         </Fragment>
       ))}

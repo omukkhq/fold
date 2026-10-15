@@ -10,15 +10,15 @@ import {
   type ComponentProps,
   type KeyboardEvent,
 } from "react";
-import { boardQuery } from "@/api/board";
+import { boardCards, boardQuery } from "@/api/board";
 import { proposalsQuery, requestsQuery } from "@/api/queries";
 import { controlClasses } from "@/components/form/Field";
-import { boardCards } from "@/features/board/columns";
 import {
   repositoryQuery,
   revisionsQuery,
   treeQuery,
-} from "@/features/repository/queries";
+  workspaceTreeQuery,
+} from "@/api/repositoryQueries";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import {
@@ -52,6 +52,10 @@ function useSuggestions(
     ...treeQuery(slug, head ?? "", query?.dir ?? ""),
     enabled: head !== null && query !== null && query.workspace === null,
   });
+  const workspaceTree = useQuery({
+    ...workspaceTreeQuery(slug, query?.workspace ?? "", query?.dir ?? ""),
+    enabled: query?.workspace != null,
+  });
   if (active === null) return [];
   if (active.mark === "#") {
     return itemSuggestions(active.query, {
@@ -69,7 +73,8 @@ function useSuggestions(
       })),
     });
   }
-  return query && tree.data ? pathSuggestions(query, tree.data) : [];
+  const entries = query?.workspace == null ? tree.data : workspaceTree.data;
+  return query && entries ? pathSuggestions(query, entries) : [];
 }
 
 export type MentionTextareaProps = Omit<

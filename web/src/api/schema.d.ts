@@ -796,6 +796,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/workspaces/{id}/tree": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The entries of one directory of an active task workspace as its files are now, for suggesting `@ws-N:` paths. */
+        get: operations["read_workspace_tree"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/session": {
         parameters: {
             query?: never;
@@ -2652,6 +2669,18 @@ export interface components {
         };
         /** @enum {string} */
         WorkspaceStateView: "active" | "missing" | "archived" | "abandoned";
+        WorkspaceTreeEntryView: {
+            kind: components["schemas"]["TreeEntryKind"];
+            name: string;
+            /** @description Relative to the workspace's root. */
+            path: string;
+        };
+        WorkspaceTreeView: {
+            /** @description In name order. */
+            entries: components["schemas"]["WorkspaceTreeEntryView"][];
+            /** @description The directory listed; empty for the root. */
+            path: string;
+        };
     };
     responses: never;
     parameters: never;
@@ -7314,6 +7343,97 @@ export interface operations {
                 };
             };
             /** @description A working file could not be read (`workspace_io`), or an internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    read_workspace_tree: {
+        parameters: {
+            query?: {
+                /** @description A path relative to the revision's root, such as `src/lib.rs`; empty or absent for the root. */
+                path?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The workspace, such as ws-9 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The directory's entries */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceTreeView"];
+                };
+            };
+            /** @description The workspace id or the path is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The workspace, the directory or the slug does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The workspace is not active */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
             500: {
                 headers: {
                     [name: string]: unknown;

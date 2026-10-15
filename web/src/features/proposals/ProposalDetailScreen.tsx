@@ -30,7 +30,7 @@ import { Skeleton } from "@/components/states/Skeleton";
 import { DiffViewer, type FileDiffView } from "@/features/diff/DiffViewer";
 import { currentFile, fileBody, listedFiles } from "@/features/diff/layout";
 import type { DiffSelection } from "@/features/diff/selection";
-import { revisionsQuery } from "@/features/repository/queries";
+import { revisionsQuery } from "@/api/repositoryQueries";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { useNow } from "@/live/useNow";
@@ -171,12 +171,15 @@ function DiffArea({
           threads={diffThreads(threads)}
           renderThread={(anchor) => {
             const thread = byId.get(anchor.id);
-            return thread ? <ThreadBox thread={thread} now={now} /> : null;
+            return thread ? (
+              <ThreadBox slug={slug} thread={thread} now={now} />
+            ) : null;
           }}
           renderComposer={
             composer
               ? (sel) => (
                   <CommentComposer
+                    slug={slug}
                     key={`${sel.path}:${sel.side}:${String(sel.start_line)}:${String(sel.end_line)}`}
                     selection={sel}
                     human={human}
@@ -200,7 +203,7 @@ function DiffArea({
             Other comments
           </h2>
           {unplaced.map((thread) => (
-            <ThreadBox key={thread.id} thread={thread} now={now} />
+            <ThreadBox key={thread.id} slug={slug} thread={thread} now={now} />
           ))}
         </section>
       ) : null}

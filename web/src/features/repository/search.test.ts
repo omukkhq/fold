@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { parentDirs, parseRepositorySearch } from "./search";
+import {
+  folderAt,
+  parentDirs,
+  parentOf,
+  parseRepositorySearch,
+} from "./search";
 
 describe("parseRepositorySearch", () => {
   it("keeps a revision id", () => {
@@ -45,5 +50,25 @@ describe("path", () => {
   it("lists the directories above a path", () => {
     expect(parentDirs("web/src/a.ts")).toEqual(["web", "web/src"]);
     expect(parentDirs("README.md")).toEqual([]);
+  });
+});
+
+describe("parentOf", () => {
+  it("names the directory that holds a path", () => {
+    expect(parentOf("web/src/board.ts")).toBe("web/src");
+    expect(parentOf("web")).toBe("");
+  });
+});
+
+describe("folderAt", () => {
+  const entries = [
+    { path: "web/src", kind: "directory" },
+    { path: "web/app.ts", kind: "file" },
+  ];
+
+  it("tells a folder from a file and an unlisted path", () => {
+    expect(folderAt(entries, "web/src")).toBe(true);
+    expect(folderAt(entries, "web/app.ts")).toBe(false);
+    expect(folderAt(entries, "web/gone")).toBeNull();
   });
 });

@@ -7,7 +7,7 @@ import { Button } from "@/components/button/Button";
 import { Menu } from "@/components/overlay/Menu";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { Skeleton } from "@/components/states/Skeleton";
-import { revisionsQuery } from "@/features/repository/queries";
+import { revisionsQuery } from "@/api/repositoryQueries";
 import { formatSince } from "@/format/time";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";

@@ -21,6 +21,20 @@ export function parseRepositorySearch(
   };
 }
 
+/** The directory that holds a path, `""` for the root. */
+export function parentOf(path: string): string {
+  return path.split("/").slice(0, -1).join("/");
+}
+
+/** Whether a mentioned path is a folder, from the entries of its parent directory; null when the parent does not list it. */
+export function folderAt(
+  entries: readonly { path: string; kind: string }[],
+  path: string,
+): boolean | null {
+  const found = entries.find((entry) => entry.path === path);
+  return found ? found.kind === "directory" : null;
+}
+
 /** The directories above a path, outermost first, which the tree opens to show it. */
 export function parentDirs(path: string): string[] {
   const parts = path.split("/").slice(0, -1);

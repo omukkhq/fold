@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import type { Comparison } from "@/api/diff";
 import { fileDiffQuery, workspaceQuery } from "@/api/queries";
-import { repositoryQuery } from "@/features/repository/queries";
+import { repositoryQuery } from "@/api/repositoryQueries";
 import { HrefLink } from "@/app/HrefLink";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { cn } from "@/lib/cn";

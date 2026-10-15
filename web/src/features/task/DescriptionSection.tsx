@@ -1,10 +1,10 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Pencil } from "lucide-react";
 import { useState } from "react";
-import { useForm } from "react-hook-form";
+import { Controller, useForm } from "react-hook-form";
 import { setDescription, type TaskDetail } from "@/api/tasks";
 import { Button } from "@/components/button/Button";
-import { Textarea } from "@/components/form/controls";
+import { MentionField } from "@/mentions/MentionField";
 import { Markdown } from "./Markdown";
 import { SectionHead, SmallAction, submit, WriteError } from "./parts";
 import { descriptionSchema, type DescriptionForm } from "./schemas";
@@ -35,15 +35,25 @@ function DescriptionEditor({
         }),
       )}
     >
-      <Textarea
-        label="Description"
-        hint="Markdown, with tables and task lists. HTML is not shown."
-        rows={12}
-        autoFocus
-        disabled={write.isPending}
-        error={form.formState.errors.description?.message}
-        className="font-mono text-meta"
-        {...form.register("description")}
+      <Controller
+        control={form.control}
+        name="description"
+        render={({ field }) => (
+          <MentionField
+            slug={slug}
+            label="Description"
+            hint="Markdown, with tables and task lists. HTML is not shown. Type # for an item and @ for a file."
+            rows={12}
+            autoFocus
+            disabled={write.isPending}
+            error={form.formState.errors.description?.message}
+            className="font-mono text-meta"
+            ref={field.ref}
+            value={field.value}
+            onValueChange={field.onChange}
+            onBlur={field.onBlur}
+          />
+        )}
       />
       <WriteError error={write.error} />
       <div className="flex gap-8">
@@ -93,7 +103,7 @@ export function DescriptionSection({
       ) : task.description.trim() === "" ? (
         <p className="text-body text-text-muted">No description yet.</p>
       ) : (
-        <Markdown>{task.description}</Markdown>
+        <Markdown mentions={{ slug }}>{task.description}</Markdown>
       )}
     </section>
   );

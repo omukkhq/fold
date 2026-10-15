@@ -458,7 +458,7 @@ fn other_thread(request: RequestId, parent: MessageId) -> FoldError {
         ("request", json!(request.to_string())),
         ("reply_to", json!(parent.to_string())),
     ])
-    .with_hint("leave out reply_to to join the request's thread, or leave out request to reply")
+    .with_hint("call get_thread with the request to see its messages, then leave out reply_to to join the request's thread, or leave out request to reply")
 }
 
 fn message_not_found(message: MessageId) -> FoldError {

@@ -1,6 +1,7 @@
 use fold_core::object::{ObjectKind, hash_object};
 use fold_core::tree::EntryKind;
-use fold_vcs::browse::{DirEntry, parse_path, read_dir, read_file};
+use fold_core::tree::{FlatEntry, FlatTree};
+use fold_vcs::browse::{DirEntry, list_flat_dir, parse_path, read_dir, read_file};
 use fold_vcs::diff::MAX_INLINE_BYTES;
 use fold_vcs::paths::RepoPath;
 
@@ -132,4 +133,55 @@ fn a_file_above_the_inline_cap_gives_its_size_and_hash_only() {
     assert!(large.bytes.is_empty());
     assert_eq!(large.size, MAX_INLINE_BYTES as u64 + 1);
     assert_eq!(large.hash, above_hash);
+}
+
+#[test]
+fn flat_paths_list_one_directory_with_derived_folders() {
+    let hash = hash_object(ObjectKind::Blob, b"x");
+    let flat: FlatTree = [
+        "a.txt",
+        "src/b.rs",
+        "src/deep/c.rs",
+        "src/deep/d.rs",
+        "srcx",
+    ]
+    .iter()
+    .map(|p| {
+        (
+            p.as_bytes().to_vec(),
+            FlatEntry {
+                kind: EntryKind::File,
+                hash,
+            },
+        )
+    })
+    .collect();
+    let list = |p: Option<&str>| -> Vec<(String, EntryKind)> {
+        let path = p.map(path);
+        list_flat_dir(&flat, path.as_ref())
+            .unwrap()
+            .into_iter()
+            .map(|e| (String::from_utf8(e.name).unwrap(), e.kind))
+            .collect()
+    };
+    assert_eq!(
+        list(None),
+        [
+            ("a.txt".into(), EntryKind::File),
+            ("src".into(), EntryKind::Directory),
+            ("srcx".into(), EntryKind::File),
+        ]
+    );
+    assert_eq!(
+        list(Some("src")),
+        [
+            ("b.rs".into(), EntryKind::File),
+            ("deep".into(), EntryKind::Directory),
+        ]
+    );
+    for missing in ["nope", "a.txt", "sr"] {
+        let error = list_flat_dir(&flat, Some(&path(missing))).unwrap_err();
+        assert_eq!(error.code(), "not_found", "{missing}");
+    }
+    assert!(list_flat_dir(&FlatTree::new(), None).unwrap().is_empty());
 }

@@ -1,12 +1,14 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useForm } from "react-hook-form";
+import { Controller, useForm } from "react-hook-form";
 import { Button } from "@/components/button/Button";
-import { TextField, Textarea } from "@/components/form/controls";
+import { TextField } from "@/components/form/controls";
 import { Dialog } from "@/components/overlay/Dialog";
+import { MentionField } from "@/mentions/MentionField";
 import { failureText } from "@/format/failure";
 import { feedbackSchema, type FeedbackValues } from "./compose";
 
 interface FeedbackDialogProps {
+  slug: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Resolves once the daemon has taken the message; rejects with its error. */
@@ -14,12 +16,14 @@ interface FeedbackDialogProps {
 }
 
 export function FeedbackDialog({
+  slug,
   open,
   onOpenChange,
   onSend,
 }: FeedbackDialogProps) {
   const {
     register,
+    control,
     handleSubmit,
     reset,
     setError,
@@ -61,10 +65,20 @@ export function FeedbackDialog({
           error={errors.task?.message}
           {...register("task")}
         />
-        <Textarea
-          label="Message"
-          error={errors.body?.message}
-          {...register("body")}
+        <Controller
+          control={control}
+          name="body"
+          render={({ field }) => (
+            <MentionField
+              slug={slug}
+              label="Message"
+              error={errors.body?.message}
+              ref={field.ref}
+              value={field.value}
+              onValueChange={field.onChange}
+              onBlur={field.onBlur}
+            />
+          )}
         />
         {errors.root ? (
           <p role="alert" className="text-bar font-medium text-danger">

@@ -1,11 +1,12 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as RadixDialog from "@radix-ui/react-dialog";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useForm } from "react-hook-form";
+import { Controller, useForm } from "react-hook-form";
 import { keys } from "@/api/keys";
 import { createTask } from "@/api/tasks";
 import { Button } from "@/components/button/Button";
-import { Textarea, TextField } from "@/components/form/controls";
+import { TextField } from "@/components/form/controls";
+import { MentionField } from "@/mentions/MentionField";
 import { DialogFrame } from "./DialogFrame";
 import { submit, WriteError } from "./parts";
 import { newTaskSchema, type NewTaskForm } from "./schemas";
@@ -62,14 +63,24 @@ export function NewTaskDialog({
           error={form.formState.errors.title?.message}
           {...form.register("title")}
         />
-        <Textarea
-          label="Description"
-          hint="Markdown, with tables and task lists. HTML is not shown."
-          rows={8}
-          disabled={create.isPending}
-          error={form.formState.errors.description?.message}
-          className="font-mono text-meta"
-          {...form.register("description")}
+        <Controller
+          control={form.control}
+          name="description"
+          render={({ field }) => (
+            <MentionField
+              slug={slug}
+              label="Description"
+              hint="Markdown, with tables and task lists. HTML is not shown. Type # for an item and @ for a file."
+              rows={8}
+              disabled={create.isPending}
+              error={form.formState.errors.description?.message}
+              className="font-mono text-meta"
+              ref={field.ref}
+              value={field.value}
+              onValueChange={field.onChange}
+              onBlur={field.onBlur}
+            />
+          )}
         />
         <WriteError error={create.error} />
         <div className="flex gap-8">

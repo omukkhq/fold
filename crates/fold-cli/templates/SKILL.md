@@ -87,11 +87,15 @@ A reviewer reads proposals, asks for changes and integrates the proposals that a
 6. If the proposal is ready, call `integrate_proposal(id, expected_version?)`. Pass the version you reviewed as `expected_version`: if a newer version exists, the call fails with `stale_version`. fold checks the approvals, the human review mark and the prerequisite tasks before it moves `main/`.
 7. Call `release_review(id)` when you stop the review.
 
+## Mentions
+
+In all text you write for people, `#` names a fold item and `@` names a file. The text is in messages, review comments, proposal evidence, task descriptions and requests. `#T-12` is a task, `#P-3` a proposal, `#RQ-2` a request, `#r17` a revision, `#ws-9` a workspace, `#ck-88` a checkpoint and `#m-210` a message. `@web/src/board.ts` is a file in `main/` and `@ws-9:web/src/board.ts` a file in a workspace. The web interface shows each mention as a link. fold keeps the text as it is written and checks no mention. Write a mention only for an item or file that exists, and write it with no space after the mark.
+
 ## Requests
 
 A request asks for work in plain words. Anyone can create one: a human in the web interface, or any worker with `create_request(body, attachments?, ws?)`. Give only the message. Do not give a title or a kind, because the orchestrator writes them. To attach files such as a log or a screenshot, give their paths inside your own workspace as `attachments` and that workspace as `ws`. A request holds at most 10 files of at most 10 MiB each.
 
-In the text of a request, `#` names a fold item and `@` names a file: `#T-12` is a task, `#P-3` a proposal, `#RQ-2` a request, `#r17` a revision, `#ws-9` a workspace, `#ck-88` a checkpoint and `#m-210` a message; `@web/src/board.ts` is a file in `main/` and `@ws-9:web/src/board.ts` a file in a workspace. Write mentions the same way in a request, a draft note, a comment and a message about a request. fold keeps the text as it is written and checks no mention. Read each item with its tool, such as `get_task` or `get_proposal`, and read each file in `main/` or in its workspace.
+In the text of a request, a draft note and a comment, write mentions as described in Mentions. Read each item with its tool, such as `get_task` or `get_proposal`, and read each file in `main/` or in its workspace.
 
 An orchestrator (the main worker of an agent) turns a request into cards:
 

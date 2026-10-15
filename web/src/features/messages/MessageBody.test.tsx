@@ -43,6 +43,16 @@ describe("MessageBody", () => {
     ]);
   });
 
+  it("links # items and @ files, keeps bare ids linked and leaves a code span as text", async () => {
+    await show("See #T-12, @web/src/board.ts and P-3 but not `@web/x.ts`.");
+    const links = screen.getAllByRole("link");
+    expect(links.map((a) => [a.textContent, a.getAttribute("href")])).toEqual([
+      ["#T-12", "/p/demo/t/T-12"],
+      ["@web/src/board.ts", "/p/demo/repository?path=web%2Fsrc%2Fboard.ts"],
+      ["P-3", "/p/demo/proposals/P-3"],
+    ]);
+  });
+
   it("renders HTML as text and creates no element from it", async () => {
     const body = '<img src=x onerror="alert(1)"> <b>bold</b> T-5';
     await show(body);

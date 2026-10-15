@@ -1,21 +1,23 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { MessageSquarePlus, TextSelect } from "lucide-react";
-import { useForm } from "react-hook-form";
+import { Controller, useForm } from "react-hook-form";
 import { Avatar } from "@/components/avatar/Avatar";
 import { Button } from "@/components/button/Button";
-import { controlClasses } from "@/components/form/Field";
 import type { DiffSelection } from "@/features/diff/selection";
+import { MentionText } from "@/mentions/MentionText";
+import { MentionTextarea } from "@/mentions/MentionTextarea";
 import { formatAsOfMinute } from "@/format/time";
 import { cn } from "@/lib/cn";
-import { focusRing } from "@/lib/focus";
 import { commentSchema, type CommentValues } from "./compose";
 import { displayName } from "./present";
 import { commentNote, composerTitle, type CommentThread } from "./threads";
 
 export function ThreadBox({
+  slug,
   thread,
   now,
 }: {
+  slug: string;
   thread: CommentThread;
   now: number;
 }) {
@@ -45,9 +47,7 @@ export function ThreadBox({
                 {formatAsOfMinute(now, entry.comment.created_at)}
               </span>
             </p>
-            <p className="text-body leading-normal whitespace-pre-wrap text-text">
-              {entry.comment.body}
-            </p>
+            <MentionText text={entry.comment.body} slug={slug} />
           </article>
         </li>
       ))}
@@ -56,6 +56,7 @@ export function ThreadBox({
 }
 
 interface ComposerProps {
+  slug: string;
   selection: DiffSelection;
   human: string;
   /** Resolves once the daemon has stored the comment; rejects with its error. */
@@ -66,6 +67,7 @@ interface ComposerProps {
 }
 
 export function CommentComposer({
+  slug,
   selection,
   human,
   onSubmit,
@@ -73,7 +75,7 @@ export function CommentComposer({
   failureText,
 }: ComposerProps) {
   const {
-    register,
+    control,
     handleSubmit,
     setError,
     formState: { errors, isSubmitting },
@@ -102,14 +104,24 @@ export function CommentComposer({
         <TextSelect aria-hidden="true" size={14} />
         {title}
       </p>
-      <textarea
-        rows={2}
-        aria-label="Comment"
-        autoFocus
-        readOnly={isSubmitting}
-        aria-invalid={errors.body ? true : undefined}
-        className={cn(controlClasses, "resize-y py-9", focusRing)}
-        {...register("body")}
+      <Controller
+        control={control}
+        name="body"
+        render={({ field }) => (
+          <MentionTextarea
+            slug={slug}
+            rows={2}
+            aria-label="Comment"
+            autoFocus
+            readOnly={isSubmitting}
+            aria-invalid={errors.body ? true : undefined}
+            className="resize-y py-9"
+            ref={field.ref}
+            value={field.value}
+            onValueChange={field.onChange}
+            onBlur={field.onBlur}
+          />
+        )}
       />
       {errors.body ? (
         <p className="text-meta font-medium text-danger">

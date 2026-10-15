@@ -37,3 +37,18 @@ export const boardQuery = (slug: string) =>
     queryFn: () => getBoard(slug),
     staleTime: Infinity,
   });
+
+/** Every card of the board once, whichever column it arrived in. */
+export function boardCards(board: Board): BoardCard[] {
+  const seen = new Set<string>();
+  const cards: BoardCard[] = [];
+  for (const column of board.columns) {
+    for (const card of column.cards) {
+      if (!seen.has(card.task)) {
+        seen.add(card.task);
+        cards.push(card);
+      }
+    }
+  }
+  return cards;
+}

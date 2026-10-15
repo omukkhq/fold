@@ -60,21 +60,6 @@ export function taskNumber(task: string): number {
   return id?.kind === "task" ? id.number : Number.MAX_SAFE_INTEGER;
 }
 
-/** Every card of the board once, whichever column it arrived in. */
-export function boardCards(board: Board): BoardCard[] {
-  const seen = new Set<string>();
-  const cards: BoardCard[] = [];
-  for (const column of board.columns) {
-    for (const card of column.cards) {
-      if (!seen.has(card.task)) {
-        seen.add(card.task);
-        cards.push(card);
-      }
-    }
-  }
-  return cards;
-}
-
 function byNumber(a: BoardCard, b: BoardCard): number {
   return taskNumber(a.task) - taskNumber(b.task);
 }

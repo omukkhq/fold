@@ -432,6 +432,7 @@ async fn a_clarification_joins_the_request_thread_and_a_reply_keeps_it() {
     .await;
     assert_eq!(error["code"], "invalid_request");
     assert_eq!(error["details"]["reason"], "request_thread");
+    assert!(error["hint"].as_str().unwrap().contains("get_thread"));
     let error = err(
         &h,
         "frontend",
@@ -484,4 +485,14 @@ fn every_input_field_has_a_description() {
         .unwrap();
     assert!(marks.contains("`#` names a fold item") && marks.contains("`@` names a file"));
     assert!(send.input_schema["properties"].get("request").is_some());
+}
+
+#[tokio::test]
+async fn a_bad_kind_or_state_filter_names_the_tool_that_lists_requests() {
+    let h = harness().await;
+    for filter in [json!({"kind": "chore"}), json!({"state": "stuck"})] {
+        let error = err(&h, "frontend", "list_requests", filter).await;
+        assert_eq!(error["code"], "invalid_request");
+        assert!(error["hint"].as_str().unwrap().contains("list_requests"));
+    }
 }

@@ -217,7 +217,11 @@ function stubRepository(revisions = REVISIONS): StubRequest[] {
 }
 
 /** The screen as the route mounts it: the chosen revision lives in the address. */
-function renderRepository(initial?: string, revisions = REVISIONS) {
+function renderRepository(
+  initial?: string,
+  revisions = REVISIONS,
+  path?: string,
+) {
   stubRepository(revisions);
   const queryClient = createQueryClient();
   const root = createRootRoute();
@@ -227,6 +231,7 @@ function renderRepository(initial?: string, revisions = REVISIONS) {
       <RepositoryScreen
         slug="demo"
         revision={revision}
+        path={path}
         onSelectRevision={setRevision}
       />
     );
@@ -254,6 +259,19 @@ function renderRepository(initial?: string, revisions = REVISIONS) {
 }
 
 describe("Repository screen", () => {
+  it("opens a mentioned folder as the tree at that folder and a mentioned file as a file", async () => {
+    renderRepository(undefined, REVISIONS, "assets");
+    expect(await screen.findByText("logo.png")).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "File assets" })).toBeNull();
+    expect(screen.queryByText("The file could not load.")).toBeNull();
+    cleanup();
+    renderRepository(undefined, REVISIONS, "README.md");
+    expect(
+      await screen.findByRole("region", { name: "File README.md" }),
+    ).toBeTruthy();
+    expect(await screen.findByText("A demo project.")).toBeTruthy();
+  });
+
   it("lists the main revisions newest first with their source and task", async () => {
     renderRepository();
     const revisions = await screen.findByRole("list", {

@@ -2,9 +2,9 @@ use std::path::PathBuf;
 
 use fold_core::object::ObjectHash;
 use fold_core::tree::{EntryKind, FlatTree};
-use fold_core::{ProposalId, RevisionId, TaskId, Timestamp};
+use fold_core::{ProposalId, RevisionId, TaskId, Timestamp, WorkspaceId};
 use fold_store::workspaces::{self, IntegrationKind, RevisionRow};
-use fold_vcs::browse::{self, DirEntry, FileContent};
+use fold_vcs::browse::{self, DirEntry, FileContent, FlatDirEntry};
 use fold_vcs::compare::{self as vcs, FileChange, State, Totals};
 use fold_vcs::diff::line_count;
 use fold_vcs::paths::RepoPath;
@@ -179,6 +179,19 @@ impl WorkspaceService {
             .tree_hash;
         let paths = self.paths.clone();
         blocking(move || browse::read_dir(&open_objects(&paths)?, &tree, path.as_ref())).await
+    }
+
+    /// The entries of one directory of an active workspace's working files, from a scan of the whole workspace; an empty `path` lists the root. Nothing is stored. An absent directory is `not_found`; a workspace that is not active is `workspace_not_active`.
+    pub async fn read_workspace_tree(
+        &self,
+        workspace: WorkspaceId,
+        path: &str,
+    ) -> Result<Vec<FlatDirEntry>, WorkspaceError> {
+        let path = browse::parse_path(path)?;
+        let resolved = self
+            .resolve_state(super::compare::StateRef::Workspace(workspace))
+            .await?;
+        browse::list_flat_dir(resolved.state.entries(), path.as_ref()).map_err(Into::into)
     }
 
     /// One file of a revision. A symlink gives its target text.

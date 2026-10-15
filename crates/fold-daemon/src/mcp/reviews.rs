@@ -41,7 +41,7 @@ pub struct CreateProposalInput {
     pub task: String,
     /// The proposal title: one line of at most 200 characters.
     pub title: String,
-    /// What shows the work is done, such as the tests you ran and their result. Leave it out for none.
+    /// What shows the work is done, such as the tests you ran and their result. Leave it out for none. In the text `#` names a fold item (#T-12) and `@` names a file (@web/src/board.ts); the daemon parses nothing.
     #[serde(default)]
     pub evidence: Option<String>,
     /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
@@ -81,7 +81,7 @@ pub struct ProposalVersionInput {
 pub struct UpdateProposalInput {
     /// The proposal, such as P-3. Only its author's worker can add a version.
     pub id: String,
-    /// New evidence for the new version. Leave it out to keep the current evidence.
+    /// New evidence for the new version. Leave it out to keep the current evidence. In the text `#` names a fold item (#T-12) and `@` names a file (@web/src/board.ts); the daemon parses nothing.
     #[serde(default)]
     pub evidence: Option<String>,
     /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
@@ -139,7 +139,7 @@ pub struct ReviewCommentInput {
     /// old for the lines of the version's base, new for the lines of the version.
     #[serde(default)]
     pub side: Option<String>,
-    /// The comment text.
+    /// The comment text. In the text `#` names a fold item (#T-12) and `@` names a file (@web/src/board.ts); the daemon parses nothing.
     pub body: String,
     /// A comment of the same proposal this one answers, such as rc-5.
     #[serde(default)]
@@ -153,7 +153,7 @@ pub struct SubmitReviewInput {
     pub id: String,
     /// comment, request_changes, approve or reject. Only an agent with the integrator tag can approve or reject; reject closes the proposal.
     pub verdict: String,
-    /// The review text. It may be empty only when the review carries a comment; a reject needs it.
+    /// The review text. It may be empty only when the review carries a comment; a reject needs it. In the text `#` names a fold item (#T-12) and `@` names a file (@web/src/board.ts); the daemon parses nothing.
     pub body: String,
     /// Line comments that come with the review.
     #[serde(default)]

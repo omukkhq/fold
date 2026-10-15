@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, RefreshCw } from "lucide-react";
 import { useState } from "react";
-import { boardQuery } from "@/api/board";
+import { boardCards, boardQuery } from "@/api/board";
 import { keys } from "@/api/keys";
 import {
   proposalsQuery,
@@ -24,7 +24,6 @@ import {
   buttonIconClass,
 } from "@/components/button/buttonStyles";
 import { Skeleton } from "@/components/states/Skeleton";
-import { boardCards } from "@/features/board/columns";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { useNow } from "@/live/useNow";

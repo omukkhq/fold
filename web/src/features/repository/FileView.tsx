@@ -4,7 +4,7 @@ import { Mono } from "@/components/mono/Mono";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
 import { fileState, formatSize } from "./describe";
-import { fileQuery } from "./queries";
+import { fileQuery } from "@/api/repositoryQueries";
 
 interface FileViewProps {
   slug: string;
