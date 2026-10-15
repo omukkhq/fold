@@ -19,6 +19,7 @@ mod acceptance_4_live_diff;
 mod acceptance_5_review_and_integrate;
 mod acceptance_6_dependency_unblocks;
 mod acceptance_7_conflicting_proposals;
+mod acceptance_9_offline;
 mod adoption;
 mod attention_question;
 mod auto_checkpoints;

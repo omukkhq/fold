@@ -12,7 +12,9 @@ use fold_daemon::http::assets::AssetSource;
 use fold_daemon::http::{router, socket_router};
 use fold_daemon::mcp::handshake::{self, Answer, PROTOCOL_VERSION};
 use fold_daemon::projects::{ProjectHandle, Projects};
-use fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME;
+use fold_daemon::services::projects::{
+    DEFAULT_SESSION_LIFETIME, InitializedProject, init_project_from,
+};
 use fold_store::projects::{self, ProjectRow};
 use fold_store::testing::{TestProject, eventually};
 use fold_store::workspaces::{self, RevisionRow, create_initial_revision, initial_revision};
@@ -135,6 +137,39 @@ impl Harness {
             harness.connect(agent).await;
         }
         harness
+    }
+
+    /// Project `demo` made by `fold init --from source`, so `r1` holds the files of `source`, with the three sessions connected and no tag granted. Returns what init reported.
+    pub async fn start_initialized(source: &Path) -> (Self, InitializedProject) {
+        let mut initialized = None;
+        let project = TestProject::initialized(async |root, host, clock| {
+            let made = init_project_from(host, root, Some("Demo"), Some(source), clock)
+                .await
+                .unwrap();
+            initialized = Some(made);
+        })
+        .await;
+        let initialized = initialized.unwrap();
+        assert_eq!(initialized.slug, SLUG);
+        let row = ProjectRow {
+            slug: initialized.slug.clone(),
+            name: initialized.name.clone(),
+            root: initialized.root.to_string_lossy().into_owned(),
+        };
+        let (state, handle) = open(&project, &row).await;
+        let mut harness = Self {
+            project,
+            dir: TempDir::new().unwrap(),
+            row,
+            state,
+            handle,
+            sessions: BTreeMap::new(),
+            next_pid: 4000,
+        };
+        for agent in AGENTS {
+            harness.connect(agent).await;
+        }
+        (harness, initialized)
     }
 
     /// The canonical project root: the `cwd` of every session and hook.

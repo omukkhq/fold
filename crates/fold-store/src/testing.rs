@@ -8,7 +8,7 @@ use std::fmt::Debug;
 use std::path::Path;
 use std::time::Duration;
 
-use fold_core::{Clock, ManualClock, ProjectPaths, Timestamp};
+use fold_core::{Clock, HostPaths, ManualClock, ProjectPaths, Timestamp};
 use sqlx::AssertSqlSafe;
 use tempfile::TempDir;
 
@@ -75,6 +75,30 @@ impl TestProject {
             _registry_dir: registry_dir,
             registry,
             clock: ManualClock::new(),
+        }
+    }
+
+    /// A project that `init` creates the way `fold init` does, so a test sees the layout, `r1` and the registry row that init writes. `init` gets the project root, which does not exist yet, the host paths whose registry database the fixture opens afterwards, and the fixture's clock.
+    pub async fn initialized(init: impl AsyncFnOnce(&Path, &HostPaths, &ManualClock)) -> Self {
+        let dir = TempDir::new().expect("create the project directory");
+        let paths = ProjectPaths::new(dir.path().join("project"));
+        let registry_dir = TempDir::new().expect("create the registry directory");
+        let host = HostPaths::new(registry_dir.path().to_str(), None).expect("host paths");
+        let clock = ManualClock::new();
+        init(paths.root(), &host, &clock).await;
+        let store = Store::open_project(&paths)
+            .await
+            .expect("open the project database");
+        let registry = Store::open_registry(&host.registry_db())
+            .await
+            .expect("open the registry database");
+        Self {
+            _dir: dir,
+            paths,
+            store,
+            _registry_dir: registry_dir,
+            registry,
+            clock,
         }
     }
 
