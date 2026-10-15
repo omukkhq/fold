@@ -81,9 +81,8 @@ describe("Projects screen", () => {
 });
 
 describe("Repository screen", () => {
-  it("lists revisions, expands a tree, opens text and binary files and compares", async () => {
-    const router = renderAt("/p/demo/repository");
-    const user = userEvent.setup();
+  it("lists the main revisions newest first with their source and task", async () => {
+    renderAt("/p/demo/repository");
     const revisions = await screen.findByRole("list", {
       name: "Main revisions",
     });
@@ -99,7 +98,26 @@ describe("Repository screen", () => {
     expect(
       within(revisions).getByText(/P-5 · Form field components/),
     ).toBeTruthy();
+  });
 
+  it("expands a directory to show a symlink target", async () => {
+    renderAt("/p/demo/repository");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "docs" }));
+    expect(await screen.findByText("→ ../README.md")).toBeTruthy();
+  });
+
+  it("opens a text file", async () => {
+    renderAt("/p/demo/repository");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /README\.md/ }));
+    const text = await screen.findByRole("region", { name: "File README.md" });
+    expect(await within(text).findByText(/A demo project/)).toBeTruthy();
+  });
+
+  it("opens a binary file with its size and hash", async () => {
+    renderAt("/p/demo/repository");
+    const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "assets" }));
     await user.click(await screen.findByRole("button", { name: /logo\.png/ }));
     const binary = await screen.findByRole("region", {
@@ -107,16 +125,13 @@ describe("Repository screen", () => {
     });
     expect(await within(binary).findByText(/Binary file/)).toBeTruthy();
     expect(within(binary).getByText(/18.0 KB · b3c1d2e4f5a60718/)).toBeTruthy();
+  });
 
-    await user.click(await screen.findByRole("button", { name: "docs" }));
-    expect(await screen.findByText("→ ../README.md")).toBeTruthy();
-
-    await user.click(screen.getByRole("button", { name: /README\.md/ }));
-    const text = await screen.findByRole("region", { name: "File README.md" });
-    expect(await within(text).findByText(/A demo project/)).toBeTruthy();
-
+  it("compares two chosen revisions", async () => {
+    const router = renderAt("/p/demo/repository");
+    const user = userEvent.setup();
     expect(
-      screen.getByRole("button", { name: "Compare r4 → r5" }),
+      await screen.findByRole("button", { name: "Compare r4 → r5" }),
     ).toBeTruthy();
     await user.selectOptions(screen.getByLabelText("From"), "r5");
     await user.selectOptions(screen.getByLabelText("To"), "r2");

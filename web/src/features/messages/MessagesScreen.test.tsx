@@ -48,7 +48,7 @@ async function setup(
       <RouterProvider router={router} />
     </QueryClientProvider>,
   );
-  await screen.findByRole("heading", { name: "Messages" }, { timeout: 3000 });
+  await screen.findByRole("heading", { name: "Messages" });
   return queryClient;
 }
 
@@ -82,12 +82,9 @@ describe("MessagesScreen", () => {
         .getAttribute("aria-busy"),
     ).toBe("true");
     expect(within(panel).getAllByRole("article")).toHaveLength(before);
-    await waitFor(
-      () => {
-        expect(within(panel).getAllByRole("article")).toHaveLength(before + 1);
-      },
-      { timeout: 3000 },
-    );
+    await waitFor(() => {
+      expect(within(panel).getAllByRole("article")).toHaveLength(before + 1);
+    });
     expect(within(panel).getByText("Plain SVG.")).toBeTruthy();
     expect(
       within(panel).getByLabelText<HTMLTextAreaElement>("Reply").value,

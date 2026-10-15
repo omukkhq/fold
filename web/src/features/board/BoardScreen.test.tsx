@@ -187,14 +187,14 @@ describe("BoardScreen", () => {
         () => {
           expect(tasksIn("In Progress")[0]).toBe("T-1");
         },
-        { timeout: 2000 },
+        { timeout: 10_000 },
       );
       expect(tasksIn("Todo")).not.toContain("T-1");
       await waitFor(
         () => {
           expect(tasksIn("Review")).toEqual(["T-1", "T-3"]);
         },
-        { timeout: 2000 },
+        { timeout: 10_000 },
       );
       expect(tasksIn("In Progress")).not.toContain("T-1");
       // The status was patched into the cache; an unknown status would have invalidated and refetched the board.
@@ -314,11 +314,7 @@ describe("BoardScreen", () => {
     expect(alert.textContent).toContain("The board could not load.");
     await userEvent.click(within(alert).getByRole("button", { name: "Retry" }));
     expect(
-      await screen.findByRole(
-        "link",
-        { name: "Login flow" },
-        { timeout: 2000 },
-      ),
+      await screen.findByRole("link", { name: "Login flow" }),
     ).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
   });

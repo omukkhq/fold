@@ -44,7 +44,7 @@ async function setup(agents?: AgentView[]) {
       <RouterProvider router={router} />
     </QueryClientProvider>,
   );
-  await screen.findByRole("heading", { name: "Agents" }, { timeout: 3000 });
+  await screen.findByRole("heading", { name: "Agents" });
 }
 
 describe("AgentsScreen", () => {
@@ -86,12 +86,9 @@ describe("AgentsScreen", () => {
         .getByRole("button", { name: "Grant integrator" })
         .getAttribute("aria-busy"),
     ).toBe("true");
-    await waitFor(
-      () => {
-        expect(screen.queryByRole("dialog")).toBeNull();
-      },
-      { timeout: 3000 },
-    );
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
     expect(within(frontend).getByText("integrator")).toBeTruthy();
     expect(
       within(frontend).getByRole("button", { name: "Remove integrator" }),
