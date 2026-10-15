@@ -19,6 +19,7 @@ use crate::live::LiveState;
 use crate::projects::ProjectHandle;
 
 mod adoption;
+mod attachments;
 mod auto;
 mod changes;
 mod changesets;
@@ -36,6 +37,7 @@ mod sync_task;
 
 pub use adoption::AdoptReason;
 pub(crate) use adoption::adopt_if_orphaned;
+pub use attachments::WorkspaceFile;
 pub use auto::{AutoCheckpoint, QuietCheckpoint};
 pub(crate) use auto::{auto_checkpoint_in_tx, pruned_event};
 pub use changes::{WorkspaceChanges, WorkspaceEntry};

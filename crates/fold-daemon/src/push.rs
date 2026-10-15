@@ -6,10 +6,11 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
-use fold_core::push::{MAX_NOTICE_LEN, Notice, PushContext, is_pushed, notice_for};
+use fold_core::push::{MAX_NOTICE_LEN, Notice, PushContext, is_pushed, notice_for, request_of};
+use fold_core::requests::Requester;
 use fold_core::{AgentName, Event, FoldError, INTEGRATOR_TAG, Timestamp, codes};
 use fold_store::reviews;
-use fold_store::tasks::claims;
+use fold_store::tasks::{claims, requests};
 use fold_store::{Store, StoreError, agents, events};
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
@@ -486,6 +487,26 @@ async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError
             .await?
             .into_iter()
             .collect();
+        return Ok(ctx);
+    }
+    if kind.as_str().starts_with("request.")
+        && let Some(request) = request_of(event)
+    {
+        let mut conn = store.read().acquire().await?;
+        if let Some(row) = requests::fetch(&mut conn, request).await? {
+            ctx.requester = match row.requester {
+                Requester::Agent(agent) => Some(agent),
+                Requester::Human(_) => None,
+            };
+            ctx.drafter = row.drafter.map(|drafter| drafter.worker.agent());
+        }
+        if kind == fold_core::events::types::REQUEST_CREATED {
+            ctx.agents = agents::list_agents(store.read())
+                .await?
+                .into_iter()
+                .map(|agent| agent.name)
+                .collect();
+        }
         return Ok(ctx);
     }
     if kind == fold_core::events::types::TASK_STATUS_CHANGED {

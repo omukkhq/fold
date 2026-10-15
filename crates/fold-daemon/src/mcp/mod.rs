@@ -234,6 +234,7 @@ impl ServerHandler for FoldServer {
         tools.extend(events::tools());
         tools.extend(workspaces::tools());
         tools.extend(tasks::tools());
+        tools.extend(tasks::requests::tools());
         tools.extend(messages::tools());
         if self.reviews.is_some() {
             tools.extend(reviews::tools());

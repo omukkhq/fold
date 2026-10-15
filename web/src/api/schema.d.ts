@@ -203,7 +203,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** A named human's feedback on a task or reply to a message. Feedback goes to the task's claim holder unless `to` names recipients; a reply answers a question to humans, which clears the task's `question` attention. The message changes no task state. */
+        /** A named human's feedback on a task, message in a request's clarification thread, or reply to a message. Feedback goes to the task's claim holder and a request message to the request's drafter unless `to` names recipients; a reply answers a question to humans, which clears the task's `question` attention. The message changes no task or request state. */
         post: operations["send_feedback"];
         delete?: never;
         options?: never;
@@ -394,6 +394,126 @@ export interface paths {
         get: operations["get_repository_state"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The project's requests, newest first. Reading needs no human name. */
+        get: operations["list_requests"];
+        put?: never;
+        /** A named human creates a request: the message and up to 10 files. The orchestrator that claims it sets the kind and the title. */
+        post: operations["create_request"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/requests/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One request with every draft version, the comments, the clarification thread and the tasks its approval created. Reading needs no human name. */
+        get: operations["get_request"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/requests/{id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** The requester approves the latest draft version: one task per card and one dependency per edge, in one transaction. */
+        post: operations["approve_request_draft"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/requests/{id}/attachments/{n}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The bytes of one attachment, always as a download: the bytes come from users, so they are never shown in the page or sniffed as another type. */
+        get: operations["get_request_attachment"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/requests/{id}/changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** The requester sends the latest draft version back to the drafter with a comment. */
+        post: operations["request_draft_changes"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/requests/{id}/close": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** The requester closes the request with a reason; it then only reads. */
+        post: operations["close_request"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/requests/{id}/drafts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** The requester writes the next draft version instead of asking for changes. */
+        post: operations["edit_request_draft"];
         delete?: never;
         options?: never;
         head?: never;
@@ -762,6 +882,13 @@ export interface components {
             /** @description Every tag of the agent after the change, sorted. */
             tags: string[];
         };
+        ApproveDraftBody: {
+            /**
+             * Format: int32
+             * @description The draft version the requester read and approves; an older one is `stale_version`.
+             */
+            expected_version: number;
+        };
         AttentionItem: {
             kind: components["schemas"]["AttentionKind"];
         };
@@ -968,6 +1095,10 @@ export interface components {
         };
         /** @enum {string} */
         ClaimKind: "implementation";
+        CloseRequestBody: {
+            /** @description Why the request is closed. `#` names a fold item and `@` names a file; the daemon parses nothing. */
+            reason: string;
+        };
         /** @description One comment: on a run of lines when `path`, `side`, `start_line` and `end_line` are all given, on the whole version when none is. */
         CommentBody: {
             body: string;
@@ -1122,6 +1253,13 @@ export interface components {
             color: string;
             name: string;
         };
+        /** @description The multipart form of `POST /requests`. */
+        CreateRequestForm: {
+            /** @description The message in Markdown. `#` names a fold item and `@` names a file; the daemon parses nothing. */
+            body: string;
+            /** @description Up to 10 files of at most 10 MiB each, each with a file name; a part without a content type gets one from its name. */
+            files: string[];
+        };
         CreateTaskBody: {
             /** @description Markdown; empty when left out. */
             description?: string | null;
@@ -1168,6 +1306,37 @@ export interface components {
             /** @enum {string} */
             view: "file";
         });
+        DraftCardView: {
+            /** @description Markdown in the task template. */
+            description: string;
+            /**
+             * @description Local to the draft; edges name cards by it.
+             * @example c1
+             */
+            key: string;
+            title: string;
+        };
+        DraftChangesBody: {
+            /** @description What the drafter must change. `#` names a fold item and `@` names a file; the daemon parses nothing. */
+            comment: string;
+            /**
+             * Format: int32
+             * @description The draft version the requester read, which must be the latest.
+             */
+            version: number;
+        };
+        DraftEdgeView: {
+            /**
+             * @description The key of the card that needs it.
+             * @example c2
+             */
+            dependent: string;
+            /**
+             * @description The key of the card that must be done first.
+             * @example c1
+             */
+            prerequisite: string;
+        };
         /** @description A stored event. The related ids are public ids. */
         DurableEvent: {
             /** @description A worker (`frontend`, `frontend/ui`), a human (`human:ana`) or `fold`. */
@@ -1208,6 +1377,13 @@ export interface components {
          * @enum {string}
          */
         EdgeOrigin: "direct" | "checklist";
+        EditDraftBody: {
+            /** @description 1 to 20 cards. */
+            cards: components["schemas"]["DraftCardView"][];
+            edges?: components["schemas"]["DraftEdgeView"][];
+            /** @description A note about this version. `#` names a fold item and `@` names a file; the daemon parses nothing. */
+            note?: string | null;
+        };
         ErrorBody: {
             /** @description A stable code; branch on it, never on the message. */
             code: string;
@@ -1244,15 +1420,17 @@ export interface components {
             before: number | null;
             events: components["schemas"]["DurableEvent"][];
         };
-        /** @description A human's feedback on a task, or reply to a message. */
+        /** @description A human's feedback on a task, message in a request's clarification thread, or reply to a message. */
         FeedbackRequest: {
-            /** @description Plain text with some visible character. */
+            /** @description Plain text with some visible character. In message text `#` names a fold item and `@` names a file; the daemon parses nothing. */
             body: string;
-            /** @description The message to answer, such as `m-31`. The reply joins its thread and takes its task. */
+            /** @description The message to answer, such as `m-31`. The reply joins its thread and takes its task and request. */
             reply_to?: string | null;
-            /** @description The task the feedback is about, such as `T-12`. Needed when `reply_to` is left out. */
+            /** @description A request, such as `RQ-4`: the message joins its clarification thread. A reply takes its parent's request; naming another is `invalid_request` with `details.reason` `request_thread`. */
+            request?: string | null;
+            /** @description The task the feedback is about, such as `T-12`. Needed when neither `request` nor `reply_to` is given. */
             task?: string | null;
-            /** @description The recipients, as an agent, `agent/worker`, `tag:<tag>`, `all`, `human:<name>` or `humans`. Left out, feedback goes to the task's claim holder and a reply to the parent's sender. */
+            /** @description The recipients, as an agent, `agent/worker`, `tag:<tag>`, `all`, `human:<name>` or `humans`. Left out, feedback goes to the task's claim holder, a request message to the request's drafter and a reply to the parent's sender. */
             to?: string[] | null;
         };
         /** @enum {string} */
@@ -1465,6 +1643,11 @@ export interface components {
             recipients: components["schemas"]["RecipientView"][];
             /** @example m-30 */
             reply_to: string | null;
+            /**
+             * @description The request whose clarification thread holds the message.
+             * @example RQ-4
+             */
+            request: string | null;
             /**
              * @description A worker, `human:<name>` or `fold`.
              * @example frontend/ui
@@ -1769,6 +1952,129 @@ export interface components {
             main_path: string;
             /** @description The newest 10 revisions, newest first. */
             recent: components["schemas"]["RevisionView"][];
+        };
+        /** @description A file dropped on the request; its bytes come from the attachment route. */
+        RequestAttachmentView: {
+            /** @example image/png */
+            media_type: string;
+            name: string;
+            /**
+             * Format: int32
+             * @description 1-based; the `{n}` of the attachment route.
+             */
+            position: number;
+            /**
+             * Format: int64
+             * @description Bytes.
+             */
+            size: number;
+        };
+        /** @description The requester's comment on one version, written when asking for changes. */
+        RequestCommentView: {
+            author: string;
+            body: string;
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            created_at: number;
+            /** Format: int32 */
+            version: number;
+        };
+        /** @description A request with its attachments, every draft version, the comments, the clarification thread and the tasks its approval created. */
+        RequestDetailView: {
+            attachments: components["schemas"]["RequestAttachmentView"][];
+            /** @description The message in Markdown, as the requester wrote it. `#` names a fold item and `@` names a file. */
+            body: string;
+            /** @description Set once the request is closed. */
+            close_reason: string | null;
+            comments: components["schemas"]["RequestCommentView"][];
+            /** @description Oldest first. */
+            drafts: components["schemas"]["RequestDraftView"][];
+            request: components["schemas"]["RequestSummary"];
+            /** @description The tasks the approval created, in card order. */
+            tasks: string[];
+            thread: components["schemas"]["RequestThreadSummary"] | null;
+        };
+        /** @description One draft version; versions never change. */
+        RequestDraftView: {
+            /** @description The drafter's worker or the requester, such as `frontend` or `human:ana`. */
+            author: string;
+            cards: components["schemas"]["DraftCardView"][];
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            created_at: number;
+            edges: components["schemas"]["DraftEdgeView"][];
+            note: string | null;
+            /** Format: int32 */
+            version: number;
+        };
+        /**
+         * @description What a request asks for, set by the orchestrator that claims it.
+         * @enum {string}
+         */
+        RequestKind: "bug" | "feature" | "question";
+        RequestList: {
+            /** @description Newest first. */
+            items: components["schemas"]["RequestSummary"][];
+        };
+        /**
+         * @description Where a request stands. `approved` and `closed` are final.
+         * @enum {string}
+         */
+        RequestState: "open" | "drafting" | "draft_ready" | "changes_requested" | "approved" | "closed";
+        /** @description One request in a list. */
+        RequestSummary: {
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            created_at: number;
+            /**
+             * @description The orchestrator worker drafting the request.
+             * @example frontend
+             */
+            drafter: string | null;
+            /** @description The first line of the message, cut to about 80 characters. */
+            excerpt: string;
+            /** @example RQ-4 */
+            id: string;
+            kind: components["schemas"]["RequestKind"] | null;
+            /**
+             * Format: int32
+             * @description The newest draft version; null before the first draft.
+             */
+            latest_version: number | null;
+            /**
+             * @description An agent name, or `human:<name>`.
+             * @example human:ana
+             */
+            requester: string;
+            state: components["schemas"]["RequestState"];
+            /** @description Null until an orchestrator claims and names the request; show `excerpt` instead. */
+            title: string | null;
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            updated_at: number;
+        };
+        /** @description The request's clarification thread at a glance; read it through the thread route. */
+        RequestThreadSummary: {
+            /**
+             * @description The id of the thread's first message.
+             * @example m-31
+             */
+            id: string;
+            /**
+             * Format: int64
+             * @description UTC milliseconds of the newest message.
+             */
+            last_at: number;
+            /** Format: int32 */
+            messages: number;
         };
         /** @description A human verdict on the current version. The web screens offer approve, request changes and comment; the route also takes reject, which closes the proposal. */
         ReviewBody: {
@@ -2178,6 +2484,11 @@ export interface components {
              * @example P-3
              */
             proposal: string | null;
+            /**
+             * @description The request whose clarification thread this is.
+             * @example RQ-4
+             */
+            request: string | null;
             /**
              * @description The first task a message of the thread is linked to.
              * @example T-12
@@ -3472,7 +3783,7 @@ export interface operations {
                     "application/json": components["schemas"]["MessageView"];
                 };
             };
-            /** @description `invalid_request`: no `task` or `reply_to`, an empty body or a malformed request; `invalid_id` or `invalid_name`: an id or recipient is malformed */
+            /** @description `invalid_request`: no `task`, `request` or `reply_to`, a `request` other than the parent's (`details.reason` `request_thread`), an empty body or a malformed request; `invalid_id` or `invalid_name`: an id or recipient is malformed */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -3499,7 +3810,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `task_not_found`, `message_not_found`, `proposal_not_found`, `unknown_human`, `recipient_not_found` (also when the task has no claim holder and `to` is left out) or `project_not_found` */
+            /** @description `task_not_found`, `request_not_found`, `message_not_found`, `proposal_not_found`, `unknown_human`, `recipient_not_found` (also when the task has no claim holder, or the request no drafter, and `to` is left out) or `project_not_found` */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -4663,6 +4974,706 @@ export interface operations {
                 };
             };
             /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    list_requests: {
+        parameters: {
+            query?: {
+                /** @description Only requests in this state. */
+                state?: string;
+                /** @description Only requests of this kind: `bug`, `feature` or `question`. */
+                kind?: string;
+                /** @description Only requests of this requester: an agent name or `human:<name>`. */
+                requester?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The requests, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RequestList"];
+                };
+            };
+            /** @description `invalid_request`: a filter is not a state, a kind or a requester */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    create_request: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["CreateRequestForm"];
+            };
+        };
+        responses: {
+            /** @description The created request */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RequestDetailView"];
+                };
+            };
+            /** @description `invalid_request`: no body, an unknown part, or `details.reason` `too_many_attachments`, `attachment_too_large`, `invalid_attachment_name` or `invalid_media_type` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The body is larger than 10 files of 10 MiB and the message: a plain-text answer without an envelope */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_request: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The request id, such as RQ-4 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RequestDetailView"];
+                };
+            };
+            /** @description `invalid_id` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `request_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    approve_request_draft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The request id, such as RQ-4 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApproveDraftBody"];
+            };
+        };
+        responses: {
+            /** @description The approved request with the tasks it created */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RequestDetailView"];
+                };
+            };
+            /** @description `invalid_request` (`details.reason` `state` when no draft waits for approval) or `invalid_id` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `requester_required`: the human is not the requester; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `request_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `stale_version` or `request_not_open` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_request_attachment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The request id, such as RQ-4 */
+                id: string;
+                /** @description The attachment's 1-based position */
+                n: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The attachment's bytes with its stored media type */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": number[];
+                };
+            };
+            /** @description `invalid_id` or `invalid_request`: the position is not a number */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `request_not_found`, `not_found` (no attachment at that position) or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    request_draft_changes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The request id, such as RQ-4 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DraftChangesBody"];
+            };
+        };
+        responses: {
+            /** @description The request, now with changes requested */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RequestDetailView"];
+                };
+            };
+            /** @description `invalid_request` (an empty comment, or `details.reason` `state` when there is no draft to send back) or `invalid_id` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `requester_required`: the human is not the requester; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `request_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `stale_version` or `request_not_open` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    close_request: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The request id, such as RQ-4 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CloseRequestBody"];
+            };
+        };
+        responses: {
+            /** @description The closed request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RequestDetailView"];
+                };
+            };
+            /** @description `invalid_request` (an empty reason) or `invalid_id` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `requester_required`: the human is not the requester; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `request_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `request_not_open` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    edit_request_draft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The request id, such as RQ-4 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EditDraftBody"];
+            };
+        };
+        responses: {
+            /** @description The request with the new version */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RequestDetailView"];
+                };
+            };
+            /** @description `invalid_draft` with `details.reason`, `invalid_request` (`details.reason` `state` when there is no draft to edit) or `invalid_id` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `requester_required`: the human is not the requester; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `request_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `dependency_cycle` or `request_not_open` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
             503: {
                 headers: {
                     [name: string]: unknown;

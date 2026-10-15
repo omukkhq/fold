@@ -2,11 +2,13 @@ use std::collections::{BTreeSet, HashSet};
 
 use fold_core::messages::reply_addresses;
 use fold_core::{
-    Actor, Address, AgentName, FoldError, MessageBody, MessageId, ProposalId, Sender, TaskId,
-    Timestamp, WorkerName, codes, policy,
+    Actor, Address, AgentName, FoldError, MessageBody, MessageId, ProposalId, RequestId, Sender,
+    TaskId, Timestamp, WorkerName, codes, policy,
 };
 use fold_store::messages::{self, MessageRow, ThreadFilter};
+use fold_store::tasks::requests;
 use fold_store::{Store, StoreError};
+use serde_json::json;
 
 use super::{
     MessageError, MessageService, MessageView, SendMessage, message_not_found, message_view,
@@ -40,6 +42,8 @@ pub struct ThreadView {
     pub task: Option<TaskId>,
     /// The first proposal a message of the thread is linked to.
     pub proposal: Option<ProposalId>,
+    /// The request whose clarification thread this is.
+    pub request: Option<RequestId>,
     /// Every sender and recipient, in the order they first appear.
     pub participants: Vec<String>,
     /// The thread holds a question to a human that no human has answered.
@@ -57,13 +61,15 @@ pub struct ThreadPage {
     pub total_awaiting_human: u64,
 }
 
-/// A human's feedback on a task or reply to a message. It needs `task` or `reply_to`.
+/// A human's feedback on a task, message in a request's clarification thread, or reply to a message. It needs `task`, `request` or `reply_to`.
 #[derive(Debug, Clone)]
 pub struct Feedback {
     pub body: MessageBody,
     pub task: Option<TaskId>,
+    /// The request whose clarification thread the message joins. A reply takes its parent's request, and naming another is refused.
+    pub request: Option<RequestId>,
     pub reply_to: Option<MessageId>,
-    /// Left out, feedback goes to the task's claim holder and a reply to the parent's sender.
+    /// Left out, feedback goes to the task's claim holder, a request message to the request's drafter and a reply to the parent's sender.
     pub to: Option<Vec<Address>>,
 }
 
@@ -104,7 +110,7 @@ impl MessageService {
         Ok(thread_view(head.thread, rows, &awaiting))
     }
 
-    /// A human's feedback (`task`) or reply (`reply_to`). A reply joins the parent's thread and inherits its task unless `task` names another; it answers a question to humans, which clears the task's `question` attention.
+    /// A human's feedback (`task`), message in a request's clarification thread (`request`) or reply (`reply_to`). A reply joins the parent's thread and inherits its task unless `task` names another, and its request; it answers a question to humans, which clears the task's `question` attention.
     pub async fn feedback(
         &self,
         actor: &Actor,
@@ -112,8 +118,16 @@ impl MessageService {
     ) -> Result<MessageView, MessageError> {
         policy::can_send_feedback(actor).map_err(FoldError::from)?;
         let Some(parent) = input.reply_to else {
+            if let Some(request) = input.request {
+                return self
+                    .request_feedback(actor, request, input.body, input.to)
+                    .await;
+            }
             let task = input.task.ok_or_else(|| {
-                FoldError::new(codes::INVALID_REQUEST, "feedback needs a task or reply_to")
+                FoldError::new(
+                    codes::INVALID_REQUEST,
+                    "feedback needs a task, a request or reply_to",
+                )
             })?;
             return self.send_feedback(actor, task, input.body, input.to).await;
         };
@@ -121,7 +135,7 @@ impl MessageService {
             Some(to) => to,
             None => self.reply_default(actor, parent).await?,
         };
-        self.send(
+        self.send_linked(
             actor,
             SendMessage {
                 to,
@@ -130,6 +144,63 @@ impl MessageService {
                 proposal: None,
                 reply_to: Some(parent),
             },
+            input.request,
+        )
+        .await
+    }
+
+    /// The request's clarification thread, `None` before anyone wrote about it; refused with `request_not_found` when the request does not exist.
+    pub async fn request_thread(
+        &self,
+        request: RequestId,
+    ) -> Result<Option<ThreadView>, MessageError> {
+        let mut tx = self.store.read().begin().await.map_err(StoreError::from)?;
+        if requests::fetch(&mut tx, request).await?.is_none() {
+            return Err(crate::services::tasks::request_missing(request).into());
+        }
+        let Some(thread) = messages::request_thread(&mut tx, request).await? else {
+            return Ok(None);
+        };
+        let rows = messages::thread(&mut tx, thread).await?;
+        let awaiting = messages::threads_awaiting_human(&mut *tx).await?;
+        tx.commit().await.map_err(StoreError::from)?;
+        Ok(Some(thread_view(thread, rows, &awaiting)))
+    }
+
+    /// A named human's message in the request's clarification thread. It goes to `to` when given, otherwise to the request's drafter; with neither it is `recipient_not_found`.
+    async fn request_feedback(
+        &self,
+        actor: &Actor,
+        request: RequestId,
+        body: MessageBody,
+        to: Option<Vec<Address>>,
+    ) -> Result<MessageView, MessageError> {
+        let to = match to {
+            Some(to) => to,
+            None => {
+                let mut conn = self
+                    .store
+                    .read()
+                    .acquire()
+                    .await
+                    .map_err(StoreError::from)?;
+                let row = requests::fetch(&mut conn, request)
+                    .await?
+                    .ok_or_else(|| crate::services::tasks::request_missing(request))?;
+                let drafter = row.drafter.ok_or_else(|| no_drafter(request))?;
+                vec![Address::of_worker(&drafter.worker)]
+            }
+        };
+        self.send_linked(
+            actor,
+            SendMessage {
+                to,
+                body,
+                task: None,
+                proposal: None,
+                reply_to: None,
+            },
+            Some(request),
         )
         .await
     }
@@ -164,6 +235,15 @@ impl MessageService {
 /// The tasks with an unanswered question to a human, the source of the `question` attention kind. A human reply in the thread removes the task.
 pub async fn tasks_awaiting_human(store: &Store) -> Result<BTreeSet<TaskId>, StoreError> {
     messages::tasks_awaiting_human(store.read()).await
+}
+
+fn no_drafter(request: RequestId) -> FoldError {
+    FoldError::new(
+        codes::RECIPIENT_NOT_FOUND,
+        format!("{request} has no drafter to receive the message"),
+    )
+    .with_details([("request", json!(request.to_string()))])
+    .with_hint("choose a recipient for the message")
 }
 
 fn parse_query(query: &ThreadQuery) -> Result<(ThreadFilter, u32), FoldError> {
@@ -244,6 +324,7 @@ fn thread_view(id: MessageId, rows: Vec<MessageRow>, awaiting: &BTreeSet<Message
         id,
         task: messages.iter().find_map(|message| message.task),
         proposal: messages.iter().find_map(|message| message.proposal),
+        request: messages.iter().find_map(|message| message.request),
         participants,
         awaiting_human: awaiting.contains(&id),
         last_at: messages

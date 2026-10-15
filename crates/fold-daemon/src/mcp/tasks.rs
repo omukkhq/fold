@@ -18,6 +18,8 @@ use crate::services::tasks::{
     NewChecklistItem, TaskDetail, TaskPatch,
 };
 
+pub mod requests;
+
 pub const GET_TASK_GRAPH: &str = "get_task_graph";
 pub const GET_READY_TASKS: &str = "get_ready_tasks";
 pub const GET_TASK: &str = "get_task";
@@ -403,14 +405,15 @@ fn detail_json(detail: &TaskDetail) -> Value {
     })
 }
 
-/// Runs a task tool acting as `as_worker`. `None` when `tool` is not a task tool.
+/// Runs a task or request tool acting as `as_worker`. `None` when `tool` is neither.
 pub async fn call(
     server: &FoldServer,
     tool: &str,
     as_worker: Option<&WorkerName>,
     arguments: &JsonObject,
 ) -> Result<Option<Value>, FoldError> {
-    if !tools().iter().any(|known| known.name == tool) {
+    let request_tool = requests::is_request_tool(tool);
+    if !request_tool && !tools().iter().any(|known| known.name == tool) {
         return Ok(None);
     }
     let session = server.session().await;
@@ -419,6 +422,9 @@ pub async fn call(
         .actor(&session, as_worker)
         .await
         .map_err(from_agent)?;
+    if request_tool {
+        return requests::run(server, tool, &actor, arguments).await;
+    }
     run(server, tool, &actor, arguments).await
 }
 

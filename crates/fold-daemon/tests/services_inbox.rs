@@ -520,6 +520,7 @@ async fn feedback_needs_a_task_or_a_reply_and_only_a_human_sends_it() {
     let feedback = |task, reply_to| Feedback {
         body: body("x"),
         task,
+        request: None,
         reply_to,
         to: None,
     };
@@ -594,6 +595,7 @@ async fn a_reply_goes_to_the_parent_sender_and_inherits_its_task() {
             Feedback {
                 body: body("the first"),
                 task: None,
+                request: None,
                 reply_to: Some(question.id),
                 to: None,
             },
@@ -618,6 +620,7 @@ async fn a_reply_goes_to_the_parent_sender_and_inherits_its_task() {
             Feedback {
                 body: body("and also"),
                 task: Some(t(1)),
+                request: None,
                 reply_to: Some(reply.id),
                 to: None,
             },
@@ -641,6 +644,7 @@ async fn a_reply_goes_to_the_parent_sender_and_inherits_its_task() {
             Feedback {
                 body: body("fyi"),
                 task: None,
+                request: None,
                 reply_to: Some(question.id),
                 to: Some(Address::parse_all(&["backend"]).unwrap()),
             },

@@ -4,7 +4,7 @@ use fold_core::events::types;
 use fold_core::messages::resolve;
 use fold_core::{
     Actor, Address, AddressedAs, Clock, EventError, FoldError, IdKind, MessageBody, MessageId,
-    NewEvent, ProposalId, Recipient, Sender, Target, TaskId, Timestamp, codes, policy,
+    NewEvent, ProposalId, Recipient, RequestId, Sender, Target, TaskId, Timestamp, codes, policy,
 };
 use fold_store::messages::{self, MessageHead, MessageRow, NewMessage, RecipientRow};
 use fold_store::tasks::claims;
@@ -74,6 +74,8 @@ pub struct MessageView {
     pub sender: Sender,
     pub task: Option<TaskId>,
     pub proposal: Option<ProposalId>,
+    /// The request whose clarification thread holds the message.
+    pub request: Option<RequestId>,
     pub body: String,
     pub sent_at: Timestamp,
     pub recipients: Vec<RecipientView>,
@@ -96,6 +98,7 @@ fn message_view(row: MessageRow) -> MessageView {
         sender: row.sender,
         task: row.task,
         proposal: row.proposal,
+        request: row.request,
         body: row.body,
         sent_at: row.created_at,
         recipients: row.recipients.into_iter().map(recipient_view).collect(),
@@ -133,6 +136,16 @@ impl MessageService {
         actor: &Actor,
         input: SendMessage,
     ) -> Result<MessageView, MessageError> {
+        self.send_linked(actor, input, None).await
+    }
+
+    /// [`MessageService::send`] with the message linked to `request`, so it joins the request's clarification thread: the thread its first message started, or a new one. Anyone may write there, and the message never changes the request. A reply takes its parent's request; a reply that names another request, or a request for a parent outside its thread, is `invalid_request` with `details.reason = "request_thread"`.
+    pub async fn send_linked(
+        &self,
+        actor: &Actor,
+        input: SendMessage,
+        request: Option<RequestId>,
+    ) -> Result<MessageView, MessageError> {
         let humans = projects::list_humans(self.registry.read()).await?;
         let sender = Sender::of(actor);
         let now = self.clock.now();
@@ -148,6 +161,16 @@ impl MessageService {
                             .ok_or_else(|| message_not_found(parent))?,
                     ),
                     None => None,
+                };
+                if let (Some(request), Some(parent)) = (request, parent)
+                    && parent.request != Some(request)
+                {
+                    return Err(other_thread(request, parent.id).into());
+                }
+                let request = request.or(parent.and_then(|p| p.request));
+                let join = match (request, parent) {
+                    (Some(request), None) => require_request(tx, request).await?,
+                    _ => None,
                 };
                 if let Some(task) = input.task {
                     require_task(tx, task).await?;
@@ -170,6 +193,8 @@ impl MessageService {
                     sender: &sender,
                     task: input.task.or(parent.and_then(|p| p.task)),
                     proposal: input.proposal.or(parent.and_then(|p| p.proposal)),
+                    request,
+                    join,
                     parent,
                     body: &input.body,
                     recipients,
@@ -224,6 +249,8 @@ impl MessageService {
                     sender: &sender,
                     task: Some(task),
                     proposal: None,
+                    request: None,
+                    join: None,
                     parent: None,
                     body: &body,
                     recipients,
@@ -265,6 +292,9 @@ struct Draft<'a> {
     sender: &'a Sender,
     task: Option<TaskId>,
     proposal: Option<ProposalId>,
+    request: Option<RequestId>,
+    /// The thread a message without a parent joins: its request's thread.
+    join: Option<MessageId>,
     parent: Option<MessageHead>,
     body: &'a MessageBody,
     recipients: Vec<Recipient>,
@@ -279,7 +309,11 @@ async fn write_message(
 ) -> Result<MessageView, MessageError> {
     let number = counters::allocate(tx, IdKind::Message).await?;
     let id = MessageId::from_number(number).ok_or(StoreError::Corrupt("counters.next"))?;
-    let thread = draft.parent.map_or(id, |parent| parent.thread);
+    let thread = draft
+        .parent
+        .map(|parent| parent.thread)
+        .or(draft.join)
+        .unwrap_or(id);
     let reply_to = draft.parent.map(|parent| parent.id);
     messages::insert(
         tx,
@@ -290,6 +324,7 @@ async fn write_message(
             sender: draft.sender,
             task: draft.task,
             proposal: draft.proposal,
+            request: draft.request,
             body: draft.body.as_str(),
             now: draft.now,
         },
@@ -303,14 +338,18 @@ async fn write_message(
         .iter()
         .map(|recipient| recipient.target.to_string())
         .collect();
+    let mut data = json!({
+        "message": id.to_string(),
+        "thread": thread.to_string(),
+        "reply_to": reply_to.map(|parent| parent.to_string()),
+        "recipients": names,
+    });
+    if let Some(request) = draft.request {
+        data["request"] = json!(request.to_string());
+    }
     let mut event = NewEvent::new(types::MESSAGE_SENT, draft.actor.event_actor())?
         .message(id)
-        .data(json!({
-            "message": id.to_string(),
-            "thread": thread.to_string(),
-            "reply_to": reply_to.map(|parent| parent.to_string()),
-            "recipients": names,
-        }))?;
+        .data(data)?;
     if let Some(task) = draft.task {
         event = event.task(task);
     }
@@ -325,6 +364,7 @@ async fn write_message(
         sender: draft.sender.clone(),
         task: draft.task,
         proposal: draft.proposal,
+        request: draft.request,
         body: draft.body.as_str().to_owned(),
         sent_at: draft.now,
         recipients: draft
@@ -354,6 +394,8 @@ pub(crate) async fn send_from_fold_in_tx(
         sender: &Sender::Fold,
         task: Some(links.0),
         proposal: Some(links.1),
+        request: None,
+        join: None,
         parent: None,
         body,
         recipients,
@@ -390,6 +432,33 @@ async fn require_task(tx: &mut WriteTx, task: TaskId) -> Result<(), MessageError
         );
     }
     Ok(())
+}
+
+/// The request's thread, which a new message about it joins; refused with `request_not_found` when the request does not exist.
+async fn require_request(
+    tx: &mut WriteTx,
+    request: RequestId,
+) -> Result<Option<MessageId>, MessageError> {
+    if fold_store::tasks::requests::fetch(tx.conn(), request)
+        .await?
+        .is_none()
+    {
+        return Err(crate::services::tasks::request_missing(request).into());
+    }
+    Ok(messages::request_thread(tx.conn(), request).await?)
+}
+
+fn other_thread(request: RequestId, parent: MessageId) -> FoldError {
+    FoldError::new(
+        codes::INVALID_REQUEST,
+        format!("{parent} is not in the thread of {request}"),
+    )
+    .with_details([
+        ("reason", json!("request_thread")),
+        ("request", json!(request.to_string())),
+        ("reply_to", json!(parent.to_string())),
+    ])
+    .with_hint("leave out reply_to to join the request's thread, or leave out request to reply")
 }
 
 fn message_not_found(message: MessageId) -> FoldError {

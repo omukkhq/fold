@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT m.thread_id AS \"thread!: i64\"\n           FROM messages m JOIN requests rq ON rq.id = m.request_id\n           WHERE rq.number = ?\n           ORDER BY m.number\n           LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "thread!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "thread_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "7f8e154a0a04dfd3bd27b2225b3eb7104d6bde18c134bd93e0395f181dd61ef3"
+}

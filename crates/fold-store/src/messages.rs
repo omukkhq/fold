@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use fold_core::{
     AddressedAs, AgentName, Directory, DirectoryAgent, HumanName, MessageId, ProposalId, Recipient,
-    Sender, Tag, Target, TaskId, Timestamp, WorkerName,
+    RequestId, Sender, Tag, Target, TaskId, Timestamp, WorkerName,
 };
 use sqlx::{SqliteConnection, SqliteExecutor};
 
@@ -20,6 +20,8 @@ pub struct NewMessage<'a> {
     pub sender: &'a Sender,
     pub task: Option<TaskId>,
     pub proposal: Option<ProposalId>,
+    /// The request the message clarifies; every message of a request shares one thread.
+    pub request: Option<RequestId>,
     pub body: &'a str,
     pub now: Timestamp,
 }
@@ -31,6 +33,7 @@ pub struct MessageHead {
     pub thread: MessageId,
     pub task: Option<TaskId>,
     pub proposal: Option<ProposalId>,
+    pub request: Option<RequestId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,6 +53,7 @@ pub struct MessageRow {
     pub sender: Sender,
     pub task: Option<TaskId>,
     pub proposal: Option<ProposalId>,
+    pub request: Option<RequestId>,
     pub body: String,
     pub created_at: Timestamp,
     pub recipients: Vec<RecipientRow>,
@@ -69,17 +73,19 @@ pub async fn insert(tx: &mut WriteTx, message: &NewMessage<'_>) -> Result<(), St
     let agent = agent.as_ref().map(AgentName::as_str);
     let task = message.task.map(TaskId::to_db);
     let proposal = message.proposal.map(ProposalId::to_db);
+    let request = message.request.map(RequestId::to_db);
     let body = message.body;
     let now = message.now.as_millis();
     sqlx::query!(
         "INSERT INTO messages
              (number, thread_id, reply_to, sender_kind, sender_worker_id, sender_human,
-              task_id, proposal_id, body, created_at)
+              task_id, proposal_id, request_id, body, created_at)
          VALUES (?1, ?2, ?3, ?4,
                  (SELECT w.id FROM workers w JOIN agents a ON a.id = w.agent_id
                   WHERE a.name = ?11 AND w.name = ?5), ?6,
                  (SELECT id FROM tasks WHERE number = ?7),
-                 (SELECT id FROM proposals WHERE number = ?8), ?9, ?10)",
+                 (SELECT id FROM proposals WHERE number = ?8),
+                 (SELECT id FROM requests WHERE number = ?12), ?9, ?10)",
         number,
         thread,
         reply_to,
@@ -90,7 +96,8 @@ pub async fn insert(tx: &mut WriteTx, message: &NewMessage<'_>) -> Result<(), St
         proposal,
         body,
         now,
-        agent
+        agent,
+        request
     )
     .execute(tx.conn())
     .await?;
@@ -132,10 +139,12 @@ pub async fn find(
 ) -> Result<Option<MessageHead>, StoreError> {
     let number = message.to_db();
     let row = sqlx::query!(
-        r#"SELECT m.thread_id, t.number AS "task?: i64", p.number AS "proposal?: i64"
+        r#"SELECT m.thread_id, t.number AS "task?: i64", p.number AS "proposal?: i64",
+                  rq.number AS "request?: i64"
            FROM messages m
            LEFT JOIN tasks t ON t.id = m.task_id
            LEFT JOIN proposals p ON p.id = m.proposal_id
+           LEFT JOIN requests rq ON rq.id = m.request_id
            WHERE m.number = ?"#,
         number
     )
@@ -147,9 +156,31 @@ pub async fn find(
             thread: message_id(row.thread_id, "messages.thread_id")?,
             task: row.task.map(task_id).transpose()?,
             proposal: row.proposal.map(proposal_id).transpose()?,
+            request: row.request.map(request_id).transpose()?,
         })
     })
     .transpose()
+}
+
+/// The thread of the request's messages: the thread its first message started. `None` before anyone wrote about the request.
+pub async fn request_thread(
+    conn: &mut SqliteConnection,
+    request: RequestId,
+) -> Result<Option<MessageId>, StoreError> {
+    let number = request.to_db();
+    let thread = sqlx::query_scalar!(
+        r#"SELECT m.thread_id AS "thread!: i64"
+           FROM messages m JOIN requests rq ON rq.id = m.request_id
+           WHERE rq.number = ?
+           ORDER BY m.number
+           LIMIT 1"#,
+        number
+    )
+    .fetch_optional(conn)
+    .await?;
+    thread
+        .map(|thread| message_id(thread, "messages.thread_id"))
+        .transpose()
 }
 
 /// The agents with their tags, every worker, and `humans` from the registry, as one snapshot for `fold_core::messages::resolve`. Pass the writer's connection so the snapshot matches the rows the send inserts.
@@ -186,11 +217,12 @@ pub async fn thread(
         RawMessage,
         r#"SELECT m.number, m.thread_id, m.reply_to, m.sender_kind, w.name AS "worker?: String",
                   m.sender_human, t.number AS "task?: i64", p.number AS "proposal?: i64",
-                  m.body, m.created_at
+                  rq.number AS "request?: i64", m.body, m.created_at
            FROM messages m
            LEFT JOIN workers w ON w.id = m.sender_worker_id
            LEFT JOIN tasks t ON t.id = m.task_id
            LEFT JOIN proposals p ON p.id = m.proposal_id
+           LEFT JOIN requests rq ON rq.id = m.request_id
            WHERE m.thread_id = ?
            ORDER BY m.number"#,
         number
@@ -206,11 +238,12 @@ pub async fn awaiting_human(conn: &mut SqliteConnection) -> Result<Vec<MessageRo
         RawMessage,
         r#"SELECT m.number, m.thread_id, m.reply_to, m.sender_kind, w.name AS "worker?: String",
                   m.sender_human, t.number AS "task?: i64", p.number AS "proposal?: i64",
-                  m.body, m.created_at
+                  rq.number AS "request?: i64", m.body, m.created_at
            FROM messages m
            LEFT JOIN workers w ON w.id = m.sender_worker_id
            LEFT JOIN tasks t ON t.id = m.task_id
            LEFT JOIN proposals p ON p.id = m.proposal_id
+           LEFT JOIN requests rq ON rq.id = m.request_id
            WHERE m.sender_kind = 'worker'
              AND EXISTS (
                  SELECT 1 FROM message_recipients r
@@ -239,11 +272,12 @@ pub async fn get(
         RawMessage,
         r#"SELECT m.number, m.thread_id, m.reply_to, m.sender_kind, w.name AS "worker?: String",
                   m.sender_human, t.number AS "task?: i64", p.number AS "proposal?: i64",
-                  m.body, m.created_at
+                  rq.number AS "request?: i64", m.body, m.created_at
            FROM messages m
            LEFT JOIN workers w ON w.id = m.sender_worker_id
            LEFT JOIN tasks t ON t.id = m.task_id
            LEFT JOIN proposals p ON p.id = m.proposal_id
+           LEFT JOIN requests rq ON rq.id = m.request_id
            WHERE m.number = ?"#,
         number
     )
@@ -273,13 +307,15 @@ pub async fn inbox(
         r#"SELECT r.id AS "row!: i64", rw.name AS recipient, r.addressed_as, r.delivered_at,
                   m.number, m.thread_id, m.reply_to, m.sender_kind,
                   w.name AS "worker?: String", m.sender_human, t.number AS "task?: i64",
-                  p.number AS "proposal?: i64", m.body, m.created_at
+                  p.number AS "proposal?: i64", rq.number AS "request?: i64", m.body,
+                  m.created_at
            FROM message_recipients r
            JOIN workers rw ON rw.id = r.worker_id
            JOIN messages m ON m.id = r.message_id
            LEFT JOIN workers w ON w.id = m.sender_worker_id
            LEFT JOIN tasks t ON t.id = m.task_id
            LEFT JOIN proposals p ON p.id = m.proposal_id
+           LEFT JOIN requests rq ON rq.id = m.request_id
            WHERE r.worker_id IN (SELECT value FROM json_each(?)) AND r.acked_at IS NULL
            ORDER BY m.number, rw.id"#,
         ids
@@ -297,6 +333,7 @@ pub async fn inbox(
                 sender_human: row.sender_human,
                 task: row.task,
                 proposal: row.proposal,
+                request: row.request,
                 body: row.body,
                 created_at: row.created_at,
             }
@@ -514,11 +551,12 @@ pub async fn threads(
         RawMessage,
         r#"SELECT m.number, m.thread_id, m.reply_to, m.sender_kind, w.name AS "worker?: String",
                   m.sender_human, t.number AS "task?: i64", p.number AS "proposal?: i64",
-                  m.body, m.created_at
+                  rq.number AS "request?: i64", m.body, m.created_at
            FROM messages m
            LEFT JOIN workers w ON w.id = m.sender_worker_id
            LEFT JOIN tasks t ON t.id = m.task_id
            LEFT JOIN proposals p ON p.id = m.proposal_id
+           LEFT JOIN requests rq ON rq.id = m.request_id
            WHERE m.thread_id IN (SELECT value FROM json_each(?))
            ORDER BY m.thread_id, m.number"#,
         numbers
@@ -592,6 +630,7 @@ struct RawMessage {
     sender_human: Option<String>,
     task: Option<i64>,
     proposal: Option<i64>,
+    request: Option<i64>,
     body: String,
     created_at: i64,
 }
@@ -619,6 +658,7 @@ impl RawMessage {
             sender,
             task: self.task.map(task_id).transpose()?,
             proposal: self.proposal.map(proposal_id).transpose()?,
+            request: self.request.map(request_id).transpose()?,
             body: self.body,
             created_at: time(self.created_at, "messages.created_at")?,
             recipients,
@@ -690,6 +730,10 @@ fn task_id(number: i64) -> Result<TaskId, StoreError> {
 
 fn proposal_id(number: i64) -> Result<ProposalId, StoreError> {
     ProposalId::try_from_db(number).ok_or(StoreError::Corrupt("proposals.number"))
+}
+
+fn request_id(number: i64) -> Result<RequestId, StoreError> {
+    RequestId::try_from_db(number).ok_or(StoreError::Corrupt("requests.number"))
 }
 
 fn time(millis: i64, column: &'static str) -> Result<Timestamp, StoreError> {

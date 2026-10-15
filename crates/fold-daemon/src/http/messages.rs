@@ -2,7 +2,7 @@ use axum::Json;
 use axum::extract::rejection::QueryRejection;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use fold_core::{Address, FoldError, MessageBody, MessageId, TaskId};
+use fold_core::{Address, FoldError, MessageBody, MessageId, RequestId, TaskId};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::router::OpenApiRouter;
@@ -63,6 +63,9 @@ pub struct MessageView {
     pub task: Option<String>,
     #[schema(required = true, example = "P-3")]
     pub proposal: Option<String>,
+    /// The request whose clarification thread holds the message.
+    #[schema(required = true, example = "RQ-4")]
+    pub request: Option<String>,
     /// Plain text.
     pub body: String,
     /// UTC milliseconds.
@@ -79,6 +82,7 @@ impl From<service::MessageView> for MessageView {
             sender: message.sender.to_string(),
             task: message.task.map(|id| id.to_string()),
             proposal: message.proposal.map(|id| id.to_string()),
+            request: message.request.map(|id| id.to_string()),
             body: message.body,
             sent_at: message.sent_at.as_millis(),
             recipients: message
@@ -107,6 +111,9 @@ pub struct ThreadView {
     /// The first proposal a message of the thread is linked to.
     #[schema(required = true, example = "P-3")]
     pub proposal: Option<String>,
+    /// The request whose clarification thread this is.
+    #[schema(required = true, example = "RQ-4")]
+    pub request: Option<String>,
     /// Every sender and recipient in the order they first appear.
     pub participants: Vec<String>,
     /// True while the thread holds a question to a human that no human has answered; a human reply clears it.
@@ -122,6 +129,7 @@ impl From<service::ThreadView> for ThreadView {
             id: thread.id.to_string(),
             task: thread.task.map(|id| id.to_string()),
             proposal: thread.proposal.map(|id| id.to_string()),
+            request: thread.request.map(|id| id.to_string()),
             participants: thread.participants,
             awaiting_human: thread.awaiting_human,
             last_at: thread.last_at.as_millis(),
@@ -158,18 +166,21 @@ pub struct ListMessagesParams {
     pub limit: Option<u32>,
 }
 
-/// A human's feedback on a task, or reply to a message.
+/// A human's feedback on a task, message in a request's clarification thread, or reply to a message.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct FeedbackRequest {
-    /// Plain text with some visible character.
+    /// Plain text with some visible character. In message text `#` names a fold item and `@` names a file; the daemon parses nothing.
     pub body: String,
-    /// The task the feedback is about, such as `T-12`. Needed when `reply_to` is left out.
+    /// The task the feedback is about, such as `T-12`. Needed when neither `request` nor `reply_to` is given.
     #[serde(default)]
     pub task: Option<String>,
-    /// The message to answer, such as `m-31`. The reply joins its thread and takes its task.
+    /// A request, such as `RQ-4`: the message joins its clarification thread. A reply takes its parent's request; naming another is `invalid_request` with `details.reason` `request_thread`.
+    #[serde(default)]
+    pub request: Option<String>,
+    /// The message to answer, such as `m-31`. The reply joins its thread and takes its task and request.
     #[serde(default)]
     pub reply_to: Option<String>,
-    /// The recipients, as an agent, `agent/worker`, `tag:<tag>`, `all`, `human:<name>` or `humans`. Left out, feedback goes to the task's claim holder and a reply to the parent's sender.
+    /// The recipients, as an agent, `agent/worker`, `tag:<tag>`, `all`, `human:<name>` or `humans`. Left out, feedback goes to the task's claim holder, a request message to the request's drafter and a reply to the parent's sender.
     #[serde(default)]
     pub to: Option<Vec<String>>,
 }
@@ -242,7 +253,7 @@ pub async fn show_thread(
     Ok(Json(thread.into()))
 }
 
-/// A named human's feedback on a task or reply to a message. Feedback goes to the task's claim holder unless `to` names recipients; a reply answers a question to humans, which clears the task's `question` attention. The message changes no task state.
+/// A named human's feedback on a task, message in a request's clarification thread, or reply to a message. Feedback goes to the task's claim holder and a request message to the request's drafter unless `to` names recipients; a reply answers a question to humans, which clears the task's `question` attention. The message changes no task or request state.
 #[utoipa::path(
     post,
     path = "/api/v1/projects/{slug}/feedback",
@@ -253,9 +264,9 @@ pub async fn show_thread(
     request_body = FeedbackRequest,
     responses(
         (status = 201, description = "The stored message", body = MessageView),
-        (status = 400, description = "`invalid_request`: no `task` or `reply_to`, an empty body or a malformed request; `invalid_id` or `invalid_name`: an id or recipient is malformed", body = ErrorEnvelope),
+        (status = 400, description = "`invalid_request`: no `task`, `request` or `reply_to`, a `request` other than the parent's (`details.reason` `request_thread`), an empty body or a malformed request; `invalid_id` or `invalid_name`: an id or recipient is malformed", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
-        (status = 404, description = "`task_not_found`, `message_not_found`, `proposal_not_found`, `unknown_human`, `recipient_not_found` (also when the task has no claim holder and `to` is left out) or `project_not_found`", body = ErrorEnvelope),
+        (status = 404, description = "`task_not_found`, `request_not_found`, `message_not_found`, `proposal_not_found`, `unknown_human`, `recipient_not_found` (also when the task has no claim holder, or the request no drafter, and `to` is left out) or `project_not_found`", body = ErrorEnvelope),
         (status = 503, description = "The project failed to open", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )
@@ -272,6 +283,12 @@ pub async fn send_feedback(
             .task
             .as_deref()
             .map(str::parse::<TaskId>)
+            .transpose()
+            .map_err(FoldError::from)?,
+        request: request
+            .request
+            .as_deref()
+            .map(str::parse::<RequestId>)
             .transpose()
             .map_err(FoldError::from)?,
         reply_to: request

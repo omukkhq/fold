@@ -335,6 +335,7 @@ describe("the task's messages", () => {
     recipients: [],
     body: "b",
     proposal: null,
+    request: null,
     reply_to: null,
     task: "T-2",
     sent_at: 1_000,

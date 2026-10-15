@@ -7,7 +7,7 @@ publish.workspace = true
 autotests = false
 
 [dependencies]
-axum = "0.8.9"
+axum = { version = "0.8.9", features = ["multipart"] }
 base64 = "0.23.1"
 blake3 = "1.8.7"
 fail = { version = "0.5.1", optional = true }

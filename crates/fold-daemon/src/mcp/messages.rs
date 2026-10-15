@@ -1,7 +1,10 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use fold_core::{Actor, Address, FoldError, MessageBody, MessageId, ProposalId, TaskId, Timestamp};
+use fold_core::{
+    Actor, Address, FoldError, MessageBody, MessageId, ProposalId, RequestId, TaskId, Timestamp,
+    codes,
+};
 use fold_store::agents::WorkerRow;
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{JsonObject, Tool};
@@ -25,7 +28,7 @@ pub const ACKNOWLEDGE_MESSAGE: &str = "acknowledge_message";
 pub struct SendMessageInput {
     /// The recipients: an agent (its main worker), an agent/worker path, tag:<tag>, all, human:<name> or humans.
     pub to: Vec<String>,
-    /// The message text. It is stored as plain text and never logged.
+    /// The message text. It is stored as plain text and never logged. In message text `#` names a fold item (#T-12) and `@` names a file (@web/src/board.ts); the daemon parses nothing.
     pub body: String,
     /// Link the message to this task, such as T-12. A reply takes its parent's task when left out.
     #[serde(default)]
@@ -36,6 +39,9 @@ pub struct SendMessageInput {
     /// Reply to this message, such as m-31; the reply joins its thread.
     #[serde(default)]
     pub reply_to: Option<String>,
+    /// Link the message to this request, such as RQ-4, to ask or answer about it: the message joins the request's clarification thread. A reply takes its parent's request when left out.
+    #[serde(default)]
+    pub request: Option<String>,
     /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
     #[serde(rename = "as", default)]
     pub as_worker: Option<String>,
@@ -55,8 +61,12 @@ pub struct GetInboxInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct GetThreadInput {
-    /// The id of the thread's first message, such as m-31. Any message of the thread also names it.
-    pub thread: String,
+    /// The id of the thread's first message, such as m-31. Any message of the thread also names it. Give thread or request, not both.
+    #[serde(default)]
+    pub thread: Option<String>,
+    /// A request, such as RQ-4, to read its clarification thread; it has no messages before anyone wrote about it.
+    #[serde(default)]
+    pub request: Option<String>,
     /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
     #[serde(rename = "as", default)]
     pub as_worker: Option<String>,
@@ -79,7 +89,7 @@ pub fn tools() -> Vec<Tool> {
     vec![
         Tool::new(
             SEND_MESSAGE,
-            "Send a message to agents, workers or humans, optionally linked to a task or proposal, or as a reply in a thread. A message never changes a task, a claim or a dependency.",
+            "Send a message to agents, workers or humans, optionally linked to a task, a proposal or a request, or as a reply in a thread. A message never changes a task, a claim, a dependency or a request.",
             schema_for_type::<SendMessageInput>(),
         ),
         Tool::new(
@@ -89,7 +99,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             GET_THREAD,
-            "Read every message of a thread in id order.",
+            "Read every message of a thread, or of a request's clarification thread, in id order.",
             schema_for_type::<GetThreadInput>(),
         ),
         Tool::new(
@@ -124,11 +134,13 @@ fn insert_references(
     reply_to: Option<MessageId>,
     task: Option<TaskId>,
     proposal: Option<ProposalId>,
+    request: Option<RequestId>,
 ) {
     let references = [
         ("reply_to", reply_to.map(|id| id.to_string())),
         ("task", task.map(|id| id.to_string())),
         ("proposal", proposal.map(|id| id.to_string())),
+        ("request", request.map(|id| id.to_string())),
     ];
     for (key, value) in references {
         if let Some(value) = value {
@@ -144,7 +156,13 @@ fn inbox_json(item: &InboxItem) -> Value {
     object.insert("from".into(), json!(item.sender.to_string()));
     object.insert("to".into(), json!(item.to.as_str()));
     object.insert("addressed_as".into(), json!(item.addressed_as.as_str()));
-    insert_references(&mut object, item.reply_to, item.task, item.proposal);
+    insert_references(
+        &mut object,
+        item.reply_to,
+        item.task,
+        item.proposal,
+        item.request,
+    );
     object.insert("body".into(), json!(item.body));
     object.insert("sent_at".into(), json!(millis(item.sent_at)));
     Value::Object(object)
@@ -169,6 +187,7 @@ fn thread_json(message: &MessageView) -> Value {
         message.reply_to,
         message.task,
         message.proposal,
+        message.request,
     );
     object.insert("body".into(), json!(message.body));
     object.insert("sent_at".into(), json!(millis(message.sent_at)));
@@ -192,10 +211,15 @@ pub async fn send_message(
         proposal: input.proposal.as_deref().map(str::parse).transpose()?,
         reply_to: input.reply_to.as_deref().map(message_id).transpose()?,
     };
+    let request = input
+        .request
+        .as_deref()
+        .map(str::parse::<RequestId>)
+        .transpose()?;
     let actor = actor(server, worker).await?;
     let sent = server
         .messages
-        .send(&actor, message)
+        .send_linked(&actor, message, request)
         .await
         .map_err(from_message)?;
     Ok(json!({
@@ -226,8 +250,28 @@ pub async fn get_inbox(
 
 pub async fn get_thread(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
     let input: GetThreadInput = parse(arguments)?;
-    let thread = message_id(&input.thread)?;
-    let messages = server.messages.thread(thread).await.map_err(from_message)?;
+    let messages = match (input.thread.as_deref(), input.request.as_deref()) {
+        (Some(thread), None) => server
+            .messages
+            .thread(message_id(thread)?)
+            .await
+            .map_err(from_message)?,
+        (None, Some(request)) => server
+            .messages
+            .request_thread(request.parse()?)
+            .await
+            .map_err(from_message)?
+            .map(|thread| thread.messages)
+            .unwrap_or_default(),
+        _ => {
+            return Err(
+                FoldError::new(codes::INVALID_REQUEST, "give thread or request, not both")
+                    .with_hint(
+                        "call get_thread with a thread such as m-31 or a request such as RQ-4",
+                    ),
+            );
+        }
+    };
     Ok(json!({ "messages": messages.iter().map(thread_json).collect::<Vec<_>>() }))
 }
 

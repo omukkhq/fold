@@ -261,6 +261,7 @@ async fn the_list_filters_by_agent_task_proposal_and_awaiting_human() {
             "proposal",
             "recipients",
             "reply_to",
+            "request",
             "sender",
             "sent_at",
             "task",

@@ -297,28 +297,48 @@ pub fn valid_media_type(text: &str) -> bool {
 
 /// Checks up to [`MAX_ATTACHMENTS`] attachments of at most [`MAX_ATTACHMENT_BYTES`] each. A refusal is `invalid_request` with `details.reason` (`too_many_attachments`, `attachment_too_large`, `invalid_attachment_name`, `invalid_media_type`) and the 1-based `position`, never the name.
 pub fn check_attachments(attachments: &[AttachmentFacts<'_>]) -> Result<(), FoldError> {
-    const HINT: &str =
-        "attach at most 10 files of at most 10 MiB, each with a plain file name and a media type";
-    if attachments.len() > MAX_ATTACHMENTS {
-        return Err(invalid_item(
-            "too_many_attachments",
-            MAX_ATTACHMENTS + 1,
-            HINT,
-        ));
-    }
+    check_attachment_count(attachments.len())?;
     for (index, attachment) in attachments.iter().enumerate() {
         let position = index + 1;
         if attachment.size > MAX_ATTACHMENT_BYTES {
-            return Err(invalid_item("attachment_too_large", position, HINT));
+            return Err(attachment_too_large(position));
         }
         if !valid_attachment_name(attachment.name) {
-            return Err(invalid_item("invalid_attachment_name", position, HINT));
+            return Err(invalid_item(
+                "invalid_attachment_name",
+                position,
+                ATTACHMENT_HINT,
+            ));
         }
         if !valid_media_type(attachment.media_type) {
-            return Err(invalid_item("invalid_media_type", position, HINT));
+            return Err(invalid_item(
+                "invalid_media_type",
+                position,
+                ATTACHMENT_HINT,
+            ));
         }
     }
     Ok(())
+}
+
+const ATTACHMENT_HINT: &str =
+    "attach at most 10 files of at most 10 MiB, each with a plain file name and a media type";
+
+/// Refuses more than [`MAX_ATTACHMENTS`] attachments, so a transport can stop before it reads their bytes.
+pub fn check_attachment_count(count: usize) -> Result<(), FoldError> {
+    if count > MAX_ATTACHMENTS {
+        return Err(invalid_item(
+            "too_many_attachments",
+            MAX_ATTACHMENTS + 1,
+            ATTACHMENT_HINT,
+        ));
+    }
+    Ok(())
+}
+
+/// The refusal of the attachment at the 1-based `position` for holding more than [`MAX_ATTACHMENT_BYTES`], also given by a transport that stops reading it at the limit.
+pub fn attachment_too_large(position: usize) -> FoldError {
+    invalid_item("attachment_too_large", position, ATTACHMENT_HINT)
 }
 
 /// A drafter whose agent has no open session may lose the request once `lease_minutes` have passed since the agent's last session ended or since the drafter took the request, whichever is later. An agent with an open session keeps it however long it is quiet.
@@ -374,6 +394,23 @@ pub fn request_text(
         return Err(invalid_text("too_long", field));
     }
     Ok(Some(text.to_owned()))
+}
+
+/// The longest excerpt, in characters, before the ellipsis.
+pub const EXCERPT_CHARS: usize = 80;
+
+/// What a list shows of a request nobody has named yet: the first line of the body that holds a visible character, trimmed and cut to [`EXCERPT_CHARS`] characters with an ellipsis.
+pub fn excerpt(body: &str) -> String {
+    let line = body
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    if line.chars().count() <= EXCERPT_CHARS {
+        return line.to_owned();
+    }
+    let cut: String = line.chars().take(EXCERPT_CHARS).collect();
+    format!("{}…", cut.trim_end())
 }
 
 /// One card of a draft. `key` is local to the draft and names the card in its edges.
@@ -1002,6 +1039,20 @@ mod tests {
                 vec![edge("c1", "c2"), edge("c1", "c2")]
             )),
             json!({"reason": "duplicate_edge", "edge": {"prerequisite": "c1", "dependent": "c2"}})
+        );
+    }
+
+    #[test]
+    fn an_excerpt_is_the_first_visible_line_cut_by_characters() {
+        assert_eq!(excerpt("\n  \n  Board is slow  \nmore"), "Board is slow");
+        assert_eq!(excerpt(""), "");
+        let long = "é".repeat(EXCERPT_CHARS + 5);
+        let cut = excerpt(&long);
+        assert_eq!(cut.chars().count(), EXCERPT_CHARS + 1);
+        assert!(cut.ends_with('…'));
+        assert_eq!(
+            excerpt(&"a".repeat(EXCERPT_CHARS)),
+            "a".repeat(EXCERPT_CHARS)
         );
     }
 }

@@ -1,7 +1,7 @@
 use fold_core::events::types;
 use fold_core::{
-    Actor, AddressedAs, FoldError, MessageId, NewEvent, ProposalId, Sender, TaskId, Timestamp,
-    WorkerName, codes, policy,
+    Actor, AddressedAs, FoldError, MessageId, NewEvent, ProposalId, RequestId, Sender, TaskId,
+    Timestamp, WorkerName, codes, policy,
 };
 use fold_store::agents::WorkerRow;
 use fold_store::messages::{self, InboxRow};
@@ -23,6 +23,7 @@ pub struct InboxItem {
     pub addressed_as: AddressedAs,
     pub task: Option<TaskId>,
     pub proposal: Option<ProposalId>,
+    pub request: Option<RequestId>,
     pub body: String,
     pub sent_at: Timestamp,
     /// The first time an inbox returned the row.
@@ -40,6 +41,7 @@ fn item(row: InboxRow, now: Timestamp) -> InboxItem {
         addressed_as: row.addressed_as,
         task: message.task,
         proposal: message.proposal,
+        request: message.request,
         body: message.body,
         sent_at: message.created_at,
         delivered_at: row.delivered_at.unwrap_or(now),

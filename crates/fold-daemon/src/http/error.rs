@@ -56,7 +56,8 @@ fn status_of(code: &str) -> Option<StatusCode> {
         | codes::MESSAGE_NOT_FOUND
         | codes::RECIPIENT_NOT_FOUND
         | codes::UNKNOWN_HUMAN
-        | codes::AGENT_NOT_REGISTERED => Some(StatusCode::NOT_FOUND),
+        | codes::AGENT_NOT_REGISTERED
+        | codes::REQUEST_NOT_FOUND => Some(StatusCode::NOT_FOUND),
         codes::INVALID_REQUEST
         | codes::INVALID_NAME
         | codes::INVALID_ID
@@ -70,14 +71,18 @@ fn status_of(code: &str) -> Option<StatusCode> {
         | codes::INVALID_STEP_TEXT
         | codes::INVALID_LAST_EVENT_ID
         | codes::INVALID_PUSH_TARGET
-        | codes::INVALID_EVENT_FILTER => Some(StatusCode::BAD_REQUEST),
+        | codes::INVALID_EVENT_FILTER
+        | codes::INVALID_DRAFT => Some(StatusCode::BAD_REQUEST),
         codes::HUMAN_NAME_REQUIRED | codes::AUTH_REQUIRED | codes::INVALID_TOKEN => {
             Some(StatusCode::UNAUTHORIZED)
         }
         codes::HUMAN_REQUIRED
         | codes::ACTOR_CANNOT_CLAIM
         | codes::HOST_NOT_ALLOWED
-        | codes::AUTHOR_CANNOT_INTEGRATE => Some(StatusCode::FORBIDDEN),
+        | codes::AUTHOR_CANNOT_INTEGRATE
+        | codes::REQUESTER_REQUIRED
+        | codes::DRAFTER_REQUIRED
+        | codes::ORCHESTRATOR_REQUIRED => Some(StatusCode::FORBIDDEN),
         codes::PROJECT_UNAVAILABLE | codes::GIT_NOT_FOUND | codes::DAEMON_UNREACHABLE => {
             Some(StatusCode::SERVICE_UNAVAILABLE)
         }
@@ -101,7 +106,8 @@ fn status_of(code: &str) -> Option<StatusCode> {
         | codes::CHANGES_REQUESTED
         | codes::NOT_APPROVED
         | codes::HUMAN_APPROVAL_MISSING
-        | codes::PREREQUISITES_NOT_DONE => Some(StatusCode::CONFLICT),
+        | codes::PREREQUISITES_NOT_DONE
+        | codes::REQUEST_NOT_OPEN => Some(StatusCode::CONFLICT),
         codes::GIT_FAILED => Some(StatusCode::BAD_GATEWAY),
         codes::WORKSPACE_IO => Some(StatusCode::INTERNAL_SERVER_ERROR),
         codes::HEAD_MOVED => Some(StatusCode::CONFLICT),
@@ -371,6 +377,12 @@ mod tests {
                 StatusCode::UNPROCESSABLE_ENTITY,
             ),
             (codes::EMPTY_REVIEW, StatusCode::UNPROCESSABLE_ENTITY),
+            (codes::REQUEST_NOT_FOUND, StatusCode::NOT_FOUND),
+            (codes::REQUEST_NOT_OPEN, StatusCode::CONFLICT),
+            (codes::REQUESTER_REQUIRED, StatusCode::FORBIDDEN),
+            (codes::DRAFTER_REQUIRED, StatusCode::FORBIDDEN),
+            (codes::ORCHESTRATOR_REQUIRED, StatusCode::FORBIDDEN),
+            (codes::INVALID_DRAFT, StatusCode::BAD_REQUEST),
         ] {
             assert_eq!(status_of(code), Some(status));
         }

@@ -19,8 +19,11 @@ use super::events::DurableEventType;
 use crate::daemon::AppState;
 use crate::services::tasks::{self as service, ItemContent};
 
+pub mod requests;
+
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
+        .merge(requests::routes())
         .routes(routes!(board))
         .routes(routes!(list_tasks, create_task))
         .routes(routes!(get_task, update_task, delete_task))

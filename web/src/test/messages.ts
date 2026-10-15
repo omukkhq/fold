@@ -27,6 +27,7 @@ export function message(
     reply_to: null,
     task: null,
     proposal: null,
+    request: null,
     ...fields,
   };
 }
@@ -39,6 +40,7 @@ export function thread(
     id,
     task: null,
     proposal: null,
+    request: null,
     participants: ["human:tanim", "frontend"],
     awaiting_human: false,
     last_at: 0,

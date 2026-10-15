@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 const SKILL: &str = include_str!("../templates/SKILL.md");
 const AGENTS_SECTION: &str = include_str!("../templates/agents_section.md");
 
-const FOLD_TOOLS: [&str; 51] = [
+const FOLD_TOOLS: [&str; 61] = [
     "register_agent",
     "register_worker",
     "list_agents",
@@ -55,13 +55,34 @@ const FOLD_TOOLS: [&str; 51] = [
     "get_review_comments",
     "integrate_proposal",
     "require_human_review",
+    "create_request",
+    "list_requests",
+    "get_request",
+    "claim_request",
+    "release_request",
+    "submit_request_draft",
+    "request_draft_changes",
+    "edit_request_draft",
+    "approve_request_draft",
+    "close_request",
 ];
 
-/// The tools of `FOLD_TOOLS` that the MCP server does not list yet. The skill already teaches them; a tool leaves this list in the change that adds it to the server.
-const PENDING_TOOLS: [&str; 0] = [];
+/// The tools of `FOLD_TOOLS` that the MCP server lists and the skill does not teach yet. A tool leaves this list in the change that teaches it.
+const PENDING_TOOLS: [&str; 10] = [
+    "create_request",
+    "list_requests",
+    "get_request",
+    "claim_request",
+    "release_request",
+    "submit_request_draft",
+    "request_draft_changes",
+    "edit_request_draft",
+    "approve_request_draft",
+    "close_request",
+];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 108] = [
+const FOLD_ERROR_CODES: [&str; 114] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -170,6 +191,12 @@ const FOLD_ERROR_CODES: [&str; 108] = [
     "head_moved",
     "integration_conflicted",
     "integration_failed",
+    "request_not_found",
+    "request_not_open",
+    "requester_required",
+    "drafter_required",
+    "orchestrator_required",
+    "invalid_draft",
 ];
 
 /// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.
@@ -268,6 +295,7 @@ fn server_tools() -> BTreeSet<String> {
         events::tools(),
         workspaces::tools(),
         tasks::tools(),
+        tasks::requests::tools(),
         messages::tools(),
         reviews::tools(),
     ]
@@ -278,24 +306,19 @@ fn server_tools() -> BTreeSet<String> {
 }
 
 #[test]
-fn the_tool_list_is_the_server_list_and_the_pending_tools() {
+fn the_tool_list_is_the_server_list_and_the_skill_teaches_no_pending_tool() {
     let server = server_tools();
-    let pending: BTreeSet<&str> = PENDING_TOOLS.into_iter().collect();
     for tool in PENDING_TOOLS {
         assert!(
             FOLD_TOOLS.contains(&tool),
             "pending `{tool}` is not in FOLD_TOOLS"
         );
         assert!(
-            !server.contains(tool),
-            "the server lists `{tool}`: remove it from PENDING_TOOLS"
+            !backticked_identifiers(SKILL).contains(tool),
+            "SKILL.md teaches `{tool}`: remove it from PENDING_TOOLS"
         );
     }
-    let listed: BTreeSet<String> = FOLD_TOOLS
-        .into_iter()
-        .filter(|tool| !pending.contains(tool))
-        .map(str::to_owned)
-        .collect();
+    let listed: BTreeSet<String> = FOLD_TOOLS.into_iter().map(str::to_owned).collect();
     assert_eq!(listed, server);
 }
 
@@ -329,7 +352,10 @@ fn the_code_list_is_the_core_codes_and_the_pending_codes() {
 #[test]
 fn the_skill_names_every_tool() {
     let named = backticked_identifiers(SKILL);
-    for tool in FOLD_TOOLS {
+    for tool in FOLD_TOOLS
+        .into_iter()
+        .filter(|tool| !PENDING_TOOLS.contains(tool))
+    {
         assert!(named.contains(tool), "SKILL.md does not name `{tool}`");
     }
 }

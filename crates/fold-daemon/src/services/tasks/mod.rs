@@ -41,9 +41,10 @@ pub use fold_core::reviews::HumanReviewMark;
 pub use leases::sweep_leases;
 pub use ready::ReadyTask;
 pub use recompute::{Recomputed, recompute};
+pub(crate) use requests::request_missing;
 pub use requests::{
     ApprovedRequest, NewRequestAttachment, RequestAttachment, RequestComment, RequestDetail,
-    RequestDraft, RequestFilter, RequestView, SubmitDraft,
+    RequestDraft, RequestFilter, RequestThread, RequestView, SubmitDraft,
 };
 /// Whether `actor` may turn the human review mark on, change it or clear it: the rule that governs the human-review routes, read for a task view.
 pub fn can_change_human_review(actor: &Actor) -> bool {

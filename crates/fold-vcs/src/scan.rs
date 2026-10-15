@@ -510,6 +510,53 @@ pub(crate) fn read_stable(dir: &DirHandle, name: &[u8]) -> io::Result<StableRead
     })
 }
 
+/// What reading one file of a workspace found.
+#[derive(Debug, PartialEq, Eq)]
+pub enum WorkingFile {
+    Read(Vec<u8>),
+    /// The file holds more than the limit, so it was not read.
+    TooLarge(u64),
+    /// Nothing is at the path.
+    Missing,
+    /// A directory, a symlink or another non-regular file is at the path. A symlink is never followed.
+    NotAFile,
+    /// The file kept changing over three reads.
+    Unstable,
+}
+
+/// Reads the regular file at `path` under the workspace `root` one directory handle at a time, with no symlink followed, and only when it holds at most `max_bytes` bytes.
+pub fn read_working_file(
+    root: &Path,
+    path: &RepoPath,
+    max_bytes: u64,
+) -> Result<WorkingFile, WorkspaceError> {
+    let Some((dir, name)) = open_parent(root, path)? else {
+        return Ok(WorkingFile::Missing);
+    };
+    let meta = match dir.metadata(name) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(WorkingFile::Missing),
+        Err(error) => return Err(error.into()),
+    };
+    if !meta.is_file() {
+        return Ok(WorkingFile::NotAFile);
+    }
+    if meta.len() > max_bytes {
+        return Ok(WorkingFile::TooLarge(meta.len()));
+    }
+    Ok(match read_stable(&dir, name)? {
+        StableRead::Read(bytes, _) if bytes.len() as u64 > max_bytes => {
+            WorkingFile::TooLarge(bytes.len() as u64)
+        }
+        StableRead::Read(bytes, _) => WorkingFile::Read(bytes),
+        StableRead::Gone => WorkingFile::Missing,
+        StableRead::Unstable => WorkingFile::Unstable,
+        StableRead::Denied => {
+            return Err(io::Error::from(io::ErrorKind::PermissionDenied).into());
+        }
+    })
+}
+
 fn read_stable_into(
     dir: &DirHandle,
     name: &[u8],
@@ -659,5 +706,31 @@ mod tests {
             [b"steady".to_vec()]
         );
         assert!(index.lookup(&moving).is_none());
+    }
+
+    #[test]
+    fn a_working_file_is_read_only_when_it_is_a_small_regular_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("logs")).unwrap();
+        fs::write(root.join("logs/run.log"), b"error\n").unwrap();
+        fs::write(root.join("big.bin"), [0u8; 16]).unwrap();
+        let read = |text: &str| {
+            read_working_file(root, &RepoPath::parse(text.as_bytes()).unwrap(), 8).unwrap()
+        };
+        assert_eq!(read("logs/run.log"), WorkingFile::Read(b"error\n".to_vec()));
+        assert_eq!(read("big.bin"), WorkingFile::TooLarge(16));
+        assert_eq!(read("absent.txt"), WorkingFile::Missing);
+        assert_eq!(read("absent/run.log"), WorkingFile::Missing);
+        assert_eq!(read("logs"), WorkingFile::NotAFile);
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(root.join("logs/run.log"), root.join("link")).unwrap();
+            assert_eq!(read("link"), WorkingFile::NotAFile);
+            std::os::unix::fs::symlink(root.join("logs"), root.join("dirlink")).unwrap();
+            assert!(
+                read_working_file(root, &RepoPath::parse(b"dirlink/run.log").unwrap(), 8).is_err()
+            );
+        }
     }
 }

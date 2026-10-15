@@ -342,6 +342,7 @@ function registerDaemon(): void {
             messages: [message],
             participants: [message.sender],
             proposal: null,
+            request: null,
             task: "T-2",
           }))
         : [],
@@ -360,6 +361,7 @@ function registerDaemon(): void {
         recipients: [],
         body: body.body,
         proposal: null,
+        request: null,
         reply_to: null,
         task: "T-2",
         sent_at: 5_000,
@@ -518,6 +520,7 @@ describe("the task dialog route", () => {
         ],
         body: "Ready for review",
         proposal: null,
+        request: null,
         reply_to: null,
         task: "T-2",
         sent_at: at,

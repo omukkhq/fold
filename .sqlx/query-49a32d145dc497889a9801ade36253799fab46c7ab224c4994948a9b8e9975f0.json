@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT m.number, m.thread_id, m.reply_to, m.sender_kind, w.name AS \"worker?: String\",\n                  m.sender_human, t.number AS \"task?: i64\", p.number AS \"proposal?: i64\",\n                  m.body, m.created_at\n           FROM messages m\n           LEFT JOIN workers w ON w.id = m.sender_worker_id\n           LEFT JOIN tasks t ON t.id = m.task_id\n           LEFT JOIN proposals p ON p.id = m.proposal_id\n           WHERE m.thread_id = ?\n           ORDER BY m.number",
+  "query": "SELECT m.number, m.thread_id, m.reply_to, m.sender_kind, w.name AS \"worker?: String\",\n                  m.sender_human, t.number AS \"task?: i64\", p.number AS \"proposal?: i64\",\n                  rq.number AS \"request?: i64\", m.body, m.created_at\n           FROM messages m\n           LEFT JOIN workers w ON w.id = m.sender_worker_id\n           LEFT JOIN tasks t ON t.id = m.task_id\n           LEFT JOIN proposals p ON p.id = m.proposal_id\n           LEFT JOIN requests rq ON rq.id = m.request_id\n           WHERE m.thread_id = ?\n           ORDER BY m.number",
   "describe": {
     "columns": [
       {
@@ -92,8 +92,19 @@
         }
       },
       {
-        "name": "body",
+        "name": "request?: i64",
         "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "requests",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "body",
+        "ordinal": 9,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -104,7 +115,7 @@
       },
       {
         "name": "created_at",
-        "ordinal": 9,
+        "ordinal": 10,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -126,9 +137,10 @@
       true,
       true,
       true,
+      true,
       false,
       false
     ]
   },
-  "hash": "24980ea51fc40d7519cd6ddcb1289d06722ad6c487fb9916834d1e5402b1fe4f"
+  "hash": "49a32d145dc497889a9801ade36253799fab46c7ab224c4994948a9b8e9975f0"
 }

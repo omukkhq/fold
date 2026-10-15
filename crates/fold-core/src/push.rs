@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use crate::agents::AgentName;
 use crate::events::{Event, EventActor, types};
-use crate::ids::MessageId;
+use crate::ids::{MessageId, RequestId, TaskId};
 use crate::status::TaskStatus;
 
 /// The longest notice text. A notice names ids and a tool, so it never comes near it.
@@ -25,6 +25,12 @@ pub struct PushContext {
     pub reviewer: Option<AgentName>,
     /// The event's proposal is integrated or closed.
     pub retired: bool,
+    /// Every registered agent, for an event that asks all of them.
+    pub agents: BTreeSet<AgentName>,
+    /// The agent that created the event's request; `None` when a human did.
+    pub requester: Option<AgentName>,
+    /// The agent of the worker drafting the event's request.
+    pub drafter: Option<AgentName>,
 }
 
 /// One line for one agent's Claude Code session. `text` holds public ids and the next tool only.
@@ -45,8 +51,22 @@ pub fn is_pushed(event: &Event) -> bool {
         types::MESSAGE_SENT,
         types::PROPOSAL_VERSION_ADDED,
         types::INTEGRATION_SUCCEEDED,
+        types::REQUEST_CREATED,
+        types::REQUEST_DRAFT_SUBMITTED,
+        types::REQUEST_CHANGES_REQUESTED,
+        types::REQUEST_APPROVED,
     ]
     .contains(&event.event_type)
+}
+
+/// The request a `request.*` event names in `data.request`.
+pub fn request_of(event: &Event) -> Option<RequestId> {
+    event
+        .data
+        .get("request")
+        .and_then(serde_json::Value::as_str)?
+        .parse()
+        .ok()
 }
 
 /// The notices one committed event sends. An agent never hears about what its own workers did, and an event that misses an id its rule names sends nothing.
@@ -140,6 +160,9 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
             "create_workspace",
         ));
     }
+    if let Some(rule) = request_rule(event, ctx) {
+        return Some(rule);
+    }
     if kind == types::MESSAGE_SENT {
         let message = event
             .data
@@ -154,6 +177,82 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
         ));
     }
     None
+}
+
+/// A request asks every agent to claim it, and each later step goes to whoever acts next: the requester's agent reads a draft, the drafter's agent revises it or starts the approved tasks. A human requester reads the web, so nothing is pushed to one.
+fn request_rule(
+    event: &Event,
+    ctx: &PushContext,
+) -> Option<(Vec<AgentName>, String, &'static str)> {
+    let kind = event.event_type;
+    if ![
+        types::REQUEST_CREATED,
+        types::REQUEST_DRAFT_SUBMITTED,
+        types::REQUEST_CHANGES_REQUESTED,
+        types::REQUEST_APPROVED,
+    ]
+    .contains(&kind)
+    {
+        return None;
+    }
+    let request = request_of(event)?;
+    let drafter = || ctx.drafter.iter().cloned().collect();
+    if kind == types::REQUEST_CREATED {
+        let agents = ctx.agents.iter().cloned().collect();
+        return Some((agents, format!("{request} created"), "claim_request"));
+    }
+    if kind == types::REQUEST_DRAFT_SUBMITTED {
+        let role = event.data.get("role").and_then(serde_json::Value::as_str)?;
+        if role != "drafter" {
+            return None;
+        }
+        let text = match event
+            .data
+            .get("version")
+            .and_then(serde_json::Value::as_u64)
+        {
+            Some(version) => format!("{request} draft v{version} ready"),
+            None => format!("{request} draft ready"),
+        };
+        return Some((ctx.requester.iter().cloned().collect(), text, "get_request"));
+    }
+    if kind == types::REQUEST_CHANGES_REQUESTED {
+        return Some((
+            drafter(),
+            format!("{request} changes requested"),
+            "get_request",
+        ));
+    }
+    let tasks: Vec<TaskId> = event
+        .data
+        .get("tasks")
+        .and_then(serde_json::Value::as_array)
+        .map(|tasks| {
+            tasks
+                .iter()
+                .filter_map(|task| task.as_str()?.parse().ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    Some((drafter(), approved_text(request, &tasks), "get_ready_tasks"))
+}
+
+/// The longest task list an approval notice spells out; a longer draft is counted instead, so the notice stays within [`MAX_NOTICE_LEN`].
+const MAX_LISTED_TASKS_LEN: usize = 120;
+
+fn approved_text(request: RequestId, tasks: &[TaskId]) -> String {
+    let listed = tasks
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    if tasks.is_empty() {
+        format!("{request} approved")
+    } else if listed.len() <= MAX_LISTED_TASKS_LEN {
+        format!("{request} approved as {listed}")
+    } else {
+        format!("{request} approved as {} tasks", tasks.len())
+    }
 }
 
 /// Every integrator but the author's agent, then the holder of the review claim.
@@ -183,7 +282,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::ids::{ProposalId, TaskId};
+    use crate::ids::ProposalId;
     use crate::time::Timestamp;
 
     fn name(text: &str) -> AgentName {
@@ -219,6 +318,11 @@ mod tests {
             recipients: [name("backend"), name("docs")].into_iter().collect(),
             reviewer: Some(name("review")),
             retired: false,
+            agents: [name("frontend"), name("backend"), name("review")]
+                .into_iter()
+                .collect(),
+            requester: Some(name("frontend")),
+            drafter: Some(name("backend")),
         }
     }
 
@@ -455,7 +559,15 @@ mod tests {
         let large = |kind| Event {
             task: Some(TaskId::from_number(u32::MAX).unwrap()),
             proposal: Some(ProposalId::from_number(u32::MAX).unwrap()),
-            data: json!({"to": "todo", "verdict": "request_changes", "message": format!("m-{}", u32::MAX)}),
+            data: json!({
+                "to": "todo",
+                "verdict": "request_changes",
+                "message": format!("m-{}", u32::MAX),
+                "request": format!("RQ-{}", u32::MAX),
+                "role": "drafter",
+                "version": u32::MAX,
+                "tasks": (0..20).map(|n| format!("T-{}", u32::MAX - n)).collect::<Vec<_>>(),
+            }),
             ..event(kind, "fold")
         };
         for kind in [
@@ -466,6 +578,10 @@ mod tests {
             types::MESSAGE_SENT,
             types::PROPOSAL_VERSION_ADDED,
             types::INTEGRATION_SUCCEEDED,
+            types::REQUEST_CREATED,
+            types::REQUEST_DRAFT_SUBMITTED,
+            types::REQUEST_CHANGES_REQUESTED,
+            types::REQUEST_APPROVED,
         ] {
             let notices = notice_for(&large(kind), &ctx());
             assert!(!notices.is_empty(), "{kind}");
@@ -558,5 +674,141 @@ mod tests {
             ..ctx()
         };
         assert!(notice_for(&event, &retired).is_empty());
+    }
+
+    fn request_event(
+        kind: crate::events::EventType,
+        actor: &str,
+        data: serde_json::Value,
+    ) -> Event {
+        Event {
+            task: None,
+            proposal: None,
+            ..with_data(event(kind, actor), data)
+        }
+    }
+
+    #[test]
+    fn a_new_request_reaches_every_agent_but_the_requesters() {
+        let by_agent = request_event(
+            types::REQUEST_CREATED,
+            "frontend/ui",
+            json!({"request": "RQ-4", "attachments": 0}),
+        );
+        let text = "fold: RQ-4 created. Call claim_request.";
+        assert_eq!(
+            sent(&notice_for(&by_agent, &ctx())),
+            vec![
+                row("backend", text, "claim_request"),
+                row("review", text, "claim_request"),
+            ]
+        );
+        let by_human = request_event(
+            types::REQUEST_CREATED,
+            "human:ana",
+            json!({"request": "RQ-4"}),
+        );
+        assert_eq!(notice_for(&by_human, &ctx()).len(), 3);
+    }
+
+    #[test]
+    fn a_drafters_version_reaches_an_agent_requester_only() {
+        let event = request_event(
+            types::REQUEST_DRAFT_SUBMITTED,
+            "backend",
+            json!({"request": "RQ-4", "version": 2, "role": "drafter"}),
+        );
+        assert_eq!(
+            sent(&notice_for(&event, &ctx())),
+            vec![row(
+                "frontend",
+                "fold: RQ-4 draft v2 ready. Call get_request.",
+                "get_request"
+            )]
+        );
+        let human_requester = PushContext {
+            requester: None,
+            ..ctx()
+        };
+        assert!(notice_for(&event, &human_requester).is_empty());
+        let edit = request_event(
+            types::REQUEST_DRAFT_SUBMITTED,
+            "frontend",
+            json!({"request": "RQ-4", "version": 3, "role": "requester"}),
+        );
+        assert!(notice_for(&edit, &ctx()).is_empty());
+        let unversioned = request_event(
+            types::REQUEST_DRAFT_SUBMITTED,
+            "backend",
+            json!({"request": "RQ-4", "role": "drafter"}),
+        );
+        assert_eq!(
+            notice_for(&unversioned, &ctx())[0].text,
+            "fold: RQ-4 draft ready. Call get_request."
+        );
+    }
+
+    #[test]
+    fn requested_changes_and_an_approval_reach_the_drafter() {
+        let changes = request_event(
+            types::REQUEST_CHANGES_REQUESTED,
+            "human:ana",
+            json!({"request": "RQ-4", "version": 1}),
+        );
+        assert_eq!(
+            sent(&notice_for(&changes, &ctx())),
+            vec![row(
+                "backend",
+                "fold: RQ-4 changes requested. Call get_request.",
+                "get_request"
+            )]
+        );
+        let approved = request_event(
+            types::REQUEST_APPROVED,
+            "human:ana",
+            json!({"request": "RQ-4", "version": 2, "tasks": ["T-12", "T-13"]}),
+        );
+        assert_eq!(
+            sent(&notice_for(&approved, &ctx())),
+            vec![row(
+                "backend",
+                "fold: RQ-4 approved as T-12, T-13. Call get_ready_tasks.",
+                "get_ready_tasks"
+            )]
+        );
+        let undrafted = PushContext {
+            drafter: None,
+            ..ctx()
+        };
+        assert!(notice_for(&approved, &undrafted).is_empty());
+    }
+
+    #[test]
+    fn a_long_approval_counts_its_tasks() {
+        let tasks: Vec<TaskId> = (1000..1020)
+            .map(|n| TaskId::from_number(n).unwrap())
+            .collect();
+        let request = RequestId::from_number(4).unwrap();
+        assert_eq!(approved_text(request, &tasks), "RQ-4 approved as 20 tasks");
+        assert_eq!(approved_text(request, &[]), "RQ-4 approved");
+    }
+
+    #[test]
+    fn a_request_event_without_its_request_sends_nothing() {
+        for kind in [
+            types::REQUEST_CREATED,
+            types::REQUEST_CHANGES_REQUESTED,
+            types::REQUEST_APPROVED,
+        ] {
+            let event = request_event(kind, "human:ana", json!({"request": "T-4"}));
+            assert!(notice_for(&event, &ctx()).is_empty(), "{kind}");
+        }
+        let claimed = request_event(
+            types::REQUEST_CLAIMED,
+            "backend",
+            json!({"request": "RQ-4"}),
+        );
+        assert!(!is_pushed(&claimed));
+        assert!(notice_for(&claimed, &ctx()).is_empty());
     }
 }

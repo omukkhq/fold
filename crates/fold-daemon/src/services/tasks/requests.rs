@@ -4,12 +4,13 @@ use fold_core::events::types;
 use fold_core::object::{ObjectHash, ObjectKind};
 use fold_core::requests::{
     AttachmentFacts, DraftCard, DraftEdge, RequestKind, RequestState, RequestStep, Requester,
-    check_attachments, drafter_lapsed, request_text, request_title, validate_draft,
+    check_attachments, drafter_lapsed, excerpt, request_text, request_title, validate_draft,
 };
 use fold_core::{
-    Actor, DependencyOrigin, FoldError, IdKind, NewEvent, RequestId, TaskDescription, TaskId,
-    TaskTitle, Timestamp, WorkerName, codes, policy,
+    Actor, DependencyOrigin, FoldError, IdKind, MessageId, NewEvent, RequestId, TaskDescription,
+    TaskId, TaskTitle, Timestamp, WorkerName, codes, policy,
 };
+use fold_store::messages;
 use fold_store::tasks::requests::{self, NewAttachment, NewRequest, RequestRow};
 pub use fold_store::tasks::requests::{AttachmentRow as RequestAttachment, RequestFilter};
 use fold_store::{StoreError, WriteTx, counters};
@@ -29,6 +30,21 @@ pub struct NewRequestAttachment {
     pub bytes: Vec<u8>,
 }
 
+impl NewRequestAttachment {
+    /// An attachment whose media type is guessed from its name's extension, `application/octet-stream` when the extension says nothing.
+    pub fn named(name: String, bytes: Vec<u8>) -> Self {
+        let media_type = mime_guess::from_path(&name)
+            .first_or_octet_stream()
+            .essence_str()
+            .to_owned();
+        Self {
+            name,
+            media_type,
+            bytes,
+        }
+    }
+}
+
 /// A request with public ids only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestView {
@@ -37,6 +53,8 @@ pub struct RequestView {
     pub kind: Option<RequestKind>,
     /// `None` until an orchestrator claims and names the request.
     pub title: Option<String>,
+    /// The start of the body, which a list shows while the request has no title.
+    pub excerpt: String,
     pub body: String,
     pub state: RequestState,
     pub requester: Requester,
@@ -58,6 +76,7 @@ impl From<RequestRow> for RequestView {
             id: row.id,
             kind: row.kind,
             title: row.title,
+            excerpt: excerpt(&row.body),
             body: row.body,
             state: row.state,
             requester: row.requester,
@@ -90,13 +109,24 @@ pub struct RequestComment {
     pub created_at: Timestamp,
 }
 
-/// A request with everything that belongs to it: attachment metadata, every draft version, the requester's comments and the tasks its approval created.
+/// The request's clarification thread at a glance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RequestThread {
+    /// The id of the thread's first message.
+    pub id: MessageId,
+    pub messages: u32,
+    pub last_at: Timestamp,
+}
+
+/// A request with everything that belongs to it: attachment metadata, every draft version, the requester's comments, its clarification thread and the tasks its approval created.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestDetail {
     pub request: RequestView,
     pub attachments: Vec<RequestAttachment>,
     pub drafts: Vec<RequestDraft>,
     pub comments: Vec<RequestComment>,
+    /// `None` before anyone wrote about the request.
+    pub thread: Option<RequestThread>,
     pub tasks: Vec<TaskId>,
 }
 
@@ -195,12 +225,7 @@ impl TaskService {
         if blobs.is_empty() {
             return Ok((None, Vec::new()));
         }
-        let access = self.objects.clone().ok_or_else(|| {
-            FoldError::new(
-                codes::INTERNAL_ERROR,
-                "this service has no object store for attachments",
-            )
-        })?;
+        let access = self.object_access()?;
         let guard = access.lock.read_owned().await;
         let fold_dir = access.fold_dir;
         let hashes = tokio::task::spawn_blocking(move || {
@@ -573,13 +598,83 @@ impl TaskService {
             })
             .collect();
         let tasks = requests::tasks_of(&mut conn, request).await?;
+        let thread = match messages::request_thread(&mut conn, request).await? {
+            Some(id) => {
+                let rows = messages::thread(&mut conn, id).await?;
+                Some(RequestThread {
+                    id,
+                    messages: u32::try_from(rows.len()).unwrap_or(u32::MAX),
+                    last_at: rows.last().map_or(Timestamp::EPOCH, |row| row.created_at),
+                })
+            }
+            None => None,
+        };
         Ok(RequestDetail {
             request: row.into(),
             attachments,
             drafts,
             comments,
+            thread,
             tasks,
         })
+    }
+
+    /// One attachment's metadata and bytes, by its 1-based position. A position the request does not have is `not_found`.
+    pub async fn request_attachment(
+        &self,
+        request: RequestId,
+        position: u32,
+    ) -> Result<(RequestAttachment, Vec<u8>), TaskError> {
+        let mut conn = self
+            .store
+            .read()
+            .acquire()
+            .await
+            .map_err(StoreError::from)?;
+        if requests::fetch(&mut conn, request).await?.is_none() {
+            return Err(request_not_found(request));
+        }
+        let attachment = requests::attachments(&mut conn, request)
+            .await?
+            .into_iter()
+            .find(|attachment| attachment.position == position)
+            .ok_or_else(|| {
+                FoldError::new(
+                    codes::NOT_FOUND,
+                    format!("{request} has no attachment {position}"),
+                )
+                .with_details([
+                    ("request", json!(request.to_string())),
+                    ("position", json!(position)),
+                ])
+                .with_hint("call get_request to see the attachments")
+            })?;
+        drop(conn);
+        let access = self.object_access()?;
+        let hash = attachment.object;
+        let bytes = tokio::task::spawn_blocking(move || {
+            ObjectStore::open(&access.fold_dir)?
+                .read_expecting(&hash, ObjectKind::Blob)
+                .map(|object| object.payload)
+        })
+        .await
+        .map_err(|error| {
+            FoldError::new(
+                codes::INTERNAL_ERROR,
+                format!("blocking work stopped: {error}"),
+            )
+        })?
+        .map_err(FoldError::from)?;
+        Ok((attachment, bytes))
+    }
+
+    fn object_access(&self) -> Result<super::ObjectAccess, TaskError> {
+        Ok(self.objects.clone().ok_or_else(|| {
+            FoldError::new(
+                codes::INTERNAL_ERROR,
+                "this service has no object store for attachments",
+            )
+        })?)
     }
 
     /// The requests `filter` selects, newest first.
@@ -651,11 +746,13 @@ fn require_latest(row: &RequestRow, version: u32) -> Result<(), TaskError> {
 }
 
 pub(crate) fn request_not_found(request: RequestId) -> TaskError {
-    TaskError::Fold(
-        FoldError::new(
-            codes::REQUEST_NOT_FOUND,
-            format!("{request} does not exist"),
-        )
-        .with_hint("call list_requests to see the requests"),
+    TaskError::Fold(request_missing(request))
+}
+
+pub(crate) fn request_missing(request: RequestId) -> FoldError {
+    FoldError::new(
+        codes::REQUEST_NOT_FOUND,
+        format!("{request} does not exist"),
     )
+    .with_hint("call list_requests to see the requests")
 }
