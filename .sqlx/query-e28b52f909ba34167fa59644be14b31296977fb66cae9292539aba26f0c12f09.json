@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT t.number AS \"task?: i64\", p.number AS \"proposal?: i64\"\n           FROM claims c\n           JOIN workers w ON w.id = c.worker_id\n           LEFT JOIN tasks t ON t.id = c.task_id\n           LEFT JOIN proposals p ON p.id = c.proposal_id\n           WHERE w.agent_id = ? AND c.released_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "task?: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "proposal?: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "e28b52f909ba34167fa59644be14b31296977fb66cae9292539aba26f0c12f09"
+}

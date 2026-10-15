@@ -1,4 +1,5 @@
 pub mod error;
+pub mod events;
 pub mod footer;
 pub mod handshake;
 pub mod identity;
@@ -17,6 +18,7 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 
 use crate::services::agents::{AgentService, SessionContext};
+use crate::services::events::EventService;
 use error::{from_agent, tool_error};
 pub use footer::{FooterCounts, FooterPart, FooterSource, footer};
 
@@ -26,6 +28,7 @@ pub const INSTRUCTIONS: &str = "fold coordinates the agents of one project. Work
 /// The MCP server of one adapter session. Every tool call passes through [`FoldServer::call_tool`], which checks the agent, resolves `as`, records the call and adds the footer, so a tool only parses its input and calls its service.
 pub struct FoldServer {
     agents: AgentService,
+    events: EventService,
     /// Held across the `register_agent` command, which binds the session.
     session: Mutex<SessionContext>,
     footer: Vec<Arc<dyn FooterSource>>,
@@ -38,11 +41,15 @@ impl std::fmt::Debug for FoldServer {
 }
 
 impl FoldServer {
-    pub fn new(agents: AgentService, session: SessionContext) -> Self {
+    /// Every server counts the new events of its agent in the footer.
+    pub fn new(agents: AgentService, events: EventService, session: SessionContext) -> Self {
+        let new_events: Arc<dyn FooterSource> =
+            Arc::new(events::NewEventsFooter::new(agents.clone(), events.clone()));
         Self {
             agents,
+            events,
             session: Mutex::new(session),
-            footer: Vec::new(),
+            footer: vec![new_events],
         }
     }
 
@@ -57,7 +64,11 @@ impl FoldServer {
         self.session.lock().await.clone()
     }
 
-    async fn run(&self, request: &CallToolRequestParams) -> Result<Option<Value>, FoldError> {
+    async fn run(
+        &self,
+        request: &CallToolRequestParams,
+        context: &RequestContext<RoleServer>,
+    ) -> Result<Option<Value>, FoldError> {
         let tool = request.name.as_ref();
         let arguments = request.arguments.clone().unwrap_or_default();
         let as_worker = as_worker(&arguments)?;
@@ -68,17 +79,24 @@ impl FoldServer {
                 .await
                 .map_err(from_agent)?;
         }
-        // `register_agent` binds the session, so its `as` can only be resolved after the call.
+        // `register_agent` binds the session, so its `as` can only be resolved after the call. Every other tool needs an agent, so its worker is known before it runs.
         let resolved = match &as_worker {
             Some(name) if before.agent.is_some() || tool != identity::REGISTER_AGENT => {
                 Some(self.resolve(&before, Some(name)).await?)
             }
+            None if !identity::is_identity_tool(tool) => Some(self.resolve(&before, None).await?),
             _ => None,
         };
-        let value = match tool {
-            identity::REGISTER_AGENT => identity::register_agent(self, &arguments).await?,
-            identity::REGISTER_WORKER => identity::register_worker(self, &arguments).await?,
-            identity::LIST_AGENTS => identity::list_agents(self, &arguments).await?,
+        let value = match (tool, &resolved) {
+            (identity::REGISTER_AGENT, _) => identity::register_agent(self, &arguments).await?,
+            (identity::REGISTER_WORKER, _) => identity::register_worker(self, &arguments).await?,
+            (identity::LIST_AGENTS, _) => identity::list_agents(self, &arguments).await?,
+            (events::GET_EVENTS, Some(worker)) => {
+                events::get_events(self, worker, &arguments).await?
+            }
+            (events::WAIT_FOR_EVENTS, Some(worker)) => {
+                events::wait_for_events(self, worker, &arguments, context).await?
+            }
             _ => return Ok(None),
         };
         let after = self.session().await;
@@ -143,15 +161,17 @@ impl ServerHandler for FoldServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        Ok(ListToolsResult::with_all_items(identity::tools()))
+        let mut tools = identity::tools();
+        tools.extend(events::tools());
+        Ok(ListToolsResult::with_all_items(tools))
     }
 
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        let mut result = match self.run(&request).await {
+        let mut result = match self.run(&request, &context).await {
             Ok(Some(value)) => CallToolResult::success(vec![ContentBlock::text(value.to_string())]),
             Ok(None) => {
                 return Err(ErrorData::invalid_params(

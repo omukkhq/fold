@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT last_seq AS \"last_seq!: i64\" FROM agent_cursors WHERE agent_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "last_seq!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "agent_cursors",
+            "name": "last_seq"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "2096185f0da8da62fd0ed014f5497657ffbc7d296b6d87433ec49b2d06769d71"
+}

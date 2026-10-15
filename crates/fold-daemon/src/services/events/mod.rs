@@ -1,9 +1,19 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use fold_core::{Event, EventFilter, LiveEvent, NewEvent, Timestamp};
 use fold_store::{Store, StoreError, WriteTx, events};
 use tokio::sync::broadcast::{self, error::RecvError};
+
+mod query;
+mod wait;
+
+pub use query::{
+    DEFAULT_LIMIT, EventPage, EventQuery, EventService, EventsError, MAX_LIMIT, query,
+    read_since_cursor,
+};
+pub use wait::{DEFAULT_TIMEOUT_S, MAX_TIMEOUT_S, TICK, WaitQuery, WaitStep, Waiter};
 
 const BUS_CAPACITY: usize = 1024;
 
@@ -60,6 +70,7 @@ impl EventBuffer {
 #[derive(Debug, Clone)]
 pub struct EventBus {
     sender: broadcast::Sender<BusMessage>,
+    waiters: Arc<AtomicUsize>,
 }
 
 impl Default for EventBus {
@@ -76,11 +87,29 @@ impl EventBus {
     /// A smaller capacity makes a slow subscriber lag sooner; tests use it to exercise recovery.
     pub fn with_capacity(capacity: usize) -> Self {
         let (sender, _) = broadcast::channel(capacity);
-        Self { sender }
+        Self {
+            sender,
+            waiters: Arc::new(AtomicUsize::new(0)),
+        }
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<BusMessage> {
         self.sender.subscribe()
+    }
+
+    /// How many receivers are subscribed right now. A waiter that ended has dropped its receiver.
+    pub fn subscribers(&self) -> usize {
+        self.sender.receiver_count()
+    }
+
+    /// How many waits have read their backlog and wait on the bus alone right now.
+    pub fn waiters(&self) -> usize {
+        self.waiters.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn waiting(&self) -> WaitingGuard {
+        self.waiters.fetch_add(1, Ordering::SeqCst);
+        WaitingGuard(self.waiters.clone())
     }
 
     /// Sends the buffered events in `seq` order. A service calls this only after `Store::write` returned `Ok`.
@@ -108,6 +137,16 @@ impl EventBus {
             syncing: true,
             pending: VecDeque::new(),
         }
+    }
+}
+
+/// Counts one wait in [`EventBus::waiters`] until it is dropped.
+#[derive(Debug)]
+pub struct WaitingGuard(Arc<AtomicUsize>);
+
+impl Drop for WaitingGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -158,6 +197,14 @@ impl EventStream {
                 Err(RecvError::Closed) => return None,
             }
         }
+    }
+
+    /// Reads the table until the stream has caught up with the bus. The backlog it finds is yielded first by `next`, which then waits on the bus alone.
+    pub async fn catch_up(&mut self) -> Result<(), StoreError> {
+        while self.syncing {
+            self.read_page().await?;
+        }
+        Ok(())
     }
 
     async fn read_page(&mut self) -> Result<(), StoreError> {

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT p.number AS \"number!: i64\"\n           FROM proposals p\n           JOIN workers w ON w.id = p.author_worker_id\n           WHERE w.agent_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a08a9338512009b03810fa656af303bc5ac2e1b8370c378ff05bec171cdcd078"
+}

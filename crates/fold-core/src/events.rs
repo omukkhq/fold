@@ -1,8 +1,10 @@
+use std::collections::BTreeSet;
 use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
 
+use crate::agents::AgentName;
 use crate::ids::{ProposalId, RevisionId, TaskId, WorkspaceId};
 use crate::time::Timestamp;
 
@@ -172,6 +174,14 @@ impl EventActor {
         &self.0
     }
 
+    /// The agent of a worker actor, which is its first segment; `None` for a human and for `fold`.
+    pub fn agent(&self) -> Option<&str> {
+        if self.0 == Self::FOLD || self.0.starts_with("human:") {
+            return None;
+        }
+        self.0.split('/').next()
+    }
+
     fn valid_name(name: &str) -> bool {
         !name.is_empty()
             && name.len() <= MAX_LABEL_LEN
@@ -328,5 +338,154 @@ impl EventFilter {
             && self
                 .proposal
                 .is_none_or(|proposal| event.proposal == Some(proposal))
+    }
+}
+
+/// What decides whether an event concerns one agent. It is loaded once per call from the claims, dependencies and proposals of every worker of the agent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentEventFacts {
+    pub agent: AgentName,
+    /// Tasks a worker of the agent holds an unreleased implementation claim on.
+    pub claimed: BTreeSet<TaskId>,
+    /// Tasks that a claimed task needs directly.
+    pub prerequisites: BTreeSet<TaskId>,
+    /// Proposals a worker of the agent authored.
+    pub authored: BTreeSet<ProposalId>,
+    /// Proposals a worker of the agent holds the unreleased review claim on.
+    pub reviewing: BTreeSet<ProposalId>,
+}
+
+impl AgentEventFacts {
+    pub fn new(agent: AgentName) -> Self {
+        Self {
+            agent,
+            claimed: BTreeSet::new(),
+            prerequisites: BTreeSet::new(),
+            authored: BTreeSet::new(),
+            reviewing: BTreeSet::new(),
+        }
+    }
+}
+
+/// An event concerns an agent when it touches a task the agent works on or needs, a proposal it wrote or reviews, or moves main. What the agent's own workers did is never news to it.
+pub fn concerns(event: &Event, facts: &AgentEventFacts) -> bool {
+    if event.actor.agent() == Some(facts.agent.as_str()) {
+        return false;
+    }
+    event.event_type == types::MAIN_ADVANCED
+        || event.task.is_some_and(|task| {
+            facts.claimed.contains(&task) || facts.prerequisites.contains(&task)
+        })
+        || event.proposal.is_some_and(|proposal| {
+            facts.authored.contains(&proposal) || facts.reviewing.contains(&proposal)
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn event(event_type: EventType, actor: &str) -> Event {
+        Event {
+            seq: 1,
+            event_type,
+            actor: EventActor::parse(actor).unwrap(),
+            task: None,
+            proposal: None,
+            workspace: None,
+            revision: None,
+            data: serde_json::json!({}),
+            created_at: Timestamp::from_millis(0).unwrap(),
+        }
+    }
+
+    fn task(number: u32) -> TaskId {
+        TaskId::from_number(number).unwrap()
+    }
+
+    fn proposal(number: u32) -> ProposalId {
+        ProposalId::from_number(number).unwrap()
+    }
+
+    fn facts() -> AgentEventFacts {
+        let mut facts = AgentEventFacts::new(AgentName::parse("frontend").unwrap());
+        facts.claimed.insert(task(1));
+        facts.prerequisites.insert(task(2));
+        facts.authored.insert(proposal(3));
+        facts.reviewing.insert(proposal(4));
+        facts
+    }
+
+    fn on_task(number: u32, actor: &str) -> Event {
+        Event {
+            task: Some(task(number)),
+            ..event(types::TASK_UPDATED, actor)
+        }
+    }
+
+    fn on_proposal(number: u32, actor: &str) -> Event {
+        Event {
+            proposal: Some(proposal(number)),
+            ..event(types::REVIEW_SUBMITTED, actor)
+        }
+    }
+
+    #[test]
+    fn an_event_on_a_claimed_task_concerns_the_holder() {
+        assert!(concerns(&on_task(1, "backend"), &facts()));
+    }
+
+    #[test]
+    fn an_event_on_a_prerequisite_concerns_the_holder() {
+        assert!(concerns(&on_task(2, "human:ana"), &facts()));
+    }
+
+    #[test]
+    fn an_event_on_an_authored_proposal_concerns_the_author() {
+        assert!(concerns(&on_proposal(3, "review"), &facts()));
+    }
+
+    #[test]
+    fn an_event_on_a_reviewed_proposal_concerns_the_reviewer() {
+        assert!(concerns(&on_proposal(4, "fold"), &facts()));
+    }
+
+    #[test]
+    fn main_advanced_concerns_every_agent() {
+        assert!(concerns(&event(types::MAIN_ADVANCED, "fold"), &facts()));
+        let unrelated = AgentEventFacts::new(AgentName::parse("docs").unwrap());
+        assert!(concerns(&event(types::MAIN_ADVANCED, "review"), &unrelated));
+    }
+
+    #[test]
+    fn the_agents_own_workers_never_count() {
+        assert!(!concerns(&on_task(1, "frontend"), &facts()));
+        assert!(!concerns(&on_task(2, "frontend/ui"), &facts()));
+        assert!(!concerns(
+            &event(types::MAIN_ADVANCED, "frontend"),
+            &facts()
+        ));
+        assert!(concerns(&on_task(1, "frontend-two"), &facts()));
+    }
+
+    #[test]
+    fn an_unrelated_event_does_not_concern_the_agent() {
+        assert!(!concerns(&on_task(9, "backend"), &facts()));
+        assert!(!concerns(&on_proposal(9, "backend"), &facts()));
+        assert!(!concerns(&event(types::TASK_CREATED, "backend"), &facts()));
+    }
+
+    #[test]
+    fn only_a_worker_actor_has_an_agent() {
+        assert_eq!(
+            EventActor::parse("frontend/ui").unwrap().agent(),
+            Some("frontend")
+        );
+        assert_eq!(
+            EventActor::parse("frontend").unwrap().agent(),
+            Some("frontend")
+        );
+        assert_eq!(EventActor::fold().agent(), None);
+        assert_eq!(EventActor::parse("human:ana").unwrap().agent(), None);
     }
 }

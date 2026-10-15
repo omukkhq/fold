@@ -22,7 +22,10 @@ pub use agents::{AgentName, INTEGRATOR_TAG, NameError, Tag, WorkerName};
 pub use clock::{Clock, ManualClock};
 pub use config::{CONFIG_TEMPLATE, ProjectConfig};
 pub use error::{FoldError, codes};
-pub use events::{Event, EventActor, EventError, EventFilter, EventType, LiveEvent, NewEvent};
+pub use events::{
+    AgentEventFacts, Event, EventActor, EventError, EventFilter, EventType, LiveEvent, NewEvent,
+    concerns,
+};
 pub use ids::{
     ChangesetId, ChecklistItemId, CheckpointId, CommentId, IdKind, IdParseError, IntegrationId,
     MessageId, ProposalId, RevisionId, TaskId, WorkspaceId,

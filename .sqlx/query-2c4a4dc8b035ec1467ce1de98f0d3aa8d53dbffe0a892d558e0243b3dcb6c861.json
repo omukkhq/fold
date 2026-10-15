@@ -1,0 +1,122 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT seq AS \"seq!: i64\", type AS event_type, actor, task_id, proposal_id,\n                  workspace_id, revision_id, data, created_at\n           FROM events\n           WHERE seq > ?1\n             AND (type IN (SELECT value FROM json_each(?4))\n                  OR task_id IN (SELECT value FROM json_each(?2))\n                  OR proposal_id IN (SELECT value FROM json_each(?3)))\n           ORDER BY seq ASC",
+  "describe": {
+    "columns": [
+      {
+        "name": "seq!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "events",
+            "name": "seq"
+          }
+        }
+      },
+      {
+        "name": "event_type",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "events",
+            "name": "type"
+          }
+        }
+      },
+      {
+        "name": "actor",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "events",
+            "name": "actor"
+          }
+        }
+      },
+      {
+        "name": "task_id",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "events",
+            "name": "task_id"
+          }
+        }
+      },
+      {
+        "name": "proposal_id",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "events",
+            "name": "proposal_id"
+          }
+        }
+      },
+      {
+        "name": "workspace_id",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "events",
+            "name": "workspace_id"
+          }
+        }
+      },
+      {
+        "name": "revision_id",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "events",
+            "name": "revision_id"
+          }
+        }
+      },
+      {
+        "name": "data",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "events",
+            "name": "data"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "events",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "2c4a4dc8b035ec1467ce1de98f0d3aa8d53dbffe0a892d558e0243b3dcb6c861"
+}

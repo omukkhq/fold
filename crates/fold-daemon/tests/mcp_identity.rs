@@ -5,7 +5,7 @@ use std::sync::Arc;
 use fold_core::WorkerName;
 use fold_daemon::mcp::{FoldServer, FooterPart, FooterSource, INSTRUCTIONS};
 use fold_daemon::services::agents::{AgentService, SessionContext};
-use fold_daemon::services::events::EventBus;
+use fold_daemon::services::events::{EventBus, EventService};
 use fold_store::agents;
 use fold_store::testing::TestProject;
 use rmcp::model::{CallToolRequestParams, CallToolResult};
@@ -48,8 +48,9 @@ async fn connect_with(
     sources: Vec<Arc<dyn FooterSource>>,
 ) -> (Client, SessionContext) {
     let agents = service(project);
+    let events = EventService::new(project.store().clone(), EventBus::new());
     let session = agents.start_session(7).await.unwrap();
-    let mut server = FoldServer::new(agents, session.clone());
+    let mut server = FoldServer::new(agents, events, session.clone());
     for source in sources {
         server = server.with_footer_source(source);
     }
@@ -364,7 +365,7 @@ async fn every_result_ends_with_the_footer_line_when_a_count_is_not_zero() {
 }
 
 #[tokio::test]
-async fn the_server_lists_three_described_tools_and_sends_the_workflow() {
+async fn the_server_lists_described_tools_and_sends_the_workflow() {
     let project = TestProject::new().await;
     let client = connect(&project).await;
     let info = client.peer_info().unwrap();
@@ -372,7 +373,16 @@ async fn the_server_lists_three_described_tools_and_sends_the_workflow() {
     assert!(INSTRUCTIONS.contains("register_agent"));
     let tools = client.list_all_tools().await.unwrap();
     let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_ref()).collect();
-    assert_eq!(names, ["register_agent", "register_worker", "list_agents"]);
+    assert_eq!(
+        names,
+        [
+            "register_agent",
+            "register_worker",
+            "list_agents",
+            "get_events",
+            "wait_for_events"
+        ]
+    );
     for tool in &tools {
         assert!(tool.description.is_some(), "{}", tool.name);
         let properties = tool.input_schema["properties"].as_object().unwrap();

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT n.number AS \"number!: i64\"\n           FROM dependencies d\n           JOIN tasks n ON n.id = d.needs_task_id\n           JOIN claims c ON c.task_id = d.task_id\n           JOIN workers w ON w.id = c.worker_id\n           WHERE w.agent_id = ? AND c.kind = 'implementation' AND c.released_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a3258540148b0c101cc81ec1cb3066bba1d28f89fa3465df2b5aedb0f9c88e09"
+}

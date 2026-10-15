@@ -4,11 +4,13 @@ use rmcp::model::{CallToolResult, ContentBlock};
 use serde::{Deserialize, Serialize};
 
 use crate::services::agents::AgentError;
+use crate::services::events::EventsError;
 use crate::services::projects::ProjectError;
 
 /// The next step for the codes an agent can fix itself. A code in this table always gets this hint, whatever the error carried, so every transport names the same next step.
 const HINTS: &[(&str, &str)] = &[
     (codes::AGENT_NOT_REGISTERED, "call register_agent"),
+    (codes::INVALID_EVENT_FILTER, "call get_events"),
     (codes::WORKER_NOT_FOUND, "call register_worker"),
     (
         codes::PROJECT_NOT_FOUND,
@@ -60,6 +62,13 @@ pub fn from_agent(error: AgentError) -> FoldError {
             tracing::error!(%error, "tool call failed to build an event");
             FoldError::new(codes::INTERNAL_ERROR, "internal error")
         }
+    }
+}
+
+pub fn from_events(error: EventsError) -> FoldError {
+    match error {
+        EventsError::Fold(error) => error,
+        EventsError::Store(error) => from_store(error),
     }
 }
 

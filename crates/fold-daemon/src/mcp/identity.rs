@@ -71,7 +71,7 @@ pub fn tools() -> Vec<Tool> {
     ]
 }
 
-fn parse<T: for<'de> Deserialize<'de>>(arguments: &JsonObject) -> Result<T, FoldError> {
+pub(super) fn parse<T: for<'de> Deserialize<'de>>(arguments: &JsonObject) -> Result<T, FoldError> {
     serde_json::from_value(Value::Object(arguments.clone())).map_err(|_| {
         FoldError::new(
             fold_core::codes::INVALID_REQUEST,
