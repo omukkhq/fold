@@ -19,14 +19,23 @@ type MatcherKey = (Vec<u8>, &'static str);
 /// Files are read when first needed and kept until [`IgnoreRules::reload`], which every scan calls first, so the rules always follow the files on disk.
 #[derive(Debug)]
 pub struct IgnoreRules {
-    root: PathBuf,
+    /// `None` for rules that ignore nothing.
+    root: Option<PathBuf>,
     cache: Mutex<HashMap<MatcherKey, Option<Arc<Gitignore>>>>,
 }
 
 impl IgnoreRules {
     pub fn new(root: &Path) -> Self {
         Self {
-            root: root.to_path_buf(),
+            root: Some(root.to_path_buf()),
+            cache: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Rules that ignore nothing, for a directory that shows a tree as it is: a tracked file stays tracked there even when an ignore file in the same tree matches it.
+    pub fn none() -> Self {
+        Self {
+            root: None,
             cache: Mutex::new(HashMap::new()),
         }
     }
@@ -101,10 +110,11 @@ impl IgnoreRules {
     }
 
     fn build(&self, dir: &[u8], name: &str) -> Option<Gitignore> {
+        let root = self.root.as_ref()?;
         let folder = if dir.is_empty() {
-            self.root.clone()
+            root.clone()
         } else {
-            resolve(&self.root, &RepoPath::parse(dir).ok()?).ok()?
+            resolve(root, &RepoPath::parse(dir).ok()?).ok()?
         };
         let file = folder.join(name);
         if !fs::symlink_metadata(&folder).ok()?.is_dir()

@@ -283,3 +283,52 @@ async fn start_repairs_a_main_dir_behind_the_head() {
         Some("pub fn y() {}\n")
     );
 }
+
+#[tokio::test]
+async fn start_leaves_an_up_to_date_main_dir_unchanged() {
+    use std::os::unix::fs::MetadataExt;
+    let project = Project::new().await;
+    let marker = project
+        .fx
+        .project
+        .paths()
+        .fold_dir()
+        .join(main_view::MARKER);
+    let seen = || {
+        let file = |path: &str| {
+            let meta = std::fs::symlink_metadata(project.main().join(path)).unwrap();
+            (meta.ino(), meta.mtime_nsec(), meta.mtime())
+        };
+        (
+            file("README.md"),
+            file("src/lib.rs"),
+            std::fs::read_to_string(&marker).unwrap(),
+        )
+    };
+    let before = seen();
+
+    let job = project.start(&project.fx.bus, MainQueue::new());
+    until(|| progress(&job).checks >= 1).await;
+    assert_eq!(progress(&job).cycles, 0, "nothing to rewrite");
+    assert_eq!(seen(), before);
+    assert_eq!(before.2, "r1\n");
+}
+
+#[tokio::test]
+async fn start_repairs_a_rewrite_to_the_head_that_stopped_part_way() {
+    let project = Project::new().await;
+    let main = project.main();
+    std::fs::set_permissions(&main, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::remove_file(main.join("README.md")).unwrap();
+    let fold_dir = project.fx.project.paths().fold_dir();
+    std::fs::write(fold_dir.join(main_view::MARKER), " -> r1\n").unwrap();
+
+    let job = project.start(&project.fx.bus, MainQueue::new());
+    until(|| progress(&job).cycles == 1).await;
+    assert_eq!(project.marker(), Some(r(1)));
+    assert!(project.read("README.md").is_some());
+    assert_eq!(
+        std::fs::metadata(&main).unwrap().permissions().mode() & 0o777,
+        0o555
+    );
+}

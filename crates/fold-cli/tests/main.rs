@@ -23,6 +23,7 @@ mod claude_files;
 #[cfg(feature = "failpoints")]
 mod crash_sigkill;
 mod daemon_client;
+mod daemon_lock;
 #[cfg(not(feature = "dev-seed"))]
 mod dev_command;
 mod doctor;

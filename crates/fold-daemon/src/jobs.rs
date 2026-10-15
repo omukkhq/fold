@@ -522,7 +522,7 @@ impl Drop for MainMaterialiser {
     }
 }
 
-/// Starts the `main_materialiser` of one project: it queues the revision of each committed `main.advanced` on `bus`, a proposal integration and a pull alike, and rewrites `main/` to the newest queued revision with [`main_view::update`]. At start it queues the current head, so a revision committed before a crash or a stop that never reached `main/` is written then. A project without a marker shows `r1`, which `fold init` wrote. A failed rewrite leaves the marker where it was and is logged; the next queued revision starts again from the marker.
+/// Starts the `main_materialiser` of one project: it queues the revision of each committed `main.advanced` on `bus`, a proposal integration and a pull alike, and rewrites `main/` to the newest queued revision with [`main_view::update`]. At start it queues the current head, so a revision committed before a crash or a stop that never reached `main/` is written then. A project without a marker shows `r1`, which `fold init` wrote. A failed or cut-off rewrite is logged and leaves the marker on the revision `main/` last finished showing, with the rewrite it began noted, so the next queued revision, or the head at the next start, starts from what `main/` holds.
 pub fn spawn_main_materialiser(
     store: Store,
     bus: &EventBus,
@@ -606,15 +606,15 @@ impl MainRun {
         }
     }
 
-    /// False when `main/` already shows `target` or a later revision.
+    /// False when `main/` already shows `target` or a later revision and no rewrite stopped part-way.
     async fn rewrite(&self, target: RevisionId) -> Result<bool, &'static str> {
         let fold_dir = self.paths.fold_dir();
-        let marker = tokio::task::spawn_blocking(move || main_view::read_marker(&fold_dir))
+        let marker = tokio::task::spawn_blocking(move || main_view::read_state(&fold_dir))
             .await
             .map_err(|_| codes::INTERNAL_ERROR)?
             .map_err(|error| FoldError::from(WorkspaceError::from(error)).code())?;
-        let shown = marker.or_else(|| RevisionId::from_number(1));
-        if shown.is_some_and(|shown| shown >= target) {
+        let shown = marker.shown.or_else(|| RevisionId::from_number(1));
+        if marker.rewriting.is_none() && shown.is_some_and(|shown| shown >= target) {
             return Ok(false);
         }
         let from = match shown {

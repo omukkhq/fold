@@ -123,6 +123,22 @@ The first test proves that the second of two proposals that change the same line
 
 The second test proves that the conflicted proposal integrates after the author resolves it. `backend` runs `sync_workspace`, which moves the base to `r2` and writes conflict markers into `README.md`. It writes a line that keeps both changes, records the changes and sends `v2` with `update_proposal`. `review` approves `v2` and integrates it with `expected_version` 2, main is `r3` and holds both changes, `main/` shows the resolved line, and the task is Done.
 
+## Acceptance 8: a restarted daemon recovers
+
+The automated tests are `acceptance_8_restart_recovery_graceful` and `acceptance_8_restart_recovery_dropped` in `crates/fold-daemon/tests/acceptance_8_restart_recovery.rs`. `make acceptance` runs both. The first stops the daemon gracefully; the second drops it without a shutdown, as a killed daemon ends.
+
+1. In `review`, ask: "Create the tasks 'Build the login screen', 'Add the login endpoint' and 'Ship the login', and make 'Ship the login' need 'Build the login screen'." In `frontend` and `backend`, ask each to claim one of the first two tasks, create its workspace and write one new file in it. **Expected:** both claims and both workspaces succeed.
+2. Leave both workspaces untouched for the quiet period, then in `frontend` ask: "Call record_checkpoint for your workspace with the label 'screen drafted', then create_proposal for your task." In `backend`, ask: "Call record_changes for your workspace with the message 'Add the login endpoint'." In `review`, ask: "Send a fold message to frontend and another to backend." **Expected:** each workspace has an automatic checkpoint, `frontend` has an explicit one, `backend` has a changeset, the proposal `P-1` is open, and nobody acknowledges the messages.
+3. Open the live activity screen in the web interface. In `review`, ask: "Call get_events until it returns no events." Close the browser tab, then in `review` ask: "Create the task 'Write the release notes' and add the checklist item 'List the login changes' to it."
+4. Stop `fold serve` with Ctrl-C. Delete the workspace directory of `backend` and write a new file into the workspace of `frontend`. Start `fold serve` again, then end and start all three sessions with the commands from setup step 3. **Expected:** the daemon starts, and each session reconnects with the fold session context.
+5. In `review`, ask: "Call get_task for the four tasks, get_workspace for both workspaces, get_proposal for P-1 and get_events." In `frontend` and `backend`, ask: "Call get_inbox." **Expected:** the tasks, the proposal and the checkpoints are as before; the workspace of `backend` is `missing` and the other is `active`; each inbox still holds its message; `get_events` starts at the event after the last one `review` read in step 3, with no gap.
+6. Open the live activity screen again. **Expected:** it lists the workspace of `frontend` with the new file from step 4, and the activity feed shows `workspace.missing` for the deleted workspace and `session.ended` for each agent.
+7. Compare `main/` with `get_repository_state`. **Expected:** `main/` holds the files of the head revision.
+8. Repeat steps 4 to 7, but stop the daemon with `kill -9` instead of Ctrl-C. **Expected:** the same results, and `fold serve` starts at once although the socket file is still there.
+9. Leave the sessions idle for 31 minutes. **Expected:** the board marks both claims stale, with one `claim.stale` event each.
+
+Result: date, fold version, Claude Code version, pass or fail, notes.
+
 ## Acceptance 9: fold works with no network
 
 This scenario runs automated only. The automated tests are `acceptance_9_offline` and `acceptance_9_offline_inner` in `crates/fold-daemon/tests/acceptance_9_offline.rs`. `make acceptance` runs them with the other acceptance tests.

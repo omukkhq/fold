@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 use fold_core::RevisionId;
 use fold_core::object::ObjectHash;
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
-use fold_vcs::main_view::{MARKER, read_marker, rewrite, update, write_marker};
+use fold_vcs::main_view::{
+    MARKER, MarkerState, read_marker, read_state, rewrite, update, write_marker,
+};
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::platform::Capabilities;
 use fold_vcs::revision_store::write_initial_tree;
@@ -404,4 +406,232 @@ fn rewrite_succeeds_with_the_portable_fallbacks() {
         assert!(!main.join("bin").exists());
         assert!(!main.join("link").exists());
     }
+}
+
+/// Every file under `dir` by relative path, with its text; `.fold` is left out.
+fn files(dir: &Path) -> Vec<(String, String)> {
+    fn walk(root: &Path, dir: &Path, into: &mut Vec<(String, String)>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.file_name().is_some_and(|name| name == ".fold") {
+                continue;
+            }
+            if path.is_dir() {
+                walk(root, &path, into);
+            } else {
+                let relative = path.strip_prefix(root).unwrap().to_string_lossy();
+                into.push((relative.into_owned(), fs::read_to_string(&path).unwrap()));
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(dir, dir, &mut found);
+    found.sort();
+    found
+}
+
+#[test]
+fn a_rewrite_that_stopped_part_way_is_repaired_from_what_main_holds() {
+    let project = Project::new();
+    let two = [
+        (".gitignore", FILE, b"*.log\n".as_slice()),
+        ("a.txt", FILE, b"two\n"),
+        ("b.txt", FILE, b"two\n"),
+        ("keep.log", FILE, b"tracked\n"),
+    ];
+    let two_tree = project.tree(&two);
+    update(
+        &project.objects,
+        &project.main(),
+        &project.fold_dir(),
+        None,
+        &two_tree,
+        r(2),
+        HOST,
+    )
+    .unwrap();
+
+    // A rewrite to r3 wrote a.txt and the new c.txt, then stopped before b.txt and the final marker.
+    let partial = project.flat(&[
+        (".gitignore", FILE, b"*.log\n"),
+        ("a.txt", FILE, b"three\n"),
+        ("b.txt", FILE, b"two\n"),
+        ("c.txt", FILE, b"three\n"),
+        ("keep.log", FILE, b"tracked\n"),
+    ]);
+    rewrite(
+        &project.objects,
+        &project.main(),
+        &project.flat(&two),
+        &partial,
+        HOST,
+    )
+    .unwrap();
+    fs::write(project.fold_dir().join(MARKER), "r2 -> r3\n").unwrap();
+    assert_eq!(
+        read_state(&project.fold_dir()).unwrap(),
+        MarkerState {
+            shown: Some(r(2)),
+            rewriting: Some(r(3)),
+        }
+    );
+    assert_eq!(read_marker(&project.fold_dir()).unwrap(), Some(r(2)));
+
+    // r4 puts a.txt back to its r2 content, so no diff from r2 names it, and drops the tracked keep.log that an ignore rule matches.
+    let four = project.tree(&[
+        (".gitignore", FILE, b"*.log\n"),
+        ("a.txt", FILE, b"two\n"),
+        ("b.txt", FILE, b"four\n"),
+    ]);
+    update(
+        &project.objects,
+        &project.main(),
+        &project.fold_dir(),
+        Some(&two_tree),
+        &four,
+        r(4),
+        HOST,
+    )
+    .unwrap();
+    assert_eq!(
+        files(&project.main()),
+        [
+            (".gitignore".to_owned(), "*.log\n".to_owned()),
+            ("a.txt".to_owned(), "two\n".to_owned()),
+            ("b.txt".to_owned(), "four\n".to_owned()),
+        ]
+    );
+    assert_eq!(
+        fs::read_to_string(project.fold_dir().join(MARKER)).unwrap(),
+        "r4\n"
+    );
+    assert_eq!(
+        read_state(&project.fold_dir()).unwrap(),
+        MarkerState {
+            shown: Some(r(4)),
+            rewriting: None,
+        }
+    );
+}
+
+#[test]
+fn a_marker_records_the_rewrite_it_began() {
+    let project = Project::new();
+    fs::write(project.fold_dir().join(MARKER), " -> r3\n").unwrap();
+    assert_eq!(
+        read_state(&project.fold_dir()).unwrap(),
+        MarkerState {
+            shown: None,
+            rewriting: Some(r(3)),
+        }
+    );
+    // A failed rewrite keeps the revision main/ showed and names the one it began.
+    let first = project.tree(&[("a.txt", FILE, b"one\n")]);
+    update(
+        &project.objects,
+        &project.main(),
+        &project.fold_dir(),
+        None,
+        &first,
+        r(1),
+        HOST,
+    )
+    .unwrap();
+    let mut broken = project.flat(&[("a.txt", FILE, b"two\n")]);
+    broken.insert(
+        b"b.txt".to_vec(),
+        FlatEntry {
+            kind: FILE,
+            hash: ObjectHash::from_bytes([9; 32]),
+        },
+    );
+    let broken = write_initial_tree(&project.objects, broken).unwrap();
+    update(
+        &project.objects,
+        &project.main(),
+        &project.fold_dir(),
+        Some(&first),
+        &broken,
+        r(2),
+        HOST,
+    )
+    .unwrap_err();
+    assert_eq!(
+        fs::read_to_string(project.fold_dir().join(MARKER)).unwrap(),
+        "r1 -> r2\n"
+    );
+    assert_eq!(project.read("a.txt"), "one\n");
+}
+
+#[test]
+fn a_repair_seals_the_directories_a_stopped_rewrite_opened() {
+    let project = Project::new();
+    let one = [
+        ("docs/b.txt", FILE, b"one\n".as_slice()),
+        ("src/a.txt", FILE, b"one\n"),
+    ];
+    let one_tree = project.tree(&one);
+    update(
+        &project.objects,
+        &project.main(),
+        &project.fold_dir(),
+        None,
+        &one_tree,
+        r(1),
+        HOST,
+    )
+    .unwrap();
+
+    // A rewrite to r2 opened every directory on its way, wrote src/a.txt and stopped before docs/b.txt.
+    rewrite(
+        &project.objects,
+        &project.main(),
+        &project.flat(&one),
+        &project.flat(&[
+            ("docs/b.txt", FILE, b"one\n"),
+            ("src/a.txt", FILE, b"two\n"),
+        ]),
+        HOST,
+    )
+    .unwrap();
+    let main = project.main();
+    for dir in [main.clone(), main.join("docs"), main.join("src")] {
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    fs::write(project.fold_dir().join(MARKER), "r1 -> r2\n").unwrap();
+    let two = project.tree(&[
+        ("docs/b.txt", FILE, b"two\n"),
+        ("src/a.txt", FILE, b"two\n"),
+    ]);
+    let done = update(
+        &project.objects,
+        &main,
+        &project.fold_dir(),
+        Some(&one_tree),
+        &two,
+        r(2),
+        HOST,
+    )
+    .unwrap();
+    assert_eq!(strings(&done.written), ["docs/b.txt"]);
+    for dir in [main.clone(), main.join("docs"), main.join("src")] {
+        assert_eq!(mode(&dir), 0o555, "{}", dir.display());
+    }
+
+    // A rewrite that stopped after its last file leaves nothing to write, and the repair still seals.
+    fs::set_permissions(main.join("src"), fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(project.fold_dir().join(MARKER), "r1 -> r2\n").unwrap();
+    let done = update(
+        &project.objects,
+        &main,
+        &project.fold_dir(),
+        Some(&one_tree),
+        &two,
+        r(2),
+        HOST,
+    )
+    .unwrap();
+    assert!(done.written.is_empty() && done.removed.is_empty());
+    assert_eq!(mode(&main.join("src")), 0o555);
+    assert_eq!(read_marker(&project.fold_dir()).unwrap(), Some(r(2)));
 }

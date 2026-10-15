@@ -8,6 +8,7 @@ autotests = false
 
 [dependencies]
 blake3 = "1.8.7"
+fail = { version = "0.5.1", optional = true }
 fold-core = { version = "0.1.0", path = "../fold-core" }
 ignore = "0.4.33"
 notify = "8.2.0"
@@ -27,6 +28,10 @@ tempfile = "3.27.0"
 
 [target."cfg(unix)".dependencies]
 libc = "0.2.190"
+
+[features]
+# Compiles the failpoints that crash-safety tests fire; release builds leave it off.
+failpoints = ["dep:fail", "fail/failpoints"]
 
 [[test]]
 name = "integration"

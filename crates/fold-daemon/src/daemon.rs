@@ -93,7 +93,7 @@ impl From<DaemonError> for FoldError {
 pub struct Daemon;
 
 impl Daemon {
-    /// Takes the host lock, opens the registry and every registered project, ends the sessions a previous run left open, then binds the socket and the HTTP listener. `clock` goes to every project handle.
+    /// Takes the host lock, opens the registry and every registered project, each through its start-up sequence, then binds the socket and the HTTP listener and starts the jobs. `clock` goes to every project handle.
     pub async fn start(
         config: DaemonConfig,
         clock: Arc<dyn Clock>,
@@ -123,11 +123,6 @@ impl Daemon {
         for row in fold_store::projects::list_projects(state.registry.read()).await? {
             // A project that fails to open is logged and marked unavailable; the others start.
             let _ = state.projects.open(&row, clock.clone()).await;
-        }
-        for handle in state.projects.handles() {
-            if let Err(error) = handle.agents().close_orphan_sessions().await {
-                tracing::error!(project = %handle.slug, %error, "could not end orphan sessions");
-            }
         }
 
         let (stop, stopped) = watch::channel(false);

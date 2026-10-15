@@ -228,6 +228,18 @@ impl Harness {
     /// Stops the project the way a stopping daemon does, opens the same files again the way a starting daemon does, and reconnects the sessions that were connected. Push targets live in memory, so none survive.
     pub async fn restart(&mut self) {
         let connected: Vec<String> = self.sessions.keys().cloned().collect();
+        self.stop().await;
+        self.start_again().await;
+        for agent in AGENTS {
+            if connected.iter().any(|name| name == agent) {
+                self.connect(agent).await;
+            }
+        }
+    }
+
+    /// Stops the project the way a stopping daemon does: the sessions end, the stream closes, the live state lets go of the workspaces and the database closes. [`Harness::start_again`] opens it again.
+    pub async fn stop(&mut self) {
+        let connected: Vec<String> = self.sessions.keys().cloned().collect();
         for agent in &connected {
             self.disconnect(agent).await;
         }
@@ -241,15 +253,25 @@ impl Harness {
             .await
             .unwrap();
         self.handle.store.close().await.unwrap();
+    }
+
+    /// Stops the project the way a killed daemon stops: the session tasks are aborted, so no session ends, and the workspace watchers stop without a last write, so nothing the test changes while the daemon is down reaches the old handle. Nothing is closed or checkpointed. [`Harness::start_again`] opens it again.
+    pub async fn drop_daemon(&mut self) {
+        for (_, session) in std::mem::take(&mut self.sessions) {
+            session.server.abort();
+            let _ = session.server.await;
+            drop(session.client);
+        }
+        for live in self.handle.live.all() {
+            self.handle.live.detach(live.view.workspace).await;
+        }
+    }
+
+    /// Opens the same files again the way a starting daemon does, through the project's start-up sequence, with no session connected.
+    pub async fn start_again(&mut self) {
         let (state, handle) = open(&self.project, &self.row).await;
-        handle.agents().close_orphan_sessions().await.unwrap();
         self.state = state;
         self.handle = handle;
-        for agent in AGENTS {
-            if connected.iter().any(|name| name == agent) {
-                self.connect(agent).await;
-            }
-        }
     }
 
     pub fn client(&self, agent: &str) -> &Client {

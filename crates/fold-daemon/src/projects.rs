@@ -207,7 +207,7 @@ impl Projects {
             .collect()
     }
 
-    /// Opens `row` unless it is already open, in which case the same handle comes back. A new handle has its workspaces reconciled with their directories before any request can reach it.
+    /// Opens `row` unless it is already open, in which case the same handle comes back. A new handle runs its start-up sequence before any request can reach it: the database opens with SQLite's own WAL recovery, the workspaces are reconciled with their directories, and every session a previous run left open ends at the start time with its `session.ended`, so presence shows offline until the adapters reconnect. The handle's `main/` materialiser queues the head revision as it starts, which repairs `main/` after an integration cut off after its commit or a rewrite stopped part-way and changes nothing otherwise. No session of this run can exist yet, because a session starts only through an open handle. The daemon's jobs start after its projects are open.
     pub async fn open(
         &self,
         row: &ProjectRow,
@@ -220,6 +220,9 @@ impl Projects {
         let outcome = ProjectHandle::open(row, clock).await.map(Arc::new);
         if let Ok(handle) = &outcome {
             jobs::reconcile_workspaces(handle).await;
+            if let Err(error) = handle.agents().close_orphan_sessions().await {
+                tracing::error!(project = %row.slug, %error, "could not end orphan sessions");
+            }
         }
         let slot = match &outcome {
             Ok(handle) => Slot::Open(handle.clone()),

@@ -19,6 +19,7 @@ mod acceptance_4_live_diff;
 mod acceptance_5_review_and_integrate;
 mod acceptance_6_dependency_unblocks;
 mod acceptance_7_conflicting_proposals;
+mod acceptance_8_restart_recovery;
 mod acceptance_9_offline;
 mod adoption;
 mod attention_question;
@@ -54,6 +55,8 @@ mod integration;
 mod lease_sweeper;
 mod live_state;
 mod main_materialiser;
+#[cfg(feature = "failpoints")]
+mod main_view_failpoints;
 mod mcp_activity;
 mod mcp_footer;
 mod mcp_handshake;
@@ -78,6 +81,7 @@ mod recompute_guard;
 mod reconcile;
 #[cfg(feature = "failpoints")]
 mod reconcile_failpoints;
+mod restart_sessions;
 mod review_checkouts;
 mod review_claims;
 mod reviews;
