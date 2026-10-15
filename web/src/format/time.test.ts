@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatAsOf, formatQuiet, formatSince } from "./time";
+import { formatAsOf, formatAsOfMinute, formatQuiet, formatSince } from "./time";
 
 const NOW = 1_800_000_000_000;
 const SEC = 1000;
@@ -57,5 +57,19 @@ describe("formatAsOf", () => {
     const now = new Date(2026, 9, 15, 0, 1, 0).getTime();
     const at = new Date(2026, 9, 14, 23, 59, 59).getTime();
     expect(formatAsOf(now, at)).toBe("Oct 14, 23:59:59");
+  });
+});
+
+describe("formatAsOfMinute", () => {
+  it("shows hours and minutes on the same local day", () => {
+    const now = new Date(2026, 9, 15, 14, 20, 0).getTime();
+    const at = new Date(2026, 9, 15, 9, 5, 31).getTime();
+    expect(formatAsOfMinute(now, at)).toBe("09:05");
+  });
+
+  it("adds the date on another day", () => {
+    const now = new Date(2026, 9, 15, 0, 1, 0).getTime();
+    const at = new Date(2026, 9, 14, 23, 59, 59).getTime();
+    expect(formatAsOfMinute(now, at)).toBe("Oct 14, 23:59");
   });
 });

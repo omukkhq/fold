@@ -1,12 +1,13 @@
 import { RefreshCw, WifiOff } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { useNow } from "@/live/useNow";
 import { Button } from "../button/Button";
-import { reconnectingText } from "./reconnecting";
+import { reconnectingParts } from "./reconnecting";
 
 interface ReconnectingBannerProps {
   /** The time of the state on screen, in UTC milliseconds. */
   asOf: number;
-  /** The current time, passed in so the text is a pure function of its inputs. */
+  /** The current time; with `retryAt` the banner reads the display clock instead, so the countdown moves each second. */
   now: number;
   /** When the next connection attempt starts, in UTC milliseconds; the banner then counts down to it. */
   retryAt?: number;
@@ -24,6 +25,9 @@ export function ReconnectingBanner({
   onRetry,
   className,
 }: ReconnectingBannerProps) {
+  const counting = retryAt !== undefined;
+  const clock = useNow(counting);
+  const text = reconnectingParts(counting ? clock : now, asOf, retryAt, shown);
   return (
     // The bottom padding gives its last pixel to the border, as the frame's inner stroke does.
     <div
@@ -39,7 +43,11 @@ export function ReconnectingBanner({
         className="shrink-0 text-secondary-text"
       />
       <p className="min-w-0 flex-1 text-bar leading-snug text-text">
-        {reconnectingText(now, asOf, retryAt, shown)}
+        {text.paused}{" "}
+        {text.countdown !== null && (
+          <span aria-hidden="true">{text.countdown} </span>
+        )}
+        {text.asOf}
       </p>
       {onRetry ? (
         <Button

@@ -81,6 +81,7 @@ const W00_OTHER = [
   "radius-s",
   "radius-m",
   "radius-l",
+  "radius-chip",
   "size-micro",
   "size-caption",
   "size-code",

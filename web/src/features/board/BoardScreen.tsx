@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { agentBarQuery, boardQuery } from "@/api/board";
+import { agentBarQuery } from "@/api/agentBar";
+import { boardQuery } from "@/api/board";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { ReconnectingBanner } from "@/components/states/ReconnectingBanner";
 import { cn } from "@/lib/cn";

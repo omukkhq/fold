@@ -2,7 +2,6 @@ import type {
   Board,
   BoardCard,
   BoardColumn,
-  ProjectAgent,
   TaskStatus,
 } from "../src/api/board";
 
@@ -181,15 +180,4 @@ export function board(slug: string, now: number = Date.now()): Board {
     cards: all.filter((c) => c.status === status),
   }));
   return { columns };
-}
-
-export function agents(slug: string): ProjectAgent[] {
-  if (slug !== "demo") {
-    return [];
-  }
-  return [
-    { name: "frontend", presence: "active", working: 3, stalled: 0 },
-    { name: "backend", presence: "idle", working: 2, stalled: 1 },
-    { name: "review", presence: "offline", working: 0, stalled: 0 },
-  ];
 }

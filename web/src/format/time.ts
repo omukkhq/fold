@@ -47,13 +47,23 @@ function pad(value: number): string {
   return String(value).padStart(2, "0");
 }
 
-/** The local time of `at` as `14:12:31`, with the date in front when it is not the day of `now`. */
-export function formatAsOf(now: number, at: number): string {
+function stamp(now: number, at: number, seconds: boolean): string {
   const when = new Date(at);
-  const clock = `${pad(when.getHours())}:${pad(when.getMinutes())}:${pad(when.getSeconds())}`;
+  const minutes = `${pad(when.getHours())}:${pad(when.getMinutes())}`;
+  const clock = seconds ? `${minutes}:${pad(when.getSeconds())}` : minutes;
   if (when.toDateString() === new Date(now).toDateString()) {
     return clock;
   }
   const month = MONTHS[when.getMonth()] ?? "";
   return `${month} ${String(when.getDate())}, ${clock}`;
+}
+
+/** The local time of `at` as `14:12:31`, with the date in front when it is not the day of `now`. */
+export function formatAsOf(now: number, at: number): string {
+  return stamp(now, at, true);
+}
+
+/** The local time of `at` to the minute, `14:12`, with the date in front when it is not the day of `now`. */
+export function formatAsOfMinute(now: number, at: number): string {
+  return stamp(now, at, false);
 }

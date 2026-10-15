@@ -1,5 +1,6 @@
 import { Bot, Hand, OctagonAlert, Search, Tag } from "lucide-react";
-import type { BoardLabel, ProjectAgent } from "@/api/board";
+import type { ProjectAgent } from "@/api/agentBar";
+import type { BoardLabel } from "@/api/board";
 import { Button } from "@/components/button/Button";
 import { Menu, type MenuItem } from "@/components/overlay/Menu";
 import { cn } from "@/lib/cn";

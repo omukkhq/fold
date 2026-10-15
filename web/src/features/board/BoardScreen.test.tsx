@@ -17,7 +17,8 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { agents, board } from "../../../fixtures/board";
+import { agents } from "../../../fixtures/agentBar";
+import { board } from "../../../fixtures/board";
 import { fixtureEventTransport } from "../../../fixtures/events";
 import type { Board } from "@/api/board";
 import { keys } from "@/api/keys";
@@ -326,7 +327,7 @@ describe("BoardScreen", () => {
     const retry = vi.fn();
     setup(board("demo"), "/p/demo/board", retry);
     await screen.findByRole("region", { name: "Backlog" });
-    const asOf = Date.now() + 60_000;
+    const asOf = Date.now();
     act(() => {
       liveStatusStore.set({
         state: "reconnecting",

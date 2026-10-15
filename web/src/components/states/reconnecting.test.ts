@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { reconnectingText } from "./reconnecting";
+import { reconnectingParts, reconnectingText } from "./reconnecting";
 
 const now = new Date(2026, 9, 15, 14, 20, 0).getTime();
 const asOf = new Date(2026, 9, 15, 14, 12, 31).getTime();
@@ -28,5 +28,18 @@ describe("reconnectingText", () => {
     expect(reconnectingText(now, asOf, undefined, "the board")).toContain(
       "Showing the board as of 14:12:31;",
     );
+  });
+});
+
+describe("reconnectingParts", () => {
+  it("has no countdown without a retry time", () => {
+    expect(reconnectingParts(now, asOf).countdown).toBeNull();
+  });
+
+  it("keeps the countdown apart from the rest of the sentence", () => {
+    const parts = reconnectingParts(now, asOf, now + 1000);
+    expect(parts.paused).toBe("Live updates paused.");
+    expect(parts.countdown).toBe("Reconnecting in 1 s.");
+    expect(parts.asOf).toContain("14:12:31");
   });
 });

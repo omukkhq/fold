@@ -6,13 +6,7 @@ import { applyEvent } from "../live/apply";
 import { connectProject } from "../live/connect";
 import type { StoredEvent } from "../live/envelope";
 import { createLiveStatusStore } from "../live/status";
-import {
-  agentBarQuery,
-  boardQuery,
-  getBoard,
-  getProjectAgents,
-  type Board,
-} from "./board";
+import { boardQuery, getBoard, type Board } from "./board";
 import { keys } from "./keys";
 
 beforeEach(() => {
@@ -60,20 +54,8 @@ describe("the board fixture", () => {
 
   it("is empty for every other project", async () => {
     const board = getBoard("ledger");
-    const agents = getProjectAgents("ledger");
     await vi.runAllTimersAsync();
     expect(await board).toEqual({ columns: [] });
-    expect(await agents).toEqual([]);
-  });
-
-  it("lists the demo agents with their presence", async () => {
-    const agents = getProjectAgents("demo");
-    await vi.runAllTimersAsync();
-    expect((await agents).map((a) => a.presence)).toEqual([
-      "active",
-      "idle",
-      "offline",
-    ]);
   });
 });
 
@@ -83,27 +65,21 @@ describe("a production build", () => {
     vi.resetModules();
   });
 
-  it("answers with an empty board and no agents", async () => {
+  it("answers with an empty board", async () => {
     vi.stubEnv("DEV", false);
     vi.resetModules();
     const board = await import("./board");
     await expect(board.getBoard("demo")).resolves.toEqual({ columns: [] });
-    await expect(board.getProjectAgents("demo")).resolves.toEqual([]);
   });
 });
 
 describe("board queries", () => {
-  it("cache the board under the board key and the agents under the agents prefix", async () => {
+  it("cache the board under the board key", async () => {
     const client = new QueryClient();
-    const both = Promise.all([
-      client.query(boardQuery("demo")),
-      client.query(agentBarQuery("demo")),
-    ]);
+    const loading = client.query(boardQuery("demo"));
     await vi.runAllTimersAsync();
-    const [board, agents] = await both;
+    const board = await loading;
     expect(client.getQueryData(keys.board("demo"))).toEqual(board);
-    expect(client.getQueryData(keys.agentBar("demo"))).toEqual(agents);
-    expect(keys.agentBar("demo").slice(0, 2)).toEqual(keys.agents("demo"));
   });
 
   it("move a card to its new column when a status event arrives", async () => {

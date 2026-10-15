@@ -1,5 +1,4 @@
 import { queryOptions } from "@tanstack/react-query";
-import type { Presence } from "../components/avatar/presence";
 import { fromFixture } from "./fixture";
 import { keys } from "./keys";
 
@@ -84,15 +83,6 @@ export interface Board {
   columns: BoardColumn[];
 }
 
-export interface ProjectAgent {
-  name: string;
-  presence: Presence;
-  /** Tasks its workers hold an implementation claim on. */
-  working: number;
-  /** Of those, the ones whose worker is stalled. */
-  stalled: number;
-}
-
 const fixture = import.meta.env.DEV
   ? () => import("../../fixtures/board")
   : undefined;
@@ -101,15 +91,5 @@ export async function getBoard(slug: string): Promise<Board> {
   return fromFixture(fixture, (m) => m.board(slug), { columns: [] });
 }
 
-export async function getProjectAgents(slug: string): Promise<ProjectAgent[]> {
-  return fromFixture(fixture, (m) => m.agents(slug), []);
-}
-
 export const boardQuery = (slug: string) =>
   queryOptions({ queryKey: keys.board(slug), queryFn: () => getBoard(slug) });
-
-export const agentBarQuery = (slug: string) =>
-  queryOptions({
-    queryKey: keys.agentBar(slug),
-    queryFn: () => getProjectAgents(slug),
-  });

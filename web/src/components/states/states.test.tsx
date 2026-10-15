@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Inbox } from "lucide-react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -104,5 +104,31 @@ describe("ReconnectingBanner", () => {
     render(<ReconnectingBanner now={2} asOf={1} onRetry={onRetry} />);
     await userEvent.click(screen.getByRole("button", { name: "Retry now" }));
     expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts down to the next attempt each second, outside the announced text", () => {
+    vi.useFakeTimers();
+    try {
+      const start = new Date(2026, 9, 15, 14, 20, 0).getTime();
+      vi.setSystemTime(start);
+      render(
+        <ReconnectingBanner now={start} asOf={start} retryAt={start + 3000} />,
+      );
+      const banner = screen.getByRole("status");
+      expect(banner.textContent).toContain("Reconnecting in 3 s.");
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(banner.textContent).toContain("Reconnecting in 2 s.");
+      act(() => {
+        vi.advanceTimersByTime(2000);
+      });
+      expect(banner.textContent).toContain("Reconnecting now.");
+      expect(
+        screen.getByText("Reconnecting now.").getAttribute("aria-hidden"),
+      ).toBe("true");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

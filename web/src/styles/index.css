@@ -82,6 +82,7 @@
   --radius-s: var(--radius-s);
   --radius-m: var(--radius-m);
   --radius-l: var(--radius-l);
+  --radius-chip: var(--radius-chip);
 
   --text-*: initial;
   --text-page: var(--size-page);
