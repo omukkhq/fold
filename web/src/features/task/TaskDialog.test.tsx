@@ -539,7 +539,11 @@ describe("the task dialog route", () => {
         { seq: 1, type: "task.updated", actor: "human:tanim", created_at: at },
       ],
       human_review_note: { reason: "Auth work", set_by: "planner", set_at: at },
-      human_review: { reviewer: "tanim" },
+      human_review: {
+        reviewer: "tanim",
+        reason: "Auth work",
+        set_by: "planner",
+      },
     });
     const { dialog } = await openTask();
     expect(
@@ -1084,7 +1088,9 @@ describe("the human edits", () => {
   }, 15_000);
 
   it("shows the human-review mark and offers no control for it", async () => {
-    patch("T-2", { human_review: { reviewer: "tanim" } });
+    patch("T-2", {
+      human_review: { reviewer: "tanim", reason: "auth", set_by: "planner" },
+    });
     const { dialog } = await openTask();
     const review = region(dialog, "Human review");
     expect(within(review).getByText("Required · tanim")).toBeTruthy();

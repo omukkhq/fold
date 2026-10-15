@@ -99,3 +99,10 @@ review_claim_required
 checkout_failed
 invalid_last_event_id
 invalid_push_target
+human_review_already_set
+stale_version
+author_cannot_integrate
+changes_requested
+not_approved
+human_approval_missing
+prerequisites_not_done

@@ -129,7 +129,11 @@ describe("proposalLook", () => {
 
 describe("humanReviewText", () => {
   it("names the reviewer when there is one", () => {
-    expect(humanReviewText({ reviewer: "tanim" })).toBe("Human review · tanim");
-    expect(humanReviewText({ reviewer: null })).toBe("Human review");
+    expect(
+      humanReviewText({ reviewer: "tanim", reason: "auth", set_by: "planner" }),
+    ).toBe("Human review · tanim");
+    expect(
+      humanReviewText({ reviewer: null, reason: "auth", set_by: "planner" }),
+    ).toBe("Human review");
   });
 });

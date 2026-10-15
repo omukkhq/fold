@@ -1,5 +1,5 @@
 use fold_core::object::ObjectHash;
-use fold_core::reviews::{ReviewFact, Side, Verdict};
+use fold_core::reviews::{Approver, ReviewFact, Side, Verdict};
 use fold_core::tree::ChangeCounts;
 use fold_core::{
     ChangesetId, CommentId, EventActor, HumanName, ProposalId, RevisionId, TaskId, Timestamp,
@@ -650,7 +650,7 @@ pub async fn comment_proposal(
         .transpose()
 }
 
-/// The reviews of one version of the proposal. `seq` is each review's place in `(created_at, id)` order, counted from 1: the order the status cache reads the latest verdict in, so `fold_core::reviews::latest_verdict` over these facts and the board never disagree.
+/// The reviews of one version of the proposal. `seq` is each review's place in `(created_at, id)` order, counted from 1: the order the status cache reads the latest verdict in, so `fold_core::reviews::latest_verdict` over these facts and the board never disagree. Each approver's weight comes from the agent's tags at the time of this read.
 pub async fn review_facts(
     executor: impl SqliteExecutor<'_>,
     proposal: ProposalId,
@@ -658,7 +658,11 @@ pub async fn review_facts(
 ) -> Result<Vec<ReviewFact>, StoreError> {
     let (number, version) = (proposal.to_db(), i64::from(version));
     let rows = sqlx::query!(
-        r#"SELECT r.verdict, w.name AS "worker?: String", r.reviewer_human
+        r#"SELECT r.verdict, w.name AS "worker?: String", r.reviewer_human,
+                  EXISTS (
+                      SELECT 1 FROM agent_tags a
+                      WHERE a.agent_id = w.agent_id AND a.tag = 'integrator'
+                  ) AS "integrator!: bool"
            FROM reviews r
            JOIN proposal_versions v ON v.id = r.version_id
            JOIN proposals p ON p.id = v.proposal_id
@@ -673,13 +677,22 @@ pub async fn review_facts(
     rows.into_iter()
         .zip(1_u64..)
         .map(|(row, seq)| {
+            let reviewer = actor(
+                row.worker.as_deref(),
+                row.reviewer_human.as_deref(),
+                "reviews",
+            )?;
+            let approver = match row.reviewer_human.as_deref() {
+                Some(human) => Approver::Human(
+                    HumanName::parse(human).map_err(|_| StoreError::Corrupt("reviews"))?,
+                ),
+                None if row.integrator => Approver::IntegratorAgent,
+                None => Approver::OtherAgent,
+            };
             Ok(ReviewFact {
                 verdict: parse_verdict(&row.verdict)?,
-                reviewer: actor(
-                    row.worker.as_deref(),
-                    row.reviewer_human.as_deref(),
-                    "reviews",
-                )?,
+                reviewer,
+                approver,
                 seq,
             })
         })

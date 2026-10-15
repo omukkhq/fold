@@ -102,7 +102,11 @@ function demoBoard(): Board {
       boardCard("T-6", {
         title: "Needs a person",
         labels: [auth, ui],
-        human_review: { reviewer: "tanim" },
+        human_review: {
+          reviewer: "tanim",
+          reason: "Auth work",
+          set_by: "planner",
+        },
         attention: [{ kind: "human_review" }],
       }),
       boardCard("T-7", {

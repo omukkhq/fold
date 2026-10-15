@@ -86,7 +86,7 @@ describe("the human-review controls", () => {
     mount(
       taskView("T-2", {
         can_change_human_review: true,
-        human_review: { reviewer: null },
+        human_review: { reviewer: null, reason: "auth", set_by: "planner" },
       }),
     );
     const review = await screen.findByRole("region", { name: "Human review" });

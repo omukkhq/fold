@@ -1,8 +1,8 @@
 use std::str::FromStr;
 
 use fold_core::{
-    Actor, ChecklistItemId, ChecklistName, FoldError, IdParseError, LabelColor, LabelName,
-    StepText, TaskDescription, TaskId, TaskTitle, WorkerName,
+    Actor, ChecklistItemId, ChecklistName, FoldError, HumanName, IdParseError, LabelColor,
+    LabelName, StepText, TaskDescription, TaskId, TaskTitle, WorkerName,
 };
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{JsonObject, Tool};
@@ -368,6 +368,11 @@ fn detail_json(detail: &TaskDetail) -> Value {
             "renewed_at": claim.renewed_at,
         })),
         "workspace": detail.workspace,
+        "human_review": task.human_review.as_ref().map(|mark| json!({
+            "reviewer": mark.reviewer.as_ref().map(HumanName::as_str),
+            "reason": mark.reason,
+            "set_by": mark.set_by.as_str(),
+        })),
     })
 }
 

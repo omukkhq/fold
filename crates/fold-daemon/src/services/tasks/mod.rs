@@ -34,11 +34,12 @@ pub use checklists::{
 pub use claims::{ClaimView, Claimed, claim_view, renew_leases};
 pub(crate) use claims::{already_claimed, claim_in_tx, closed_refusal, worker_row};
 pub use dependencies::{Edge, add_edge_in_tx};
+pub use fold_core::reviews::HumanReviewMark;
 pub use ready::ReadyTask;
 pub use recompute::{Recomputed, recompute};
 pub use views::{
     BOARD_DONE_LIMIT, Board, BoardCard, BoardColumn, ChecklistCounts, DetailChecklist, DetailEdge,
-    DetailItem, GraphTask, HumanReviewMark, TaskDetail, TaskRef,
+    DetailItem, GraphTask, TaskDetail, TaskRef,
 };
 
 /// Refusals carry a stable code; anything else is a database failure.
@@ -107,10 +108,8 @@ pub struct TaskView {
     pub archived_at: Option<Timestamp>,
     pub status: TaskStatus,
     pub blocked: bool,
-    pub human_review: bool,
-    pub human_reviewer: Option<String>,
-    pub human_review_reason: Option<String>,
-    pub human_review_set_by: Option<String>,
+    /// `None` while the mark is off.
+    pub human_review: Option<HumanReviewMark>,
     pub labels: Vec<LabelView>,
 }
 
@@ -327,9 +326,6 @@ fn view(row: tasks::TaskRow, labels: Vec<tasks::LabelRow>) -> TaskView {
         status: row.status,
         blocked: row.blocked,
         human_review: row.human_review,
-        human_reviewer: row.human_reviewer,
-        human_review_reason: row.human_review_reason,
-        human_review_set_by: row.human_review_set_by,
         labels: labels.into_iter().map(label_view).collect(),
     }
 }

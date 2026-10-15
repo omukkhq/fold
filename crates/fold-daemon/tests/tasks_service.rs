@@ -94,10 +94,7 @@ async fn create_with_labels_writes_the_row_its_event_and_its_status() {
     // Recompute ran in the create: a task with no prerequisites is ready.
     assert_eq!(task.status, TaskStatus::Todo);
     assert!(!task.blocked);
-    assert!(!task.human_review);
-    assert_eq!(task.human_reviewer, None);
-    assert_eq!(task.human_review_reason, None);
-    assert_eq!(task.human_review_set_by, None);
+    assert_eq!(task.human_review, None);
     assert_eq!(task.created_at, project.now());
     let names: Vec<_> = task.labels.iter().map(|l| l.name.as_str()).collect();
     assert_eq!(names, ["api", "bug"]);

@@ -158,8 +158,7 @@ async fn a_new_task_has_the_defaults_and_reads_back() {
     assert_eq!(row.archived_at, None);
     assert_eq!(row.status, TaskStatus::Backlog);
     assert!(!row.blocked);
-    assert!(!row.human_review);
-    assert_eq!(row.human_reviewer, None);
+    assert_eq!(row.human_review, None);
     assert!(
         tasks::get_by_number(project.store().read(), id(2))
             .await

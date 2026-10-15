@@ -15,6 +15,7 @@ use crate::services::agents::AgentError;
 use crate::services::events::EventsError;
 use crate::services::messages::MessageError;
 use crate::services::projects::ProjectError;
+use crate::services::reviews::ReviewError;
 use crate::services::tasks::TaskError;
 use crate::services::workspaces::WorkspaceError;
 
@@ -70,9 +71,10 @@ fn status_of(code: &str) -> Option<StatusCode> {
         codes::HUMAN_NAME_REQUIRED | codes::AUTH_REQUIRED | codes::INVALID_TOKEN => {
             Some(StatusCode::UNAUTHORIZED)
         }
-        codes::HUMAN_REQUIRED | codes::ACTOR_CANNOT_CLAIM | codes::HOST_NOT_ALLOWED => {
-            Some(StatusCode::FORBIDDEN)
-        }
+        codes::HUMAN_REQUIRED
+        | codes::ACTOR_CANNOT_CLAIM
+        | codes::HOST_NOT_ALLOWED
+        | codes::AUTHOR_CANNOT_INTEGRATE => Some(StatusCode::FORBIDDEN),
         codes::PROJECT_UNAVAILABLE | codes::GIT_NOT_FOUND => Some(StatusCode::SERVICE_UNAVAILABLE),
         codes::GC_IN_PROGRESS
         | codes::REMOTE_NOT_SET
@@ -88,7 +90,13 @@ fn status_of(code: &str) -> Option<StatusCode> {
         | codes::ALREADY_HOLDER
         | codes::CLAIM_NOT_STALE
         | codes::NOT_CLAIM_HOLDER
-        | codes::WORKSPACE_NOT_ACTIVE => Some(StatusCode::CONFLICT),
+        | codes::WORKSPACE_NOT_ACTIVE
+        | codes::HUMAN_REVIEW_ALREADY_SET
+        | codes::STALE_VERSION
+        | codes::CHANGES_REQUESTED
+        | codes::NOT_APPROVED
+        | codes::HUMAN_APPROVAL_MISSING
+        | codes::PREREQUISITES_NOT_DONE => Some(StatusCode::CONFLICT),
         codes::GIT_FAILED => Some(StatusCode::BAD_GATEWAY),
         codes::WORKSPACE_IO => Some(StatusCode::INTERNAL_SERVER_ERROR),
         _ => None,
@@ -150,6 +158,19 @@ impl From<TaskError> for ApiError {
             TaskError::Fold(error) => error.into(),
             TaskError::Store(error) => error.into(),
             TaskError::Event(error) => {
+                Self(FoldError::new(codes::INTERNAL_ERROR, error.to_string()))
+            }
+        }
+    }
+}
+
+impl From<ReviewError> for ApiError {
+    fn from(error: ReviewError) -> Self {
+        match error {
+            ReviewError::Fold(error) => error.into(),
+            ReviewError::Store(error) => error.into(),
+            ReviewError::Task(error) => error.into(),
+            ReviewError::Event(error) => {
                 Self(FoldError::new(codes::INTERNAL_ERROR, error.to_string()))
             }
         }
@@ -310,6 +331,13 @@ mod tests {
             (codes::RECIPIENT_NOT_FOUND, StatusCode::NOT_FOUND),
             (codes::PROPOSAL_NOT_FOUND, StatusCode::NOT_FOUND),
             (codes::UNKNOWN_HUMAN, StatusCode::NOT_FOUND),
+            (codes::HUMAN_REVIEW_ALREADY_SET, StatusCode::CONFLICT),
+            (codes::STALE_VERSION, StatusCode::CONFLICT),
+            (codes::AUTHOR_CANNOT_INTEGRATE, StatusCode::FORBIDDEN),
+            (codes::CHANGES_REQUESTED, StatusCode::CONFLICT),
+            (codes::NOT_APPROVED, StatusCode::CONFLICT),
+            (codes::HUMAN_APPROVAL_MISSING, StatusCode::CONFLICT),
+            (codes::PREREQUISITES_NOT_DONE, StatusCode::CONFLICT),
         ] {
             assert_eq!(status_of(code), Some(status));
         }
@@ -376,6 +404,20 @@ mod tests {
         .into();
         assert_eq!(error.code(), codes::ALREADY_CLAIMED);
         let ApiError(error) = WorkspaceError::Event(fold_core::EventError::UnknownType).into();
+        assert_eq!(error.code(), codes::INTERNAL_ERROR);
+    }
+
+    #[test]
+    fn review_errors_keep_their_code_and_a_bad_event_is_internal() {
+        let ApiError(error) =
+            ReviewError::Fold(FoldError::new(codes::HUMAN_REVIEW_ALREADY_SET, "set")).into();
+        assert_eq!(error.code(), codes::HUMAN_REVIEW_ALREADY_SET);
+        let ApiError(error) = ReviewError::Store(StoreError::Corrupt("tasks.number")).into();
+        assert_eq!(error.code(), codes::INTERNAL_ERROR);
+        let ApiError(error) =
+            ReviewError::Task(TaskError::Fold(FoldError::new(codes::TASK_CLOSED, "done"))).into();
+        assert_eq!(error.code(), codes::TASK_CLOSED);
+        let ApiError(error) = ReviewError::Event(fold_core::EventError::UnknownType).into();
         assert_eq!(error.code(), codes::INTERNAL_ERROR);
     }
 

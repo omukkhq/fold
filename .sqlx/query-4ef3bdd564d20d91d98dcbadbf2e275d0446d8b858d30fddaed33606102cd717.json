@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT r.verdict, w.name AS \"worker?: String\", r.reviewer_human\n           FROM reviews r\n           JOIN proposal_versions v ON v.id = r.version_id\n           JOIN proposals p ON p.id = v.proposal_id\n           LEFT JOIN workers w ON w.id = r.reviewer_worker_id\n           WHERE p.number = ?1 AND v.version = ?2\n           ORDER BY r.created_at, r.id",
+  "query": "SELECT r.verdict, w.name AS \"worker?: String\", r.reviewer_human,\n                  EXISTS (\n                      SELECT 1 FROM agent_tags a\n                      WHERE a.agent_id = w.agent_id AND a.tag = 'integrator'\n                  ) AS \"integrator!: bool\"\n           FROM reviews r\n           JOIN proposal_versions v ON v.id = r.version_id\n           JOIN proposals p ON p.id = v.proposal_id\n           LEFT JOIN workers w ON w.id = r.reviewer_worker_id\n           WHERE p.number = ?1 AND v.version = ?2\n           ORDER BY r.created_at, r.id",
   "describe": {
     "columns": [
       {
@@ -35,6 +35,12 @@
             "name": "reviewer_human"
           }
         }
+      },
+      {
+        "name": "integrator!: bool",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": "Expression"
       }
     ],
     "parameters": {
@@ -43,8 +49,9 @@
     "nullable": [
       false,
       true,
-      true
+      true,
+      false
     ]
   },
-  "hash": "26dac0a7f62f26c0e713d747cf6e174a3b781fc74b1a715cdd62a7106b668d3c"
+  "hash": "4ef3bdd564d20d91d98dcbadbf2e275d0446d8b858d30fddaed33606102cd717"
 }

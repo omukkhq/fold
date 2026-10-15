@@ -309,7 +309,13 @@ async fn the_board_has_five_columns_with_blocked_by_blocks_and_the_latest_done_c
     assert_eq!(card.human_review, None);
     let reviewed = backlog.cards.iter().find(|card| card.id == t(4)).unwrap();
     assert_eq!(
-        reviewed.human_review.as_ref().unwrap().reviewer.as_deref(),
+        reviewed
+            .human_review
+            .as_ref()
+            .unwrap()
+            .reviewer
+            .as_ref()
+            .map(|name| name.as_str()),
         Some("ana")
     );
     let done = &board.columns[4];

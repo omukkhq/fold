@@ -9,6 +9,7 @@ pub mod host;
 pub mod messages;
 pub mod openapi;
 pub mod projects;
+pub mod reviews;
 pub mod tasks;
 pub mod workspaces;
 
@@ -39,6 +40,7 @@ fn guarded_routes() -> OpenApiRouter<AppState> {
         .merge(events::routes())
         .merge(messages::routes())
         .merge(projects::routes())
+        .merge(reviews::routes())
         .merge(workspaces::routes())
         .merge(tasks::routes())
 }

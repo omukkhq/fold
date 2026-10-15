@@ -126,11 +126,26 @@ impl From<service::ChecklistCounts> for ChecklistCounts {
     }
 }
 
+/// The task's request that a human approves its proposal before it integrates.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct HumanReviewMark {
     /// The named human whose approval integration waits for; null when any human may approve.
     #[schema(required = true)]
     pub reviewer: Option<String>,
+    /// Why a human must look.
+    pub reason: String,
+    /// The worker or human that set the mark, such as `planner` or `human:tanim`.
+    pub set_by: String,
+}
+
+impl From<service::HumanReviewMark> for HumanReviewMark {
+    fn from(mark: service::HumanReviewMark) -> Self {
+        Self {
+            reviewer: mark.reviewer.map(|name| name.to_string()),
+            reason: mark.reason,
+            set_by: mark.set_by.to_string(),
+        }
+    }
 }
 
 fn ids(ids: &[TaskId]) -> Vec<String> {
@@ -182,9 +197,7 @@ impl From<service::BoardCard> for BoardCard {
             blocks: card.blocks,
             worker: card.holder.map(|worker| worker.to_string()),
             workspace: card.workspace.map(|workspace| workspace.to_string()),
-            human_review: card.human_review.map(|mark| HumanReviewMark {
-                reviewer: mark.reviewer,
-            }),
+            human_review: card.human_review.map(HumanReviewMark::from),
             messages: card.messages,
             completed_at: card.completed_at.map(|at| at.as_millis()),
             attention: attention(card.attention),
@@ -410,9 +423,7 @@ impl From<service::TaskDetail> for TaskView {
                 })
                 .collect(),
             workspace: detail.workspace.map(|workspace| workspace.to_string()),
-            human_review: task.human_review.then_some(HumanReviewMark {
-                reviewer: task.human_reviewer,
-            }),
+            human_review: task.human_review.map(HumanReviewMark::from),
             attention: attention(detail.attention),
         }
     }
@@ -535,7 +546,7 @@ pub struct LabelList {
     pub labels: Vec<Label>,
 }
 
-fn id<T>(text: &str) -> Result<T, ApiError>
+pub(super) fn id<T>(text: &str) -> Result<T, ApiError>
 where
     T: FromStr<Err = IdParseError>,
 {

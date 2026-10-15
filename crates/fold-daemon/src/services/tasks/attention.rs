@@ -1,7 +1,9 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use fold_core::{TaskId, Timestamp};
 use fold_store::{Store, StoreError, messages};
+
+use crate::services::reviews::awaiting_human_review;
 
 /// Why a task needs a person. The daemon decides every kind; no client derives one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -39,6 +41,11 @@ pub async fn attention(
     _now: Timestamp,
 ) -> Result<BTreeMap<TaskId, Vec<AttentionItem>>, StoreError> {
     let questions = messages::tasks_awaiting_human(read.read()).await?;
+    let human_review: BTreeSet<TaskId> = awaiting_human_review(read)
+        .await?
+        .into_iter()
+        .map(|waiting| waiting.task)
+        .collect();
     Ok(task_ids
         .iter()
         .map(|id| {
@@ -46,6 +53,11 @@ pub async fn attention(
             if questions.contains(id) {
                 items.push(AttentionItem {
                     kind: AttentionKind::Question,
+                });
+            }
+            if human_review.contains(id) {
+                items.push(AttentionItem {
+                    kind: AttentionKind::HumanReview,
                 });
             }
             (*id, items)

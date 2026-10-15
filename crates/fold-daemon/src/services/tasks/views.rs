@@ -15,8 +15,8 @@ pub use fold_store::tasks::{ChecklistCounts, TaskRef};
 
 use super::attention::{AttentionItem, attention};
 use super::{
-    ChecklistItemView, ClaimView, LabelView, TaskError, TaskService, TaskView, label_view,
-    task_not_found, view,
+    ChecklistItemView, ClaimView, HumanReviewMark, LabelView, TaskError, TaskService, TaskView,
+    label_view, task_not_found, view,
 };
 
 /// How many Done cards the board returns: the most recently completed ones. The Done column's `total` counts them all.
@@ -68,13 +68,6 @@ pub struct GraphTask {
     /// Every direct prerequisite, Done or not.
     pub needs: Vec<TaskId>,
     pub holder: Option<WorkerName>,
-}
-
-/// The human review mark as a card shows it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HumanReviewMark {
-    /// The named human whose approval integration waits for; `None` when any human may approve.
-    pub reviewer: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -293,9 +286,7 @@ impl TaskService {
                     .unwrap_or_default(),
                 holder: snapshot.holders.remove(&row.id),
                 workspace: snapshot.workspaces.get(&row.id).copied(),
-                human_review: row.human_review.then(|| HumanReviewMark {
-                    reviewer: row.human_reviewer.clone(),
-                }),
+                human_review: row.human_review,
                 messages: snapshot.messages.get(&row.id).copied().unwrap_or(0),
                 completed_at: snapshot.completions.get(&row.id).copied(),
                 attention: attention.remove(&row.id).unwrap_or_default(),

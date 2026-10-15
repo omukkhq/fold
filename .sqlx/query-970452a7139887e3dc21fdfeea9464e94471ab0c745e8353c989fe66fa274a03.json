@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE tasks\n         SET human_review = 1, human_reviewer = ?2, human_review_reason = ?3,\n             human_review_set_by = ?4, updated_at = ?5\n         WHERE number = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "970452a7139887e3dc21fdfeea9464e94471ab0c745e8353c989fe66fa274a03"
+}

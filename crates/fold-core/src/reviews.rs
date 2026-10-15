@@ -74,11 +74,20 @@ impl Side {
     }
 }
 
+/// The weight of a review's author, read from the agent's tags when the review is read rather than when it was written, so removing `integrator` from an agent withdraws the weight of its approvals.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Approver {
+    IntegratorAgent,
+    OtherAgent,
+    Human(HumanName),
+}
+
 /// One review of a proposal version as the turn and the integration gates read it. `seq` orders the reviews of a version: a higher `seq` is a later review.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReviewFact {
     pub verdict: Verdict,
     pub reviewer: EventActor,
+    pub approver: Approver,
     pub seq: u64,
 }
 
@@ -95,6 +104,48 @@ pub fn changes_requested(reviews: &[ReviewFact]) -> bool {
     latest_verdict(reviews).is_some_and(|review| review.verdict == Verdict::RequestChanges)
 }
 
+/// A task's request that a human looks at its proposal before it integrates. `reviewer` names the one human whose approval counts; `None` lets any human approve.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HumanReviewMark {
+    pub reviewer: Option<HumanName>,
+    pub reason: String,
+    /// The worker or human that set the mark.
+    pub set_by: EventActor,
+}
+
+impl HumanReviewMark {
+    /// Whether an approval by `human` satisfies the mark.
+    pub fn accepts(&self, human: &HumanName) -> bool {
+        self.reviewer
+            .as_ref()
+            .is_none_or(|reviewer| reviewer == human)
+    }
+}
+
+/// Whether the human review a mark asks for is met. Pass the reviews of the current version only, because approvals belong to the version they reviewed. A human who integrates approves in the same action, so `integrating_human` counts as an approval when the mark accepts that human. A recorded human approval stands until a later `request_changes` on the same version; an agent's approval never counts, whatever its tags.
+pub fn human_approval_standing(
+    mark: Option<&HumanReviewMark>,
+    reviews: &[ReviewFact],
+    integrating_human: Option<&HumanName>,
+) -> bool {
+    let Some(mark) = mark else {
+        return true;
+    };
+    if integrating_human.is_some_and(|human| mark.accepts(human)) {
+        return true;
+    }
+    let withdrawn = reviews
+        .iter()
+        .filter(|review| review.verdict == Verdict::RequestChanges)
+        .map(|review| review.seq)
+        .max();
+    reviews.iter().any(|review| {
+        review.verdict == Verdict::Approve
+            && matches!(&review.approver, Approver::Human(human) if mark.accepts(human))
+            && withdrawn.is_none_or(|seq| review.seq > seq)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -103,7 +154,36 @@ mod tests {
         ReviewFact {
             verdict,
             reviewer: EventActor::parse("review").unwrap(),
+            approver: Approver::OtherAgent,
             seq,
+        }
+    }
+
+    fn name(text: &str) -> HumanName {
+        HumanName::parse(text).unwrap()
+    }
+
+    fn by_human(verdict: Verdict, human: &str, seq: u64) -> ReviewFact {
+        ReviewFact {
+            verdict,
+            reviewer: EventActor::human(&name(human)),
+            approver: Approver::Human(name(human)),
+            seq,
+        }
+    }
+
+    fn by_integrator(verdict: Verdict, seq: u64) -> ReviewFact {
+        ReviewFact {
+            approver: Approver::IntegratorAgent,
+            ..fact(verdict, seq)
+        }
+    }
+
+    fn mark(reviewer: Option<&str>) -> HumanReviewMark {
+        HumanReviewMark {
+            reviewer: reviewer.map(name),
+            reason: "touches auth".to_owned(),
+            set_by: EventActor::parse("planner").unwrap(),
         }
     }
 
@@ -167,5 +247,105 @@ mod tests {
             fact(Verdict::RequestChanges, 2)
         ]));
         assert!(!changes_requested(&[requested, fact(Verdict::Reject, 2)]));
+    }
+
+    #[test]
+    fn no_mark_always_stands() {
+        assert!(human_approval_standing(None, &[], None));
+        let requested = [fact(Verdict::RequestChanges, 1)];
+        assert!(human_approval_standing(None, &requested, None));
+    }
+
+    #[test]
+    fn a_mark_without_a_reviewer_takes_any_human_approval() {
+        let any = mark(None);
+        assert!(!human_approval_standing(Some(&any), &[], None));
+        let approved = [by_human(Verdict::Approve, "ana", 1)];
+        assert!(human_approval_standing(Some(&any), &approved, None));
+    }
+
+    #[test]
+    fn a_named_reviewer_needs_that_human() {
+        let named = mark(Some("tanim"));
+        let by_tanim = [by_human(Verdict::Approve, "tanim", 1)];
+        assert!(human_approval_standing(Some(&named), &by_tanim, None));
+        let by_ana = [by_human(Verdict::Approve, "ana", 1)];
+        assert!(!human_approval_standing(Some(&named), &by_ana, None));
+    }
+
+    #[test]
+    fn a_later_request_changes_withdraws_the_approval() {
+        let any = mark(None);
+        let withdrawn = [
+            by_human(Verdict::Approve, "ana", 1),
+            fact(Verdict::RequestChanges, 2),
+        ];
+        assert!(!human_approval_standing(Some(&any), &withdrawn, None));
+        let again = [
+            by_human(Verdict::Approve, "ana", 1),
+            fact(Verdict::RequestChanges, 2),
+            by_human(Verdict::Approve, "ana", 3),
+        ];
+        assert!(human_approval_standing(Some(&any), &again, None));
+        let commented = [
+            by_human(Verdict::Approve, "ana", 1),
+            fact(Verdict::Comment, 2),
+        ];
+        assert!(human_approval_standing(Some(&any), &commented, None));
+        let human_request = [
+            fact(Verdict::RequestChanges, 1),
+            by_human(Verdict::Approve, "ana", 2),
+            by_human(Verdict::RequestChanges, "tanim", 3),
+        ];
+        assert!(!human_approval_standing(Some(&any), &human_request, None));
+    }
+
+    /// The caller passes only the current version's reviews, so an approval of an older version is not among them and the mark waits.
+    #[test]
+    fn an_approval_of_an_older_version_is_not_passed_in() {
+        let any = mark(None);
+        let current_version: [ReviewFact; 0] = [];
+        assert!(!human_approval_standing(Some(&any), &current_version, None));
+    }
+
+    #[test]
+    fn an_agent_approval_never_counts() {
+        let any = mark(None);
+        let agents = [
+            by_integrator(Verdict::Approve, 1),
+            fact(Verdict::Approve, 2),
+        ];
+        assert!(!human_approval_standing(Some(&any), &agents, None));
+        let named = mark(Some("tanim"));
+        assert!(!human_approval_standing(Some(&named), &agents, None));
+    }
+
+    #[test]
+    fn an_integrating_human_counts_when_the_mark_accepts_them() {
+        let named = mark(Some("tanim"));
+        let tanim = name("tanim");
+        let ana = name("ana");
+        assert!(human_approval_standing(Some(&named), &[], Some(&tanim)));
+        let requested = [fact(Verdict::RequestChanges, 1)];
+        assert!(human_approval_standing(
+            Some(&named),
+            &requested,
+            Some(&tanim)
+        ));
+        assert!(!human_approval_standing(Some(&named), &[], Some(&ana)));
+        let approved_by_tanim = [by_human(Verdict::Approve, "tanim", 1)];
+        assert!(human_approval_standing(
+            Some(&named),
+            &approved_by_tanim,
+            Some(&ana)
+        ));
+        assert!(human_approval_standing(Some(&mark(None)), &[], Some(&ana)));
+    }
+
+    #[test]
+    fn the_mark_accepts_its_reviewer_or_anyone() {
+        assert!(mark(None).accepts(&name("ana")));
+        assert!(mark(Some("ana")).accepts(&name("ana")));
+        assert!(!mark(Some("ana")).accepts(&name("tanim")));
     }
 }

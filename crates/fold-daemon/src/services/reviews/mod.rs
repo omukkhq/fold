@@ -12,12 +12,14 @@ use super::workspaces::{WorkspaceError, WorkspaceService};
 mod checkouts;
 mod claims;
 mod comments;
+mod human_review;
 mod proposals;
 mod verdicts;
 
 pub use checkouts::ReviewCheckout;
 pub use claims::ReviewClaimView;
 pub use comments::{CommentInput, CommentLocation, CommentView};
+pub use human_review::{AwaitingHumanReview, awaiting_human_review};
 pub use proposals::{
     ProposalDetail, ProposalFilter, ProposalSummary, Retirement, Turn, VersionView, retire_proposal,
 };
@@ -79,6 +81,7 @@ pub struct ReviewService {
     bus: EventBus,
     clock: Arc<dyn Clock>,
     workspaces: WorkspaceService,
+    registry: Option<Store>,
 }
 
 impl std::fmt::Debug for ReviewService {
@@ -99,12 +102,20 @@ impl ReviewService {
             bus,
             clock,
             workspaces,
+            registry: None,
         }
     }
 
     /// The review claim follows the same lease as the implementation claims of `workspaces`, which in the daemon reads the project's `config.toml` on each use.
     async fn lease_minutes(&self) -> Result<u64, ReviewError> {
         Ok(self.workspaces.lease().minutes().await?)
+    }
+
+    /// The host registry, which says which humans exist. Without it no human is known, so a mark that names a reviewer is refused with `unknown_human`.
+    #[must_use]
+    pub fn with_registry(mut self, registry: Store) -> Self {
+        self.registry = Some(registry);
+        self
     }
 }
 

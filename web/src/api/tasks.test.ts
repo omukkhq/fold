@@ -293,14 +293,34 @@ describe("feedback", () => {
 });
 
 describe("the human-review writes", () => {
-  it("refuse with not_found and send no request, as the daemon serves no such route", async () => {
+  const route = `${P}/tasks/T-2/human-review`;
+
+  it("puts the reviewer and the reason and answers with the mark", async () => {
+    const mark = { reviewer: "tanim", reason: "auth", set_by: "human:ana" };
+    daemon.on(`PUT ${route}`, ok(mark));
     await expect(
-      setHumanReview("demo", "T-2", { reviewer: null, reason: "x" }),
-    ).rejects.toSatisfy((e: unknown) => apiErrorCode(e) === "not_found");
-    await expect(clearHumanReview("demo", "T-2")).rejects.toSatisfy(
-      (e: unknown) => apiErrorCode(e) === "not_found",
+      setHumanReview("demo", "T-2", { reviewer: "tanim", reason: "auth" }),
+    ).resolves.toEqual(mark);
+    expect(bodyOf(`PUT ${route}`)).toEqual({
+      reviewer: "tanim",
+      reason: "auth",
+    });
+  });
+
+  it("deletes the mark and answers with the task", async () => {
+    daemon.on(`DELETE ${route}`, ok(taskView("T-2")));
+    expect((await clearHumanReview("demo", "T-2")).task).toBe("T-2");
+    expect(daemon.made(`DELETE ${route}`)).toHaveLength(1);
+  });
+
+  it("carries the refusal code", async () => {
+    daemon.on(
+      `PUT ${route}`,
+      refuse(404, "unknown_human", { reviewer: "nobody" }),
     );
-    expect(daemon.calls).toHaveLength(0);
+    await expect(
+      setHumanReview("demo", "T-2", { reviewer: "nobody", reason: "auth" }),
+    ).rejects.toSatisfy((e: unknown) => apiErrorCode(e) === "unknown_human");
   });
 });
 

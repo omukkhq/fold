@@ -1,7 +1,6 @@
 import { queryOptions } from "@tanstack/react-query";
 import type { BoardActivity, BoardLabel, ProposalState } from "./board";
 import { api } from "./client";
-import { ApiError } from "./errors";
 import { keys } from "./keys";
 import { readPages, type Pages } from "./pages";
 import { expectOk, unwrap } from "./result";
@@ -331,31 +330,30 @@ export function removeDependency(slug: string, task: string, needs: string) {
   );
 }
 
-/** The daemon serves no route that sets or clears the mark, so these refuse without a request. The controls that call them mount only when the task read allows the change, which it does not. */
+/** A human may change an existing mark; a named reviewer the daemon does not know is refused with `unknown_human`. */
 export function setHumanReview(
   slug: string,
   task: string,
   mark: { reviewer: string | null; reason: string },
-): Promise<void> {
-  return Promise.reject(
-    humanReviewUnavailable(slug, task, { reviewer: mark.reviewer }),
+): Promise<Schemas["HumanReviewMark"]> {
+  return unwrap(
+    api.PUT("/api/v1/projects/{slug}/tasks/{id}/human-review", {
+      params: { path: { slug, id: task } },
+      body: { reviewer: mark.reviewer, reason: mark.reason },
+    }),
   );
 }
 
-export function clearHumanReview(slug: string, task: string): Promise<void> {
-  return Promise.reject(humanReviewUnavailable(slug, task, {}));
-}
-
-function humanReviewUnavailable(
+/** Answers with the task as it stands without the mark; clearing a task that has none changes nothing. */
+export function clearHumanReview(
   slug: string,
   task: string,
-  more: Record<string, unknown>,
-): ApiError {
-  return new ApiError("not_found", "the daemon serves no human-review route", {
-    project: slug,
-    task,
-    ...more,
-  });
+): Promise<Schemas["TaskView"]> {
+  return unwrap(
+    api.DELETE("/api/v1/projects/{slug}/tasks/{id}/human-review", {
+      params: { path: { slug, id: task } },
+    }),
+  );
 }
 
 /** Refused with `invalid_request` and `details.reason` `proposal_open` while a proposal is open. */

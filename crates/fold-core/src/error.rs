@@ -114,6 +114,13 @@ define_codes! {
     CHECKOUT_FAILED = "checkout_failed",
     INVALID_LAST_EVENT_ID = "invalid_last_event_id",
     INVALID_PUSH_TARGET = "invalid_push_target",
+    HUMAN_REVIEW_ALREADY_SET = "human_review_already_set",
+    STALE_VERSION = "stale_version",
+    AUTHOR_CANNOT_INTEGRATE = "author_cannot_integrate",
+    CHANGES_REQUESTED = "changes_requested",
+    NOT_APPROVED = "not_approved",
+    HUMAN_APPROVAL_MISSING = "human_approval_missing",
+    PREREQUISITES_NOT_DONE = "prerequisites_not_done",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

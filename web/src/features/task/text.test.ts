@@ -128,11 +128,18 @@ describe("checkpointText", () => {
 describe("humanReviewLines", () => {
   it("names the reviewer, or any human, and who set the mark when the daemon says", () => {
     const note = { reason: "auth", set_by: "planner", set_at: AT };
-    expect(humanReviewLines({ reviewer: "tanim" }, note)).toEqual({
+    expect(
+      humanReviewLines(
+        { reviewer: "tanim", reason: "auth", set_by: "planner" },
+        note,
+      ),
+    ).toEqual({
       title: "Required · tanim",
       setBy: "Set by planner · 13:40",
     });
-    expect(humanReviewLines({ reviewer: null })).toEqual({
+    expect(
+      humanReviewLines({ reviewer: null, reason: "auth", set_by: "planner" }),
+    ).toEqual({
       title: "Required · any human",
       setBy: null,
     });

@@ -8,7 +8,7 @@ import { keys } from "@/api/keys";
 export function useTaskWrite<V>(
   slug: string,
   task: string,
-  write: (vars: V) => Promise<void>,
+  write: (vars: V) => Promise<unknown>,
 ) {
   const queryClient = useQueryClient();
   return useMutation({

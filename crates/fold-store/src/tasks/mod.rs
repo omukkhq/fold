@@ -1,4 +1,8 @@
-use fold_core::{LabelColor, LabelName, TaskDescription, TaskId, TaskStatus, TaskTitle, Timestamp};
+use fold_core::reviews::HumanReviewMark;
+use fold_core::{
+    EventActor, HumanName, LabelColor, LabelName, TaskDescription, TaskId, TaskStatus, TaskTitle,
+    Timestamp,
+};
 use sqlx::{SqliteConnection, SqlitePool};
 
 use crate::error::StoreError;
@@ -8,12 +12,16 @@ pub mod checklists;
 pub mod claims;
 pub mod completions;
 mod dependencies;
+mod human_review;
 mod ready;
 mod recompute;
 mod removal;
 mod views;
 
 pub use dependencies::{EdgeRow, delete_edge, edges, edges_conn, fetch_edge, insert_edge};
+pub use human_review::{
+    MarkedProposal, clear_human_review, marked_open_proposals, set_human_review,
+};
 pub use ready::{ReadyRow, ReadySnapshot, ready_snapshot};
 pub use recompute::{LoadedFacts, load_facts, write_cache};
 pub use removal::{
@@ -35,10 +43,7 @@ pub struct TaskRow {
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
     pub archived_at: Option<Timestamp>,
-    pub human_review: bool,
-    pub human_reviewer: Option<String>,
-    pub human_review_reason: Option<String>,
-    pub human_review_set_by: Option<String>,
+    pub human_review: Option<HumanReviewMark>,
     pub status: TaskStatus,
     pub blocked: bool,
 }
@@ -89,10 +94,12 @@ impl RawTask {
                 .archived_at
                 .map(|millis| timestamp(millis, "tasks.archived_at"))
                 .transpose()?,
-            human_review: self.human_review,
-            human_reviewer: self.human_reviewer,
-            human_review_reason: self.human_review_reason,
-            human_review_set_by: self.human_review_set_by,
+            human_review: mark(
+                self.human_review,
+                self.human_reviewer,
+                self.human_review_reason,
+                self.human_review_set_by,
+            )?,
             status: self
                 .status
                 .parse()
@@ -100,6 +107,31 @@ impl RawTask {
             blocked: self.blocked,
         })
     }
+}
+
+/// The mark the four `human_review` columns hold. A mark that is on always has a reason and a setter; the columns of a mark that is off are ignored.
+fn mark(
+    on: bool,
+    reviewer: Option<String>,
+    reason: Option<String>,
+    set_by: Option<String>,
+) -> Result<Option<HumanReviewMark>, StoreError> {
+    if !on {
+        return Ok(None);
+    }
+    let reviewer = reviewer
+        .map(|name| HumanName::parse(&name))
+        .transpose()
+        .map_err(|_| StoreError::Corrupt("tasks.human_reviewer"))?;
+    let reason = reason.ok_or(StoreError::Corrupt("tasks.human_review_reason"))?;
+    let set_by = set_by
+        .and_then(|actor| EventActor::parse(&actor).ok())
+        .ok_or(StoreError::Corrupt("tasks.human_review_set_by"))?;
+    Ok(Some(HumanReviewMark {
+        reviewer,
+        reason,
+        set_by,
+    }))
 }
 
 fn label_row(name: &str, color: &str, created_at: i64) -> Result<LabelRow, StoreError> {
