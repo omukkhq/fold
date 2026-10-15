@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO web_tokens (number, token_hash, human_id, label, created_at)\n           VALUES ((SELECT COALESCE(MAX(number), 0) + 1 FROM web_tokens), ?, ?, ?, ?)\n           RETURNING number AS \"number!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "web_tokens",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5341102fde42a363bf40d26cd85eb9bb91b3e007af752c793d47f40cf4e2157d"
+}

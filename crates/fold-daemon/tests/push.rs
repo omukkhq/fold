@@ -608,6 +608,7 @@ async fn the_push_route_is_socket_only_and_names_the_human() {
         data_dir: host.paths.registry_db().parent().unwrap().to_owned(),
         runtime_dir: host.path("run"),
         web_dir: None,
+        session_lifetime: fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME,
     };
     let daemon = Daemon::start(daemon_config, Arc::new(host.clock.clone()))
         .await

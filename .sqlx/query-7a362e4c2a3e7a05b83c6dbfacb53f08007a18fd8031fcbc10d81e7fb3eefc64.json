@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT t.id AS \"id!: i64\", t.token_hash, h.name, t.last_used_at\n           FROM web_tokens t JOIN humans h ON h.id = t.human_id\n           WHERE t.token_hash = ?",
+  "query": "SELECT t.id AS \"id!: i64\", t.token_hash, t.human_id, h.name, t.last_used_at\n           FROM web_tokens t JOIN humans h ON h.id = t.human_id\n           WHERE t.token_hash = ? AND t.revoked_at IS NULL",
   "describe": {
     "columns": [
       {
@@ -26,8 +26,19 @@
         }
       },
       {
-        "name": "name",
+        "name": "human_id",
         "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "web_tokens",
+            "name": "human_id"
+          }
+        }
+      },
+      {
+        "name": "name",
+        "ordinal": 3,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -38,7 +49,7 @@
       },
       {
         "name": "last_used_at",
-        "ordinal": 3,
+        "ordinal": 4,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -55,8 +66,9 @@
       false,
       false,
       false,
+      false,
       true
     ]
   },
-  "hash": "81d784e1ffbc6c66834a8aafd6bcf16fa37adae0a6b61a9008bcd6e2a36a2753"
+  "hash": "7a362e4c2a3e7a05b83c6dbfacb53f08007a18fd8031fcbc10d81e7fb3eefc64"
 }

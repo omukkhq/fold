@@ -82,3 +82,4 @@ remote_ahead
 unresolved_conflicts
 checkpoint_not_found
 workspace_write_unfinished
+token_not_found

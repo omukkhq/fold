@@ -55,6 +55,7 @@ impl Sandbox {
             data_dir: self.path("data").join("fold"),
             runtime_dir: self.path("run"),
             web_dir: None,
+            session_lifetime: fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME,
         };
         Daemon::start(config, Arc::new(ManualClock::new()))
             .await

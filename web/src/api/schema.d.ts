@@ -203,9 +203,9 @@ export interface paths {
         /** Reports who the request acts as. It is the only way the web application learns the name, because `fold_human` is HttpOnly. */
         get: operations["get_session"];
         put?: never;
-        /** Signs in. Off loopback the body is `{ token }` and a valid token sets `fold_session`; on loopback it is `{ name }`, which registers the human on first use and sets `fold_human`. */
+        /** Signs in. Off loopback the body is `{ token }` and a valid token opens a session whose id `fold_session` carries; on loopback it is `{ name }`, which registers the human on first use and sets `fold_human`. */
         post: operations["create_session"];
-        /** Signs out: expires `fold_session` and `fold_human`. */
+        /** Signs out: deletes the session that `fold_session` names, so the cookie stops working even where the browser keeps it, and expires `fold_session` and `fold_human`. */
         delete: operations["delete_session"];
         options?: never;
         head?: never;
@@ -571,7 +571,7 @@ export interface components {
         SessionRequest: components["schemas"]["TokenSignIn"] | components["schemas"]["NameSignIn"];
         /** @description What the sign-in screen needs to know. */
         SessionStatus: {
-            /** @description False only off loopback without a valid session cookie: the sign-in screen then asks for a token. True with a null `human` asks for a name. */
+            /** @description False only off loopback without the cookie of a live session: the sign-in screen then asks for a token. True with a null `human` asks for a name. */
             authenticated: boolean;
             /** @description The name the request acts under; null before a name or a token gives one. */
             human: string | null;
@@ -683,7 +683,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProjectList"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie; `invalid_token`: the cookie holds a token the registry does not have */
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -743,7 +743,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie; `invalid_token`: the cookie holds a token the registry does not have */
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -811,7 +811,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProjectSummary"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie; `invalid_token`: the cookie holds a token the registry does not have */
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -882,7 +882,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie; `invalid_token`: the cookie holds a token the registry does not have */
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -970,7 +970,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie; `invalid_token`: the cookie holds a token the registry does not have */
+            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -1049,7 +1049,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie; `invalid_token`: the cookie holds a token the registry does not have */
+            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -1130,7 +1130,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie; `invalid_token`: the cookie holds a token the registry does not have */
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -1216,7 +1216,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description The request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie; `invalid_token`: the cookie holds a token the registry does not have */
+            /** @description The request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -1302,7 +1302,7 @@ export interface operations {
                     "application/json": components["schemas"]["RepositoryView"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie; `invalid_token`: the cookie holds a token the registry does not have */
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -1384,7 +1384,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie; `invalid_token`: the cookie holds a token the registry does not have */
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -1463,7 +1463,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie; `invalid_token`: the cookie holds a token the registry does not have */
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -1545,7 +1545,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie; `invalid_token`: the cookie holds a token the registry does not have */
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -1627,7 +1627,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie; `invalid_token`: the cookie holds a token the registry does not have */
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -1743,7 +1743,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `invalid_token`: the registry holds no such token */
+            /** @description `invalid_token`: the registry holds no such token, or it is revoked */
             401: {
                 headers: {
                     [name: string]: unknown;

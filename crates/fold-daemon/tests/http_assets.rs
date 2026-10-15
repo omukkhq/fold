@@ -36,6 +36,7 @@ impl Site {
             data_dir: dir.path().join("data"),
             runtime_dir: dir.path().join("run"),
             web_dir: Some(web),
+            session_lifetime: fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME,
         };
         let daemon = Daemon::start(config, Arc::new(ManualClock::new()))
             .await
@@ -254,6 +255,7 @@ async fn the_embedded_source_serves_the_folder_it_was_built_from() {
         data_dir: dir.path().join("data"),
         runtime_dir: dir.path().join("run"),
         web_dir: None,
+        session_lifetime: fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME,
     };
     let daemon = Daemon::start(config, Arc::new(ManualClock::new()))
         .await

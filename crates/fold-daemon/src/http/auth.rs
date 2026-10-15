@@ -18,13 +18,12 @@ use super::error::{ApiError, ApiJson, ErrorEnvelope};
 use crate::daemon::AppState;
 use crate::services::projects;
 
-/// The cookie that carries a web token off loopback. Its value is the token itself, checked against the stored hash on every request.
+/// The cookie that carries a session id off loopback. The id is random, the registry holds only its hash, and the token that opened the session never goes into a cookie.
 pub const SESSION_COOKIE: &str = "fold_session";
 const SESSION_PATH: &str = "/api/v1/session";
-const SESSION_MAX_AGE_SECS: u64 = 30 * 24 * 60 * 60;
 const HUMAN_MAX_AGE_SECS: u64 = 365 * 24 * 60 * 60;
 
-/// The human a valid `fold_session` cookie signs in. [`require_session`] adds it to the request, and the `Human` extractor takes the name from it before anything else.
+/// The human a live `fold_session` cookie signs in. [`require_session`] adds it to the request, and the `Human` extractor takes the name from it before anything else.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionHuman(pub HumanName);
 
@@ -33,7 +32,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new().routes(routes!(get_session, create_session, delete_session))
 }
 
-/// The layer on every guarded `/api` route. A request over the Unix socket comes from the host's user and passes; so does every request on loopback. Off loopback the request needs a valid `fold_session` cookie: none is `auth_required`, a wrong one `invalid_token`.
+/// The layer on every guarded `/api` route. A request over the Unix socket comes from the host's user and passes; so does every request on loopback. Off loopback the request needs the `fold_session` cookie of a live session: a missing cookie and an unknown, ended, expired or revoked session are all `auth_required`.
 pub async fn require_session(
     State(state): State<AppState>,
     mut request: Request,
@@ -43,16 +42,18 @@ pub async fn require_session(
         return next.run(request).await;
     }
     match signed_in(&state, request.headers()).await {
-        Ok(Token::Valid(name)) => {
+        Ok(Some(name)) => {
             request.extensions_mut().insert(SessionHuman(name));
             next.run(request).await
         }
-        Ok(Token::Absent) => ApiError(
-            FoldError::new(codes::AUTH_REQUIRED, "this route needs the session cookie")
-                .with_hint("sign in with a token from `fold token create`"),
+        Ok(None) => ApiError(
+            FoldError::new(
+                codes::AUTH_REQUIRED,
+                "this route needs the cookie of a live session",
+            )
+            .with_hint("sign in with a token from `fold token create`"),
         )
         .into_response(),
-        Ok(Token::Wrong) => invalid_token().into_response(),
         Err(error) => ApiError::from(error).into_response(),
     }
 }
@@ -62,23 +63,12 @@ fn open(state: &AppState, transport: Option<&Transport>) -> bool {
     transport == Some(&Transport::Socket) || !state.auth_required()
 }
 
-/// What the `fold_session` cookie of a request holds.
-enum Token {
-    Absent,
-    Valid(HumanName),
-    Wrong,
-}
-
-async fn signed_in(state: &AppState, headers: &HeaderMap) -> Result<Token, StoreError> {
-    let Some(token) = cookie(headers, SESSION_COOKIE) else {
-        return Ok(Token::Absent);
+/// The human the live session in the `fold_session` cookie signs in.
+async fn signed_in(state: &AppState, headers: &HeaderMap) -> Result<Option<HumanName>, StoreError> {
+    let Some(session) = cookie(headers, SESSION_COOKIE) else {
+        return Ok(None);
     };
-    Ok(
-        match projects::check_web_token(&state.registry, state.clock.as_ref(), &token).await? {
-            Some(name) => Token::Valid(name),
-            None => Token::Wrong,
-        },
-    )
+    projects::check_web_session(&state.registry, state.clock.as_ref(), &session).await
 }
 
 fn invalid_token() -> ApiError {
@@ -94,7 +84,7 @@ pub struct SessionStatus {
     /// The name the request acts under; null before a name or a token gives one.
     #[schema(required = true)]
     pub human: Option<String>,
-    /// False only off loopback without a valid session cookie: the sign-in screen then asks for a token. True with a null `human` asks for a name.
+    /// False only off loopback without the cookie of a live session: the sign-in screen then asks for a token. True with a null `human` asks for a name.
     pub authenticated: bool,
 }
 
@@ -143,11 +133,11 @@ pub async fn get_session(
         ),
         None if !state.auth_required() => opened(cookie(&parts.headers, HUMAN_COOKIE).as_deref()),
         None => match signed_in(&state, &parts.headers).await? {
-            Token::Valid(name) => SessionStatus {
+            Some(name) => SessionStatus {
                 human: Some(name.to_string()),
                 authenticated: true,
             },
-            Token::Absent | Token::Wrong => SessionStatus {
+            None => SessionStatus {
                 human: None,
                 authenticated: false,
             },
@@ -166,7 +156,7 @@ fn opened(raw: Option<&str>) -> SessionStatus {
     }
 }
 
-/// Signs in. Off loopback the body is `{ token }` and a valid token sets `fold_session`; on loopback it is `{ name }`, which registers the human on first use and sets `fold_human`.
+/// Signs in. Off loopback the body is `{ token }` and a valid token opens a session whose id `fold_session` carries; on loopback it is `{ name }`, which registers the human on first use and sets `fold_human`.
 #[utoipa::path(
     post,
     path = "/api/v1/session",
@@ -175,7 +165,7 @@ fn opened(raw: Option<&str>) -> SessionStatus {
     responses(
         (status = 204, description = "Signed in", headers(("Set-Cookie" = String, description = "`fold_session` off loopback, `fold_human` on loopback"))),
         (status = 400, description = "`invalid_request`: a name off loopback, a token on loopback, or a malformed body; `invalid_name`: the name breaks the name pattern", body = ErrorEnvelope),
-        (status = 401, description = "`invalid_token`: the registry holds no such token", body = ErrorEnvelope),
+        (status = 401, description = "`invalid_token`: the registry holds no such token, or it is revoked", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )
 )]
@@ -196,11 +186,18 @@ pub async fn create_session(
             )))
         }
         (SessionRequest::Token(TokenSignIn { token }), false) => {
-            match projects::check_web_token(&state.registry, state.clock.as_ref(), &token).await? {
-                Some(_) => Ok(signed_in_response(set_cookie(
+            match projects::create_web_session(
+                &state.registry,
+                state.clock.as_ref(),
+                state.session_lifetime,
+                &token,
+            )
+            .await?
+            {
+                Some(signed_in) => Ok(signed_in_response(set_cookie(
                     SESSION_COOKIE,
-                    &token,
-                    SESSION_MAX_AGE_SECS,
+                    &signed_in.session,
+                    state.session_lifetime.as_secs(),
                 ))),
                 None => {
                     tracing::warn!(
@@ -231,7 +228,7 @@ pub async fn create_session(
     }
 }
 
-/// Signs out: expires `fold_session` and `fold_human`.
+/// Signs out: deletes the session that `fold_session` names, so the cookie stops working even where the browser keeps it, and expires `fold_session` and `fold_human`.
 #[utoipa::path(
     delete,
     path = "/api/v1/session",
@@ -241,15 +238,21 @@ pub async fn create_session(
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )
 )]
-pub async fn delete_session() -> Response {
-    (
+pub async fn delete_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    if let Some(session) = cookie(&headers, SESSION_COOKIE) {
+        projects::end_web_session(&state.registry, &session).await?;
+    }
+    Ok((
         StatusCode::NO_CONTENT,
         AppendHeaders([
             (SET_COOKIE, set_cookie(SESSION_COOKIE, "", 0)),
             (SET_COOKIE, set_cookie(HUMAN_COOKIE, "", 0)),
         ]),
     )
-        .into_response()
+        .into_response())
 }
 
 fn signed_in_response(cookie: String) -> Response {
@@ -260,7 +263,7 @@ fn signed_in_response(cookie: String) -> Response {
         .into_response()
 }
 
-/// No `Secure` flag: off loopback the daemon serves plain HTTP. Token and name are URL-safe base64 and name characters, which a cookie value takes unquoted.
+/// No `Secure` flag: off loopback the daemon serves plain HTTP. Session id and name are URL-safe base64 and name characters, which a cookie value takes unquoted.
 fn set_cookie(name: &str, value: &str, max_age_secs: u64) -> String {
     format!("{name}={value}; HttpOnly; SameSite=Strict; Path=/; Max-Age={max_age_secs}")
 }

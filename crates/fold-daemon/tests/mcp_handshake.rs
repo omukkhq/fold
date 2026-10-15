@@ -47,6 +47,7 @@ impl Host {
             data_dir: dir.path().join("data"),
             runtime_dir: dir.path().join("run"),
             web_dir: None,
+            session_lifetime: fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME,
         };
         let clock = ManualClock::new();
         let project = TestProject::new().await;

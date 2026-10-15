@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
@@ -9,7 +10,9 @@ use fold_daemon::http::assets::AssetSource;
 use fold_daemon::http::{openapi, router, socket_router};
 use fold_daemon::projects::Projects;
 use fold_daemon::services::agents::AgentService;
-use fold_daemon::services::projects::create_web_token;
+use fold_daemon::services::projects::{
+    DEFAULT_SESSION_LIFETIME, create_web_token, list_web_tokens, revoke_web_token,
+};
 use fold_daemon::{Daemon, DaemonConfig};
 use fold_store::events;
 use fold_store::projects::{self as registry, ProjectRow};
@@ -54,6 +57,7 @@ impl Fixture {
             } else {
                 "127.0.0.1".parse().unwrap()
             },
+            session_lifetime: DEFAULT_SESSION_LIFETIME,
         });
         let row = ProjectRow {
             slug: "demo".to_owned(),
@@ -96,6 +100,12 @@ impl Fixture {
         )
         .await
         .unwrap()
+    }
+
+    /// Signs `human` in with a new token and returns the `Cookie` header value of the session.
+    async fn sign_in(&self, human: &str) -> String {
+        let token = self.token(human).await;
+        sign_in_with(self.http(), &token).await
     }
 
     /// The actor of every stored `agent.tag_*` event.
@@ -177,6 +187,28 @@ async fn send_with(
     }
 }
 
+/// Posts `token` to the session route and returns the `fold_session` pair of the `Set-Cookie` header, ready for a `Cookie` header.
+#[cfg(test)]
+async fn sign_in_with(router: Router, token: &str) -> String {
+    let answer = send(
+        router,
+        Method::POST,
+        SESSION,
+        None,
+        Some(json!({"token": token})),
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::NO_CONTENT, "{:?}", answer.body);
+    session_pair(&answer.cookies()[0])
+}
+
+#[cfg(test)]
+fn session_pair(set_cookie: &str) -> String {
+    let pair = set_cookie.split(';').next().unwrap().to_owned();
+    assert!(pair.starts_with("fold_session=") && pair.len() > "fold_session=".len());
+    pair
+}
+
 /// Every operation of the OpenAPI document as `(method, path)`, path parameters filled with the fixture's project and agent.
 #[cfg(test)]
 fn operations() -> Vec<(Method, String)> {
@@ -198,8 +230,7 @@ fn operations() -> Vec<(Method, String)> {
 #[tokio::test]
 async fn off_loopback_every_guarded_route_needs_the_cookie_and_accepts_a_valid_one() {
     let fixture = Fixture::new(true).await;
-    let token = fixture.token("ana").await;
-    let cookie = format!("fold_session={token}");
+    let cookie = fixture.sign_in("ana").await;
     let guarded: Vec<_> = operations()
         .into_iter()
         .filter(|(_, path)| path != SESSION)
@@ -214,10 +245,7 @@ async fn off_loopback_every_guarded_route_needs_the_cookie_and_accepts_a_valid_o
         );
         let answer = send(fixture.http(), method.clone(), &path, Some(&cookie), None).await;
         assert!(
-            !matches!(
-                answer.code(),
-                "auth_required" | "invalid_token" | "human_name_required"
-            ),
+            !matches!(answer.code(), "auth_required" | "human_name_required"),
             "{method} {path}: {:?}",
             answer.body
         );
@@ -251,17 +279,35 @@ async fn off_loopback_the_session_routes_work_without_the_cookie() {
     )
     .await;
     assert_eq!(answer.status, StatusCode::NO_CONTENT);
+    let cookies = answer.cookies();
+    assert_eq!(cookies.len(), 1);
+    let cookie = session_pair(&cookies[0]);
     assert_eq!(
-        answer.cookies(),
-        vec![format!(
-            "fold_session={token}; HttpOnly; SameSite=Strict; Path=/; {THIRTY_DAYS}"
-        )]
+        cookies[0],
+        format!("{cookie}; HttpOnly; SameSite=Strict; Path=/; {THIRTY_DAYS}")
     );
-    assert!(!answer.cookies()[0].contains("Secure"));
+    assert!(!cookies[0].contains("Secure"));
+    assert!(!cookies[0].contains(&token), "the cookie carries the token");
+    let session = cookie.strip_prefix("fold_session=").unwrap();
+    assert_eq!(session.len(), 43);
+    assert_ne!(sign_in_with(fixture.http(), &token).await, cookie);
 
-    let cookie = format!("fold_session={token}");
     let answer = send(fixture.http(), Method::GET, SESSION, Some(&cookie), None).await;
     assert_eq!(answer.body, json!({"human": "ana", "authenticated": true}));
+    let as_token = format!("fold_session={token}");
+    let answer = send(
+        fixture.http(),
+        Method::GET,
+        "/api/v1/projects",
+        Some(&as_token),
+        None,
+    )
+    .await;
+    assert_eq!(
+        (answer.status, answer.code()),
+        (StatusCode::UNAUTHORIZED, "auth_required"),
+        "a token in place of a session id must not sign in"
+    );
 
     let answer = send(fixture.http(), Method::DELETE, SESSION, None, None).await;
     assert_eq!(answer.status, StatusCode::NO_CONTENT);
@@ -275,9 +321,9 @@ async fn off_loopback_the_session_routes_work_without_the_cookie() {
 }
 
 #[tokio::test]
-async fn off_loopback_a_wrong_token_is_invalid_token() {
+async fn off_loopback_a_wrong_token_is_invalid_token_and_a_wrong_session_auth_required() {
     let fixture = Fixture::new(true).await;
-    fixture.token("ana").await;
+    fixture.sign_in("ana").await;
     let wrong = "fold_session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
     let answer = send(
         fixture.http(),
@@ -289,8 +335,9 @@ async fn off_loopback_a_wrong_token_is_invalid_token() {
     .await;
     assert_eq!(
         (answer.status, answer.code()),
-        (StatusCode::UNAUTHORIZED, "invalid_token")
+        (StatusCode::UNAUTHORIZED, "auth_required")
     );
+    assert!(!answer.body.to_string().contains("AAAAAAAA"));
     let answer = send(
         fixture.http(),
         Method::POST,
@@ -306,6 +353,144 @@ async fn off_loopback_a_wrong_token_is_invalid_token() {
     assert!(answer.cookies().is_empty());
     let answer = send(fixture.http(), Method::GET, SESSION, Some(wrong), None).await;
     assert_eq!(answer.body, json!({"human": null, "authenticated": false}));
+}
+
+#[tokio::test]
+async fn off_loopback_sign_out_ends_the_session_on_the_server() {
+    let fixture = Fixture::new(true).await;
+    let cookie = fixture.sign_in("ana").await;
+    let other = fixture.sign_in("ana").await;
+    let projects = "/api/v1/projects";
+    let answer = send(fixture.http(), Method::GET, projects, Some(&cookie), None).await;
+    assert_eq!(answer.status, StatusCode::OK);
+
+    let answer = send(fixture.http(), Method::DELETE, SESSION, Some(&cookie), None).await;
+    assert_eq!(answer.status, StatusCode::NO_CONTENT);
+    let answer = send(fixture.http(), Method::GET, projects, Some(&cookie), None).await;
+    assert_eq!(
+        (answer.status, answer.code()),
+        (StatusCode::UNAUTHORIZED, "auth_required")
+    );
+    let answer = send(fixture.http(), Method::GET, SESSION, Some(&cookie), None).await;
+    assert_eq!(answer.body, json!({"human": null, "authenticated": false}));
+    let answer = send(fixture.http(), Method::DELETE, SESSION, Some(&cookie), None).await;
+    assert_eq!(answer.status, StatusCode::NO_CONTENT);
+
+    let answer = send(fixture.http(), Method::GET, projects, Some(&other), None).await;
+    assert_eq!(
+        answer.status,
+        StatusCode::OK,
+        "sign-out ended another session"
+    );
+}
+
+#[tokio::test]
+async fn off_loopback_a_revoked_token_cannot_sign_in_and_its_sessions_end() {
+    let fixture = Fixture::new(true).await;
+    let token = fixture.token("ana").await;
+    let cookie = sign_in_with(fixture.http(), &token).await;
+    let kept = fixture.sign_in("ana").await;
+    let projects = "/api/v1/projects";
+    let registry = fixture.project.registry();
+    let listed = list_web_tokens(registry).await.unwrap();
+    assert_eq!(listed.len(), 2);
+    revoke_web_token(registry, listed[0].id, fixture.project.clock().now())
+        .await
+        .unwrap();
+
+    let answer = send(fixture.http(), Method::GET, projects, Some(&cookie), None).await;
+    assert_eq!(
+        (answer.status, answer.code()),
+        (StatusCode::UNAUTHORIZED, "auth_required")
+    );
+    let answer = send(
+        fixture.http(),
+        Method::POST,
+        SESSION,
+        None,
+        Some(json!({"token": token})),
+    )
+    .await;
+    assert_eq!(
+        (answer.status, answer.code()),
+        (StatusCode::UNAUTHORIZED, "invalid_token")
+    );
+    assert!(answer.cookies().is_empty());
+    let answer = send(fixture.http(), Method::GET, projects, Some(&kept), None).await;
+    assert_eq!(
+        answer.status,
+        StatusCode::OK,
+        "revoking one token ended another"
+    );
+}
+
+#[tokio::test]
+async fn off_loopback_a_session_expires_after_its_lifetime() {
+    let fixture = Fixture::new(true).await;
+    let cookie = fixture.sign_in("ana").await;
+    let projects = "/api/v1/projects";
+    let clock = fixture.project.clock();
+    clock
+        .advance(DEFAULT_SESSION_LIFETIME - Duration::from_millis(1))
+        .unwrap();
+    let answer = send(fixture.http(), Method::GET, projects, Some(&cookie), None).await;
+    assert_eq!(answer.status, StatusCode::OK);
+    clock.advance(Duration::from_millis(1)).unwrap();
+    let answer = send(fixture.http(), Method::GET, projects, Some(&cookie), None).await;
+    assert_eq!(
+        (answer.status, answer.code()),
+        (StatusCode::UNAUTHORIZED, "auth_required")
+    );
+    let answer = send(fixture.http(), Method::GET, SESSION, Some(&cookie), None).await;
+    assert_eq!(answer.body, json!({"human": null, "authenticated": false}));
+
+    let fresh = fixture.sign_in("ana").await;
+    let answer = send(fixture.http(), Method::GET, projects, Some(&fresh), None).await;
+    assert_eq!(answer.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn the_cookie_lasts_as_long_as_the_configured_lifetime() {
+    let project = TestProject::new().await;
+    let state: AppState = Arc::new(DaemonState {
+        registry: project.registry().clone(),
+        projects: Projects::default(),
+        clock: Arc::new(project.clock().clone()),
+        assets: AssetSource::Embedded,
+        listen: "0.0.0.0".parse().unwrap(),
+        session_lifetime: Duration::from_secs(7 * 24 * 60 * 60),
+    });
+    let token = create_web_token(
+        project.registry(),
+        &HumanName::parse("ana").unwrap(),
+        None,
+        project.clock().now(),
+    )
+    .await
+    .unwrap();
+    let answer = send(
+        router(state.clone()),
+        Method::POST,
+        SESSION,
+        None,
+        Some(json!({"token": token})),
+    )
+    .await;
+    assert!(answer.cookies()[0].ends_with("Max-Age=604800"));
+    let cookie = session_pair(&answer.cookies()[0]);
+    project
+        .clock()
+        .advance(Duration::from_secs(7 * 24 * 60 * 60))
+        .unwrap();
+    let answer = send(
+        router(state),
+        Method::GET,
+        "/api/v1/projects",
+        Some(&cookie),
+        None,
+    )
+    .await;
+    assert_eq!(answer.code(), "auth_required");
 }
 
 #[tokio::test]
@@ -338,9 +523,9 @@ async fn off_loopback_the_web_files_load_without_a_cookie() {
 }
 
 #[tokio::test]
-async fn off_loopback_a_write_acts_as_the_token_human_and_ignores_fold_human() {
+async fn off_loopback_a_write_acts_as_the_session_human_and_ignores_fold_human() {
     let fixture = Fixture::new(true).await;
-    let token = fixture.token("ana").await;
+    let session = fixture.sign_in("ana").await;
     let answer = send(
         fixture.http(),
         Method::PUT,
@@ -350,7 +535,7 @@ async fn off_loopback_a_write_acts_as_the_token_human_and_ignores_fold_human() {
     )
     .await;
     assert_eq!(answer.code(), "auth_required");
-    let cookie = format!("fold_human=tanim; fold_session={token}");
+    let cookie = format!("fold_human=tanim; {session}");
     let answer = send(fixture.http(), Method::PUT, INTEGRATOR, Some(&cookie), None).await;
     assert_eq!(answer.status, StatusCode::OK, "{:?}", answer.body);
     assert_eq!(fixture.tag_actors().await, vec!["human:ana".to_owned()]);
@@ -533,6 +718,31 @@ async fn raw_get(addr: std::net::SocketAddr, path: &str, cookie: Option<&str>) -
     (status, serde_json::from_str(body).unwrap_or(Value::Null))
 }
 
+/// Signs in over a real TCP connection and returns the `fold_session` pair of the answer.
+#[cfg(test)]
+async fn raw_sign_in(addr: std::net::SocketAddr, token: &str) -> String {
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let body = json!({"token": token}).to_string();
+    let request = format!(
+        "POST {SESSION} HTTP/1.1\r\nhost: 127.0.0.1\r\nconnection: close\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).await.unwrap();
+    let text = String::from_utf8(response).unwrap();
+    assert!(text.starts_with("HTTP/1.1 204"), "{text}");
+    let set_cookie = text
+        .lines()
+        .find_map(|line| {
+            line.split_once(':')
+                .filter(|(name, _)| name.eq_ignore_ascii_case("set-cookie"))
+                .map(|(_, value)| value.trim().to_owned())
+        })
+        .unwrap();
+    session_pair(&set_cookie)
+}
+
 #[tokio::test]
 async fn a_daemon_on_every_address_needs_a_token_even_from_127_0_0_1() {
     let dir = TempDir::new().unwrap();
@@ -542,6 +752,7 @@ async fn a_daemon_on_every_address_needs_a_token_even_from_127_0_0_1() {
         data_dir: dir.path().join("data"),
         runtime_dir: dir.path().join("run"),
         web_dir: None,
+        session_lifetime: DEFAULT_SESSION_LIFETIME,
     };
     let clock = ManualClock::new();
     let daemon = Daemon::start(config, Arc::new(clock.clone()))
@@ -567,7 +778,7 @@ async fn a_daemon_on_every_address_needs_a_token_even_from_127_0_0_1() {
     )
     .await
     .unwrap();
-    let cookie = format!("fold_session={token}");
+    let cookie = raw_sign_in(local, &token).await;
     let (status, body) = raw_get(local, SESSION, Some(&cookie)).await;
     assert_eq!(
         (status, body),
@@ -649,8 +860,7 @@ async fn a_foreign_host_or_origin_cannot_reach_the_api() {
 #[tokio::test]
 async fn off_loopback_an_ip_host_passes_and_a_domain_name_is_refused() {
     let fixture = Fixture::new(true).await;
-    let token = fixture.token("ana").await;
-    let cookie = format!("fold_session={token}");
+    let cookie = fixture.sign_in("ana").await;
     let answer = send_with(
         fixture.http(),
         Method::PUT,

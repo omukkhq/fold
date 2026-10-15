@@ -15,7 +15,7 @@ pub const HUMAN_HEADER: &str = "x-fold-human";
 /// The loopback cookie that `POST /api/v1/session` sets. The web application never reads it in script.
 pub const HUMAN_COOKIE: &str = "fold_human";
 
-/// The named human behind a request, registered in the host registry on first use. Over the socket the name comes only from `x-fold-human`. Over HTTP off loopback it comes only from the `fold_session` token, and on loopback only from the `fold_human` cookie, so a browser page cannot claim a name with a header and a signed-in human cannot claim another name with a cookie. The loopback cookie is trusted because every `/api` route of the TCP listener refuses a `Host`, or a write's `Origin`, that names another host, so a page under a foreign domain cannot act through it.
+/// The named human behind a request, registered in the host registry on first use. Over the socket the name comes only from `x-fold-human`. Over HTTP off loopback it comes only from the session that `fold_session` names, and on loopback only from the `fold_human` cookie, so a browser page cannot claim a name with a header and a signed-in human cannot claim another name with a cookie. The loopback cookie is trusted because every `/api` route of the TCP listener refuses a `Host`, or a write's `Origin`, that names another host, so a page under a foreign domain cannot act through it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Human(pub HumanName);
 

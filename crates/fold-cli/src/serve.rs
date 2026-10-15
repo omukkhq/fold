@@ -1,9 +1,12 @@
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
+use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use clap::Args;
+use fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME;
 use fold_daemon::{Daemon, DaemonConfig, DaemonError, SystemClock, shutdown_signal};
 use serde::Deserialize;
 use thiserror::Error;
@@ -59,6 +62,8 @@ impl ServeError {
 pub(crate) struct FileConfig {
     pub(crate) listen: Option<SocketAddr>,
     pub(crate) socket: Option<PathBuf>,
+    /// How many days a web sign-in lasts off loopback.
+    pub(crate) session_days: Option<NonZeroU16>,
 }
 
 /// The directories the daemon uses, read from the environment once so the rules below stay pure.
@@ -151,6 +156,9 @@ fn build_config(
         data_dir,
         runtime_dir,
         web_dir: args.web_dir.clone(),
+        session_lifetime: file.session_days.map_or(DEFAULT_SESSION_LIFETIME, |days| {
+            Duration::from_secs(u64::from(days.get()) * 24 * 60 * 60)
+        }),
     })
 }
 
@@ -262,6 +270,20 @@ mod tests {
         .unwrap();
         assert_eq!(from_flags.listen, "127.0.0.1:9100".parse().unwrap());
         assert_eq!(from_flags.socket, Path::new("/tmp/flag.sock"));
+    }
+
+    #[test]
+    fn the_session_lifetime_is_thirty_days_unless_the_file_sets_it() {
+        let default = build_config(&args(None, None), &dirs(), &FileConfig::default()).unwrap();
+        assert_eq!(
+            default.session_lifetime,
+            Duration::from_secs(30 * 24 * 60 * 60)
+        );
+        let file = parse_file_config("session_days = 7\n").unwrap();
+        let week = build_config(&args(None, None), &dirs(), &file).unwrap();
+        assert_eq!(week.session_lifetime, Duration::from_secs(7 * 24 * 60 * 60));
+        assert!(parse_file_config("session_days = 0").is_err());
+        assert!(parse_file_config("session_days = -1").is_err());
     }
 
     #[test]

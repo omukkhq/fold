@@ -97,6 +97,7 @@ define_codes! {
     UNRESOLVED_CONFLICTS = "unresolved_conflicts",
     CHECKPOINT_NOT_FOUND = "checkpoint_not_found",
     WORKSPACE_WRITE_UNFINISHED = "workspace_write_unfinished",
+    TOKEN_NOT_FOUND = "token_not_found",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

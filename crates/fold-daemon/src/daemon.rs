@@ -31,10 +31,12 @@ pub struct DaemonState {
     pub assets: AssetSource,
     /// The IP address the HTTP listener is bound to. It fixes the auth mode at start and names the hosts the `/api` routes answer.
     pub listen: IpAddr,
+    /// How long a session that `POST /api/v1/session` opens lasts.
+    pub session_lifetime: Duration,
 }
 
 impl DaemonState {
-    /// True off loopback, where every guarded `/api` route needs the `fold_session` cookie. `0.0.0.0` and `::` are off loopback, so they need it even for a request from `127.0.0.1`.
+    /// True off loopback, where every guarded `/api` route needs the `fold_session` cookie of a live session. `0.0.0.0` and `::` are off loopback, so they need it even for a request from `127.0.0.1`.
     pub fn auth_required(&self) -> bool {
         !self.listen.is_loopback()
     }
@@ -116,6 +118,7 @@ impl Daemon {
                 .clone()
                 .map_or(AssetSource::Embedded, AssetSource::Dir),
             listen: config.listen.ip(),
+            session_lifetime: config.session_lifetime,
         });
         for row in fold_store::projects::list_projects(state.registry.read()).await? {
             // A project that fails to open is logged and marked unavailable; the others start.

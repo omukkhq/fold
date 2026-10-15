@@ -503,6 +503,7 @@ async fn state_with(fixtures: &[&Fixture], clock: &ManualClock) -> AppState {
         clock: Arc::new(clock.clone()),
         assets: AssetSource::Embedded,
         listen: "127.0.0.1".parse().unwrap(),
+        session_lifetime: fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME,
     });
     for (n, fixture) in fixtures.iter().enumerate() {
         state

@@ -22,6 +22,7 @@ async fn start(host: &Host) -> (RunningDaemon, PathBuf) {
             data_dir: host.data_home().join("fold"),
             runtime_dir: host.dir.path().join("elsewhere"),
             web_dir: None,
+            session_lifetime: fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME,
         },
         Arc::new(ManualClock::new()),
     )

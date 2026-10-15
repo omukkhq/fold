@@ -33,7 +33,7 @@ pub use events::{
 };
 pub use ids::{
     ChangesetId, ChecklistItemId, CheckpointId, CommentId, IdKind, IdParseError, IntegrationId,
-    MessageId, ProposalId, RevisionId, TaskId, WorkspaceId,
+    MessageId, ProposalId, RevisionId, TaskId, WebTokenId, WorkspaceId,
 };
 pub use layout::{HostPaths, ProjectPaths, task_workspace_path};
 pub use messages::{

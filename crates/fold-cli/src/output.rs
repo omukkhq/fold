@@ -37,9 +37,34 @@ pub fn skipped_line(path: &impl Display, reason: &str) -> String {
     format!("skipped {path} ({reason})")
 }
 
+/// `wt-3 ana created 2026-10-15T06:05:47.388Z last used never (laptop)`
+pub fn web_token_line(
+    id: &impl Display,
+    human: &impl Display,
+    created_at: &impl Display,
+    last_used_at: Option<&impl Display>,
+    label: Option<&str>,
+) -> String {
+    let used = last_used_at.map_or_else(|| "never".to_owned(), ToString::to_string);
+    let label = label.map_or_else(String::new, |label| format!(" ({label})"));
+    format!("{id} {human} created {created_at} last used {used}{label}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn web_token_line_shows_never_for_an_unused_token_and_the_label_last() {
+        assert_eq!(
+            web_token_line(&"wt-3", &"ana", &"T0", None::<&String>, Some("laptop")),
+            "wt-3 ana created T0 last used never (laptop)"
+        );
+        assert_eq!(
+            web_token_line(&"wt-4", &"ana", &"T0", Some(&"T1"), None),
+            "wt-4 ana created T0 last used T1"
+        );
+    }
 
     #[test]
     fn version_line_names_the_workspace_version() {

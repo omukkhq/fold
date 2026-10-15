@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "INSERT INTO web_tokens (token_hash, human_id, label, created_at) VALUES (?, ?, ?, ?) RETURNING id AS \"id!: i64\"",
+  "query": "INSERT INTO web_sessions (session_hash, token_id, human_id, created_at, last_used_at, expires_at)\n           VALUES (?, ?, ?, ?, ?, ?) RETURNING id AS \"id!: i64\"",
   "describe": {
     "columns": [
       {
@@ -9,18 +9,18 @@
         "type_info": "Integer",
         "origin": {
           "Table": {
-            "table": "web_tokens",
+            "table": "web_sessions",
             "name": "id"
           }
         }
       }
     ],
     "parameters": {
-      "Right": 4
+      "Right": 6
     },
     "nullable": [
       null
     ]
   },
-  "hash": "545005f9e50144c0b2cabdabc27392562f346a0980f98ec7d59a5aff814090cc"
+  "hash": "cced95772ec0fcf5009ae9fd8b9514267989689841edbaf7a6d1539e0c6a5271"
 }

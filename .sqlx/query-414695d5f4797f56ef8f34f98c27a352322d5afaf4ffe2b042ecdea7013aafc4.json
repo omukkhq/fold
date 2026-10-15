@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE web_sessions SET last_used_at = ? WHERE id = ? AND last_used_at <= ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "414695d5f4797f56ef8f34f98c27a352322d5afaf4ffe2b042ecdea7013aafc4"
+}

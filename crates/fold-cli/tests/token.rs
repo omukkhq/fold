@@ -63,6 +63,29 @@ async fn status_of(addr: SocketAddr, path: &str, cookie: Option<&str>) -> u16 {
         .unwrap()
 }
 
+/// Posts `body` to the session route and returns the status and the `fold_session` pair, if the answer sets one.
+#[cfg(test)]
+async fn sign_in(addr: SocketAddr, token: &str) -> (u16, Option<String>) {
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let body = format!("{{\"token\":\"{token}\"}}");
+    let request = format!(
+        "POST /api/v1/session HTTP/1.1\r\nhost: 127.0.0.1\r\nconnection: close\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).await.unwrap();
+    let text = String::from_utf8(response).unwrap();
+    let status = text.split_whitespace().nth(1).unwrap().parse().unwrap();
+    let pair = text.lines().find_map(|line| {
+        line.split_once(':')
+            .filter(|(name, _)| name.eq_ignore_ascii_case("set-cookie"))
+            .and_then(|(_, value)| value.trim().split(';').next())
+            .map(str::to_owned)
+    });
+    (status, pair)
+}
+
 #[tokio::test]
 async fn a_token_created_without_a_daemon_signs_in_to_a_daemon_started_afterwards() {
     let host = Host::new();
@@ -102,6 +125,7 @@ async fn a_token_created_without_a_daemon_signs_in_to_a_daemon_started_afterward
             data_dir: host.data_dir(),
             runtime_dir: host.path().join("run").join("fold"),
             web_dir: None,
+            session_lifetime: fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME,
         },
         Arc::new(ManualClock::new()),
     )
@@ -109,12 +133,56 @@ async fn a_token_created_without_a_daemon_signs_in_to_a_daemon_started_afterward
     .unwrap();
     let addr = SocketAddr::from(([127, 0, 0, 1], daemon.http_addr().port()));
     assert_eq!(status_of(addr, "/api/v1/projects", None).await, 401);
-    let cookie = format!("fold_session={token}");
+    let (status, cookie) = sign_in(addr, token).await;
+    assert_eq!(status, 204);
+    let cookie = cookie.unwrap();
+    assert!(!cookie.contains(token));
     assert_eq!(
         status_of(addr, "/api/v1/projects", Some(&cookie)).await,
         200
     );
+
+    let output = host.fold(&["token", "list"]).await;
+    assert!(output.status.success());
+    let listed = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        listed.starts_with("wt-1 ana created ") && listed.ends_with(" (laptop)\n"),
+        "{listed}"
+    );
+    assert!(!listed.contains("last used never"), "{listed}");
+    assert!(!listed.contains(token));
+
+    let output = host.fold(&["token", "revoke", "wt-1"]).await;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "revoked wt-1\n");
+    assert_eq!(
+        status_of(addr, "/api/v1/projects", Some(&cookie)).await,
+        401
+    );
+    assert_eq!(sign_in(addr, token).await, (401, None));
     daemon.shutdown().await;
+
+    let output = host.fold(&["token", "list"]).await;
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "no web tokens\n");
+}
+
+#[tokio::test]
+async fn revoking_an_unknown_or_malformed_id_is_refused_with_its_code() {
+    let host = Host::new();
+    for (id, code) in [("wt-7", "token_not_found"), ("7", "invalid_id")] {
+        let output = host.fold(&["token", "revoke", id]).await;
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(code), "{stderr}");
+    }
+    let output = host.fold(&["token", "list"]).await;
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "no web tokens\n");
 }
 
 #[tokio::test]

@@ -9,7 +9,17 @@ use sqlx::{Connection, Row};
 /// The version of every `.sql` file in `migrations/project`, the files sqlx loads, so the test follows the migrations as they are added.
 #[cfg(test)]
 fn project_migration_versions() -> Vec<i64> {
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/migrations/project");
+    migration_versions(concat!(env!("CARGO_MANIFEST_DIR"), "/migrations/project"))
+}
+
+#[cfg(test)]
+fn registry_migration_count() -> i64 {
+    let versions = migration_versions(concat!(env!("CARGO_MANIFEST_DIR"), "/migrations/registry"));
+    i64::try_from(versions.len()).unwrap()
+}
+
+#[cfg(test)]
+fn migration_versions(dir: &str) -> Vec<i64> {
     let mut versions: Vec<i64> = std::fs::read_dir(dir)
         .unwrap()
         .map(|entry| entry.unwrap().file_name().into_string().unwrap())
@@ -227,7 +237,7 @@ async fn opens_of_a_new_file_at_once_apply_each_migration_once() {
         let stores = [first.unwrap(), second.unwrap(), third.unwrap()];
         assert_eq!(
             count(&stores[0], "SELECT COUNT(*) FROM _sqlx_migrations").await,
-            1
+            registry_migration_count()
         );
         for store in stores {
             store.close().await.unwrap();
@@ -280,7 +290,7 @@ async fn open_outlasts_a_long_write_lock(wal: bool) {
         .unwrap();
     assert_eq!(
         count(&store, "SELECT COUNT(*) FROM _sqlx_migrations").await,
-        1
+        registry_migration_count()
     );
     store.close().await.unwrap();
     holder.close().await.unwrap();
@@ -366,7 +376,7 @@ async fn registry_opens_with_its_own_migrations() {
     let registry = Store::open_registry(&dir.path().join("nested").join("registry.db"))
         .await
         .unwrap();
-    for table in ["projects", "humans", "web_tokens"] {
+    for table in ["projects", "humans", "web_tokens", "web_sessions"] {
         let found = count(
             &registry,
             &format!(
@@ -384,6 +394,72 @@ async fn registry_opens_with_its_own_migrations() {
         .await,
         0
     );
+    registry.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_web_token_made_before_sessions_keeps_its_row_id_as_its_number() {
+    let dir = tempfile::tempdir().unwrap();
+    let baseline = dir.path().join("baseline");
+    std::fs::create_dir(&baseline).unwrap();
+    std::fs::copy(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/migrations/registry/0001_baseline.sql"
+        ),
+        baseline.join("0001_baseline.sql"),
+    )
+    .unwrap();
+    let path = dir.path().join("registry.db");
+    let options = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(&path)
+        .create_if_missing(true);
+    let mut conn = sqlx::SqliteConnection::connect_with(&options)
+        .await
+        .unwrap();
+    sqlx::migrate::Migrator::new(baseline.as_path())
+        .await
+        .unwrap()
+        .run(&mut conn)
+        .await
+        .unwrap();
+    for sql in [
+        "INSERT INTO humans (id, name, created_at) VALUES (1, 'ana', 0)",
+        "INSERT INTO web_tokens (id, token_hash, human_id, label, created_at, last_used_at) VALUES (3, x'01', 1, 'laptop', 5, 6), (7, x'02', 1, NULL, 8, NULL)",
+    ] {
+        sqlx::query(sql).execute(&mut conn).await.unwrap();
+    }
+    conn.close().await.unwrap();
+
+    let registry = Store::open_registry(&path).await.unwrap();
+    let numbers: Vec<(i64, i64)> = sqlx::query("SELECT id, number FROM web_tokens ORDER BY id")
+        .fetch_all(registry.read())
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect();
+    assert_eq!(numbers, [(3, 3), (7, 7)]);
+    assert_eq!(
+        count(
+            &registry,
+            "SELECT COUNT(*) FROM web_tokens WHERE revoked_at IS NULL AND ((id = 3 AND label = 'laptop' AND created_at = 5 AND last_used_at = 6) OR (id = 7 AND label IS NULL AND created_at = 8 AND last_used_at IS NULL))"
+        )
+        .await,
+        2
+    );
+    let duplicate = exec(
+        &registry,
+        "INSERT INTO web_tokens (number, token_hash, human_id, created_at) VALUES (7, x'03', 1, 9)",
+    )
+    .await;
+    assert!(duplicate.is_err());
+    let missing = exec(
+        &registry,
+        "INSERT INTO web_tokens (token_hash, human_id, created_at) VALUES (x'04', 1, 9)",
+    )
+    .await;
+    assert!(missing.is_err());
     registry.close().await.unwrap();
 }
 

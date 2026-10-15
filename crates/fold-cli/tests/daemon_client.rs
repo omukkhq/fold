@@ -176,6 +176,7 @@ async fn the_socket_flag_reaches_a_daemon_on_a_non_default_path() {
             data_dir: host.data_home().join("fold"),
             runtime_dir: host.dir.path().join("elsewhere"),
             web_dir: None,
+            session_lifetime: fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME,
         },
         Arc::new(ManualClock::new()),
     )

@@ -63,7 +63,7 @@ impl IdKind {
         IdKind::ChecklistItem,
     ];
 
-    pub fn prefix(self) -> &'static str {
+    pub const fn prefix(self) -> &'static str {
         match self {
             IdKind::Task => "T-",
             IdKind::Proposal => "P-",
@@ -117,12 +117,19 @@ fn parse_number(rest: &str) -> Result<NonZeroU32, IdParseError> {
 
 macro_rules! define_id {
     ($(#[$meta:meta])* $name:ident, $kind:expr) => {
+        define_id!(@prefixed $(#[$meta])* $name, $kind.prefix());
+
+        impl $name {
+            pub const KIND: IdKind = $kind;
+        }
+    };
+    (@prefixed $(#[$meta:meta])* $name:ident, $prefix:expr) => {
         $(#[$meta])*
         #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub struct $name(NonZeroU32);
 
         impl $name {
-            pub const KIND: IdKind = $kind;
+            pub const PREFIX: &'static str = $prefix;
 
             pub fn number(self) -> u32 {
                 self.0.get()
@@ -144,7 +151,7 @@ macro_rules! define_id {
 
         impl fmt::Display for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(f, "{}{}", Self::KIND.prefix(), self.0)
+                write!(f, "{}{}", Self::PREFIX, self.0)
             }
         }
 
@@ -153,7 +160,7 @@ macro_rules! define_id {
 
             fn from_str(text: &str) -> Result<Self, Self::Err> {
                 let rest = text
-                    .strip_prefix(Self::KIND.prefix())
+                    .strip_prefix(Self::PREFIX)
                     .ok_or(IdParseError::WrongPrefix)?;
                 parse_number(rest).map(Self)
             }
@@ -195,6 +202,12 @@ define_id!(
     /// The public id of a checklist item, plain step or linked; the `checklist_item` counter numbers them.
     ChecklistItemId,
     IdKind::ChecklistItem
+);
+define_id!(
+    @prefixed
+    /// The public id of a web sign-in token: `web_tokens.number`, unique across the host registry rather than one project. A revoked token keeps its row and its number, so a number is never handed out twice.
+    WebTokenId,
+    "wt-"
 );
 
 #[cfg(test)]
@@ -300,6 +313,28 @@ mod tests {
         keys.dedup();
         assert_eq!(prefixes.len(), 10);
         assert_eq!(keys.len(), 10);
+    }
+
+    #[test]
+    fn a_web_token_id_has_its_own_prefix() {
+        let id: WebTokenId = "wt-12".parse().unwrap();
+        assert_eq!(id.number(), 12);
+        assert_eq!(id.to_string(), "wt-12");
+        assert_eq!(WebTokenId::try_from_db(12), Some(id));
+        assert_eq!(
+            "ws-12".parse::<WebTokenId>(),
+            Err(IdParseError::WrongPrefix)
+        );
+        assert_eq!(
+            "wt-012".parse::<WebTokenId>(),
+            Err(IdParseError::LeadingZero)
+        );
+        assert!(
+            IdKind::ALL
+                .iter()
+                .all(|kind| !WebTokenId::PREFIX.starts_with(kind.prefix())
+                    && !kind.prefix().starts_with(WebTokenId::PREFIX))
+        );
     }
 
     #[test]
