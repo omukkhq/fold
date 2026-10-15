@@ -267,6 +267,10 @@ impl ReviewService {
                 return Ok(Integrated::Conflicted(conflicts));
             }
         };
+        #[cfg(feature = "failpoints")]
+        fail::fail_point!("integration_after_merge", |_| Err(fired(
+            "integration_after_merge"
+        )));
         // Allocated in its own write, so a failed attempt never gives its number to a later one.
         let number = self
             .store
@@ -289,6 +293,10 @@ impl ReviewService {
             .write_integration_revision(&locks, revision)
             .await
             .map_err(ReviewError::from)?;
+        #[cfg(feature = "failpoints")]
+        fail::fail_point!("integration_after_objects", |_| Err(fired(
+            "integration_after_objects"
+        )));
         let mut buffer = EventBuffer::new();
         let commit = Commit {
             actor,
@@ -302,6 +310,10 @@ impl ReviewService {
             .store
             .write(async |tx| commit.run(tx, &mut buffer).await)
             .await?;
+        #[cfg(feature = "failpoints")]
+        fail::fail_point!("integration_after_commit", |_| Err(fired(
+            "integration_after_commit"
+        )));
         drop(locks);
         self.bus.publish(buffer);
         for workspace in archived {
@@ -487,7 +499,7 @@ impl Commit<'_> {
         }
         let label = self.actor.event_actor();
         let revision = self.stored.revision().number;
-        match &self.plan.subject {
+        let archived = match &self.plan.subject {
             Subject::Proposal {
                 proposal,
                 task,
@@ -514,7 +526,7 @@ impl Commit<'_> {
                         "version": version,
                     }))?;
                 self.advance(tx, buffer, &label, subject, succeeded).await?;
-                self.complete(tx, buffer, &label, facts).await
+                self.complete(tx, buffer, &label, facts).await?
             }
             Subject::Pull {
                 remote_commit,
@@ -539,9 +551,14 @@ impl Commit<'_> {
                     }))?;
                 buffer.append(tx, &pulled, self.now).await?;
                 buffer.extend(recompute(tx, &[], self.now).await?.events);
-                Ok(Vec::new())
+                Vec::new()
             }
-        }
+        };
+        #[cfg(feature = "failpoints")]
+        fail::fail_point!("integration_in_transaction", |_| Err(fired(
+            "integration_in_transaction"
+        )));
+        Ok(archived)
     }
 
     /// Records the integration and its revision, moves `main` by compare-and-swap, and appends `succeeded` and `main.advanced` for the new revision.
@@ -689,6 +706,12 @@ impl Commit<'_> {
         notify::integration_messages(tx, buffer, &facts, revision, self.now).await?;
         Ok(archived)
     }
+}
+
+/// The error a fired failpoint returns, as a crash at that point would stop the command.
+#[cfg(feature = "failpoints")]
+fn fired(name: &str) -> Step {
+    FoldError::new(codes::FAILPOINT, format!("{name} fired")).into()
 }
 
 /// Whether the latest verdict on the version already is `human`'s approval, so integrating adds no second one.

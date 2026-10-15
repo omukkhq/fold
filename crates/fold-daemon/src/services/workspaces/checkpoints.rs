@@ -75,13 +75,17 @@ impl WorkspaceService {
             move || files.snapshot(base_tree)
         })
         .await?;
+        #[cfg(feature = "failpoints")]
+        fail::fail_point!("checkpoint_after_objects", |_| Err(fired(
+            "checkpoint_after_objects"
+        )));
         let now = self.clock.now();
         let mut buffer = EventBuffer::new();
         let checkpoint = self
             .store
             .write(async |tx| {
                 let row = owned_in_tx(tx, actor, workspace).await?;
-                checkpoint_in_tx(
+                let checkpoint = checkpoint_in_tx(
                     tx,
                     &mut buffer,
                     actor,
@@ -91,7 +95,12 @@ impl WorkspaceService {
                     label,
                     now,
                 )
-                .await
+                .await?;
+                #[cfg(feature = "failpoints")]
+                fail::fail_point!("checkpoint_in_transaction", |_| Err(fired(
+                    "checkpoint_in_transaction"
+                )));
+                Ok::<_, WorkspaceError>(checkpoint)
             })
             .await?;
         self.bus.publish(buffer);
@@ -252,6 +261,12 @@ pub(super) fn retry_hint(error: WorkspaceError, hint: &str) -> WorkspaceError {
         }
         other => other,
     }
+}
+
+/// The error a fired failpoint returns, as a crash at that point would stop the command.
+#[cfg(feature = "failpoints")]
+fn fired(name: &str) -> WorkspaceError {
+    FoldError::new(codes::FAILPOINT, format!("{name} fired")).into()
 }
 
 #[cfg(test)]

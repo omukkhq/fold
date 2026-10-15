@@ -61,3 +61,15 @@ required-features = ["failpoints"]
 [[test]]
 name = "reconcile_failpoints"
 required-features = ["failpoints"]
+
+[[test]]
+name = "crash_integration"
+required-features = ["failpoints"]
+
+[[test]]
+name = "crash_checkpoint"
+required-features = ["failpoints"]
+
+[[test]]
+name = "crash_messages"
+required-features = ["failpoints"]

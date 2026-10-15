@@ -37,3 +37,11 @@ workspace = true
 fold-store = { path = "../fold-store", features = ["testing"] }
 rmcp = { version = "3.5.1", features = ["client"] }
 tokio = { version = "1.53.3", features = ["macros", "rt-multi-thread", "process"] }
+
+[features]
+# A `fold serve` built with it reads `FAILPOINTS`, so a crash test can stop the real daemon inside a command.
+failpoints = ["fold-daemon/failpoints"]
+
+[[test]]
+name = "crash_sigkill"
+required-features = ["failpoints"]

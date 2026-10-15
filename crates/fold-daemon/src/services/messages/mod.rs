@@ -175,9 +175,18 @@ impl MessageService {
                     recipients,
                     now,
                 };
-                write_message(tx, &mut buffer, draft).await
+                let view = write_message(tx, &mut buffer, draft).await?;
+                #[cfg(feature = "failpoints")]
+                fail::fail_point!("send_message_in_transaction", |_| Err(fired(
+                    "send_message_in_transaction"
+                )));
+                Ok::<_, MessageError>(view)
             })
             .await?;
+        #[cfg(feature = "failpoints")]
+        fail::fail_point!("send_message_after_commit", |_| Err(fired(
+            "send_message_after_commit"
+        )));
         self.bus.publish(buffer);
         Ok(view)
     }
@@ -398,4 +407,10 @@ fn no_claim_holder(task: TaskId) -> FoldError {
     )
     .with_details([("task", json!(task.to_string()))])
     .with_hint("choose a recipient for the feedback")
+}
+
+/// The error a fired failpoint returns, as a crash at that point would stop the command.
+#[cfg(feature = "failpoints")]
+fn fired(name: &str) -> MessageError {
+    FoldError::new(codes::FAILPOINT, format!("{name} fired")).into()
 }

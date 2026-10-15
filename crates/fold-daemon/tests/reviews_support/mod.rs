@@ -136,6 +136,30 @@ impl Fixture {
         }
     }
 
+    /// Drops every service without a graceful shutdown and opens the project again, as a daemon that was killed and started again does. The agents keep their sessions, which live in the database; the locks are new, as in a new process.
+    pub async fn restart(&mut self) {
+        self.project.reopen_after_crash().await;
+        let clock = Arc::new(self.project.clock().clone());
+        self.bus = EventBus::new();
+        self.objects = Arc::new(tokio::sync::RwLock::new(()));
+        self.locks = Arc::new(WorkspaceLocks::default());
+        self.integration = Arc::new(tokio::sync::Mutex::new(()));
+        self.agents = AgentService::new(
+            self.project.store().clone(),
+            self.bus.clone(),
+            clock.clone(),
+        )
+        .with_lease_minutes(LEASE_MINUTES);
+        self.tasks = TaskService::new(
+            self.project.store().clone(),
+            self.bus.clone(),
+            clock,
+            LEASE_MINUTES,
+        );
+        self.workspaces = workspace_service(&self.project, &self.bus, &self.objects, &self.locks);
+        self.reviews = self.review_service(self.workspaces.clone());
+    }
+
     /// Another review service over the same project and its locks, as each request of a transport builds one.
     pub fn service(&self) -> ReviewService {
         let workspaces = workspace_service(&self.project, &self.bus, &self.objects, &self.locks);

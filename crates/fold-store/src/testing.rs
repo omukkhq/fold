@@ -109,6 +109,14 @@ impl TestProject {
             .await
             .expect("reopen the project database");
     }
+
+    /// Opens the same files again without closing the store first, so nothing checkpoints the WAL, as a daemon that was killed and started again does. Services built on the old store must be dropped with it.
+    pub async fn reopen_after_crash(&mut self) {
+        let store = Store::open_project(&self.paths)
+            .await
+            .expect("reopen the project database");
+        drop(std::mem::replace(&mut self.store, store));
+    }
 }
 
 /// Runs `sql`, which may hold several statements, in one committed write. Tests use it for rows no store function writes.

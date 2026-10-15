@@ -190,6 +190,8 @@ pub fn run(args: &ServeArgs) -> Result<(), ServeError> {
                 .unwrap_or_else(|_| "info,rmcp=warn".into()),
         )
         .init();
+    #[cfg(feature = "failpoints")]
+    let _failpoints = fold_daemon::failpoints_from_env();
     let dirs = Dirs::from_env();
     let file = read_file_config(&dirs.config_file()?)?;
     let config = build_config(args, &dirs, &file)?;
