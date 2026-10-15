@@ -1,6 +1,5 @@
 use std::ffi::OsString;
 use std::fmt;
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -10,6 +9,7 @@ use serde_json::json;
 use thiserror::Error;
 
 use crate::objects::ObjectError;
+use crate::platform::DirHandle;
 
 #[derive(Debug, Error)]
 pub enum WorkspaceError {
@@ -94,6 +94,17 @@ impl RepoPath {
         self.0.split(|&byte| byte == b'/')
     }
 
+    /// The names of the directories above the entry, from the top, and the entry's own name.
+    pub(crate) fn parents_and_name(&self) -> (Vec<&[u8]>, &[u8]) {
+        match self.0.iter().rposition(|&byte| byte == b'/') {
+            Some(at) => (
+                self.0[..at].split(|&byte| byte == b'/').collect(),
+                &self.0[at + 1..],
+            ),
+            None => (Vec::new(), &self.0),
+        }
+    }
+
     /// The path of the entry `name` inside `parent`, or the top-level entry when `parent` is `None`.
     pub fn child(parent: Option<&Self>, name: &[u8]) -> Result<Self, WorkspaceError> {
         match parent {
@@ -149,23 +160,33 @@ pub(crate) fn os_bytes(name: &std::ffi::OsStr) -> Option<Vec<u8>> {
     }
 }
 
-/// Joins `path` under `root` one component at a time and checks every parent that exists. A parent that is a symlink or not a directory is refused, so no write can leave `root`. The last component may be a symlink; it is never followed here.
+/// Joins `path` under `root` and checks every parent that exists, as [`open_parent`] opens them. A parent that is a symlink or not a directory is refused. The last component may be a symlink; it is never followed here.
 pub fn resolve(root: &Path, path: &RepoPath) -> Result<PathBuf, WorkspaceError> {
-    let names: Vec<&[u8]> = path.components().collect();
-    let mut current = root.to_path_buf();
-    for (position, name) in names.iter().enumerate() {
-        current.push(os_component(name)?);
-        if position + 1 == names.len() {
-            break;
-        }
-        match fs::symlink_metadata(&current) {
-            Ok(meta) if meta.is_dir() => {}
-            Ok(_) => return Err(WorkspaceError::invalid(path.as_bytes())),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+    let located = root.join(os_path(path)?);
+    open_parent(root, path)?;
+    Ok(located)
+}
+
+/// The directory that holds `path`, reached from `root` one handle at a time with no symlink followed, and the entry's name in it. `None` when the root or a parent is missing; a parent that is a symlink or not a directory is refused.
+pub(crate) fn open_parent<'p>(
+    root: &Path,
+    path: &'p RepoPath,
+) -> Result<Option<(DirHandle, &'p [u8])>, WorkspaceError> {
+    let mut dir = match DirHandle::open(root) {
+        Ok(dir) => dir,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let (parents, name) = path.parents_and_name();
+    for parent in parents {
+        dir = match dir.child(parent) {
+            Ok(Some(child)) => child,
+            Ok(None) => return Err(WorkspaceError::invalid(path.as_bytes())),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error.into()),
-        }
+        };
     }
-    Ok(current)
+    Ok(Some((dir, name)))
 }
 
 #[cfg(test)]

@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::fs;
 use std::io::{self, Read};
 use std::ops::Bound;
 use std::path::Path;
@@ -10,8 +9,8 @@ use fold_core::tree::{EntryKind, FlatEntry, FlatTree, Tree, apply_changes, flatt
 
 use crate::index::StatIndex;
 use crate::objects::ObjectStore;
-use crate::paths::{RepoPath, WorkspaceError, os_bytes, resolve};
-use crate::scan::{ChangeKind, ScanOptions, ScanResult, SkipReason, changes, open_regular, scan};
+use crate::paths::{RepoPath, WorkspaceError, open_parent};
+use crate::scan::{ChangeKind, ScanOptions, ScanResult, SkipReason, changes, scan};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WarningReason {
@@ -178,7 +177,7 @@ fn at_or_below<'t>(
         })
 }
 
-/// Stores the blob of one entry unless the object store already holds it. False when the file no longer has the hash the scan found. A file is read only when it is still a regular file of the size the scan recorded, and never past that size.
+/// Stores the blob of one entry unless the object store already holds it. False when the file no longer has the hash the scan found, or is no longer where the scan found it. The file is reached from the root through directory handles, so a parent swapped for a symlink since the scan is never read through. It is read only when it is still a regular file of the size the scan recorded, and never past that size.
 fn store_blob(
     objects: &ObjectStore,
     root: &Path,
@@ -189,19 +188,21 @@ fn store_blob(
     if objects.refresh(&entry.hash)? {
         return Ok(true);
     }
-    let located = resolve(root, path)?;
+    let (dir, name) = match open_parent(root, path) {
+        Ok(Some(found)) => found,
+        Ok(None) | Err(WorkspaceError::InvalidPath(_)) => return Ok(false),
+        Err(error) => return Err(error),
+    };
     let written = if entry.kind == EntryKind::Symlink {
-        let target = match fs::read_link(&located) {
-            Ok(target) => target,
+        let target = match dir.read_link(name) {
+            Ok(Some(target)) => target,
+            Ok(None) => return Ok(false),
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
             Err(error) => return Err(error.into()),
         };
-        let Some(bytes) = os_bytes(target.as_os_str()) else {
-            return Ok(false);
-        };
-        objects.write(ObjectKind::Blob, &bytes)?
+        objects.write(ObjectKind::Blob, &target)?
     } else {
-        let (file, meta) = match open_regular(&located) {
+        let (file, meta) = match dir.open_regular(name) {
             Ok(Some(opened)) => opened,
             Ok(None) => return Ok(false),
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
@@ -224,6 +225,8 @@ pub(crate) fn load_tree(objects: &ObjectStore, hash: &ObjectHash) -> Result<Tree
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use crate::ignore::IgnoreRules;
     use crate::platform::Capabilities;
     use crate::scan::{DEFAULT_MAX_FILE_BYTES, with_rewrites_during_reads};

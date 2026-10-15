@@ -13,10 +13,9 @@ use fold_core::{FoldError, RevisionId, codes};
 use crate::index::StatIndex;
 use crate::materialise::{Batch, MaterialiseOptions};
 use crate::objects::ObjectStore;
-use crate::paths::{RepoPath, WorkspaceError, os_bytes, os_path, resolve};
+use crate::paths::{RepoPath, WorkspaceError, open_parent, os_bytes, os_path, resolve};
 use crate::platform::is_executable;
-use crate::restore::remove_empty_dirs;
-use crate::scan::{Reading, hash_stable, open_regular};
+use crate::scan::{Reading, hash_stable};
 use crate::snapshot::load_tree;
 
 /// Main's side of a conflict is written beside the conflicted path under this suffix.
@@ -188,13 +187,7 @@ fn apply(
         }
     }
     for (path, entry) in plan.writes.iter().chain(&plan.sidecar_writes) {
-        let dest = resolve(root, path)?;
-        if metadata(&dest)
-            .map_err(WorkspaceError::from)?
-            .is_some_and(|meta| meta.is_dir())
-        {
-            remove_empty_dirs(&dest).map_err(WorkspaceError::from)?;
-        }
+        batch.remove_empty_dirs(path)?;
         let done = batch.write_entry(objects, path, entry, &opts)?;
         index.upsert(path.clone(), done.stat);
         written += 1;
@@ -351,11 +344,15 @@ fn matches(
     path: &RepoPath,
     expected: &FlatEntry,
 ) -> Result<bool, WorkspaceError> {
-    let Some(located) = locate(root, path)? else {
-        return Ok(false);
+    let (dir, name) = match open_parent(root, path) {
+        Ok(Some(found)) => found,
+        Ok(None) | Err(WorkspaceError::InvalidPath(_)) => return Ok(false),
+        Err(error) => return Err(error),
     };
-    let Some(meta) = metadata(&located)? else {
-        return Ok(false);
+    let meta = match dir.metadata(name) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
     };
     let caps = index.capabilities();
     let link = meta.file_type().is_symlink();
@@ -377,13 +374,12 @@ fn matches(
         return Ok(hash == expected.hash);
     }
     let hash = if link {
-        let target = fs::read_link(&located)?;
-        let Some(bytes) = os_bytes(target.as_os_str()) else {
+        let Some(target) = dir.read_link(name)? else {
             return Ok(false);
         };
-        hash_object(ObjectKind::Blob, &bytes)
+        hash_object(ObjectKind::Blob, &target)
     } else {
-        match hash_stable(&located)? {
+        match hash_stable(&dir, name)? {
             Reading::Hashed(hash, _) => hash,
             Reading::Unstable | Reading::Gone | Reading::Denied => return Ok(false),
         }
@@ -514,10 +510,12 @@ fn exists(root: &Path, path: &RepoPath) -> Result<bool, WorkspaceError> {
 }
 
 fn holds_marker(root: &Path, path: &RepoPath) -> Result<bool, WorkspaceError> {
-    let Some(located) = locate(root, path)? else {
-        return Ok(false);
+    let (dir, name) = match open_parent(root, path) {
+        Ok(Some(found)) => found,
+        Ok(None) | Err(WorkspaceError::InvalidPath(_)) => return Ok(false),
+        Err(error) => return Err(error),
     };
-    let opened = match open_regular(&located) {
+    let opened = match dir.open_regular(name) {
         Ok(opened) => opened,
         Err(error) if error.kind() == io::ErrorKind::NotFound => None,
         Err(error) => return Err(error.into()),

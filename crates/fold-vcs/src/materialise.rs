@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read};
+use std::fs::{self, File, Metadata};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -9,8 +9,8 @@ use fold_core::tree::{EntryKind, FlatEntry, Tree, TreeError};
 
 use crate::index::{StatEntry, StatIndex};
 use crate::objects::ObjectStore;
-use crate::paths::{RepoPath, WorkspaceError, resolve};
-use crate::platform::{Capabilities, SymlinkOutcome, create_symlink, set_mode, sync_dir};
+use crate::paths::{RepoPath, WorkspaceError};
+use crate::platform::{Capabilities, DirHandle, SymlinkOutcome, set_file_mode, sync_dir};
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -55,16 +55,17 @@ pub fn materialise(
 ) -> Result<Materialised, WorkspaceError> {
     prepare_target(root)?;
     let mut batch = Batch::open(root)?;
-    batch.create_dirs(root)?;
+    batch.root_handle()?;
+    batch.dirs.insert(Vec::new());
     let mut done = Materialised {
         index: StatIndex::empty(opts.caps),
         degraded: Vec::new(),
         synced: Synced::default(),
     };
     write_tree(objects, tree, None, opts, &mut batch, &mut done)?;
+    let staging = batch.staging()?.try_clone()?;
     done.synced = batch.finish()?;
-    staging_ready(root, true)?;
-    done.index.mark_boundary(&staging_dir(root))?;
+    done.index.mark_boundary_in(&staging)?;
     Ok(done)
 }
 
@@ -95,8 +96,8 @@ fn write_tree(
     for entry in tree.entries {
         let path = RepoPath::child(prefix, &entry.name)?;
         if entry.kind == EntryKind::Directory {
-            let dir = resolve(&batch.root, &path)?;
-            batch.create_dirs(&dir)?;
+            let names: Vec<&[u8]> = path.components().collect();
+            batch.create_dirs(&names, &path)?;
             write_tree(objects, &entry.hash, Some(&path), opts, batch, done)?;
             continue;
         }
@@ -135,24 +136,42 @@ pub fn remove_entry(root: &Path, path: &RepoPath) -> Result<(), WorkspaceError> 
     Ok(())
 }
 
-/// The writes and removals of one create, sync or restore in one workspace, flushed together by [`Batch::finish`]: the written files first, then every directory whose entries changed. The caller saves the stat index only after `finish`. One batch runs per workspace at a time, because opening a batch removes whatever an interrupted one left in the staging directory `<root>/.fold/tmp/`.
+/// The writes and removals of one create, sync or restore in one workspace, flushed together by [`Batch::finish`]: the written files first, then every directory whose entries changed. The caller saves the stat index only after `finish`. One batch runs per workspace at a time, because opening a batch removes whatever an interrupted one left in the staging directory `<root>/.fold/tmp/`. Below the root every directory is reached through handles opened without following a symlink: a parent that is a symlink when it is reached is refused, and one swapped for a symlink after it was opened still takes the write in the directory that was opened.
 #[derive(Debug)]
 pub struct Batch {
     root: PathBuf,
+    /// `None` until the root exists.
+    handle: Option<DirHandle>,
+    staging: Option<DirHandle>,
     unsynced: Vec<File>,
-    dirs: BTreeSet<PathBuf>,
+    /// Directories below the root that gained or lost an entry, as slash-joined names; the empty name is the root.
+    dirs: BTreeSet<Vec<u8>>,
+    /// The parent of the root and of each missing ancestor, when the batch created the root.
+    outer: BTreeSet<PathBuf>,
     synced: Synced,
 }
 
 impl Batch {
     pub fn open(root: &Path) -> Result<Self, WorkspaceError> {
-        if staging_ready(root, false)? {
-            sweep(&staging_dir(root))?;
+        let handle = match DirHandle::open(root) {
+            Ok(handle) => Some(handle),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error.into()),
+        };
+        let staging = match &handle {
+            Some(handle) => open_staging(handle, false)?,
+            None => None,
+        };
+        if let Some(staging) = &staging {
+            sweep(staging)?;
         }
         Ok(Self {
             root: root.to_path_buf(),
+            handle,
+            staging,
             unsynced: Vec::new(),
             dirs: BTreeSet::new(),
+            outer: BTreeSet::new(),
             synced: Synced::default(),
         })
     }
@@ -168,25 +187,24 @@ impl Batch {
         if entry.kind == EntryKind::Directory {
             return Err(TreeError::DirectoryInFlatMap.into());
         }
-        let dest = resolve(&self.root, path)?;
-        let parent = dest.parent().unwrap_or(&self.root).to_path_buf();
-        self.create_dirs(&parent)?;
-        staging_ready(&self.root, true)?;
-        let tmp = staging_dir(&self.root).join(format!(
+        let (parents, name) = path.parents_and_name();
+        let parent = self.create_dirs(&parents, path)?;
+        let staging = self.staging()?;
+        let tmp = format!(
             "{}-{}",
             std::process::id(),
             TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-        ));
+        )
+        .into_bytes();
         // The stat comes from the staged entry, which no one else can reach: an edit that lands at the destination right after the rename then differs from the index, so the next scan reads it.
-        let staged = stage(objects, &tmp, entry, opts).and_then(|staged| {
-            let meta = fs::symlink_metadata(&tmp)?;
-            fs::rename(&tmp, &dest)?;
-            Ok((staged, meta))
+        let staged = stage(objects, staging, &tmp, entry, opts).and_then(|staged| {
+            staging.rename(&tmp, &parent, name)?;
+            Ok(staged)
         });
-        let ((outcome, file), meta) = match staged {
+        let (outcome, file, meta) = match staged {
             Ok(staged) => staged,
             Err(error) => {
-                let _ = fs::remove_file(&tmp);
+                let _ = staging.remove_file(&tmp);
                 return Err(error);
             }
         };
@@ -201,42 +219,75 @@ impl Batch {
 
     /// Removes the file or symlink at `path`, never following a link, then any parent directory it leaves empty. The workspace root itself is never removed. A path that is already absent is not an error.
     pub fn remove_entry(&mut self, path: &RepoPath) -> Result<(), WorkspaceError> {
-        let dest = resolve(&self.root, path)?;
-        match fs::symlink_metadata(&dest) {
+        let (mut parents, name) = path.parents_and_name();
+        let Some(mut held) = self.open_dirs(&parents, path)? else {
+            return Ok(());
+        };
+        let Some(parent) = held.last() else {
+            return Ok(());
+        };
+        match parent.metadata(name) {
             Ok(meta) if meta.is_dir() => return Err(WorkspaceError::invalid(path.as_bytes())),
-            Ok(_) => fs::remove_file(&dest)?,
+            Ok(_) => parent.remove_file(name)?,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
             Err(error) => return Err(error.into()),
         }
-        let mut changed = dest.parent();
-        while let Some(dir) = changed {
-            self.dirs.insert(dir.to_path_buf());
-            if dir == self.root || fs::remove_dir(dir).is_err() {
+        loop {
+            self.dirs.insert(parents.join(&b'/'));
+            let Some(emptied) = parents.pop() else {
                 break;
+            };
+            held.pop();
+            match held.last() {
+                Some(holder) if holder.remove_dir(emptied).is_ok() => {}
+                _ => break,
             }
-            changed = dir.parent();
         }
         Ok(())
     }
 
     /// Removes whatever is at `path`, a directory with everything below it included, never following a link. Unlike [`Batch::remove_entry`] it leaves the parent directory in place. A path that is already absent is not an error.
     pub fn remove_tree(&mut self, path: &RepoPath) -> Result<(), WorkspaceError> {
-        let dest = resolve(&self.root, path)?;
-        match fs::symlink_metadata(&dest) {
-            Ok(meta) if meta.is_dir() => fs::remove_dir_all(&dest)?,
-            Ok(_) => fs::remove_file(&dest)?,
+        let (parents, name) = path.parents_and_name();
+        let Some(held) = self.open_dirs(&parents, path)? else {
+            return Ok(());
+        };
+        let Some(parent) = held.last() else {
+            return Ok(());
+        };
+        match parent.metadata(name) {
+            Ok(meta) if meta.is_dir() => parent.remove_all(name)?,
+            Ok(_) => parent.remove_file(name)?,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
             Err(error) => return Err(error.into()),
         }
-        self.dirs
-            .insert(dest.parent().unwrap_or(&self.root).to_path_buf());
+        self.dirs.insert(parents.join(&b'/'));
+        Ok(())
+    }
+
+    /// Clears the way for a file at `path` when a directory stands there: the directory and the empty directories below it are removed, never following a link, and anything else below makes it an error. Nothing at `path`, or something that is not a directory, is left alone.
+    pub fn remove_empty_dirs(&mut self, path: &RepoPath) -> Result<(), WorkspaceError> {
+        let (parents, name) = path.parents_and_name();
+        let Some(held) = self.open_dirs(&parents, path)? else {
+            return Ok(());
+        };
+        let Some(parent) = held.last() else {
+            return Ok(());
+        };
+        match parent.child(name) {
+            Ok(Some(_)) => parent.remove_empty_dirs(name)?,
+            Ok(None) => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
+        }
+        self.dirs.insert(parents.join(&b'/'));
         Ok(())
     }
 
     /// A changed directory that a later removal pruned is skipped, also when a file written later took the place of it or of a parent.
     pub fn finish(mut self) -> Result<Synced, WorkspaceError> {
         self.sync_files()?;
-        for dir in &self.dirs {
+        for dir in &self.outer {
             match sync_dir(dir) {
                 Ok(()) => self.synced.dirs += 1,
                 Err(error)
@@ -247,21 +298,104 @@ impl Batch {
                 Err(error) => return Err(error.into()),
             }
         }
+        let Some(root) = &self.handle else {
+            return Ok(self.synced);
+        };
+        'dirs: for dir in &self.dirs {
+            let mut current = root.try_clone()?;
+            for name in dir
+                .split(|&byte| byte == b'/')
+                .filter(|name| !name.is_empty())
+            {
+                match current.child(name) {
+                    Ok(Some(child)) => current = child,
+                    Ok(None) => continue 'dirs,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => continue 'dirs,
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            current.sync()?;
+            self.synced.dirs += 1;
+        }
         Ok(self.synced)
     }
 
-    /// Creates `dir` and its missing ancestors. `dir` gains an entry, and so does the parent of each directory created.
-    fn create_dirs(&mut self, dir: &Path) -> io::Result<()> {
-        self.dirs.insert(dir.to_path_buf());
-        let mut current = dir;
-        while fs::symlink_metadata(current).is_err() {
-            let Some(parent) = current.parent() else {
+    /// Opened when the batch first needs it, and created then with its missing ancestors when it does not exist.
+    fn root_handle(&mut self) -> io::Result<&DirHandle> {
+        let handle = match self.handle.take() {
+            Some(handle) => handle,
+            None => {
+                let mut current = self.root.as_path();
+                while fs::symlink_metadata(current).is_err() {
+                    let Some(parent) = current.parent() else {
+                        break;
+                    };
+                    self.outer.insert(parent.to_path_buf());
+                    current = parent;
+                }
+                fs::create_dir_all(&self.root)?;
+                DirHandle::open(&self.root)?
+            }
+        };
+        Ok(self.handle.insert(handle))
+    }
+
+    fn staging(&mut self) -> Result<&DirHandle, WorkspaceError> {
+        let staging = match self.staging.take() {
+            Some(staging) => staging,
+            None => open_staging(self.root_handle()?, true)?
+                .ok_or_else(|| WorkspaceError::invalid(b".fold/tmp"))?,
+        };
+        Ok(self.staging.insert(staging))
+    }
+
+    /// Opens the directories `names` below the root, the root included first, without creating any. `None` when one is missing; one that is a symlink or not a directory refuses `path`.
+    fn open_dirs(
+        &self,
+        names: &[&[u8]],
+        path: &RepoPath,
+    ) -> Result<Option<Vec<DirHandle>>, WorkspaceError> {
+        let Some(root) = &self.handle else {
+            return Ok(None);
+        };
+        let mut held = vec![root.try_clone()?];
+        for name in names {
+            let Some(current) = held.last() else {
                 break;
             };
-            self.dirs.insert(parent.to_path_buf());
-            current = parent;
+            match current.child(name) {
+                Ok(Some(child)) => held.push(child),
+                Ok(None) => return Err(WorkspaceError::invalid(path.as_bytes())),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+                Err(error) => return Err(error.into()),
+            }
         }
-        fs::create_dir_all(dir)
+        Ok(Some(held))
+    }
+
+    /// Opens the directories `names` below the root, creating the missing ones. Each directory that gains an entry is noted for the flush: the one holding each created directory, and the last one, which `path` is written into. One that is a symlink or not a directory refuses `path`.
+    fn create_dirs(
+        &mut self,
+        names: &[&[u8]],
+        path: &RepoPath,
+    ) -> Result<DirHandle, WorkspaceError> {
+        let mut current = self.root_handle()?.try_clone()?;
+        let mut below: Vec<u8> = Vec::new();
+        for name in names {
+            let Some((child, created)) = current.child_or_create(name)? else {
+                return Err(WorkspaceError::invalid(path.as_bytes()));
+            };
+            if created {
+                self.dirs.insert(below.clone());
+            }
+            if !below.is_empty() {
+                below.push(b'/');
+            }
+            below.extend_from_slice(name);
+            current = child;
+        }
+        self.dirs.insert(below);
+        Ok(current)
     }
 
     fn hold(&mut self, file: File) -> io::Result<()> {
@@ -281,65 +415,71 @@ impl Batch {
     }
 }
 
-fn staging_dir(root: &Path) -> PathBuf {
-    root.join(".fold").join("tmp")
+/// `<root>/.fold/tmp`, created when `create`. A level that is anything but a real directory is refused, so a planted link never redirects staging or the sweep.
+fn open_staging(root: &DirHandle, create: bool) -> Result<Option<DirHandle>, WorkspaceError> {
+    let Some(fold) = staging_level(root, b".fold", create)? else {
+        return Ok(None);
+    };
+    staging_level(&fold, b"tmp", create)
 }
 
-/// Whether `<root>/.fold/tmp` exists, creating it when `create`. A level that is anything but a real directory is refused, so a planted link never redirects staging or the sweep.
-fn staging_ready(root: &Path, create: bool) -> Result<bool, WorkspaceError> {
-    let mut dir = root.to_path_buf();
-    for name in [".fold", "tmp"] {
-        dir.push(name);
-        match fs::symlink_metadata(&dir) {
-            Ok(meta) if meta.is_dir() => {}
-            Ok(_) => return Err(WorkspaceError::invalid(b".fold/tmp")),
-            Err(error) if error.kind() == io::ErrorKind::NotFound && create => {
-                fs::create_dir(&dir)?;
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
-            Err(error) => return Err(error.into()),
-        }
+fn staging_level(
+    parent: &DirHandle,
+    name: &[u8],
+    create: bool,
+) -> Result<Option<DirHandle>, WorkspaceError> {
+    let opened = if create {
+        parent
+            .child_or_create(name)
+            .map(|found| found.map(|(dir, _)| dir))
+    } else {
+        parent.child(name)
+    };
+    match opened {
+        Ok(Some(dir)) => Ok(Some(dir)),
+        Ok(None) => Err(WorkspaceError::invalid(b".fold/tmp")),
+        Err(error) if error.kind() == io::ErrorKind::NotFound && !create => Ok(None),
+        Err(error) => Err(error.into()),
     }
-    Ok(true)
 }
 
-fn sweep(staging: &Path) -> io::Result<()> {
-    for entry in fs::read_dir(staging)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            fs::remove_dir_all(entry.path())?;
-        } else {
-            fs::remove_file(entry.path())?;
-        }
+fn sweep(staging: &DirHandle) -> io::Result<()> {
+    for name in staging.names()? {
+        staging.remove_all(&name)?;
     }
     Ok(())
 }
 
-/// Returns the handle to sync at the end of the batch: the staged file, or none for a real symlink, whose directory entry is all there is to flush.
+/// Returns the handle to sync at the end of the batch (the staged file, or none for a real symlink, whose directory entry is all there is to flush) and the staged entry's metadata.
 fn stage(
     objects: &ObjectStore,
-    tmp: &Path,
+    staging: &DirHandle,
+    tmp: &[u8],
     entry: &FlatEntry,
     opts: &MaterialiseOptions,
-) -> Result<(SymlinkOutcome, Option<File>), WorkspaceError> {
+) -> Result<(SymlinkOutcome, Option<File>, Metadata), WorkspaceError> {
     let mut blob = objects.open_blob(&entry.hash)?;
     if entry.kind == EntryKind::Symlink {
         let mut target = Vec::new();
         blob.read_to_end(&mut target)?;
-        let outcome = create_symlink(&target, tmp, &opts.caps)?;
-        if outcome == SymlinkOutcome::Created {
-            return Ok((outcome, None));
+        if opts.caps.symlinks {
+            staging.symlink(&target, tmp)?;
+            return Ok((SymlinkOutcome::Created, None, staging.metadata(tmp)?));
         }
-        set_mode(tmp, false, opts.read_only, &opts.caps)?;
-        return Ok((outcome, Some(File::open(tmp)?)));
+        let mut file = staging.create_file(tmp)?;
+        file.write_all(&target)?;
+        set_file_mode(&file, false, opts.read_only, &opts.caps)?;
+        let meta = file.metadata()?;
+        return Ok((SymlinkOutcome::Emulated, Some(file), meta));
     }
-    let mut file = OpenOptions::new().write(true).create_new(true).open(tmp)?;
+    let mut file = staging.create_file(tmp)?;
     io::copy(&mut blob, &mut file)?;
-    set_mode(
-        tmp,
+    set_file_mode(
+        &file,
         entry.kind == EntryKind::Executable,
         opts.read_only,
         &opts.caps,
     )?;
-    Ok((SymlinkOutcome::Created, Some(file)))
+    let meta = file.metadata()?;
+    Ok((SymlinkOutcome::Created, Some(file), meta))
 }

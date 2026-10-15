@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::fs::{self, File, Metadata, OpenOptions};
+use std::fs::{File, Metadata, OpenOptions};
 use std::io::{self, Read};
 use std::path::Path;
 
@@ -8,15 +8,15 @@ use fold_core::tree::{ChangeCounts, EntryKind, FlatEntry, FlatTree};
 
 use crate::ignore::{FOLDIGNORE, GITIGNORE, IgnoreRules};
 use crate::index::{StatEntry, StatIndex, mtime_ns};
-use crate::paths::{RepoPath, WorkspaceError, is_reserved_name, os_bytes, resolve};
-use crate::platform::{Capabilities, is_executable};
+use crate::paths::{RepoPath, WorkspaceError, is_reserved_name, open_parent};
+use crate::platform::{Capabilities, DirHandle, is_executable};
 
 pub const DEFAULT_MAX_FILE_BYTES: u64 = 52_428_800;
 const READ_BUFFER: usize = 64 * 1024;
 const READ_TRIES: usize = 3;
 
 #[cfg(test)]
-type ReadHook = Option<Box<dyn FnMut(&Path)>>;
+type ReadHook = Option<Box<dyn FnMut(&[u8], &File)>>;
 
 #[cfg(test)]
 thread_local! {
@@ -28,10 +28,9 @@ thread_local! {
 #[cfg(test)]
 pub(crate) fn with_rewrites_during_reads<T>(name: &'static str, body: impl FnOnce() -> T) -> T {
     let mut tick = 0;
-    AFTER_READ.set(Some(Box::new(move |path: &Path| {
-        if path.ends_with(name) {
+    AFTER_READ.set(Some(Box::new(move |read: &[u8], file: &File| {
+        if read == name.as_bytes() {
             tick += 1;
-            let file = OpenOptions::new().write(true).open(path).unwrap();
             let time = std::time::SystemTime::UNIX_EPOCH
                 + std::time::Duration::from_secs(1_000_000 + tick);
             file.set_modified(time).unwrap();
@@ -98,7 +97,11 @@ pub fn scan(
 ) -> Result<ScanResult, WorkspaceError> {
     opts.rules.reload();
     let mut walk = Walk::new(index, opts);
-    walk.dir(root, None)?;
+    match DirHandle::open(root) {
+        Ok(handle) => walk.dir(&handle, None)?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
     walk.prune(None);
     Ok(walk.out)
 }
@@ -232,36 +235,21 @@ impl<'a, 'o> Walk<'a, 'o> {
         }
     }
 
-    fn dir(&mut self, folder: &Path, prefix: Option<&RepoPath>) -> Result<(), WorkspaceError> {
-        let reader = match fs::read_dir(folder) {
-            Ok(reader) => reader,
+    /// Lists the directory from its handle, so every entry found is inside it. A directory removed since it was opened holds nothing.
+    fn dir(&mut self, dir: &DirHandle, prefix: Option<&RepoPath>) -> Result<(), WorkspaceError> {
+        let names = match dir.names() {
+            Ok(names) => names,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
-                let Some(prefix) = prefix else {
-                    return Err(error.into());
-                };
-                self.seen.insert(prefix.clone());
-                self.skip(prefix.clone(), SkipReason::Unreadable);
-                return Ok(());
-            }
             Err(error) => return Err(error.into()),
         };
-        for entry in reader {
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(error.into()),
-            };
-            let Some(name) = os_bytes(&entry.file_name()) else {
-                continue;
-            };
+        for name in names {
             if is_reserved_name(&name) {
                 continue;
             }
             let Ok(path) = RepoPath::child(prefix, &name) else {
                 continue;
             };
-            let meta = match entry.metadata() {
+            let meta = match dir.metadata(&name) {
                 Ok(meta) => meta,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
                 Err(error) => return Err(error.into()),
@@ -269,35 +257,68 @@ impl<'a, 'o> Walk<'a, 'o> {
             if self.opts.rules.is_ignored_below(&path, meta.is_dir()) {
                 continue;
             }
-            if meta.is_dir() {
-                self.dir(&entry.path(), Some(&path))?;
-            } else {
-                self.file(&path, &entry.path(), &meta)?;
-            }
+            self.entry(dir, &name, &path, &meta)?;
         }
         Ok(())
     }
 
+    /// A directory is entered through a handle opened without following a symlink. One swapped for something else after `meta` was read is looked at as what is there now, and dropped when that is ignored. One that keeps changing between a directory and something else is unstable, so the caller keeps what it knew below it.
+    fn entry(
+        &mut self,
+        parent: &DirHandle,
+        name: &[u8],
+        path: &RepoPath,
+        meta: &Metadata,
+    ) -> Result<(), WorkspaceError> {
+        if !meta.is_dir() {
+            return Ok(self.file(parent, name, path, meta)?);
+        }
+        for _ in 0..READ_TRIES {
+            match parent.child(name) {
+                Ok(Some(child)) => return self.dir(&child, Some(path)),
+                Ok(None) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+                Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                    self.seen.insert(path.clone());
+                    self.skip(path.clone(), SkipReason::Unreadable);
+                    return Ok(());
+                }
+                Err(error) => return Err(error.into()),
+            }
+            let now = match parent.metadata(name) {
+                Ok(now) => now,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+                Err(error) => return Err(error.into()),
+            };
+            if now.is_dir() {
+                continue;
+            }
+            if self.opts.rules.is_ignored_below(path, false) {
+                return Ok(());
+            }
+            return Ok(self.file(parent, name, path, &now)?);
+        }
+        self.out.unstable.push(path.clone());
+        Ok(())
+    }
+
     fn touched(&mut self, root: &Path, path: &RepoPath) -> Result<(), WorkspaceError> {
-        let located = resolve(root, path)
-            .ok()
-            .and_then(|located| match fs::symlink_metadata(&located) {
-                Ok(meta) => Some(Ok((located, meta))),
-                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-                Err(error) => Some(Err(error)),
-            })
-            .transpose()?;
-        let Some((located, meta)) = located else {
+        let Ok(Some((parent, name))) = open_parent(root, path) else {
             self.drop_below(path);
             return Ok(());
         };
+        let meta = match parent.metadata(name) {
+            Ok(meta) => meta,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                self.drop_below(path);
+                return Ok(());
+            }
+            Err(error) => return Err(error.into()),
+        };
         if self.opts.rules.is_ignored(path, meta.is_dir()) {
             self.drop_below(path);
-        } else if meta.is_dir() {
-            self.dir(&located, Some(path))?;
-            self.prune(Some(path));
         } else {
-            self.file(path, &located, &meta)?;
+            self.entry(&parent, name, path, &meta)?;
             self.prune(Some(path));
         }
         Ok(())
@@ -328,10 +349,16 @@ impl<'a, 'o> Walk<'a, 'o> {
         self.out.skipped.push(Skipped { path, reason });
     }
 
-    fn file(&mut self, path: &RepoPath, located: &Path, meta: &Metadata) -> io::Result<()> {
+    fn file(
+        &mut self,
+        parent: &DirHandle,
+        name: &[u8],
+        path: &RepoPath,
+        meta: &Metadata,
+    ) -> io::Result<()> {
         let kind = meta.file_type();
         if kind.is_symlink() {
-            return self.symlink(path, located, meta);
+            return self.symlink(parent, name, path, meta);
         }
         self.seen.insert(path.clone());
         if !kind.is_file() {
@@ -368,7 +395,7 @@ impl<'a, 'o> Walk<'a, 'o> {
             .and_then(|_| self.index.is_fresh(path, meta));
         let (hash, meta) = match cached {
             Some(hash) => (hash, meta.clone()),
-            None => match hash_stable(located)? {
+            None => match hash_stable(parent, name)? {
                 Reading::Hashed(hash, meta) => {
                     self.out.hashed += 1;
                     (hash, *meta)
@@ -399,7 +426,13 @@ impl<'a, 'o> Walk<'a, 'o> {
         Ok(())
     }
 
-    fn symlink(&mut self, path: &RepoPath, located: &Path, meta: &Metadata) -> io::Result<()> {
+    fn symlink(
+        &mut self,
+        parent: &DirHandle,
+        name: &[u8],
+        path: &RepoPath,
+        meta: &Metadata,
+    ) -> io::Result<()> {
         self.seen.insert(path.clone());
         let known = self.index.lookup(path).copied();
         let cached = known
@@ -408,20 +441,21 @@ impl<'a, 'o> Walk<'a, 'o> {
         let hash = match cached {
             Some(hash) => hash,
             None => {
-                let target = match fs::read_link(located) {
-                    Ok(target) => target,
+                let target = match parent.read_link(name) {
+                    Ok(Some(target)) => target,
+                    Ok(None) => {
+                        self.index.remove(path);
+                        self.out.unstable.push(path.clone());
+                        return Ok(());
+                    }
                     Err(error) if error.kind() == io::ErrorKind::NotFound => {
                         self.seen.remove(path);
                         return Ok(());
                     }
                     Err(error) => return Err(error),
                 };
-                let Some(bytes) = os_bytes(target.as_os_str()) else {
-                    self.skip(path.clone(), SkipReason::Special);
-                    return Ok(());
-                };
                 self.out.hashed += 1;
-                hash_object(ObjectKind::Blob, &bytes)
+                hash_object(ObjectKind::Blob, &target)
             }
         };
         self.record(path, EntryKind::Symlink, hash, meta);
@@ -468,9 +502,9 @@ pub(crate) fn open_regular(path: &Path) -> io::Result<Option<(File, Metadata)>> 
     Ok(meta.is_file().then_some((file, meta)))
 }
 
-/// Hashes the file as a blob. The read counts only when the size and modification time are the same before and after it, and the path is still a regular file; otherwise it is read again, up to three times in all.
-pub(crate) fn hash_stable(path: &Path) -> io::Result<Reading> {
-    read_stable_into(path, None)
+/// Hashes the file `name` in `dir` as a blob. The read counts only when the size and modification time are the same before and after it, and the name still holds a regular file; otherwise it is read again, up to three times in all.
+pub(crate) fn hash_stable(dir: &DirHandle, name: &[u8]) -> io::Result<Reading> {
+    read_stable_into(dir, name, None)
 }
 
 /// What a stable read of one workspace file found.
@@ -484,10 +518,10 @@ pub enum StableRead {
     Denied,
 }
 
-/// Reads the whole file with the scanner's stable read: a read counts only when the file did not change while it was read, and a changed file is read again, three tries at most. A symlink in the file's place is not followed.
-pub fn read_stable(path: &Path) -> io::Result<StableRead> {
+/// Reads the whole file `name` in `dir` with the scanner's stable read: a read counts only when the file did not change while it was read, and a changed file is read again, three tries at most. A symlink in the file's place is not followed.
+pub(crate) fn read_stable(dir: &DirHandle, name: &[u8]) -> io::Result<StableRead> {
     let mut content = Vec::new();
-    Ok(match read_stable_into(path, Some(&mut content))? {
+    Ok(match read_stable_into(dir, name, Some(&mut content))? {
         Reading::Hashed(hash, _) => StableRead::Read(content, hash),
         Reading::Unstable => StableRead::Unstable,
         Reading::Gone => StableRead::Gone,
@@ -495,12 +529,16 @@ pub fn read_stable(path: &Path) -> io::Result<StableRead> {
     })
 }
 
-fn read_stable_into(path: &Path, mut content: Option<&mut Vec<u8>>) -> io::Result<Reading> {
+fn read_stable_into(
+    dir: &DirHandle,
+    name: &[u8],
+    mut content: Option<&mut Vec<u8>>,
+) -> io::Result<Reading> {
     for _ in 0..READ_TRIES {
         if let Some(content) = content.as_deref_mut() {
             content.clear();
         }
-        let (mut file, before) = match open_regular(path) {
+        let (mut file, before) = match dir.open_regular(name) {
             Ok(Some(opened)) => opened,
             Ok(None) => continue,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Reading::Gone),
@@ -529,11 +567,11 @@ fn read_stable_into(path: &Path, mut content: Option<&mut Vec<u8>>) -> io::Resul
         #[cfg(test)]
         AFTER_READ.with_borrow_mut(|hook| {
             if let Some(hook) = hook {
-                hook(path);
+                hook(name, &file);
             }
         });
         let after = file.metadata()?;
-        let end = match fs::symlink_metadata(path) {
+        let end = match dir.metadata(name) {
             Ok(end) => end,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Reading::Gone),
             Err(error) => return Err(error),
@@ -548,6 +586,8 @@ fn read_stable_into(path: &Path, mut content: Option<&mut Vec<u8>>) -> io::Resul
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
 
     const HOST: Capabilities = Capabilities {
@@ -556,6 +596,27 @@ mod tests {
         inodes: true,
         read_only_bit: true,
     };
+
+    #[test]
+    fn a_directory_removed_after_it_was_opened_holds_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let gone = dir.path().join("gone");
+        fs::create_dir(&gone).unwrap();
+        let handle = DirHandle::open(&gone).unwrap();
+        fs::remove_dir(&gone).unwrap();
+        let rules = IgnoreRules::new(dir.path());
+        let opts = ScanOptions {
+            rules: &rules,
+            max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+            caps: HOST,
+            recorded: None,
+        };
+        let mut index = StatIndex::empty(HOST);
+        let mut walk = Walk::new(&mut index, &opts);
+        let path = RepoPath::parse(b"gone").unwrap();
+        walk.dir(&handle, Some(&path)).unwrap();
+        assert!(walk.out.entries.is_empty());
+    }
 
     #[test]
     fn a_file_rewritten_during_its_read_is_unstable() {

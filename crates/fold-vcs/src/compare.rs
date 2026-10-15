@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use fold_core::object::{ObjectHash, ObjectKind};
@@ -14,7 +13,7 @@ use crate::diff::{
 use crate::ignore::IgnoreRules;
 use crate::index::StatIndex;
 use crate::objects::ObjectStore;
-use crate::paths::{RepoPath, WorkspaceError, os_bytes, resolve};
+use crate::paths::{RepoPath, WorkspaceError, open_parent};
 use crate::platform::Capabilities;
 use crate::scan::{self, DEFAULT_MAX_FILE_BYTES, ScanOptions, Skipped, StableRead};
 use crate::snapshot::{Warning, WarningReason, keep_base, load_tree, remove_below};
@@ -546,7 +545,6 @@ fn content(
 
 /// A symlink gives its target text and is never followed.
 fn read_working(root: &Path, path: &RepoPath) -> Result<Vec<u8>, FoldError> {
-    let located = resolve(root, path)?;
     let changed = || {
         FoldError::new(
             codes::WORKSPACE_IO,
@@ -554,12 +552,14 @@ fn read_working(root: &Path, path: &RepoPath) -> Result<Vec<u8>, FoldError> {
         )
         .with_details([("path", json!(path.to_string()))])
     };
-    let meta = fs::symlink_metadata(&located).map_err(|_| changed())?;
+    let Some((dir, name)) = open_parent(root, path)? else {
+        return Err(changed());
+    };
+    let meta = dir.metadata(name).map_err(|_| changed())?;
     if meta.file_type().is_symlink() {
-        let target = fs::read_link(&located).map_err(|_| changed())?;
-        return os_bytes(target.as_os_str()).ok_or_else(changed);
+        return dir.read_link(name).ok().flatten().ok_or_else(changed);
     }
-    match scan::read_stable(&located).map_err(WorkspaceError::from)? {
+    match scan::read_stable(&dir, name).map_err(WorkspaceError::from)? {
         StableRead::Read(bytes, _) => Ok(bytes),
         StableRead::Unstable | StableRead::Gone | StableRead::Denied => Err(changed()),
     }
@@ -567,6 +567,8 @@ fn read_working(root: &Path, path: &RepoPath) -> Result<Vec<u8>, FoldError> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use fold_core::tree::EntryKind;
 
     use super::*;

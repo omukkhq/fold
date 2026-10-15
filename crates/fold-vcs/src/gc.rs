@@ -310,6 +310,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_symlink_entry_below_the_root_is_not_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("file"), b"outside").unwrap();
+        fs::set_permissions(outside.join("file"), fs::Permissions::from_mode(0o400)).unwrap();
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o500)).unwrap();
+        let root = dir.path().join("ws");
+        fs::create_dir_all(root.join("sub")).unwrap();
+        symlink(&outside, root.join("sub/dir-link")).unwrap();
+        symlink(outside.join("file"), root.join("file-link")).unwrap();
+        fs::set_permissions(root.join("sub"), fs::Permissions::from_mode(0o500)).unwrap();
+
+        assert!(make_removable(&root).unwrap());
+        let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&root.join("sub")), 0o700);
+        assert_eq!(mode(&outside), 0o500);
+        assert_eq!(mode(&outside.join("file")), 0o400);
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    #[test]
     fn a_root_that_became_a_symlink_is_not_walked() {
         let dir = tempfile::tempdir().unwrap();
         let outside = dir.path().join("outside");

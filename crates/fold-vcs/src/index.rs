@@ -9,7 +9,7 @@ use fold_core::object::{ObjectHash, varint};
 use fold_core::tree::EntryKind;
 
 use crate::paths::RepoPath;
-use crate::platform::{Capabilities, file_identity, file_mode, sync_dir};
+use crate::platform::{Capabilities, DirHandle, file_identity, file_mode, sync_dir};
 
 const MAGIC: &[u8; 4] = b"FIDX";
 const VERSION: u8 = 1;
@@ -148,6 +148,18 @@ impl StatIndex {
         let marked = file.metadata().map(|meta| mtime_ns(&meta));
         drop(file);
         fs::remove_file(&probe)?;
+        self.boundary_ns = marked?;
+        Ok(())
+    }
+
+    /// [`StatIndex::mark_boundary`] with the probe made in an open directory, so a directory inside a workspace that is swapped for a symlink never takes it.
+    pub(crate) fn mark_boundary_in(&mut self, dir: &DirHandle) -> io::Result<()> {
+        let number = PROBE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let probe = format!("boundary-{}-{number}", std::process::id()).into_bytes();
+        let file = dir.create_file(&probe)?;
+        let marked = file.metadata().map(|meta| mtime_ns(&meta));
+        drop(file);
+        dir.remove_file(&probe)?;
         self.boundary_ns = marked?;
         Ok(())
     }

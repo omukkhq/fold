@@ -10,6 +10,7 @@ blake3 = "1.8.7"
 fold-core = { version = "0.1.0", path = "../fold-core" }
 ignore = "0.4.33"
 notify = "8.2.0"
+rustix = { version = "1.1.5", features = ["fs"] }
 serde_json = "1.0.154"
 similar = "3.2.0"
 thiserror = "2.0.21"

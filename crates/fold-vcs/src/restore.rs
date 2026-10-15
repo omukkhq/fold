@@ -10,7 +10,7 @@ use fold_core::tree::{FlatEntry, FlatTree, flatten};
 use crate::index::StatIndex;
 use crate::materialise::{Batch, MaterialiseOptions, Synced};
 use crate::objects::{ObjectError, ObjectStore};
-use crate::paths::{RepoPath, WorkspaceError, os_bytes, os_path, resolve};
+use crate::paths::{RepoPath, WorkspaceError, os_bytes, os_path};
 use crate::scan::{ChangeKind, ScanOptions, changes, scan};
 use crate::snapshot::{Snapshot, load_tree, snapshot};
 
@@ -103,10 +103,7 @@ pub fn restore_tree(
         done.removed.push(path);
     }
     for (path, entry) in writes {
-        let dest = resolve(root, &path)?;
-        if fs::symlink_metadata(&dest).is_ok_and(|meta| meta.is_dir()) {
-            remove_empty_dirs(&dest).map_err(WorkspaceError::from)?;
-        }
+        batch.remove_empty_dirs(&path)?;
         let written = batch.write_entry(objects, &path, &entry, &opts.write)?;
         if written.degraded {
             done.degraded.push(path.clone());
@@ -193,15 +190,4 @@ fn holds_only(dir: &Path, prefix: &RepoPath, removing: &BTreeSet<&RepoPath>) -> 
         }
     }
     true
-}
-
-/// Removes `dir` and the empty directories below it, never following a link. Anything else below makes the removal fail.
-pub(crate) fn remove_empty_dirs(dir: &Path) -> io::Result<()> {
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            remove_empty_dirs(&entry.path())?;
-        }
-    }
-    fs::remove_dir(dir)
 }
