@@ -1,6 +1,17 @@
 import { queryOptions } from "@tanstack/react-query";
 import { keys } from "../../api/keys";
-import { getFile, getTree, listRevisions } from "../../api/repository";
+import {
+  getFile,
+  getRepository,
+  getTree,
+  listRevisions,
+} from "../../api/repository";
+
+export const repositoryQuery = (slug: string) =>
+  queryOptions({
+    queryKey: [...keys.repository(slug), "state"] as const,
+    queryFn: () => getRepository(slug),
+  });
 
 export const revisionsQuery = (slug: string) =>
   queryOptions({

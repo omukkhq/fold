@@ -26,28 +26,34 @@ export function presenceLine(agent: AgentView, now: number): string {
   return `${state} · ${sessions} · last call ${formatSince(now, agent.last_call_at)}`;
 }
 
-/** `session since 13:30:00 · pid 81231 · ~/ledger`. */
+/** `session since 13:30:00 · pid 81231 · /home/tanim/ledger`; a session that sent no working directory ends at its pid. */
 export function sessionLine(session: SessionView, now: number): string {
-  return `session since ${formatAsOf(now, session.started_at)} · pid ${String(session.pid)} · ${session.cwd}`;
+  const line = `session since ${formatAsOf(now, session.started_at)} · pid ${String(session.pid)}`;
+  return session.cwd === null ? line : `${line} · ${session.cwd}`;
 }
 
-/** The session lines of the agent; none when the payload lists no sessions. */
+/** The session lines of the agent, oldest first. */
 export function sessionLines(agent: AgentView): SessionView[] {
-  return agent.open_sessions ?? [];
+  return agent.open_sessions;
+}
+
+/** A session has no public id; one adapter process is one session, so its pid and start name it. */
+export function sessionKey(session: SessionView): string {
+  return `${String(session.pid)}:${String(session.started_at)}`;
 }
 
 function hasItem(
-  attention: AgentAttention[] | undefined,
+  attention: AgentAttention[],
   kind: AgentAttention["kind"],
   task: string,
 ): boolean {
-  return (attention ?? []).some((i) => i.kind === kind && i.task === task);
+  return attention.some((i) => i.kind === kind && i.task === task);
 }
 
 /** `stalled` for a worker whose claimed task has a stalled item. The web compares no times. */
 export function workerBadges(
   worker: WorkerView,
-  attention: AgentAttention[] | undefined,
+  attention: AgentAttention[],
 ): BadgeTone[] {
   return worker.claims.some((claim) =>
     hasItem(attention, "stalled", claim.task),
@@ -59,7 +65,7 @@ export function workerBadges(
 /** `stale` for a claim whose lease ran out, or whose task has a stale_claim item. */
 export function claimBadges(
   claim: ClaimView,
-  attention: AgentAttention[] | undefined,
+  attention: AgentAttention[],
 ): BadgeTone[] {
   return claim.stale || hasItem(attention, "stale_claim", claim.task)
     ? ["stale"]

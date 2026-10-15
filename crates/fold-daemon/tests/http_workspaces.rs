@@ -6,12 +6,15 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use fold_core::{Clock, ManualClock};
+use fold_core::object::ObjectKind;
+use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
+use fold_core::{Clock, ManualClock, Timestamp};
 use fold_daemon::http::router;
 use fold_daemon::{Daemon, DaemonConfig, RunningDaemon};
 use fold_store::projects::{self, ProjectRow};
 use fold_store::testing::TestProject;
-use fold_store::{Store, StoreError};
+use fold_store::{Store, StoreError, workspaces};
+use fold_vcs::revision_store::{write_initial_tree, write_revision};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -150,6 +153,36 @@ async fn the_five_repository_routes_answer_for_a_known_revision() {
     assert_eq!(binary["binary"], true);
     assert!(binary.get("text").is_none());
     assert_eq!(binary["hash"].as_str().unwrap().len(), 64);
+    host.daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_tree_route_sends_a_symlink_target_and_no_target_for_a_file() {
+    let project = TestProject::new().await;
+    let objects = workspaces_support::objects(&project);
+    let mut flat = FlatTree::new();
+    for (path, kind, content) in [
+        ("README.md", EntryKind::File, &b"hello\n"[..]),
+        ("config.ts", EntryKind::Symlink, b"../shared/config.ts"),
+    ] {
+        let hash = objects.write(ObjectKind::Blob, content).unwrap();
+        flat.insert(path.as_bytes().to_vec(), FlatEntry { kind, hash });
+    }
+    let tree = write_initial_tree(&objects, flat).unwrap();
+    let r1 = workspaces::initial_revision(tree, Timestamp::from_millis(1_000).unwrap()).unwrap();
+    let stored = write_revision(&objects, &r1).unwrap();
+    workspaces::create_initial_revision(project.store(), &stored, None)
+        .await
+        .unwrap();
+    let host = host(&project).await;
+
+    let (status, tree) = host.get("/revisions/r1/tree").await;
+    assert_eq!(status, StatusCode::OK, "{tree}");
+    assert_eq!(tree["entries"][0]["name"], "README.md");
+    assert!(tree["entries"][0].get("target").is_none());
+    assert_eq!(tree["entries"][1]["kind"], "symlink");
+    assert_eq!(tree["entries"][1]["target"], "../shared/config.ts");
+    assert_eq!(tree["entries"][1]["size"], 19);
     host.daemon.shutdown().await;
 }
 

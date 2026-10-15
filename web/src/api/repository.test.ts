@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { errorReply, stubFetch } from "../test/stubFetch";
 import { isApiError } from "./errors";
-import { getFile, getTree, listRevisions } from "./repository";
+import { getFile, getRepository, getTree, listRevisions } from "./repository";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -19,6 +19,19 @@ describe("listRevisions", () => {
     expect(items.map((r) => r.id)).toEqual(["r3", "r2", "r1"]);
     expect(more).toBe(false);
     expect(calls[0]?.search.get("limit")).toBe("200");
+  });
+});
+
+describe("getRepository", () => {
+  it("answers main's head and the path of its copy", async () => {
+    stubFetch({
+      "GET /api/v1/projects/demo/repository": {
+        body: { head: "r17", main_path: "/srv/demo/main", recent: [] },
+      },
+    });
+    const state = await getRepository("demo");
+    expect(state.head).toBe("r17");
+    expect(state.main_path).toBe("/srv/demo/main");
   });
 });
 

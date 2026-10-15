@@ -98,7 +98,7 @@ describe("AgentsScreen", () => {
         ...frontend,
         tags: ["integrator"],
         open_sessions: [
-          { id: "s1", started_at: 0, pid: 81231, cwd: "~/ledger" },
+          { started_at: 0, pid: 81231, cwd: "/home/tanim/ledger" },
         ],
         attention: [{ kind: "stalled", task: "T-12" }],
         integrator_granted_by: "human:tanim",
@@ -106,7 +106,9 @@ describe("AgentsScreen", () => {
       review,
     ]);
     const card = screen.getByRole("region", { name: "Agent frontend" });
-    expect(within(card).getByText(/pid 81231 · ~\/ledger/)).toBeTruthy();
+    expect(
+      within(card).getByText(/pid 81231 · \/home\/tanim\/ledger/),
+    ).toBeTruthy();
     expect(within(card).getByText("Stalled")).toBeTruthy();
     expect(within(card).getByText(/integrator granted by tanim/)).toBeTruthy();
     const plain = screen.getByRole("region", { name: "Agent review" });

@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::Arc;
 
 use fold_core::events::types;
@@ -11,6 +12,7 @@ use fold_store::{Store, StoreError, WriteTx};
 use serde_json::json;
 use thiserror::Error;
 
+use crate::live::LiveState;
 use crate::push::PushTargets;
 use crate::services::events::{EventBuffer, EventBus};
 use crate::services::projects::{Lease, ProjectError};
@@ -21,8 +23,8 @@ mod presence;
 mod push;
 
 pub use overview::{
-    AgentOverview, ClaimSummary, MAX_OVERVIEW_EVENTS, OverviewFilter, ProposalSummary,
-    WorkerOverview, WorkspaceSummary,
+    AgentAttention, AgentOverview, ClaimSummary, MAX_OVERVIEW_EVENTS, OverviewFilter,
+    ProposalSummary, SessionSummary, WorkerOverview, WorkspaceSummary,
 };
 pub use presence::SeenPresence;
 
@@ -84,6 +86,7 @@ pub struct AgentService {
     lease: Lease,
     seen: SeenPresence,
     push: PushTargets,
+    live: Option<LiveState>,
 }
 
 impl std::fmt::Debug for AgentService {
@@ -102,6 +105,7 @@ impl AgentService {
             lease: Lease::Minutes(ProjectConfig::default().lease_minutes),
             seen: SeenPresence::new(),
             push: PushTargets::new(),
+            live: None,
         }
     }
 
@@ -131,16 +135,40 @@ impl AgentService {
         self
     }
 
+    /// Lets the overview read the stalled flags of the project's live workspaces. Without it no task counts as stalled.
+    #[must_use]
+    pub fn with_live(mut self, live: LiveState) -> Self {
+        self.live = Some(live);
+        self
+    }
+
     async fn lease_minutes(&self) -> Result<u64, AgentError> {
         Ok(self.lease.minutes().await?)
     }
 
-    /// Inserts the session row when an adapter connects. The session has no agent until `register_agent` binds it, and no event is stored until then.
+    /// Inserts a session row that records no working directory. The session has no agent until `register_agent` binds it, and no event is stored until then.
     pub async fn start_session(&self, pid: u32) -> Result<SessionContext, AgentError> {
+        self.insert_session(pid, None).await
+    }
+
+    /// Inserts the session row when an adapter connects, with the canonical working directory from its handshake, which the agents overview shows.
+    pub async fn start_session_in(
+        &self,
+        pid: u32,
+        cwd: &Path,
+    ) -> Result<SessionContext, AgentError> {
+        self.insert_session(pid, Some(&cwd.to_string_lossy())).await
+    }
+
+    async fn insert_session(
+        &self,
+        pid: u32,
+        cwd: Option<&str>,
+    ) -> Result<SessionContext, AgentError> {
         let now = self.clock.now();
         let session_id = self
             .store
-            .write(async |tx| agents::insert_session(tx.conn(), pid, now).await)
+            .write(async |tx| agents::insert_session(tx.conn(), pid, cwd, now).await)
             .await?;
         Ok(SessionContext {
             session_id,
@@ -270,6 +298,7 @@ impl AgentService {
     ) -> Result<AgentTags, AgentError> {
         let tag = Tag::parse(INTEGRATOR_TAG).map_err(FoldError::from)?;
         policy::can_set_tag(actor, &tag, on).map_err(FoldError::from)?;
+        let granter = actor.event_actor();
         let now = self.clock.now();
         let mut buffer = EventBuffer::new();
         let tags = self
@@ -284,7 +313,7 @@ impl AgentService {
                     .with_hint("the agent registers itself with register_agent first")
                 })?;
                 let changed = if on {
-                    agents::add_tag(tx.conn(), row.id, &tag, now).await?
+                    agents::add_tag(tx.conn(), row.id, &tag, Some(granter.as_str()), now).await?
                 } else {
                     agents::remove_tag(tx.conn(), row.id, &tag).await?
                 };
@@ -463,7 +492,7 @@ async fn register_agent_in(
         }
     };
     for tag in tags {
-        agents::add_tag(tx.conn(), agent_id, tag, now).await?;
+        agents::add_tag(tx.conn(), agent_id, tag, None, now).await?;
     }
     if session.agent_id.is_none() {
         agents::bind_session(tx.conn(), session_id, agent_id).await?;

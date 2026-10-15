@@ -48,6 +48,20 @@ fn the_root_and_a_nested_directory_list() {
 }
 
 #[test]
+fn a_listed_symlink_carries_its_target_and_other_entries_none() {
+    let (_dir, objects) = store();
+    let root = sample(&objects);
+    let targets: Vec<_> = read_dir(&objects, &root, None)
+        .unwrap()
+        .into_iter()
+        .map(|entry| entry.target)
+        .collect();
+    assert_eq!(targets, [None, Some(b"src/lib.rs".to_vec()), None]);
+    let deep = read_dir(&objects, &root, Some(&path("src/deep"))).unwrap();
+    assert_eq!(deep[0].target, None);
+}
+
+#[test]
 fn a_file_reads_and_a_symlink_returns_its_target_text() {
     let (_dir, objects) = store();
     let root = sample(&objects);

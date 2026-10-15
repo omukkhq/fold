@@ -15,6 +15,8 @@ pub struct DirEntry {
     pub kind: EntryKind,
     pub hash: ObjectHash,
     pub size: Option<u64>,
+    /// A symlink's target text, read from its blob and never followed; `None` for any other kind, and for a target longer than [`MAX_INLINE_BYTES`].
+    pub target: Option<Vec<u8>>,
 }
 
 /// The content of one stored file. A symlink's content is its target text; it is never followed.
@@ -62,11 +64,21 @@ pub fn read_dir(
                 EntryKind::Directory => None,
                 _ => Some(objects.blob_size(&entry.hash).map_err(FoldError::from)?),
             };
+            let target = match (entry.kind, size) {
+                (EntryKind::Symlink, Some(size)) if size <= MAX_INLINE_BYTES as u64 => Some(
+                    objects
+                        .read_expecting(&entry.hash, ObjectKind::Blob)
+                        .map_err(FoldError::from)?
+                        .payload,
+                ),
+                _ => None,
+            };
             Ok(DirEntry {
                 name: entry.name,
                 kind: entry.kind,
                 hash: entry.hash,
                 size,
+                target,
             })
         })
         .collect()

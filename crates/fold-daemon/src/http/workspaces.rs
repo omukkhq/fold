@@ -262,6 +262,10 @@ pub struct TreeEntryView {
     /// Bytes of a file, or of a symlink's target text; null for a directory.
     #[schema(required = true)]
     pub size: Option<u64>,
+    /// A symlink's target text, never followed. Absent for any other kind and for a target longer than 1 MiB.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false, example = "../shared/config.ts")]
+    pub target: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -287,6 +291,9 @@ fn tree_view(path: String, entries: Vec<DirEntry>) -> TreeView {
                 kind: entry.kind.into(),
                 hash: entry.hash.to_string(),
                 size: entry.size,
+                target: entry
+                    .target
+                    .map(|target| String::from_utf8_lossy(&target).into_owned()),
             }
         })
         .collect();

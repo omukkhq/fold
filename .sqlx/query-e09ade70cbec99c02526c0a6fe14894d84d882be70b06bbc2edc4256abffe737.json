@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT agent_id AS \"agent_id!: i64\", pid, started_at, cwd\n           FROM sessions WHERE agent_id IS NOT NULL AND ended_at IS NULL\n           ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "name": "agent_id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "agent_id"
+          }
+        }
+      },
+      {
+        "name": "pid",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "pid"
+          }
+        }
+      },
+      {
+        "name": "started_at",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "started_at"
+          }
+        }
+      },
+      {
+        "name": "cwd",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "cwd"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "e09ade70cbec99c02526c0a6fe14894d84d882be70b06bbc2edc4256abffe737"
+}

@@ -11,10 +11,11 @@ use super::Project;
 use super::actor::Human;
 use super::error::{ApiError, ErrorEnvelope};
 use super::events::DurableEvent;
+use super::tasks::AttentionKind;
 use crate::daemon::AppState;
 use crate::services::agents::{
-    AgentOverview, AgentTags, ClaimSummary, OverviewFilter, ProposalSummary, WorkerOverview,
-    WorkspaceSummary,
+    AgentAttention, AgentOverview, AgentTags, ClaimSummary, OverviewFilter, ProposalSummary,
+    SessionSummary, WorkerOverview, WorkspaceSummary,
 };
 
 pub fn routes() -> OpenApiRouter<AppState> {
@@ -49,11 +50,58 @@ pub struct AgentEntry {
     pub last_call_at: Option<fold_core::Timestamp>,
     /// How many of the agent's sessions are connected.
     pub sessions: u64,
+    /// The connected sessions, oldest first.
+    pub open_sessions: Vec<AgentSession>,
+    /// The actor that granted the `integrator` tag, such as `human:tanim`; null without the tag or when the tag records no granter.
+    #[schema(required = true, example = "human:tanim")]
+    pub integrator_granted_by: Option<String>,
+    /// The `stalled` and `stale_claim` items of the tasks the agent's workers hold claims on. A `stalled` item shows only for an implementation claim, and a `stale_claim` item only for a claim of this agent that the lease sweeper marked.
+    pub attention: Vec<AgentAttentionItem>,
     /// The main worker first, then the children by name.
     pub workers: Vec<WorkerEntry>,
     /// The newest events the agent's workers performed, newest first; empty unless `events` is asked for.
     #[schema(value_type = Vec<DurableEvent>)]
     pub events: Vec<Event>,
+}
+
+/// A connected session. A session has no public id; one adapter process is one session, so its pid names it.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AgentSession {
+    /// UTC milliseconds.
+    #[schema(value_type = i64)]
+    pub started_at: fold_core::Timestamp,
+    /// The adapter process.
+    pub pid: i64,
+    /// The canonical working directory the adapter sent when it connected; null for a session that sent none.
+    #[schema(required = true, example = "/home/tanim/ledger")]
+    pub cwd: Option<String>,
+}
+
+/// One attention item of a task the agent holds a claim on; `kind` is `stalled` or `stale_claim`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AgentAttentionItem {
+    pub kind: AttentionKind,
+    #[schema(example = "T-12")]
+    pub task: String,
+}
+
+impl From<SessionSummary> for AgentSession {
+    fn from(session: SessionSummary) -> Self {
+        Self {
+            started_at: session.started_at,
+            pid: session.pid,
+            cwd: session.cwd,
+        }
+    }
+}
+
+impl From<AgentAttention> for AgentAttentionItem {
+    fn from(item: AgentAttention) -> Self {
+        Self {
+            kind: item.kind.into(),
+            task: item.task.to_string(),
+        }
+    }
 }
 
 /// `active`: a connected session called in the last two minutes. `idle`: a session is connected and none is active. `offline`: no session is connected.
@@ -220,7 +268,18 @@ impl From<AgentOverview> for AgentEntry {
             tags: agent.tags.iter().map(ToString::to_string).collect(),
             presence: agent.presence,
             last_call_at: agent.last_call_at,
-            sessions: agent.open_sessions,
+            sessions: agent.open_session_count,
+            open_sessions: agent
+                .open_sessions
+                .into_iter()
+                .map(AgentSession::from)
+                .collect(),
+            integrator_granted_by: agent.integrator_granted_by,
+            attention: agent
+                .attention
+                .into_iter()
+                .map(AgentAttentionItem::from)
+                .collect(),
             workers: agent.workers.into_iter().map(WorkerEntry::from).collect(),
             events: agent.events,
         }

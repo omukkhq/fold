@@ -5,6 +5,7 @@ import {
   fileState,
   formatSize,
   isOpenable,
+  mainCopyText,
   symlinkLabel,
 } from "./describe";
 
@@ -158,5 +159,22 @@ describe("symlinkLabel", () => {
   it("shows nothing without a target or for another kind", () => {
     expect(symlinkLabel({ kind: "symlink" })).toBeNull();
     expect(symlinkLabel({ kind: "file", target: "x" })).toBeNull();
+  });
+});
+
+describe("mainCopyText", () => {
+  it("names the head the repository route sends", () => {
+    expect(
+      mainCopyText({ head: "r17", main_path: "/srv/demo/main", recent: [] }),
+    ).toBe(
+      "main/ on disk always matches r17 and is read-only. Agents read it; builds run in workspaces.",
+    );
+  });
+
+  it("says nothing before the read arrives or while main has no revision", () => {
+    expect(mainCopyText(undefined)).toBeNull();
+    expect(
+      mainCopyText({ head: null, main_path: "/srv/demo/main", recent: [] }),
+    ).toBeNull();
   });
 });

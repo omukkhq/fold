@@ -6,11 +6,20 @@ import type { components } from "./schema";
 type Schemas = components["schemas"];
 
 export type Revision = Schemas["RevisionView"];
-/** `target` is a symlink's link text. The tree route leaves it out, so it is optional and the tree draws nothing for an absent one. */
-export type TreeEntry = Schemas["TreeEntryView"] & { target?: string };
+export type RepositoryState = Schemas["RepositoryView"];
+export type TreeEntry = Schemas["TreeEntryView"];
 export type FileView = Schemas["FileContentView"];
 
 const PAGE_SIZE = 200;
+
+/** Main's head, the path of its read-only copy, and the newest revisions. */
+export async function getRepository(slug: string): Promise<RepositoryState> {
+  return unwrap(
+    api.GET("/api/v1/projects/{slug}/repository", {
+      params: { path: { slug } },
+    }),
+  );
+}
 const MAX_PAGES = 5;
 
 /** The main revisions, newest first, in at most `MAX_PAGES` pages of `PAGE_SIZE`; `more` says that older revisions were left out. */

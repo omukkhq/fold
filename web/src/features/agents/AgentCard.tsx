@@ -26,6 +26,7 @@ import {
   orderWorkers,
   plainTags,
   presenceLine,
+  sessionKey,
   sessionLine,
   sessionLines,
   workerBadges,
@@ -98,7 +99,10 @@ export function AgentCard({ slug, agent, now }: AgentCardProps) {
           </ul>
         ) : null}
         {live.map((session) => (
-          <p key={session.id} className="font-mono text-label text-text-muted">
+          <p
+            key={sessionKey(session)}
+            className="font-mono text-label text-text-muted"
+          >
             {sessionLine(session, now)}
           </p>
         ))}

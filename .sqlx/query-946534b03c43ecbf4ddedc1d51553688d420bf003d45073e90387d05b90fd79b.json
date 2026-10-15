@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT agent_id, tag, granted_by AS \"granted_by!: String\"\n           FROM agent_tags WHERE granted_by IS NOT NULL ORDER BY agent_id, tag",
+  "describe": {
+    "columns": [
+      {
+        "name": "agent_id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "agent_tags",
+            "name": "agent_id"
+          }
+        }
+      },
+      {
+        "name": "tag",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agent_tags",
+            "name": "tag"
+          }
+        }
+      },
+      {
+        "name": "granted_by!: String",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agent_tags",
+            "name": "granted_by"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "946534b03c43ecbf4ddedc1d51553688d420bf003d45073e90387d05b90fd79b"
+}

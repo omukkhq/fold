@@ -1,4 +1,9 @@
-import type { FileView, Revision, TreeEntry } from "../../api/repository";
+import type {
+  FileView,
+  RepositoryState,
+  Revision,
+  TreeEntry,
+} from "../../api/repository";
 import { formatAsOf } from "../../format/time";
 
 export interface RevisionLines {
@@ -40,6 +45,16 @@ export function describeRevision(
 /** The daemon turns a name that is not UTF-8 into text with U+FFFD, and that text names no entry. Such an entry shows but is never read again by its path. */
 export function isOpenable(entry: Pick<TreeEntry, "name" | "path">): boolean {
   return !entry.name.includes("\uFFFD") && !entry.path.includes("\uFFFD");
+}
+
+/** The note under the tree, from main's head as the repository route names it; null until that read arrives or while main has no revision. */
+export function mainCopyText(
+  state: RepositoryState | undefined,
+): string | null {
+  if (state?.head == null) {
+    return null;
+  }
+  return `main/ on disk always matches ${state.head} and is read-only. Agents read it; builds run in workspaces.`;
 }
 
 /** `→ ../shared/config.ts` beside a symlink in the tree, or null when the entry carries no target. The target is never followed. */

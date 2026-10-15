@@ -15,6 +15,7 @@ import {
   orderWorkers,
   plainTags,
   presenceLine,
+  sessionKey,
   sessionLine,
   sessionLines,
   workerBadges,
@@ -202,16 +203,25 @@ describe("session lines", () => {
   const NOW = new Date(2026, 9, 15, 14, 0, 0).getTime();
   const STARTED = new Date(2026, 9, 15, 13, 30, 0).getTime();
   const session = {
-    id: "s1",
     started_at: STARTED,
     pid: 81231,
-    cwd: "~/ledger",
+    cwd: "/home/tanim/ledger",
   };
 
   it("words a session with its start, pid and directory", () => {
     expect(sessionLine(session, NOW)).toBe(
-      "session since 13:30:00 · pid 81231 · ~/ledger",
+      "session since 13:30:00 · pid 81231 · /home/tanim/ledger",
     );
+  });
+
+  it("ends at the pid for a session that sent no directory", () => {
+    expect(sessionLine({ ...session, cwd: null }, NOW)).toBe(
+      "session since 13:30:00 · pid 81231",
+    );
+  });
+
+  it("keys a session by its pid and start", () => {
+    expect(sessionKey(session)).toBe(`81231:${String(STARTED)}`);
   });
 
   it("lists the sessions the payload carries, and none when it carries none", () => {
@@ -232,18 +242,18 @@ describe("badges", () => {
     expect(workerBadges(busy, [{ kind: "stalled", task: "T-9" }])).toEqual([]);
   });
 
-  it("marks no worker when the payload carries no attention", () => {
-    expect(workerBadges(busy, undefined)).toEqual([]);
+  it("marks no worker when the agent has no attention item", () => {
+    expect(workerBadges(busy, [])).toEqual([]);
   });
 
   it("marks a claim stale by its lease or by a stale_claim item", () => {
-    expect(claimBadges(claim({ stale: true }), undefined)).toEqual(["stale"]);
+    expect(claimBadges(claim({ stale: true }), [])).toEqual(["stale"]);
     expect(
       claimBadges(claim({ task: "T-3" }), [
         { kind: "stale_claim", task: "T-3" },
       ]),
     ).toEqual(["stale"]);
-    expect(claimBadges(claim(), undefined)).toEqual([]);
+    expect(claimBadges(claim(), [])).toEqual([]);
   });
 });
 
@@ -259,7 +269,7 @@ describe("footLine with the integrator granter", () => {
     ).toBe("integrator granted by tanim");
   });
 
-  it("leaves the granter out when it is absent or the tag is not held", () => {
+  it("leaves the granter out when it is null or the tag is not held", () => {
     expect(footLine(agent("review", { tags: ["integrator"] }))).toBe(
       "no claims",
     );

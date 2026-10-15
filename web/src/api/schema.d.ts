@@ -528,16 +528,31 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description One attention item of a task the agent holds a claim on; `kind` is `stalled` or `stale_claim`. */
+        AgentAttentionItem: {
+            kind: components["schemas"]["AttentionKind"];
+            /** @example T-12 */
+            task: string;
+        };
         /** @description One agent with its presence, calculated by the daemon at the time of the request. */
         AgentEntry: {
+            /** @description The `stalled` and `stale_claim` items of the tasks the agent's workers hold claims on. A `stalled` item shows only for an implementation claim, and a `stale_claim` item only for a claim of this agent that the lease sweeper marked. */
+            attention: components["schemas"]["AgentAttentionItem"][];
             /** @description The newest events the agent's workers performed, newest first; empty unless `events` is asked for. */
             events: components["schemas"]["DurableEvent"][];
+            /**
+             * @description The actor that granted the `integrator` tag, such as `human:tanim`; null without the tag or when the tag records no granter.
+             * @example human:tanim
+             */
+            integrator_granted_by: string | null;
             /**
              * Format: int64
              * @description UTC milliseconds of the newest call of any of the agent's sessions; null before the first.
              */
             last_call_at: number | null;
             name: string;
+            /** @description The connected sessions, oldest first. */
+            open_sessions: components["schemas"]["AgentSession"][];
             presence: components["schemas"]["PresenceState"];
             /**
              * Format: int64
@@ -552,6 +567,24 @@ export interface components {
         /** @description Every agent of the project in registration order. */
         AgentList: {
             agents: components["schemas"]["AgentEntry"][];
+        };
+        /** @description A connected session. A session has no public id; one adapter process is one session, so its pid names it. */
+        AgentSession: {
+            /**
+             * @description The canonical working directory the adapter sent when it connected; null for a session that sent none.
+             * @example /home/tanim/ledger
+             */
+            cwd: string | null;
+            /**
+             * Format: int64
+             * @description The adapter process.
+             */
+            pid: number;
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            started_at: number;
         };
         AgentTagList: {
             agent: string;
@@ -1437,6 +1470,11 @@ export interface components {
              * @description Bytes of a file, or of a symlink's target text; null for a directory.
              */
             size: number | null;
+            /**
+             * @description A symlink's target text, never followed. Absent for any other kind and for a target longer than 1 MiB.
+             * @example ../shared/config.ts
+             */
+            target?: string;
         };
         TreeView: {
             /** @description In name order. */

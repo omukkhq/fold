@@ -69,15 +69,22 @@ pub struct AttentionItem {
     pub kind: AttentionKind,
 }
 
+impl From<service::AttentionKind> for AttentionKind {
+    fn from(kind: service::AttentionKind) -> Self {
+        match kind {
+            service::AttentionKind::Question => Self::Question,
+            service::AttentionKind::HumanReview => Self::HumanReview,
+            service::AttentionKind::Stalled => Self::Stalled,
+            service::AttentionKind::StaleClaim => Self::StaleClaim,
+        }
+    }
+}
+
 impl From<service::AttentionItem> for AttentionItem {
     fn from(item: service::AttentionItem) -> Self {
-        let kind = match item.kind {
-            service::AttentionKind::Question => AttentionKind::Question,
-            service::AttentionKind::HumanReview => AttentionKind::HumanReview,
-            service::AttentionKind::Stalled => AttentionKind::Stalled,
-            service::AttentionKind::StaleClaim => AttentionKind::StaleClaim,
-        };
-        Self { kind }
+        Self {
+            kind: item.kind.into(),
+        }
     }
 }
 

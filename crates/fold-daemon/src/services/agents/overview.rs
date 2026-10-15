@@ -1,9 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use fold_core::claims::is_stale;
 use fold_core::{
-    AgentName, CheckpointId, Event, FoldError, Presence, ProposalId, RevisionId, Tag, TaskId,
-    Timestamp, WorkerName, WorkspaceId, codes, presence_of,
+    AgentName, CheckpointId, Event, FoldError, INTEGRATOR_TAG, Presence, ProposalId, RevisionId,
+    Tag, TaskId, Timestamp, WorkerName, WorkspaceId, codes, presence_of,
 };
 use fold_store::agents::{self, ClaimKind};
 use fold_store::workspaces::WorkspaceState;
@@ -12,6 +12,7 @@ use serde_json::json;
 
 use super::presence::facts;
 use super::{AgentError, AgentService};
+use crate::services::tasks::{AttentionKind, stalled_tasks};
 
 /// The most events one agent of the overview carries.
 pub const MAX_OVERVIEW_EVENTS: usize = 50;
@@ -33,11 +34,32 @@ pub struct AgentOverview {
     /// The newest call of any of the agent's sessions.
     pub last_call_at: Option<Timestamp>,
     /// How many of the agent's sessions are connected.
-    pub open_sessions: u64,
+    pub open_session_count: u64,
+    /// The connected sessions, oldest first.
+    pub open_sessions: Vec<SessionSummary>,
+    /// The actor label that granted the `integrator` tag; `None` without the tag or when the tag records no granter.
+    pub integrator_granted_by: Option<String>,
+    /// The `stalled` and `stale_claim` items of the tasks the agent's workers hold claims on, in worker and claim order.
+    pub attention: Vec<AgentAttention>,
     /// The main worker first, then the children by name.
     pub workers: Vec<WorkerOverview>,
     /// The newest events the agent's workers performed, newest first; empty unless the filter asks for events.
     pub events: Vec<Event>,
+}
+
+/// A connected session of the agent. `cwd` is `None` for a session opened without a working directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionSummary {
+    pub pid: i64,
+    pub started_at: Timestamp,
+    pub cwd: Option<String>,
+}
+
+/// One attention item of a task the agent holds a claim on, from the stall flag and the lease mark that the board reads too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentAttention {
+    pub kind: AttentionKind,
+    pub task: TaskId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,7 +74,7 @@ pub struct WorkerOverview {
     pub proposals: Vec<ProposalSummary>,
 }
 
-/// A claim the worker holds. `stale` is decided by the claim lease alone; a worker that holds a claim but makes no edits is stalled, which is a separate flag.
+/// A claim the worker holds. `stale` is decided by the claim lease alone; a worker that holds a claim but makes no edits is stalled, which is a separate flag. `marked_stale` is the lease sweeper's mark, which the next sweep sets after the lease runs out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClaimSummary {
     pub task: TaskId,
@@ -60,6 +82,7 @@ pub struct ClaimSummary {
     pub acquired_at: Timestamp,
     pub renewed_at: Timestamp,
     pub stale: bool,
+    pub marked_stale: bool,
 }
 
 /// A task workspace in state `active` or `missing` that the worker owns, read from the workspace row's cached counts.
@@ -107,7 +130,9 @@ impl AgentService {
         }
         let tags = agents::all_tags(&mut *tx).await?;
         let mut workers = agents::all_workers(&mut *tx).await?;
+        let granters = agents::tag_granters(&mut *tx).await?;
         let mut sessions = agents::sessions_by_agent(&mut tx).await?;
+        let mut open_rows = agents::open_sessions_by_agent(&mut *tx).await?;
         let claims = agents::held_claims(&mut *tx).await?;
         let workspaces = agents::owned_live_workspaces(&mut *tx).await?;
         let proposals = agents::open_proposals(&mut *tx).await?;
@@ -120,6 +145,12 @@ impl AgentService {
             }
         }
         tx.commit().await.map_err(StoreError::from)?;
+        let stalled = stalled_tasks(self.live.as_ref());
+        let mut granter_of: HashMap<i64, String> = granters
+            .into_iter()
+            .filter(|(_, tag, _)| tag.as_str() == INTEGRATOR_TAG)
+            .map(|(agent_id, _, granted_by)| (agent_id, granted_by))
+            .collect();
 
         let mut tags_of: HashMap<i64, Vec<Tag>> = HashMap::new();
         for (agent_id, tag) in tags {
@@ -136,6 +167,7 @@ impl AgentService {
                     acquired_at: claim.acquired_at,
                     renewed_at: claim.renewed_at,
                     stale: is_stale(claim.renewed_at, now, lease_minutes),
+                    marked_stale: claim.marked_stale,
                 });
         }
         let mut workspaces_of: HashMap<i64, Vec<WorkspaceSummary>> = HashMap::new();
@@ -187,16 +219,54 @@ impl AgentService {
             .map(|row| {
                 let sessions = sessions.remove(&row.id).unwrap_or_default();
                 let facts = facts(&sessions.open);
+                let tags = tags_of.remove(&row.id).unwrap_or_default();
+                let granter = granter_of.remove(&row.id);
+                let workers = workers_of.remove(&row.id).unwrap_or_default();
                 AgentOverview {
                     presence: presence_of(now, &facts),
-                    tags: tags_of.remove(&row.id).unwrap_or_default(),
+                    integrator_granted_by: granter
+                        .filter(|_| tags.iter().any(|tag| tag.as_str() == INTEGRATOR_TAG)),
+                    tags,
                     last_call_at: sessions.newest_call,
-                    open_sessions: u64::try_from(facts.len()).unwrap_or(u64::MAX),
-                    workers: workers_of.remove(&row.id).unwrap_or_default(),
+                    open_session_count: u64::try_from(facts.len()).unwrap_or(u64::MAX),
+                    open_sessions: open_rows
+                        .remove(&row.id)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|session| SessionSummary {
+                            pid: session.pid,
+                            started_at: session.started_at,
+                            cwd: session.cwd,
+                        })
+                        .collect(),
+                    attention: agent_attention(&workers, &stalled),
+                    workers,
                     events: events_of.remove(&row.id).unwrap_or_default(),
                     name: row.name,
                 }
             })
             .collect())
     }
+}
+
+/// The board's `stalled` and `stale_claim` items, narrowed to the claim each concerns: `stalled` to the implementation claim, whose workspace the stall job watches, and `stale_claim` to the claim the lease sweeper marked, so another worker's lapsed claim on the same task never shows here.
+fn agent_attention(workers: &[WorkerOverview], stalled: &BTreeSet<TaskId>) -> Vec<AgentAttention> {
+    let mut items = Vec::new();
+    for claim in workers.iter().flat_map(|worker| &worker.claims) {
+        let kinds = [
+            (claim.kind == ClaimKind::Implementation && stalled.contains(&claim.task))
+                .then_some(AttentionKind::Stalled),
+            claim.marked_stale.then_some(AttentionKind::StaleClaim),
+        ];
+        for kind in kinds.into_iter().flatten() {
+            let item = AgentAttention {
+                kind,
+                task: claim.task,
+            };
+            if !items.contains(&item) {
+                items.push(item);
+            }
+        }
+    }
+    items
 }

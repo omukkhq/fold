@@ -8,7 +8,8 @@ import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
 import { CompareBar } from "./CompareBar";
 import { FileView } from "./FileView";
-import { revisionsQuery } from "./queries";
+import { mainCopyText } from "./describe";
+import { repositoryQuery, revisionsQuery } from "./queries";
 import { RevisionList } from "./RevisionList";
 import { TreeView } from "./TreeView";
 
@@ -26,6 +27,7 @@ export function RepositoryScreen({
   onSelectRevision,
 }: RepositoryScreenProps) {
   const revisions = useQuery(revisionsQuery(slug));
+  const repository = useQuery(repositoryQuery(slug));
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [openPath, setOpenPath] = useState<string | null>(null);
   // The clock is read once per mount: the row times are a snapshot, not a ticking display.
@@ -60,6 +62,7 @@ export function RepositoryScreen({
   }
   const selected = history.find((r) => r.id === revision)?.id ?? newest.id;
   const onlyFirst = history.length === 1;
+  const mainCopy = mainCopyText(repository.data);
 
   function toggle(path: string) {
     const next = new Set(expanded);
@@ -126,10 +129,12 @@ export function RepositoryScreen({
         {openPath === null ? null : (
           <FileView slug={slug} revision={selected} path={openPath} />
         )}
-        <p className="flex items-center gap-8 rounded-m bg-sunken px-12 py-10 text-bar text-text-muted">
-          <FolderLock aria-hidden size={15} className="shrink-0" />
-          {`main/ on disk always matches ${newest.id} and is read-only. Agents read it; builds run in workspaces.`}
-        </p>
+        {mainCopy === null ? null : (
+          <p className="flex items-center gap-8 rounded-m bg-sunken px-12 py-10 text-bar text-text-muted">
+            <FolderLock aria-hidden size={15} className="shrink-0" />
+            {mainCopy}
+          </p>
+        )}
       </section>
     </div>
   );

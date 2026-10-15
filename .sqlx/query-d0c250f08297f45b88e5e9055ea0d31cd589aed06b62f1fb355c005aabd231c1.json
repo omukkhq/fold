@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT c.worker_id, c.kind, COALESCE(t.number, pt.number) AS \"task!: i64\",\n                  c.acquired_at, c.renewed_at\n           FROM claims c\n           LEFT JOIN tasks t ON t.id = c.task_id\n           LEFT JOIN proposals p ON p.id = c.proposal_id\n           LEFT JOIN tasks pt ON pt.id = p.task_id\n           WHERE c.released_at IS NULL\n           ORDER BY c.acquired_at, c.id",
+  "query": "SELECT c.worker_id, c.kind, COALESCE(t.number, pt.number) AS \"task!: i64\",\n                  c.acquired_at, c.renewed_at, c.stale_at IS NOT NULL AS \"marked_stale!: bool\"\n           FROM claims c\n           LEFT JOIN tasks t ON t.id = c.task_id\n           LEFT JOIN proposals p ON p.id = c.proposal_id\n           LEFT JOIN tasks pt ON pt.id = p.task_id\n           WHERE c.released_at IS NULL\n           ORDER BY c.acquired_at, c.id",
   "describe": {
     "columns": [
       {
@@ -52,6 +52,12 @@
             "name": "renewed_at"
           }
         }
+      },
+      {
+        "name": "marked_stale!: bool",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": "Expression"
       }
     ],
     "parameters": {
@@ -62,8 +68,9 @@
       false,
       true,
       false,
+      false,
       false
     ]
   },
-  "hash": "9c47a873bb157f64245b519e13a0e2982943063bbff1aa25e0ebd55d448875f5"
+  "hash": "d0c250f08297f45b88e5e9055ea0d31cd589aed06b62f1fb355c005aabd231c1"
 }

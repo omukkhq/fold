@@ -121,6 +121,7 @@ impl ProjectHandle {
             .with_project_config(self.paths.clone())
             .with_seen_presence(self.presence.clone())
             .with_push_targets(self.push.clone())
+            .with_live(self.live.clone())
     }
 }
 

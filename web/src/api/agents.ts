@@ -5,30 +5,10 @@ import type { components } from "./schema";
 type Schemas = components["schemas"];
 
 /** One connected session as the session line words it. */
-export interface SessionView {
-  id: string;
-  /** UTC milliseconds. */
-  started_at: number;
-  pid: number;
-  cwd: string;
-}
-
+export type SessionView = Schemas["AgentSession"];
 /** A stalled worker or a stale claim, by the task it is on. */
-export interface AgentAttention {
-  kind: Extract<Schemas["AttentionKind"], "stalled" | "stale_claim">;
-  /** @example T-12 */
-  task: string;
-}
-
-/** Fields the agents route leaves out of `AgentEntry`. Each is optional, and the screens draw nothing for an absent one. */
-export interface AgentDetails {
-  open_sessions?: SessionView[];
-  attention?: AgentAttention[];
-  /** The human that granted the integrator tag. */
-  integrator_granted_by?: string | null;
-}
-
-export type AgentView = Schemas["AgentEntry"] & AgentDetails;
+export type AgentAttention = Schemas["AgentAttentionItem"];
+export type AgentView = Schemas["AgentEntry"];
 export type WorkerView = Schemas["WorkerEntry"];
 export type ClaimView = Schemas["HeldClaim"];
 export type WorkspaceView = Schemas["WorkerWorkspace"];

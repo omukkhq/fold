@@ -241,7 +241,10 @@ async fn open(
         handle.bus.clone(),
         handle.clock.clone(),
     );
-    let mut session = agents.start_session(hello.pid).await.map_err(from_agent)?;
+    let mut session = agents
+        .start_session_in(hello.pid, &hello.cwd)
+        .await
+        .map_err(from_agent)?;
     if let Some(agent) = agent
         && let Err(error) = agents.register_agent(&mut session, &agent, &[]).await
     {

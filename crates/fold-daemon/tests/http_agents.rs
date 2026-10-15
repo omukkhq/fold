@@ -366,6 +366,9 @@ async fn the_agents_route_returns_the_overview_in_registration_order() {
             "presence": "active",
             "last_call_at": registered,
             "sessions": 1,
+            "open_sessions": [{"started_at": registered, "pid": 2, "cwd": null}],
+            "integrator_granted_by": null,
+            "attention": [],
             "workers": [
                 {"name": "backend", "parent": null, "last_call_at": null, "activity": null,
                  "claims": [], "workspaces": [], "proposals": []},
@@ -384,6 +387,100 @@ async fn the_agents_route_returns_the_overview_in_registration_order() {
     let (_, body) = call(fixture.http(), Method::GET, AGENTS, &[]).await;
     assert_eq!(body["agents"][1]["presence"], "offline");
     assert_eq!(body["agents"][1]["sessions"], 0);
+    assert_eq!(body["agents"][1]["open_sessions"], json!([]));
+}
+
+#[tokio::test]
+async fn open_sessions_carry_the_working_directory_of_the_handshake() {
+    let fixture = Fixture::new().await;
+    let agents = fixture.agents();
+    let first = fixture.project.now().as_millis();
+    let mut one = agents
+        .start_session_in(81231, std::path::Path::new("/home/tanim/ledger"))
+        .await
+        .unwrap();
+    let name = AgentName::parse("backend").unwrap();
+    agents.register_agent(&mut one, &name, &[]).await.unwrap();
+    fixture.advance(1_000);
+    let mut two = agents
+        .start_session_in(81232, std::path::Path::new("/home/tanim/ledger/web"))
+        .await
+        .unwrap();
+    agents.register_agent(&mut two, &name, &[]).await.unwrap();
+
+    let (status, body) = call(fixture.http(), Method::GET, AGENTS, &[]).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["agents"][1]["open_sessions"],
+        json!([
+            {"started_at": first, "pid": 81231, "cwd": "/home/tanim/ledger"},
+            {"started_at": first + 1_000, "pid": 81232, "cwd": "/home/tanim/ledger/web"},
+        ])
+    );
+    agents.end_session(&one).await.unwrap();
+    let (_, body) = call(fixture.http(), Method::GET, AGENTS, &[]).await;
+    assert_eq!(body["agents"][1]["sessions"], 1);
+    assert_eq!(body["agents"][1]["open_sessions"][0]["pid"], 81232);
+    assert_eq!(
+        body["agents"][1]["open_sessions"].as_array().unwrap().len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn the_overview_names_the_human_that_granted_integrator() {
+    let fixture = Fixture::new().await;
+    let granter = async || {
+        let (_, body) = call(fixture.http(), Method::GET, AGENTS, &[]).await;
+        body["agents"][0]["integrator_granted_by"].clone()
+    };
+    assert_eq!(granter().await, Value::Null);
+
+    let (status, _) = call(
+        fixture.http(),
+        Method::PUT,
+        PATH,
+        &[("cookie", "fold_human=tanim")],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(granter().await, "human:tanim");
+    let (status, _) = call(
+        fixture.socket(),
+        Method::PUT,
+        PATH,
+        &[("x-fold-human", "ana")],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        granter().await,
+        "human:tanim",
+        "a repeat grant keeps the first granter"
+    );
+
+    let (status, _) = call(
+        fixture.socket(),
+        Method::DELETE,
+        PATH,
+        &[("x-fold-human", "ana")],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(granter().await, Value::Null);
+    let (status, _) = call(
+        fixture.socket(),
+        Method::PUT,
+        PATH,
+        &[("x-fold-human", "ana")],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        granter().await,
+        "human:ana",
+        "a grant after a removal records the new granter"
+    );
 }
 
 #[tokio::test]

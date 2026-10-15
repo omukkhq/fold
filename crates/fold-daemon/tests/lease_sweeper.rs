@@ -224,6 +224,30 @@ impl Fixture {
             .collect()
     }
 
+    /// The `attention` list of each agent on `GET /agents`, by agent name.
+    async fn agent_attention(&self) -> BTreeMap<String, Value> {
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri("/api/v1/projects/demo/agents")
+            .body(Body::empty())
+            .unwrap();
+        let response = router(self.state.clone()).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        body["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|agent| {
+                (
+                    agent["name"].as_str().unwrap().to_owned(),
+                    agent["attention"].clone(),
+                )
+            })
+            .collect()
+    }
+
     async fn attention(&self, task: &str) -> Vec<String> {
         self.board().await.remove(task).unwrap()
     }
@@ -555,6 +579,56 @@ async fn the_board_and_the_workspace_routes_show_stalled_and_stale_claim_until_e
     fx.handle.live.rescan(id).await.unwrap();
     assert!(fx.attention("T-1").await.is_empty());
     assert!(fx.workspace_attention(id).await.is_empty());
+}
+
+#[tokio::test]
+async fn the_agents_route_gives_each_agent_the_items_of_its_own_claims() {
+    let fx = Fixture::new().await;
+    let (id, dir) = fx.create(&fx.frontend, 1).await;
+    fx.review_claim(&dir).await;
+    let none = BTreeMap::from([
+        ("frontend".to_owned(), json!([])),
+        ("backend".to_owned(), json!([])),
+    ]);
+    assert_eq!(fx.agent_attention().await, none);
+
+    fx.advance(STALL);
+    fx.check().await;
+    assert!(fx.stalled(id));
+    assert_eq!(
+        fx.agent_attention().await,
+        BTreeMap::from([
+            (
+                "frontend".to_owned(),
+                json!([{"kind": "stalled", "task": "T-1"}])
+            ),
+            ("backend".to_owned(), json!([])),
+        ]),
+        "the reviewer of a stalled task is not stalled"
+    );
+
+    fx.advance(LEASE);
+    fx.call(&fx.frontend).await;
+    assert_eq!(fx.sweep().await, 1, "only the review claim lapsed");
+    assert_eq!(
+        fx.agent_attention().await,
+        BTreeMap::from([
+            (
+                "frontend".to_owned(),
+                json!([{"kind": "stalled", "task": "T-1"}])
+            ),
+            (
+                "backend".to_owned(),
+                json!([{"kind": "stale_claim", "task": "T-1"}])
+            ),
+        ]),
+        "a lapsed review claim marks only its holder"
+    );
+
+    fx.call(&fx.backend).await;
+    fs::write(dir.join("README.md"), "# demo\nedited again\n").unwrap();
+    fx.handle.live.rescan(id).await.unwrap();
+    assert_eq!(fx.agent_attention().await, none);
 }
 
 #[tokio::test]

@@ -15,10 +15,9 @@ export function workingCount(agent: ProjectAgent): number {
   );
 }
 
-/** Tasks with a stalled worker; zero when the payload carries no attention. */
+/** Tasks with a stalled worker. */
 export function stalledCount(agent: ProjectAgent): number {
-  return (agent.attention ?? []).filter((item) => item.kind === "stalled")
-    .length;
+  return agent.attention.filter((item) => item.kind === "stalled").length;
 }
 
 /** The chip's second line from the agent's claims, or that no session is connected. */

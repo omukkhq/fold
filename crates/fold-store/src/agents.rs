@@ -103,20 +103,22 @@ pub async fn agent_name(
         .transpose()
 }
 
-/// True when the tag was new.
+/// True when the tag was new. `granted_by` is the actor label of the granting human; a tag that is already present keeps its first granter.
 pub async fn add_tag(
     executor: impl SqliteExecutor<'_>,
     agent_id: i64,
     tag: &Tag,
+    granted_by: Option<&str>,
     now: Timestamp,
 ) -> Result<bool, StoreError> {
     let tag = tag.as_str();
     let created_at = now.as_millis();
     let result = sqlx::query!(
-        "INSERT OR IGNORE INTO agent_tags (agent_id, tag, created_at) VALUES (?, ?, ?)",
+        "INSERT OR IGNORE INTO agent_tags (agent_id, tag, created_at, granted_by) VALUES (?, ?, ?, ?)",
         agent_id,
         tag,
-        created_at
+        created_at,
+        granted_by
     )
     .execute(executor)
     .await?;
@@ -227,16 +229,18 @@ pub async fn main_worker(
 pub async fn insert_session(
     executor: impl SqliteExecutor<'_>,
     pid: u32,
+    cwd: Option<&str>,
     now: Timestamp,
 ) -> Result<i64, StoreError> {
     let pid = i64::from(pid);
     let started_at = now.as_millis();
     Ok(sqlx::query_scalar!(
-        r#"INSERT INTO sessions (pid, started_at, last_call_at) VALUES (?, ?, ?)
+        r#"INSERT INTO sessions (pid, started_at, last_call_at, cwd) VALUES (?, ?, ?, ?)
            RETURNING id AS "id!: i64""#,
         pid,
         started_at,
-        started_at
+        started_at,
+        cwd
     )
     .fetch_one(executor)
     .await?)
@@ -396,6 +400,24 @@ pub async fn all_tags(executor: impl SqliteExecutor<'_>) -> Result<Vec<(i64, Tag
         .collect()
 }
 
+/// The actor label that granted each tag that has one, as `(agent_id, tag, granted_by)`.
+pub async fn tag_granters(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Vec<(i64, Tag, String)>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT agent_id, tag, granted_by AS "granted_by!: String"
+           FROM agent_tags WHERE granted_by IS NOT NULL ORDER BY agent_id, tag"#
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            let tag = Tag::parse(&row.tag).map_err(|_| StoreError::Corrupt("agent_tags.tag"))?;
+            Ok((row.agent_id, tag, row.granted_by))
+        })
+        .collect()
+}
+
 /// Every worker of every agent, ordered by name.
 pub async fn all_workers(executor: impl SqliteExecutor<'_>) -> Result<Vec<WorkerRow>, StoreError> {
     let rows = sqlx::query!(
@@ -478,6 +500,39 @@ pub async fn sessions_by_agent(
     Ok(sessions)
 }
 
+/// An open, bound session as the agents overview lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenSessionRow {
+    pub pid: i64,
+    pub started_at: Timestamp,
+    pub cwd: Option<String>,
+}
+
+/// The open sessions of every agent that has one, by agent row id, oldest first.
+pub async fn open_sessions_by_agent(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<HashMap<i64, Vec<OpenSessionRow>>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT agent_id AS "agent_id!: i64", pid, started_at, cwd
+           FROM sessions WHERE agent_id IS NOT NULL AND ended_at IS NULL
+           ORDER BY id"#
+    )
+    .fetch_all(executor)
+    .await?;
+    let mut sessions: HashMap<i64, Vec<OpenSessionRow>> = HashMap::new();
+    for row in rows {
+        sessions
+            .entry(row.agent_id)
+            .or_default()
+            .push(OpenSessionRow {
+                pid: row.pid,
+                started_at: time(row.started_at, "sessions.started_at")?,
+                cwd: row.cwd,
+            });
+    }
+    Ok(sessions)
+}
+
 /// The `last_call_at` of every open session of one agent, which is what its presence reads.
 pub async fn open_session_calls(
     executor: impl SqliteExecutor<'_>,
@@ -548,13 +603,15 @@ pub struct HeldClaim {
     pub task: TaskId,
     pub acquired_at: Timestamp,
     pub renewed_at: Timestamp,
+    /// The lease sweeper marked the claim (`stale_at` is set).
+    pub marked_stale: bool,
 }
 
 /// Every unreleased claim, oldest first.
 pub async fn held_claims(executor: impl SqliteExecutor<'_>) -> Result<Vec<HeldClaim>, StoreError> {
     let rows = sqlx::query!(
         r#"SELECT c.worker_id, c.kind, COALESCE(t.number, pt.number) AS "task!: i64",
-                  c.acquired_at, c.renewed_at
+                  c.acquired_at, c.renewed_at, c.stale_at IS NOT NULL AS "marked_stale!: bool"
            FROM claims c
            LEFT JOIN tasks t ON t.id = c.task_id
            LEFT JOIN proposals p ON p.id = c.proposal_id
@@ -572,6 +629,7 @@ pub async fn held_claims(executor: impl SqliteExecutor<'_>) -> Result<Vec<HeldCl
                 task: TaskId::try_from_db(row.task).ok_or(StoreError::Corrupt("tasks.number"))?,
                 acquired_at: time(row.acquired_at, "claims.acquired_at")?,
                 renewed_at: time(row.renewed_at, "claims.renewed_at")?,
+                marked_stale: row.marked_stale,
             })
         })
         .collect()

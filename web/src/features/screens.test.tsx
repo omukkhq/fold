@@ -131,13 +131,20 @@ const REVISIONS = [
   revision(1, { origin: "initial", proposal: null, task: null, author: null }),
 ];
 
-function entry(name: string, kind: string, dir = "", size: number | null = 10) {
+function entry(
+  name: string,
+  kind: string,
+  dir = "",
+  size: number | null = 10,
+  target?: string,
+) {
   return {
     name,
     kind,
     path: dir === "" ? name : `${dir}/${name}`,
     hash: "h",
     size: kind === "directory" ? null : size,
+    ...(target === undefined ? {} : { target }),
   };
 }
 
@@ -149,7 +156,7 @@ const TREES: Record<string, ReturnType<typeof entry>[]> = {
     entry("assets", "directory"),
     entry("huge.dat", "file", "", 5_000_000),
   ],
-  docs: [entry("latest", "symlink", "docs", 12)],
+  docs: [entry("latest", "symlink", "docs", 12, "../README.md")],
   assets: [entry("logo.png", "file", "assets", 18_432)],
 };
 
@@ -186,6 +193,13 @@ function stubRepository(revisions = REVISIONS): StubRequest[] {
   return stubFetch({
     "GET /api/v1/projects/demo/revisions": {
       body: { revisions, before: null },
+    },
+    "GET /api/v1/projects/demo/repository": {
+      body: {
+        head: revisions[0]?.id ?? null,
+        main_path: "/srv/demo/main",
+        recent: revisions,
+      },
     },
     "GET /api/v1/projects/demo/revisions/r5/tree": (request) => ({
       body: {
@@ -257,10 +271,20 @@ describe("Repository screen", () => {
     expect(within(revisions).getByText(/P-5 · Change 5/)).toBeTruthy();
   });
 
+  it("names main's head from the repository route under the tree", async () => {
+    renderRepository("r3");
+    expect(
+      await screen.findByText(
+        /main\/ on disk always matches r5 and is read-only/,
+      ),
+    ).toBeTruthy();
+  });
+
   it("opens a symlink to show its target without following it", async () => {
     renderRepository();
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "docs" }));
+    expect(await screen.findByText("→ ../README.md")).toBeTruthy();
     await user.click(await screen.findByRole("button", { name: /latest/ }));
     const link = await screen.findByRole("region", {
       name: "File docs/latest",

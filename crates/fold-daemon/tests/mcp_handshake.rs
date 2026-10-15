@@ -84,6 +84,18 @@ impl Host {
         json!({"fold": PROTOCOL_VERSION, "cwd": cwd, "pid": 4242, "agent": agent})
     }
 
+    async fn text(&self, sql: &'static str) -> String {
+        let handle = match self.state().projects.slot("app") {
+            Some(fold_daemon::projects::Slot::Open(handle)) => handle,
+            other => panic!("project app is not open: {other:?}"),
+        };
+        sqlx::query(sql)
+            .fetch_one(handle.store.read())
+            .await
+            .unwrap()
+            .get(0)
+    }
+
     async fn count(&self, sql: &'static str) -> i64 {
         let handle = match self.state().projects.slot("app") {
             Some(fold_daemon::projects::Slot::Open(handle)) => handle,
@@ -177,6 +189,11 @@ async fn an_rmcp_client_completes_the_handshake_and_the_session_ends_with_the_st
         host.count("SELECT count(*) FROM sessions WHERE ended_at IS NULL AND pid = 4242")
             .await,
         1
+    );
+    assert_eq!(
+        host.text("SELECT cwd FROM sessions WHERE pid = 4242").await,
+        host.root.to_string_lossy(),
+        "the session keeps the working directory of the handshake"
     );
 
     client.cancel().await.unwrap();

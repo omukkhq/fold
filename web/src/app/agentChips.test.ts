@@ -15,7 +15,7 @@ interface ChipOptions {
   presence?: ProjectAgent["presence"];
   /** Implementation claims held. */
   working?: number;
-  /** Of those, the tasks with a stalled item; absent leaves the payload without attention. */
+  /** Of those, the tasks with a stalled item. */
   stalled?: number;
 }
 
@@ -24,7 +24,7 @@ const agent = ({
   name = "frontend",
   presence = "active",
   working = 0,
-  stalled,
+  stalled = 0,
 }: ChipOptions): ProjectAgent => ({
   ...baseAgent(name, { presence }),
   workers: [
@@ -34,14 +34,10 @@ const agent = ({
       ),
     }),
   ],
-  ...(stalled === undefined
-    ? {}
-    : {
-        attention: Array.from({ length: stalled }, (_, i) => ({
-          kind: "stalled" as const,
-          task: `T-${String(i + 1)}`,
-        })),
-      }),
+  attention: Array.from({ length: stalled }, (_, i) => ({
+    kind: "stalled" as const,
+    task: `T-${String(i + 1)}`,
+  })),
 });
 
 const status = (patch: Partial<LiveStatus>): LiveStatus => ({
@@ -60,9 +56,8 @@ describe("agentStateText", () => {
     expect(agentStateText(agent({ presence: "idle" }))).toBe("waiting");
   });
 
-  it("counts working tasks and the stalled ones when the payload carries them", () => {
+  it("counts working tasks and adds the stalled ones when there are any", () => {
     expect(agentStateText(agent({ working: 2 }))).toBe("2 working");
-    expect(agentStateText(agent({ working: 2, stalled: 0 }))).toBe("2 working");
     expect(agentStateText(agent({ working: 2, stalled: 1 }))).toBe(
       "2 working · 1 stalled",
     );
