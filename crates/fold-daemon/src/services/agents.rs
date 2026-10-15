@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use fold_core::events::types;
 use fold_core::{
-    AgentName, Clock, EventActor, EventError, FoldError, NewEvent, Tag, TaskId, Timestamp,
-    WorkerName, codes,
+    Actor, AgentActor, AgentName, Clock, EventActor, EventError, FoldError, INTEGRATOR_TAG,
+    NewEvent, Tag, TaskId, Timestamp, WorkerName, codes, policy,
 };
 use fold_store::agents::{self, AgentRow, WorkerRow};
 use fold_store::{Store, StoreError, WriteTx};
@@ -49,6 +49,13 @@ pub struct AgentSummary {
     pub workers: Vec<WorkerName>,
 }
 
+/// An agent and its whole tag set after a tag command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentTags {
+    pub agent: AgentName,
+    pub tags: Vec<Tag>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisteredWorker {
     pub worker: WorkerRow,
@@ -88,20 +95,24 @@ impl AgentService {
         })
     }
 
-    /// Creates the agent and its main worker on first use, merges `tags` and binds the session. A repeat call changes nothing except the tags it adds.
+    /// Creates the agent and its main worker on first use, merges `tags` and binds the session. A repeat call changes nothing except the tags it adds. It keeps the session context instead of an `Actor` because it binds that session; the registering agent is the actor that `policy::can_set_tag` checks for each tag.
     pub async fn register_agent(
         &self,
         ctx: &mut SessionContext,
         name: &AgentName,
         tags: &[Tag],
     ) -> Result<Registered, AgentError> {
-        if tags.iter().any(Tag::is_integrator) {
-            return Err(FoldError::new(
-                codes::HUMAN_REQUIRED,
-                "the integrator tag can only be granted by a human",
-            )
-            .with_hint("ask a human to grant the integrator tag")
-            .into());
+        let current = match agents::find_agent(self.store.read(), name).await? {
+            Some(agent) => agents::tags(self.store.read(), agent.id).await?,
+            None => Vec::new(),
+        };
+        let registering = Actor::Agent(AgentActor {
+            agent: name.clone(),
+            worker: WorkerName::main(name),
+            tags: current,
+        });
+        for tag in tags {
+            policy::can_set_tag(&registering, tag, true).map_err(FoldError::from)?;
         }
         let session_id = ctx.session_id;
         let now = self.clock.now();
@@ -142,8 +153,8 @@ impl AgentService {
                 }
                 let id =
                     agents::insert_worker(tx.conn(), agent.id, &name, Some(parent.id), now).await?;
-                let event =
-                    NewEvent::new(types::WORKER_REGISTERED, actor(&agent.name)?)?.data(json!({
+                let event = NewEvent::new(types::WORKER_REGISTERED, main_actor(&agent.name))?
+                    .data(json!({
                         "agent": agent.name.as_str(),
                         "worker": name.as_str(),
                         "parent": parent.name.as_str(),
@@ -211,6 +222,68 @@ impl AgentService {
         Ok(agent)
     }
 
+    /// The acting agent of a call: the worker from `resolve_worker` and the agent's tags as they are now.
+    pub async fn actor(
+        &self,
+        ctx: &SessionContext,
+        as_worker: Option<&WorkerName>,
+    ) -> Result<Actor, AgentError> {
+        let worker = self.resolve_worker(ctx, as_worker).await?;
+        let tags = agents::tags(self.store.read(), worker.agent_id).await?;
+        Ok(Actor::Agent(AgentActor {
+            agent: worker.name.agent(),
+            worker: worker.name,
+            tags,
+        }))
+    }
+
+    /// Grants (`on`) or removes `integrator` on `agent`. `policy::can_set_tag` runs first, so only a human gets past it. A grant of a present tag or a removal of an absent one changes nothing and appends no event.
+    pub async fn set_integrator(
+        &self,
+        actor: &Actor,
+        agent: &AgentName,
+        on: bool,
+    ) -> Result<AgentTags, AgentError> {
+        let tag = Tag::parse(INTEGRATOR_TAG).map_err(FoldError::from)?;
+        policy::can_set_tag(actor, &tag, on).map_err(FoldError::from)?;
+        let now = self.clock.now();
+        let mut buffer = EventBuffer::new();
+        let tags = self
+            .store
+            .write(async |tx| {
+                let row = agents::find_agent(tx.conn(), agent).await?.ok_or_else(|| {
+                    FoldError::new(
+                        codes::AGENT_NOT_FOUND,
+                        format!("agent {agent} does not exist"),
+                    )
+                    .with_details([("agent", json!(agent.as_str()))])
+                    .with_hint("the agent registers itself with register_agent first")
+                })?;
+                let changed = if on {
+                    agents::add_tag(tx.conn(), row.id, &tag, now).await?
+                } else {
+                    agents::remove_tag(tx.conn(), row.id, &tag).await?
+                };
+                if changed {
+                    let event_type = if on {
+                        types::AGENT_TAG_ADDED
+                    } else {
+                        types::AGENT_TAG_REMOVED
+                    };
+                    let event = NewEvent::new(event_type, actor.event_actor())?
+                        .data(json!({"agent": agent.as_str(), "tag": tag.as_str()}))?;
+                    buffer.append(tx, &event, now).await?;
+                }
+                Ok::<_, AgentError>(agents::tags(tx.conn(), row.id).await?)
+            })
+            .await?;
+        self.bus.publish(buffer);
+        Ok(AgentTags {
+            agent: agent.clone(),
+            tags,
+        })
+    }
+
     /// The worker named by `as_worker`, or the agent's main worker when it is absent. A worker of another agent is reported as `worker_not_found`, so its existence is never revealed.
     pub async fn resolve_worker(
         &self,
@@ -268,7 +341,7 @@ impl AgentService {
                 let name = agents::agent_name(tx.conn(), agent_id)
                     .await?
                     .ok_or(StoreError::Corrupt("sessions.agent_id"))?;
-                let event = NewEvent::new(types::SESSION_ENDED, actor(&name)?)?
+                let event = NewEvent::new(types::SESSION_ENDED, main_actor(&name))?
                     .data(json!({"agent": name.as_str()}))?;
                 buffer.append(tx, &event, now).await?;
                 Ok(())
@@ -334,7 +407,7 @@ async fn register_agent_in(
         .with_hint("start a new session to act as another agent")
         .into());
     }
-    let actor = actor(name)?;
+    let actor = main_actor(name);
     let (agent_id, created) = match existing {
         Some(agent) => (agent.id, false),
         None => {
@@ -367,8 +440,8 @@ async fn register_agent_in(
     })
 }
 
-fn actor(agent: &AgentName) -> Result<EventActor, EventError> {
-    EventActor::parse(agent.as_str())
+fn main_actor(agent: &AgentName) -> EventActor {
+    EventActor::worker(&WorkerName::main(agent))
 }
 
 fn worker_not_found() -> FoldError {

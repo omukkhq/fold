@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use clap::Args;
 use fold_cli::daemon_client::{ClientConfig, ClientError, DaemonClient, Response};
-use fold_daemon::services::projects::{ProjectError, slug_for_dir};
+use fold_daemon::services::projects::{ProjectError, slug_for_dir_on_host};
 use hyper::Method;
 use serde_json::Value;
 use thiserror::Error;
@@ -81,12 +81,12 @@ pub fn run(
     let cwd = cwd
         .and_then(std::fs::canonicalize)
         .map_err(GcError::WorkingDir)?;
-    let host = host_paths(dirs)?;
+    let host = host_paths(dirs).map_err(InitError::HostPaths)?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(GcError::Runtime)?;
-    let slug = runtime.block_on(slug_for_dir(&host, &cwd))?;
+    let slug = runtime.block_on(slug_for_dir_on_host(&host, &cwd))?;
     let socket = socket_path(args.socket.as_deref(), dirs)?.ok_or(GcError::NoSocket)?;
     let client = DaemonClient::new(
         ClientConfig {

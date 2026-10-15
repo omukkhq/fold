@@ -61,3 +61,6 @@ invalid_step_text
 checklist_item_not_found
 invalid_event_filter
 gc_in_progress
+human_name_required
+agent_not_found
+actor_cannot_claim

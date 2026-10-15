@@ -68,7 +68,7 @@ enum Registration {
 
 /// A daemon that refuses or cannot be asked leaves the project initialised and registered, so init still succeeds.
 pub fn run(args: &InitArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), InitError> {
-    let host = host_paths(dirs)?;
+    let host = host_paths(dirs).map_err(InitError::HostPaths)?;
     let socket = socket_path(args.socket.as_deref(), dirs);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -134,21 +134,21 @@ fn client(socket: PathBuf) -> DaemonClient {
     DaemonClient::new(config, daemon_client::human_from_env().ok())
 }
 
-pub(crate) fn host_paths(dirs: &Dirs) -> Result<HostPaths, InitError> {
+pub(crate) fn host_paths(dirs: &Dirs) -> Result<HostPaths, FoldError> {
     let data_home = utf8(dirs.data_home.as_deref(), "XDG_DATA_HOME")?;
     let home = utf8(dirs.home.as_deref(), "HOME")?;
-    HostPaths::new(data_home, home).map_err(InitError::HostPaths)
+    HostPaths::new(data_home, home)
 }
 
 /// The daemon finds the registry through the same variables as a `PathBuf`, so a value that is not UTF-8 is refused instead of skipped.
-fn utf8<'a>(path: Option<&'a Path>, name: &str) -> Result<Option<&'a str>, InitError> {
+fn utf8<'a>(path: Option<&'a Path>, name: &str) -> Result<Option<&'a str>, FoldError> {
     match path {
         None => Ok(None),
         Some(path) => path.to_str().map(Some).ok_or_else(|| {
-            InitError::HostPaths(FoldError::new(
+            FoldError::new(
                 codes::INVALID_HOST_PATHS,
                 format!("{name} is not valid UTF-8"),
-            ))
+            )
         }),
     }
 }
@@ -315,7 +315,7 @@ mod tests {
             ..Dirs::default()
         };
         let error = host_paths(&dirs).unwrap_err();
-        assert_eq!(error.code(), Some("invalid_host_paths"));
+        assert_eq!(error.code(), "invalid_host_paths");
         assert!(error.to_string().contains("XDG_DATA_HOME"));
         let fine = Dirs {
             data_home: None,

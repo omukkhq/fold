@@ -1,7 +1,7 @@
 use fold_core::events::types;
 use fold_core::{
-    ChecklistItemId, ChecklistName, DependencyOrigin, EventActor, IdKind, NewEvent, StepText,
-    TaskId, TaskStatus, Timestamp, codes,
+    Actor, ChecklistItemId, ChecklistName, DependencyOrigin, IdKind, NewEvent, StepText, TaskId,
+    TaskStatus, Timestamp, codes,
 };
 use fold_store::tasks::checklists::{self, ItemRow, NewItem};
 use fold_store::tasks::{self, TaskRow};
@@ -71,7 +71,7 @@ impl TaskService {
     /// Adds a plain step or a linked item and recomputes the task in the same transaction. A linked item adds the edge "task needs child" with the checklist origin, so it is refused as a direct edge would be; a child that is already Done ticks the item in the same transaction.
     pub async fn add_checklist_item(
         &self,
-        actor: &EventActor,
+        actor: &Actor,
         task: TaskId,
         item: NewChecklistItem,
     ) -> Result<ChecklistItemView, TaskError> {
@@ -92,7 +92,7 @@ impl TaskService {
     /// Edits or ticks a plain step and recomputes its task in the same transaction: ticking the last open step can complete the task by its children. A linked item ticks itself and is refused with `linked_item`.
     pub async fn update_checklist_item(
         &self,
-        actor: &EventActor,
+        actor: &Actor,
         item: ChecklistItemId,
         patch: ChecklistItemPatch,
     ) -> Result<ChecklistItemView, TaskError> {
@@ -108,7 +108,7 @@ impl TaskService {
     /// Removes an item, with its edge when it is linked, and recomputes its task in the same transaction.
     pub async fn remove_checklist_item(
         &self,
-        actor: &EventActor,
+        actor: &Actor,
         item: ChecklistItemId,
     ) -> Result<(), TaskError> {
         let now = self.clock.now();
@@ -213,7 +213,7 @@ async fn open_task(tx: &mut WriteTx, task: TaskId) -> Result<TaskRow, TaskError>
 async fn add_item_in_tx(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,
-    actor: &EventActor,
+    actor: &Actor,
     task: TaskId,
     item: &NewChecklistItem,
     now: Timestamp,
@@ -248,7 +248,7 @@ async fn add_item_in_tx(
         .await?;
     }
     if checklists::ensure_checklist(tx, task, &checklist, now).await? {
-        let event = NewEvent::new(types::CHECKLIST_CREATED, actor.clone())?
+        let event = NewEvent::new(types::CHECKLIST_CREATED, actor.event_actor())?
             .task(task)
             .data(json!({"checklist": checklist.as_str()}))?;
         buffer.append(tx, &event, now).await?;
@@ -270,7 +270,7 @@ async fn add_item_in_tx(
     if let ItemContent::Linked(child) = item.content {
         data["linked_task"] = json!(child.to_string());
     }
-    let event = NewEvent::new(types::CHECKLIST_ITEM_ADDED, actor.clone())?
+    let event = NewEvent::new(types::CHECKLIST_ITEM_ADDED, actor.event_actor())?
         .task(task)
         .data(data)?;
     buffer.append(tx, &event, now).await?;
@@ -280,7 +280,7 @@ async fn add_item_in_tx(
 async fn update_item_in_tx(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,
-    actor: &EventActor,
+    actor: &Actor,
     item: ChecklistItemId,
     patch: &ChecklistItemPatch,
     now: Timestamp,
@@ -312,7 +312,9 @@ async fn update_item_in_tx(
     let ticked = row.done_at.is_some();
     let tick = patch.done.filter(|done| *done != ticked);
     match tick {
-        Some(true) => checklists::set_done(tx, item, Some((now, actor.as_str()))).await?,
+        Some(true) => {
+            checklists::set_done(tx, item, Some((now, actor.event_actor().as_str()))).await?
+        }
         Some(false) => {
             checklists::set_done(tx, item, None).await?;
             fields.push("done");
@@ -320,13 +322,13 @@ async fn update_item_in_tx(
         None => {}
     }
     if !fields.is_empty() {
-        let event = NewEvent::new(types::CHECKLIST_ITEM_UPDATED, actor.clone())?
+        let event = NewEvent::new(types::CHECKLIST_ITEM_UPDATED, actor.event_actor())?
             .task(row.task)
             .data(json!({"item": item.to_string(), "fields": fields}))?;
         buffer.append(tx, &event, now).await?;
     }
     if tick == Some(true) {
-        let event = NewEvent::new(types::CHECKLIST_ITEM_DONE, actor.clone())?
+        let event = NewEvent::new(types::CHECKLIST_ITEM_DONE, actor.event_actor())?
             .task(row.task)
             .data(json!({"item": item.to_string()}))?;
         buffer.append(tx, &event, now).await?;
@@ -340,7 +342,7 @@ async fn update_item_in_tx(
 async fn remove_item_in_tx(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,
-    actor: &EventActor,
+    actor: &Actor,
     item: ChecklistItemId,
     now: Timestamp,
 ) -> Result<(), TaskError> {
@@ -353,7 +355,7 @@ async fn remove_item_in_tx(
     if let ItemContent::Linked(child) = row.content {
         data["linked_task"] = json!(child.to_string());
     }
-    let event = NewEvent::new(types::CHECKLIST_ITEM_REMOVED, actor.clone())?
+    let event = NewEvent::new(types::CHECKLIST_ITEM_REMOVED, actor.event_actor())?
         .task(row.task)
         .data(data)?;
     buffer.append(tx, &event, now).await?;
@@ -364,7 +366,7 @@ async fn remove_item_in_tx(
     if let Some(edge) = edge.filter(|edge| edge.origin == DependencyOrigin::Checklist) {
         let child = edge.needs;
         tasks::delete_edge(tx, row.task, child).await?;
-        let event = NewEvent::new(types::DEPENDENCY_REMOVED, actor.clone())?
+        let event = NewEvent::new(types::DEPENDENCY_REMOVED, actor.event_actor())?
             .task(row.task)
             .data(
                 json!({"needs": child.to_string(), "origin": DependencyOrigin::Checklist.as_str()}),

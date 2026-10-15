@@ -1,3 +1,4 @@
+pub mod actor;
 pub mod agents;
 pub mod claims;
 pub mod clock;
@@ -10,6 +11,7 @@ pub mod ids;
 pub mod layout;
 pub mod merge;
 pub mod object;
+pub mod policy;
 pub mod projects;
 pub mod readiness;
 pub mod revision;
@@ -18,7 +20,8 @@ pub mod task;
 pub mod time;
 pub mod tree;
 
-pub use agents::{AgentName, INTEGRATOR_TAG, NameError, Tag, WorkerName};
+pub use actor::{Actor, AgentActor};
+pub use agents::{AgentName, HumanName, INTEGRATOR_TAG, NameError, Tag, WorkerName};
 pub use clock::{Clock, ManualClock};
 pub use config::{CONFIG_TEMPLATE, ProjectConfig};
 pub use error::{FoldError, codes};
@@ -31,6 +34,7 @@ pub use ids::{
     MessageId, ProposalId, RevisionId, TaskId, WorkspaceId,
 };
 pub use layout::{HostPaths, ProjectPaths};
+pub use policy::PolicyDenied;
 pub use projects::{choose_slug, slugify};
 pub use status::TaskStatus;
 pub use task::{

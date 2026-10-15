@@ -4,7 +4,7 @@ use std::fmt;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
 
-use crate::agents::AgentName;
+use crate::agents::{AgentName, HumanName, WorkerName};
 use crate::ids::{ProposalId, RevisionId, TaskId, WorkspaceId};
 use crate::time::Timestamp;
 
@@ -141,7 +141,7 @@ impl<'de> Deserialize<'de> for EventType {
 
 const MAX_LABEL_LEN: usize = 64;
 
-/// Who caused an event: a worker (`frontend`, `frontend/ui`), a human (`human:ana`) or `fold`.
+/// Who caused an event: a worker (`frontend`, `frontend/ui`, any depth a `WorkerName` allows), a human (`human:ana`) or `fold`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EventActor(String);
 
@@ -153,6 +153,8 @@ impl EventActor {
             true
         } else if let Some(human) = label.strip_prefix("human:") {
             Self::valid_human(human)
+        } else if WorkerName::parse(label).is_ok() {
+            true
         } else {
             let mut parts = label.split('/');
             let agent = parts.next().unwrap_or_default();
@@ -168,6 +170,14 @@ impl EventActor {
 
     pub fn fold() -> EventActor {
         EventActor(Self::FOLD.to_owned())
+    }
+
+    pub fn worker(worker: &WorkerName) -> EventActor {
+        EventActor(worker.as_str().to_owned())
+    }
+
+    pub fn human(name: &HumanName) -> EventActor {
+        EventActor(format!("human:{name}"))
     }
 
     pub fn as_str(&self) -> &str {

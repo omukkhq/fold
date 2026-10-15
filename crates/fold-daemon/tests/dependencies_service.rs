@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use fold_core::events::types;
 use fold_core::{
-    DependencyOrigin, EventActor, EventFilter, TaskDescription, TaskId, TaskStatus, TaskTitle,
+    Actor, AgentActor, DependencyOrigin, EventActor, EventFilter, TaskDescription, TaskId,
+    TaskStatus, TaskTitle, WorkerName,
 };
 use fold_daemon::services::events::{BusMessage, EventBuffer, EventBus};
 use fold_daemon::services::tasks::{self, CreateTask, Edge, TaskError, TaskService};
@@ -12,13 +13,23 @@ use fold_store::{StoreError, events};
 use serde_json::{Value, json};
 
 #[cfg(test)]
-fn frontend() -> EventActor {
-    EventActor::parse("frontend").unwrap()
+fn frontend() -> Actor {
+    let worker = WorkerName::parse("frontend").unwrap();
+    Actor::Agent(AgentActor {
+        agent: worker.agent(),
+        worker,
+        tags: Vec::new(),
+    })
 }
 
 #[cfg(test)]
-fn backend() -> EventActor {
-    EventActor::parse("backend").unwrap()
+fn backend() -> Actor {
+    let worker = WorkerName::parse("backend").unwrap();
+    Actor::Agent(AgentActor {
+        agent: worker.agent(),
+        worker,
+        tags: Vec::new(),
+    })
 }
 
 #[cfg(test)]
@@ -156,7 +167,7 @@ async fn add_inserts_a_direct_edge_and_recomputes_the_task() {
     let appended = events_after(&project, before).await;
     let added = &appended[0];
     assert_eq!(added.event_type, types::DEPENDENCY_ADDED);
-    assert_eq!(added.actor, backend());
+    assert_eq!(added.actor, backend().event_actor());
     assert_eq!(added.task, Some(t(1)));
     assert_eq!(added.data, json!({"needs": "T-2", "origin": "direct"}));
     let changed = &appended[1];
@@ -207,7 +218,7 @@ async fn remove_deletes_the_edge_and_recomputes_the_task() {
     let appended = events_after(&project, before).await;
     let removed = &appended[0];
     assert_eq!(removed.event_type, types::DEPENDENCY_REMOVED);
-    assert_eq!(removed.actor, frontend());
+    assert_eq!(removed.actor, frontend().event_actor());
     assert_eq!(removed.task, Some(t(1)));
     assert_eq!(removed.data, json!({"needs": "T-2", "origin": "direct"}));
     let changed = &appended[1];

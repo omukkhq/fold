@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO humans (name, created_at) VALUES (?, ?) ON CONFLICT (name) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "5fbbb0f781b91602c994e1e00d9e3eec0e51ba0e29efd67c5cdd23f35864a1c8"
+}

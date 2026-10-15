@@ -10,6 +10,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 use utoipa::ToSchema;
 
+use crate::services::agents::AgentError;
 use crate::services::projects::ProjectError;
 
 /// The one error body of every route.
@@ -31,10 +32,13 @@ pub struct ErrorBody {
 /// The status of each code that has one. Every other code is an internal failure: it answers 500 `internal_error` and the code goes to the log only.
 fn status_of(code: &str) -> Option<StatusCode> {
     match code {
-        codes::NOT_FOUND | codes::PROJECT_NOT_FOUND | codes::WEB_NOT_BUILT => {
-            Some(StatusCode::NOT_FOUND)
-        }
-        codes::INVALID_REQUEST => Some(StatusCode::BAD_REQUEST),
+        codes::NOT_FOUND
+        | codes::PROJECT_NOT_FOUND
+        | codes::WEB_NOT_BUILT
+        | codes::AGENT_NOT_FOUND => Some(StatusCode::NOT_FOUND),
+        codes::INVALID_REQUEST | codes::INVALID_NAME => Some(StatusCode::BAD_REQUEST),
+        codes::HUMAN_NAME_REQUIRED => Some(StatusCode::UNAUTHORIZED),
+        codes::HUMAN_REQUIRED | codes::ACTOR_CANNOT_CLAIM => Some(StatusCode::FORBIDDEN),
         codes::PROJECT_UNAVAILABLE => Some(StatusCode::SERVICE_UNAVAILABLE),
         codes::GC_IN_PROGRESS => Some(StatusCode::CONFLICT),
         _ => None,
@@ -65,6 +69,18 @@ impl From<ProjectError> for ApiError {
         match error {
             ProjectError::Fold(error) => error.into(),
             ProjectError::Store(error) => error.into(),
+        }
+    }
+}
+
+impl From<AgentError> for ApiError {
+    fn from(error: AgentError) -> Self {
+        match error {
+            AgentError::Fold(error) => error.into(),
+            AgentError::Store(error) => error.into(),
+            AgentError::Event(error) => {
+                Self(FoldError::new(codes::INTERNAL_ERROR, error.to_string()))
+            }
         }
     }
 }
@@ -149,6 +165,11 @@ mod tests {
             (codes::INVALID_REQUEST, StatusCode::BAD_REQUEST),
             (codes::PROJECT_UNAVAILABLE, StatusCode::SERVICE_UNAVAILABLE),
             (codes::GC_IN_PROGRESS, StatusCode::CONFLICT),
+            (codes::AGENT_NOT_FOUND, StatusCode::NOT_FOUND),
+            (codes::INVALID_NAME, StatusCode::BAD_REQUEST),
+            (codes::HUMAN_NAME_REQUIRED, StatusCode::UNAUTHORIZED),
+            (codes::HUMAN_REQUIRED, StatusCode::FORBIDDEN),
+            (codes::ACTOR_CANNOT_CLAIM, StatusCode::FORBIDDEN),
         ] {
             assert_eq!(status_of(code), Some(status));
         }
@@ -187,6 +208,17 @@ mod tests {
         let ApiError(error) = StoreError::SchemaTooNew { version: 9 }.into();
         assert_eq!(error.code(), codes::SCHEMA_TOO_NEW);
         let ApiError(error) = StoreError::Corrupt("events.seq").into();
+        assert_eq!(error.code(), codes::INTERNAL_ERROR);
+    }
+
+    #[test]
+    fn agent_errors_keep_their_code_and_a_bad_event_is_internal() {
+        let ApiError(error) =
+            AgentError::Fold(FoldError::new(codes::AGENT_NOT_FOUND, "absent")).into();
+        assert_eq!(error.code(), codes::AGENT_NOT_FOUND);
+        let ApiError(error) = AgentError::Store(StoreError::SchemaTooNew { version: 9 }).into();
+        assert_eq!(error.code(), codes::SCHEMA_TOO_NEW);
+        let ApiError(error) = AgentError::Event(fold_core::EventError::UnknownType).into();
         assert_eq!(error.code(), codes::INTERNAL_ERROR);
     }
 

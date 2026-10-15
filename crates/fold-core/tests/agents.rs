@@ -1,4 +1,6 @@
-use fold_core::{AgentName, FoldError, INTEGRATOR_TAG, NameError, Tag, WorkerName, codes};
+use fold_core::{
+    AgentName, EventActor, FoldError, HumanName, INTEGRATOR_TAG, NameError, Tag, WorkerName, codes,
+};
 use proptest::prelude::*;
 
 #[test]
@@ -69,6 +71,28 @@ fn bad_worker_names_are_refused() {
 }
 
 #[test]
+fn the_agent_name_fold_is_reserved_because_it_is_the_system_actor() {
+    assert_eq!(AgentName::parse(EventActor::FOLD), Err(NameError::Reserved));
+    for worker in ["fold", "fold/ui", "fold/ui/deep"] {
+        assert_eq!(
+            WorkerName::parse(worker),
+            Err(NameError::Reserved),
+            "{worker}"
+        );
+    }
+    let error = FoldError::from(NameError::Reserved);
+    assert_eq!(error.code(), codes::INVALID_NAME);
+    assert!(error.message().contains("reserved"));
+    for allowed in ["folder", "fold-ui", "my-fold"] {
+        assert!(AgentName::parse(allowed).is_ok(), "{allowed}");
+    }
+    assert!(WorkerName::parse("frontend/fold").is_ok());
+    // A human is recorded as `human:<name>` and a tag is never an actor, so neither collides with `fold`.
+    assert!(HumanName::parse("fold").is_ok());
+    assert!(Tag::parse("fold").is_ok());
+}
+
+#[test]
 fn a_name_error_becomes_invalid_name() {
     let error = FoldError::from(NameError::InvalidWorker);
     assert_eq!(error.code(), codes::INVALID_NAME);
@@ -81,7 +105,8 @@ proptest! {
         let expected = !text.is_empty()
             && text.len() <= 32
             && text.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
-            && text.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_');
+            && text.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+            && text != "fold";
         prop_assert_eq!(AgentName::parse(&text).is_ok(), expected);
     }
 }

@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use fold_core::events::types;
 use fold_core::{
-    ChecklistName, Event, EventActor, EventFilter, EventType, LabelColor, LabelName, StepText,
-    TaskDescription, TaskId, TaskStatus, TaskTitle,
+    Actor, AgentActor, ChecklistName, Event, EventFilter, EventType, LabelColor, LabelName,
+    StepText, TaskDescription, TaskId, TaskStatus, TaskTitle, WorkerName,
 };
 use fold_daemon::services::events::{BusMessage, EventBus};
 use fold_daemon::services::tasks::{
@@ -23,8 +23,13 @@ fn t(number: u32) -> TaskId {
 }
 
 #[cfg(test)]
-fn agent() -> EventActor {
-    EventActor::parse("backend").unwrap()
+fn agent() -> Actor {
+    let worker = WorkerName::parse("backend").unwrap();
+    Actor::Agent(AgentActor {
+        agent: worker.agent(),
+        worker,
+        tags: Vec::new(),
+    })
 }
 
 #[cfg(test)]
@@ -353,7 +358,7 @@ async fn deleting_a_fresh_task_removes_every_row_that_mentions_it_and_frees_its_
     let deleted = of_type(&appended, types::TASK_DELETED);
     assert_eq!(deleted.len(), 1);
     assert_eq!(deleted[0].task, Some(t(1)));
-    assert_eq!(deleted[0].actor, agent());
+    assert_eq!(deleted[0].actor, agent().event_actor());
     assert_eq!(deleted[0].data, json!({"number": 1, "title": "task"}));
     let removed: Vec<(Option<TaskId>, Value)> = of_type(&appended, types::DEPENDENCY_REMOVED)
         .into_iter()

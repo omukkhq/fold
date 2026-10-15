@@ -1,3 +1,4 @@
+mod agent;
 mod claude_files;
 mod commands;
 mod doctor;
@@ -38,6 +39,8 @@ enum Command {
     Service(service::ServiceArgs),
     /// Delete unreferenced objects, prune checkpoints and remove closed workspace directories
     Gc(commands::gc::GcArgs),
+    /// Manage the agents of the project in the working directory
+    Agent(agent::AgentArgs),
 }
 
 /// clap prints a parse outcome, including `--help` and `--version`, and exits with its own code; a failed write is a runtime error with exit code 1.
@@ -52,6 +55,7 @@ enum Failure {
     Doctor(doctor::DoctorError),
     Service(service::ServiceError),
     Gc(commands::gc::GcError),
+    Agent(agent::AgentError),
 }
 
 fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result<(), Failure> {
@@ -75,6 +79,9 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
             out,
         )
         .map_err(Failure::Gc),
+        Some(Command::Agent(args)) => {
+            agent::run(&args, &serve::Dirs::from_env(), out).map_err(Failure::Agent)
+        }
         None => output::line(out, &output::version_line()).map_err(Failure::Write),
     }
 }
@@ -90,6 +97,10 @@ fn main() -> anyhow::Result<()> {
             None => error.into(),
         }),
         Err(Failure::Init(error)) => Err(match error.code() {
+            Some(code) => anyhow::anyhow!("{code}: {error}"),
+            None => error.into(),
+        }),
+        Err(Failure::Agent(error)) => Err(match error.code() {
             Some(code) => anyhow::anyhow!("{code}: {error}"),
             None => error.into(),
         }),

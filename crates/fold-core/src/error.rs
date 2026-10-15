@@ -75,6 +75,9 @@ define_codes! {
     CHECKLIST_ITEM_NOT_FOUND = "checklist_item_not_found",
     INVALID_EVENT_FILTER = "invalid_event_filter",
     GC_IN_PROGRESS = "gc_in_progress",
+    HUMAN_NAME_REQUIRED = "human_name_required",
+    AGENT_NOT_FOUND = "agent_not_found",
+    ACTOR_CANNOT_CLAIM = "actor_cannot_claim",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

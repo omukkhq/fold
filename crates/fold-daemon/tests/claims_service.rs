@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use fold_core::events::types;
 use fold_core::{
-    AgentName, Event, EventFilter, FoldError, TaskDescription, TaskId, TaskStatus, TaskTitle,
-    Timestamp, WorkerName,
+    Actor, AgentActor, AgentName, Event, EventFilter, FoldError, TaskDescription, TaskId,
+    TaskStatus, TaskTitle, Timestamp, WorkerName,
 };
 use fold_daemon::services::agents::{AgentService, SessionContext};
 use fold_daemon::services::events::{BusMessage, EventBus};
@@ -21,6 +21,16 @@ const LEASE_MINUTES: u64 = 5;
 #[cfg(test)]
 fn t(number: u32) -> TaskId {
     TaskId::from_number(number).unwrap()
+}
+
+/// The acting agent of a worker row, as `AgentService::actor` builds it.
+#[cfg(test)]
+fn by(worker: &WorkerRow) -> Actor {
+    Actor::Agent(AgentActor {
+        agent: worker.name.agent(),
+        worker: worker.name.clone(),
+        tags: Vec::new(),
+    })
 }
 
 #[cfg(test)]
@@ -54,7 +64,12 @@ impl Fixture {
         let clock = Arc::new(project.clock().clone());
         let agents = AgentService::new(project.store().clone(), bus.clone(), clock.clone());
         let tasks = TaskService::new(project.store().clone(), bus.clone(), clock, lease_minutes);
-        let creator = fold_core::EventActor::parse("frontend").unwrap();
+        let frontend_name = WorkerName::parse("frontend").unwrap();
+        let creator = Actor::Agent(AgentActor {
+            agent: frontend_name.agent(),
+            worker: frontend_name,
+            tags: Vec::new(),
+        });
         for _ in 0..3 {
             tasks
                 .create_task(
@@ -154,7 +169,7 @@ async fn two_workers_claim_at_once_and_one_is_refused_naming_the_holder() {
             let barrier = barrier.clone();
             tokio::spawn(async move {
                 barrier.wait().await;
-                service.claim_task(&worker, t(1)).await
+                service.claim_task(&by(&worker), t(1)).await
             })
         };
         let front = spawn_claim(fixture.frontend.main.clone());
@@ -195,7 +210,7 @@ async fn two_workers_claim_at_once_and_one_is_refused_naming_the_holder() {
         assert_eq!(published.seq, last.seq);
         assert!(receiver.try_recv().is_err());
 
-        fixture.tasks.release_task(winner, t(1)).await.unwrap();
+        fixture.tasks.release_task(&by(winner), t(1)).await.unwrap();
     }
 }
 
@@ -204,7 +219,7 @@ async fn the_holder_repeating_the_call_renews_the_claim() {
     let fixture = Fixture::new(LEASE_MINUTES).await;
     let first = fixture
         .tasks
-        .claim_task(&fixture.frontend.main, t(1))
+        .claim_task(&by(&fixture.frontend.main), t(1))
         .await
         .unwrap();
     let acquired = fixture.project.now();
@@ -214,7 +229,7 @@ async fn the_holder_repeating_the_call_renews_the_claim() {
 
     let again = fixture
         .tasks
-        .claim_task(&fixture.frontend.main, t(1))
+        .claim_task(&by(&fixture.frontend.main), t(1))
         .await
         .unwrap();
     assert_eq!(
@@ -238,7 +253,7 @@ async fn only_the_holder_releases_and_the_claim_frees_the_task() {
     let fixture = Fixture::new(LEASE_MINUTES).await;
     let unclaimed = fixture
         .tasks
-        .release_task(&fixture.frontend.main, t(1))
+        .release_task(&by(&fixture.frontend.main), t(1))
         .await
         .unwrap_err();
     assert_eq!(unclaimed.code(), Some("claim_not_found"));
@@ -246,13 +261,13 @@ async fn only_the_holder_releases_and_the_claim_frees_the_task() {
 
     fixture
         .tasks
-        .claim_task(&fixture.frontend.main, t(1))
+        .claim_task(&by(&fixture.frontend.main), t(1))
         .await
         .unwrap();
     for intruder in [&fixture.backend.main, &fixture.ui] {
         let error = fixture
             .tasks
-            .release_task(intruder, t(1))
+            .release_task(&by(intruder), t(1))
             .await
             .unwrap_err();
         assert_eq!(error.code(), Some("not_claim_holder"));
@@ -267,7 +282,7 @@ async fn only_the_holder_releases_and_the_claim_frees_the_task() {
     let released_at = fixture.advance(minutes(1));
     fixture
         .tasks
-        .release_task(&fixture.frontend.main, t(1))
+        .release_task(&by(&fixture.frontend.main), t(1))
         .await
         .unwrap();
     assert_eq!(fixture.tasks.claim_view(t(1)).await.unwrap(), None);
@@ -288,14 +303,14 @@ async fn only_the_holder_releases_and_the_claim_frees_the_task() {
 
     let again = fixture
         .tasks
-        .release_task(&fixture.frontend.main, t(1))
+        .release_task(&by(&fixture.frontend.main), t(1))
         .await
         .unwrap_err();
     assert_eq!(again.code(), Some("claim_not_found"));
 
     let view = fixture
         .tasks
-        .claim_task(&fixture.backend.main, t(1))
+        .claim_task(&by(&fixture.backend.main), t(1))
         .await
         .unwrap();
     assert_eq!(view.holder, WorkerName::parse("backend").unwrap());
@@ -307,13 +322,17 @@ async fn a_call_from_any_tool_renews_every_claim_of_the_agent_with_last_call_at(
     let fixture = Fixture::new(LEASE_MINUTES).await;
     fixture
         .tasks
-        .claim_task(&fixture.frontend.main, t(1))
+        .claim_task(&by(&fixture.frontend.main), t(1))
         .await
         .unwrap();
-    fixture.tasks.claim_task(&fixture.ui, t(2)).await.unwrap();
     fixture
         .tasks
-        .claim_task(&fixture.backend.main, t(3))
+        .claim_task(&by(&fixture.ui), t(2))
+        .await
+        .unwrap();
+    fixture
+        .tasks
+        .claim_task(&by(&fixture.backend.main), t(3))
         .await
         .unwrap();
     let start = fixture.project.now();
@@ -351,7 +370,7 @@ async fn renewal_and_last_call_at_commit_together() {
     let fixture = Fixture::new(LEASE_MINUTES).await;
     fixture
         .tasks
-        .claim_task(&fixture.frontend.main, t(1))
+        .claim_task(&by(&fixture.frontend.main), t(1))
         .await
         .unwrap();
     let start = fixture.project.now();
@@ -425,14 +444,14 @@ async fn a_stale_holder_still_blocks_a_new_claim() {
     let fixture = Fixture::new(LEASE_MINUTES).await;
     fixture
         .tasks
-        .claim_task(&fixture.frontend.main, t(1))
+        .claim_task(&by(&fixture.frontend.main), t(1))
         .await
         .unwrap();
 
     fixture.advance(minutes(LEASE_MINUTES) - Duration::from_millis(1));
     let fresh = fixture
         .tasks
-        .claim_task(&fixture.backend.main, t(1))
+        .claim_task(&by(&fixture.backend.main), t(1))
         .await
         .unwrap_err();
     assert_eq!(
@@ -443,7 +462,7 @@ async fn a_stale_holder_still_blocks_a_new_claim() {
     fixture.advance(Duration::from_millis(1));
     let stale = fixture
         .tasks
-        .claim_task(&fixture.backend.main, t(1))
+        .claim_task(&by(&fixture.backend.main), t(1))
         .await
         .unwrap_err();
     assert_eq!(stale.code(), Some("already_claimed"));
@@ -482,7 +501,7 @@ async fn the_default_lease_is_thirty_minutes() {
     let fixture = Fixture::new(fold_core::ProjectConfig::default().lease_minutes).await;
     fixture
         .tasks
-        .claim_task(&fixture.frontend.main, t(1))
+        .claim_task(&by(&fixture.frontend.main), t(1))
         .await
         .unwrap();
     fixture.advance(minutes(29));
@@ -517,7 +536,7 @@ async fn done_and_archived_tasks_take_no_claim() {
     for (task, reason) in [(t(1), "done"), (t(2), "archived")] {
         let error = fixture
             .tasks
-            .claim_task(&fixture.frontend.main, task)
+            .claim_task(&by(&fixture.frontend.main), task)
             .await
             .unwrap_err();
         assert_eq!(error.code(), Some("task_closed"));
@@ -540,7 +559,7 @@ async fn a_claim_moves_no_card() {
         .unwrap();
     fixture
         .tasks
-        .claim_task(&fixture.frontend.main, t(1))
+        .claim_task(&by(&fixture.frontend.main), t(1))
         .await
         .unwrap();
     let after = fold_store::tasks::get_by_number(fixture.project.store().read(), t(1))
@@ -569,17 +588,79 @@ async fn a_missing_task_is_task_not_found() {
     let missing = t(99);
     let claim = fixture
         .tasks
-        .claim_task(&fixture.frontend.main, missing)
+        .claim_task(&by(&fixture.frontend.main), missing)
         .await
         .unwrap_err();
     assert_eq!(claim.code(), Some("task_not_found"));
     let release = fixture
         .tasks
-        .release_task(&fixture.frontend.main, missing)
+        .release_task(&by(&fixture.frontend.main), missing)
         .await
         .unwrap_err();
     assert_eq!(release.code(), Some("task_not_found"));
     let view = fixture.tasks.claim_view(missing).await.unwrap_err();
     assert_eq!(view.code(), Some("task_not_found"));
     assert_eq!(fixture.tasks.claim_view(t(1)).await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn a_human_or_the_system_cannot_claim_or_release() {
+    let fixture = Fixture::new(LEASE_MINUTES).await;
+    let human = Actor::human(fold_core::HumanName::parse("tanim").unwrap());
+    for actor in [human, Actor::System] {
+        let claim = fixture.tasks.claim_task(&actor, t(1)).await.unwrap_err();
+        assert_eq!(refusal(claim).code(), "actor_cannot_claim");
+        let release = fixture.tasks.release_task(&actor, t(1)).await.unwrap_err();
+        assert_eq!(refusal(release).code(), "actor_cannot_claim");
+    }
+    assert!(fixture.claim_events().await.is_empty());
+    assert_eq!(fixture.tasks.claim_view(t(1)).await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn an_unregistered_worker_is_worker_not_found() {
+    let fixture = Fixture::new(LEASE_MINUTES).await;
+    for name in ["ghost", "frontend/ghost"] {
+        let worker = WorkerName::parse(name).unwrap();
+        let actor = Actor::Agent(AgentActor {
+            agent: worker.agent(),
+            worker,
+            tags: Vec::new(),
+        });
+        let claim = fixture.tasks.claim_task(&actor, t(1)).await.unwrap_err();
+        assert_eq!(refusal(claim).code(), "worker_not_found", "{name}");
+        let release = fixture.tasks.release_task(&actor, t(1)).await.unwrap_err();
+        assert_eq!(refusal(release).code(), "worker_not_found", "{name}");
+    }
+    assert!(fixture.claim_events().await.is_empty());
+}
+
+#[tokio::test]
+async fn a_three_level_worker_claims_and_releases() {
+    let fixture = Fixture::new(LEASE_MINUTES).await;
+    let deep = fixture
+        .agents
+        .register_worker(
+            &fixture.frontend.ctx,
+            "deep",
+            Some(&WorkerName::parse("frontend/ui").unwrap()),
+        )
+        .await
+        .unwrap()
+        .worker;
+    let actor = fixture
+        .agents
+        .actor(&fixture.frontend.ctx, Some(&deep.name))
+        .await
+        .unwrap();
+    let view = fixture.tasks.claim_task(&actor, t(2)).await.unwrap();
+    assert_eq!(view.holder.as_str(), "frontend/ui/deep");
+    fixture.tasks.release_task(&actor, t(2)).await.unwrap();
+    let actors: Vec<String> = fixture
+        .claim_events()
+        .await
+        .into_iter()
+        .map(|event| event.actor.to_string())
+        .collect();
+    assert_eq!(actors, ["frontend/ui/deep", "frontend/ui/deep"]);
 }

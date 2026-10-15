@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use fold_core::events::types;
 use fold_core::{
-    AgentName, EventActor, EventType, FoldError, NewEvent, ProposalId, TaskDescription, TaskId,
-    TaskTitle, codes,
+    Actor, AgentActor, AgentName, EventActor, EventType, FoldError, HumanName, NewEvent,
+    ProposalId, TaskDescription, TaskId, TaskTitle, codes,
 };
 use fold_daemon::services::agents::{AgentService, SessionContext};
 use fold_daemon::services::events::{
@@ -23,6 +23,20 @@ fn t(number: u32) -> TaskId {
 #[cfg(test)]
 fn p(number: u32) -> ProposalId {
     ProposalId::from_number(number).unwrap()
+}
+
+#[cfg(test)]
+fn ana() -> Actor {
+    Actor::human(HumanName::parse("ana").unwrap())
+}
+
+#[cfg(test)]
+fn by(worker: &WorkerRow) -> Actor {
+    Actor::Agent(AgentActor {
+        agent: worker.name.agent(),
+        worker: worker.name.clone(),
+        tags: Vec::new(),
+    })
 }
 
 #[cfg(test)]
@@ -94,7 +108,7 @@ impl Fixture {
         for _ in 0..count {
             self.tasks
                 .create_task(
-                    &actor("human:ana"),
+                    &ana(),
                     CreateTask {
                         title: TaskTitle::parse("task").unwrap(),
                         description: TaskDescription::new(""),
@@ -489,11 +503,11 @@ async fn new_events_count_only_what_concerns_the_agent() {
     let frontend = fx.register("frontend").await;
     let backend = fx.register("backend").await;
     let review = fx.register("review").await;
-    fx.tasks.claim_task(&frontend.main, t(1)).await.unwrap();
     fx.tasks
-        .add_dependency(&actor("human:ana"), t(1), t(2))
+        .claim_task(&by(&frontend.main), t(1))
         .await
         .unwrap();
+    fx.tasks.add_dependency(&ana(), t(1), t(2)).await.unwrap();
     fx.sql(&format!(
         "INSERT INTO proposals (number, task_id, author_worker_id, title, created_at, updated_at)
          SELECT 1, id, {}, 'one', 0, 0 FROM tasks WHERE number = 3;
@@ -526,7 +540,10 @@ async fn new_events_count_only_what_concerns_the_agent() {
         facts_of_review.unwrap() >= 2,
         "main.advanced reaches every agent"
     );
-    fx.tasks.release_task(&frontend.main, t(1)).await.unwrap();
+    fx.tasks
+        .release_task(&by(&frontend.main), t(1))
+        .await
+        .unwrap();
     fx.catch_up(&frontend).await;
     fx.commit(vec![
         new_event(types::TASK_UPDATED, "backend").task(t(1)),

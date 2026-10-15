@@ -3,7 +3,8 @@ use std::time::Duration;
 
 use fold_core::events::types;
 use fold_core::{
-    EventActor, EventFilter, LabelColor, LabelName, TaskDescription, TaskId, TaskStatus, TaskTitle,
+    Actor, AgentActor, EventActor, EventFilter, LabelColor, LabelName, TaskDescription, TaskId,
+    TaskStatus, TaskTitle, WorkerName,
 };
 use fold_daemon::services::events::{BusMessage, EventBus};
 use fold_daemon::services::tasks::{CreateTask, TaskError, TaskPatch, TaskService};
@@ -11,8 +12,13 @@ use fold_store::testing::TestProject;
 use fold_store::{events, tasks};
 
 #[cfg(test)]
-fn actor() -> EventActor {
-    EventActor::parse("frontend").unwrap()
+fn actor() -> Actor {
+    let worker = WorkerName::parse("frontend").unwrap();
+    Actor::Agent(AgentActor {
+        agent: worker.agent(),
+        worker,
+        tags: Vec::new(),
+    })
 }
 
 #[cfg(test)]
@@ -103,7 +109,7 @@ async fn create_with_labels_writes_the_row_its_event_and_its_status() {
         .collect();
     assert_eq!(created.len(), 1);
     assert_eq!(created[0].task, Some(task.id));
-    assert_eq!(created[0].actor, actor());
+    assert_eq!(created[0].actor, actor().event_actor());
     assert_eq!(
         created[0].data,
         serde_json::json!({"labels": ["api", "bug"]})

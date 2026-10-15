@@ -413,3 +413,20 @@ pub async fn all_workers(executor: impl SqliteExecutor<'_>) -> Result<Vec<Worker
         })
         .collect()
 }
+
+/// True when the tag was present.
+pub async fn remove_tag(
+    executor: impl SqliteExecutor<'_>,
+    agent_id: i64,
+    tag: &Tag,
+) -> Result<bool, StoreError> {
+    let tag = tag.as_str();
+    let result = sqlx::query!(
+        "DELETE FROM agent_tags WHERE agent_id = ? AND tag = ?",
+        agent_id,
+        tag
+    )
+    .execute(executor)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}

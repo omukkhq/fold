@@ -1,9 +1,10 @@
 use fold_core::claims::is_stale;
 use fold_core::events::types;
 use fold_core::{
-    EventActor, FoldError, NewEvent, TaskId, TaskStatus, Timestamp, WorkerName, codes,
+    Actor, AgentActor, EventActor, FoldError, NewEvent, TaskId, TaskStatus, Timestamp, WorkerName,
+    codes, policy,
 };
-use fold_store::agents::WorkerRow;
+use fold_store::agents::{self, WorkerRow};
 use fold_store::tasks::claims::{self, ClaimRow, ReleaseReason};
 use fold_store::{Store, StoreError, WriteTx, tasks};
 use serde_json::json;
@@ -31,32 +32,34 @@ fn claim_view_of(row: ClaimRow, now: Timestamp, lease_minutes: u64) -> ClaimView
     }
 }
 
-/// Implementation claims. The acting party is a resolved worker, because only workers hold claims; the lease is the project's `lease_minutes`.
+/// Implementation claims. `policy::can_claim` admits only an agent, and the claim belongs to the agent's acting worker; the lease is the project's `lease_minutes`.
 impl TaskService {
-    /// Takes the implementation claim on `task` for `worker`. A repeat call by the holder renews the claim and returns it without a second `claim.acquired`. A claim moves no card, so no status is written.
-    pub async fn claim_task(
-        &self,
-        worker: &WorkerRow,
-        task: TaskId,
-    ) -> Result<ClaimView, TaskError> {
+    /// Takes the implementation claim on `task` for the actor's worker. A repeat call by the holder renews the claim and returns it without a second `claim.acquired`. A claim moves no card, so no status is written.
+    pub async fn claim_task(&self, actor: &Actor, task: TaskId) -> Result<ClaimView, TaskError> {
+        let claimant = policy::can_claim(actor).map_err(FoldError::from)?;
         let now = self.clock.now();
         let lease_minutes = self.lease_minutes;
         let mut buffer = EventBuffer::new();
         let view = self
             .store
-            .write(async |tx| claim_in_tx(tx, &mut buffer, worker, task, now, lease_minutes).await)
+            .write(async |tx| {
+                let worker = worker_row(tx, claimant).await?;
+                claim_in_tx(tx, &mut buffer, &worker, task, now, lease_minutes).await
+            })
             .await?;
         self.bus.publish(buffer);
         Ok(view)
     }
 
-    /// Releases the claim `worker` holds on `task`. The task's workspace stays where it is.
-    pub async fn release_task(&self, worker: &WorkerRow, task: TaskId) -> Result<(), TaskError> {
+    /// Releases the claim the actor's worker holds on `task`. The task's workspace stays where it is.
+    pub async fn release_task(&self, actor: &Actor, task: TaskId) -> Result<(), TaskError> {
+        let claimant = policy::can_claim(actor).map_err(FoldError::from)?;
         let now = self.clock.now();
         let lease_minutes = self.lease_minutes;
         let mut buffer = EventBuffer::new();
         self.store
             .write(async |tx| {
+                let worker = &worker_row(tx, claimant).await?;
                 if tasks::fetch(tx.conn(), task).await?.is_none() {
                     return Err(task_not_found(task));
                 }
@@ -83,7 +86,7 @@ impl TaskService {
                 }
                 let reason = ReleaseReason::Released;
                 claims::release(tx, task, worker.id, reason, now).await?;
-                let event = NewEvent::new(types::CLAIM_RELEASED, worker_actor(worker)?)?
+                let event = NewEvent::new(types::CLAIM_RELEASED, EventActor::worker(&worker.name))?
                     .task(task)
                     .data(json!({
                         "kind": "implementation",
@@ -188,7 +191,7 @@ async fn claim_in_tx(
         }
         Err(error) => return Err(error.into()),
     }
-    let event = NewEvent::new(types::CLAIM_ACQUIRED, worker_actor(worker)?)?
+    let event = NewEvent::new(types::CLAIM_ACQUIRED, EventActor::worker(&worker.name))?
         .task(task)
         .data(json!({"kind": "implementation", "worker": worker.name.as_str()}))?;
     buffer.append(tx, &event, now).await?;
@@ -201,6 +204,18 @@ async fn claim_in_tx(
     })
 }
 
-fn worker_actor(worker: &WorkerRow) -> Result<EventActor, TaskError> {
-    Ok(EventActor::parse(worker.name.as_str())?)
+/// The worker row of the claimant, read in the claim's transaction. A worker that does not exist is `worker_not_found`.
+async fn worker_row(tx: &mut WriteTx, claimant: &AgentActor) -> Result<WorkerRow, TaskError> {
+    let not_found = || {
+        TaskError::Fold(
+            FoldError::new(codes::WORKER_NOT_FOUND, "the worker does not exist")
+                .with_hint("call register_worker"),
+        )
+    };
+    let agent = agents::find_agent(tx.conn(), &claimant.agent)
+        .await?
+        .ok_or_else(not_found)?;
+    agents::find_worker(tx.conn(), agent.id, &claimant.worker)
+        .await?
+        .ok_or_else(not_found)
 }

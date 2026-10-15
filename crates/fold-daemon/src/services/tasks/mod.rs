@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use fold_core::events::types;
 use fold_core::{
-    Clock, EventActor, EventError, FoldError, IdKind, LabelColor, LabelName, NewEvent,
-    TaskDescription, TaskId, TaskStatus, TaskTitle, Timestamp, codes,
+    Actor, Clock, EventError, FoldError, IdKind, LabelColor, LabelName, NewEvent, TaskDescription,
+    TaskId, TaskStatus, TaskTitle, Timestamp, codes,
 };
 use fold_store::tasks::{self, NewTask};
 use fold_store::{Store, StoreError, WriteTx, counters};
@@ -122,7 +122,7 @@ impl TaskService {
 
     pub async fn create_task(
         &self,
-        actor: &EventActor,
+        actor: &Actor,
         input: CreateTask,
     ) -> Result<TaskView, TaskError> {
         let now = self.clock.now();
@@ -141,7 +141,7 @@ impl TaskService {
 
     pub async fn update_task(
         &self,
-        actor: &EventActor,
+        actor: &Actor,
         id: TaskId,
         patch: TaskPatch,
     ) -> Result<TaskView, TaskError> {
@@ -156,7 +156,7 @@ impl TaskService {
 
     pub async fn create_label(
         &self,
-        actor: &EventActor,
+        actor: &Actor,
         name: LabelName,
         color: LabelColor,
     ) -> Result<LabelView, TaskError> {
@@ -174,7 +174,7 @@ impl TaskService {
                     }
                     Err(error) => return Err(error.into()),
                 }
-                let event = NewEvent::new(types::LABEL_CREATED, actor.clone())?
+                let event = NewEvent::new(types::LABEL_CREATED, actor.event_actor())?
                     .data(json!({"name": name.as_str(), "color": color.as_str()}))?;
                 buffer.append(tx, &event, now).await?;
                 Ok::<_, TaskError>(())
@@ -271,7 +271,7 @@ async fn require_labels(tx: &mut WriteTx, names: &[LabelName]) -> Result<(), Tas
 pub(crate) async fn create_in_tx(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,
-    actor: &EventActor,
+    actor: &Actor,
     input: &CreateTask,
     now: Timestamp,
 ) -> Result<TaskId, TaskError> {
@@ -284,14 +284,14 @@ pub(crate) async fn create_in_tx(
             number: id,
             title: &input.title,
             description: &input.description,
-            created_by: actor.as_str(),
+            created_by: actor.event_actor().as_str(),
             now,
         },
     )
     .await?;
     tasks::replace_labels(tx, id, &input.labels).await?;
     let labels: BTreeSet<&str> = input.labels.iter().map(LabelName::as_str).collect();
-    let event = NewEvent::new(types::TASK_CREATED, actor.clone())?
+    let event = NewEvent::new(types::TASK_CREATED, actor.event_actor())?
         .task(id)
         .data(json!({"labels": labels}))?;
     buffer.append(tx, &event, now).await?;
@@ -301,7 +301,7 @@ pub(crate) async fn create_in_tx(
 async fn update_in_tx(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,
-    actor: &EventActor,
+    actor: &Actor,
     id: TaskId,
     patch: &TaskPatch,
     now: Timestamp,
@@ -363,7 +363,7 @@ async fn update_in_tx(
     if let Some(names) = new_labels {
         tasks::replace_labels(tx, id, names).await?;
     }
-    let event = NewEvent::new(types::TASK_UPDATED, actor.clone())?
+    let event = NewEvent::new(types::TASK_UPDATED, actor.event_actor())?
         .task(id)
         .data(json!({"fields": fields}))?;
     buffer.append(tx, &event, now).await?;

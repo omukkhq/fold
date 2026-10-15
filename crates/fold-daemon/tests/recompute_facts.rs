@@ -2,7 +2,10 @@ use std::cell::Cell;
 use std::sync::Arc;
 
 use fold_core::events::types;
-use fold_core::{Event, EventActor, TaskDescription, TaskId, TaskStatus, TaskTitle};
+use fold_core::{
+    Actor, AgentActor, Event, EventActor, TaskDescription, TaskId, TaskStatus, TaskTitle,
+    WorkerName,
+};
 use fold_daemon::services::events::EventBus;
 use fold_daemon::services::tasks::{self, CreateTask, TaskError, TaskService};
 use fold_store::StoreError;
@@ -18,8 +21,13 @@ fn t(number: u32) -> TaskId {
 }
 
 #[cfg(test)]
-fn agent() -> EventActor {
-    EventActor::parse("backend").unwrap()
+fn agent() -> Actor {
+    let worker = WorkerName::parse("backend").unwrap();
+    Actor::Agent(AgentActor {
+        agent: worker.agent(),
+        worker,
+        tags: Vec::new(),
+    })
 }
 
 #[cfg(test)]

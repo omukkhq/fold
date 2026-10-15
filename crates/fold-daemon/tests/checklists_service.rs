@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use fold_core::events::types;
 use fold_core::{
-    ChecklistItemId, ChecklistName, Event, EventActor, EventFilter, EventType, StepText,
-    TaskDescription, TaskId, TaskStatus, TaskTitle,
+    Actor, AgentActor, ChecklistItemId, ChecklistName, Event, EventActor, EventFilter, EventType,
+    StepText, TaskDescription, TaskId, TaskStatus, TaskTitle, WorkerName,
 };
 use fold_daemon::services::events::EventBus;
 use fold_daemon::services::tasks::{
@@ -28,8 +28,13 @@ fn ci(number: u32) -> ChecklistItemId {
 }
 
 #[cfg(test)]
-fn agent() -> EventActor {
-    EventActor::parse("backend").unwrap()
+fn agent() -> Actor {
+    let worker = WorkerName::parse("backend").unwrap();
+    Actor::Agent(AgentActor {
+        agent: worker.agent(),
+        worker,
+        tags: Vec::new(),
+    })
 }
 
 #[cfg(test)]
@@ -303,7 +308,7 @@ async fn a_parent_with_an_open_plain_step_goes_to_todo_and_completes_when_the_st
             types::TASK_STATUS_CHANGED
         ]
     );
-    assert_eq!(after[0].actor, agent());
+    assert_eq!(after[0].actor, agent().event_actor());
 }
 
 #[tokio::test]

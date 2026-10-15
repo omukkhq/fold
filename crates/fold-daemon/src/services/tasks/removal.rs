@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use fold_core::events::types;
 use fold_core::status::ProposalFact;
-use fold_core::{EventActor, NewEvent, TaskId, Timestamp, codes};
+use fold_core::{Actor, EventActor, NewEvent, TaskId, Timestamp, codes};
 use fold_store::tasks::claims::{self, ReleaseReason};
 use fold_store::tasks::{self, EdgeRow};
 use fold_store::{WriteTx, workspaces};
@@ -16,7 +16,8 @@ const ARCHIVED_REASON: &str = "task_archived";
 
 impl TaskService {
     /// Removes a task that never had a workspace, a proposal, a completion or a message naming it, with its edges, the linked checklist items pointing at it, its labels, its own checklists and its claim rows. Its earlier events stay, and its number is never reused. Dependents recompute in the same transaction.
-    pub async fn delete_task(&self, actor: &EventActor, id: TaskId) -> Result<(), TaskError> {
+    pub async fn delete_task(&self, actor: &Actor, id: TaskId) -> Result<(), TaskError> {
+        let actor = &actor.event_actor();
         let now = self.clock.now();
         let mut buffer = EventBuffer::new();
         self.store
@@ -27,11 +28,8 @@ impl TaskService {
     }
 
     /// Hides a task that has started: removes its edges and the linked checklist items pointing at it, archives its live task workspace and releases its implementation claim. Its rows and events stay, and its status cache stays as it was. Dependents recompute in the same transaction. An open proposal must be closed first; archiving never closes it.
-    pub async fn archive_task(
-        &self,
-        actor: &EventActor,
-        id: TaskId,
-    ) -> Result<TaskView, TaskError> {
+    pub async fn archive_task(&self, actor: &Actor, id: TaskId) -> Result<TaskView, TaskError> {
+        let actor = &actor.event_actor();
         let now = self.clock.now();
         let mut buffer = EventBuffer::new();
         self.store

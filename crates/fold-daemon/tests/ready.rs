@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use fold_core::{EventActor, LabelColor, LabelName, TaskDescription, TaskId, TaskTitle, Timestamp};
+use fold_core::{
+    Actor, AgentActor, LabelColor, LabelName, TaskDescription, TaskId, TaskTitle, Timestamp,
+    WorkerName,
+};
 use fold_daemon::services::events::EventBus;
 use fold_daemon::services::tasks::{self, CreateTask, ReadyTask, TaskError, TaskService};
 use fold_store::StoreError;
@@ -13,8 +16,13 @@ fn t(number: u32) -> TaskId {
 }
 
 #[cfg(test)]
-fn agent() -> EventActor {
-    EventActor::parse("backend").unwrap()
+fn agent() -> Actor {
+    let worker = WorkerName::parse("backend").unwrap();
+    Actor::Agent(AgentActor {
+        agent: worker.agent(),
+        worker,
+        tags: Vec::new(),
+    })
 }
 
 #[cfg(test)]

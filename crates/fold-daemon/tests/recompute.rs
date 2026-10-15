@@ -4,7 +4,10 @@ use std::sync::Arc;
 use fold_core::dag::Dag;
 use fold_core::events::types;
 use fold_core::status::{ProposalFact, TaskFacts, calculate};
-use fold_core::{Event, EventActor, EventFilter, TaskDescription, TaskId, TaskStatus, TaskTitle};
+use fold_core::{
+    Actor, AgentActor, Event, EventActor, EventFilter, TaskDescription, TaskId, TaskStatus,
+    TaskTitle, WorkerName,
+};
 use fold_daemon::services::events::EventBus;
 use fold_daemon::services::tasks::{self, CreateTask, TaskError, TaskService};
 use fold_store::tasks::completions::{self, CompletionKind};
@@ -21,8 +24,13 @@ fn t(number: u32) -> TaskId {
 }
 
 #[cfg(test)]
-fn agent() -> EventActor {
-    EventActor::parse("frontend").unwrap()
+fn agent() -> Actor {
+    let worker = WorkerName::parse("frontend").unwrap();
+    Actor::Agent(AgentActor {
+        agent: worker.agent(),
+        worker,
+        tags: Vec::new(),
+    })
 }
 
 #[cfg(test)]

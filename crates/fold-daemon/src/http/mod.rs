@@ -1,3 +1,5 @@
+pub mod actor;
+pub mod agents;
 pub mod assets;
 pub mod error;
 pub mod events;
@@ -25,7 +27,9 @@ pub enum Transport {
 
 /// Every `/api` route with its declaration, so a route and its schema cannot drift apart.
 pub fn api_router() -> OpenApiRouter<AppState> {
-    OpenApiRouter::with_openapi(openapi::base()).merge(projects::routes())
+    OpenApiRouter::with_openapi(openapi::base())
+        .merge(agents::routes())
+        .merge(projects::routes())
 }
 
 /// The OpenAPI document. It needs no state, socket or project.

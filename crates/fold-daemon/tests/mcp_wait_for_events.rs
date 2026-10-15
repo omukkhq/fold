@@ -5,12 +5,14 @@ use std::time::Duration;
 
 use fold_core::events::types;
 use fold_core::{
-    AgentName, EventActor, EventType, NewEvent, TaskDescription, TaskId, TaskTitle, Timestamp,
+    Actor, AgentActor, AgentName, EventActor, EventType, HumanName, NewEvent, TaskDescription,
+    TaskId, TaskTitle, Timestamp,
 };
 use fold_daemon::mcp::FoldServer;
 use fold_daemon::services::agents::{AgentService, SessionContext};
 use fold_daemon::services::events::{EventBuffer, EventBus, EventService, WaitQuery, WaitStep};
 use fold_daemon::services::tasks::{CreateTask, TaskService};
+use fold_store::agents::WorkerRow;
 use fold_store::testing::{TestProject, eventually};
 use fold_store::{Store, StoreError, events};
 use rmcp::model::{
@@ -119,7 +121,7 @@ impl Fixture {
     async fn create_task(&self) {
         self.tasks
             .create_task(
-                &EventActor::parse("human:ana").unwrap(),
+                &Actor::human(HumanName::parse("ana").unwrap()),
                 CreateTask {
                     title: TaskTitle::parse("task").unwrap(),
                     description: TaskDescription::new(""),
@@ -234,6 +236,15 @@ async fn subscribed(bus: &EventBus, count: usize) {
         if now == count { Ok(()) } else { Err(now) }
     })
     .await;
+}
+
+#[cfg(test)]
+fn by(worker: &WorkerRow) -> Actor {
+    Actor::Agent(AgentActor {
+        agent: worker.name.agent(),
+        worker: worker.name.clone(),
+        tags: Vec::new(),
+    })
 }
 
 #[tokio::test]
@@ -566,7 +577,7 @@ async fn a_wait_ticks_every_minute_renews_the_worker_and_times_out() {
         .resolve_worker(&session.context, None)
         .await
         .unwrap();
-    fx.tasks.claim_task(&main, t(1)).await.unwrap();
+    fx.tasks.claim_task(&by(&main), t(1)).await.unwrap();
     call(&session, "get_events", json!({})).await;
     let session_id = session.context.session_id;
     let time = ManualTime::start();
@@ -675,7 +686,7 @@ async fn the_footer_counts_new_events_that_concern_the_agent() {
         .resolve_worker(&session.context, None)
         .await
         .unwrap();
-    fx.tasks.claim_task(&main, t(1)).await.unwrap();
+    fx.tasks.claim_task(&by(&main), t(1)).await.unwrap();
     call(&session, "get_events", json!({})).await;
     let quiet = call_raw(&session, "list_agents", json!({})).await;
     assert_eq!(

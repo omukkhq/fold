@@ -1,7 +1,7 @@
 use fold_core::dag::{Dag, EdgeRefusal};
 use fold_core::events::types;
 use fold_core::{
-    DependencyOrigin, EventActor, FoldError, NewEvent, TaskId, TaskStatus, Timestamp, codes,
+    Actor, DependencyOrigin, FoldError, NewEvent, TaskId, TaskStatus, Timestamp, codes,
 };
 use fold_store::WriteTx;
 use fold_store::tasks::{self, EdgeRow};
@@ -36,7 +36,7 @@ impl TaskService {
     /// Adds the direct edge `task` needs `needs` and recomputes `task` and its dependents in the same transaction.
     pub async fn add_dependency(
         &self,
-        actor: &EventActor,
+        actor: &Actor,
         task: TaskId,
         needs: TaskId,
     ) -> Result<Edge, TaskError> {
@@ -63,7 +63,7 @@ impl TaskService {
             task,
             needs,
             origin: DependencyOrigin::Direct,
-            created_by: actor.as_str().to_owned(),
+            created_by: actor.event_actor().as_str().to_owned(),
             created_at: now,
         })
     }
@@ -71,7 +71,7 @@ impl TaskService {
     /// Removes a direct edge and recomputes `task` and its dependents in the same transaction. A checklist edge is removed only with its linked checklist item.
     pub async fn remove_dependency(
         &self,
-        actor: &EventActor,
+        actor: &Actor,
         task: TaskId,
         needs: TaskId,
     ) -> Result<(), TaskError> {
@@ -105,7 +105,7 @@ impl TaskService {
                     ));
                 }
                 tasks::delete_edge(tx, task, needs).await?;
-                let event = NewEvent::new(types::DEPENDENCY_REMOVED, actor.clone())?
+                let event = NewEvent::new(types::DEPENDENCY_REMOVED, actor.event_actor())?
                     .task(task)
                     .data(json!({"needs": needs.to_string(), "origin": edge.origin.as_str()}))?;
                 buffer.append(tx, &event, now).await?;
@@ -134,7 +134,7 @@ pub async fn add_edge_in_tx(
     task: TaskId,
     needs: TaskId,
     origin: DependencyOrigin,
-    actor: &EventActor,
+    actor: &Actor,
     now: Timestamp,
 ) -> Result<(), TaskError> {
     // A task absent from the graph has no edges, so an unknown task never forms a cycle and still reaches task_not_found below.
@@ -215,8 +215,8 @@ pub async fn add_edge_in_tx(
             "the edge exists; call get_task to see its dependencies",
         ));
     }
-    tasks::insert_edge(tx, task, needs, origin, actor.as_str(), now).await?;
-    let event = NewEvent::new(types::DEPENDENCY_ADDED, actor.clone())?
+    tasks::insert_edge(tx, task, needs, origin, actor.event_actor().as_str(), now).await?;
+    let event = NewEvent::new(types::DEPENDENCY_ADDED, actor.event_actor())?
         .task(task)
         .data(json!({"needs": needs.to_string(), "origin": origin.as_str()}))?;
     buffer.append(tx, &event, now).await?;

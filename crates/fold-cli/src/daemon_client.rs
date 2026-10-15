@@ -15,8 +15,7 @@ use serde_json::Value;
 use thiserror::Error;
 use tokio::net::UnixStream;
 
-/// The header that names the human behind a CLI request.
-pub const HUMAN_HEADER: &str = "x-fold-human";
+pub use fold_daemon::http::actor::HUMAN_HEADER;
 
 const START_TIMEOUT: Duration = Duration::from_secs(10);
 const FIRST_BACKOFF: Duration = Duration::from_millis(10);

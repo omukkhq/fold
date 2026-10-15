@@ -7,6 +7,9 @@ use crate::error::{FoldError, codes};
 const MAX_NAME_LEN: usize = 32;
 const MAX_WORKER_NAME_LEN: usize = 128;
 
+/// Agent names that an agent cannot take. `fold` is the event actor label of the daemon itself, so an agent with that name would be indistinguishable from it in the history.
+const RESERVED_AGENT_NAMES: &[&str] = &[crate::events::EventActor::FOLD];
+
 /// The tag that makes an agent the integrator. Only a human can grant it.
 pub const INTEGRATOR_TAG: &str = "integrator";
 
@@ -19,6 +22,8 @@ pub enum NameError {
     InvalidSegment,
     #[error("a worker name is an agent name followed by /<segment> parts, at most 128 characters")]
     InvalidWorker,
+    #[error("the agent name fold is reserved for fold itself")]
+    Reserved,
 }
 
 impl From<NameError> for FoldError {
@@ -39,16 +44,21 @@ fn valid_segment(text: &str) -> bool {
 
 macro_rules! segment_newtype {
     ($(#[$doc:meta])* $name:ident) => {
+        segment_newtype!($(#[$doc])* $name, reserved: &[]);
+    };
+    ($(#[$doc:meta])* $name:ident, reserved: $reserved:expr) => {
         $(#[$doc])*
         #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
         pub struct $name(String);
 
         impl $name {
             pub fn parse(text: &str) -> Result<Self, NameError> {
-                if valid_segment(text) {
-                    Ok(Self(text.to_owned()))
-                } else {
+                if !valid_segment(text) {
                     Err(NameError::InvalidSegment)
+                } else if $reserved.contains(&text) {
+                    Err(NameError::Reserved)
+                } else {
+                    Ok(Self(text.to_owned()))
                 }
             }
 
@@ -66,12 +76,17 @@ macro_rules! segment_newtype {
 }
 
 segment_newtype!(
-    /// 1 to 32 characters of `a-z`, `0-9`, `-` and `_`, starting with a letter or digit.
-    AgentName
+    /// 1 to 32 characters of `a-z`, `0-9`, `-` and `_`, starting with a letter or digit, and not a reserved name.
+    AgentName,
+    reserved: RESERVED_AGENT_NAMES
 );
 segment_newtype!(
     /// A role or capability label on an agent. It follows the agent name pattern.
     Tag
+);
+segment_newtype!(
+    /// A person who acts through the CLI or the web. It follows the agent name pattern, so `human:<name>` is a valid event actor.
+    HumanName
 );
 
 impl Tag {
@@ -86,10 +101,16 @@ pub struct WorkerName(String);
 
 impl WorkerName {
     pub fn parse(text: &str) -> Result<Self, NameError> {
-        if text.len() <= MAX_WORKER_NAME_LEN && text.split('/').all(valid_segment) {
-            Ok(Self(text.to_owned()))
-        } else {
+        if text.len() > MAX_WORKER_NAME_LEN || !text.split('/').all(valid_segment) {
             Err(NameError::InvalidWorker)
+        } else if text
+            .split('/')
+            .next()
+            .is_some_and(|agent| RESERVED_AGENT_NAMES.contains(&agent))
+        {
+            Err(NameError::Reserved)
+        } else {
+            Ok(Self(text.to_owned()))
         }
     }
 

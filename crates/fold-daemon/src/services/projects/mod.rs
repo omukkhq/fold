@@ -6,10 +6,10 @@ use std::sync::Arc;
 use fold_core::projects::find_root;
 use fold_core::tree::FlatTree;
 use fold_core::{
-    CONFIG_TEMPLATE, Clock, FoldError, HostPaths, ProjectConfig, ProjectPaths, RevisionId,
-    Timestamp, choose_slug, codes, slugify,
+    CONFIG_TEMPLATE, Clock, FoldError, HostPaths, HumanName, ProjectConfig, ProjectPaths,
+    RevisionId, Timestamp, choose_slug, codes, slugify,
 };
-use fold_store::projects::{self, ProjectRow};
+use fold_store::projects::{self, HumanRow, ProjectRow};
 use fold_store::workspaces::{create_initial_revision, initial_revision};
 use fold_store::{Store, StoreError};
 use fold_vcs::git::{CommitId, Git};
@@ -538,26 +538,13 @@ pub async fn open_for_dir(
     state: &DaemonState,
     cwd: &Path,
 ) -> Result<Arc<ProjectHandle>, ProjectError> {
-    let rows = projects::list_projects(state.registry.read()).await?;
-    let root = find_root(cwd, rows.iter().map(|row| Path::new(&row.root)));
-    let row = root
-        .and_then(|root| rows.iter().find(|row| Path::new(&row.root) == root))
-        .ok_or_else(|| {
-            FoldError::new(
-                codes::PROJECT_NOT_FOUND,
-                "no registered project holds this directory",
-            )
-        })?;
-    open(state, &row.slug).await
+    let slug = slug_for_dir(&state.registry, cwd).await?;
+    open(state, &slug).await
 }
 
-/// The slug of the registered project whose root holds `cwd`, the nearest one when roots nest, read from the registry without a daemon. `cwd` must be canonical. Commands that run inside a project find their project this way.
-pub async fn slug_for_dir(host: &HostPaths, cwd: &Path) -> Result<String, ProjectError> {
-    let registry = Store::open_registry(&host.registry_db()).await?;
-    let rows = projects::list_projects(registry.read()).await;
-    // The lookup result is what the caller needs; a failed close only delays the WAL checkpoint.
-    let _ = registry.close().await;
-    let rows = rows?;
+/// The slug of the registered project whose root holds `cwd`, the nearest one when roots nest.
+pub async fn slug_for_dir(registry: &Store, cwd: &Path) -> Result<String, ProjectError> {
+    let rows = projects::list_projects(registry.read()).await?;
     let root = find_root(cwd, rows.iter().map(|row| Path::new(&row.root)));
     root.and_then(|root| rows.iter().find(|row| Path::new(&row.root) == root))
         .map(|row| row.slug.clone())
@@ -566,7 +553,30 @@ pub async fn slug_for_dir(host: &HostPaths, cwd: &Path) -> Result<String, Projec
                 codes::PROJECT_NOT_FOUND,
                 "no registered project holds this directory",
             )
-            .with_hint("run the command inside a project, or run fold init first")
+            .with_hint("run the command inside a project directory, or fold init one")
             .into()
         })
+}
+
+/// [`slug_for_dir`] for a CLI command, which reads the host registry without a running daemon.
+pub async fn slug_for_dir_on_host(host: &HostPaths, cwd: &Path) -> Result<String, ProjectError> {
+    let registry = Store::open_registry(&host.registry_db()).await?;
+    let slug = slug_for_dir(&registry, cwd).await;
+    registry.close().await?;
+    slug
+}
+
+/// The registry row of the human `name`, inserted on first use with `created_at` from `clock`. A known human costs one read and no write. Humans belong to the host, so this appends no project event.
+pub async fn ensure_human(
+    registry: &Store,
+    clock: &dyn Clock,
+    name: &HumanName,
+) -> Result<HumanRow, StoreError> {
+    if let Some(human) = projects::find_human(registry.read(), name).await? {
+        return Ok(human);
+    }
+    let now = clock.now();
+    registry
+        .write(async |tx| projects::ensure_human(tx, name, now).await)
+        .await
 }
