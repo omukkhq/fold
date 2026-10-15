@@ -1,0 +1,419 @@
+use std::collections::BTreeSet;
+
+const SKILL: &str = include_str!("../templates/SKILL.md");
+const AGENTS_SECTION: &str = include_str!("../templates/agents_section.md");
+
+const FOLD_TOOLS: [&str; 51] = [
+    "register_agent",
+    "register_worker",
+    "list_agents",
+    "send_message",
+    "get_inbox",
+    "get_thread",
+    "acknowledge_message",
+    "get_events",
+    "wait_for_events",
+    "get_activity",
+    "get_task_graph",
+    "get_ready_tasks",
+    "get_task",
+    "create_task",
+    "update_task",
+    "delete_task",
+    "archive_task",
+    "add_dependency",
+    "remove_dependency",
+    "add_checklist_item",
+    "update_checklist_item",
+    "move_checklist_item",
+    "remove_checklist_item",
+    "create_label",
+    "claim_task",
+    "release_task",
+    "takeover_claim",
+    "get_repository_state",
+    "get_revision",
+    "compare_revisions",
+    "create_workspace",
+    "get_workspace",
+    "get_workspace_changes",
+    "record_checkpoint",
+    "list_checkpoints",
+    "restore_checkpoint",
+    "record_changes",
+    "sync_workspace",
+    "abandon_workspace",
+    "create_proposal",
+    "list_proposals",
+    "get_proposal",
+    "update_proposal",
+    "close_proposal",
+    "claim_review",
+    "release_review",
+    "create_review_checkout",
+    "submit_review",
+    "get_review_comments",
+    "integrate_proposal",
+    "require_human_review",
+];
+
+/// The tools of `FOLD_TOOLS` that the MCP server does not list yet. The skill already teaches them; a tool leaves this list in the change that adds it to the server.
+const PENDING_TOOLS: [&str; 12] = [
+    "create_proposal",
+    "list_proposals",
+    "get_proposal",
+    "update_proposal",
+    "close_proposal",
+    "claim_review",
+    "release_review",
+    "create_review_checkout",
+    "submit_review",
+    "get_review_comments",
+    "integrate_proposal",
+    "require_human_review",
+];
+
+/// Every code of the error table and the named `invalid_request` reasons.
+const FOLD_ERROR_CODES: [&str; 108] = [
+    "invalid_id",
+    "invalid_timestamp",
+    "invalid_request",
+    "invalid_name",
+    "invalid_config",
+    "invalid_handshake",
+    "protocol_version_unsupported",
+    "invalid_host_paths",
+    "not_found",
+    "auth_required",
+    "invalid_token",
+    "token_not_found",
+    "human_name_required",
+    "human_required",
+    "unknown_human",
+    "host_not_allowed",
+    "agent_not_registered",
+    "agent_not_found",
+    "agent_already_bound",
+    "worker_not_found",
+    "project_unavailable",
+    "internal_error",
+    "handshake_unavailable",
+    "project_exists",
+    "project_not_found",
+    "daemon_already_running",
+    "runtime_dir_missing",
+    "schema_too_new",
+    "database_locked",
+    "web_not_built",
+    "seed_exists",
+    "doctor_checks_failed",
+    "service_install_failed",
+    "task_not_found",
+    "task_closed",
+    "label_exists",
+    "label_not_found",
+    "invalid_label_color",
+    "dependency_cycle",
+    "dependency_exists",
+    "dependency_not_found",
+    "already_claimed",
+    "already_holder",
+    "claim_not_found",
+    "claim_not_stale",
+    "not_claimed",
+    "not_claim_holder",
+    "actor_cannot_claim",
+    "invalid_checklist_name",
+    "invalid_step_text",
+    "checklist_item_not_found",
+    "workspace_exists",
+    "workspace_not_found",
+    "workspace_not_active",
+    "not_workspace_owner",
+    "unresolved_conflicts",
+    "checkpoint_not_found",
+    "workspace_write_unfinished",
+    "already_current",
+    "workspace_changed_during_sync",
+    "object_missing",
+    "target_not_empty",
+    "too_large",
+    "revision_not_found",
+    "path_not_in_comparison",
+    "invalid_path",
+    "invalid_state_ref",
+    "git_failed",
+    "git_sync_map_invalid",
+    "git_not_found",
+    "remote_not_set",
+    "remote_ahead",
+    "object_corrupt",
+    "object_io",
+    "workspace_io",
+    "unrecorded_changes",
+    "invalid_hash",
+    "tree_invalid",
+    "revision_invalid",
+    "export_diverged",
+    "gc_in_progress",
+    "message_not_found",
+    "recipient_not_found",
+    "invalid_event_filter",
+    "invalid_last_event_id",
+    "invalid_push_target",
+    "proposal_not_found",
+    "proposal_exists",
+    "proposal_not_open",
+    "not_proposal_author",
+    "version_unchanged",
+    "stale_version",
+    "author_cannot_review",
+    "author_cannot_integrate",
+    "integrator_required",
+    "review_claim_required",
+    "empty_review",
+    "unknown_comment_path",
+    "invalid_comment_range",
+    "checkout_failed",
+    "human_review_already_set",
+    "not_approved",
+    "changes_requested",
+    "human_approval_missing",
+    "prerequisites_not_done",
+    "head_moved",
+    "integration_conflicted",
+    "integration_failed",
+];
+
+/// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.
+const PENDING_ERROR_CODES: [&str; 3] = ["seed_exists", "too_large", "integration_conflicted"];
+
+/// The `invalid_request` reasons that have a name.
+const INVALID_REQUEST_REASONS: [&str; 7] = [
+    "self_dependency",
+    "checklist_origin",
+    "linked_item",
+    "task_has_history",
+    "proposal_open",
+    "malformed_claude_file",
+    "no_service_manager",
+];
+
+const NON_TOOL_NAMES: [&str; 11] = [
+    "stall_minutes",
+    "lease_minutes",
+    "request_changes",
+    "stop_hook_active",
+    "linked_task",
+    "start_line",
+    "end_line",
+    "up_to",
+    "expected_version",
+    "timeout_s",
+    "reply_to",
+];
+
+const SECTIONS: [&str; 10] = [
+    "Identity",
+    "Messaging",
+    "Noticing news",
+    "Orchestrator",
+    "Worker",
+    "Reviewer",
+    "Task template",
+    "Subagents",
+    "Errors",
+    "Never",
+];
+
+/// Each lowercase identifier with an underscore inside a backtick span.
+fn backticked_identifiers(text: &str) -> BTreeSet<String> {
+    let mut found = BTreeSet::new();
+    for (index, span) in text.split('`').enumerate() {
+        if index % 2 == 0 {
+            continue;
+        }
+        let mut word = String::new();
+        for character in span.chars().chain(std::iter::once(' ')) {
+            if character.is_ascii_alphanumeric() || character == '_' {
+                word.push(character);
+            } else {
+                let lower = word
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+                if lower && word.contains('_') && !word.starts_with('_') {
+                    found.insert(word.clone());
+                }
+                word.clear();
+            }
+        }
+    }
+    found
+}
+
+fn known_names() -> BTreeSet<&'static str> {
+    FOLD_TOOLS
+        .into_iter()
+        .chain(FOLD_ERROR_CODES)
+        .chain(INVALID_REQUEST_REASONS)
+        .chain(NON_TOOL_NAMES)
+        .collect()
+}
+
+#[test]
+fn every_backticked_identifier_is_a_tool_a_code_or_an_allowed_name() {
+    let known = known_names();
+    for (name, text) in [("SKILL.md", SKILL), ("agents_section.md", AGENTS_SECTION)] {
+        for identifier in backticked_identifiers(text) {
+            assert!(
+                known.contains(identifier.as_str()),
+                "{name} names `{identifier}`, which is not a tool, a code or an allowed name"
+            );
+        }
+    }
+}
+
+fn server_tools() -> BTreeSet<String> {
+    use fold_daemon::mcp::{agents, events, identity, messages, tasks, workspaces};
+    [
+        identity::tools(),
+        agents::tools(),
+        events::tools(),
+        workspaces::tools(),
+        tasks::tools(),
+        messages::tools(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|tool| tool.name.into_owned())
+    .collect()
+}
+
+#[test]
+fn the_tool_list_is_the_server_list_and_the_pending_tools() {
+    let server = server_tools();
+    let pending: BTreeSet<&str> = PENDING_TOOLS.into_iter().collect();
+    for tool in PENDING_TOOLS {
+        assert!(
+            FOLD_TOOLS.contains(&tool),
+            "pending `{tool}` is not in FOLD_TOOLS"
+        );
+        assert!(
+            !server.contains(tool),
+            "the server lists `{tool}`: remove it from PENDING_TOOLS"
+        );
+    }
+    let listed: BTreeSet<String> = FOLD_TOOLS
+        .into_iter()
+        .filter(|tool| !pending.contains(tool))
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(listed, server);
+}
+
+#[test]
+fn the_code_list_is_the_core_codes_and_the_pending_codes() {
+    let defined: BTreeSet<&str> = fold_core::codes::ALL.iter().copied().collect();
+    for code in PENDING_ERROR_CODES {
+        assert!(
+            FOLD_ERROR_CODES.contains(&code),
+            "pending `{code}` is not in FOLD_ERROR_CODES"
+        );
+        assert!(
+            !defined.contains(code),
+            "fold_core defines `{code}`: remove it from PENDING_ERROR_CODES"
+        );
+    }
+    for code in FOLD_ERROR_CODES {
+        assert!(
+            defined.contains(code) || PENDING_ERROR_CODES.contains(&code),
+            "`{code}` is neither a fold_core code nor pending"
+        );
+    }
+    for reason in INVALID_REQUEST_REASONS {
+        assert!(
+            !defined.contains(reason),
+            "`{reason}` is a code, not a reason"
+        );
+    }
+}
+
+#[test]
+fn the_skill_names_every_tool() {
+    let named = backticked_identifiers(SKILL);
+    for tool in FOLD_TOOLS {
+        assert!(named.contains(tool), "SKILL.md does not name `{tool}`");
+    }
+}
+
+#[test]
+fn the_tool_and_code_lists_have_no_duplicates() {
+    assert_eq!(
+        FOLD_TOOLS.into_iter().collect::<BTreeSet<_>>().len(),
+        FOLD_TOOLS.len()
+    );
+    assert_eq!(
+        FOLD_ERROR_CODES.into_iter().collect::<BTreeSet<_>>().len(),
+        FOLD_ERROR_CODES.len()
+    );
+}
+
+#[test]
+fn the_agents_section_is_short_and_has_no_imports_or_design_documents() {
+    assert!(AGENTS_SECTION.lines().count() <= 40);
+    for text in [AGENTS_SECTION, SKILL] {
+        assert!(text.lines().all(|line| !line.starts_with('@')));
+        assert!(!text.contains("ARCHITECTURE.md"));
+        assert!(!text.contains("IMPLEMENTATION_PLAN.md"));
+    }
+}
+
+#[test]
+fn the_agents_section_points_to_the_skill_and_the_repository_rules() {
+    assert!(AGENTS_SECTION.starts_with("## fold\n"));
+    assert!(AGENTS_SECTION.contains("FOLD_AGENT=<name> claude --name <name>"));
+    assert!(AGENTS_SECTION.contains("`fold` skill"));
+    assert!(AGENTS_SECTION.contains("`ws/`"));
+    assert!(AGENTS_SECTION.contains("`AGENTS.md` or `CLAUDE.md`"));
+}
+
+#[test]
+fn neither_template_uses_the_banned_word_for_a_proposal() {
+    for text in [AGENTS_SECTION, SKILL] {
+        assert!(!text.to_lowercase().contains("pull request"));
+        let abbreviation = text
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|word| word.eq_ignore_ascii_case("pr") || word.eq_ignore_ascii_case("prs"));
+        assert!(!abbreviation);
+    }
+}
+
+#[test]
+fn both_templates_name_main_as_read_only() {
+    assert!(AGENTS_SECTION.contains("`main/` is read-only"));
+    assert!(SKILL.contains("Never edit `main/`"));
+}
+
+#[test]
+fn the_skill_has_the_frontmatter_keys_and_every_section() {
+    let rest = SKILL.strip_prefix("---\n").expect("frontmatter");
+    let (frontmatter, _) = rest.split_once("\n---\n").expect("frontmatter end");
+    let keys: Vec<&str> = frontmatter
+        .lines()
+        .filter_map(|line| line.split_once(": ").map(|(key, _)| key))
+        .collect();
+    assert_eq!(keys, ["name", "description"]);
+    assert!(frontmatter.contains("name: fold\n"));
+    let headings: Vec<&str> = SKILL
+        .lines()
+        .filter_map(|line| line.strip_prefix("## "))
+        .collect();
+    assert_eq!(headings, SECTIONS);
+}
+
+#[test]
+fn the_skill_uses_exactly_the_four_verdicts() {
+    for verdict in ["comment", "request_changes", "approve", "reject"] {
+        assert!(SKILL.contains(&format!("`{verdict}`")), "{verdict}");
+    }
+}
