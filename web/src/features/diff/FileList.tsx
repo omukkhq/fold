@@ -7,11 +7,26 @@ interface FileListProps {
   files: readonly ComparedFile[];
   selectedPath: string | null;
   onSelectFile: (path: string) => void;
+  /** An overline above the files; the proposal screen draws one, the diff screen does not. */
+  title?: string;
 }
 
-export function FileList({ files, selectedPath, onSelectFile }: FileListProps) {
+export function FileList({
+  files,
+  selectedPath,
+  onSelectFile,
+  title,
+}: FileListProps) {
   return (
-    <nav aria-label="Changed files" className="w-file-list shrink-0">
+    <nav
+      aria-label="Changed files"
+      className="flex w-file-list shrink-0 flex-col gap-2"
+    >
+      {title ? (
+        <h2 className="text-overline leading-snug font-semibold text-primary-text uppercase">
+          {title}
+        </h2>
+      ) : null}
       <ul className="flex flex-col gap-2">
         {files.map((file) => {
           const badge = changeBadge(file.change);

@@ -154,6 +154,7 @@
   --width-sign-in: var(--width-sign-in);
   --width-thread-list: var(--width-thread-list);
   --width-dialog: var(--width-dialog);
+  --width-review-panel: var(--width-review-panel);
 
   --height-*: initial;
   --height-bar: var(--height-bar);

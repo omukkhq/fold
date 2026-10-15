@@ -6,6 +6,7 @@ import type {
   Hunk,
   HunkLine,
 } from "../src/api/diff";
+import { comparisons as proposalComparisons } from "./proposals";
 
 const READ_AT = Date.UTC(2026, 9, 15, 12, 12, 31);
 
@@ -282,9 +283,10 @@ const workingChanges = fixture(
 
 /**
  * Keyed by `from..to`, or by `to` alone for `to` against its recorded base: the working changes of ws-7 in both forms, two main revisions,
- * and a revision with itself.
+ * a revision with itself, and every proposal version.
  */
 export const comparisons: Record<string, ComparisonFixture> = {
+  ...proposalComparisons,
   "r7..ws-7": workingChanges,
   "ws-7": workingChanges,
   "r7..r8": fixture(revision("r7"), revision("r8"), null, [changelog, login]),

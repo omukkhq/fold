@@ -26,6 +26,8 @@ export interface DiffViewerProps {
   comparison: Comparison;
   selectedPath: string | undefined;
   onSelectFile: (path: string) => void;
+  /** The overline above the file list, when the screen draws one. */
+  filesTitle?: string;
   /** Read only for a file whose body is text; a binary file and an unchanged rename need no hunks. */
   fileDiff: FileDiffView;
   selection: DiffSelection | null;
@@ -40,7 +42,7 @@ export interface DiffViewerProps {
 
 type BodyProps = Omit<
   DiffViewerProps,
-  "comparison" | "selectedPath" | "onSelectFile"
+  "comparison" | "selectedPath" | "onSelectFile" | "filesTitle"
 > & { file: ComparedFile };
 
 function Hash({ side, hash }: { side: string; hash: string | null }) {
@@ -136,6 +138,7 @@ export function DiffViewer({
   comparison,
   selectedPath,
   onSelectFile,
+  filesTitle,
   ...body
 }: DiffViewerProps) {
   const files = listedFiles(comparison.files);
@@ -149,6 +152,7 @@ export function DiffViewer({
         files={files}
         selectedPath={file.path}
         onSelectFile={onSelectFile}
+        title={filesTitle}
       />
       <section
         aria-label={file.path}

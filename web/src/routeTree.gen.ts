@@ -18,7 +18,9 @@ import { Route as PSlugAgentsRouteImport } from './routes/p.$slug.agents'
 import { Route as PSlugBoardRouteImport } from './routes/p.$slug.board'
 import { Route as PSlugDiffRouteImport } from './routes/p.$slug.diff'
 import { Route as PSlugMessagesRouteImport } from './routes/p.$slug.messages'
+import { Route as PSlugProposalsRouteImport } from './routes/p.$slug.proposals'
 import { Route as PSlugRepositoryRouteImport } from './routes/p.$slug.repository'
+import { Route as PSlugProposalsIdRouteImport } from './routes/p.$slug.proposals_.$id'
 import { Route as PSlugTTaskRouteImport } from './routes/p.$slug.t.$task'
 import { Route as PSlugTNewRouteImport } from './routes/p.$slug.t.new'
 
@@ -67,9 +69,19 @@ const PSlugMessagesRoute = PSlugMessagesRouteImport.update({
   path: '/messages',
   getParentRoute: () => PSlugRoute,
 } as any)
+const PSlugProposalsRoute = PSlugProposalsRouteImport.update({
+  id: '/proposals',
+  path: '/proposals',
+  getParentRoute: () => PSlugRoute,
+} as any)
 const PSlugRepositoryRoute = PSlugRepositoryRouteImport.update({
   id: '/repository',
   path: '/repository',
+  getParentRoute: () => PSlugRoute,
+} as any)
+const PSlugProposalsIdRoute = PSlugProposalsIdRouteImport.update({
+  id: '/proposals_/$id',
+  path: '/proposals/$id',
   getParentRoute: () => PSlugRoute,
 } as any)
 const PSlugTTaskRoute = PSlugTTaskRouteImport.update({
@@ -93,7 +105,9 @@ export interface FileRoutesByFullPath {
   '/p/$slug/board': typeof PSlugBoardRoute
   '/p/$slug/diff': typeof PSlugDiffRoute
   '/p/$slug/messages': typeof PSlugMessagesRoute
+  '/p/$slug/proposals': typeof PSlugProposalsRoute
   '/p/$slug/repository': typeof PSlugRepositoryRoute
+  '/p/$slug/proposals/$id': typeof PSlugProposalsIdRoute
   '/p/$slug/t/$task': typeof PSlugTTaskRoute
   '/p/$slug/t/new': typeof PSlugTNewRoute
 }
@@ -107,7 +121,9 @@ export interface FileRoutesByTo {
   '/p/$slug/board': typeof PSlugBoardRoute
   '/p/$slug/diff': typeof PSlugDiffRoute
   '/p/$slug/messages': typeof PSlugMessagesRoute
+  '/p/$slug/proposals': typeof PSlugProposalsRoute
   '/p/$slug/repository': typeof PSlugRepositoryRoute
+  '/p/$slug/proposals/$id': typeof PSlugProposalsIdRoute
   '/p/$slug/t/$task': typeof PSlugTTaskRoute
   '/p/$slug/t/new': typeof PSlugTNewRoute
 }
@@ -122,7 +138,9 @@ export interface FileRoutesById {
   '/p/$slug/board': typeof PSlugBoardRoute
   '/p/$slug/diff': typeof PSlugDiffRoute
   '/p/$slug/messages': typeof PSlugMessagesRoute
+  '/p/$slug/proposals': typeof PSlugProposalsRoute
   '/p/$slug/repository': typeof PSlugRepositoryRoute
+  '/p/$slug/proposals_/$id': typeof PSlugProposalsIdRoute
   '/p/$slug/t/$task': typeof PSlugTTaskRoute
   '/p/$slug/t/new': typeof PSlugTNewRoute
 }
@@ -138,7 +156,9 @@ export interface FileRouteTypes {
     | '/p/$slug/board'
     | '/p/$slug/diff'
     | '/p/$slug/messages'
+    | '/p/$slug/proposals'
     | '/p/$slug/repository'
+    | '/p/$slug/proposals/$id'
     | '/p/$slug/t/$task'
     | '/p/$slug/t/new'
   fileRoutesByTo: FileRoutesByTo
@@ -152,7 +172,9 @@ export interface FileRouteTypes {
     | '/p/$slug/board'
     | '/p/$slug/diff'
     | '/p/$slug/messages'
+    | '/p/$slug/proposals'
     | '/p/$slug/repository'
+    | '/p/$slug/proposals/$id'
     | '/p/$slug/t/$task'
     | '/p/$slug/t/new'
   id:
@@ -166,7 +188,9 @@ export interface FileRouteTypes {
     | '/p/$slug/board'
     | '/p/$slug/diff'
     | '/p/$slug/messages'
+    | '/p/$slug/proposals'
     | '/p/$slug/repository'
+    | '/p/$slug/proposals_/$id'
     | '/p/$slug/t/$task'
     | '/p/$slug/t/new'
   fileRoutesById: FileRoutesById
@@ -243,11 +267,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PSlugMessagesRouteImport
       parentRoute: typeof PSlugRoute
     }
+    '/p/$slug/proposals': {
+      id: '/p/$slug/proposals'
+      path: '/proposals'
+      fullPath: '/p/$slug/proposals'
+      preLoaderRoute: typeof PSlugProposalsRouteImport
+      parentRoute: typeof PSlugRoute
+    }
     '/p/$slug/repository': {
       id: '/p/$slug/repository'
       path: '/repository'
       fullPath: '/p/$slug/repository'
       preLoaderRoute: typeof PSlugRepositoryRouteImport
+      parentRoute: typeof PSlugRoute
+    }
+    '/p/$slug/proposals_/$id': {
+      id: '/p/$slug/proposals_/$id'
+      path: '/proposals/$id'
+      fullPath: '/p/$slug/proposals/$id'
+      preLoaderRoute: typeof PSlugProposalsIdRouteImport
       parentRoute: typeof PSlugRoute
     }
     '/p/$slug/t/$task': {
@@ -273,7 +311,9 @@ interface PSlugRouteChildren {
   PSlugBoardRoute: typeof PSlugBoardRoute
   PSlugDiffRoute: typeof PSlugDiffRoute
   PSlugMessagesRoute: typeof PSlugMessagesRoute
+  PSlugProposalsRoute: typeof PSlugProposalsRoute
   PSlugRepositoryRoute: typeof PSlugRepositoryRoute
+  PSlugProposalsIdRoute: typeof PSlugProposalsIdRoute
   PSlugTTaskRoute: typeof PSlugTTaskRoute
   PSlugTNewRoute: typeof PSlugTNewRoute
 }
@@ -284,7 +324,9 @@ const PSlugRouteChildren: PSlugRouteChildren = {
   PSlugBoardRoute: PSlugBoardRoute,
   PSlugDiffRoute: PSlugDiffRoute,
   PSlugMessagesRoute: PSlugMessagesRoute,
+  PSlugProposalsRoute: PSlugProposalsRoute,
   PSlugRepositoryRoute: PSlugRepositoryRoute,
+  PSlugProposalsIdRoute: PSlugProposalsIdRoute,
   PSlugTTaskRoute: PSlugTTaskRoute,
   PSlugTNewRoute: PSlugTNewRoute,
 }

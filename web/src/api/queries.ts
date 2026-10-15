@@ -4,6 +4,7 @@ import { listAgents } from "./agents";
 import { keys } from "./keys";
 import { listThreads } from "./messages";
 import { getProject, listProjects } from "./projects";
+import { getProposal, listProposals } from "./proposals";
 import { getSession } from "./session";
 
 export const projectsQuery = () =>
@@ -51,5 +52,19 @@ export const messagesQuery = (slug: string) =>
   queryOptions({
     queryKey: keys.messages(slug),
     queryFn: () => listThreads(),
+    staleTime: Infinity,
+  });
+
+export const proposalsQuery = (slug: string) =>
+  queryOptions({
+    queryKey: keys.proposals(slug),
+    queryFn: () => listProposals(slug),
+    staleTime: Infinity,
+  });
+
+export const proposalQuery = (slug: string, id: string) =>
+  queryOptions({
+    queryKey: keys.proposal(slug, id),
+    queryFn: () => getProposal(slug, id),
     staleTime: Infinity,
   });
