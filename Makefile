@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help setup build fmt dev dev-daemon dev-web fmt-check-rust fmt-check-web fmt-check web-build check-inner-allow clippy test test-fast test-web coverage check-rust check-web check acceptance clean clean-keep-cargo gen-api check-api
+.PHONY: help setup build fmt dev dev-daemon dev-web fmt-check-rust fmt-check-web fmt-check web-build check-inner-allow clippy test test-fast test-web coverage check-rust check-web check acceptance clean clean-keep-cargo gen-api check-api release
 
 help: ## List the targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-18s %s\n", $$1, $$2}'
@@ -22,6 +22,9 @@ fmt: ## Format the Rust code, fix lint findings and format the web sources
 	cargo fmt --all
 	cd web && bun run lint --fix
 	cd web && bun run format
+
+RELEASE_TRIPLE := x86_64-unknown-linux-gnu
+RELEASE_MAX_BYTES ?= 30000000
 
 DEV_DIR := $(CURDIR)/target/dev
 
@@ -131,6 +134,20 @@ check-api: ## Fail when web/src/api/schema.d.ts differs from the daemon's OpenAP
 	cargo run -q -p fold-cli -- openapi > $(GEN_DIR)/openapi.json
 	cd web && bunx openapi-typescript ../$(GEN_DIR)/openapi.json -o ../$(GEN_DIR)/schema.d.ts
 	@cmp -s $(GEN_DIR)/schema.d.ts web/src/api/schema.d.ts || { echo "web/src/api/schema.d.ts is stale: run make gen-api" >&2; exit 1; }
+
+release: web-build ## Build fold for x86_64 Linux into dist/ with the host toolchain, check the artefact, write SHA256SUMS and run the smoke test
+	@test -f web/dist/index.html || { echo "release: web/dist/index.html is missing; the binary embeds web/dist" >&2; exit 1; }
+	cargo build --release --locked -p fold-cli --target $(RELEASE_TRIPLE)
+	rm -rf dist
+	mkdir -p dist
+	install -m 0755 "$$(cargo metadata --format-version 1 --no-deps | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')/$(RELEASE_TRIPLE)/release/fold" dist/fold-x86_64-linux
+	@size=$$(stat -c %s dist/fold-x86_64-linux); \
+	if [ "$$size" -ge $(RELEASE_MAX_BYTES) ]; then \
+		echo "release: dist/fold-x86_64-linux is $$size bytes, over the limit of $(RELEASE_MAX_BYTES)" >&2; exit 1; \
+	fi
+	cd dist && sha256sum fold-x86_64-linux > SHA256SUMS
+	file dist/fold-x86_64-linux | grep -q 'x86-64' || { echo "release: dist/fold-x86_64-linux is not an x86-64 binary" >&2; exit 1; }
+	scripts/release-smoke.sh dist/fold-x86_64-linux
 
 check: web-build check-api check-rust check-web ## Run every check, after the web build that the binary embeds
 

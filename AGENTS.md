@@ -36,7 +36,7 @@ make check-rust            # the Rust half of check
 make check-web             # the web half of check
 make acceptance            # the acceptance tests only
 make seed-dev              # development only: a throwaway project with agents, tasks, workspaces and a proposal
-make release               # web build, then fold for x86_64 and aarch64 Linux into dist/
+make release               # web build, then fold for x86_64 Linux into dist/
 make clean                 # delete build output and dev projects
 make clean-keep-cargo      # the same, but keep the cargo target directory
 ```
