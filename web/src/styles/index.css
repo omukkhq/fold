@@ -152,6 +152,7 @@
   --width-content: var(--width-content);
   --width-history: var(--width-history);
   --width-sign-in: var(--width-sign-in);
+  --width-thread-list: var(--width-thread-list);
 
   --height-*: initial;
   --height-bar: var(--height-bar);

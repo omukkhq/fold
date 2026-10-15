@@ -9,13 +9,30 @@ const sources = import.meta.glob<string>("/src/**/*.{ts,tsx}", {
 
 type Keys = Map<string, Set<string>>;
 
+// Theme namespaces whose name has a dash; the longest match wins, so `--max-width-x` is the key `x` of `max-width`, not `width-x` of `max`.
+const COMPOUND = [
+  "font-weight",
+  "min-width",
+  "max-width",
+  "min-height",
+  "max-height",
+  "flex-basis",
+];
+
+function splitName(name: string): [string, string] {
+  const compound = COMPOUND.find((ns) => name.startsWith(`${ns}-`));
+  if (compound) return [compound, name.slice(compound.length + 1)];
+  const dash = name.indexOf("-");
+  return [name.slice(0, dash), name.slice(dash + 1)];
+}
+
 function themeKeys(css: string): Keys {
   const body = /@theme[^{]*\{([^}]*)\}/.exec(css)?.[1] ?? "";
   const keys: Keys = new Map();
-  for (const m of body.matchAll(/--([a-z]+)-([\w.-]+)\s*:/g)) {
-    const ns = m[1] ?? "";
-    const key = m[2] ?? "";
-    if (key.includes("--")) continue;
+  for (const m of body.matchAll(/(?<![\w-])--([a-z][\w.-]*)\s*:/g)) {
+    const name = m[1] ?? "";
+    if (name.includes("--") || !name.includes("-")) continue;
+    const [ns, key] = splitName(name);
     const set = keys.get(ns) ?? new Set<string>();
     set.add(key);
     keys.set(ns, set);
@@ -28,16 +45,24 @@ const SPACING = [
   ..."gap gap-x gap-y space-x space-y".split(" "),
   ..."inset inset-x inset-y top right bottom left".split(" "),
 ];
+// The theme namespaces Tailwind 4.3 reads for each sizing utility, in its own order.
 const SIZING: Record<string, string[]> = {
-  w: ["width", "spacing"],
-  "min-w": ["width", "spacing"],
-  "max-w": ["width", "spacing"],
+  w: ["width", "spacing", "container"],
+  "min-w": ["min-width", "spacing", "container"],
+  "max-w": ["max-width", "spacing", "container"],
   h: ["height", "spacing"],
-  "min-h": ["height", "spacing"],
-  "max-h": ["height", "spacing"],
+  "min-h": ["min-height", "height", "spacing"],
+  "max-h": ["max-height", "height", "spacing"],
   size: ["size", "spacing"],
-  basis: ["spacing"],
+  basis: ["flex-basis", "spacing", "container"],
 };
+// Named min and max sizes rarely share a shape with ids or paths, so their names are checked against the theme too; these are Tailwind's static values.
+const NAMED_CHECKED = new Set(["min-w", "max-w", "min-h", "max-h"]);
+const SIZE_KEYWORDS = new Set(
+  "auto full screen svw lvw dvw svh lvh dvh lh min max fit none px prose".split(
+    " ",
+  ),
+);
 const FRACTIONS = new Set([
   ...Object.keys(SIZING),
   ..."inset inset-x inset-y top right bottom left".split(" "),
@@ -82,6 +107,9 @@ function offToken(text: string, keys: Keys): string[] {
       const namespaces = SIZING[prefix] ?? ["spacing"];
       const fraction = /^\d+\/\d+$/.test(value) && FRACTIONS.has(prefix);
       if (!fraction && !has(namespaces, value)) bad.push(m[0]);
+    } else if (NAMED_CHECKED.has(prefix)) {
+      const namespaces = SIZING[prefix] ?? [];
+      if (!SIZE_KEYWORDS.has(value) && !has(namespaces, value)) bad.push(m[0]);
     }
   }
   return bad;
@@ -96,6 +124,30 @@ describe("utility guard", () => {
     expect(keys.get("text")?.has("wordmark--letter-spacing")).toBe(false);
     expect(keys.get("height")?.has("bar")).toBe(true);
     expect(keys.get("width")?.has("skeleton-s")).toBe(true);
+    expect(keys.get("font-weight")?.has("semibold")).toBe(true);
+  });
+  it("checks a named min or max size against the namespace Tailwind reads for it", () => {
+    expect(keys.get("container")).toBeUndefined();
+    expect(keys.get("max-width")).toBeUndefined();
+    expect(offToken('className="max-w-content"', keys)).toEqual([
+      "max-w-content",
+    ]);
+    // max-w reads --max-width, --spacing and --container, never --width.
+    expect(offToken('className="max-w-skeleton-l"', keys)).toEqual([
+      "max-w-skeleton-l",
+    ]);
+    expect(offToken('className="min-w-thread-list max-h-x"', keys)).toEqual([
+      "min-w-thread-list",
+      "max-h-x",
+    ]);
+    // min-h and max-h also read --height.
+    expect(
+      offToken('className="min-h-bar max-h-bar max-w-full min-w-max"', keys),
+    ).toEqual([]);
+    const own = themeKeys(
+      "@theme { --max-width-content: 1px; --container-wide: 2px; }",
+    );
+    expect(offToken('className="max-w-content min-w-wide"', own)).toEqual([]);
   });
   it("accepts utilities that resolve to a token", () => {
     const ok = [

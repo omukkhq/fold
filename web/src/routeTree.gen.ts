@@ -14,8 +14,10 @@ import { Route as ProjectsRouteImport } from './routes/projects'
 import { Route as SignInRouteImport } from './routes/sign-in'
 import { Route as PSlugRouteImport } from './routes/p.$slug'
 import { Route as PSlugActivityRouteImport } from './routes/p.$slug.activity'
+import { Route as PSlugAgentsRouteImport } from './routes/p.$slug.agents'
 import { Route as PSlugBoardRouteImport } from './routes/p.$slug.board'
 import { Route as PSlugDiffRouteImport } from './routes/p.$slug.diff'
+import { Route as PSlugMessagesRouteImport } from './routes/p.$slug.messages'
 import { Route as PSlugRepositoryRouteImport } from './routes/p.$slug.repository'
 
 const IndexRoute = IndexRouteImport.update({
@@ -43,6 +45,11 @@ const PSlugActivityRoute = PSlugActivityRouteImport.update({
   path: '/activity',
   getParentRoute: () => PSlugRoute,
 } as any)
+const PSlugAgentsRoute = PSlugAgentsRouteImport.update({
+  id: '/agents',
+  path: '/agents',
+  getParentRoute: () => PSlugRoute,
+} as any)
 const PSlugBoardRoute = PSlugBoardRouteImport.update({
   id: '/board',
   path: '/board',
@@ -51,6 +58,11 @@ const PSlugBoardRoute = PSlugBoardRouteImport.update({
 const PSlugDiffRoute = PSlugDiffRouteImport.update({
   id: '/diff',
   path: '/diff',
+  getParentRoute: () => PSlugRoute,
+} as any)
+const PSlugMessagesRoute = PSlugMessagesRouteImport.update({
+  id: '/messages',
+  path: '/messages',
   getParentRoute: () => PSlugRoute,
 } as any)
 const PSlugRepositoryRoute = PSlugRepositoryRouteImport.update({
@@ -65,8 +77,10 @@ export interface FileRoutesByFullPath {
   '/sign-in': typeof SignInRoute
   '/p/$slug': typeof PSlugRouteWithChildren
   '/p/$slug/activity': typeof PSlugActivityRoute
+  '/p/$slug/agents': typeof PSlugAgentsRoute
   '/p/$slug/board': typeof PSlugBoardRoute
   '/p/$slug/diff': typeof PSlugDiffRoute
+  '/p/$slug/messages': typeof PSlugMessagesRoute
   '/p/$slug/repository': typeof PSlugRepositoryRoute
 }
 export interface FileRoutesByTo {
@@ -75,8 +89,10 @@ export interface FileRoutesByTo {
   '/sign-in': typeof SignInRoute
   '/p/$slug': typeof PSlugRouteWithChildren
   '/p/$slug/activity': typeof PSlugActivityRoute
+  '/p/$slug/agents': typeof PSlugAgentsRoute
   '/p/$slug/board': typeof PSlugBoardRoute
   '/p/$slug/diff': typeof PSlugDiffRoute
+  '/p/$slug/messages': typeof PSlugMessagesRoute
   '/p/$slug/repository': typeof PSlugRepositoryRoute
 }
 export interface FileRoutesById {
@@ -86,8 +102,10 @@ export interface FileRoutesById {
   '/sign-in': typeof SignInRoute
   '/p/$slug': typeof PSlugRouteWithChildren
   '/p/$slug/activity': typeof PSlugActivityRoute
+  '/p/$slug/agents': typeof PSlugAgentsRoute
   '/p/$slug/board': typeof PSlugBoardRoute
   '/p/$slug/diff': typeof PSlugDiffRoute
+  '/p/$slug/messages': typeof PSlugMessagesRoute
   '/p/$slug/repository': typeof PSlugRepositoryRoute
 }
 export interface FileRouteTypes {
@@ -98,8 +116,10 @@ export interface FileRouteTypes {
     | '/sign-in'
     | '/p/$slug'
     | '/p/$slug/activity'
+    | '/p/$slug/agents'
     | '/p/$slug/board'
     | '/p/$slug/diff'
+    | '/p/$slug/messages'
     | '/p/$slug/repository'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -108,8 +128,10 @@ export interface FileRouteTypes {
     | '/sign-in'
     | '/p/$slug'
     | '/p/$slug/activity'
+    | '/p/$slug/agents'
     | '/p/$slug/board'
     | '/p/$slug/diff'
+    | '/p/$slug/messages'
     | '/p/$slug/repository'
   id:
     | '__root__'
@@ -118,8 +140,10 @@ export interface FileRouteTypes {
     | '/sign-in'
     | '/p/$slug'
     | '/p/$slug/activity'
+    | '/p/$slug/agents'
     | '/p/$slug/board'
     | '/p/$slug/diff'
+    | '/p/$slug/messages'
     | '/p/$slug/repository'
   fileRoutesById: FileRoutesById
 }
@@ -167,6 +191,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PSlugActivityRouteImport
       parentRoute: typeof PSlugRoute
     }
+    '/p/$slug/agents': {
+      id: '/p/$slug/agents'
+      path: '/agents'
+      fullPath: '/p/$slug/agents'
+      preLoaderRoute: typeof PSlugAgentsRouteImport
+      parentRoute: typeof PSlugRoute
+    }
     '/p/$slug/board': {
       id: '/p/$slug/board'
       path: '/board'
@@ -181,6 +212,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PSlugDiffRouteImport
       parentRoute: typeof PSlugRoute
     }
+    '/p/$slug/messages': {
+      id: '/p/$slug/messages'
+      path: '/messages'
+      fullPath: '/p/$slug/messages'
+      preLoaderRoute: typeof PSlugMessagesRouteImport
+      parentRoute: typeof PSlugRoute
+    }
     '/p/$slug/repository': {
       id: '/p/$slug/repository'
       path: '/repository'
@@ -193,15 +231,19 @@ declare module '@tanstack/react-router' {
 
 interface PSlugRouteChildren {
   PSlugActivityRoute: typeof PSlugActivityRoute
+  PSlugAgentsRoute: typeof PSlugAgentsRoute
   PSlugBoardRoute: typeof PSlugBoardRoute
   PSlugDiffRoute: typeof PSlugDiffRoute
+  PSlugMessagesRoute: typeof PSlugMessagesRoute
   PSlugRepositoryRoute: typeof PSlugRepositoryRoute
 }
 
 const PSlugRouteChildren: PSlugRouteChildren = {
   PSlugActivityRoute: PSlugActivityRoute,
+  PSlugAgentsRoute: PSlugAgentsRoute,
   PSlugBoardRoute: PSlugBoardRoute,
   PSlugDiffRoute: PSlugDiffRoute,
+  PSlugMessagesRoute: PSlugMessagesRoute,
   PSlugRepositoryRoute: PSlugRepositoryRoute,
 }
 
