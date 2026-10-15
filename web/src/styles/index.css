@@ -88,6 +88,7 @@
   --text-screen: var(--size-screen);
   --text-wordmark: var(--size-wordmark);
   --text-wordmark--letter-spacing: var(--tracking-wordmark);
+  --text-item-title: var(--size-item-title);
   --text-section: var(--size-section);
   --text-card: var(--size-card);
   --text-body: var(--size-body);
@@ -147,6 +148,9 @@
   --width-search: var(--width-search);
   --width-file-list: var(--width-file-list);
   --width-side-panel: var(--width-side-panel);
+  --width-content: var(--width-content);
+  --width-history: var(--width-history);
+  --width-sign-in: var(--width-sign-in);
 
   --height-*: initial;
   --height-bar: var(--height-bar);

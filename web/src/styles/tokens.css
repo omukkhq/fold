@@ -10,6 +10,7 @@
   --size-page: 28px;
   --size-screen: 24px;
   --size-wordmark: 23px;
+  --size-item-title: 18px;
   --size-section: 16px;
   --size-card: 15px;
   --size-body: 14px;
@@ -65,6 +66,9 @@
   --width-search: 240px;
   --width-file-list: 280px;
   --width-side-panel: 300px;
+  --width-content: 1120px;
+  --width-history: 440px;
+  --width-sign-in: 400px;
 }
 
 :root {

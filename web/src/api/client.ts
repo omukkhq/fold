@@ -27,7 +27,7 @@ async function streamFailure(response: Response): Promise<Error> {
   const body: unknown = await response.json().catch(() => null);
   return (
     toApiError(body) ??
-    new Error(`the event stream answered ${String(response.status)}`)
+    new Error(`the daemon answered ${String(response.status)}`)
   );
 }
 
@@ -67,6 +67,23 @@ export async function fetchEventStream(
     throw new Error("the event stream has no body");
   }
   return decodeBody(response.body);
+}
+
+/** A write to a route the generated schema does not describe yet: a JSON body out, nothing read back. Failures throw an `ApiError` when the body is the daemon's error envelope. */
+export async function postJson(
+  path: string,
+  body: unknown,
+  fetchImpl: typeof fetch = (input, init) => fetch(input, init),
+): Promise<void> {
+  const response = await fetchImpl(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw await streamFailure(response);
+  }
 }
 
 /** The one way the web application reaches the daemon. Paths and bodies are typed by the generated schema. */

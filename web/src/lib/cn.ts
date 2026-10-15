@@ -12,6 +12,7 @@ const twMerge = extendTailwindMerge({
             "page",
             "screen",
             "wordmark",
+            "item-title",
             "section",
             "card",
             "body",

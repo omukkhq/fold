@@ -1,0 +1,130 @@
+import { useQuery } from "@tanstack/react-query";
+import { FolderLock } from "lucide-react";
+import { useState } from "react";
+import { Mono } from "@/components/mono/Mono";
+import { EmptyPanel } from "@/components/states/EmptyPanel";
+import { ErrorBanner } from "@/components/states/ErrorBanner";
+import { Skeleton } from "@/components/states/Skeleton";
+import { CompareBar } from "./CompareBar";
+import { FileView } from "./FileView";
+import { revisionsQuery } from "./queries";
+import { RevisionList } from "./RevisionList";
+import { TreeView } from "./TreeView";
+
+interface RepositoryScreenProps {
+  slug: string;
+  /** The revision to show; the newest shows when it is absent or the project has no such revision. */
+  revision?: string;
+  /** Called with the revision the human picks; the route puts it in the address, which brings it back as `revision`. */
+  onSelectRevision: (id: string) => void;
+}
+
+export function RepositoryScreen({
+  slug,
+  revision,
+  onSelectRevision,
+}: RepositoryScreenProps) {
+  const revisions = useQuery(revisionsQuery(slug));
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const [openPath, setOpenPath] = useState<string | null>(null);
+  // The clock is read once per mount: the row times are a snapshot, not a ticking display.
+  const [now] = useState(() => Date.now());
+
+  if (revisions.isPending) {
+    return (
+      <div className="px-24 pt-20 pb-24">
+        <Skeleton />
+      </div>
+    );
+  }
+  if (revisions.isError) {
+    return (
+      <ErrorBanner
+        title="The repository could not load."
+        message="The revisions did not arrive."
+        onRetry={() => void revisions.refetch()}
+      />
+    );
+  }
+  const [newest] = revisions.data;
+  if (!newest) {
+    return (
+      <div className="px-24 pt-20 pb-24">
+        <EmptyPanel title="No revisions yet">
+          The project has no main history. Integrate a proposal to create r1.
+        </EmptyPanel>
+      </div>
+    );
+  }
+  const selected =
+    revisions.data.find((r) => r.id === revision)?.id ?? newest.id;
+  const onlyFirst = revisions.data.length === 1;
+
+  function toggle(path: string) {
+    const next = new Set(expanded);
+    if (!next.delete(path)) {
+      next.add(path);
+    }
+    setExpanded(next);
+  }
+
+  return (
+    <div className="flex flex-1 flex-col gap-20 px-24 pt-20 pb-24 lg:flex-row lg:items-start">
+      <section
+        aria-label="History"
+        className="flex flex-col gap-12 lg:w-history lg:shrink-0"
+      >
+        <div className="flex flex-col gap-4">
+          <h1 className="text-screen leading-snug font-semibold text-text">
+            Repository
+          </h1>
+          <p className="text-body text-text-muted">
+            Accepted history only. Each revision is one integration.
+          </p>
+        </div>
+        <RevisionList
+          revisions={revisions.data}
+          selected={selected}
+          now={now}
+          onSelect={onSelectRevision}
+        />
+        {onlyFirst ? (
+          <p className="text-bar text-text-muted">
+            Only r1 exists, so there is nothing to compare yet.
+          </p>
+        ) : null}
+      </section>
+      <section
+        aria-label="Tree"
+        className="flex min-w-0 flex-1 flex-col gap-12"
+      >
+        <div className="flex min-h-32 flex-wrap items-center justify-between gap-10">
+          <Mono className="text-bar font-semibold text-text">{selected}</Mono>
+          {onlyFirst ? null : (
+            <CompareBar
+              key={selected}
+              slug={slug}
+              revisions={revisions.data}
+              selected={selected}
+            />
+          )}
+        </div>
+        <TreeView
+          slug={slug}
+          revision={selected}
+          expanded={expanded}
+          openPath={openPath}
+          onToggle={toggle}
+          onOpenFile={setOpenPath}
+        />
+        {openPath === null ? null : (
+          <FileView slug={slug} revision={selected} path={openPath} />
+        )}
+        <p className="flex items-center gap-8 rounded-m bg-sunken px-12 py-10 text-bar text-text-muted">
+          <FolderLock aria-hidden size={15} className="shrink-0" />
+          {`main/ on disk always matches ${newest.id} and is read-only. Agents read it; builds run in workspaces.`}
+        </p>
+      </section>
+    </div>
+  );
+}
