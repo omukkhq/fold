@@ -8,7 +8,8 @@ use fold_daemon::{Daemon, DaemonConfig, DaemonError, SystemClock, shutdown_signa
 use serde::Deserialize;
 use thiserror::Error;
 
-const DEFAULT_LISTEN: SocketAddr = SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::LOCALHOST), 7420);
+pub(crate) const DEFAULT_LISTEN: SocketAddr =
+    SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::LOCALHOST), 7420);
 
 #[derive(Args)]
 pub struct ServeArgs {
@@ -56,7 +57,7 @@ impl ServeError {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FileConfig {
-    listen: Option<SocketAddr>,
+    pub(crate) listen: Option<SocketAddr>,
     pub(crate) socket: Option<PathBuf>,
 }
 

@@ -68,6 +68,8 @@ define_codes! {
     GIT_FAILED = "git_failed",
     EXPORT_DIVERGED = "export_diverged",
     GIT_SYNC_MAP_INVALID = "git_sync_map_invalid",
+    DOCTOR_CHECKS_FAILED = "doctor_checks_failed",
+    SERVICE_INSTALL_FAILED = "service_install_failed",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

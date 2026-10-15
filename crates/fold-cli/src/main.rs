@@ -1,8 +1,12 @@
+mod claude_files;
 mod commands;
+mod doctor;
 mod init;
 mod mcp;
 mod output;
+mod platform;
 mod serve;
+mod service;
 
 use std::ffi::OsString;
 use std::io::{self, Write};
@@ -28,6 +32,10 @@ enum Command {
     Mcp(mcp::McpArgs),
     /// Append the main revisions not yet exported to a Git repository as commits
     ExportGit(commands::export_git::ExportGitArgs),
+    /// Check the host, the daemon and each project, and name the fix for every problem
+    Doctor(doctor::DoctorArgs),
+    /// Manage the service that starts the daemon at login
+    Service(service::ServiceArgs),
 }
 
 /// clap prints a parse outcome, including `--help` and `--version`, and exits with its own code; a failed write is a runtime error with exit code 1.
@@ -39,6 +47,8 @@ enum Failure {
     Init(init::InitError),
     Mcp(mcp::McpError),
     ExportGit(commands::export_git::ExportGitError),
+    Doctor(doctor::DoctorError),
+    Service(service::ServiceError),
 }
 
 fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result<(), Failure> {
@@ -47,6 +57,8 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
             init::run(&args, &serve::Dirs::from_env(), out).map_err(Failure::Init)
         }
         Some(Command::Serve(args)) => serve::run(&args).map_err(Failure::Serve),
+        Some(Command::Doctor(args)) => doctor::run(&args, out).map_err(Failure::Doctor),
+        Some(Command::Service(args)) => service::run(&args, out).map_err(Failure::Service),
         Some(Command::Openapi) => commands::openapi::run(out).map_err(Failure::Write),
         Some(Command::Mcp(args)) => mcp::run(&args).map_err(Failure::Mcp),
         Some(Command::ExportGit(args)) => {
@@ -77,6 +89,15 @@ fn main() -> anyhow::Result<()> {
         Err(Failure::ExportGit(error)) => Err(match error.code() {
             Some(code) => anyhow::anyhow!("{code}: {error}"),
             None => error.into(),
+        }),
+        Err(Failure::Doctor(error)) => Err(match error.code() {
+            Some(code) => anyhow::anyhow!("{code}: {error}"),
+            None => error.into(),
+        }),
+        Err(Failure::Service(error)) => Err(match (error.code(), error.hint()) {
+            (Some(code), Some(hint)) => anyhow::anyhow!("{code}: {error}\nhint: {hint}"),
+            (Some(code), None) => anyhow::anyhow!("{code}: {error}"),
+            _ => error.into(),
         }),
     }
 }
