@@ -165,7 +165,7 @@ fn git(dir: &Path, args: &[&str]) -> String {
 }
 
 #[test]
-fn remote_set_writes_the_git_section_keeps_the_rest_and_creates_the_mirror() {
+fn remote_set_writes_a_named_section_keeps_the_rest_and_configures_the_mirror() {
     let sandbox = Sandbox::new();
     let project = sandbox.project();
     let config_path = project.join(".fold/config.toml");
@@ -174,22 +174,25 @@ fn remote_set_writes_the_git_section_keeps_the_rest_and_creates_the_mirror() {
 
     // Run from inside the project with a relative path, which is stored absolute.
     let output = sandbox
-        .command(&system_path(), &["remote", "set", "../../first.git"])
+        .command(
+            &system_path(),
+            &["remote", "set", "origin", "../../first.git", "main"],
+        )
         .current_dir(project.join("main"))
         .output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
         stdout(&output),
-        "remote set: fold syncs main with the branch main of the remote\n"
+        "remote origin set: fold syncs main with its branch main\n"
     );
     let text = fs::read_to_string(&config_path).unwrap();
     assert!(text.starts_with(&template), "{text}");
     let canonical = first.canonicalize().unwrap();
     let config = ProjectConfig::from_toml(&text).unwrap();
-    assert_eq!(config.git.remote.as_deref(), canonical.to_str());
-    assert_eq!(config.git.branch, "main");
-    assert!(!config.git.push_on_integrate);
+    assert_eq!(config.remotes["origin"].url, canonical.to_str().unwrap());
+    assert_eq!(config.remotes["origin"].branch, "main");
+    assert!(!config.remotes["origin"].push_on_integrate);
     let mirror = project.join(".fold/git");
     assert_eq!(
         git(&mirror, &["rev-parse", "--is-bare-repository"]),
@@ -201,34 +204,48 @@ fn remote_set_writes_the_git_section_keeps_the_rest_and_creates_the_mirror() {
     );
 
     let second = sandbox.remote("second.git");
+    let project_arg = project.to_str().unwrap();
     let output = sandbox.fold(&[
         "remote",
         "set",
+        "backup",
         second.to_str().unwrap(),
-        "--branch",
         "trunk",
         "--project",
-        project.to_str().unwrap(),
+        project_arg,
     ]);
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
-        git(&mirror, &["remote", "get-url", "origin"]),
+        git(&mirror, &["remote", "get-url", "backup"]),
         format!("{}\n", second.display())
     );
+    let config = ProjectConfig::from_toml(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    assert_eq!(config.remotes.len(), 2);
+    assert_eq!(config.remotes["backup"].branch, "trunk");
+    let listed = sandbox.fold(&["remote", "--project", project_arg]);
+    assert_eq!(
+        stdout(&listed),
+        format!(
+            "backup\ttrunk\t{}\norigin\tmain\t{}\n",
+            second.display(),
+            canonical.display()
+        )
+    );
+    let removed = sandbox.fold(&["remote", "remove", "backup", "--project", project_arg]);
+    assert_eq!(stdout(&removed), "remote backup removed\n");
+    assert_eq!(git(&mirror, &["remote"]), "origin\n");
     let text = fs::read_to_string(&config_path).unwrap();
-    assert!(text.starts_with(&template));
-    let config = ProjectConfig::from_toml(&text).unwrap();
-    assert_eq!(config.git.remote.as_deref(), second.to_str());
-    assert_eq!(config.git.branch, "trunk");
 
     let missing = sandbox.fold_with_path(
         &sandbox.empty_path(),
         &[
             "remote",
             "set",
+            "x",
             "/srv/x.git",
+            "main",
             "--project",
-            project.to_str().unwrap(),
+            project_arg,
         ],
     );
     assert!(!missing.status.success());
@@ -238,14 +255,14 @@ fn remote_set_writes_the_git_section_keeps_the_rest_and_creates_the_mirror() {
     let bad = sandbox.fold(&[
         "remote",
         "set",
+        "x",
         "/srv/x.git",
-        "--branch",
         "a..b",
         "--project",
-        project.to_str().unwrap(),
+        project_arg,
     ]);
     assert!(stderr(&bad).contains("invalid_request"), "{bad:?}");
-    let outside = sandbox.fold(&["remote", "set", "/srv/x.git"]);
+    let outside = sandbox.fold(&["remote", "set", "x", "/srv/x.git", "main"]);
     assert!(
         stderr(&outside).contains("project_not_found"),
         "{outside:?}"
@@ -266,7 +283,9 @@ fn push_goes_through_the_daemon_and_needs_git_on_its_path() {
     let set = sandbox.fold(&[
         "remote",
         "set",
+        "origin",
         remote.to_str().unwrap(),
+        "main",
         "--project",
         project.to_str().unwrap(),
     ]);
@@ -276,14 +295,11 @@ fn push_goes_through_the_daemon_and_needs_git_on_its_path() {
         let _daemon = sandbox.serve(&system_path());
         let output = sandbox.push(&project);
         assert!(output.status.success(), "{output:?}");
-        assert_eq!(stdout(&output), "pushed r1 to main: 1 commit\n");
+        assert_eq!(stdout(&output), "pushed r1 to origin/main: 1 commit\n");
         let message = git(&remote, &["log", "-1", "--format=%B", "main"]);
-        assert_eq!(message, "fold r1\n\nRevision: r1\n\n");
+        assert_eq!(message, "fold r1\n\nFold-Revision: r1\n\n");
         let again = sandbox.push(&project);
-        assert_eq!(
-            stdout(&again),
-            "the remote branch main is up to date: r1 is pushed\n"
-        );
+        assert_eq!(stdout(&again), "origin/main is up to date: r1 is pushed\n");
         fs::create_dir(sandbox.path("elsewhere")).unwrap();
         let outside = sandbox.push(&sandbox.path("elsewhere"));
         assert!(

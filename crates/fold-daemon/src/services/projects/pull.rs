@@ -1,17 +1,19 @@
+use std::path::Path;
 use std::sync::Arc;
 
 use fold_core::merge::ConflictKind;
 use fold_core::object::ObjectHash;
 use fold_core::{Actor, FoldError, RevisionId, TaskId, WorkspaceId, codes};
-use fold_store::{Store, StoreError, reviews, tasks, workspaces};
+use fold_store::{Store, StoreError, tasks, workspaces};
 use fold_vcs::git::{CommitId, Git};
 use fold_vcs::git_import::{GitImportOptions, archive_tree};
-use fold_vcs::git_remote::{MIRROR_DIR, fetch_branch, is_ancestor, prepare_mirror};
+use fold_vcs::git_remote::{MIRROR_DIR, fetch_branch, is_ancestor, merge_base, prepare_mirror};
 use fold_vcs::git_sync_map::SyncMap;
 use fold_vcs::integrate::tree_merge;
 use fold_vcs::objects::ObjectStore;
 
-use super::remote::{blocking, diverged, remote_not_set};
+use super::commits::commit_locked;
+use super::remote::{blocking, select_remote};
 use super::{ProjectError, load_config};
 use crate::projects::ProjectHandle;
 use crate::services::reviews::{self as review, PullIntegration, ReviewError, ReviewService};
@@ -26,17 +28,20 @@ const ATTEMPTS: usize = 3;
 pub enum PullOutcome {
     /// Main holds the remote branch already, or the remote has no such branch (`remote_commit` is `None`).
     UpToDate {
+        remote: String,
         branch: String,
         remote_commit: Option<CommitId>,
     },
     /// The remote commit merged cleanly and main moved to `revision`.
     Integrated {
+        remote: String,
         branch: String,
         remote_commit: CommitId,
         revision: RevisionId,
     },
     /// The merge conflicted, so main did not move: the sync task resolves it in its workspace. `created` is false when an open sync task for the same commit existed already and nothing was created.
     Conflicted {
+        remote: String,
         branch: String,
         remote_commit: CommitId,
         task: TaskId,
@@ -53,22 +58,22 @@ pub struct PulledConflict {
     pub kind: ConflictKind,
 }
 
-/// The newest commit fold main and the remote share, and the revision it was found on.
+/// The newest commit fold main and the remote share.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SyncBase {
     commit: CommitId,
-    revision: RevisionId,
-    /// True when `.fold/git-sync.map` pairs the revision with the commit, so the revision is the commit; false when the revision's integration brought the commit in and holds a merge of it.
-    mapped: bool,
+    /// Main's head revision when the commit is its commit: the remote only added to main, so a clean pull can be the remote commit itself.
+    fast_forward: Option<RevisionId>,
 }
 
-/// Brings the `[git]` branch of the remote into fold main, for the named human who runs `fold pull`. The branch is fetched into the mirror under the project's remote lock and Git sync lock, which are held to the end, so a push or an export never runs at the same time. The sync base is the newest commit main and the remote share: walking main back from the head, the first revision that `.fold/git-sync.map` pairs with a commit or whose integration brought a remote commit in; without one it is `r1`'s tree.
+/// Brings the branch of the remote `remote`, or of the only remote without a name, into fold main, for the named human who runs `fold pull`. The branch is fetched into the mirror `.fold/git` under the project's remote lock and Git sync lock, which are held to the end, so a push or the commit of an integration never runs at the same time. Main's missing commits are written first, so the mirror holds main's whole history; the sync base is the best common ancestor of the remote tip and main's newest commit, and without one it is `r1`'s tree.
 ///
-/// A tip that is the sync base or one of its ancestors, or a remote with no such branch, is up to date. A tip that an open sync task already resolves names that task and creates nothing. Otherwise the remote tree is merged onto main against the sync base under the integration mutex: a clean merge goes through the pull entry of the integration procedure, so it is an integration of kind `pull` whose compare-and-swap protects main, and a conflict creates the sync task and its workspace while the mutex is still held. When main had not moved since the sync base was pushed or imported, the new revision is the remote commit and the map gains `r<n> <tip>` after the commit, so the next push writes nothing for it. The pull runs as its own task, so a caller that stops waiting never leaves an integration without its map line.
+/// A tip that is main's newest commit or one of its ancestors, or a remote with no such branch, is up to date. A tip that an open sync task already resolves names that task and creates nothing. Otherwise the remote tree is merged onto main against the sync base under the integration mutex: a clean merge goes through the pull entry of the integration procedure, so it is an integration of kind `pull` whose compare-and-swap protects main, and a conflict creates the sync task and its workspace while the mutex is still held. When the remote only added to main's newest commit, the new revision is the remote commit and the map gains `r<n> <tip>` after the commit, so no commit is written for it. The pull runs as its own task, so a caller that stops waiting never leaves an integration without its map line.
 pub async fn pull(
     handle: &Arc<ProjectHandle>,
     actor: &Actor,
     git: &Git,
+    remote: Option<&str>,
 ) -> Result<PullOutcome, ProjectError> {
     if !actor.is_human() {
         return Err(FoldError::new(
@@ -79,7 +84,8 @@ pub async fn pull(
         .into());
     }
     let (handle, actor, git) = (Arc::clone(handle), actor.clone(), git.clone());
-    tokio::spawn(async move { run(&handle, &actor, &git).await })
+    let remote = remote.map(str::to_owned);
+    tokio::spawn(async move { run(&handle, &actor, &git, remote.as_deref()).await })
         .await
         .unwrap_or_else(|error| {
             Err(FoldError::new(codes::INTERNAL_ERROR, format!("the pull stopped: {error}")).into())
@@ -90,54 +96,67 @@ async fn run(
     handle: &Arc<ProjectHandle>,
     actor: &Actor,
     git: &Git,
+    remote: Option<&str>,
 ) -> Result<PullOutcome, ProjectError> {
     let config = load_config(&handle.paths).await?;
-    let Some(remote) = config.git.remote else {
-        return Err(remote_not_set().into());
-    };
-    let branch = config.git.branch;
+    let (name, remote) = select_remote(&config, remote)?;
+    let (url, branch, local) = (remote.url, remote.branch, config.git.branch);
     let remote_guard = handle.remote_lock.clone().lock_owned().await;
     let fold_dir = handle.paths.fold_dir();
     let mirror = fold_dir.join(MIRROR_DIR);
     let (held, map, fetched) = {
-        let (git, fold_dir, mirror, branch) = (
+        let (git, fold_dir, mirror, name, branch) = (
             git.clone(),
             fold_dir.clone(),
             mirror.clone(),
+            name.clone(),
             branch.clone(),
         );
         blocking(move || {
             let (sync_lock, map) = SyncMap::lock(&fold_dir)?;
-            prepare_mirror(&git, &mirror, &remote)?;
-            let fetched = fetch_branch(&git, &mirror, &branch)?;
+            prepare_mirror(&git, &mirror, &name, &url)?;
+            let fetched = fetch_branch(&git, &mirror, &name, &branch)?;
             Ok(((remote_guard, sync_lock), map, fetched))
         })
         .await?
     };
     let Some(tip) = fetched else {
         return Ok(PullOutcome::UpToDate {
+            remote: name,
             branch,
             remote_commit: None,
         });
     };
-    let base = sync_base(&handle.store, &map).await?;
-    if let Some(base) = &base {
-        let (git, mirror, base, fetched) = (git.clone(), mirror.clone(), base.clone(), tip.clone());
-        let current = blocking(move || {
-            if !git.has_commit(&mirror, &base.commit)? {
-                return Err(diverged(base.revision, &base.commit));
-            }
-            Ok(fetched == base.commit || is_ancestor(&git, &mirror, &fetched, &base.commit)?)
-        })
-        .await?;
-        if current {
+    let (held, map, _) = commit_locked(
+        &handle.store,
+        &handle.paths,
+        git,
+        &local,
+        held,
+        map,
+        handle.clock.now(),
+    )
+    .await?;
+    let base = {
+        let (git, mirror, tip, last) = (
+            git.clone(),
+            mirror.clone(),
+            tip.clone(),
+            map.last().cloned(),
+        );
+        blocking(move || sync_base(&git, &mirror, &tip, last.as_ref())).await?
+    };
+    let base = match base {
+        SyncCheck::Current => {
             return Ok(PullOutcome::UpToDate {
+                remote: name,
                 branch,
                 remote_commit: Some(tip),
             });
         }
-    }
-    if let Some(open) = open_sync_task(&handle.store, &branch, &tip).await? {
+        SyncCheck::Base(base) => base,
+    };
+    if let Some(open) = open_sync_task(&handle.store, &name, &branch, &tip).await? {
         return Ok(open);
     }
     let first = RevisionId::from_number(1).ok_or(StoreError::Corrupt("revision number 1"))?;
@@ -168,7 +187,7 @@ async fn run(
         Some(base) => format!("base {}", short_commit(base.commit.as_str())),
         None => format!("base {first}"),
     };
-    let workspaces = WorkspaceService::for_project(handle, git.clone());
+    let workspaces = WorkspaceService::for_project(handle);
     let reviews = ReviewService::new(
         handle.store.clone(),
         handle.bus.clone(),
@@ -196,6 +215,7 @@ async fn run(
         };
         if !merge.conflicts.is_empty() {
             let sync = SyncWorkspace {
+                remote: name.clone(),
                 branch: branch.clone(),
                 remote_commit: tip.to_string(),
                 remote_tree,
@@ -209,6 +229,7 @@ async fn run(
                 .map_err(|error| project_error(error.into()))?;
             drop(serial);
             return Ok(PullOutcome::Conflicted {
+                remote: name,
                 branch,
                 remote_commit: tip,
                 task: created.task,
@@ -227,6 +248,7 @@ async fn run(
         drop(serial);
         let request = PullIntegration {
             remote_commit: tip.to_string(),
+            remote: name.clone(),
             branch: branch.clone(),
             base_tree,
             remote_tree,
@@ -240,10 +262,11 @@ async fn run(
             // Main moved after the merge above and the remote now conflicts with it: merge again under the mutex.
             review::PullOutcome::Conflicted(_) => continue,
         };
-        if let Some(base) = base.as_ref().filter(|base| base.mapped) {
-            map_fast_forward(handle, held, map, base, revision, &tip, remote_tree).await;
+        if let Some(head) = base.as_ref().and_then(|base| base.fast_forward) {
+            map_fast_forward(handle, held, map, head, revision, &tip, remote_tree).await;
         }
         return Ok(PullOutcome::Integrated {
+            remote: name,
             branch,
             remote_commit: tip,
             revision,
@@ -257,33 +280,38 @@ async fn run(
     .into())
 }
 
-/// The newest of the last revision the map pairs with a commit and the last revision whose integration brought a remote commit in. Main is one line of revisions and the map only grows at its end, so this is the first revision a walk back from the head finds. A revision that is both gives its mapped commit, which is newer: the pushed merge of the commit it brought in.
-async fn sync_base(store: &Store, map: &SyncMap) -> Result<Option<SyncBase>, ProjectError> {
-    let mapped = map.last().map(|(revision, commit)| SyncBase {
-        commit: commit.clone(),
-        revision: *revision,
-        mapped: true,
-    });
-    let pulled = match reviews::latest_remote_commit(store.read()).await? {
-        Some((revision, commit)) => Some(SyncBase {
-            commit: commit
-                .parse()
-                .map_err(|_| StoreError::Corrupt("integrations.remote_commit"))?,
-            revision,
-            mapped: false,
-        }),
-        None => None,
+/// Whether the remote tip is new to main and, when it is, the commit to merge it against.
+enum SyncCheck {
+    /// The tip is main's newest commit or one of its ancestors.
+    Current,
+    Base(Option<SyncBase>),
+}
+
+/// Compares the remote tip with `last`, the commit of main's newest revision in `.fold/git`. The sync base is their best common ancestor, which every pull or sync task that merged a remote commit leaves in main's history as a second parent; without one, `r1`'s tree is the base. Blocking.
+fn sync_base(
+    git: &Git,
+    mirror: &Path,
+    tip: &CommitId,
+    last: Option<&(RevisionId, CommitId)>,
+) -> Result<SyncCheck, FoldError> {
+    let Some((head, last)) = last else {
+        return Ok(SyncCheck::Base(None));
     };
-    Ok(match (mapped, pulled) {
-        (Some(mapped), Some(pulled)) if pulled.revision > mapped.revision => Some(pulled),
-        (Some(mapped), _) => Some(mapped),
-        (None, pulled) => pulled,
-    })
+    if tip == last || is_ancestor(git, mirror, tip, last)? {
+        return Ok(SyncCheck::Current);
+    }
+    Ok(SyncCheck::Base(merge_base(git, mirror, tip, last)?.map(
+        |commit| SyncBase {
+            fast_forward: (commit == *last).then_some(*head),
+            commit,
+        },
+    )))
 }
 
 /// The newest sync task created for `tip` that is neither Done nor archived, with its live workspace and that workspace's conflicted paths.
 async fn open_sync_task(
     store: &Store,
+    remote: &str,
     branch: &str,
     tip: &CommitId,
 ) -> Result<Option<PullOutcome>, ProjectError> {
@@ -303,6 +331,7 @@ async fn open_sync_task(
         None => Vec::new(),
     };
     Ok(Some(PullOutcome::Conflicted {
+        remote: remote.to_owned(),
         branch: branch.to_owned(),
         remote_commit: tip.clone(),
         task,
@@ -312,12 +341,12 @@ async fn open_sync_task(
     }))
 }
 
-/// Appends `r<n> <tip>` to the map when `revision` is the remote commit itself: its parent is the revision the map pairs with the sync base, so main had not moved, and its tree is the remote tree. The integration has committed, so a failure here is only logged; the next push then writes the revision as a merge of the tip, which the remote accepts as well.
+/// Appends `r<n> <tip>` to the map when `revision` is the remote commit itself: its parent is `head`, whose commit the remote tip descends from, and its tree is the remote tree. The integration has committed, so a failure here is only logged; the next commit of main then writes the revision as a merge of the tip, which the remote accepts as well.
 async fn map_fast_forward<H: Send + 'static>(
     handle: &ProjectHandle,
     held: H,
     map: SyncMap,
-    base: &SyncBase,
+    head: RevisionId,
     revision: RevisionId,
     tip: &CommitId,
     remote_tree: ObjectHash,
@@ -329,7 +358,7 @@ async fn map_fast_forward<H: Send + 'static>(
             return;
         }
     };
-    if row.parent != Some(base.revision) || row.tree_hash != remote_tree {
+    if row.parent != Some(head) || row.tree_hash != remote_tree {
         return;
     }
     let added = [(revision, tip.clone())];

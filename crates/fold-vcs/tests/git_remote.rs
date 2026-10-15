@@ -7,8 +7,9 @@ use fold_core::{RevisionId, Timestamp, codes};
 use fold_vcs::git::{CommitId, Git};
 use fold_vcs::git_export::{ExportBase, ExportRevision, ExportTarget, Signature, write_commits};
 use fold_vcs::git_remote::{
-    FETCHED_REFS, MIRROR_DIR, fetch_branch, fetch_remote_refs, fold_ref, is_ancestor,
-    prepare_mirror, push_branch, remote_ref, set_ref,
+    IMPORTED_REF, MIRROR_DIR, branch_ref, create_local_remote, default_branch, fetch_branch,
+    fetch_imported, is_ancestor, merge_base, prepare_mirror, push_branch, remote_ref,
+    remove_remote, set_ref,
 };
 use fold_vcs::git_sync_map::SYNC_MAP_FILE;
 use fold_vcs::objects::ObjectStore;
@@ -86,7 +87,7 @@ impl Fixture {
         revisions: &[ExportRevision],
     ) -> Vec<(RevisionId, CommitId)> {
         let mirror = self.mirror();
-        let refname = fold_ref("main");
+        let refname = branch_ref("main");
         let target = ExportTarget {
             repo: &mirror,
             refname: &refname,
@@ -113,7 +114,7 @@ fn head(repo: &Path) -> String {
 fn the_mirror_is_bare_and_follows_the_last_remote_it_was_given() {
     let fixture = Fixture::new();
     let mirror = fixture.mirror();
-    prepare_mirror(&fixture.git, &mirror, "/srv/one.git").unwrap();
+    prepare_mirror(&fixture.git, &mirror, "origin", "/srv/one.git").unwrap();
     assert_eq!(
         git(&mirror, &["rev-parse", "--is-bare-repository"]),
         "true\n"
@@ -122,13 +123,13 @@ fn the_mirror_is_bare_and_follows_the_last_remote_it_was_given() {
         git(&mirror, &["remote", "get-url", "origin"]),
         "/srv/one.git\n"
     );
-    prepare_mirror(&fixture.git, &mirror, "/srv/two.git").unwrap();
+    prepare_mirror(&fixture.git, &mirror, "origin", "/srv/two.git").unwrap();
     assert_eq!(
         git(&mirror, &["remote", "get-url", "origin"]),
         "/srv/two.git\n"
     );
     assert_eq!(git(&mirror, &["remote"]), "origin\n");
-    let error = prepare_mirror(&fixture.git, &mirror, "--upload-pack=x").unwrap_err();
+    let error = prepare_mirror(&fixture.git, &mirror, "origin", "--upload-pack=x").unwrap_err();
     assert_eq!(error.code(), codes::INVALID_REQUEST);
     assert!(!error.message().contains("upload-pack"));
 }
@@ -138,8 +139,11 @@ fn commits_go_to_an_empty_remote_and_later_ones_on_top() {
     let fixture = Fixture::new();
     let remote = fixture.remote("remote.git");
     let mirror = fixture.mirror();
-    prepare_mirror(&fixture.git, &mirror, remote.to_str().unwrap()).unwrap();
-    assert_eq!(fetch_branch(&fixture.git, &mirror, "main").unwrap(), None);
+    prepare_mirror(&fixture.git, &mirror, "origin", remote.to_str().unwrap()).unwrap();
+    assert_eq!(
+        fetch_branch(&fixture.git, &mirror, "origin", "main").unwrap(),
+        None
+    );
 
     let first = [fixture.revision(1, b"one\n"), fixture.revision(2, b"two\n")];
     let written = fixture.write(None, &first);
@@ -147,15 +151,15 @@ fn commits_go_to_an_empty_remote_and_later_ones_on_top() {
     // Writing the same revisions again gives the same commits.
     assert_eq!(fixture.write(None, &first), written);
     assert!(!fixture.fold_dir().join(SYNC_MAP_FILE).exists());
-    push_branch(&fixture.git, &mirror, "main").unwrap();
+    push_branch(&fixture.git, &mirror, "origin", "main", "main").unwrap();
     assert_eq!(head(&remote), written[1].1.as_str());
 
-    let tip = fetch_branch(&fixture.git, &mirror, "main")
+    let tip = fetch_branch(&fixture.git, &mirror, "origin", "main")
         .unwrap()
         .unwrap();
     assert_eq!(tip, written[1].1);
     assert_eq!(
-        git(&mirror, &["rev-parse", &remote_ref("main")]).trim(),
+        git(&mirror, &["rev-parse", &remote_ref("origin", "main")]).trim(),
         tip.as_str()
     );
     let base = ExportBase {
@@ -165,7 +169,7 @@ fn commits_go_to_an_empty_remote_and_later_ones_on_top() {
     let later = fixture.write(Some(&base), &[fixture.revision(3, b"three\n")]);
     assert!(is_ancestor(&fixture.git, &mirror, &tip, &later[0].1).unwrap());
     assert!(!is_ancestor(&fixture.git, &mirror, &later[0].1, &tip).unwrap());
-    push_branch(&fixture.git, &mirror, "main").unwrap();
+    push_branch(&fixture.git, &mirror, "origin", "main", "main").unwrap();
     assert_eq!(head(&remote), later[0].1.as_str());
     let log = git(&remote, &["log", "--format=%s", "main"]);
     assert_eq!(log, "fold r3\nfold r2\nfold r1\n");
@@ -176,9 +180,9 @@ fn a_remote_that_moved_rejects_the_push_as_remote_ahead() {
     let fixture = Fixture::new();
     let remote = fixture.remote("remote.git");
     let mirror = fixture.mirror();
-    prepare_mirror(&fixture.git, &mirror, remote.to_str().unwrap()).unwrap();
+    prepare_mirror(&fixture.git, &mirror, "origin", remote.to_str().unwrap()).unwrap();
     let first = fixture.write(None, &[fixture.revision(1, b"one\n")]);
-    push_branch(&fixture.git, &mirror, "main").unwrap();
+    push_branch(&fixture.git, &mirror, "origin", "main", "main").unwrap();
 
     let clone = fixture.path("clone");
     git(
@@ -196,24 +200,30 @@ fn a_remote_that_moved_rejects_the_push_as_remote_ahead() {
         tree: fixture.revision(1, b"one\n").tree,
     };
     fixture.write(Some(&base), &[fixture.revision(2, b"two\n")]);
-    let error = push_branch(&fixture.git, &mirror, "main").unwrap_err();
+    let error = push_branch(&fixture.git, &mirror, "origin", "main", "main").unwrap_err();
     assert_eq!(error.code(), codes::REMOTE_AHEAD);
     assert_eq!(error.details().unwrap()["branch"], "main");
     assert_eq!(head(&remote), theirs);
 
-    let tip = fetch_branch(&fixture.git, &mirror, "main")
+    let tip = fetch_branch(&fixture.git, &mirror, "origin", "main")
         .unwrap()
         .unwrap();
     assert_eq!(tip.as_str(), theirs);
-    set_ref(&fixture.git, &mirror, &fold_ref("main"), Some(&first[0].1)).unwrap();
+    set_ref(
+        &fixture.git,
+        &mirror,
+        &branch_ref("main"),
+        Some(&first[0].1),
+    )
+    .unwrap();
     assert_eq!(
-        git(&mirror, &["rev-parse", &fold_ref("main")]).trim(),
+        git(&mirror, &["rev-parse", &branch_ref("main")]).trim(),
         first[0].1.as_str()
     );
-    set_ref(&fixture.git, &mirror, &fold_ref("main"), None).unwrap();
+    set_ref(&fixture.git, &mirror, &branch_ref("main"), None).unwrap();
     assert!(
         git_command(&mirror)
-            .args(["rev-parse", "--verify", "--quiet", &fold_ref("main")])
+            .args(["rev-parse", "--verify", "--quiet", &branch_ref("main")])
             .output()
             .unwrap()
             .stdout
@@ -226,20 +236,23 @@ fn a_deleted_remote_branch_counts_as_empty_and_clears_the_tracking_ref() {
     let fixture = Fixture::new();
     let remote = fixture.remote("remote.git");
     let mirror = fixture.mirror();
-    prepare_mirror(&fixture.git, &mirror, remote.to_str().unwrap()).unwrap();
+    prepare_mirror(&fixture.git, &mirror, "origin", remote.to_str().unwrap()).unwrap();
     fixture.write(None, &[fixture.revision(1, b"one\n")]);
-    push_branch(&fixture.git, &mirror, "main").unwrap();
+    push_branch(&fixture.git, &mirror, "origin", "main", "main").unwrap();
     assert!(
-        fetch_branch(&fixture.git, &mirror, "main")
+        fetch_branch(&fixture.git, &mirror, "origin", "main")
             .unwrap()
             .is_some()
     );
     git(&remote, &["update-ref", "-d", "refs/heads/main"]);
-    assert_eq!(fetch_branch(&fixture.git, &mirror, "main").unwrap(), None);
+    assert_eq!(
+        fetch_branch(&fixture.git, &mirror, "origin", "main").unwrap(),
+        None
+    );
     assert_eq!(
         fixture
             .git
-            .ref_commit(&mirror, &remote_ref("main"))
+            .ref_commit(&mirror, &remote_ref("origin", "main"))
             .unwrap(),
         None
     );
@@ -250,31 +263,34 @@ fn an_unreachable_remote_is_git_failed_and_a_missing_git_is_git_not_found() {
     let fixture = Fixture::new();
     let mirror = fixture.mirror();
     let absent = fixture.path("absent.git");
-    prepare_mirror(&fixture.git, &mirror, absent.to_str().unwrap()).unwrap();
-    let error = fetch_branch(&fixture.git, &mirror, "main").unwrap_err();
+    prepare_mirror(&fixture.git, &mirror, "origin", absent.to_str().unwrap()).unwrap();
+    let error = fetch_branch(&fixture.git, &mirror, "origin", "main").unwrap_err();
     assert_eq!(error.code(), codes::GIT_FAILED);
     assert_eq!(error.details().unwrap()["command"], "ls-remote");
     fixture.write(None, &[fixture.revision(1, b"one\n")]);
-    let error = push_branch(&fixture.git, &mirror, "main").unwrap_err();
+    let error = push_branch(&fixture.git, &mirror, "origin", "main", "main").unwrap_err();
     assert_eq!(error.code(), codes::GIT_FAILED);
     assert_eq!(error.details().unwrap()["command"], "push");
     assert_eq!(
-        fetch_branch(&fixture.git, &mirror, "a..b")
+        fetch_branch(&fixture.git, &mirror, "origin", "a..b")
             .unwrap_err()
             .code(),
         codes::INVALID_REQUEST
     );
     assert_eq!(
-        push_branch(&fixture.git, &mirror, "-x").unwrap_err().code(),
+        push_branch(&fixture.git, &mirror, "origin", "-x", "-x")
+            .unwrap_err()
+            .code(),
         codes::INVALID_REQUEST
     );
 
     let missing = Git::new(fixture.path("bin/git"));
-    let error = prepare_mirror(&missing, &fixture.path("other"), "/srv/x.git").unwrap_err();
+    let error =
+        prepare_mirror(&missing, &fixture.path("other"), "origin", "/srv/x.git").unwrap_err();
     assert_eq!(error.code(), codes::GIT_NOT_FOUND);
     for error in [
-        fetch_branch(&missing, &mirror, "main").unwrap_err(),
-        push_branch(&missing, &mirror, "main").unwrap_err(),
+        fetch_branch(&missing, &mirror, "origin", "main").unwrap_err(),
+        push_branch(&missing, &mirror, "origin", "main", "main").unwrap_err(),
     ] {
         assert_eq!(error.code(), codes::GIT_NOT_FOUND);
     }
@@ -293,12 +309,12 @@ fn a_remote_rewritten_to_the_ext_transport_runs_no_command() {
     let mirror = fixture.mirror();
     let alias = fixture.path("alias.git");
     assert_eq!(
-        prepare_mirror(&fixture.git, &mirror, "ext::sh -c true")
+        prepare_mirror(&fixture.git, &mirror, "origin", "ext::sh -c true")
             .unwrap_err()
             .code(),
         codes::INVALID_REQUEST
     );
-    prepare_mirror(&fixture.git, &mirror, alias.to_str().unwrap()).unwrap();
+    prepare_mirror(&fixture.git, &mirror, "origin", alias.to_str().unwrap()).unwrap();
     // A config file that allows `ext` and rewrites the remote to it, as a hostile or careless edit would.
     let marker = fixture.path("ran");
     let rewrite = format!(
@@ -309,8 +325,8 @@ fn a_remote_rewritten_to_the_ext_transport_runs_no_command() {
     git(&mirror, &["config", &rewrite, alias.to_str().unwrap()]);
     fixture.write(None, &[fixture.revision(1, b"one\n")]);
     for error in [
-        fetch_branch(&fixture.git, &mirror, "main").unwrap_err(),
-        push_branch(&fixture.git, &mirror, "main").unwrap_err(),
+        fetch_branch(&fixture.git, &mirror, "origin", "main").unwrap_err(),
+        push_branch(&fixture.git, &mirror, "origin", "main", "main").unwrap_err(),
     ] {
         assert_eq!(error.code(), codes::GIT_FAILED);
     }
@@ -322,9 +338,9 @@ fn a_pulled_commit_is_the_second_parent_and_the_remote_takes_the_merge_without_f
     let fixture = Fixture::new();
     let remote = fixture.remote("remote.git");
     let mirror = fixture.mirror();
-    prepare_mirror(&fixture.git, &mirror, remote.to_str().unwrap()).unwrap();
+    prepare_mirror(&fixture.git, &mirror, "origin", remote.to_str().unwrap()).unwrap();
     let first = fixture.write(None, &[fixture.revision(1, b"one\n")]);
-    push_branch(&fixture.git, &mirror, "main").unwrap();
+    push_branch(&fixture.git, &mirror, "origin", "main", "main").unwrap();
     git(
         fixture.dir.path(),
         &["clone", "--quiet", remote.to_str().unwrap(), "clone"],
@@ -334,7 +350,7 @@ fn a_pulled_commit_is_the_second_parent_and_the_remote_takes_the_merge_without_f
     git(&clone, &["add", "b.txt"]);
     git(&clone, &["commit", "--quiet", "-m", "theirs"]);
     git(&clone, &["push", "--quiet", "origin", "main"]);
-    let theirs = fetch_branch(&fixture.git, &mirror, "main")
+    let theirs = fetch_branch(&fixture.git, &mirror, "origin", "main")
         .unwrap()
         .unwrap();
 
@@ -347,7 +363,7 @@ fn a_pulled_commit_is_the_second_parent_and_the_remote_takes_the_merge_without_f
         ..fixture.revision(2, b"two\n")
     };
     let written = fixture.write(Some(&base), &[merged]);
-    push_branch(&fixture.git, &mirror, "main").unwrap();
+    push_branch(&fixture.git, &mirror, "origin", "main", "main").unwrap();
     assert_eq!(head(&remote), written[0].1.as_str());
     let parents = git(&remote, &["log", "-1", "--format=%P", "main"]);
     assert_eq!(
@@ -355,17 +371,104 @@ fn a_pulled_commit_is_the_second_parent_and_the_remote_takes_the_merge_without_f
         format!("{} {}", first[0].1.as_str(), theirs.as_str())
     );
 
-    // Another repository gets the mirror's remote commits under its own namespace, so a commit there can name them.
-    let other = fixture.remote("other.git");
-    fetch_remote_refs(&fixture.git, &other, &mirror).unwrap();
-    // The push moved the mirror's tracking ref to the merge, which reaches the pulled commit.
+    // The merge and the pulled commit share the pulled commit; a history with no commit in common shares none.
     assert_eq!(
-        git(&other, &["rev-parse", &format!("{FETCHED_REFS}/main")]).trim(),
+        merge_base(&fixture.git, &mirror, &written[0].1, &theirs).unwrap(),
+        Some(theirs.clone())
+    );
+    let unrelated = fixture.path("unrelated");
+    std::fs::create_dir(&unrelated).unwrap();
+    git(&unrelated, &["init", "--quiet", "--initial-branch=main"]);
+    write(&unrelated, "c.txt", b"elsewhere\n");
+    git(&unrelated, &["add", "c.txt"]);
+    git(&unrelated, &["commit", "--quiet", "-m", "elsewhere"]);
+    let elsewhere: CommitId = git(&unrelated, &["rev-parse", "HEAD"])
+        .trim()
+        .parse()
+        .unwrap();
+    // The imported commit lands in a new mirror under its own ref.
+    let fresh = fixture.path("fresh.git");
+    fetch_imported(&fixture.git, &fresh, &unrelated, &elsewhere).unwrap();
+    assert_eq!(
+        git(&fresh, &["rev-parse", IMPORTED_REF]).trim(),
+        elsewhere.as_str()
+    );
+    fetch_imported(&fixture.git, &mirror, &unrelated, &elsewhere).unwrap();
+    assert_eq!(
+        merge_base(&fixture.git, &mirror, &theirs, &elsewhere).unwrap(),
+        None
+    );
+    let error =
+        fetch_imported(&fixture.git, &fresh, &fixture.path("absent"), &elsewhere).unwrap_err();
+    assert_eq!(error.code(), codes::WORKSPACE_IO);
+    let other = fixture.path("other.git");
+    let error = fetch_imported(&fixture.git, &other, &remote, &elsewhere).unwrap_err();
+    assert_eq!(error.code(), codes::GIT_FAILED);
+    let missing: CommitId = "0".repeat(40).parse().unwrap();
+    let error = merge_base(&fixture.git, &mirror, &theirs, &missing).unwrap_err();
+    assert_eq!(error.code(), codes::GIT_FAILED);
+}
+
+#[test]
+fn remotes_are_named_and_removed_and_a_new_local_path_becomes_a_repository() {
+    let fixture = Fixture::new();
+    let mirror = fixture.mirror();
+    let remote = fixture.path("remote.git");
+    // A missing local path is made a bare repository on the branch; an existing one is left alone.
+    create_local_remote(&fixture.git, remote.to_str().unwrap(), "trunk").unwrap();
+    assert_eq!(
+        git(&remote, &["symbolic-ref", "HEAD"]).trim(),
+        "refs/heads/trunk"
+    );
+    create_local_remote(&fixture.git, remote.to_str().unwrap(), "main").unwrap();
+    assert_eq!(
+        git(&remote, &["symbolic-ref", "HEAD"]).trim(),
+        "refs/heads/trunk"
+    );
+    create_local_remote(&fixture.git, "relative/path", "main").unwrap();
+    create_local_remote(&fixture.git, "https://example.com/a.git", "main").unwrap();
+    assert!(!std::path::Path::new("relative/path").exists());
+
+    // An empty repository has no HEAD branch yet; one with a commit names it.
+    assert_eq!(
+        default_branch(&fixture.git, &mirror, remote.to_str().unwrap()).unwrap(),
+        None
+    );
+    prepare_mirror(&fixture.git, &mirror, "backup", remote.to_str().unwrap()).unwrap();
+    let written = fixture.write(None, &[fixture.revision(1, b"one\n")]);
+    push_branch(&fixture.git, &mirror, "backup", "main", "trunk").unwrap();
+    assert_eq!(
+        git(&remote, &["rev-parse", "trunk"]).trim(),
         written[0].1.as_str()
     );
-    assert!(fixture.git.has_commit(&other, &theirs).unwrap());
-    let error = fetch_remote_refs(&fixture.git, &other, &fixture.path("absent")).unwrap_err();
-    assert_eq!(error.code(), codes::WORKSPACE_IO);
-    let error = fetch_remote_refs(&fixture.git, &other, &fixture.path("clone/b.txt")).unwrap_err();
-    assert_eq!(error.code(), codes::GIT_FAILED);
+    assert_eq!(
+        default_branch(&fixture.git, &mirror, remote.to_str().unwrap()).unwrap(),
+        Some("trunk".to_owned())
+    );
+    assert_eq!(
+        fetch_branch(&fixture.git, &mirror, "backup", "trunk").unwrap(),
+        Some(written[0].1.clone())
+    );
+    assert_eq!(
+        default_branch(
+            &fixture.git,
+            &mirror,
+            &fixture.path("absent").to_string_lossy()
+        )
+        .unwrap_err()
+        .code(),
+        codes::GIT_FAILED
+    );
+
+    remove_remote(&fixture.git, &mirror, "backup").unwrap();
+    assert!(!git(&mirror, &["remote"]).contains("backup"));
+    assert!(!git(&mirror, &["for-each-ref"]).contains("refs/remotes/backup"));
+    remove_remote(&fixture.git, &mirror, "backup").unwrap();
+    remove_remote(&fixture.git, &fixture.path("no-mirror"), "backup").unwrap();
+    assert_eq!(
+        remove_remote(&fixture.git, &mirror, "-x")
+            .unwrap_err()
+            .code(),
+        codes::INVALID_REQUEST
+    );
 }

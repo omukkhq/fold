@@ -1,12 +1,12 @@
 use axum::Json;
 use axum::extract::State;
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 use super::actor::Human;
-use super::error::{ApiError, ApiJson, ErrorEnvelope};
+use super::error::{ApiError, ApiJson, ApiQuery, ErrorEnvelope};
 use super::{Project, SocketOnly};
 use crate::daemon::AppState;
 use crate::services::projects::{self, PullOutcome, PushOutcome};
@@ -276,13 +276,22 @@ pub enum PushState {
     UpToDate,
     /// New commits were sent to the remote branch.
     Pushed,
-    /// An earlier push had reached the remote and only its record was lost; the record was written and nothing was sent.
-    Recorded,
+}
+
+/// Which remote a push or pull uses.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct RemoteQuery {
+    /// The remote's name; left out, the only remote.
+    #[serde(default)]
+    pub remote: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct PushResult {
     pub outcome: PushState,
+    /// The remote's name.
+    pub remote: String,
     /// The remote branch.
     pub branch: String,
     /// The first revision of this push; absent when up to date.
@@ -297,8 +306,13 @@ pub struct PushResult {
 impl From<PushOutcome> for PushResult {
     fn from(outcome: PushOutcome) -> Self {
         match outcome {
-            PushOutcome::UpToDate { branch, last } => Self {
+            PushOutcome::UpToDate {
+                remote,
+                branch,
+                last,
+            } => Self {
                 outcome: PushState::UpToDate,
+                remote,
                 branch,
                 first: None,
                 last: last.map(|last| last.to_string()),
@@ -306,18 +320,15 @@ impl From<PushOutcome> for PushResult {
                 head: None,
             },
             PushOutcome::Synced {
+                remote,
                 branch,
                 first,
                 last,
                 commits,
                 head,
-                sent,
             } => Self {
-                outcome: if sent {
-                    PushState::Pushed
-                } else {
-                    PushState::Recorded
-                },
+                outcome: PushState::Pushed,
+                remote,
                 branch,
                 first: Some(first.to_string()),
                 last: Some(last.to_string()),
@@ -333,10 +344,10 @@ impl From<PushOutcome> for PushResult {
     post,
     path = "/api/v1/projects/{slug}/push",
     operation_id = "push_project",
-    params(("slug" = String, Path, description = "The project slug")),
+    params(("slug" = String, Path, description = "The project slug"), RemoteQuery),
     responses(
         (status = 200, description = "The remote branch holds main", body = PushResult),
-        (status = 400, description = "The human name is not valid", body = ErrorEnvelope),
+        (status = 400, description = "The human name or the query is not valid, or the project has several remotes and the query names none", body = ErrorEnvelope),
         (status = 401, description = "The request names no human", body = ErrorEnvelope),
         (status = 404, description = "Not on the socket, or the slug is not registered", body = ErrorEnvelope),
         (status = 409, description = "No remote is set, the remote is ahead or diverged, or the config or sync map is invalid", body = ErrorEnvelope),
@@ -349,8 +360,15 @@ pub async fn push(
     _socket: SocketOnly,
     human: Human,
     Project(handle): Project,
+    ApiQuery(query): ApiQuery<RemoteQuery>,
 ) -> Result<Json<PushResult>, ApiError> {
-    let outcome = projects::push(&handle, &human.actor(), &Git::default()).await?;
+    let outcome = projects::push(
+        &handle,
+        &human.actor(),
+        &Git::default(),
+        query.remote.as_deref(),
+    )
+    .await?;
     Ok(Json(outcome.into()))
 }
 
@@ -376,6 +394,8 @@ pub struct PullConflict {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct PullResult {
     pub outcome: PullState,
+    /// The remote's name.
+    pub remote: String,
     /// The remote branch.
     pub branch: String,
     /// The fetched tip of the remote branch; absent when the remote has no such branch.
@@ -399,10 +419,12 @@ impl From<PullOutcome> for PullResult {
     fn from(outcome: PullOutcome) -> Self {
         match outcome {
             PullOutcome::UpToDate {
+                remote,
                 branch,
                 remote_commit,
             } => Self {
                 outcome: PullState::UpToDate,
+                remote,
                 branch,
                 remote_commit: remote_commit.map(|commit| commit.to_string()),
                 revision: None,
@@ -412,11 +434,13 @@ impl From<PullOutcome> for PullResult {
                 created: false,
             },
             PullOutcome::Integrated {
+                remote,
                 branch,
                 remote_commit,
                 revision,
             } => Self {
                 outcome: PullState::Integrated,
+                remote,
                 branch,
                 remote_commit: Some(remote_commit.to_string()),
                 revision: Some(revision.to_string()),
@@ -426,6 +450,7 @@ impl From<PullOutcome> for PullResult {
                 created: false,
             },
             PullOutcome::Conflicted {
+                remote,
                 branch,
                 remote_commit,
                 task,
@@ -434,6 +459,7 @@ impl From<PullOutcome> for PullResult {
                 created,
             } => Self {
                 outcome: PullState::Conflicted,
+                remote,
                 branch,
                 remote_commit: Some(remote_commit.to_string()),
                 revision: None,
@@ -457,10 +483,10 @@ impl From<PullOutcome> for PullResult {
     post,
     path = "/api/v1/projects/{slug}/pull",
     operation_id = "pull_project",
-    params(("slug" = String, Path, description = "The project slug")),
+    params(("slug" = String, Path, description = "The project slug"), RemoteQuery),
     responses(
         (status = 200, description = "Main holds the remote branch, or a sync task resolves the conflict", body = PullResult),
-        (status = 400, description = "The human name is not valid", body = ErrorEnvelope),
+        (status = 400, description = "The human name or the query is not valid, or the project has several remotes and the query names none", body = ErrorEnvelope),
         (status = 401, description = "The request names no human", body = ErrorEnvelope),
         (status = 404, description = "Not on the socket, or the slug is not registered", body = ErrorEnvelope),
         (status = 409, description = "No remote is set, main moved during every attempt, the mirror diverged, or the config or sync map is invalid", body = ErrorEnvelope),
@@ -473,7 +499,14 @@ pub async fn pull(
     _socket: SocketOnly,
     human: Human,
     Project(handle): Project,
+    ApiQuery(query): ApiQuery<RemoteQuery>,
 ) -> Result<Json<PullResult>, ApiError> {
-    let outcome = projects::pull(&handle, &human.actor(), &Git::default()).await?;
+    let outcome = projects::pull(
+        &handle,
+        &human.actor(),
+        &Git::default(),
+        query.remote.as_deref(),
+    )
+    .await?;
     Ok(Json(outcome.into()))
 }

@@ -105,25 +105,27 @@ struct Project {
 }
 
 impl Project {
-    /// Points `[git]` at `remote`, as `fold remote set` does.
+    /// Adds `remote` as the remote `origin`, as `fold remote set` does.
     fn set_remote(&self, remote: &Path, push_on_integrate: bool) {
         let config = self.paths.config();
         let mut text = fs::read_to_string(&config).unwrap();
         text.push_str(&format!(
-            "\n[git]\nremote = {:?}\npush_on_integrate = {push_on_integrate}\n",
+            "\n[remotes.origin]\nurl = {:?}\nbranch = \"main\"\npush_on_integrate = {push_on_integrate}\n",
             remote.to_str().unwrap()
         ));
         fs::write(config, text).unwrap();
     }
 
     async fn pull(&self) -> Result<PullOutcome, Option<&'static str>> {
-        pull(&self.handle, &ana(), &Git::default())
+        pull(&self.handle, &ana(), &Git::default(), None)
             .await
             .map_err(|error| error.code())
     }
 
     async fn push(&self) -> PushOutcome {
-        push(&self.handle, &ana(), &Git::default()).await.unwrap()
+        push(&self.handle, &ana(), &Git::default(), None)
+            .await
+            .unwrap()
     }
 
     fn map(&self) -> String {
@@ -216,7 +218,7 @@ impl Project {
     }
 
     fn workspaces(&self) -> WorkspaceService {
-        WorkspaceService::for_project(&self.handle, Git::default())
+        WorkspaceService::for_project(&self.handle)
     }
 
     fn reviews(&self) -> ReviewService {
@@ -360,7 +362,7 @@ async fn a_pull_needs_a_remote_and_a_human() {
     let project = host.project().await;
     assert_eq!(project.pull().await, Err(Some(codes::REMOTE_NOT_SET)));
     let agent = project.agent("frontend").await;
-    let refused = pull(&project.handle, &agent, &Git::default())
+    let refused = pull(&project.handle, &agent, &Git::default(), None)
         .await
         .unwrap_err();
     assert_eq!(refused.code(), Some(codes::HUMAN_REQUIRED));
@@ -375,6 +377,7 @@ async fn an_unchanged_remote_is_up_to_date_and_records_nothing() {
     assert_eq!(
         project.pull().await.unwrap(),
         PullOutcome::UpToDate {
+            remote: "origin".to_owned(),
             branch: "main".to_owned(),
             remote_commit: None,
         }
@@ -387,6 +390,7 @@ async fn an_unchanged_remote_is_up_to_date_and_records_nothing() {
     assert_eq!(
         project.pull().await.unwrap(),
         PullOutcome::UpToDate {
+            remote: "origin".to_owned(),
             branch: "main".to_owned(),
             remote_commit: Some(tip.parse().unwrap()),
         }
@@ -418,6 +422,7 @@ async fn a_fast_forward_records_the_remote_tree_and_the_map_line() {
     assert_eq!(
         outcome,
         PullOutcome::Integrated {
+            remote: "origin".to_owned(),
             branch: "main".to_owned(),
             remote_commit: tip.parse().unwrap(),
             revision: r(3),
@@ -458,12 +463,13 @@ async fn a_fast_forward_records_the_remote_tree_and_the_map_line() {
     );
     assert_eq!(
         events[2].data,
-        json!({"branch": "main", "remote_commit": tip, "revision": "r3"})
+        json!({"remote": "origin", "branch": "main", "remote_commit": tip, "revision": "r3"})
     );
     assert!(project.map().ends_with(&format!("r3 {tip}\n")));
     assert_eq!(
         project.push().await,
         PushOutcome::UpToDate {
+            remote: "origin".to_owned(),
             branch: "main".to_owned(),
             last: Some(r(3)),
         }
@@ -471,6 +477,7 @@ async fn a_fast_forward_records_the_remote_tree_and_the_map_line() {
     assert_eq!(
         project.pull().await.unwrap(),
         PullOutcome::UpToDate {
+            remote: "origin".to_owned(),
             branch: "main".to_owned(),
             remote_commit: Some(tip.parse().unwrap()),
         }
@@ -499,16 +506,9 @@ async fn both_sides_moved_cleanly_and_the_next_push_is_a_merge() {
             ("b.txt".to_owned(), "theirs\n".to_owned())
         ]
     );
-    assert_eq!(project.map().lines().count(), 2);
     let pushed = project.push().await;
-    assert!(matches!(
-        pushed,
-        PushOutcome::Synced {
-            commits: 2,
-            sent: true,
-            ..
-        }
-    ));
+    assert!(matches!(pushed, PushOutcome::Synced { commits: 2, .. }));
+    assert_eq!(project.map().lines().count(), 4);
     let merges = git(&remote, &["log", "--merges", "--format=%P", "main"]);
     let parents: Vec<&str> = merges.split_whitespace().collect();
     assert_eq!(parents.len(), 2);
@@ -517,10 +517,54 @@ async fn both_sides_moved_cleanly_and_the_next_push_is_a_merge() {
     assert_eq!(
         project.pull().await.unwrap(),
         PullOutcome::UpToDate {
+            remote: "origin".to_owned(),
             branch: "main".to_owned(),
             remote_commit: Some(git(&remote, &["rev-parse", "main"]).trim().parse().unwrap()),
         }
     );
+}
+
+/// Main moved twice after the commit the remote builds on: the merge base is that commit, so both fold revisions stay.
+#[tokio::test]
+async fn a_remote_commit_on_an_older_main_commit_keeps_every_later_fold_revision() {
+    let host = Host::new();
+    let project = host.project().await;
+    let remote = host.remote();
+    project.set_remote(&remote, false);
+    project
+        .add_revision(&[("a.txt", b"one\n"), ("c.txt", b"one\n")])
+        .await;
+    project.push().await;
+    let pushed = git(&remote, &["rev-parse", "main"]).trim().to_owned();
+    let clone = host.clone_remote(&remote);
+    let tip = remote_commit(&clone, &[("b.txt", "theirs\n")]);
+    project
+        .add_revision(&[("a.txt", b"two\n"), ("c.txt", b"one\n")])
+        .await;
+    project
+        .add_revision(&[("a.txt", b"two\n"), ("c.txt", b"three\n")])
+        .await;
+
+    let outcome = project.pull().await.unwrap();
+
+    assert!(matches!(outcome, PullOutcome::Integrated { revision, .. } if revision == r(5)));
+    assert_eq!(
+        project.files(r(5)).await,
+        [
+            ("a.txt".to_owned(), "two\n".to_owned()),
+            ("b.txt".to_owned(), "theirs\n".to_owned()),
+            ("c.txt".to_owned(), "three\n".to_owned()),
+        ]
+    );
+    assert!(matches!(
+        project.push().await,
+        PushOutcome::Synced { commits: 3, .. }
+    ));
+    let parents = git(&remote, &["log", "-1", "--format=%P", "main"]);
+    let parents: Vec<&str> = parents.split_whitespace().collect();
+    assert_eq!(parents.len(), 2);
+    assert_eq!(parents[1], tip);
+    assert_eq!(git(&remote, &["merge-base", "main^1", &tip]).trim(), pushed);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -581,7 +625,7 @@ async fn a_conflict_becomes_a_sync_task_that_reaches_the_remote() {
     assert_eq!(conflicted_events[0].workspace, workspace);
     assert_eq!(
         conflicted_events[0].data,
-        json!({"branch": "main", "remote_commit": tip, "conflicted": 1})
+        json!({"remote": "origin", "branch": "main", "remote_commit": tip, "conflicted": 1})
     );
 
     // The same tip again names the open task and creates nothing.
@@ -648,7 +692,7 @@ async fn a_conflict_becomes_a_sync_task_that_reaches_the_remote() {
     );
 
     let pushed = project.push().await;
-    assert!(matches!(pushed, PushOutcome::Synced { sent: true, .. }));
+    assert!(matches!(pushed, PushOutcome::Synced { .. }));
     let merges = git(&remote, &["log", "--merges", "--format=%P", "main"]);
     let parents: Vec<&str> = merges.split_whitespace().collect();
     assert_eq!(parents.len(), 2);
@@ -675,14 +719,16 @@ async fn push_on_integrate_pushes_after_an_integration_and_records_a_failure() {
     assert_eq!(pushed.data["last"], first.to_string());
     assert_eq!(git(&remote, &["show", "main:a.txt"]), "one\n");
 
+    // A missing local path would become a new repository, so a plain file stands in for a broken remote.
     fs::remove_dir_all(&remote).unwrap();
+    fs::write(&remote, "not a repository\n").unwrap();
     let second = project.integrate_task(&[("a.txt", "two\n")]).await;
 
     let failed = next_event(&mut bus, types::REMOTE_PUSH_FAILED).await;
     assert_eq!(failed.actor.as_str(), "fold");
     assert_eq!(
         failed.data,
-        json!({"branch": "main", "code": codes::GIT_FAILED})
+        json!({"remote": "origin", "branch": "main", "code": codes::GIT_FAILED})
     );
     assert_eq!(project.head().await, second);
     assert_eq!(
@@ -757,6 +803,7 @@ async fn the_socket_route_pulls_for_the_named_human() {
         body,
         json!({
             "outcome": "integrated",
+            "remote": "origin",
             "branch": "main",
             "remote_commit": tip,
             "revision": "r2",

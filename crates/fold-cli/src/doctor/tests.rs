@@ -456,6 +456,7 @@ fn a_healthy_project_is_all_ok_and_nothing_changes_on_disk() {
         [
             "database",
             "objects",
+            "git history",
             "inotify watches",
             "claude files",
             "claude md"
@@ -465,6 +466,58 @@ fn a_healthy_project_is_all_ok_and_nothing_changes_on_disk() {
         assert_eq!(check.status, Status::Ok, "{check:?}");
     }
     assert_eq!(snapshot(&root), before);
+}
+
+#[test]
+fn a_git_history_without_the_last_mapped_commit_names_the_repair() {
+    let fixture = Fixture::new();
+    let mut host = fixture.bare_host();
+    host.path = std::env::var_os("PATH");
+    let root = fixture.project("demo");
+    let mirror = root.join(".fold/git");
+    let run = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&mirror)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "a")
+            .env("GIT_AUTHOR_EMAIL", "a@b")
+            .env("GIT_COMMITTER_NAME", "a")
+            .env("GIT_COMMITTER_EMAIL", "a@b")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{args:?}");
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    };
+    std::fs::create_dir_all(&mirror).unwrap();
+    run(&["init", "--quiet", "--bare"]);
+    let map = root.join(".fold").join(SYNC_MAP_FILE);
+    std::fs::write(&map, format!("r1 {}\n", "a".repeat(40))).unwrap();
+    let checks = project_report(&host, &root, at(1_000));
+    let check = find(&checks, "git history");
+    assert_eq!(check.status, Status::Warn);
+    assert!(check.message.contains("the commit of r1"), "{check:?}");
+    assert!(check.fix.as_deref().unwrap().contains("fold pull"));
+
+    let commit = run(&[
+        "commit-tree",
+        "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+        "-m",
+        "x",
+    ]);
+    std::fs::write(&map, format!("r1 {commit}\n")).unwrap();
+    let checks = project_report(&host, &root, at(1_000));
+    assert_eq!(find(&checks, "git history").status, Status::Ok);
+
+    std::fs::write(&map, "not a map\n").unwrap();
+    let checks = project_report(&host, &root, at(1_000));
+    assert_eq!(find(&checks, "git history").status, Status::Fail);
+    host.path = None;
+    std::fs::write(&map, format!("r1 {commit}\n")).unwrap();
+    let checks = project_report(&host, &root, at(1_000));
+    assert_eq!(find(&checks, "git history").message, NOT_APPLICABLE);
 }
 
 #[test]

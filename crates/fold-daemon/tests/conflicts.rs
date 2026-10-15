@@ -46,6 +46,7 @@ async fn move_main(fx: &Fixture, files: &[(&str, &[u8])]) {
     }
     let pull = PullIntegration {
         remote_commit: COMMIT.to_owned(),
+        remote: "origin".to_owned(),
         branch: "main".to_owned(),
         base_tree: workspaces::get_by_number(fx.project.store().read(), r(1))
             .await

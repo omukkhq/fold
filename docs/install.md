@@ -8,7 +8,7 @@ This page takes a person with a fresh host to a running daemon, an initialised p
 - For any other device or operating system, aarch64 Linux included: the Rust toolchain pinned in `rust-toolchain.toml`, [bun](https://bun.sh) and a source checkout.
 - Claude Code, installed and signed in.
 - systemd, only for the service unit on Linux.
-- `git` and your own Git credentials, only for `fold init --from-git`, `fold export-git`, `fold remote`, `fold pull` and `fold push`.
+- `git`, for the project's own Git history, and your own Git credentials, only for `fold init --from-git`, `fold remote`, `fold pull` and `fold push`.
 
 ## Other targets
 
@@ -57,7 +57,7 @@ Run `fold agent tag review integrator` once, so the review agent can integrate.
 On Linux with systemd:
 
 ```bash
-fold service install
+fold setup
 loginctl enable-linger "$USER"
 fold doctor
 ```
@@ -74,7 +74,7 @@ Open `http://127.0.0.1:7420`. To serve another address, run `fold serve --listen
 
 ## Upgrade
 
-Replace the binary at `~/.local/bin/fold`, then restart the unit that `fold service install` wrote.
+Replace the binary at `~/.local/bin/fold`, then restart the unit that `fold setup` wrote.
 
 ## Changing only the web interface
 

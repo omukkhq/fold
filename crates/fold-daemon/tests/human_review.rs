@@ -18,7 +18,6 @@ use fold_store::events;
 use fold_store::tasks::completions::{self, CompletionKind};
 use fold_store::testing::TestProject;
 use fold_store::workspaces::{create_initial_revision, initial_revision};
-use fold_vcs::git::Git;
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::revision_store::{write_initial_tree, write_revision};
 use serde_json::json;
@@ -116,7 +115,6 @@ impl Fixture {
             bus.clone(),
             clock.clone(),
             project.paths().clone(),
-            Git::default(),
             LEASE_MINUTES,
         );
         let reviews = ReviewService::new(
@@ -403,7 +401,6 @@ async fn unknown_reviewer_is_refused() {
         bus.clone(),
         clock.clone(),
         fx.project.paths().clone(),
-        Git::default(),
         LEASE_MINUTES,
     );
     let without_registry = ReviewService::new(

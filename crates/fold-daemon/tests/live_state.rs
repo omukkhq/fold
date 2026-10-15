@@ -37,7 +37,6 @@ use fold_store::workspaces::{
     self, CheckpointKind, CheckpointReason, advance_main, create_initial_revision,
     initial_revision, insert_revision,
 };
-use fold_vcs::git::Git;
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::revision_store::{write_initial_tree, write_revision};
 use fold_vcs::scan::SkipReason;
@@ -177,7 +176,6 @@ impl Fixture {
             bus.clone(),
             clock,
             project.paths().clone(),
-            Git::default(),
             LEASE_MINUTES,
         )
         .with_live(live.clone());
@@ -927,7 +925,7 @@ async fn daemon(fx: &Fixture) -> (AppState, Arc<ProjectHandle>) {
 async fn archiving_a_task_through_the_routes_detaches_its_workspace() {
     let fx = Fixture::with_backend(Silent).await;
     let (state, handle) = daemon(&fx).await;
-    let view = WorkspaceService::for_project(&handle, Git::default())
+    let view = WorkspaceService::for_project(&handle)
         .create_workspace(&by(&fx.frontend), t(1))
         .await
         .unwrap()
@@ -1038,7 +1036,7 @@ async fn the_live_job_ticks_every_open_project() {
     let idle = wait(&mut progress, &|seen| seen.checks >= 3).await;
     assert_eq!(idle.cycles, 0, "no workspace is attached yet");
 
-    let workspaces = WorkspaceService::for_project(&handle, Git::default());
+    let workspaces = WorkspaceService::for_project(&handle);
     let view = workspaces
         .create_workspace(&by(&fx.frontend), t(1))
         .await

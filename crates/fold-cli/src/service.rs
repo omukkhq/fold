@@ -2,7 +2,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use clap::{Args, Subcommand};
+use clap::Args;
 use fold_core::{FoldError, codes};
 use thiserror::Error;
 
@@ -10,19 +10,10 @@ use crate::output;
 use crate::platform::Host;
 
 #[derive(Args)]
-pub struct ServiceArgs {
-    #[command(subcommand)]
-    command: ServiceCommand,
-}
-
-#[derive(Subcommand)]
-enum ServiceCommand {
-    /// Write the systemd user unit so the daemon starts at login, then enable and start it
-    Install {
-        /// Write the unit and skip every systemctl call
-        #[arg(long)]
-        no_start: bool,
-    },
+pub struct SetupArgs {
+    /// Write the unit and skip every systemctl call
+    #[arg(long)]
+    no_start: bool,
 }
 
 #[derive(Debug, Error)]
@@ -76,8 +67,8 @@ fn no_service_manager() -> ServiceError {
 
 const START_ARGS: [&[&str]; 2] = [&["daemon-reload"], &["enable", "--now", "fold.service"]];
 
-pub fn run(args: &ServiceArgs, out: &mut impl Write) -> Result<(), ServiceError> {
-    let ServiceCommand::Install { no_start } = &args.command;
+pub fn run(args: &SetupArgs, out: &mut impl Write) -> Result<(), ServiceError> {
+    let no_start = &args.no_start;
     let exe = std::env::current_exe().map_err(ServiceError::Exe)?;
     install(&Host::from_env(), &exe, *no_start, out)
 }
@@ -191,7 +182,7 @@ mod tests {
     #[derive(Parser)]
     struct Wrapper {
         #[command(flatten)]
-        args: ServiceArgs,
+        args: SetupArgs,
     }
 
     const GOLDEN: &str = "[Unit]\nDescription=fold daemon\nAfter=default.target\n\n[Service]\nType=simple\nExecStart=/usr/bin/fold serve\nRestart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n";
@@ -214,14 +205,12 @@ mod tests {
     }
 
     #[test]
-    fn install_parses_its_flag() {
-        let bare = Wrapper::try_parse_from(["fold", "install"]).unwrap();
-        let ServiceCommand::Install { no_start } = bare.args.command;
-        assert!(!no_start);
-        let flagged = Wrapper::try_parse_from(["fold", "install", "--no-start"]).unwrap();
-        let ServiceCommand::Install { no_start } = flagged.args.command;
-        assert!(no_start);
-        assert!(Wrapper::try_parse_from(["fold"]).is_err());
+    fn setup_parses_its_flag() {
+        let bare = Wrapper::try_parse_from(["fold"]).unwrap();
+        assert!(!bare.args.no_start);
+        let flagged = Wrapper::try_parse_from(["fold", "--no-start"]).unwrap();
+        assert!(flagged.args.no_start);
+        assert!(Wrapper::try_parse_from(["fold", "install"]).is_err());
     }
 
     fn host(config_home: &Path, linux: bool) -> Host {

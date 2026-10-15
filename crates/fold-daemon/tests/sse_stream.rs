@@ -25,7 +25,6 @@ use fold_store::StoreError;
 use fold_store::projects::ProjectRow;
 use fold_store::testing::TestProject;
 use fold_store::workspaces::{create_initial_revision, initial_revision};
-use fold_vcs::git::Git;
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::revision_store::{write_initial_tree, write_revision};
 use http_body_util::BodyExt;
@@ -518,7 +517,7 @@ async fn the_snapshot_and_the_live_frames_carry_the_real_workspace_state() {
         .register_agent(&mut ctx, &AgentName::parse("frontend").unwrap(), &[])
         .await
         .unwrap();
-    let view = WorkspaceService::for_project(&fx.handle, Git::default())
+    let view = WorkspaceService::for_project(&fx.handle)
         .create_workspace(&creator, TaskId::from_number(1).unwrap())
         .await
         .unwrap()

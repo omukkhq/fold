@@ -18,6 +18,7 @@ use fold_store::{Store, StoreError};
 use fold_vcs::gc::mark;
 use fold_vcs::git::{CommitId, Git};
 use fold_vcs::git_import::{GitImportOptions, archive_tree};
+use fold_vcs::git_remote::{MIRROR_DIR, fetch_imported};
 use fold_vcs::git_sync_map::SyncMap;
 use fold_vcs::ignore::IgnoreRules;
 use fold_vcs::import::{ImportOptions, ImportResult, import_dir};
@@ -32,11 +33,14 @@ use thiserror::Error;
 use crate::daemon::DaemonState;
 use crate::projects::{ProjectHandle, Slot};
 
+mod commits;
 mod gc;
 mod pull;
 mod remote;
 mod web_auth;
 
+pub(crate) use commits::error_code;
+pub use commits::{commit_main, commit_message};
 pub use gc::{GcReport, gc};
 pub use pull::{PullOutcome, PulledConflict, pull};
 pub(crate) use remote::push_with;
@@ -400,6 +404,8 @@ async fn create_first_revision(
                 let commit = git.resolve_commit(&repo, "HEAD")?;
                 let opts = GitImportOptions { max_file_bytes };
                 let imported = archive_tree(&objects, &git, &repo, commit.as_str(), &opts)?;
+                // The commits fold writes after `r1` name this commit as their parent.
+                fetch_imported(&git, &fold_dir.join(MIRROR_DIR), &repo, &commit)?;
                 (imported, Some(commit))
             }
             (Some(source), None) => {

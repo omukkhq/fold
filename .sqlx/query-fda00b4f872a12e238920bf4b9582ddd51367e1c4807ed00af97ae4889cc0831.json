@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT p.number AS \"number!: i64\", t.number AS \"task!: i64\", p.state,\n                  p.conflicted AS \"conflicted: bool\",\n                  (SELECT MAX(v.version) FROM proposal_versions v WHERE v.proposal_id = p.id) AS \"version?: i64\",\n                  (\n                      SELECT r.verdict FROM reviews r\n                      WHERE r.version_id = (\n                                SELECT v.id FROM proposal_versions v\n                                WHERE v.proposal_id = p.id\n                                ORDER BY v.version DESC\n                                LIMIT 1\n                            )\n                        AND r.verdict <> 'comment'\n                      ORDER BY r.created_at DESC, r.id DESC\n                      LIMIT 1\n                  ) AS \"verdict?: String\",\n                  rev.number AS \"revision?: i64\",\n                  i.actor AS \"integrated_by?: String\",\n                  i.created_at AS \"integrated_at?: i64\"\n           FROM proposals p\n           JOIN tasks t ON t.id = p.task_id\n           LEFT JOIN integrations i ON i.proposal_id = p.id AND i.result = 'succeeded'\n           LEFT JOIN revisions rev ON rev.id = i.revision_id\n           WHERE p.state IN ('open', 'integrated')\n             AND (?1 IS NULL OR t.number = ?1)\n             AND p.number = (\n                     SELECT MAX(q.number) FROM proposals q\n                     WHERE q.task_id = p.task_id AND q.state IN ('open', 'integrated')\n                 )\n           ORDER BY t.number",
+  "query": "SELECT p.number AS \"number!: i64\", t.number AS \"task!: i64\", p.state,\n                  p.conflicted AS \"conflicted: bool\",\n                  (SELECT MAX(v.version) FROM proposal_versions v WHERE v.proposal_id = p.id) AS \"version?: i64\",\n                  (\n                      SELECT r.verdict FROM reviews r\n                      WHERE r.version_id = (\n                                SELECT v.id FROM proposal_versions v\n                                WHERE v.proposal_id = p.id\n                                ORDER BY v.version DESC\n                                LIMIT 1\n                            )\n                        AND r.verdict <> 'comment'\n                      ORDER BY r.created_at DESC, r.id DESC\n                      LIMIT 1\n                  ) AS \"verdict?: String\",\n                  rev.number AS \"revision?: i64\",\n                  i.actor AS \"integrated_by?: String\",\n                  i.created_at AS \"integrated_at?: i64\",\n                  rc.\"commit\" AS \"git_commit?: String\"\n           FROM proposals p\n           JOIN tasks t ON t.id = p.task_id\n           LEFT JOIN integrations i ON i.proposal_id = p.id AND i.result = 'succeeded'\n           LEFT JOIN revisions rev ON rev.id = i.revision_id\n           LEFT JOIN revision_commits rc ON rc.revision_id = rev.id\n           WHERE p.state IN ('open', 'integrated')\n             AND (?1 IS NULL OR t.number = ?1)\n             AND p.number = (\n                     SELECT MAX(q.number) FROM proposals q\n                     WHERE q.task_id = p.task_id AND q.state IN ('open', 'integrated')\n                 )\n           ORDER BY t.number",
   "describe": {
     "columns": [
       {
@@ -96,6 +96,17 @@
             "name": "created_at"
           }
         }
+      },
+      {
+        "name": "git_commit?: String",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "revision_commits",
+            "name": "commit"
+          }
+        }
       }
     ],
     "parameters": {
@@ -110,8 +121,9 @@
       true,
       true,
       true,
+      true,
       true
     ]
   },
-  "hash": "8b44b5e4761a86dc9d1092d7ab706637bbe88a5ee0e5d897abe3df58c1bbc5af"
+  "hash": "fda00b4f872a12e238920bf4b9582ddd51367e1c4807ed00af97ae4889cc0831"
 }

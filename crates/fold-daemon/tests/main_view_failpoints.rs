@@ -80,6 +80,7 @@ async fn pull(fx: &Fixture, number: u32, files: &[(&str, &str)]) {
     }
     let pull = PullIntegration {
         remote_commit: format!("{number:040x}"),
+        remote: "origin".to_owned(),
         branch: "main".to_owned(),
         base_tree: base,
         remote_tree: write_initial_tree(&objects, tree).unwrap(),

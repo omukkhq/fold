@@ -9,7 +9,6 @@ use fold_daemon::services::tasks::{CreateTask, TaskService};
 use fold_daemon::services::workspaces::WorkspaceService;
 use fold_store::projects;
 use fold_store::testing::TestProject;
-use fold_vcs::git::Git;
 use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::service::RunningService;
 use rmcp::{RoleClient, ServiceExt};
@@ -67,7 +66,6 @@ impl Fixture {
             self.bus.clone(),
             Arc::new(self.project.clock().clone()),
             self.project.paths().clone(),
-            Git::default(),
             5,
         )
     }

@@ -20,10 +20,9 @@ use crate::serve::{Dirs, socket_path};
 /// How long a daemon gets to accept the connection and answer the open request.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(10);
 
-#[derive(Args, Debug)]
+#[derive(Args, Debug, Clone)]
 pub struct InitArgs {
-    /// The project directory; created when it does not exist. With --refresh, a directory of the project, by default the working directory
-    #[arg(required_unless_present = "refresh")]
+    /// A new directory for the project, which fold creates; without it the project is the working directory. With --refresh, a directory of the project, by default the working directory
     pub(crate) dir: Option<PathBuf>,
     /// The project name; defaults to the directory name
     #[arg(long)]
@@ -47,6 +46,8 @@ pub enum InitError {
     #[error(transparent)]
     HostPaths(FoldError),
     #[error(transparent)]
+    Refused(FoldError),
+    #[error(transparent)]
     Project(#[from] ProjectError),
     #[error(transparent)]
     ClaudeFiles(#[from] ClaudeFileError),
@@ -62,10 +63,18 @@ impl InitError {
     /// The stable code of the errors that have one.
     pub fn code(&self) -> Option<&'static str> {
         match self {
-            Self::HostPaths(error) => Some(error.code()),
+            Self::HostPaths(error) | Self::Refused(error) => Some(error.code()),
             Self::Project(error) => error.code(),
             Self::ClaudeFiles(error) => error.code(),
             Self::Dir(_) | Self::Runtime(_) | Self::Write(_) => None,
+        }
+    }
+
+    /// The hint that names the next step, when a refusal carries one.
+    pub fn hint(&self) -> Option<&str> {
+        match self {
+            Self::Refused(error) => error.hint(),
+            _ => None,
         }
     }
 }
@@ -83,7 +92,32 @@ pub fn run(args: &InitArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), Ini
     if args.refresh {
         return refresh(args.dir.as_deref(), dirs, out);
     }
-    initialise(args, dirs, out).map(|_| ())
+    let Some(dir) = &args.dir else {
+        let cwd = std::env::current_dir().map_err(InitError::Dir)?;
+        let args = InitArgs {
+            dir: Some(cwd),
+            ..args.clone()
+        };
+        return initialise(&args, dirs, out).map(|_| ());
+    };
+    if std::fs::symlink_metadata(dir).is_ok() {
+        return Err(InitError::Refused(dir_exists(dir)));
+    }
+    let initialised = initialise(args, dirs, out);
+    if initialised.is_err() {
+        // Init created the directory; an empty one would only make the next `fold init DIR` fail.
+        let _ = std::fs::remove_dir(dir);
+    }
+    initialised.map(|_| ())
+}
+
+fn dir_exists(dir: &Path) -> FoldError {
+    FoldError::new(
+        codes::INVALID_REQUEST,
+        format!("{} exists already", dir.display()),
+    )
+    .with_hint(format!("cd {} && fold init", dir.display()))
+    .with_details([("reason", serde_json::json!("dir_exists"))])
 }
 
 /// [`run`], returning the slug of the new project.
@@ -293,7 +327,13 @@ mod tests {
         assert!(
             Wrapper::try_parse_from(["fold", "dir", "--from", "a", "--from-git", "b"]).is_err()
         );
-        assert!(Wrapper::try_parse_from(["fold"]).is_err());
+        assert!(
+            Wrapper::try_parse_from(["fold"])
+                .unwrap()
+                .args
+                .dir
+                .is_none()
+        );
         let refresh = Wrapper::try_parse_from(["fold", "--refresh"]).unwrap();
         assert!(refresh.args.refresh && refresh.args.dir.is_none());
         for flag in ["--name", "--from", "--from-git", "--socket"] {
@@ -383,8 +423,30 @@ mod tests {
         let mut out = Vec::new();
         let error = run(&args, &Dirs::default(), &mut out).unwrap_err();
         assert_eq!(error.code(), Some("invalid_host_paths"));
+        assert_eq!(error.hint(), None);
         assert!(!dir.path().join("p").exists());
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn a_named_directory_that_exists_is_refused_with_the_command_that_uses_it() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let args = InitArgs {
+            dir: Some(dir.path().to_owned()),
+            name: None,
+            from: None,
+            from_git: None,
+            socket: None,
+            refresh: false,
+        };
+        let error = run(&args, &Dirs::default(), &mut Vec::new()).unwrap_err();
+        assert_eq!(error.code(), Some("invalid_request"));
+        assert_eq!(
+            error.hint(),
+            Some(format!("cd {} && fold init", dir.path().display()).as_str())
+        );
+        assert!(matches!(error, InitError::Refused(_)));
+        assert!(!dir.path().join(".fold").exists());
     }
 
     #[test]

@@ -4,9 +4,7 @@ use crate::common::{count, exec, open};
 use fold_core::object::{ObjectKind, hash_object};
 use fold_core::revision::{Revision, StoredRevision};
 use fold_core::{IntegrationId, ProposalId, RevisionId, Timestamp};
-use fold_store::reviews::{
-    IntegrationSubject, NewIntegration, insert_refused, insert_succeeded, latest_remote_commit,
-};
+use fold_store::reviews::{IntegrationSubject, NewIntegration, insert_refused, insert_succeeded};
 use fold_store::testing::assert_append_only;
 use fold_store::workspaces::{IntegrationKind, create_initial_revision, initial_revision};
 use fold_store::{Store, StoreError};
@@ -175,9 +173,8 @@ async fn a_succeeded_proposal_records_its_proposal_and_version() {
 }
 
 #[tokio::test]
-async fn a_sync_tasks_proposal_carries_its_remote_commit_and_is_the_latest_one() {
+async fn a_sync_tasks_proposal_carries_its_remote_commit() {
     let (_dir, store, first) = seeded().await;
-    assert_eq!(latest_remote_commit(store.read()).await.unwrap(), None);
     let attempt = NewIntegration {
         subject: IntegrationSubject::Proposal {
             proposal: ProposalId::from_number(1).unwrap(),
@@ -193,10 +190,6 @@ async fn a_sync_tasks_proposal_carries_its_remote_commit_and_is_the_latest_one()
         .await
         .unwrap();
 
-    assert_eq!(
-        latest_remote_commit(store.read()).await.unwrap(),
-        Some((RevisionId::from_number(2).unwrap(), "0123abcd".to_owned()))
-    );
     assert_eq!(
         count(
             &store,

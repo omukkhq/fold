@@ -3,45 +3,59 @@ use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand};
 use fold_cli::daemon_client::{self, ClientConfig, ClientError, DaemonClient, Response};
-use fold_core::config::{GIT_SECTION, check_branch, check_remote};
-use fold_core::{FoldError, ProjectConfig, ProjectPaths, codes};
+use fold_core::config::{
+    GIT_SECTION, REMOTES_SECTION, UNNAMED_REMOTE, check_branch, check_remote, check_remote_name,
+};
+use fold_core::{FoldError, GitConfig, ProjectConfig, ProjectPaths, codes};
 use fold_daemon::services::projects::{ProjectError, slug_for_dir_on_host};
 use fold_vcs::git::Git;
-use fold_vcs::git_remote::{MIRROR_DIR, prepare_mirror};
+use fold_vcs::git_remote::{MIRROR_DIR, default_branch, prepare_mirror, remove_remote};
 use hyper::Method;
 use thiserror::Error;
-use toml_edit::{DocumentMut, Item, Table, TableLike, value};
+use toml_edit::{DocumentMut, Item, Table, value};
 
-use super::export_git::find_project;
 use crate::serve::{self, Dirs};
 use crate::{init, output};
 
 #[derive(Args, Debug)]
 pub struct RemoteArgs {
     #[command(subcommand)]
-    command: RemoteCommand,
+    command: Option<RemoteCommand>,
+    /// The project directory or a directory inside it; defaults to the current directory
+    #[arg(long, value_name = "DIR", global = true)]
+    project: Option<PathBuf>,
 }
 
 #[derive(Subcommand, Debug)]
 enum RemoteCommand {
-    /// Link the project to a branch of a remote Git repository and create the mirror fold pushes through
+    /// Add or change a remote Git repository that fold push and fold pull sync main with
     Set(SetArgs),
+    /// Delete a remote and the refs fetched from it
+    Remove(RemoveArgs),
+    /// List the remotes: name, branch and URL; also what `fold remote` with no subcommand prints
+    List,
 }
 
 #[derive(Args, Debug)]
 struct SetArgs {
+    /// The remote's name, such as origin
+    name: String,
     /// The URL or path of the remote Git repository; your own Git credentials and configuration apply
     url: String,
-    /// The remote branch fold syncs with
-    #[arg(long, default_value = "main")]
-    branch: String,
-    /// The project directory or a directory inside it; defaults to the current directory
-    #[arg(long, value_name = "DIR")]
-    project: Option<PathBuf>,
+    /// The remote branch fold syncs main with; defaults to the branch the remote's HEAD names
+    branch: Option<String>,
+}
+
+#[derive(Args, Debug)]
+struct RemoveArgs {
+    /// The remote's name
+    name: String,
 }
 
 #[derive(Args, Debug)]
 pub struct PushArgs {
+    /// The remote's name; defaults to the only remote
+    remote: Option<String>,
     /// Unix socket of the daemon; overrides daemon.toml (default $XDG_RUNTIME_DIR/fold/fold.sock)
     #[arg(long)]
     socket: Option<PathBuf>,
@@ -50,7 +64,7 @@ pub struct PushArgs {
     project: Option<PathBuf>,
 }
 
-/// `fold pull` takes the same options as `fold push`.
+/// `fold pull` takes the same arguments as `fold push`.
 pub type PullArgs = PushArgs;
 
 #[derive(Debug, Error)]
@@ -103,43 +117,137 @@ impl RemoteError {
 }
 
 pub fn run_remote(args: &RemoteArgs, out: &mut impl Write) -> Result<(), RemoteError> {
+    let paths = project_paths(args.project.as_deref())?;
     match &args.command {
-        RemoteCommand::Set(args) => set(args, out),
+        Some(RemoteCommand::Set(set_args)) => set(&paths, set_args, &Git::default(), out),
+        Some(RemoteCommand::Remove(remove_args)) => remove(&paths, &remove_args.name, out),
+        Some(RemoteCommand::List) | None => list(&paths, out),
     }
 }
 
-/// Writes `remote` and `branch` into `[git]` of `.fold/config.toml`, keeping every other line and comment, after the mirror `.fold/git/` exists and points `origin` at the remote. It changes no database row, so it needs no daemon.
-fn set(args: &SetArgs, out: &mut impl Write) -> Result<(), RemoteError> {
-    let start = args.project.clone().unwrap_or_else(|| PathBuf::from("."));
-    let paths = ProjectPaths::new(find_project(&start));
+/// The nearest directory at or above `start` that holds a project database, or `start` itself when none does, so the error names the directory the user gave.
+pub(crate) fn find_project(start: &Path) -> PathBuf {
+    let absolute = std::path::absolute(start).unwrap_or_else(|_| start.to_owned());
+    absolute
+        .ancestors()
+        .find(|dir| ProjectPaths::new(*dir).db().is_file())
+        .map_or(absolute.clone(), Path::to_owned)
+}
+
+fn project_paths(project: Option<&Path>) -> Result<ProjectPaths, FoldError> {
+    let paths = ProjectPaths::new(find_project(project.unwrap_or_else(|| Path::new("."))));
     if !paths.db().is_file() {
         return Err(FoldError::new(
             codes::PROJECT_NOT_FOUND,
             format!("{} is not a fold project", paths.root().display()),
         )
-        .with_hint("run the command inside a project directory or pass --project")
-        .into());
+        .with_hint("run the command inside a project directory or pass --project"));
     }
+    Ok(paths)
+}
+
+/// Writes `[remotes.<name>]` of `.fold/config.toml`, keeping every other line and comment and the remote's `push_on_integrate`, after the mirror `.fold/git/` points its remote `<name>` at the URL. Without a branch, the branch the remote's `HEAD` names is used. It changes no database row, so it needs no daemon.
+fn set(
+    paths: &ProjectPaths,
+    args: &SetArgs,
+    git: &Git,
+    out: &mut impl Write,
+) -> Result<(), RemoteError> {
+    check_remote_name(&args.name)?;
     check_remote(&args.url)?;
-    check_branch(&args.branch)?;
-    let remote = absolute_if_local(&args.url)?;
-    let config_path = paths.config();
-    let text = match std::fs::read_to_string(&config_path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
-        Err(error) => return Err(config_io(&error).into()),
+    let url = absolute_if_local(&args.url)?;
+    let mirror = paths.fold_dir().join(MIRROR_DIR);
+    let branch = match &args.branch {
+        Some(branch) => {
+            check_branch(branch)?;
+            branch.clone()
+        }
+        None => {
+            let local = Path::new(&url);
+            let head = if local.is_absolute() && !local.exists() {
+                None
+            } else {
+                default_branch(git, &mirror, &url)?
+            };
+            head.ok_or_else(|| {
+                FoldError::new(
+                    codes::INVALID_REQUEST,
+                    "the remote has no default branch to sync with",
+                )
+                .with_hint(format!(
+                    "name the branch: fold remote set {} <url> <branch>",
+                    args.name
+                ))
+                .with_details([("reason", serde_json::json!("no_default_branch"))])
+            })?
+        }
     };
-    let edited = with_remote(&text, &remote, &args.branch)?;
-    prepare_mirror(&Git::default(), &paths.fold_dir().join(MIRROR_DIR), &remote)?;
-    write_config(&config_path, &edited)?;
+    let text = read_config(&paths.config())?;
+    let edited = with_remote(&text, &args.name, &url, &branch)?;
+    prepare_mirror(git, &mirror, &args.name, &url)?;
+    write_config(&paths.config(), &edited)?;
     output::line(
         out,
         &format!(
-            "remote set: fold syncs main with the branch {} of the remote",
-            args.branch
+            "remote {} set: fold syncs main with its branch {branch}",
+            args.name
         ),
     )?;
     Ok(())
+}
+
+/// Deletes `[remotes.<name>]` from the config and the remote with its fetched refs from the mirror.
+fn remove(paths: &ProjectPaths, name: &str, out: &mut impl Write) -> Result<(), RemoteError> {
+    check_remote_name(name)?;
+    let text = read_config(&paths.config())?;
+    let edited = without_remote(&text, name)?;
+    remove_remote(&Git::default(), &paths.fold_dir().join(MIRROR_DIR), name)?;
+    write_config(&paths.config(), &edited)?;
+    output::line(out, &format!("remote {name} removed"))?;
+    Ok(())
+}
+
+/// One line per remote, in name order: its name, branch and URL without the credentials it may hold. The only remote is marked, because push and pull use it when no name is given.
+fn list(paths: &ProjectPaths, out: &mut impl Write) -> Result<(), RemoteError> {
+    let config = ProjectConfig::from_toml(&read_config(&paths.config())?)?;
+    if config.remotes.is_empty() {
+        output::line(out, "no remotes: run fold remote set <name> <url>")?;
+        return Ok(());
+    }
+    let only = config.remotes.len() == 1;
+    for (name, remote) in &config.remotes {
+        let mark = if only { " (the only remote)" } else { "" };
+        output::line(
+            out,
+            &format!(
+                "{name}\t{}\t{}{mark}",
+                remote.branch,
+                without_credentials(&remote.url)
+            ),
+        )?;
+    }
+    Ok(())
+}
+
+/// `scheme://user:secret@host/path` without `user:secret@`; any other form is returned as it is.
+fn without_credentials(url: &str) -> String {
+    let Some(start) = url.find("://").map(|index| index + 3) else {
+        return url.to_owned();
+    };
+    let rest = &url[start..];
+    let host_end = rest.find('/').unwrap_or(rest.len());
+    match rest[..host_end].rfind('@') {
+        Some(at) => format!("{}{}", &url[..start], &rest[at + 1..]),
+        None => url.to_owned(),
+    }
+}
+
+fn read_config(path: &Path) -> Result<String, FoldError> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(text),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(String::new()),
+        Err(error) => Err(config_io(&error)),
+    }
 }
 
 /// A local path is made absolute from the working directory, whether or not it exists yet, because Git would resolve a relative one from the mirror. A remote is a URL, as Git reads it, when it holds `://` or a `:` before its first `/` (`host:path` and `<transport>::<address>`); it stays as given.
@@ -164,45 +272,106 @@ fn absolute_if_local(url: &str) -> Result<String, FoldError> {
     })
 }
 
-/// `text` with `remote` and `branch` in `[git]` and `push_on_integrate` kept, or `false` when absent. The result must be a valid config, so a file that is already invalid is refused before anything is written.
-fn with_remote(text: &str, remote: &str, branch: &str) -> Result<String, FoldError> {
-    let mut doc: DocumentMut = text.parse().map_err(|_| {
+fn parse_config(text: &str) -> Result<DocumentMut, FoldError> {
+    text.parse().map_err(|_| {
         FoldError::new(codes::INVALID_CONFIG, "config.toml is not valid TOML")
-            .with_hint("fix .fold/config.toml, then run fold remote set again")
-    })?;
-    let edited = match doc.get_mut(GIT_SECTION) {
-        Some(item) => {
-            let section = item.as_table_like_mut().ok_or_else(|| {
-                FoldError::new(codes::INVALID_CONFIG, "config key git must be a table")
-                    .with_details([("key", serde_json::json!(GIT_SECTION))])
-            })?;
-            fill(section, remote, branch);
-            doc.to_string()
-        }
+            .with_hint("fix .fold/config.toml, then run the command again")
+    })
+}
+
+/// Moves `remote` and `push_on_integrate` of `[git]` into `[remotes.origin]`, as [`ProjectConfig::from_toml`] reads them, so the file names every remote in its own section once fold edits it.
+fn lift_unnamed_remote(doc: &mut DocumentMut) -> Result<(), FoldError> {
+    let Some(git) = doc.get_mut(GIT_SECTION).and_then(Item::as_table_like_mut) else {
+        return Ok(());
+    };
+    let url = git.remove("remote");
+    let push_on_integrate = git.remove("push_on_integrate");
+    let Some(url) = url else {
+        return Ok(());
+    };
+    let branch = git
+        .get("branch")
+        .cloned()
+        .unwrap_or_else(|| value(GitConfig::default().branch));
+    let remotes = remotes_table(doc)?;
+    if remotes.contains_key(UNNAMED_REMOTE) {
+        return Ok(());
+    }
+    let mut section = Table::new();
+    section.insert("url", url);
+    section.insert("branch", branch);
+    section.insert(
+        "push_on_integrate",
+        push_on_integrate.unwrap_or_else(|| value(false)),
+    );
+    remotes.insert(UNNAMED_REMOTE, Item::Table(section));
+    Ok(())
+}
+
+fn remotes_table(doc: &mut DocumentMut) -> Result<&mut Table, FoldError> {
+    let item = doc.entry(REMOTES_SECTION).or_insert_with(|| {
+        let mut table = Table::new();
+        table.set_implicit(true);
+        Item::Table(table)
+    });
+    item.as_table_mut().ok_or_else(|| {
+        FoldError::new(codes::INVALID_CONFIG, "config key remotes must be a table")
+            .with_details([("key", serde_json::json!(REMOTES_SECTION))])
+    })
+}
+
+/// `text` with `[remotes.<name>]` holding `url` and `branch`, its `push_on_integrate` kept, or `false` when absent. The result must be a valid config, so a file that is already invalid is refused before anything is written.
+fn with_remote(text: &str, name: &str, url: &str, branch: &str) -> Result<String, FoldError> {
+    let mut doc = parse_config(text)?;
+    lift_unnamed_remote(&mut doc)?;
+    let section = |push_on_integrate: bool| {
+        let mut section = Table::new();
+        section.insert("url", value(url));
+        section.insert("branch", value(branch));
+        section.insert("push_on_integrate", value(push_on_integrate));
+        Item::Table(section)
+    };
+    let edited = if doc.contains_key(REMOTES_SECTION) {
+        let remotes = remotes_table(&mut doc)?;
+        let push_on_integrate = remotes
+            .get(name)
+            .and_then(|section| section.get("push_on_integrate"))
+            .and_then(Item::as_bool)
+            .unwrap_or(false);
+        remotes.insert(name, section(push_on_integrate));
+        doc.to_string()
+    } else {
         // A new section goes after the whole file, so the comments at its end stay where they are.
-        None => {
-            let mut section = Table::new();
-            fill(&mut section, remote, branch);
-            let mut added = DocumentMut::new();
-            added.insert(GIT_SECTION, Item::Table(section));
-            let separator = if text.is_empty() || text.ends_with('\n') {
-                ""
-            } else {
-                "\n"
-            };
-            format!("{text}{separator}{added}")
-        }
+        let mut added = DocumentMut::new();
+        remotes_table(&mut added)?.insert(name, section(false));
+        let separator = if text.is_empty() || text.ends_with('\n') {
+            ""
+        } else {
+            "\n"
+        };
+        format!("{text}{separator}{added}")
     };
     ProjectConfig::from_toml(&edited)?;
     Ok(edited)
 }
 
-fn fill(section: &mut dyn TableLike, remote: &str, branch: &str) {
-    section.insert("remote", value(remote));
-    section.insert("branch", value(branch));
-    if !section.contains_key("push_on_integrate") {
-        section.insert("push_on_integrate", value(false));
+/// `text` without `[remotes.<name>]`; a name the config does not hold is `remote_not_set`.
+fn without_remote(text: &str, name: &str) -> Result<String, FoldError> {
+    let mut doc = parse_config(text)?;
+    ProjectConfig::from_toml(text)?;
+    lift_unnamed_remote(&mut doc)?;
+    let removed = remotes_table(&mut doc)?.remove(name);
+    if removed.is_none() {
+        return Err(FoldError::new(
+            codes::REMOTE_NOT_SET,
+            format!("the project has no Git remote named {name}"),
+        )
+        .with_hint("run fold remote list to see the remotes"));
     }
+    if remotes_table(&mut doc)?.is_empty() {
+        doc.remove(REMOTES_SECTION);
+    }
+    Ok(doc.to_string())
 }
 
 /// Written to a new temporary file beside it and renamed over it, so a reader sees the old file or the new one and two writers never share a temporary file.
@@ -226,14 +395,14 @@ fn config_io(error: &io::Error) -> FoldError {
     )
 }
 
-/// Asks the daemon to push main to the project's Git remote, starting the daemon when none runs.
+/// Asks the daemon to push main to the named remote, or the only one, starting the daemon when none runs.
 pub fn run_push(args: &PushArgs, out: &mut impl Write) -> Result<(), RemoteError> {
     let response = post_project(args, "push")?;
     output::line(out, &push_summary(response)?)?;
     Ok(())
 }
 
-/// Asks the daemon to bring the remote branch into main, starting the daemon when none runs.
+/// Asks the daemon to bring the named remote's branch, or the only remote's, into main, starting the daemon when none runs.
 pub fn run_pull(args: &PullArgs, out: &mut impl Write) -> Result<(), RemoteError> {
     let response = post_project(args, "pull")?;
     for line in pull_summary(response)? {
@@ -242,8 +411,15 @@ pub fn run_pull(args: &PullArgs, out: &mut impl Write) -> Result<(), RemoteError
     Ok(())
 }
 
-/// Sends `POST /api/v1/projects/<slug>/<action>` over the socket as the human in the environment.
+/// Sends `POST /api/v1/projects/<slug>/<action>[?remote=<name>]` over the socket as the human in the environment.
 fn post_project(args: &PushArgs, action: &str) -> Result<Response, RemoteError> {
+    let query = match &args.remote {
+        Some(name) => {
+            check_remote_name(name)?;
+            format!("?remote={name}")
+        }
+        None => String::new(),
+    };
     let dirs = Dirs::from_env();
     let host = init::host_paths(&dirs)?;
     let start = args.project.clone().unwrap_or_else(|| PathBuf::from("."));
@@ -262,7 +438,7 @@ fn post_project(args: &PushArgs, action: &str) -> Result<Response, RemoteError> 
         .map_err(RemoteError::Runtime)?;
     runtime.block_on(async {
         let slug = slug_for_dir_on_host(&host, &dir).await?;
-        let path = format!("/api/v1/projects/{slug}/{action}");
+        let path = format!("/api/v1/projects/{slug}/{action}{query}");
         Ok::<_, RemoteError>(client.request(Method::POST, &path, None).await?)
     })
 }
@@ -288,7 +464,8 @@ fn push_summary(response: Response) -> Result<String, RemoteError> {
     refusal(&response)?;
     let body = &response.body;
     let text = |key: &str| body[key].as_str();
-    let branch = text("branch").ok_or(RemoteError::Answer)?;
+    let remote = text("remote").ok_or(RemoteError::Answer)?;
+    let branch = format!("{remote}/{}", text("branch").ok_or(RemoteError::Answer)?);
     let range = || match (text("first"), text("last")) {
         (Some(first), Some(last)) => Ok(output::revision_range(&first, &last)),
         _ => Err(RemoteError::Answer),
@@ -302,15 +479,10 @@ fn push_summary(response: Response) -> Result<String, RemoteError> {
     };
     match text("outcome") {
         Some("up_to_date") => Ok(match text("last") {
-            Some(last) => format!("the remote branch {branch} is up to date: {last} is pushed"),
-            None => format!("the remote branch {branch} is up to date"),
+            Some(last) => format!("{branch} is up to date: {last} is pushed"),
+            None => format!("{branch} is up to date"),
         }),
         Some("pushed") => Ok(format!("pushed {} to {branch}: {}", range()?, commits()?)),
-        Some("recorded") => Ok(format!(
-            "the remote branch {branch} already held {}: recorded {}",
-            range()?,
-            commits()?
-        )),
         _ => Err(RemoteError::Answer),
     }
 }
@@ -320,7 +492,7 @@ fn pull_summary(response: Response) -> Result<Vec<String>, RemoteError> {
     refusal(&response)?;
     let body = &response.body;
     let text = |key: &str| body[key].as_str().ok_or(RemoteError::Answer);
-    let branch = text("branch")?;
+    let branch = format!("{}/{}", text("remote")?, text("branch")?);
     let short = |commit: &str| commit.get(..7).unwrap_or(commit).to_owned();
     match text("outcome")? {
         "up_to_date" => Ok(vec![match body["remote_commit"].as_str() {
@@ -366,6 +538,7 @@ fn pull_summary(response: Response) -> Result<Vec<String>, RemoteError> {
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
 
     use clap::Parser;
     use serde_json::json;
@@ -385,70 +558,128 @@ mod tests {
     }
 
     #[test]
-    fn remote_set_parses_the_url_the_branch_and_the_project() {
-        let parsed = Remote::try_parse_from(["fold", "set", "../app.git"]).unwrap();
-        let RemoteCommand::Set(set) = parsed.args.command;
+    fn remote_commands_parse_the_name_the_url_and_the_branch() {
+        let parsed = Remote::try_parse_from(["fold", "set", "origin", "../app.git"]).unwrap();
+        let Some(RemoteCommand::Set(set)) = parsed.args.command else {
+            panic!("expected set");
+        };
         assert_eq!(
-            (set.url.as_str(), set.branch.as_str()),
-            ("../app.git", "main")
+            (set.name.as_str(), set.url.as_str(), set.branch),
+            ("origin", "../app.git", None)
         );
-        assert!(set.project.is_none());
         let parsed = Remote::try_parse_from([
             "fold",
             "set",
+            "backup",
             "git@x:a.git",
-            "--branch",
             "trunk",
             "--project",
             "app",
         ])
         .unwrap();
-        let RemoteCommand::Set(set) = parsed.args.command;
-        assert_eq!(set.branch, "trunk");
-        assert_eq!(set.project.as_deref(), Some(Path::new("app")));
-        assert!(Remote::try_parse_from(["fold", "set"]).is_err());
-        let push = Push::try_parse_from(["fold", "--socket", "/f.sock"]).unwrap();
-        assert_eq!(push.args.socket.as_deref(), Some(Path::new("/f.sock")));
+        assert_eq!(parsed.args.project.as_deref(), Some(Path::new("app")));
+        let Some(RemoteCommand::Set(set)) = parsed.args.command else {
+            panic!("expected set");
+        };
+        assert_eq!(set.branch.as_deref(), Some("trunk"));
+        let parsed = Remote::try_parse_from(["fold", "remove", "origin"]).unwrap();
+        assert!(
+            matches!(parsed.args.command, Some(RemoteCommand::Remove(ref remove)) if remove.name == "origin")
+        );
+        assert!(matches!(
+            Remote::try_parse_from(["fold", "list"])
+                .unwrap()
+                .args
+                .command,
+            Some(RemoteCommand::List)
+        ));
+        assert!(
+            Remote::try_parse_from(["fold"])
+                .unwrap()
+                .args
+                .command
+                .is_none()
+        );
+        assert!(Remote::try_parse_from(["fold", "set", "origin"]).is_err());
+        let push = Push::try_parse_from(["fold", "backup", "--project", "app"]).unwrap();
+        assert_eq!(push.args.remote.as_deref(), Some("backup"));
+        assert!(
+            Push::try_parse_from(["fold"])
+                .unwrap()
+                .args
+                .remote
+                .is_none()
+        );
     }
 
     #[test]
-    fn the_git_section_is_written_and_everything_else_kept() {
-        let text = "# Lease.\nlease_minutes = 7\n# [git]\n";
-        let edited = with_remote(text, "/srv/app.git", "main").unwrap();
-        assert_eq!(
-            edited,
-            format!(
-                "{text}[git]\nremote = \"/srv/app.git\"\nbranch = \"main\"\npush_on_integrate = false\n"
-            )
-        );
-        let unterminated = with_remote("lease_minutes = 7", "/r", "main").unwrap();
-        assert!(unterminated.starts_with("lease_minutes = 7\n[git]\n"));
+    fn a_remote_section_is_written_and_removed_and_everything_else_kept() {
+        let text = "# Mine.\nlease_minutes = 7\n";
+        let edited = with_remote(text, "origin", "/srv/app.git", "main").unwrap();
+        assert!(edited.starts_with(text));
         let config = ProjectConfig::from_toml(&edited).unwrap();
         assert_eq!(config.lease_minutes, 7);
-        assert_eq!(config.git.remote.as_deref(), Some("/srv/app.git"));
-        assert!(!config.git.push_on_integrate);
-        assert!(edited.contains("push_on_integrate = false"));
-
-        let switched = "[git]\n# Kept.\npush_on_integrate = true\nremote = \"/old\"\n";
-        let edited = with_remote(switched, "/new", "trunk").unwrap();
-        assert!(edited.contains("# Kept.\npush_on_integrate = true\n"));
+        assert_eq!(config.remotes["origin"].url, "/srv/app.git");
+        assert!(!config.remotes["origin"].push_on_integrate);
+        let switched =
+            "[remotes.origin]\nurl = \"/old\"\nbranch = \"main\"\npush_on_integrate = true\n";
+        let edited = with_remote(switched, "origin", "/new", "trunk").unwrap();
         let config = ProjectConfig::from_toml(&edited).unwrap();
-        assert_eq!(config.git.remote.as_deref(), Some("/new"));
-        assert_eq!(config.git.branch, "trunk");
-        assert!(config.git.push_on_integrate);
-
-        let inline = with_remote("git = { push_on_integrate = true }\n", "/r", "main").unwrap();
-        let config = ProjectConfig::from_toml(&inline).unwrap();
-        assert_eq!(config.git.remote.as_deref(), Some("/r"));
-        assert!(config.git.push_on_integrate);
-
-        for bad in ["= x", "git = 1", "lease_minutes = 0"] {
+        assert_eq!(config.remotes["origin"].url, "/new");
+        assert_eq!(config.remotes["origin"].branch, "trunk");
+        assert!(config.remotes["origin"].push_on_integrate);
+        let two = with_remote(&edited, "backup", "/b", "main").unwrap();
+        assert_eq!(ProjectConfig::from_toml(&two).unwrap().remotes.len(), 2);
+        let one = without_remote(&two, "backup").unwrap();
+        assert_eq!(ProjectConfig::from_toml(&one).unwrap(), config);
+        let none = without_remote(&one, "origin").unwrap();
+        assert!(!none.contains("remotes"));
+        assert_eq!(
+            without_remote(&none, "origin").unwrap_err().code(),
+            codes::REMOTE_NOT_SET
+        );
+        for bad in ["= x", "remotes = 3\n", "lease_minutes = 0\n"] {
             assert_eq!(
-                with_remote(bad, "/r", "main").unwrap_err().code(),
+                with_remote(bad, "origin", "/r", "main").unwrap_err().code(),
                 codes::INVALID_CONFIG,
                 "{bad}"
             );
         }
+        assert_eq!(
+            without_remote("lease_minutes = 0\n", "origin")
+                .unwrap_err()
+                .code(),
+            codes::INVALID_CONFIG
+        );
+    }
+
+    #[test]
+    fn the_unnamed_remote_of_the_git_section_becomes_its_own_section_when_fold_edits() {
+        let unnamed =
+            "# Mine.\n[git]\nremote = \"/old.git\"\nbranch = \"trunk\"\npush_on_integrate = true\n";
+        let kept = ProjectConfig::from_toml(unnamed).unwrap().remotes;
+        let added = with_remote(unnamed, "backup", "/b.git", "main").unwrap();
+        assert!(!added.contains("remote = "));
+        assert!(added.starts_with("# Mine.\n[git]\nbranch = \"trunk\"\n"));
+        let config = ProjectConfig::from_toml(&added).unwrap();
+        assert_eq!(config.git.branch, "trunk");
+        assert_eq!(config.remotes["origin"], kept["origin"]);
+        assert!(config.remotes["origin"].push_on_integrate);
+        assert_eq!(config.remotes["backup"].url, "/b.git");
+        let changed = with_remote(unnamed, "origin", "/new.git", "main").unwrap();
+        let origin = &ProjectConfig::from_toml(&changed).unwrap().remotes["origin"];
+        assert_eq!(
+            (
+                origin.url.as_str(),
+                origin.branch.as_str(),
+                origin.push_on_integrate
+            ),
+            ("/new.git", "main", true)
+        );
+        let removed = without_remote("[git]\nremote = \"/old.git\"\n", "origin").unwrap();
+        let config = ProjectConfig::from_toml(&removed).unwrap();
+        assert!(config.remotes.is_empty());
+        assert!(!removed.contains("remote"));
     }
 
     #[test]
@@ -480,32 +711,43 @@ mod tests {
         }
     }
 
+    #[test]
+    fn credentials_never_reach_the_list() {
+        assert_eq!(
+            without_credentials("https://user:token@example.com/a.git"),
+            "https://example.com/a.git"
+        );
+        assert_eq!(
+            without_credentials("https://example.com/a@b.git"),
+            "https://example.com/a@b.git"
+        );
+        assert_eq!(
+            without_credentials("git@example.com:a.git"),
+            "git@example.com:a.git"
+        );
+        assert_eq!(without_credentials("/srv/a.git"), "/srv/a.git");
+    }
+
     fn reply(status: u16, body: serde_json::Value) -> Response {
         Response { status, body }
     }
 
     #[test]
     fn push_answers_read_as_one_line_or_the_error_they_carry() {
-        let pushed = json!({"outcome": "pushed", "branch": "main", "first": "r1", "last": "r3", "commits": 3, "head": "a"});
+        let pushed = json!({"outcome": "pushed", "remote": "origin", "branch": "main", "first": "r1", "last": "r3", "commits": 3, "head": "a"});
         assert_eq!(
             push_summary(reply(200, pushed)).unwrap(),
-            "pushed r1..r3 to main: 3 commits"
+            "pushed r1..r3 to origin/main: 3 commits"
         );
-        let recorded = json!({"outcome": "recorded", "branch": "main", "first": "r2", "last": "r2", "commits": 1});
-        assert_eq!(
-            push_summary(reply(200, recorded)).unwrap(),
-            "the remote branch main already held r2: recorded 1 commit"
-        );
-        let current =
-            json!({"outcome": "up_to_date", "branch": "main", "last": "r3", "commits": 0});
+        let current = json!({"outcome": "up_to_date", "remote": "origin", "branch": "main", "last": "r3", "commits": 0});
         assert_eq!(
             push_summary(reply(200, current)).unwrap(),
-            "the remote branch main is up to date: r3 is pushed"
+            "origin/main is up to date: r3 is pushed"
         );
-        let empty = json!({"outcome": "up_to_date", "branch": "trunk", "last": null, "commits": 0});
+        let empty = json!({"outcome": "up_to_date", "remote": "backup", "branch": "trunk", "last": null, "commits": 0});
         assert_eq!(
             push_summary(reply(200, empty)).unwrap(),
-            "the remote branch trunk is up to date"
+            "backup/trunk is up to date"
         );
         let refused = json!({"error": {"code": "remote_ahead", "message": "m", "details": {"hint": "run fold pull"}}});
         let error = push_summary(reply(409, refused)).unwrap_err();
@@ -513,15 +755,21 @@ mod tests {
         assert_eq!(error.to_string(), "m (run fold pull)");
         for bad in [
             reply(500, json!(null)),
+            reply(
+                200,
+                json!({"outcome": "pushed", "remote": "origin", "branch": "main"}),
+            ),
+            reply(
+                200,
+                json!({"outcome": "pushed", "remote": "origin", "branch": "main", "first": "r1", "last": "r1"}),
+            ),
             reply(200, json!({"outcome": "pushed", "branch": "main"})),
             reply(
                 200,
-                json!({"outcome": "pushed", "branch": "main", "first": "r1", "last": "r1"}),
+                json!({"outcome": "other", "remote": "origin", "branch": "main"}),
             ),
-            reply(200, json!({"outcome": "other", "branch": "main"})),
-            reply(200, json!({"outcome": "pushed"})),
         ] {
-            assert!(matches!(push_summary(bad), Err(RemoteError::Answer)));
+            assert!(push_summary(bad).is_err());
         }
     }
 
@@ -530,44 +778,48 @@ mod tests {
         let commit = "0123456789abcdef0123456789abcdef01234567";
         let lines = |body| pull_summary(reply(200, body)).unwrap();
         assert_eq!(
-            lines(json!({"outcome": "up_to_date", "branch": "main", "remote_commit": commit})),
-            ["main is up to date with main: it holds 0123456"]
-        );
-        assert_eq!(
-            lines(json!({"outcome": "up_to_date", "branch": "trunk", "remote_commit": null})),
-            ["the remote has no branch trunk; nothing to pull"]
+            lines(
+                json!({"outcome": "up_to_date", "remote": "origin", "branch": "main", "remote_commit": commit})
+            ),
+            ["main is up to date with origin/main: it holds 0123456"]
         );
         assert_eq!(
             lines(
-                json!({"outcome": "integrated", "branch": "main", "remote_commit": commit, "revision": "r4"})
+                json!({"outcome": "up_to_date", "remote": "origin", "branch": "trunk", "remote_commit": null})
             ),
-            ["pulled 0123456 from main into main as r4"]
+            ["the remote has no branch origin/trunk; nothing to pull"]
+        );
+        assert_eq!(
+            lines(
+                json!({"outcome": "integrated", "remote": "origin", "branch": "main", "remote_commit": commit, "revision": "r4"})
+            ),
+            ["pulled 0123456 from origin/main into main as r4"]
         );
         let conflicted = |created: bool| {
-            json!({"outcome": "conflicted", "branch": "main", "remote_commit": commit, "task": "T-3", "workspace": "ws-2", "created": created,
+            json!({"outcome": "conflicted", "remote": "origin", "branch": "main", "remote_commit": commit, "task": "T-3", "workspace": "ws-2", "created": created,
                 "conflicted": [{"path": "a.txt", "kind": "both_modified_text"}]})
         };
         assert_eq!(
             lines(conflicted(true)),
             [
-                "0123456 from main conflicts with main in 1 path; main did not move. T-3 resolves it in its workspace: an agent claims T-3, resolves the markers and opens a proposal",
+                "0123456 from origin/main conflicts with main in 1 path; main did not move. T-3 resolves it in its workspace: an agent claims T-3, resolves the markers and opens a proposal",
                 "  a.txt (both_modified_text)"
             ]
         );
         assert_eq!(
             lines(conflicted(false))[0],
-            "T-3 already resolves 0123456 from main; nothing was created (1 path conflicted)"
+            "T-3 already resolves 0123456 from origin/main; nothing was created (1 path conflicted)"
         );
         let refused = json!({"error": {"code": "remote_not_set", "message": "m"}});
         let error = pull_summary(reply(409, refused)).unwrap_err();
         assert_eq!(error.code(), Some("remote_not_set"));
         for bad in [
-            json!({"outcome": "integrated", "branch": "main", "remote_commit": commit}),
-            json!({"outcome": "conflicted", "branch": "main", "remote_commit": commit, "task": "T-3", "created": true}),
-            json!({"outcome": "conflicted", "branch": "main", "remote_commit": commit, "task": "T-3", "created": true, "conflicted": [{"path": "a"}]}),
-            json!({"outcome": "conflicted", "branch": "main", "remote_commit": commit, "task": "T-3", "conflicted": []}),
-            json!({"outcome": "other", "branch": "main"}),
-            json!({"outcome": "integrated"}),
+            json!({"outcome": "integrated", "remote": "origin", "branch": "main", "remote_commit": commit}),
+            json!({"outcome": "conflicted", "remote": "origin", "branch": "main", "remote_commit": commit, "task": "T-3", "created": true}),
+            json!({"outcome": "conflicted", "remote": "origin", "branch": "main", "remote_commit": commit, "task": "T-3", "created": true, "conflicted": [{"path": "a"}]}),
+            json!({"outcome": "conflicted", "remote": "origin", "branch": "main", "remote_commit": commit, "task": "T-3", "conflicted": []}),
+            json!({"outcome": "other", "remote": "origin", "branch": "main"}),
+            json!({"outcome": "integrated", "branch": "main"}),
         ] {
             assert!(matches!(
                 pull_summary(reply(200, bad)),
@@ -588,7 +840,44 @@ mod tests {
     }
 
     #[test]
-    fn set_writes_the_config_and_the_mirror_of_a_project() {
+    fn the_project_is_found_above_the_start_directory() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path().join("app");
+        std::fs::create_dir_all(root.join(".fold")).unwrap();
+        std::fs::write(root.join(".fold/fold.db"), "").unwrap();
+        std::fs::create_dir_all(root.join("ws/one/src")).unwrap();
+        assert_eq!(find_project(&root.join("ws/one/src")), root);
+        assert_eq!(find_project(&root), root);
+        let outside = dir.path().join("elsewhere");
+        assert_eq!(find_project(&outside), outside);
+        assert_eq!(
+            project_paths(Some(&outside)).unwrap_err().code(),
+            codes::PROJECT_NOT_FOUND
+        );
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.com")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.com")
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    }
+
+    fn text(out: Vec<u8>) -> String {
+        String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn set_list_and_remove_change_the_config_and_the_mirror_of_a_project() {
         let dir = tempfile::TempDir::new().unwrap();
         let host = fold_core::HostPaths::new(dir.path().join("data").to_str(), None).unwrap();
         let root = dir.path().join("app");
@@ -603,60 +892,153 @@ mod tests {
                 &fold_core::ManualClock::new(),
             ))
             .unwrap();
-        let args = |url: &str, branch: &str, project: PathBuf| SetArgs {
+        let paths = project_paths(Some(&root.join("main"))).unwrap();
+        // A repository whose HEAD names `trunk` gives the default branch.
+        let source = dir.path().join("source");
+        std::fs::create_dir(&source).unwrap();
+        git(&source, &["init", "--quiet", "--initial-branch=trunk"]);
+        std::fs::write(source.join("a.txt"), "a").unwrap();
+        git(&source, &["add", "a.txt"]);
+        git(&source, &["commit", "--quiet", "-m", "a"]);
+        let args = |name: &str, url: &str, branch: Option<&str>| SetArgs {
+            name: name.to_owned(),
             url: url.to_owned(),
-            branch: branch.to_owned(),
-            project: Some(project),
+            branch: branch.map(str::to_owned),
         };
+        let gitbin = Git::default();
         let mut out = Vec::new();
-        set(&args("/srv/app.git", "trunk", root.join("main")), &mut out).unwrap();
+        list(&paths, &mut out).unwrap();
+        assert_eq!(text(out), "no remotes: run fold remote set <name> <url>\n");
+        let mut out = Vec::new();
+        set(
+            &paths,
+            &args("origin", source.to_str().unwrap(), None),
+            &gitbin,
+            &mut out,
+        )
+        .unwrap();
         assert_eq!(
-            String::from_utf8(out).unwrap(),
-            "remote set: fold syncs main with the branch trunk of the remote\n"
+            text(out),
+            "remote origin set: fold syncs main with its branch trunk\n"
         );
-        let text = std::fs::read_to_string(root.join(".fold/config.toml")).unwrap();
-        let config = ProjectConfig::from_toml(&text).unwrap();
-        assert_eq!(config.git.remote.as_deref(), Some("/srv/app.git"));
-        assert_eq!(config.git.branch, "trunk");
-        assert!(root.join(".fold/git/HEAD").is_file());
+        let mut out = Vec::new();
+        list(&paths, &mut out).unwrap();
+        let canonical = source.canonicalize().unwrap();
+        assert_eq!(
+            text(out),
+            format!("origin\ttrunk\t{} (the only remote)\n", canonical.display())
+        );
+        let url = "https://user:token@example.com/a.git";
+        set(
+            &paths,
+            &args("backup", url, Some("main")),
+            &gitbin,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        list(&paths, &mut out).unwrap();
+        let listed = text(out);
+        assert!(
+            listed.contains("backup\tmain\thttps://example.com/a.git\n"),
+            "{listed}"
+        );
+        assert!(!listed.contains("token") && !listed.contains("only"));
+        let mirror = root.join(".fold/git");
+        assert!(mirror.join("HEAD").is_file());
 
-        for (url, branch, code) in [
-            ("-x", "main", codes::INVALID_REQUEST),
-            ("/srv/app.git", "a b", codes::INVALID_REQUEST),
-        ] {
-            let error = set(&args(url, branch, root.clone()), &mut Vec::new()).unwrap_err();
-            assert_eq!(error.code(), Some(code));
+        // A missing local path or an empty repository has no default branch.
+        for missing in [dir.path().join("absent"), {
+            let empty = dir.path().join("empty.git");
+            std::fs::create_dir(&empty).unwrap();
+            git(&empty, &["init", "--quiet", "--bare"]);
+            empty
+        }] {
+            let error = set(
+                &paths,
+                &args("x", missing.to_str().unwrap(), None),
+                &gitbin,
+                &mut Vec::new(),
+            )
+            .unwrap_err();
+            assert_eq!(error.code(), Some(codes::INVALID_REQUEST));
         }
+        for (name, url, branch) in [
+            ("-x", "/r", "main"),
+            ("o", "-x", "main"),
+            ("o", "/r", "a b"),
+        ] {
+            let error = set(
+                &paths,
+                &args(name, url, Some(branch)),
+                &gitbin,
+                &mut Vec::new(),
+            )
+            .unwrap_err();
+            assert_eq!(error.code(), Some(codes::INVALID_REQUEST));
+        }
+
+        let mut out = Vec::new();
+        remove(&paths, "backup", &mut out).unwrap();
+        assert_eq!(text(out), "remote backup removed\n");
+        let config =
+            ProjectConfig::from_toml(&std::fs::read_to_string(paths.config()).unwrap()).unwrap();
+        assert_eq!(config.remotes.keys().collect::<Vec<_>>(), ["origin"]);
+        assert_eq!(
+            remove(&paths, "backup", &mut Vec::new())
+                .unwrap_err()
+                .code(),
+            Some(codes::REMOTE_NOT_SET)
+        );
+        assert_eq!(
+            remove(&paths, "-x", &mut Vec::new()).unwrap_err().code(),
+            Some(codes::INVALID_REQUEST)
+        );
+
+        std::fs::write(paths.config(), "remotes = 1\n").unwrap();
         let error = set(
-            &args("/r", "main", dir.path().join("none")),
+            &paths,
+            &args("o", "/r", Some("main")),
+            &gitbin,
             &mut Vec::new(),
         )
         .unwrap_err();
-        assert_eq!(error.code(), Some(codes::PROJECT_NOT_FOUND));
-        std::fs::write(root.join(".fold/config.toml"), "git = 1\n").unwrap();
-        let error = set(&args("/r", "main", root.clone()), &mut Vec::new()).unwrap_err();
         assert_eq!(error.code(), Some(codes::INVALID_CONFIG));
-        std::fs::remove_file(root.join(".fold/config.toml")).unwrap();
-        set(&args("/r", "main", root.clone()), &mut Vec::new()).unwrap();
-        let text = std::fs::read_to_string(root.join(".fold/config.toml")).unwrap();
-        assert!(text.starts_with("[git]\nremote = \"/r\"\n"));
+        assert_eq!(
+            list(&paths, &mut Vec::new()).unwrap_err().code(),
+            Some(codes::INVALID_CONFIG)
+        );
+        std::fs::remove_file(paths.config()).unwrap();
+        set(
+            &paths,
+            &args("o", "/r", Some("main")),
+            &gitbin,
+            &mut Vec::new(),
+        )
+        .unwrap();
         assert_eq!(
             std::fs::read_dir(root.join(".fold"))
                 .unwrap()
-                .filter(|entry| {
-                    let name = entry.as_ref().unwrap().file_name();
-                    name.to_string_lossy().starts_with(".tmp")
-                })
+                .filter(|entry| entry
+                    .as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".tmp"))
                 .count(),
             0
         );
         let fold_dir = root.join(".fold");
         let mode = |bits| std::fs::Permissions::from_mode(bits);
         std::fs::set_permissions(&fold_dir, mode(0o555)).unwrap();
-        let error = set(&args("/s", "main", root.clone()), &mut Vec::new()).unwrap_err();
+        let error = set(
+            &paths,
+            &args("s", "/s", Some("main")),
+            &gitbin,
+            &mut Vec::new(),
+        )
+        .unwrap_err();
         std::fs::set_permissions(&fold_dir, mode(0o755)).unwrap();
         assert_eq!(error.code(), Some(codes::WORKSPACE_IO));
-        let text = std::fs::read_to_string(root.join(".fold/config.toml")).unwrap();
-        assert!(text.contains("remote = \"/r\""));
     }
 }

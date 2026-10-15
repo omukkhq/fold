@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::error::{FoldError, codes};
@@ -18,31 +20,42 @@ pub struct ProjectConfig {
     pub stall_minutes: u64,
     pub closed_workspace_days: u64,
     pub git: GitConfig,
+    /// The remote Git repositories by name, as `[remotes.<name>]` sections.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub remotes: BTreeMap<String, RemoteConfig>,
 }
 
-/// The `[git]` section: the remote Git repository and branch that `fold push` keeps current with main.
+/// The `[git]` section: the branch of the project's repository `.fold/git` that every integration is committed to.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct GitConfig {
-    /// A URL or path, which can hold credentials, so it never goes in a log line or an error.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub remote: Option<String>,
     pub branch: String,
-    pub push_on_integrate: bool,
 }
 
 impl Default for GitConfig {
     fn default() -> Self {
         Self {
-            remote: None,
             branch: "main".to_owned(),
-            push_on_integrate: false,
         }
     }
 }
 
-/// The section name in `config.toml`.
+/// One `[remotes.<name>]` section: a Git repository that `fold push` and `fold pull` sync main with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteConfig {
+    /// A URL or path, which can hold credentials, so it never goes in a log line or an error.
+    pub url: String,
+    /// The branch of the remote that main is pushed to and pulled from.
+    pub branch: String,
+    /// Whether fold pushes to this remote after each integration.
+    #[serde(default)]
+    pub push_on_integrate: bool,
+}
+
+/// The section names in `config.toml`.
 pub const GIT_SECTION: &str = "git";
+pub const REMOTES_SECTION: &str = "remotes";
 
 impl Default for ProjectConfig {
     fn default() -> Self {
@@ -56,19 +69,25 @@ impl Default for ProjectConfig {
             stall_minutes: 5,
             closed_workspace_days: 14,
             git: GitConfig::default(),
+            remotes: BTreeMap::new(),
         }
     }
 }
 
 impl ProjectConfig {
-    /// Parses the text of a config file. A refused key is named in `details.key`.
+    /// Parses the text of a config file. A refused key is named in `details.key`. The keys `remote` and `push_on_integrate` of `[git]` name an unnamed remote, which is read as the remote `origin` on the `[git]` branch.
     pub fn from_toml(text: &str) -> Result<Self, FoldError> {
-        let table: toml::Table = toml::from_str(text)
+        let mut table: toml::Table = toml::from_str(text)
             .map_err(|error| invalid("config.toml is not valid TOML", error.message()))?;
+        lift_unnamed_remote(&mut table)?;
         let known = known_keys();
         for (key, value) in &table {
             if key == GIT_SECTION {
                 check_git_section(value)?;
+                continue;
+            }
+            if key == REMOTES_SECTION {
+                check_remotes_section(value)?;
                 continue;
             }
             if !known.contains(key) {
@@ -105,29 +124,133 @@ fn check_git_section(value: &toml::Value) -> Result<(), FoldError> {
     for (key, value) in table {
         let name = format!("{GIT_SECTION}.{key}");
         match key.as_str() {
-            "remote" => match value.as_str() {
-                Some(remote) => check_remote(remote).map_err(|_| {
-                    refused(
-                        &name,
-                        "must be a URL or path that does not start with `-` or use the ext or fd transport",
-                    )
-                })?,
-                None => return Err(refused(&name, "must be a string")),
-            },
-            "branch" => match value.as_str() {
-                Some(branch) => check_branch(branch)
-                    .map_err(|_| refused(&name, "must be a valid Git branch name"))?,
-                None => return Err(refused(&name, "must be a string")),
-            },
-            "push_on_integrate" => {
-                if !value.is_bool() {
-                    return Err(refused(&name, "must be true or false"));
-                }
-            }
+            "branch" => check_branch_value(&name, value)?,
             _ => return Err(refused(&name, "is not a config key")),
         }
     }
     Ok(())
+}
+
+/// The name a remote from `[git].remote` takes.
+pub const UNNAMED_REMOTE: &str = "origin";
+
+/// Moves `remote` and `push_on_integrate` out of `[git]` into `[remotes.origin]`, whose branch is the `[git]` branch. `push_on_integrate` without a remote did nothing, so it is dropped. A file that also has `[remotes.origin]` names the remote twice and is refused.
+fn lift_unnamed_remote(table: &mut toml::Table) -> Result<(), FoldError> {
+    let Some(git) = table
+        .get_mut(GIT_SECTION)
+        .and_then(toml::Value::as_table_mut)
+    else {
+        return Ok(());
+    };
+    let url = git.remove("remote");
+    let push_on_integrate = git.remove("push_on_integrate");
+    let name = format!("{GIT_SECTION}.push_on_integrate");
+    let push_on_integrate = match push_on_integrate {
+        None => false,
+        Some(toml::Value::Boolean(value)) => value,
+        Some(_) => return Err(refused(&name, "must be true or false")),
+    };
+    let Some(url) = url else {
+        return Ok(());
+    };
+    let key = format!("{GIT_SECTION}.remote");
+    match url.as_str() {
+        Some(text) => check_remote(text).map_err(|_| refused(&key, REMOTE_PROBLEM))?,
+        None => return Err(refused(&key, "must be a string")),
+    }
+    let branch = git
+        .get("branch")
+        .cloned()
+        .unwrap_or_else(|| toml::Value::String(GitConfig::default().branch));
+    let remotes = table
+        .entry(REMOTES_SECTION)
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    let Some(remotes) = remotes.as_table_mut() else {
+        return Ok(());
+    };
+    if remotes.contains_key(UNNAMED_REMOTE) {
+        return Err(refused(
+            &key,
+            "names a second remote origin besides [remotes.origin]",
+        )
+        .with_hint("delete remote and push_on_integrate from [git] in .fold/config.toml"));
+    }
+    let mut origin = toml::Table::new();
+    origin.insert("url".to_owned(), url);
+    origin.insert("branch".to_owned(), branch);
+    origin.insert(
+        "push_on_integrate".to_owned(),
+        toml::Value::Boolean(push_on_integrate),
+    );
+    remotes.insert(UNNAMED_REMOTE.to_owned(), toml::Value::Table(origin));
+    Ok(())
+}
+
+const REMOTE_PROBLEM: &str =
+    "must be a URL or path that does not start with `-` or use the ext or fd transport";
+
+fn check_remotes_section(value: &toml::Value) -> Result<(), FoldError> {
+    let table = value
+        .as_table()
+        .ok_or_else(|| refused(REMOTES_SECTION, "must be a table"))?;
+    for (remote, value) in table {
+        let section = format!("{REMOTES_SECTION}.{remote}");
+        check_remote_name(remote).map_err(|_| refused(&section, "is not a valid remote name"))?;
+        let fields = value
+            .as_table()
+            .ok_or_else(|| refused(&section, "must be a table"))?;
+        for required in ["url", "branch"] {
+            if !fields.contains_key(required) {
+                return Err(refused(&format!("{section}.{required}"), "is required"));
+            }
+        }
+        for (key, value) in fields {
+            let name = format!("{section}.{key}");
+            match key.as_str() {
+                "url" => match value.as_str() {
+                    Some(url) => check_remote(url).map_err(|_| refused(&name, REMOTE_PROBLEM))?,
+                    None => return Err(refused(&name, "must be a string")),
+                },
+                "branch" => check_branch_value(&name, value)?,
+                "push_on_integrate" => {
+                    if !value.is_bool() {
+                        return Err(refused(&name, "must be true or false"));
+                    }
+                }
+                _ => return Err(refused(&name, "is not a config key")),
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_branch_value(name: &str, value: &toml::Value) -> Result<(), FoldError> {
+    match value.as_str() {
+        Some(branch) => {
+            check_branch(branch).map_err(|_| refused(name, "must be a valid Git branch name"))
+        }
+        None => Err(refused(name, "must be a string")),
+    }
+}
+
+/// A remote name is what Git accepts for one and fold can put in a ref and a TOML key unquoted: 1 to 64 ASCII letters, digits, `.`, `_` or `-`, not starting with `.` or `-` and without `..`.
+pub fn check_remote_name(name: &str) -> Result<(), FoldError> {
+    let valid = (1..=64).contains(&name.len())
+        && !name.starts_with(['.', '-'])
+        && !name.contains("..")
+        && !name.ends_with(".lock")
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+    if valid {
+        Ok(())
+    } else {
+        Err(FoldError::new(
+            codes::INVALID_REQUEST,
+            format!("{name:?} is not a valid remote name"),
+        )
+        .with_hint("name the remote with letters, digits, `.`, `_` or `-`, such as origin"))
+    }
 }
 
 /// A remote Git would read as an option, that holds a control character, or that names the `ext::` transport, which runs a command, or `fd::`, is refused. The error never repeats the text, which can hold credentials.
@@ -217,10 +340,10 @@ mod tests {
         let table: toml::Table = toml::from_str(&text).unwrap();
         let named = dotted_keys(&table);
         let fields = dotted_keys(&toml::Table::try_from(ProjectConfig::default()).unwrap());
-        // `remote` has no default, so the template names it in a comment only.
-        assert!(CONFIG_TEMPLATE.contains("`remote`"));
+        // No remote exists by default, so the template names the section in a comment only.
+        assert!(CONFIG_TEMPLATE.contains("`[remotes.<name>]`"));
         assert_eq!(named, fields);
-        assert_eq!(fields.len(), 10);
+        assert_eq!(fields.len(), 9);
         assert_eq!(known_keys().len(), 8);
         // Only comments: the file as written changes nothing.
         let as_written = ProjectConfig::from_toml(CONFIG_TEMPLATE).unwrap();
@@ -270,38 +393,71 @@ mod tests {
     }
 
     #[test]
-    fn the_git_section_takes_a_remote_a_branch_and_a_switch() {
+    fn the_git_section_takes_a_branch_and_each_remote_its_own_section() {
         let config = ProjectConfig::from_toml(
-            "lease_minutes = 3\n[git]\nremote = \"../app.git\"\nbranch = \"release/1.0\"\npush_on_integrate = true\n",
+            "lease_minutes = 3\n[git]\nbranch = \"trunk\"\n[remotes.origin]\nurl = \"../app.git\"\nbranch = \"release/1.0\"\npush_on_integrate = true\n[remotes.backup]\nurl = \"/srv/backup.git\"\nbranch = \"main\"\n",
         )
         .unwrap();
         assert_eq!(config.lease_minutes, 3);
+        assert_eq!(config.git.branch, "trunk");
         assert_eq!(
-            config.git,
-            GitConfig {
-                remote: Some("../app.git".to_owned()),
+            config.remotes["origin"],
+            RemoteConfig {
+                url: "../app.git".to_owned(),
                 branch: "release/1.0".to_owned(),
                 push_on_integrate: true,
             }
         );
+        assert!(!config.remotes["backup"].push_on_integrate);
         let defaults = ProjectConfig::from_toml("[git]\n").unwrap();
         assert_eq!(defaults.git, GitConfig::default());
         assert_eq!(defaults.git.branch, "main");
+        assert!(defaults.remotes.is_empty());
     }
 
     #[test]
-    fn a_wrong_type_in_the_git_section_is_invalid_config() {
+    fn a_wrong_value_in_the_git_or_remote_sections_is_invalid_config() {
         for (text, key) in [
             ("git = 3", "git"),
-            ("[git]\nremote = 3", "git.remote"),
-            ("[git]\nremote = \"-x\"", "git.remote"),
             ("[git]\nbranch = 1", "git.branch"),
             ("[git]\nbranch = \"a..b\"", "git.branch"),
+            ("[git]\nremote = 3", "git.remote"),
+            ("[git]\nremote = \"-x\"", "git.remote"),
+            ("remotes = 3\n[git]\nremote = \"/a.git\"", "remotes"),
+            ("[git]\npush_on_integrate = 1", "git.push_on_integrate"),
             (
-                "[git]\npush_on_integrate = \"yes\"",
-                "git.push_on_integrate",
+                "[git]\nremote = \"a\"\n[remotes.origin]\nurl = \"b\"\nbranch = \"main\"",
+                "git.remote",
             ),
             ("[git]\nremotes = \"x\"", "git.remotes"),
+            ("remotes = 3", "remotes"),
+            ("[remotes]\norigin = 3", "remotes.origin"),
+            (
+                "[remotes.\"-x\"]\nurl = \"a\"\nbranch = \"main\"",
+                "remotes.-x",
+            ),
+            ("[remotes.origin]\nbranch = \"main\"", "remotes.origin.url"),
+            ("[remotes.origin]\nurl = \"a\"", "remotes.origin.branch"),
+            (
+                "[remotes.origin]\nurl = 3\nbranch = \"main\"",
+                "remotes.origin.url",
+            ),
+            (
+                "[remotes.origin]\nurl = \"-x\"\nbranch = \"main\"",
+                "remotes.origin.url",
+            ),
+            (
+                "[remotes.origin]\nurl = \"a\"\nbranch = \"a b\"",
+                "remotes.origin.branch",
+            ),
+            (
+                "[remotes.origin]\nurl = \"a\"\nbranch = \"main\"\npush_on_integrate = \"yes\"",
+                "remotes.origin.push_on_integrate",
+            ),
+            (
+                "[remotes.origin]\nurl = \"a\"\nbranch = \"main\"\nkind = \"x\"",
+                "remotes.origin.kind",
+            ),
         ] {
             let error = ProjectConfig::from_toml(text).unwrap_err();
             assert_eq!(error.code(), "invalid_config", "{text}");
@@ -311,9 +467,61 @@ mod tests {
                 "{text}"
             );
         }
+        let twice = ProjectConfig::from_toml(
+            "[git]\nremote = \"a\"\n[remotes.origin]\nurl = \"b\"\nbranch = \"main\"",
+        )
+        .unwrap_err();
+        assert!(twice.hint().unwrap().contains("delete remote"));
         let secret = "https://user:token@example.com/app.git\n";
         let error = check_remote(secret).unwrap_err();
         assert!(!error.message().contains("token"));
+    }
+
+    #[test]
+    fn the_unnamed_remote_of_the_git_section_is_origin() {
+        let config = ProjectConfig::from_toml(
+            "[git]\nremote = \"../app.git\"\nbranch = \"trunk\"\npush_on_integrate = true\n[remotes.backup]\nurl = \"/b.git\"\nbranch = \"main\"\n",
+        )
+        .unwrap();
+        assert_eq!(config.git.branch, "trunk");
+        assert_eq!(
+            config.remotes[UNNAMED_REMOTE],
+            RemoteConfig {
+                url: "../app.git".to_owned(),
+                branch: "trunk".to_owned(),
+                push_on_integrate: true,
+            }
+        );
+        assert_eq!(config.remotes.len(), 2);
+        let plain = ProjectConfig::from_toml("[git]\nremote = \"/a.git\"\n").unwrap();
+        assert_eq!(plain.remotes[UNNAMED_REMOTE].branch, "main");
+        assert!(!plain.remotes[UNNAMED_REMOTE].push_on_integrate);
+        let switch_only = ProjectConfig::from_toml("[git]\npush_on_integrate = true\n").unwrap();
+        assert!(switch_only.remotes.is_empty());
+    }
+
+    #[test]
+    fn remote_names_are_plain_words() {
+        for good in ["origin", "back-up", "a.b", "v_2", "A1"] {
+            assert!(check_remote_name(good).is_ok(), "{good}");
+        }
+        for bad in [
+            "",
+            ".a",
+            "-a",
+            "a..b",
+            "a/b",
+            "a b",
+            "a:b",
+            "x.lock",
+            &"a".repeat(65),
+        ] {
+            assert_eq!(
+                check_remote_name(bad).unwrap_err().code(),
+                codes::INVALID_REQUEST,
+                "{bad:?}"
+            );
+        }
     }
 
     #[test]

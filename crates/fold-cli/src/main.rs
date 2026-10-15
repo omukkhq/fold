@@ -30,16 +30,12 @@ enum Command {
     Init(init::InitArgs),
     /// Run the daemon in the foreground
     Serve(serve::ServeArgs),
-    /// Print the OpenAPI document of the HTTP API
-    Openapi,
     /// Connect a Claude Code session to the daemon over stdio, starting the daemon when needed
     Mcp(mcp::McpArgs),
-    /// Append the main revisions not yet exported to a Git repository as commits
-    ExportGit(commands::export_git::ExportGitArgs),
     /// Check the host, the daemon and each project, and name the fix for every problem
     Doctor(doctor::DoctorArgs),
-    /// Manage the service that starts the daemon at login
-    Service(service::ServiceArgs),
+    /// Write the systemd user unit that starts the daemon at login, then enable and start it
+    Setup(service::SetupArgs),
     /// Delete unreferenced objects, prune checkpoints and remove closed workspace directories
     Gc(commands::gc::GcArgs),
     /// Manage the agents of the project in the working directory
@@ -48,9 +44,10 @@ enum Command {
     Token(token::TokenArgs),
     /// Link the project to a remote Git repository
     Remote(commands::remote::RemoteArgs),
-    /// Push the main revisions not yet on the Git remote as commits, without force
+    /// Push main's Git history, one commit per revision, to the Git remote, without force
     Push(commands::remote::PushArgs),
     /// Run a Claude Code hook; the generated .claude/settings.json calls these
+    #[command(hide = true)]
     Hook(hook::HookArgs),
     /// Bring the commits of the Git remote into main; a conflict becomes a sync task
     Pull(commands::remote::PullArgs),
@@ -68,7 +65,6 @@ enum Failure {
     Serve(serve::ServeError),
     Init(init::InitError),
     Mcp(mcp::McpError),
-    ExportGit(commands::export_git::ExportGitError),
     Doctor(doctor::DoctorError),
     Service(service::ServiceError),
     Gc(commands::gc::GcError),
@@ -86,12 +82,8 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         }
         Some(Command::Serve(args)) => serve::run(&args).map_err(Failure::Serve),
         Some(Command::Doctor(args)) => doctor::run(&args, out).map_err(Failure::Doctor),
-        Some(Command::Service(args)) => service::run(&args, out).map_err(Failure::Service),
-        Some(Command::Openapi) => commands::openapi::run(out).map_err(Failure::Write),
+        Some(Command::Setup(args)) => service::run(&args, out).map_err(Failure::Service),
         Some(Command::Mcp(args)) => mcp::run(&args).map_err(Failure::Mcp),
-        Some(Command::ExportGit(args)) => {
-            commands::export_git::run(&args, out).map_err(Failure::ExportGit)
-        }
         Some(Command::Gc(args)) => commands::gc::run(
             &args,
             &serve::Dirs::from_env(),
@@ -137,9 +129,10 @@ fn main() -> anyhow::Result<()> {
             Some(code) => anyhow::anyhow!("{code}: {error}"),
             None => error.into(),
         }),
-        Err(Failure::Init(error)) => Err(match error.code() {
-            Some(code) => anyhow::anyhow!("{code}: {error}"),
-            None => error.into(),
+        Err(Failure::Init(error)) => Err(match (error.code(), error.hint()) {
+            (Some(code), Some(hint)) => anyhow::anyhow!("{code}: {error}\nhint: {hint}"),
+            (Some(code), None) => anyhow::anyhow!("{code}: {error}"),
+            _ => error.into(),
         }),
         Err(Failure::Agent(error)) => Err(match error.code() {
             Some(code) => anyhow::anyhow!("{code}: {error}"),
@@ -153,10 +146,6 @@ fn main() -> anyhow::Result<()> {
             let _ = output::line(&mut io::stderr().lock(), &format!("fold mcp: {error}"));
             std::process::exit(1)
         }
-        Err(Failure::ExportGit(error)) => Err(match error.code() {
-            Some(code) => anyhow::anyhow!("{code}: {error}"),
-            None => error.into(),
-        }),
         Err(Failure::Doctor(error)) => Err(match error.code() {
             Some(code) => anyhow::anyhow!("{code}: {error}"),
             None => error.into(),
@@ -225,25 +214,6 @@ mod tests {
         let (result, out) = run_with(&["fold", "--bogus"]);
         assert_eq!(parse_kind(result), ErrorKind::UnknownArgument);
         assert!(out.is_empty());
-    }
-
-    #[test]
-    fn openapi_subcommand_prints_valid_json() {
-        let (result, out) = run_with(&["fold", "openapi"]);
-        assert!(result.is_ok());
-        assert!(out.ends_with("}\n"));
-        let doc: serde_json::Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(doc["openapi"], "3.1.0");
-        assert_eq!(doc["info"]["title"], "fold");
-        assert_eq!(doc["info"]["version"], env!("CARGO_PKG_VERSION"));
-        assert!(doc["paths"]["/api/v1/projects"]["get"].is_object());
-    }
-
-    #[test]
-    fn openapi_reports_a_failed_write() {
-        let mut full: &mut [u8] = &mut [];
-        let result = run(["fold", "openapi"].map(OsString::from), &mut full);
-        assert!(matches!(result, Err(Failure::Write(_))));
     }
 
     #[test]

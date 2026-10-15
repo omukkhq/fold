@@ -23,7 +23,6 @@ use fold_store::testing::TestProject;
 use fold_store::workspaces::{
     WorkspaceState, create_initial_revision, initial_revision, list_changesets, list_checkpoints,
 };
-use fold_vcs::git::Git;
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::revision_store::{write_initial_tree, write_revision};
 use serde_json::json;
@@ -241,7 +240,6 @@ fn workspace_service(
         bus.clone(),
         Arc::new(project.clock().clone()),
         project.paths().clone(),
-        Git::default(),
         LEASE_MINUTES,
     )
     .with_locks(Arc::clone(objects), Arc::clone(locks))

@@ -26,7 +26,6 @@ use fold_store::workspaces::{
     self, Checkpoint, CheckpointKind, CheckpointReason, advance_main, create_initial_revision,
     initial_revision, insert_revision,
 };
-use fold_vcs::git::Git;
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::revision_store::{write_initial_tree, write_revision};
 use tokio::sync::watch;
@@ -97,7 +96,7 @@ impl Fixture {
             )
             .await
             .unwrap();
-        let workspaces = WorkspaceService::for_project(&handle, Git::default());
+        let workspaces = WorkspaceService::for_project(&handle);
         let view = workspaces
             .create_workspace(&actor, t(1))
             .await

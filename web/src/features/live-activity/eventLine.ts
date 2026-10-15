@@ -386,6 +386,13 @@ const SPECS: Record<EventType, Spec> = {
     icon: TriangleAlert,
     text: fixed("pull from the remote conflicted"),
   },
+  "git.commit_failed": {
+    icon: TriangleAlert,
+    text: (e) =>
+      e.revision === null
+        ? "writing the Git commit failed"
+        : `writing the Git commit of ${e.revision} failed`,
+  },
   "message.sent": {
     icon: MessageSquare,
     text: (e) => {

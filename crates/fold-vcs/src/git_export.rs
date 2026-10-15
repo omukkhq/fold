@@ -11,7 +11,6 @@ use fold_core::{FoldError, RevisionId, Timestamp, codes};
 use serde_json::json;
 
 use crate::git::{CommitId, Git, check_rev, failed, unexpected_output, wait_error};
-use crate::git_sync_map::SyncMap;
 use crate::objects::{ObjectError, ObjectStore};
 use crate::snapshot::load_tree;
 
@@ -53,147 +52,6 @@ pub struct ExportTarget<'a> {
     pub refname: &'a str,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TargetState {
-    /// The path does not exist or is an empty directory: [`create_target`] makes the repository.
-    Missing,
-    /// A repository whose ref is where the export continues.
-    Ready,
-}
-
-/// Checks that an export can continue the chain that ends at `last` (the last mapped commit): `target.refname` must point to it, or must not exist when nothing is mapped yet. A missing or empty path continues only an empty chain. A non-empty directory must be the top of a SHA-1 repository, working tree or bare. Changes nothing.
-pub fn check_target(
-    git: &Git,
-    target: &ExportTarget<'_>,
-    last: Option<&(RevisionId, CommitId)>,
-) -> Result<TargetState, FoldError> {
-    check_rev(target.refname)?;
-    let repo = target.repo;
-    let state = match fs::symlink_metadata(repo) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => TargetState::Missing,
-        Err(error) => return Err(target_io(&error)),
-        Ok(meta) if !meta.is_dir() => return Err(not_a_repository(repo)),
-        Ok(_) => {
-            let mut listing = fs::read_dir(repo).map_err(|error| target_io(&error))?;
-            if listing.next().is_none() {
-                TargetState::Missing
-            } else if git.repository(repo)?.is_some() {
-                TargetState::Ready
-            } else {
-                return Err(not_a_repository(repo));
-            }
-        }
-    };
-    let continues = match (state, last) {
-        (TargetState::Missing, None) => true,
-        (TargetState::Missing, Some(_)) => false,
-        (TargetState::Ready, None) => git.ref_commit(repo, target.refname)?.is_none(),
-        (TargetState::Ready, Some((_, commit))) => {
-            git.has_commit(repo, commit)?
-                && git.ref_commit(repo, target.refname)?.as_ref() == Some(commit)
-        }
-    };
-    if continues {
-        Ok(state)
-    } else {
-        Err(diverged(target, last))
-    }
-}
-
-/// Makes the bare repository [`check_target`] found missing, with `HEAD` on the target branch.
-pub fn create_target(git: &Git, target: &ExportTarget<'_>) -> Result<(), FoldError> {
-    let branch = target.refname.strip_prefix("refs/heads/").ok_or_else(|| {
-        FoldError::new(
-            codes::INVALID_REQUEST,
-            "a new repository is created only for a branch ref",
-        )
-        .with_details([("ref", json!(target.refname))])
-    })?;
-    fs::create_dir_all(target.repo).map_err(|error| target_io(&error))?;
-    git.init_bare(target.repo, branch)
-}
-
-/// The ref [`recover_stopped`] writes the expected commits to, to compare them with the branch before the branch moves.
-const RECOVERY_REF: &str = "refs/fold/export-recovery";
-
-/// Recovers an export that stopped after `git fast-import` and before the sync map was appended to: `target.refname` is not the last mapped commit `base.commit` (or exists although nothing is mapped, when `base` is `None`), but is one of the commits fold writes for `revisions`, the revisions after it. A commit has the same id whenever its tree, parent, message, author and time are the same, so the expected chain is written to a scratch ref first and the branch is compared with it. When the branch is one of those commits it moves on to the newest, and every revision with its commit is returned for the map. When it is anything else, such as a commit fold did not write, the branch does not move, the commits written for the comparison stay unreferenced in the repository, and the result is `None`. Blocking: async callers go through `spawn_blocking`.
-pub fn recover_stopped(
-    objects: &ObjectStore,
-    git: &Git,
-    target: &ExportTarget<'_>,
-    base: Option<&ExportBase>,
-    revisions: &[ExportRevision],
-    scratch: &Path,
-) -> Result<Option<Vec<(RevisionId, CommitId)>>, FoldError> {
-    check_rev(target.refname)?;
-    if revisions.is_empty() || git.repository(target.repo)?.is_none() {
-        return Ok(None);
-    }
-    if let Some(base) = base
-        && !git.has_commit(target.repo, &base.commit)?
-    {
-        return Ok(None);
-    }
-    let Some(current) = git.ref_commit(target.repo, target.refname)? else {
-        return Ok(None);
-    };
-    if git.checked_out(target.repo, target.refname)? {
-        return Err(checked_out(target));
-    }
-    let scratch_target = ExportTarget {
-        repo: target.repo,
-        refname: RECOVERY_REF,
-    };
-    // A scratch ref left by a recovery that stopped would make fast-import refuse a chain that does not continue it.
-    drop_recovery_ref(git, target.repo)?;
-    let written = write_commits(objects, git, &scratch_target, base, revisions, scratch);
-    let dropped = drop_recovery_ref(git, target.repo);
-    let added = written?;
-    dropped?;
-    let Some(tip) = added.last().map(|(_, commit)| commit.clone()) else {
-        return Ok(None);
-    };
-    if !added.iter().any(|(_, commit)| *commit == current) {
-        return Ok(None);
-    }
-    if current != tip {
-        git.update_ref(target.repo, target.refname, Some(&tip), &current)?;
-    }
-    Ok(Some(added))
-}
-
-fn drop_recovery_ref(git: &Git, repo: &Path) -> Result<(), FoldError> {
-    match git.ref_commit(repo, RECOVERY_REF)? {
-        Some(tip) => git.update_ref(repo, RECOVERY_REF, None, &tip),
-        None => Ok(()),
-    }
-}
-
-fn diverged(target: &ExportTarget<'_>, last: Option<&(RevisionId, CommitId)>) -> FoldError {
-    let message = match last {
-        Some((revision, commit)) => format!(
-            "{} in {} is not {commit}, the commit {revision} was exported as",
-            target.refname,
-            target.repo.display()
-        ),
-        None => format!(
-            "{} already exists in {}, and nothing was exported from this project yet",
-            target.refname,
-            target.repo.display()
-        ),
-    };
-    let error = FoldError::new(codes::EXPORT_DIVERGED, message).with_hint(
-        "export into the repository the last export wrote, or a clone of it whose branch has no new commits",
-    );
-    match last {
-        Some((revision, commit)) => error.with_details([
-            ("revision", json!(revision.to_string())),
-            ("commit", json!(commit.as_str())),
-        ]),
-        None => error,
-    }
-}
-
 fn checked_out(target: &ExportTarget<'_>) -> FoldError {
     FoldError::new(
         codes::INVALID_REQUEST,
@@ -205,39 +63,6 @@ fn checked_out(target: &ExportTarget<'_>) -> FoldError {
     )
     .with_hint("check out another branch or detach HEAD in that repository, or export into a bare clone of it")
     .with_details([("ref", json!(target.refname))])
-}
-
-fn not_a_repository(repo: &Path) -> FoldError {
-    FoldError::new(
-        codes::INVALID_REQUEST,
-        format!(
-            "{} is not empty and is not a Git repository",
-            repo.display()
-        ),
-    )
-    .with_hint("export into a Git repository, an empty directory or a path that does not exist")
-}
-
-fn target_io(error: &io::Error) -> FoldError {
-    FoldError::new(
-        codes::WORKSPACE_IO,
-        format!("cannot read the export target: {}", error.kind()),
-    )
-}
-
-/// Writes `revisions` as one chain of commits on `target.refname` through `git fast-import`, the first continuing `base` or starting the history when there is none, then appends each revision and its commit to `map` in one write. A failed run appends nothing, so a retry exports the same revisions again. See [`write_commits`] for the rest. Blocking: async callers go through `spawn_blocking`.
-pub fn export(
-    objects: &ObjectStore,
-    git: &Git,
-    target: &ExportTarget<'_>,
-    base: Option<&ExportBase>,
-    revisions: &[ExportRevision],
-    map: &mut SyncMap,
-    scratch: &Path,
-) -> Result<Vec<(RevisionId, CommitId)>, FoldError> {
-    let added = write_commits(objects, git, target, base, revisions, scratch)?;
-    map.append(&added)?;
-    Ok(added)
 }
 
 /// Writes `revisions` as one chain of commits on `target.refname` through `git fast-import`, the first continuing `base` or starting the history when there is none, and returns each revision with its commit. Each commit records only the paths that differ from the previous revision's tree, and its id depends only on the revisions, so writing the same revisions again gives the same commits. A ref that a working tree has checked out is refused with `invalid_request`, as Git refuses a push to it, because fast-import moves the ref without touching the files. fast-import refuses to move the ref unless the old commit is an ancestor of the new one. `scratch` holds the marks file while the command runs. Blocking: async callers go through `spawn_blocking`.

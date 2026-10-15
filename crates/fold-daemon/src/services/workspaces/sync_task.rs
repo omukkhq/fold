@@ -28,6 +28,8 @@ const LISTED_PATHS: usize = 200;
 /// A `fold pull` whose merge conflicted, as the sync task records it.
 #[derive(Debug, Clone)]
 pub struct SyncWorkspace {
+    /// The name of the remote the pull fetched from.
+    pub remote: String,
     pub branch: String,
     /// The fetched tip of the remote branch, in full.
     pub remote_commit: String,
@@ -102,7 +104,7 @@ impl WorkspaceService {
         })
         .await?;
         let input = CreateTask {
-            title: sync_title(&sync.branch, &sync.remote_commit)?,
+            title: sync_title(&sync.remote, &sync.branch, &sync.remote_commit)?,
             description: sync_description(&sync, &conflicted),
             labels: Vec::new(),
         };
@@ -158,6 +160,7 @@ impl WorkspaceService {
                     .task(task)
                     .workspace(id)
                     .data(json!({
+                        "remote": sync.remote,
                         "branch": sync.branch,
                         "remote_commit": sync.remote_commit,
                         "conflicted": rows.len(),
@@ -207,8 +210,8 @@ pub fn short_commit(commit: &str) -> &str {
     commit.get(..7).unwrap_or(commit)
 }
 
-fn sync_title(branch: &str, commit: &str) -> Result<TaskTitle, FoldError> {
-    TaskTitle::parse(&format!("Sync origin/{branch} @{}", short_commit(commit))).map_err(|_| {
+fn sync_title(remote: &str, branch: &str, commit: &str) -> Result<TaskTitle, FoldError> {
+    TaskTitle::parse(&format!("Sync {remote}/{branch} @{}", short_commit(commit))).map_err(|_| {
         FoldError::new(
             codes::INVALID_CONFIG,
             "the branch name does not make a task title",
@@ -219,8 +222,9 @@ fn sync_title(branch: &str, commit: &str) -> Result<TaskTitle, FoldError> {
 
 fn sync_description(sync: &SyncWorkspace, conflicted: &[ConflictedPath]) -> TaskDescription {
     let mut text = format!(
-        "`fold pull` brought in the commit `{commit}` of `origin/{branch}`, and it changes the same paths as fold main. This task's workspace holds the remote's version with main `{head}` merged into it; resolve it so main gets both sides.\n\n**Conflicted paths** ({count}):\n\n",
+        "`fold pull` brought in the commit `{commit}` of `{remote}/{branch}`, and it changes the same paths as fold main. This task's workspace holds the remote's version with main `{head}` merged into it; resolve it so main gets both sides.\n\n**Conflicted paths** ({count}):\n\n",
         commit = sync.remote_commit,
+        remote = sync.remote,
         branch = sync.branch,
         head = sync.head,
         count = conflicted.len(),
@@ -269,11 +273,13 @@ mod tests {
     #[test]
     fn a_branch_that_breaks_the_title_is_refused() {
         assert_eq!(
-            sync_title("main", "0123456789").unwrap().as_str(),
+            sync_title("origin", "main", "0123456789").unwrap().as_str(),
             "Sync origin/main @0123456"
         );
         assert_eq!(
-            sync_title("a\nb", "0123456789").unwrap_err().code(),
+            sync_title("origin", "a\nb", "0123456789")
+                .unwrap_err()
+                .code(),
             codes::INVALID_CONFIG
         );
     }
@@ -281,6 +287,7 @@ mod tests {
     #[test]
     fn the_description_names_the_commit_and_counts_the_paths_it_leaves_out() {
         let sync = SyncWorkspace {
+            remote: "origin".to_owned(),
             branch: "main".to_owned(),
             remote_commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
             remote_tree: fold_core::object::hash_object(fold_core::object::ObjectKind::Tree, b""),

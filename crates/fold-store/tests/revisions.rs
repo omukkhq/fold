@@ -273,3 +273,67 @@ async fn every_integration_has_its_own_number() {
     let repeated = exec(project.store(), numbered).await.unwrap_err();
     assert!(repeated.unique_violation());
 }
+
+#[tokio::test]
+async fn a_revision_records_its_commit_once_and_reads_show_it() {
+    let project = TestProject::new().await;
+    let r1 = init(&project).await;
+    append(&project, &child(&r1, 2)).await.unwrap();
+    let store = project.store();
+    assert_eq!(
+        workspaces::uncommitted_revisions(store.read())
+            .await
+            .unwrap(),
+        [id(1), id(2)]
+    );
+    let a = "a".repeat(40);
+    let now = project.now();
+    store
+        .write(async |tx| {
+            workspaces::insert_revision_commits(tx, "main", &[(id(1), a.clone())], now).await
+        })
+        .await
+        .unwrap();
+    // A second record of the same revision keeps the first.
+    store
+        .write(async |tx| {
+            workspaces::insert_revision_commits(tx, "trunk", &[(id(1), "b".repeat(40))], now).await
+        })
+        .await
+        .unwrap();
+    let row = workspaces::get_by_number(store.read(), id(1))
+        .await
+        .unwrap();
+    assert_eq!(row.commit.as_deref(), Some(a.as_str()));
+    assert_eq!(
+        workspaces::get_by_number(store.read(), id(2))
+            .await
+            .unwrap()
+            .commit,
+        None
+    );
+    assert_eq!(
+        workspaces::uncommitted_revisions(store.read())
+            .await
+            .unwrap(),
+        [id(2)]
+    );
+    let missing = store
+        .write(async |tx| {
+            workspaces::insert_revision_commits(tx, "main", &[(id(9), a.clone())], now).await
+        })
+        .await;
+    assert!(matches!(missing, Err(StoreError::RevisionNotFound(_))));
+    for bad in ["'abc'", "upper('a' || substr(hex(zeroblob(20)), 2))"] {
+        let refused = exec(
+            store,
+            &format!(
+                "INSERT INTO revision_commits (revision_id, branch, \"commit\", created_at)
+                 SELECT id, 'main', {bad}, 0 FROM revisions WHERE number = 2"
+            ),
+        )
+        .await;
+        assert!(refused.is_err(), "{bad}");
+    }
+    assert_append_only(store, "revision_commits").await;
+}

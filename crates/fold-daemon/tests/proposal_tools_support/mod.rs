@@ -14,7 +14,6 @@ use fold_daemon::services::workspaces::WorkspaceService;
 use fold_store::projects::ProjectRow;
 use fold_store::testing::TestProject;
 use fold_store::workspaces::{create_initial_revision, initial_revision};
-use fold_vcs::git::Git;
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::revision_store::{write_initial_tree, write_revision};
 
@@ -104,7 +103,7 @@ impl Fixture {
     }
 
     pub fn workspaces(&self) -> WorkspaceService {
-        WorkspaceService::for_project(&self.handle, Git::default())
+        WorkspaceService::for_project(&self.handle)
     }
 
     pub fn reviews(&self) -> ReviewService {

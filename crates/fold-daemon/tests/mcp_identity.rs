@@ -11,7 +11,6 @@ use fold_daemon::services::tasks::TaskService;
 use fold_daemon::services::workspaces::WorkspaceService;
 use fold_store::agents;
 use fold_store::testing::TestProject;
-use fold_vcs::git::Git;
 use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::service::RunningService;
 use rmcp::{RoleClient, ServiceExt};
@@ -59,7 +58,6 @@ async fn connect_with(
         EventBus::new(),
         Arc::new(project.clock().clone()),
         project.paths().clone(),
-        Git::default(),
         30,
     );
     let tasks = TaskService::new(

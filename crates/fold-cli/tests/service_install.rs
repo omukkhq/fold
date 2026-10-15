@@ -74,7 +74,7 @@ fn stderr(output: &Output) -> String {
 fn no_start_writes_the_unit_under_the_default_config_directory() {
     let sandbox = Sandbox::new().unwrap();
     let output = sandbox
-        .fold(&["service", "install", "--no-start"], Path::new(""), None)
+        .fold(&["setup", "--no-start"], Path::new(""), None)
         .unwrap();
     assert!(output.status.success(), "{}", stderr(&output));
     let unit = sandbox.path("home/.config/systemd/user/fold.service");
@@ -89,7 +89,7 @@ fn no_start_writes_the_unit_under_the_default_config_directory() {
 
     let before = std::fs::read(&unit).unwrap();
     let again = sandbox
-        .fold(&["service", "install", "--no-start"], Path::new(""), None)
+        .fold(&["setup", "--no-start"], Path::new(""), None)
         .unwrap();
     assert!(again.status.success());
     assert_eq!(std::fs::read(&unit).unwrap(), before);
@@ -101,11 +101,7 @@ fn xdg_config_home_decides_where_the_unit_goes() {
     let sandbox = Sandbox::new().unwrap();
     let config = sandbox.path("cfg");
     let output = sandbox
-        .fold(
-            &["service", "install", "--no-start"],
-            Path::new(""),
-            Some(&config),
-        )
+        .fold(&["setup", "--no-start"], Path::new(""), Some(&config))
         .unwrap();
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(config.join("systemd/user/fold.service").is_file());
@@ -117,7 +113,7 @@ fn xdg_config_home_decides_where_the_unit_goes() {
 fn install_enables_and_starts_through_systemctl() {
     let sandbox = Sandbox::new().unwrap();
     let (bin, log) = sandbox.fake_systemctl(0).unwrap();
-    let output = sandbox.fold(&["service", "install"], &bin, None).unwrap();
+    let output = sandbox.fold(&["setup"], &bin, None).unwrap();
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(
         std::fs::read_to_string(&log).unwrap(),
@@ -127,7 +123,7 @@ fn install_enables_and_starts_through_systemctl() {
 
     let broken = Sandbox::new().unwrap();
     let (bin, _) = broken.fake_systemctl(1).unwrap();
-    let failing = broken.fold(&["service", "install"], &bin, None).unwrap();
+    let failing = broken.fold(&["setup"], &bin, None).unwrap();
     assert_eq!(failing.status.code(), Some(1));
     assert!(stderr(&failing).contains("service_install_failed"));
 }
@@ -136,9 +132,7 @@ fn install_enables_and_starts_through_systemctl() {
 #[test]
 fn a_host_without_systemctl_is_refused_with_invalid_request() {
     let sandbox = Sandbox::new().unwrap();
-    let output = sandbox
-        .fold(&["service", "install"], Path::new(""), None)
-        .unwrap();
+    let output = sandbox.fold(&["setup"], Path::new(""), None).unwrap();
     assert_eq!(output.status.code(), Some(1));
     let text = stderr(&output);
     assert!(

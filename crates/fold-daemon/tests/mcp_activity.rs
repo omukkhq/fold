@@ -17,7 +17,6 @@ use fold_daemon::services::workspaces::WorkspaceService;
 use fold_store::events;
 use fold_store::testing::{TestProject, execute};
 use fold_store::workspaces::{create_initial_revision, initial_revision};
-use fold_vcs::git::Git;
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::revision_store::{write_initial_tree, write_revision};
 use rmcp::model::{CallToolRequestParams, CallToolResult};
@@ -112,7 +111,6 @@ impl Fixture {
             bus,
             clock,
             project.paths().clone(),
-            Git::default(),
             LEASE_MINUTES,
         );
         for _ in 0..3 {

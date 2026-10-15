@@ -10,7 +10,6 @@ use fold_daemon::services::messages::MessageService;
 use fold_daemon::services::tasks::TaskService;
 use fold_daemon::services::workspaces::WorkspaceService;
 use fold_store::testing::{TestProject, execute};
-use fold_vcs::git::Git;
 use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::service::RunningService;
 use rmcp::{RoleClient, ServiceExt};
@@ -73,7 +72,6 @@ impl Fixture {
             self.bus.clone(),
             Arc::new(self.project.clock().clone()),
             self.project.paths().clone(),
-            Git::default(),
             LEASE,
         );
         let server = FoldServer::new(

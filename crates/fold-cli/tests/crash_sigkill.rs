@@ -16,7 +16,6 @@ use fold_daemon::services::workspaces::WorkspaceService;
 use fold_store::Store;
 use fold_store::testing::eventually;
 use fold_store::workspaces;
-use fold_vcs::git::Git;
 use hyper::Method;
 use serde_json::{Value, json};
 use sqlx::sqlite::SqliteConnectOptions;
@@ -74,14 +73,8 @@ async fn project(host: &Host) -> ProjectPaths {
         )
         .await
         .unwrap();
-    let workspaces = WorkspaceService::new(
-        store.clone(),
-        bus.clone(),
-        clock.clone(),
-        paths.clone(),
-        Git::default(),
-        5,
-    );
+    let workspaces =
+        WorkspaceService::new(store.clone(), bus.clone(), clock.clone(), paths.clone(), 5);
     workspaces.create_workspace(&author, task).await.unwrap();
     std::fs::write(paths.root().join("ws/t-1/src/new.rs"), "pub fn z() {}\n").unwrap();
     ReviewService::new(

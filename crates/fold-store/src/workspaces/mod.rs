@@ -1,6 +1,7 @@
 mod changesets;
 mod checkpoints;
 mod columns;
+mod commits;
 mod conflicts;
 mod gc;
 mod lifecycle;
@@ -15,6 +16,7 @@ pub use checkpoints::{
     AUTO_CHECKPOINTS_KEPT, Checkpoint, CheckpointKind, CheckpointReason, get_checkpoint,
     insert_checkpoint, latest_checkpoint, list_checkpoints, prune_auto, prune_workspace,
 };
+pub use commits::{insert_revision_commits, uncommitted_revisions};
 pub use conflicts::{ConflictRow, clear_conflict, list_conflicts, set_conflicts};
 pub use gc::{ClosedWorkspace, closed_workspaces_due, gc_roots, workspaces_over_auto_limit};
 pub use lifecycle::{

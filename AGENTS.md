@@ -27,7 +27,7 @@ fold: a local-first platform where independent AI coding agents plan, build, rev
 make setup                 # toolchain components, cargo tools, bun install, prek and its git hook (once per clone)
 make dev                   # daemon with reload on :7420 plus the Vite dev server on :5173
 make dev-daemon            # daemon only (also dev-web)
-make gen-api               # regenerate web/src/api/schema.d.ts from `fold openapi` (no daemon needed)
+make gen-api               # regenerate web/src/api/schema.d.ts from the OpenAPI example program of fold-daemon (no daemon needed)
 make migration NAME=<name> # new project migration; DB=registry for the host registry. The daemon applies migrations itself.
 make sqlx-prepare          # refresh .sqlx/ query metadata after changing a query
 make fmt                   # cargo fmt, eslint --fix, biome format --write

@@ -34,10 +34,14 @@ impl Sandbox {
     }
 
     fn fold_with(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
+        self.fold_in(self.dir.path(), args, env)
+    }
+
+    fn fold_in(&self, cwd: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fold"));
         command
             .args(args)
-            .current_dir(self.dir.path())
+            .current_dir(cwd)
             .env_clear()
             .env("HOME", self.path("home"))
             .env("XDG_DATA_HOME", self.path("data"))
@@ -305,7 +309,16 @@ fn a_second_init_prints_project_exists_and_keeps_the_first_project() {
     let db = project.join(".fold").join("fold.db");
     let before = std::fs::metadata(&db).unwrap().len();
 
-    let second = sandbox.fold(&["init", project.to_str().unwrap()]);
+    // A named directory must be new.
+    let named = sandbox.fold(&["init", project.to_str().unwrap()]);
+    assert_eq!(named.status.code(), Some(1));
+    let refused = String::from_utf8_lossy(&named.stderr).into_owned();
+    assert!(refused.contains("invalid_request"), "{refused}");
+    assert!(
+        refused.contains(&format!("cd {} && fold init", project.display())),
+        "{refused}"
+    );
+    let second = sandbox.fold_in(&project, &["init"], &[]);
     assert_eq!(second.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&second.stderr).contains("project_exists"));
     assert!(second.stdout.is_empty());
@@ -327,14 +340,17 @@ fn an_init_the_registry_does_not_know_is_finished_with_its_claude_files() {
     std::fs::create_dir_all(&source).unwrap();
     std::fs::write(source.join("new.txt"), "not read\n").unwrap();
 
-    let second = sandbox.fold(&[
-        "init",
-        project.to_str().unwrap(),
-        "--name",
-        "Again",
-        "--from",
-        source.to_str().unwrap(),
-    ]);
+    let second = sandbox.fold_in(
+        &project,
+        &[
+            "init",
+            "--name",
+            "Again",
+            "--from",
+            source.to_str().unwrap(),
+        ],
+        &[],
+    );
     assert!(second.status.success(), "{second:?}");
     assert_eq!(
         stdout(&second),

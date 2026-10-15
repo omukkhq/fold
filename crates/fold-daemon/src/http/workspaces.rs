@@ -5,7 +5,6 @@ use fold_core::{CheckpointId, FoldError, ProposalId, RevisionId, TaskId, Timesta
 use fold_store::workspaces::{WorkspaceKind, WorkspaceState};
 use fold_vcs::browse::{DirEntry, FileContent, FlatDirEntry};
 use fold_vcs::compare::{ChangeKind, FileChange, Totals};
-use fold_vcs::git::Git;
 use fold_vcs::scan::SkipReason;
 use fold_vcs::snapshot::{Warning, WarningReason};
 use serde::{Deserialize, Serialize};
@@ -38,7 +37,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
 }
 
 pub(super) fn service(project: &Project) -> WorkspaceService {
-    WorkspaceService::for_project(&project.0, Git::default())
+    WorkspaceService::for_project(&project.0)
 }
 
 fn revision(text: &str) -> Result<RevisionId, ApiError> {
@@ -93,6 +92,9 @@ pub struct RevisionView {
     /// The remote commit a pull brought in.
     #[schema(required = true)]
     pub pull: Option<String>,
+    /// The Git commit the revision became in the project's repository `.fold/git`; null until it is written, just after the integration.
+    #[schema(required = true)]
+    pub commit: Option<String>,
 }
 
 impl From<RevisionSummary> for RevisionView {
@@ -112,6 +114,7 @@ impl From<RevisionSummary> for RevisionView {
             title: summary.title,
             author: summary.author,
             pull: summary.pull,
+            commit: summary.commit,
         }
     }
 }

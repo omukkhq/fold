@@ -1,9 +1,7 @@
 use fold_core::merge::ConflictReport;
 use fold_core::reviews::{HumanReviewMark, ReviewFact};
 use fold_core::revision::StoredRevision;
-use fold_core::{
-    IntegrationId, ProposalId, RevisionId, TaskId, TaskStatus, Timestamp, WorkspaceId,
-};
+use fold_core::{IntegrationId, ProposalId, TaskId, TaskStatus, Timestamp, WorkspaceId};
 use sqlx::{SqliteConnection, SqliteExecutor};
 
 use super::{ProposalRow, ReviewTarget, get_proposal, review_facts, review_target};
@@ -220,25 +218,4 @@ async fn insert(
     .execute(tx.conn())
     .await?;
     Ok(())
-}
-
-/// The newest main revision whose succeeded integration brought a remote commit in, a pull or the proposal of a sync task, with that commit.
-pub async fn latest_remote_commit(
-    executor: impl SqliteExecutor<'_>,
-) -> Result<Option<(RevisionId, String)>, StoreError> {
-    let row = sqlx::query!(
-        r#"SELECT r.number AS "number!: i64", i.remote_commit AS "remote_commit!: String"
-           FROM integrations i JOIN revisions r ON r.id = i.revision_id
-           WHERE i.result = 'succeeded' AND i.remote_commit IS NOT NULL
-           ORDER BY r.number DESC
-           LIMIT 1"#
-    )
-    .fetch_optional(executor)
-    .await?;
-    row.map(|row| {
-        RevisionId::try_from_db(row.number)
-            .map(|number| (number, row.remote_commit))
-            .ok_or(StoreError::Corrupt("revisions.number"))
-    })
-    .transpose()
 }

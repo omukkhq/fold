@@ -171,6 +171,7 @@ describe("proposal texts", () => {
         proposal: "P-5",
         by: "review",
         at: AT,
+        commit: null,
       }),
     ).toBe("by @review · 13:40");
     expect(messageCountText(2, "T-12")).toBe("2 linked to T-12");

@@ -20,7 +20,7 @@ pub struct SyncLock {
     _file: File,
 }
 
-/// Which fold revision is which Git commit: one line `r<n> <commit>` for each revision that is that commit, in revision order. The Git import writes the first line and every export appends, so the last line is where the next export continues the chain of commits.
+/// Which fold revision is which Git commit: one line `r<n> <commit>` for each revision that is that commit, in revision order. The Git import writes the first line and every commit of main appends, so the last line is where the next commit continues the chain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncMap {
     path: PathBuf,
@@ -51,7 +51,7 @@ impl SyncMap {
         Ok(Self { path, entries })
     }
 
-    /// Waits for the project's Git sync lock, then reads the map. A command that appends holds the lock from before it reads the map until after it appends, so two exports never both continue the same commit. It is the operating system's file lock, so it holds between processes and ends with the process that holds it.
+    /// Waits for the project's Git sync lock, then reads the map. A command that appends holds the lock from before it reads the map until after it appends, so two writers never both continue the same commit. It is the operating system's file lock, so it holds between processes and ends with the process that holds it.
     pub fn lock(fold_dir: &Path) -> Result<(SyncLock, Self), FoldError> {
         let file = OpenOptions::new()
             .create(true)

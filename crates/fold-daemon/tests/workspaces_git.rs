@@ -9,8 +9,8 @@ use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
 use fold_core::{
     HostPaths, IntegrationId, ManualClock, ProjectPaths, RevisionId, Timestamp, codes,
 };
-use fold_daemon::services::projects::{ProjectError, init_project, init_project_from_git};
-use fold_daemon::services::workspaces::{GitExport, WorkspaceService};
+use fold_daemon::services::projects::{ProjectError, commit_main, init_project_from_git};
+use fold_daemon::services::workspaces::WorkspaceService;
 use fold_store::workspaces::{self, advance_main, insert_revision};
 use fold_store::{Store, projects};
 use fold_vcs::git::Git;
@@ -164,15 +164,15 @@ async fn add_revision(
     number
 }
 
+/// Writes the project's missing commits into `.fold/git`, as its Git job does.
 #[cfg(test)]
-async fn export(root: &Path, repo: &Path) -> Result<GitExport, Option<&'static str>> {
-    let clock = Arc::new(ManualClock::new());
-    let service = WorkspaceService::open_local(ProjectPaths::new(root), Git::default(), clock)
+async fn commit(root: &Path) {
+    let paths = ProjectPaths::new(root);
+    let store = Store::open_project(&paths).await.unwrap();
+    commit_main(&store, &paths, &Git::default(), &ManualClock::new())
         .await
         .unwrap();
-    let result = service.export_git(repo).await;
-    service.close().await;
-    result.map_err(|error| error.code())
+    store.close().await.unwrap();
 }
 
 #[tokio::test]
@@ -197,6 +197,15 @@ async fn from_git_imports_head_and_records_the_first_sync_point() {
     assert_eq!(r1.import_source.as_deref(), canonical.to_str());
     let map = fs::read_to_string(paths.fold_dir().join(SYNC_MAP_FILE)).unwrap();
     assert_eq!(map, format!("r1 {head}\n"));
+    // The commits after r1 name the imported commit as their parent, so the project's repository holds it.
+    assert_eq!(
+        git(
+            &paths.fold_dir().join("git"),
+            &["rev-parse", "refs/fold/imported"]
+        )
+        .trim(),
+        head
+    );
     assert_eq!(
         fs::read(paths.main_dir().join("README.md")).unwrap(),
         b"# app\n"
@@ -286,26 +295,6 @@ async fn only_the_top_of_a_sha1_repository_imports() {
     assert_eq!(host.registered().await, 0);
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn concurrent_exports_run_one_after_the_other() {
-    let host = Host::new();
-    let root = host.path("app");
-    init_project(&host.paths, &root, None, &host.clock)
-        .await
-        .unwrap();
-    add_revision(&root, &[("a.txt", b"one\n")], None).await;
-    add_revision(&root, &[("a.txt", b"two\n")], None).await;
-    let target = host.path("out");
-    let (first, second) = tokio::join!(export(&root, &target), export(&root, &target));
-    let mut results = [first.unwrap(), second.unwrap()];
-    results.sort_by_key(|result| matches!(result, GitExport::UpToDate { .. }));
-    assert!(matches!(results[0], GitExport::Exported { commits: 3, .. }));
-    assert_eq!(results[1], GitExport::UpToDate { last: Some(id(3)) });
-    assert_eq!(log(&target).len(), 3);
-    let map = fs::read_to_string(root.join(".fold").join(SYNC_MAP_FILE)).unwrap();
-    assert_eq!(map.lines().count(), 3);
-}
-
 #[tokio::test]
 async fn a_missing_git_program_fails_init_with_git_not_found() {
     let host = Host::new();
@@ -330,338 +319,6 @@ async fn a_missing_git_program_fails_init_with_git_not_found() {
     assert_eq!(not_a_dir.unwrap_err().code(), Some(codes::INVALID_REQUEST));
 }
 
-#[tokio::test]
-async fn exports_are_incremental_and_refuse_a_diverged_target() {
-    let host = Host::new();
-    let root = host.path("app");
-    init_project(&host.paths, &root, None, &host.clock)
-        .await
-        .unwrap();
-    add_revision(&root, &[("a.txt", b"one\n")], None).await;
-    add_revision(&root, &[("a.txt", b"two\n")], None).await;
-    let target = host.path("out");
-
-    let first = export(&root, &target).await.unwrap();
-    let GitExport::Exported {
-        first: from,
-        last,
-        commits,
-        head,
-    } = first
-    else {
-        panic!("expected an export, got {first:?}");
-    };
-    assert_eq!((from, last, commits), (id(1), id(3), 3));
-    let commits = log(&target);
-    assert_eq!(commits.len(), 3);
-    assert_eq!(commits[0], head.as_str());
-    assert_eq!(message(&target, &commits[2]), "fold r1\n\nRevision: r1\n\n");
-    assert_eq!(message(&target, &commits[0]), "fold r3\n\nRevision: r3\n\n");
-    let map_path = root.join(".fold").join(SYNC_MAP_FILE);
-    let map = fs::read_to_string(&map_path).unwrap();
-    assert_eq!(map.lines().count(), 3);
-
-    assert_eq!(
-        export(&root, &target).await.unwrap(),
-        GitExport::UpToDate { last: Some(id(3)) }
-    );
-    assert_eq!(fs::read_to_string(&map_path).unwrap(), map);
-    assert_eq!(log(&target), commits);
-
-    add_revision(&root, &[("a.txt", b"three\n")], None).await;
-    add_revision(&root, &[("a.txt", b"three\n"), ("b.txt", b"four\n")], None).await;
-    let again = export(&root, &target).await.unwrap();
-    assert!(matches!(
-        again,
-        GitExport::Exported { first, last, commits: 2, .. } if first == id(4) && last == id(5)
-    ));
-    let after = log(&target);
-    assert_eq!(after.len(), 5);
-    assert_eq!(after[2], commits[0]);
-    assert_eq!(
-        git(&target, &["log", "-1", "--format=%P", &after[1]]).trim(),
-        commits[0]
-    );
-
-    // Another path holds none of the exported commits.
-    assert_eq!(
-        export(&root, &host.path("elsewhere")).await,
-        Err(Some(codes::EXPORT_DIVERGED))
-    );
-    assert!(!host.path("elsewhere").exists());
-
-    // A commit made in the target after the last export.
-    let outside = git(
-        &target,
-        &[
-            "commit-tree",
-            "-p",
-            "main",
-            "-m",
-            "outside fold",
-            "main^{tree}",
-        ],
-    );
-    git(&target, &["update-ref", "refs/heads/main", outside.trim()]);
-    add_revision(&root, &[("a.txt", b"six\n")], None).await;
-    let before = fs::read_to_string(&map_path).unwrap();
-    assert_eq!(
-        export(&root, &target).await,
-        Err(Some(codes::EXPORT_DIVERGED))
-    );
-    assert_eq!(fs::read_to_string(&map_path).unwrap(), before);
-    assert_eq!(log(&target).len(), 6);
-
-    let plain = host.path("plain");
-    write(&plain, "file", b"x");
-    assert_eq!(
-        export(&root, &plain).await,
-        Err(Some(codes::INVALID_REQUEST))
-    );
-}
-
-/// A project with `r1` to `r3` exported, then `r4` and `r5` recorded; returns the root, the target and the map before the second export.
-#[cfg(test)]
-async fn exported_then_two_more(host: &Host) -> (PathBuf, PathBuf, String) {
-    let root = host.path("app");
-    init_project(&host.paths, &root, None, &host.clock)
-        .await
-        .unwrap();
-    add_revision(&root, &[("a.txt", b"one\n")], None).await;
-    add_revision(&root, &[("a.txt", b"two\n")], None).await;
-    let target = host.path("out");
-    export(&root, &target).await.unwrap();
-    let map = fs::read_to_string(root.join(".fold").join(SYNC_MAP_FILE)).unwrap();
-    add_revision(&root, &[("a.txt", b"three\n")], None).await;
-    add_revision(&root, &[("a.txt", b"four\n")], None).await;
-    (root, target, map)
-}
-
-#[tokio::test]
-async fn an_export_stopped_after_fast_import_finishes_on_the_next_run() {
-    let host = Host::new();
-    let (root, target, mapped) = exported_then_two_more(&host).await;
-    let map_path = root.join(".fold").join(SYNC_MAP_FILE);
-    let first = export(&root, &target).await.unwrap();
-    let GitExport::Exported { head, .. } = first else {
-        panic!("expected an export, got {first:?}");
-    };
-    // The crash: the commits are in the target, the map never got their lines.
-    fs::write(&map_path, &mapped).unwrap();
-
-    let recovered = export(&root, &target).await.unwrap();
-    assert!(matches!(
-        recovered,
-        GitExport::Exported { first, last, commits: 2, head: ref again }
-            if first == id(4) && last == id(5) && *again == head
-    ));
-    assert_eq!(log(&target).len(), 5);
-    let map = fs::read_to_string(&map_path).unwrap();
-    assert_eq!(map.lines().count(), 5);
-    assert!(map.ends_with(&format!("r5 {}\n", head.as_str())));
-    assert_eq!(
-        export(&root, &target).await.unwrap(),
-        GitExport::UpToDate { last: Some(id(5)) }
-    );
-}
-
-#[tokio::test]
-async fn an_export_stopped_part_way_finishes_the_chain() {
-    let host = Host::new();
-    let (root, target, mapped) = exported_then_two_more(&host).await;
-    let map_path = root.join(".fold").join(SYNC_MAP_FILE);
-    export(&root, &target).await.unwrap();
-    fs::write(&map_path, &mapped).unwrap();
-    // Only r4 reached the branch.
-    git(&target, &["update-ref", "refs/heads/main", "main~1"]);
-
-    assert!(matches!(
-        export(&root, &target).await.unwrap(),
-        GitExport::Exported { commits: 2, .. }
-    ));
-    assert_eq!(log(&target).len(), 5);
-    assert_eq!(fs::read_to_string(&map_path).unwrap().lines().count(), 5);
-    assert!(!git(&target, &["for-each-ref", "refs/fold"]).contains("refs/fold"));
-}
-
-#[tokio::test]
-async fn a_stopped_export_with_a_foreign_commit_stays_diverged() {
-    let host = Host::new();
-    let (root, target, mapped) = exported_then_two_more(&host).await;
-    let map_path = root.join(".fold").join(SYNC_MAP_FILE);
-    export(&root, &target).await.unwrap();
-    fs::write(&map_path, &mapped).unwrap();
-    let outside = git(
-        &target,
-        &[
-            "commit-tree",
-            "-p",
-            "main",
-            "-m",
-            "outside fold",
-            "main^{tree}",
-        ],
-    );
-    git(&target, &["update-ref", "refs/heads/main", outside.trim()]);
-    let before = log(&target);
-
-    assert_eq!(
-        export(&root, &target).await,
-        Err(Some(codes::EXPORT_DIVERGED))
-    );
-    assert_eq!(log(&target), before);
-    assert_eq!(fs::read_to_string(&map_path).unwrap(), mapped);
-
-    // A foreign commit in place of fold's r4.
-    let foreign = git(
-        &target,
-        &[
-            "commit-tree",
-            "-p",
-            &before[before.len() - 3],
-            "-m",
-            "other",
-            "main^{tree}",
-        ],
-    );
-    git(&target, &["update-ref", "refs/heads/main", foreign.trim()]);
-    assert_eq!(
-        export(&root, &target).await,
-        Err(Some(codes::EXPORT_DIVERGED))
-    );
-    assert_eq!(log(&target)[0], foreign.trim());
-    assert_eq!(fs::read_to_string(&map_path).unwrap(), mapped);
-    assert!(!git(&target, &["for-each-ref", "refs/fold"]).contains("refs/fold"));
-}
-
-#[tokio::test]
-async fn a_first_export_stopped_after_fast_import_finishes_on_the_next_run() {
-    let host = Host::new();
-    let root = host.path("app");
-    init_project(&host.paths, &root, None, &host.clock)
-        .await
-        .unwrap();
-    add_revision(&root, &[("a.txt", b"one\n")], None).await;
-    add_revision(&root, &[("a.txt", b"two\n")], None).await;
-    let map_path = root.join(".fold").join(SYNC_MAP_FILE);
-    let target = host.path("out");
-    let GitExport::Exported { head, .. } = export(&root, &target).await.unwrap() else {
-        panic!("expected an export");
-    };
-    let map = fs::read_to_string(&map_path).unwrap();
-    // The crash: the first export's commits are in the target, the map has no line yet.
-    fs::write(&map_path, "").unwrap();
-    // A scratch ref left by a recovery that stopped, on a commit the expected chain does not continue.
-    let stale = git(&target, &["commit-tree", "-m", "stale", "main^{tree}"]);
-    git(
-        &target,
-        &["update-ref", "refs/fold/export-recovery", stale.trim()],
-    );
-
-    let recovered = export(&root, &target).await.unwrap();
-    assert!(matches!(
-        recovered,
-        GitExport::Exported { first, last, commits: 3, head: ref again }
-            if first == id(1) && last == id(3) && *again == head
-    ));
-    assert_eq!(fs::read_to_string(&map_path).unwrap(), map);
-    assert_eq!(log(&target).len(), 3);
-    assert!(!git(&target, &["for-each-ref", "refs/fold"]).contains("refs/fold"));
-
-    // Another project's first export finds a branch it did not write.
-    let other = host.path("other");
-    init_project(&host.paths, &other, None, &host.clock)
-        .await
-        .unwrap();
-    add_revision(&other, &[("b.txt", b"other\n")], None).await;
-    assert_eq!(
-        export(&other, &target).await,
-        Err(Some(codes::EXPORT_DIVERGED))
-    );
-    assert_eq!(git(&target, &["rev-parse", "main"]).trim(), head.as_str());
-    assert!(!git(&target, &["for-each-ref", "refs/fold"]).contains("refs/fold"));
-    assert_eq!(
-        fs::read_to_string(other.join(".fold").join(SYNC_MAP_FILE)).unwrap_or_default(),
-        ""
-    );
-}
-
-#[cfg(feature = "failpoints")]
-#[tokio::test]
-async fn an_export_stopped_by_the_failpoint_recovers_with_one_map_line_per_revision() {
-    let scenario = fail::FailScenario::setup();
-    let host = Host::new();
-    let (root, target, mapped) = exported_then_two_more(&host).await;
-    let map_path = root.join(".fold").join(SYNC_MAP_FILE);
-
-    fail::cfg("git_export_before_map", "return").unwrap();
-    assert_eq!(export(&root, &target).await, Err(Some(codes::FAILPOINT)));
-    fail::remove("git_export_before_map");
-    assert_eq!(log(&target).len(), 5);
-    assert_eq!(fs::read_to_string(&map_path).unwrap(), mapped);
-
-    assert!(matches!(
-        export(&root, &target).await.unwrap(),
-        GitExport::Exported { commits: 2, .. }
-    ));
-    let map = fs::read_to_string(&map_path).unwrap();
-    let revisions: Vec<&str> = map
-        .lines()
-        .map(|line| line.split(' ').next().unwrap())
-        .collect();
-    assert_eq!(revisions, ["r1", "r2", "r3", "r4", "r5"]);
-    scenario.teardown();
-}
-
-#[tokio::test]
-async fn a_from_git_project_continues_its_source_repository() {
-    let host = Host::new();
-    let repo = host.path("repo");
-    let head = source_repo(&repo);
-    let root = host.path("app");
-    init_project_from_git(&host.paths, &root, None, &repo, Git::default(), &host.clock)
-        .await
-        .unwrap();
-
-    // Nothing after r1, and an empty directory lacks the imported commit.
-    let empty = host.path("empty");
-    fs::create_dir(&empty).unwrap();
-    assert_eq!(
-        export(&root, &empty).await,
-        Err(Some(codes::EXPORT_DIVERGED))
-    );
-    assert!(fs::read_dir(&empty).unwrap().next().is_none());
-    assert_eq!(
-        export(&root, &repo).await.unwrap(),
-        GitExport::UpToDate { last: Some(id(1)) }
-    );
-
-    add_revision(
-        &root,
-        &[("README.md", b"# app v2\n"), ("bin/run", b"#!/bin/sh\n")],
-        None,
-    )
-    .await;
-    // `main` is checked out in the source, and moving it would leave the working tree behind.
-    assert_eq!(
-        export(&root, &repo).await,
-        Err(Some(codes::INVALID_REQUEST))
-    );
-    assert_eq!(log(&repo), std::slice::from_ref(&head));
-    git(&repo, &["checkout", "--quiet", "--detach"]);
-    let exported = export(&root, &repo).await.unwrap();
-    assert!(matches!(exported, GitExport::Exported { commits: 1, .. }));
-    let commits = log(&repo);
-    assert_eq!(commits.len(), 2);
-    assert_eq!(commits[1], head);
-    assert_eq!(message(&repo, &commits[0]), "fold r2\n\nRevision: r2\n\n");
-    // r2 records only what differs from r1; the committed `.fold/` that fold never imported stays.
-    let names = git(&repo, &["show", "--name-status", "--format=", &commits[0]]);
-    assert_eq!(names, "M\tREADME.md\nM\tbin/run\nD\tlink\n");
-    let files = git(&repo, &["ls-tree", "-r", "--name-only", &commits[0]]);
-    assert_eq!(files, ".fold/fold.db\nREADME.md\nbin/run\n");
-}
-
 const PARENTS: &str = "
 INSERT INTO agents (id, name, created_at) VALUES (1, 'backend', 0);
 INSERT INTO workers (id, agent_id, name, created_at) VALUES (1, 1, 'worker-a', 0);
@@ -671,10 +328,13 @@ INSERT INTO changesets (id, number, workspace_id, task_id, base_revision_id, tre
 INSERT INTO proposals (id, number, task_id, author_worker_id, title, created_at, updated_at) VALUES (1, 4, 1, 1, 'Database schema for reports', 0, 0);
 INSERT INTO proposal_versions (id, proposal_id, version, base_revision_id, tree_hash, head_changeset_id, created_by, created_at) VALUES (1, 1, 1, 1, 't', 1, 'frontend', 0);
 INSERT INTO integrations (id, number, kind, proposal_id, version_id, result, actor, created_at) VALUES (1, 1, 'proposal', 1, 1, 'succeeded', 'backend.worker-a', 0);
+INSERT INTO reviews (id, version_id, reviewer_human, verdict, body, created_at) VALUES (1, 1, 'bo', 'request_changes', 'b', 1);
+INSERT INTO reviews (id, version_id, reviewer_worker_id, verdict, body, created_at) VALUES (2, 1, 1, 'approve', 'b', 2);
+INSERT INTO reviews (id, version_id, reviewer_human, verdict, body, created_at) VALUES (3, 1, 'ana', 'approve', 'b', 3);
 ";
 
 #[tokio::test]
-async fn exported_commits_carry_the_revision_messages() {
+async fn commits_carry_the_revision_messages() {
     let host = Host::new();
     let source = host.path("source");
     write(&source, "notes.txt", b"imported\n");
@@ -725,15 +385,18 @@ async fn exported_commits_carry_the_revision_messages() {
     add_revision(&root, &[("a.txt", b"pulled\n")], integration(2)).await;
     add_revision(&root, &[("a.txt", b"plain\n")], None).await;
 
-    let target = host.path("out");
-    export(&root, &target).await.unwrap();
+    commit(&root).await;
+    let target = root.join(".fold/git");
     let commits = log(&target);
     let canonical = source.canonicalize().unwrap();
     let expected = [
-        "fold r4\n\nRevision: r4\n\n".to_owned(),
-        "fold r3\n\nRevision: r3\n\n".to_owned(),
-        "P-4: Database schema for reports\n\nRevision: r2\nTask: T-3\nIntegrated by: backend.worker-a\n\n".to_owned(),
-        format!("Import {}\n\nRevision: r1\n\n", canonical.display()),
+        "fold r4\n\nFold-Revision: r4\n\n".to_owned(),
+        format!(
+            "Merge remote commit {}\n\nFold-Revision: r3\nIntegrated-by: human:ana\n\n",
+            &pulled[..12]
+        ),
+        "Database schema for reports\n\nthree\n\nFold-Proposal: P-4\nFold-Version: 1\nFold-Task: T-3\nFold-Revision: r2\nReviewed-by: worker-a\nReviewed-by: human:ana\nIntegrated-by: backend.worker-a\n\n".to_owned(),
+        format!("Import {}\n\nFold-Revision: r1\n\n", canonical.display()),
     ];
     let found: Vec<String> = commits
         .iter()
@@ -750,7 +413,7 @@ async fn a_directory_without_a_project_is_project_not_found() {
     let host = Host::new();
     let paths = ProjectPaths::new(host.path("none"));
     let clock = Arc::new(host.clock.clone());
-    let error = WorkspaceService::open_local(paths, Git::default(), clock)
+    let error = WorkspaceService::open_local(paths, clock)
         .await
         .unwrap_err();
     assert_eq!(error.code(), Some(codes::PROJECT_NOT_FOUND));

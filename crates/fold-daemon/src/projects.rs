@@ -7,7 +7,7 @@ use fold_store::projects::ProjectRow;
 use fold_vcs::git::Git;
 use fold_vcs::platform::Capabilities;
 
-use crate::jobs::{self, AutoPush, MainMaterialiser, MainQueue};
+use crate::jobs::{self, AutoCommit, MainMaterialiser, MainQueue};
 use crate::live::{LiveConfig, LiveState};
 use crate::push::{self, PushTargets, PushTask};
 use crate::services::agents::{AgentService, SeenPresence};
@@ -49,7 +49,8 @@ pub struct ProjectHandle {
     _push_task: PushTask,
     /// Keeps `main/` on the head after each integration. It is the only writer of `main/` after `fold init`.
     pub main_view: MainMaterialiser,
-    _auto_push: AutoPush,
+    /// Commits each integration to `.fold/git` and pushes it when the configuration asks.
+    _auto_commit: AutoCommit,
 }
 
 impl std::fmt::Debug for ProjectHandle {
@@ -109,7 +110,7 @@ impl ProjectHandle {
             MainQueue::new(),
         );
         let remote_lock = Arc::new(tokio::sync::Mutex::new(()));
-        let auto_push = jobs::auto_push(
+        let auto_commit = jobs::auto_commit(
             RemoteContext {
                 slug: row.slug.clone(),
                 paths: paths.clone(),
@@ -139,7 +140,7 @@ impl ProjectHandle {
             push,
             _push_task: push_task,
             main_view,
-            _auto_push: auto_push,
+            _auto_commit: auto_commit,
         })
     }
 
@@ -158,7 +159,7 @@ impl ProjectHandle {
             self.store.clone(),
             self.bus.clone(),
             self.clock.clone(),
-            WorkspaceService::for_project(self, Git::default()),
+            WorkspaceService::for_project(self),
             self.integration.clone(),
         )
         .with_registry(registry.clone())

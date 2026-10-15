@@ -525,6 +525,9 @@ pub struct TaskIntegration {
     pub by: String,
     /// UTC milliseconds.
     pub at: i64,
+    /// The Git commit the revision became in the project's repository `.fold/git`; null until it is written, just after the integration.
+    #[schema(required = true)]
+    pub commit: Option<String>,
 }
 
 /// A stored event of the task as its history lists it.
@@ -668,6 +671,7 @@ impl From<service::TaskDetail> for TaskView {
                 proposal: integration.proposal.to_string(),
                 by: integration.by,
                 at: integration.at.as_millis(),
+                commit: integration.commit,
             }),
             history: detail
                 .history

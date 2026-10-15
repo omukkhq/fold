@@ -125,6 +125,7 @@ fn remote_tree(fx: &Fixture, readme: &str) -> ObjectHash {
 fn pull(fx: &Fixture, readme: &str) -> PullIntegration {
     PullIntegration {
         remote_commit: COMMIT.to_owned(),
+        remote: "origin".to_owned(),
         branch: "main".to_owned(),
         base_tree: remote_tree(fx, "# demo\n"),
         remote_tree: remote_tree(fx, readme),
@@ -831,7 +832,7 @@ async fn pull_integration_records_kind_pull_the_remote_commit_and_remote_pulled(
     );
     assert_eq!(
         events[2].data,
-        serde_json::json!({"branch": "main", "remote_commit": COMMIT, "revision": "r2"})
+        serde_json::json!({"remote": "origin", "branch": "main", "remote_commit": COMMIT, "revision": "r2"})
     );
     assert_eq!(events[2].revision, Some(r(2)));
     assert_eq!(events[1].data["previous"], "r1");

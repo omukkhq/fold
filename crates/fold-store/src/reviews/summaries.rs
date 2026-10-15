@@ -12,6 +12,8 @@ pub struct IntegrationRecord {
     /// A worker name or `human:<name>`.
     pub actor: String,
     pub at: Timestamp,
+    /// The Git commit the revision became; `None` until it is written.
+    pub commit: Option<String>,
 }
 
 /// The proposal a task shows: its newest proposal that is open or integrated. A closed proposal is left out, so a task whose proposal was closed shows none until a new one opens.
@@ -62,11 +64,13 @@ pub async fn proposal_summaries(
                   ) AS "verdict?: String",
                   rev.number AS "revision?: i64",
                   i.actor AS "integrated_by?: String",
-                  i.created_at AS "integrated_at?: i64"
+                  i.created_at AS "integrated_at?: i64",
+                  rc."commit" AS "git_commit?: String"
            FROM proposals p
            JOIN tasks t ON t.id = p.task_id
            LEFT JOIN integrations i ON i.proposal_id = p.id AND i.result = 'succeeded'
            LEFT JOIN revisions rev ON rev.id = i.revision_id
+           LEFT JOIN revision_commits rc ON rc.revision_id = rev.id
            WHERE p.state IN ('open', 'integrated')
              AND (?1 IS NULL OR t.number = ?1)
              AND p.number = (
@@ -86,6 +90,7 @@ pub async fn proposal_summaries(
                         .ok_or(StoreError::Corrupt("revisions.number"))?,
                     actor: by,
                     at: time(at, "integrations.created_at")?,
+                    commit: row.git_commit,
                 }),
                 _ => None,
             };

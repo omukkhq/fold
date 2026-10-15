@@ -138,14 +138,14 @@ check-web: ## Run the web install, typecheck, lint, format check, coverage and b
 GEN_DIR := target/gen
 
 # openapi-typescript runs from web/ so bunx uses the version pinned in bun.lock.
-gen-api: ## Regenerate web/src/api/schema.d.ts from `fold openapi` (no daemon needed)
+gen-api: ## Regenerate web/src/api/schema.d.ts from the daemon's OpenAPI document (no daemon needed)
 	mkdir -p $(GEN_DIR)
-	cargo run -q -p fold-cli -- openapi > $(GEN_DIR)/openapi.json
+	cargo run -q -p fold-daemon --example openapi > $(GEN_DIR)/openapi.json
 	cd web && bunx openapi-typescript ../$(GEN_DIR)/openapi.json -o src/api/schema.d.ts
 
 check-api: ## Fail when web/src/api/schema.d.ts differs from the daemon's OpenAPI document
 	mkdir -p $(GEN_DIR)
-	cargo run -q -p fold-cli -- openapi > $(GEN_DIR)/openapi.json
+	cargo run -q -p fold-daemon --example openapi > $(GEN_DIR)/openapi.json
 	cd web && bunx openapi-typescript ../$(GEN_DIR)/openapi.json -o ../$(GEN_DIR)/schema.d.ts
 	@cmp -s $(GEN_DIR)/schema.d.ts web/src/api/schema.d.ts || { echo "web/src/api/schema.d.ts is stale: run make gen-api" >&2; exit 1; }
 

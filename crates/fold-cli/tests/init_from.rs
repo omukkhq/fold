@@ -29,6 +29,10 @@ impl Sandbox {
 
     /// The environment holds no real home and no runtime directory, so no run touches the user's registry or a real daemon.
     fn fold(&self, args: &[&str]) -> Output {
+        self.fold_in(self.dir.path(), args)
+    }
+
+    fn fold_in(&self, cwd: &Path, args: &[&str]) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fold"));
         // Coverage runs name the profile file through this variable.
         if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
@@ -36,7 +40,7 @@ impl Sandbox {
         }
         command
             .args(args)
-            .current_dir(self.dir.path())
+            .current_dir(cwd)
             .env_clear()
             .env("HOME", self.path("home"))
             .env("XDG_DATA_HOME", self.path("data"))
@@ -315,7 +319,7 @@ fn init_on_an_initialised_project_is_refused_before_any_import() {
     let first = r1(&project);
     write(&source, "new.txt", b"new");
 
-    let again = sandbox.fold(&args);
+    let again = sandbox.fold_in(&project, &["init", "--from", source.to_str().unwrap()]);
     assert_eq!(again.status.code(), Some(1));
     assert!(stderr(&again).contains("project_exists"), "{again:?}");
     assert_eq!(r1(&project), first);

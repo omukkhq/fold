@@ -21,7 +21,6 @@ use fold_store::workspaces::{
     WorkspaceKind, WorkspaceState, create_initial_revision, initial_revision,
 };
 use fold_store::{StoreError, events};
-use fold_vcs::git::Git;
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::revision_store::{write_initial_tree, write_revision};
 use serde_json::json;
@@ -88,7 +87,6 @@ impl Fixture {
             bus.clone(),
             clock,
             project.paths().clone(),
-            Git::default(),
             LEASE_MINUTES,
         );
         let creator = agent("frontend");
@@ -729,7 +727,6 @@ async fn a_project_without_a_revision_cannot_create() {
         bus,
         clock,
         project.paths().clone(),
-        Git::default(),
         5,
     );
     tasks
@@ -837,7 +834,6 @@ async fn a_local_service_takes_the_configured_lease_and_refuses_a_bad_config() {
     std::fs::write(&config, "lease_minute = 3").unwrap();
     let error = WorkspaceService::open_local(
         fx.project.paths().clone(),
-        Git::default(),
         Arc::new(fx.project.clock().clone()),
     )
     .await
@@ -846,7 +842,6 @@ async fn a_local_service_takes_the_configured_lease_and_refuses_a_bad_config() {
     std::fs::write(&config, "lease_minutes = 7").unwrap();
     let service = WorkspaceService::open_local(
         fx.project.paths().clone(),
-        Git::default(),
         Arc::new(fx.project.clock().clone()),
     )
     .await

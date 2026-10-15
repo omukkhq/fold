@@ -1400,7 +1400,7 @@ export interface components {
             workspace: string | null;
         };
         /** @enum {string} */
-        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed";
+        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed";
         /**
          * @description `needs`: this task needs the other task. `needed_by`: the other task needs this one.
          * @enum {string}
@@ -1930,6 +1930,8 @@ export interface components {
             /** @description False when an open sync task for the same commit existed already and nothing was created. */
             created: boolean;
             outcome: components["schemas"]["PullState"];
+            /** @description The remote's name. */
+            remote: string;
             /** @description The fetched tip of the remote branch; absent when the remote has no such branch. */
             remote_commit?: string | null;
             /**
@@ -1961,9 +1963,11 @@ export interface components {
             /** @description The newest revision on the remote. */
             last?: string | null;
             outcome: components["schemas"]["PushState"];
+            /** @description The remote's name. */
+            remote: string;
         };
         /** @enum {string} */
-        PushState: "up_to_date" | "pushed" | "recorded";
+        PushState: "up_to_date" | "pushed";
         /** @description One recipient row. Names starting `human:` are humans. */
         RecipientView: {
             /**
@@ -2217,6 +2221,8 @@ export interface components {
         RevisionView: {
             /** @description The agent whose proposal was integrated, or the human who pulled. */
             author: string | null;
+            /** @description The Git commit the revision became in the project's repository `.fold/git`; null until it is written, just after the integration. */
+            commit: string | null;
             /**
              * Format: int64
              * @description UTC milliseconds.
@@ -2359,6 +2365,8 @@ export interface components {
             at: number;
             /** @description A worker or `human:<name>`. */
             by: string;
+            /** @description The Git commit the revision became in the project's repository `.fold/git`; null until it is written, just after the integration. */
+            commit: string | null;
             /** @example P-3 */
             proposal: string;
             /**
@@ -4826,7 +4834,10 @@ export interface operations {
     };
     pull_project: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description The remote's name; left out, the only remote. */
+                remote?: string;
+            };
             header?: never;
             path: {
                 /** @description The project slug */
@@ -4845,7 +4856,7 @@ export interface operations {
                     "application/json": components["schemas"]["PullResult"];
                 };
             };
-            /** @description The human name is not valid */
+            /** @description The human name or the query is not valid, or the project has several remotes and the query names none */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -4921,7 +4932,10 @@ export interface operations {
     };
     push_project: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description The remote's name; left out, the only remote. */
+                remote?: string;
+            };
             header?: never;
             path: {
                 /** @description The project slug */
@@ -4940,7 +4954,7 @@ export interface operations {
                     "application/json": components["schemas"]["PushResult"];
                 };
             };
-            /** @description The human name is not valid */
+            /** @description The human name or the query is not valid, or the project has several remotes and the query names none */
             400: {
                 headers: {
                     [name: string]: unknown;

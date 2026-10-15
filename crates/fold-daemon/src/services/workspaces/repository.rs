@@ -52,6 +52,8 @@ pub struct RevisionSummary {
     pub author: Option<String>,
     /// The remote commit a pull brought in.
     pub pull: Option<String>,
+    /// The Git commit the revision became in `.fold/git`; `None` until it is written.
+    pub commit: Option<String>,
 }
 
 impl From<RevisionRow> for RevisionSummary {
@@ -79,6 +81,7 @@ impl From<RevisionRow> for RevisionSummary {
             title: proposal.map(|proposal| proposal.title),
             author,
             pull: integration.and_then(|info| info.remote_commit),
+            commit: row.commit,
         }
     }
 }

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO revision_commits (revision_id, branch, \"commit\", created_at)\n               SELECT id, ?2, ?3, ?4 FROM revisions WHERE number = ?1\n               ON CONFLICT (revision_id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "2d77469821599f98af2061ac2bdc6a20bca71d33471b40510eeae178599fe90b"
+}

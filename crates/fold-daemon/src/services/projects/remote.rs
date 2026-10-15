@@ -1,53 +1,58 @@
 use std::sync::Arc;
 
 use fold_core::{
-    Actor, Clock, FoldError, NewEvent, ProjectPaths, RevisionId, codes, events::types, policy,
+    Actor, Clock, FoldError, NewEvent, ProjectConfig, ProjectPaths, RemoteConfig, RevisionId,
+    codes, events::types, policy,
 };
-use fold_store::workspaces::RevisionRow;
-use fold_store::{Store, StoreError};
+use fold_store::Store;
 use fold_vcs::git::{CommitId, Git};
-use fold_vcs::git_export::{ExportRevision, ExportTarget, Signature, write_commits};
 use fold_vcs::git_remote::{
-    MIRROR_DIR, fetch_branch, fold_ref, is_ancestor, prepare_mirror, push_branch, remote_ahead,
-    set_ref,
+    MIRROR_DIR, create_local_remote, fetch_branch, is_ancestor, prepare_mirror, push_branch,
+    remote_ahead,
 };
 use fold_vcs::git_sync_map::SyncMap;
-use fold_vcs::objects::ObjectStore;
 use serde_json::json;
 
+use super::commits::commit_locked;
 use super::{ProjectError, load_config};
 use crate::projects::ProjectHandle;
 use crate::services::events::{EventBuffer, EventBus};
-use crate::services::workspaces::{commit_message, merge_parent, unsynced};
 
 /// What a push did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PushOutcome {
-    /// Every main revision is synced already; `last` is the newest mapped one.
+    /// The remote branch is on main's newest commit already; `last` is its revision.
     UpToDate {
+        remote: String,
         branch: String,
         last: Option<RevisionId>,
     },
     Synced {
+        remote: String,
         branch: String,
         first: RevisionId,
         last: RevisionId,
         commits: usize,
         /// The commit the remote branch points to.
         head: CommitId,
-        /// False when an earlier push had reached the remote and only its record was lost, so nothing was sent.
-        sent: bool,
     },
 }
 
-/// Writes the main revisions after the newest one in `.fold/git-sync.map` as commits in the bare mirror `.fold/git/` and pushes them to the `[git]` branch of the remote, never with force. `[git]` is read on every call, so `fold remote set` takes effect without a restart. A remote branch with commits that main lacks fails with `remote_ahead` before anything is sent. Only after the push succeeds does the map gain the new lines, and then one transaction appends `remote.pushed`. A push never changes main, tasks, workspaces or claims; a failed one writes no map line and no event, and the commits it wrote stay in the mirror for the next push. The project's remote lock and its Git sync lock are held from before the map is read until after it is written, so pushes and exports run one after the other. The push runs as its own task, so a caller that stops waiting never leaves the map written without its event.
+/// Writes the commits that `.fold/git` lacks for main, as every integration does, then pushes the `[git]` branch of `.fold/git` to the branch of the remote `remote`, never with force, and appends `remote.pushed` in one transaction. Without a name the push goes to the only remote. The configuration is read on every call, so `fold remote set` takes effect without a restart. A remote that is an absolute local path that does not exist is created as a bare repository first. A remote branch with commits that main lacks fails with `remote_ahead` before anything is sent; one already on main's newest commit is up to date. A push never changes main, tasks, workspaces or claims, and a failed one writes no event. The project's remote lock and its Git sync lock are held throughout, so pushes, pulls and the commit of each integration run one after the other. The push runs as its own task, so a caller that stops waiting never leaves the remote moved without its event.
 pub async fn push(
     handle: &Arc<ProjectHandle>,
     actor: &Actor,
     git: &Git,
+    remote: Option<&str>,
 ) -> Result<PushOutcome, ProjectError> {
     policy::can_push(actor).map_err(FoldError::from)?;
-    push_with(RemoteContext::of(handle), actor, git).await
+    push_with(
+        RemoteContext::of(handle),
+        actor,
+        git,
+        remote.map(str::to_owned),
+    )
+    .await
 }
 
 /// What a push needs of an open project. The automatic push keeps one instead of the project's handle, so it never keeps a closed project open.
@@ -62,6 +67,24 @@ pub struct RemoteContext {
 }
 
 impl RemoteContext {
+    /// The context of a project whose services run without a [`ProjectHandle`], with its own remote lock.
+    pub fn new(
+        slug: String,
+        paths: ProjectPaths,
+        store: Store,
+        clock: Arc<dyn Clock>,
+        bus: EventBus,
+    ) -> Self {
+        Self {
+            slug,
+            paths,
+            store,
+            clock,
+            bus,
+            remote_lock: Arc::new(tokio::sync::Mutex::new(())),
+        }
+    }
+
     pub(crate) fn of(handle: &ProjectHandle) -> Self {
         Self {
             slug: handle.slug.clone(),
@@ -79,9 +102,10 @@ pub(crate) async fn push_with(
     context: RemoteContext,
     actor: &Actor,
     git: &Git,
+    remote: Option<String>,
 ) -> Result<PushOutcome, ProjectError> {
     let (actor, git) = (actor.clone(), git.clone());
-    tokio::spawn(async move { run(&context, &actor, &git).await })
+    tokio::spawn(async move { run(&context, &actor, &git, remote.as_deref()).await })
         .await
         .unwrap_or_else(|error| {
             Err(FoldError::new(codes::INTERNAL_ERROR, format!("the push stopped: {error}")).into())
@@ -92,100 +116,78 @@ async fn run(
     handle: &RemoteContext,
     actor: &Actor,
     git: &Git,
+    remote: Option<&str>,
 ) -> Result<PushOutcome, ProjectError> {
-    let config = load_config(&handle.paths).await?.git;
-    let Some(remote) = config.remote else {
-        return Err(remote_not_set().into());
-    };
-    let branch = config.branch;
+    let config = load_config(&handle.paths).await?;
+    let (name, remote) = select_remote(&config, remote)?;
+    let (url, branch, local) = (remote.url, remote.branch, config.git.branch);
     let remote_guard = handle.remote_lock.clone().lock_owned().await;
     let fold_dir = handle.paths.fold_dir();
     let mirror = fold_dir.join(MIRROR_DIR);
     // Both locks move into each blocking step and come back out, so a task stopped by a shutdown never releases them while Git still runs.
     let (held, map, fetched) = {
-        let (git, fold_dir, mirror, branch) = (
-            git.clone(),
-            fold_dir.clone(),
-            mirror.clone(),
-            branch.clone(),
-        );
+        let (git, mirror, name, branch) =
+            (git.clone(), mirror.clone(), name.clone(), branch.clone());
         blocking(move || {
             let (sync_lock, map) = SyncMap::lock(&fold_dir)?;
-            prepare_mirror(&git, &mirror, &remote)?;
-            let fetched = fetch_branch(&git, &mirror, &branch)?;
+            create_local_remote(&git, &url, &branch)?;
+            prepare_mirror(&git, &mirror, &name, &url)?;
+            let fetched = fetch_branch(&git, &mirror, &name, &branch)?;
             Ok(((remote_guard, sync_lock), map, fetched))
         })
         .await?
     };
-    let last = map.last().cloned();
-    let (rows, base) = unsynced(&handle.store, last.as_ref()).await?;
-    if rows.is_empty() {
-        return Ok(PushOutcome::UpToDate {
-            branch,
-            last: last.map(|(number, _)| number),
-        });
-    }
-    let revisions = rows
-        .iter()
-        .map(export_revision)
-        .collect::<Result<Vec<_>, StoreError>>()?;
-    let (added, sent) = {
-        let (git, branch) = (git.clone(), branch.clone());
+    let (held, map, _) = commit_locked(
+        &handle.store,
+        &handle.paths,
+        git,
+        &local,
+        held,
+        map,
+        handle.clock.now(),
+    )
+    .await?;
+    let entries = map.entries().to_vec();
+    let Some((last, tip)) = entries.last().cloned() else {
+        return Err(FoldError::new(codes::INTERNAL_ERROR, "main has no commit to push").into());
+    };
+    let sent_from = {
+        let (git, name, branch, tip) = (git.clone(), name.clone(), branch.clone(), tip.clone());
         blocking(move || {
             let _held = held;
-            if let Some((number, commit)) = &last
-                && !git.has_commit(&mirror, commit)?
-            {
-                return Err(diverged(*number, commit));
-            }
-            let refname = fold_ref(&branch);
-            set_ref(
-                &git,
-                &mirror,
-                &refname,
-                base.as_ref().map(|base| &base.commit),
-            )?;
-            let objects = ObjectStore::open(&fold_dir)?;
-            let target = ExportTarget {
-                repo: &mirror,
-                refname: &refname,
-            };
-            let added = write_commits(
-                &objects,
-                &git,
-                &target,
-                base.as_ref(),
-                &revisions,
-                &fold_dir,
-            )?;
-            let Some((_, tip)) = added.last() else {
-                return Ok((added, false));
-            };
-            let send = match &fetched {
-                None => true,
-                Some(remote) if remote == tip => false,
-                Some(remote) if is_ancestor(&git, &mirror, remote, tip)? => true,
+            let first = match &fetched {
+                None => 0,
+                Some(remote) if *remote == tip => return Ok(None),
+                Some(remote) if is_ancestor(&git, &mirror, remote, &tip)? => {
+                    first_unreached(&git, &mirror, &entries, remote)?
+                }
                 Some(remote) => return Err(remote_ahead(&branch, Some(remote))),
             };
-            if send {
-                push_branch(&git, &mirror, &branch)?;
-            }
-            let mut map = map;
-            map.append(&added)?;
-            Ok((added, send))
+            push_branch(&git, &mirror, &name, &local, &branch)?;
+            Ok(Some(first))
         })
         .await?
     };
-    let (Some((first, _)), Some((newest, head))) = (added.first(), added.last()) else {
-        return Err(FoldError::new(codes::INTERNAL_ERROR, "a push wrote no commits").into());
+    let Some(first_index) = sent_from else {
+        return Ok(PushOutcome::UpToDate {
+            remote: name,
+            branch,
+            last: Some(last),
+        });
     };
+    let first = map
+        .entries()
+        .get(first_index)
+        .map_or(last, |(number, _)| *number);
+    let commits = map.entries().len() - first_index;
     let event = NewEvent::new(types::REMOTE_PUSHED, actor.event_actor())
         .and_then(|event| {
             event.data(json!({
+                "remote": name,
                 "branch": branch,
                 "first": first.to_string(),
-                "last": newest.to_string(),
-                "commits": added.len(),
+                "last": last.to_string(),
+                "commits": commits,
             }))
         })
         .map_err(|error| FoldError::new(codes::INTERNAL_ERROR, error.to_string()))?;
@@ -200,68 +202,69 @@ async fn run(
         .await?;
     handle.bus.publish(buffer);
     Ok(PushOutcome::Synced {
+        remote: name,
         branch,
-        first: *first,
-        last: *newest,
-        commits: added.len(),
-        head: head.clone(),
-        sent,
+        first,
+        last,
+        commits,
+        head: tip,
     })
 }
 
-fn export_revision(row: &RevisionRow) -> Result<ExportRevision, StoreError> {
-    let fold = Signature {
-        name: "fold".to_owned(),
-        email: "fold@localhost".to_owned(),
-    };
-    let proposal = row
-        .integration
-        .as_ref()
-        .and_then(|integration| integration.proposal.as_ref());
-    let author = match proposal {
-        Some(proposal) => author(&proposal.agent, &proposal.worker),
-        None => fold.clone(),
-    };
-    Ok(ExportRevision {
-        number: row.number,
-        tree: row.tree_hash,
-        created_at: row.created_at,
-        message: commit_message(row),
-        author,
-        committer: fold,
-        merge: merge_parent(row)?,
-    })
-}
-
-/// The worker that wrote a proposal as a Git author: `frontend/ui` is `frontend/ui <frontend.ui@fold.local>` and the main worker `frontend` is `frontend <frontend.frontend@fold.local>`. A deeper worker such as `frontend/ui/forms` gives `frontend.ui.forms@fold.local`.
-fn author(agent: &str, worker: &str) -> Signature {
-    let local = match worker.split_once('/') {
-        Some((_, rest)) => rest.replace('/', "."),
-        None => worker.to_owned(),
-    };
-    Signature {
-        name: worker.to_owned(),
-        email: format!("{agent}.{local}@fold.local"),
+/// The index of the first map entry whose commit `reached` does not reach: the entry after the one that is `reached` or is its newest mapped ancestor, or 0 when it reaches none. Blocking.
+pub(crate) fn first_unreached(
+    git: &Git,
+    repo: &std::path::Path,
+    entries: &[(RevisionId, CommitId)],
+    reached: &CommitId,
+) -> Result<usize, FoldError> {
+    if let Some(index) = entries.iter().position(|(_, commit)| commit == reached) {
+        return Ok(index + 1);
     }
+    for (index, (_, commit)) in entries.iter().enumerate().rev() {
+        if is_ancestor(git, repo, commit, reached)? {
+            return Ok(index + 1);
+        }
+    }
+    Ok(0)
 }
 
 pub(super) fn remote_not_set() -> FoldError {
     FoldError::new(codes::REMOTE_NOT_SET, "the project has no Git remote")
-        .with_hint("run fold remote set <url> in the project first")
+        .with_hint("run fold remote set <name> <url> in the project first")
 }
 
-pub(super) fn diverged(revision: RevisionId, commit: &CommitId) -> FoldError {
-    FoldError::new(
-        codes::EXPORT_DIVERGED,
-        format!(
-            "the remote does not hold {commit}, the commit {revision} was synced as, so new commits cannot continue it"
-        ),
-    )
-    .with_hint("set the remote to the repository this project was imported from or exported to")
-    .with_details([
-        ("revision", json!(revision.to_string())),
-        ("commit", json!(commit.as_str())),
-    ])
+/// The remote `name` names, or the only remote when `name` is `None`. No remote, an unknown name and several remotes without a name are refused with a hint that names `fold remote list`.
+pub(crate) fn select_remote(
+    config: &ProjectConfig,
+    name: Option<&str>,
+) -> Result<(String, RemoteConfig), FoldError> {
+    match name {
+        Some(name) => config
+            .remotes
+            .get(name)
+            .map(|remote| (name.to_owned(), remote.clone()))
+            .ok_or_else(|| {
+                FoldError::new(
+                    codes::REMOTE_NOT_SET,
+                    format!("the project has no Git remote named {name}"),
+                )
+                .with_hint("run fold remote list to see the remotes")
+            }),
+        None => {
+            let mut remotes = config.remotes.iter();
+            match (remotes.next(), remotes.next()) {
+                (Some((name, remote)), None) => Ok((name.clone(), remote.clone())),
+                (None, _) => Err(remote_not_set()),
+                (Some(_), Some(_)) => Err(FoldError::new(
+                    codes::INVALID_REQUEST,
+                    "the project has several Git remotes, so the command must name one",
+                )
+                .with_hint("run fold remote list, then name the remote")
+                .with_details([("reason", json!("several_remotes"))])),
+            }
+        }
+    }
 }
 
 pub(super) async fn blocking<T: Send + 'static>(
@@ -276,40 +279,4 @@ pub(super) async fn blocking<T: Send + 'static>(
             ))
         })
         .map_err(ProjectError::from)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_author_email_joins_the_agent_and_the_worker_below_it() {
-        let cases = [
-            (
-                "frontend",
-                "frontend/ui",
-                "frontend/ui",
-                "frontend.ui@fold.local",
-            ),
-            (
-                "frontend",
-                "frontend",
-                "frontend",
-                "frontend.frontend@fold.local",
-            ),
-            (
-                "frontend",
-                "frontend/ui/forms",
-                "frontend/ui/forms",
-                "frontend.ui.forms@fold.local",
-            ),
-        ];
-        for (agent, worker, name, email) in cases {
-            let signature = author(agent, worker);
-            assert_eq!(
-                (signature.name.as_str(), signature.email.as_str()),
-                (name, email)
-            );
-        }
-    }
 }

@@ -14,8 +14,10 @@ use fold_core::{
 use fold_daemon::http::socket_router;
 use fold_daemon::projects::ProjectHandle;
 use fold_daemon::services::events::BusMessage;
-use fold_daemon::services::projects::{PushOutcome, init_project, init_project_from_git, push};
-use fold_daemon::services::workspaces::commit_message;
+use fold_daemon::services::projects::{
+    ProjectError, PushOutcome, commit_main, commit_message, init_project, init_project_from_git,
+    push,
+};
 use fold_daemon::{Daemon, DaemonConfig};
 use fold_store::StoreError;
 use fold_store::projects::ProjectRow;
@@ -96,12 +98,12 @@ impl Project {
         }
     }
 
-    /// Points `[git]` at `remote`, as `fold remote set` does.
+    /// Adds `remote` as the remote `origin`, as `fold remote set` does.
     fn set_remote(&self, remote: &Path) {
         let config = self.paths.config();
         let mut text = fs::read_to_string(&config).unwrap();
         text.push_str(&format!(
-            "\n[git]\nremote = {:?}\n",
+            "\n[remotes.origin]\nurl = {:?}\nbranch = \"main\"\n",
             remote.to_str().unwrap()
         ));
         fs::write(config, text).unwrap();
@@ -113,7 +115,7 @@ impl Project {
 
     async fn push_with(&self, git: &Git) -> Result<PushOutcome, Option<&'static str>> {
         let actor = Actor::human(HumanName::parse("ana").unwrap());
-        push(&self.handle, &actor, git)
+        push(&self.handle, &actor, git, None)
             .await
             .map_err(|error| error.code())
     }
@@ -192,7 +194,19 @@ impl Project {
         )
         .await
         .unwrap();
-        commit_message(&row)
+        commit_message(&row, &[])
+    }
+
+    /// Writes the commits the project's job may not have written yet, so a test starts from a known map.
+    async fn committed(&self) {
+        commit_main(
+            &self.handle.store,
+            &self.paths,
+            &Git::default(),
+            self.handle.clock.as_ref(),
+        )
+        .await
+        .unwrap();
     }
 }
 
@@ -261,18 +275,24 @@ async fn three_revisions_become_three_commits_and_later_ones_go_on_top() {
         .add_revision(&[("a.txt", b"two\n"), ("src/b.rs", b"fn b() {}\n")], None)
         .await;
 
+    // The commits every integration writes into `.fold/git` are the ones the push sends and an export copies.
+    project.committed().await;
+    let mirror = project.paths.fold_dir().join("git");
+    let written = log(&mirror);
     let outcome = project.push().await.unwrap();
     let commits = log(&remote);
     assert_eq!(commits.len(), 3);
+    assert_eq!(commits, written);
+
     assert_eq!(
         outcome,
         PushOutcome::Synced {
+            remote: "origin".to_owned(),
             branch: "main".to_owned(),
             first: id(1),
             last: id(3),
             commits: 3,
             head: commits[0].parse().unwrap(),
-            sent: true,
         }
     );
     // Newest first: r3, r2, r1.
@@ -310,12 +330,13 @@ async fn three_revisions_become_three_commits_and_later_ones_go_on_top() {
     assert_eq!(events[0].actor.as_str(), "human:ana");
     assert_eq!(
         events[0].data,
-        serde_json::json!({"branch": "main", "first": "r1", "last": "r3", "commits": 3})
+        serde_json::json!({"remote": "origin", "branch": "main", "first": "r1", "last": "r3", "commits": 3})
     );
 
     assert_eq!(
         project.push().await.unwrap(),
         PushOutcome::UpToDate {
+            remote: "origin".to_owned(),
             branch: "main".to_owned(),
             last: Some(id(3)),
         }
@@ -328,7 +349,7 @@ async fn three_revisions_become_three_commits_and_later_ones_go_on_top() {
     let outcome = project.push().await.unwrap();
     assert!(matches!(
         outcome,
-        PushOutcome::Synced { commits: 2, first, last, sent: true, .. } if first == id(4) && last == id(5)
+        PushOutcome::Synced { commits: 2, first, last, .. } if first == id(4) && last == id(5)
     ));
     let after = log(&remote);
     assert_eq!(after.len(), 5);
@@ -336,11 +357,54 @@ async fn three_revisions_become_three_commits_and_later_ones_go_on_top() {
     assert_eq!(project.map().lines().count(), 5);
     assert_eq!(project.pushed_events().await.len(), 2);
     // The mirror holds what it fetched and wrote, with no working tree.
-    let mirror = project.paths.fold_dir().join("git");
     assert_eq!(
         git(&mirror, &["rev-parse", "--is-bare-repository"]),
         "true\n"
     );
+}
+
+#[tokio::test]
+async fn a_push_to_a_new_local_path_creates_it_with_the_commits_of_main() {
+    let host = Host::new();
+    let project = host.plain_project().await;
+    project.add_revision(&[("a.txt", b"one\n")], None).await;
+    project.committed().await;
+    let written = log(&project.paths.fold_dir().join("git"));
+    let config = project.paths.config();
+    let mut text = fs::read_to_string(&config).unwrap();
+    let backup = host.path("new/backup.git");
+    text.push_str(&format!(
+        "\n[remotes.backup]\nurl = {:?}\nbranch = \"trunk\"\n",
+        backup.to_str().unwrap()
+    ));
+    fs::write(&config, text).unwrap();
+    let outcome = project.push().await.unwrap();
+    assert!(matches!(
+        outcome,
+        PushOutcome::Synced { ref remote, ref branch, commits: 2, .. } if remote == "backup" && branch == "trunk"
+    ));
+    assert_eq!(
+        git(&backup, &["rev-parse", "--is-bare-repository"]),
+        "true\n"
+    );
+    let pushed: Vec<String> = git(&backup, &["log", "--format=%H", "trunk"])
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(pushed, written);
+
+    // With two remotes a push must name one.
+    project.set_remote(&host.remote("remote.git"));
+    assert_eq!(project.push().await, Err(Some(codes::INVALID_REQUEST)));
+    let actor = Actor::human(HumanName::parse("ana").unwrap());
+    let named = push(&project.handle, &actor, &Git::default(), Some("origin"))
+        .await
+        .unwrap();
+    assert!(matches!(named, PushOutcome::Synced { ref remote, .. } if remote == "origin"));
+    let unknown = push(&project.handle, &actor, &Git::default(), Some("elsewhere"))
+        .await
+        .unwrap_err();
+    assert_eq!(unknown.code(), Some(codes::REMOTE_NOT_SET));
 }
 
 #[tokio::test]
@@ -362,12 +426,12 @@ async fn a_commit_from_another_clone_makes_the_push_remote_ahead() {
     git(&clone, &["commit", "--quiet", "-m", "theirs"]);
     git(&clone, &["push", "--quiet", "origin", "main"]);
     let remote_log = log(&remote);
-    let map = project.map();
 
     project.add_revision(&[("a.txt", b"two\n")], None).await;
     assert_eq!(project.push().await, Err(Some(codes::REMOTE_AHEAD)));
     assert_eq!(log(&remote), remote_log);
-    assert_eq!(project.map(), map);
+    // The commit of r3 is written in `.fold/git` all the same; only the remote refused it.
+    assert_eq!(project.map().lines().count(), 3);
     assert_eq!(project.pushed_events().await.len(), 1);
 }
 
@@ -381,22 +445,23 @@ async fn a_push_needs_a_remote_and_the_git_program() {
         worker,
         tags: Vec::new(),
     });
-    let refused = push(&project.handle, &agent, &Git::default())
+    let refused = push(&project.handle, &agent, &Git::default(), None)
         .await
         .unwrap_err();
     assert_eq!(refused.code(), Some(codes::HUMAN_REQUIRED));
     assert_eq!(project.push().await, Err(Some(codes::REMOTE_NOT_SET)));
     let remote = host.remote("remote.git");
     project.set_remote(&remote);
+    project.committed().await;
     let missing = Git::new(host.path("bin/git"));
     assert_eq!(
         project.push_with(&missing).await,
         Err(Some(codes::GIT_NOT_FOUND))
     );
-    assert_eq!(project.map(), "");
+    assert_eq!(project.map().lines().count(), 1);
     assert!(project.pushed_events().await.is_empty());
     let config = project.paths.config();
-    fs::write(&config, "[git]\nremote = 7\n").unwrap();
+    fs::write(&config, "[remotes.origin]\nurl = 7\nbranch = \"main\"\n").unwrap();
     assert_eq!(project.push().await, Err(Some(codes::INVALID_CONFIG)));
 }
 
@@ -412,8 +477,8 @@ async fn two_pushes_at_once_send_the_revisions_once() {
     let mut synced = 0;
     for outcome in [first.unwrap(), second.unwrap()] {
         match outcome {
-            PushOutcome::Synced { commits, sent, .. } => {
-                assert_eq!((commits, sent), (3, true));
+            PushOutcome::Synced { commits, .. } => {
+                assert_eq!(commits, 3);
                 synced += 1;
             }
             PushOutcome::UpToDate { last, .. } => assert_eq!(last, Some(id(3))),
@@ -454,7 +519,7 @@ async fn a_caller_that_stops_waiting_still_gets_the_map_and_the_event() {
 }
 
 #[tokio::test]
-async fn lost_map_lines_are_recreated_without_sending_again() {
+async fn lost_map_lines_are_written_again_as_the_same_commits() {
     let host = Host::new();
     let project = host.plain_project().await;
     let remote = host.remote("remote.git");
@@ -465,42 +530,26 @@ async fn lost_map_lines_are_recreated_without_sending_again() {
     let map = project.map();
     let commits = log(&remote);
 
-    // Keep only r1, as if the map write of the push had been lost after r1 was synced.
+    // Keep only r1, as if the map write after the commits had been lost.
     let first = map.lines().next().unwrap();
     fs::write(
         project.paths.fold_dir().join(SYNC_MAP_FILE),
         format!("{first}\n"),
     )
     .unwrap();
-    let outcome = project.push().await.unwrap();
-    assert_eq!(
-        outcome,
-        PushOutcome::Synced {
-            branch: "main".to_owned(),
-            first: id(2),
-            last: id(3),
-            commits: 2,
-            head: commits[0].parse().unwrap(),
-            sent: false,
-        }
-    );
+    let up_to_date = PushOutcome::UpToDate {
+        remote: "origin".to_owned(),
+        branch: "main".to_owned(),
+        last: Some(id(3)),
+    };
+    assert_eq!(project.push().await.unwrap(), up_to_date);
     assert_eq!(project.map(), map);
     assert_eq!(log(&remote), commits);
-    let events = project.pushed_events().await;
-    assert_eq!(events.len(), 2);
-    assert_eq!(events[1].data["first"], "r2");
 
     fs::remove_file(project.paths.fold_dir().join(SYNC_MAP_FILE)).unwrap();
-    let outcome = project.push().await.unwrap();
-    assert!(matches!(
-        outcome,
-        PushOutcome::Synced {
-            commits: 3,
-            sent: false,
-            ..
-        }
-    ));
+    assert_eq!(project.push().await.unwrap(), up_to_date);
     assert_eq!(project.map(), map);
+    assert_eq!(project.pushed_events().await.len(), 1);
 }
 
 #[tokio::test]
@@ -533,6 +582,7 @@ async fn a_project_imported_from_git_pushes_on_top_of_the_imported_head() {
     assert_eq!(
         project.push().await.unwrap(),
         PushOutcome::UpToDate {
+            remote: "origin".to_owned(),
             branch: "main".to_owned(),
             last: Some(id(1)),
         }
@@ -544,20 +594,69 @@ async fn a_project_imported_from_git_pushes_on_top_of_the_imported_head() {
         .add_revision(&[("README.md", b"# app v3\n")], None)
         .await;
     let outcome = project.push().await.unwrap();
-    assert!(matches!(
-        outcome,
-        PushOutcome::Synced {
-            commits: 2,
-            sent: true,
-            ..
-        }
-    ));
+    assert!(matches!(outcome, PushOutcome::Synced { commits: 2, .. }));
     let commits = log(&source);
     assert_eq!(commits.len(), 3);
     assert_eq!(commits[2], head);
     assert_eq!(
         git(&source, &["show", &format!("{}:README.md", commits[0])]),
         "# app v3\n"
+    );
+}
+
+/// A project made with `--from-git` whose `.fold/git` lacks the imported commit: the commit comes from the source while the source holds it, and a clear refusal names the repair while it does not.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_imported_commit_missing_from_the_project_repository_is_fetched_from_its_source() {
+    let host = Host::new();
+    let work = host.path("work");
+    fs::create_dir(&work).unwrap();
+    git(&work, &["init", "--quiet", "--initial-branch=main"]);
+    fs::write(work.join("README.md"), b"# app\n").unwrap();
+    git(&work, &["add", "."]);
+    git(&work, &["commit", "--quiet", "-m", "start"]);
+    let head = git(&work, &["rev-parse", "HEAD"]).trim().to_owned();
+    let imported = init_project_from_git(
+        &host.paths,
+        &host.path("app"),
+        None,
+        &work,
+        Git::default(),
+        &host.clock,
+    )
+    .await
+    .unwrap();
+    let mirror = imported.root.join(".fold/git");
+    fs::remove_dir_all(&mirror).unwrap();
+    let moved = host.path("moved");
+    fs::rename(&work, &moved).unwrap();
+    let project = Project::open(&imported.slug, &imported.root, &host.clock).await;
+    project
+        .add_revision(&[("README.md", b"# app v2\n")], None)
+        .await;
+    let system_git = Git::default();
+    let commit = || {
+        commit_main(
+            &project.handle.store,
+            &project.paths,
+            &system_git,
+            project.handle.clock.as_ref(),
+        )
+    };
+    let refused = commit().await.unwrap_err();
+    assert_eq!(refused.code(), Some(codes::EXPORT_DIVERGED));
+    let ProjectError::Fold(refused) = refused else {
+        panic!("expected a refusal");
+    };
+    assert!(refused.hint().unwrap().contains("fold pull"));
+    assert_eq!(project.map(), format!("r1 {head}\n"));
+
+    fs::rename(&moved, &work).unwrap();
+    commit().await.unwrap();
+    assert_eq!(project.map().lines().count(), 2);
+    assert_eq!(
+        git(&mirror, &["rev-parse", "main^"]).trim(),
+        head,
+        "r2 continues the imported commit"
     );
 }
 
@@ -597,7 +696,7 @@ async fn the_push_route_is_socket_only_and_names_the_human() {
     let config = ProjectPaths::new(&project.root).config();
     let mut text = fs::read_to_string(&config).unwrap();
     text.push_str(&format!(
-        "\n[git]\nremote = {:?}\n",
+        "\n[remotes.origin]\nurl = {:?}\nbranch = \"main\"\n",
         remote.to_str().unwrap()
     ));
     fs::write(&config, text).unwrap();

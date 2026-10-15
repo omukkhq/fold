@@ -8,10 +8,7 @@ use fold_core::object::ObjectHash;
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree, Tree, flatten};
 use fold_core::{FoldError, RevisionId, Timestamp, codes};
 use fold_vcs::git::{CommitId, Git};
-use fold_vcs::git_export::{
-    ExportBase, ExportRevision, ExportTarget, Signature, TargetState, check_target, create_target,
-    export,
-};
+use fold_vcs::git_export::{ExportBase, ExportRevision, ExportTarget, Signature, write_commits};
 use fold_vcs::git_sync_map::{SYNC_MAP_FILE, SyncMap};
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::revision_store::write_initial_tree;
@@ -63,16 +60,16 @@ impl Fixture {
             repo,
             refname: MAIN,
         };
-        let mut map = self.map();
-        export(
+        let added = write_commits(
             &self.store,
             &self.git,
             &target,
             base,
             revisions,
-            &mut map,
             &self.fold_dir(),
-        )
+        )?;
+        self.map().append(&added)?;
+        Ok(added)
     }
 
     /// Path to mode and content, read from a fold tree.
@@ -95,6 +92,15 @@ impl Fixture {
             })
             .collect()
     }
+}
+
+/// A new bare repository on `main`.
+fn bare(repo: &Path) {
+    fs::create_dir_all(repo).unwrap();
+    git(
+        repo,
+        &["init", "--quiet", "--bare", "--initial-branch=main"],
+    );
 }
 
 fn revision(number: u32, tree: ObjectHash, message: &str) -> ExportRevision {
@@ -189,11 +195,7 @@ fn three_revisions_become_three_commits_with_the_same_trees() {
         repo: &repo,
         refname: MAIN,
     };
-    assert_eq!(
-        check_target(&fx.git, &target, None).unwrap(),
-        TargetState::Missing
-    );
-    create_target(&fx.git, &target).unwrap();
+    bare(target.repo);
     let revisions = three(&fx);
     let added = fx.export(&repo, None, &revisions).unwrap();
     assert_eq!(added.len(), 3);
@@ -243,14 +245,10 @@ fn a_later_export_continues_the_chain_with_only_the_new_revisions() {
         repo: &repo,
         refname: MAIN,
     };
-    create_target(&fx.git, &target).unwrap();
+    bare(target.repo);
     let revisions = three(&fx);
     let first = fx.export(&repo, None, &revisions).unwrap();
     let last = first.last().unwrap().clone();
-    assert_eq!(
-        check_target(&fx.git, &target, Some(&last)).unwrap(),
-        TargetState::Ready
-    );
     assert_eq!(fx.export(&repo, None, &[]).unwrap(), []);
 
     let t4 = fx.tree(&[("README.md", EntryKind::File, b"four\n")]);
@@ -278,128 +276,6 @@ fn a_later_export_continues_the_chain_with_only_the_new_revisions() {
 }
 
 #[test]
-fn a_moved_branch_or_another_repository_is_diverged() {
-    let fx = Fixture::new();
-    let repo = fx.dir.path().join("export");
-    let target = ExportTarget {
-        repo: &repo,
-        refname: MAIN,
-    };
-    create_target(&fx.git, &target).unwrap();
-    let added = fx.export(&repo, None, &three(&fx)).unwrap();
-    let last = added.last().unwrap().clone();
-
-    // A missing or empty path holds no commit to continue.
-    for path in [fx.dir.path().join("absent"), fx.dir.path().join("empty")] {
-        if path.ends_with("empty") {
-            fs::create_dir(&path).unwrap();
-        }
-        let elsewhere = ExportTarget {
-            repo: &path,
-            refname: MAIN,
-        };
-        let error = check_target(&fx.git, &elsewhere, Some(&last)).unwrap_err();
-        assert_eq!(error.code(), codes::EXPORT_DIVERGED);
-        assert_eq!(error.details().unwrap()["revision"], "r3");
-    }
-    assert!(!fx.dir.path().join("absent").exists());
-
-    // Another repository that lacks the commit.
-    let other = fx.dir.path().join("other");
-    fs::create_dir(&other).unwrap();
-    git(&other, &["init", "--quiet", "--initial-branch=main"]);
-    fs::write(other.join("x"), "x").unwrap();
-    git(&other, &["add", "."]);
-    git(&other, &["commit", "--quiet", "-m", "x"]);
-    let error = check_target(
-        &fx.git,
-        &ExportTarget {
-            repo: &other,
-            refname: MAIN,
-        },
-        Some(&last),
-    )
-    .unwrap_err();
-    assert_eq!(error.code(), codes::EXPORT_DIVERGED);
-    // A repository whose branch exists although nothing was exported yet.
-    let error = check_target(
-        &fx.git,
-        &ExportTarget {
-            repo: &other,
-            refname: MAIN,
-        },
-        None,
-    )
-    .unwrap_err();
-    assert_eq!(error.code(), codes::EXPORT_DIVERGED);
-
-    // A commit made in the target after the export.
-    let outside = git(
-        &repo,
-        &[
-            "commit-tree",
-            "-p",
-            "main",
-            "-m",
-            "outside fold",
-            "main^{tree}",
-        ],
-    );
-    git(&repo, &["update-ref", "refs/heads/main", outside.trim()]);
-    let error = check_target(&fx.git, &target, Some(&last)).unwrap_err();
-    assert_eq!(error.code(), codes::EXPORT_DIVERGED);
-    assert_eq!(error.details().unwrap()["commit"], last.1.as_str());
-}
-
-#[test]
-fn a_non_empty_directory_that_is_not_a_repository_is_refused() {
-    let fx = Fixture::new();
-    let plain = fx.dir.path().join("plain");
-    fs::create_dir(&plain).unwrap();
-    fs::write(plain.join("file"), "x").unwrap();
-    let target = ExportTarget {
-        repo: &plain,
-        refname: MAIN,
-    };
-    let error = check_target(&fx.git, &target, None).unwrap_err();
-    assert_eq!(error.code(), codes::INVALID_REQUEST);
-
-    // A directory inside a repository's working tree is not that repository's top.
-    let repo = fx.dir.path().join("repo");
-    fs::create_dir(&repo).unwrap();
-    git(&repo, &["init", "--quiet"]);
-    fs::create_dir(repo.join("sub")).unwrap();
-    fs::write(repo.join("sub/file"), "x").unwrap();
-    let nested = repo.join("sub");
-    let target = ExportTarget {
-        repo: &nested,
-        refname: MAIN,
-    };
-    assert_eq!(
-        check_target(&fx.git, &target, None).unwrap_err().code(),
-        codes::INVALID_REQUEST
-    );
-
-    let file = plain.join("file");
-    let target = ExportTarget {
-        repo: &file,
-        refname: MAIN,
-    };
-    assert_eq!(
-        check_target(&fx.git, &target, None).unwrap_err().code(),
-        codes::INVALID_REQUEST
-    );
-    let tag = ExportTarget {
-        repo: &fx.dir.path().join("new"),
-        refname: "refs/tags/v1",
-    };
-    assert_eq!(
-        create_target(&fx.git, &tag).unwrap_err().code(),
-        codes::INVALID_REQUEST
-    );
-}
-
-#[test]
 fn a_new_target_is_bare_and_a_checked_out_branch_is_refused() {
     let fx = Fixture::new();
     let repo = fx.dir.path().join("export");
@@ -407,7 +283,7 @@ fn a_new_target_is_bare_and_a_checked_out_branch_is_refused() {
         repo: &repo,
         refname: MAIN,
     };
-    create_target(&fx.git, &target).unwrap();
+    bare(target.repo);
     assert_eq!(git(&repo, &["rev-parse", "--is-bare-repository"]), "true\n");
     assert_eq!(git(&repo, &["rev-parse", "--show-object-format"]), "sha1\n");
 
@@ -425,53 +301,10 @@ fn a_new_target_is_bare_and_a_checked_out_branch_is_refused() {
 }
 
 #[test]
-fn a_sha256_repository_is_refused() {
-    let fx = Fixture::new();
-    let repo = fx.dir.path().join("sha256");
-    fs::create_dir(&repo).unwrap();
-    git(
-        &repo,
-        &["init", "--quiet", "--bare", "--object-format=sha256"],
-    );
-    let target = ExportTarget {
-        repo: &repo,
-        refname: MAIN,
-    };
-    let error = check_target(&fx.git, &target, None).unwrap_err();
-    assert_eq!(error.code(), codes::INVALID_REQUEST);
-    assert_eq!(error.details().unwrap()["object_format"], "sha256");
-}
-
-#[test]
-fn a_bare_repository_is_a_target() {
-    let fx = Fixture::new();
-    let bare = fx.dir.path().join("bare.git");
-    fs::create_dir(&bare).unwrap();
-    git(&bare, &["init", "--quiet", "--bare"]);
-    let target = ExportTarget {
-        repo: &bare,
-        refname: MAIN,
-    };
-    assert_eq!(
-        check_target(&fx.git, &target, None).unwrap(),
-        TargetState::Ready
-    );
-    fx.export(&bare, None, &three(&fx)[..1]).unwrap();
-    assert_eq!(first_parent_log(&bare).len(), 1);
-}
-
-#[test]
 fn a_failed_fast_import_leaves_the_map_and_the_branch_unchanged() {
     let fx = Fixture::new();
     let repo = fx.dir.path().join("export");
-    create_target(
-        &fx.git,
-        &ExportTarget {
-            repo: &repo,
-            refname: MAIN,
-        },
-    )
-    .unwrap();
+    bare(&repo);
     let revisions = three(&fx);
     // A held ref lock makes fast-import fail when it moves the branch, after it wrote the commits.
     let lock = repo.join("refs/heads/main.lock");
@@ -515,20 +348,14 @@ fn a_missing_git_program_is_git_not_found() {
         repo: &repo,
         refname: MAIN,
     };
-    let mut map = fx.map();
-    let error = export(
+    let error = write_commits(
         &fx.store,
         &missing,
         &target,
         None,
         &three(&fx),
-        &mut map,
         &fx.fold_dir(),
     )
     .unwrap_err();
     assert_eq!(error.code(), codes::GIT_NOT_FOUND);
-    assert_eq!(
-        create_target(&missing, &target).unwrap_err().code(),
-        codes::GIT_NOT_FOUND
-    );
 }

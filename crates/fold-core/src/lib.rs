@@ -30,7 +30,7 @@ pub mod tree;
 pub use actor::{Actor, AgentActor};
 pub use agents::{AgentName, HumanName, INTEGRATOR_TAG, NameError, Tag, WorkerName};
 pub use clock::{Clock, ManualClock};
-pub use config::{CONFIG_TEMPLATE, GitConfig, ProjectConfig};
+pub use config::{CONFIG_TEMPLATE, GitConfig, ProjectConfig, RemoteConfig};
 pub use error::{FoldError, codes};
 pub use events::{
     AgentEventFacts, Event, EventActor, EventError, EventFilter, EventType, LiveEvent, NewEvent,

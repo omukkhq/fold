@@ -21,7 +21,6 @@ use fold_store::testing::TestProject;
 use fold_store::workspaces::{
     self, advance_main, create_initial_revision, initial_revision, insert_revision,
 };
-use fold_vcs::git::Git;
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::revision_store::{write_initial_tree, write_revision};
 use rmcp::model::{CallToolRequestParams, CallToolResult};
@@ -111,7 +110,6 @@ impl Fixture {
             bus.clone(),
             clock,
             project.paths().clone(),
-            Git::default(),
             5,
         );
         Self {

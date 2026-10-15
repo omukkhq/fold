@@ -54,7 +54,7 @@ pub const RECONCILE_PARALLEL: usize = 4;
 
 /// Reconciles every task workspace in state `active` or `missing` with its directory when a project opens, before it serves requests: see [`WorkspaceService::reconcile_workspace`]. Up to [`RECONCILE_PARALLEL`] run at once. A workspace whose reconciliation fails is logged and left as it was; the others go on. Returns what was done, by workspace id.
 pub async fn reconcile_workspaces(handle: &ProjectHandle) -> Vec<Reconciliation> {
-    let service = WorkspaceService::for_project(handle, Git::default());
+    let service = WorkspaceService::for_project(handle);
     let rows = match workspaces::list_live_task_workspaces(handle.store.read()).await {
         Ok(rows) => rows,
         Err(error) => {
@@ -233,7 +233,7 @@ impl QuietCheckpoints {
         let handled = self.handled.entry(project.slug.clone()).or_default();
         handled.retain(|workspace, _| live.iter().any(|state| state.view.workspace == *workspace));
         let now = project.clock.now();
-        let service = WorkspaceService::for_project(project, Git::default());
+        let service = WorkspaceService::for_project(project);
         let mut recorded = 0;
         for state in live {
             let view = &state.view;
@@ -663,65 +663,106 @@ fn rewrite_main(
     Ok(())
 }
 
-/// The automatic push of one project. Dropping it stops the task; a push already started finishes in its own task.
+/// The Git job of one project. Dropping it stops the task; a push already started finishes in its own task.
 #[derive(Debug)]
-pub struct AutoPush(JoinHandle<()>);
+pub struct AutoCommit(JoinHandle<()>);
 
-impl Drop for AutoPush {
+impl Drop for AutoCommit {
     fn drop(&mut self) {
         self.0.abort();
     }
 }
 
-/// Starts `auto_push` for one project: after every committed integration of either kind, which the bus carries only after its commit, it runs the push of `fold push` as `fold` when `[git].push_on_integrate` is true, read at that moment. A push covers every revision so far, so the integrations that arrive while one waits or runs need one more push at most. A failed push appends `remote.push_failed` in its own transaction and logs the project and the code only; the integration it follows stands either way.
-pub fn auto_push(context: RemoteContext, git: Git) -> AutoPush {
+/// Starts `auto_commit` for one project. It writes the commit of every revision that has none into `.fold/git` once at the start, which catches up an integration a stopped daemon never committed, and again after every committed integration of either kind, which the bus carries only after its commit. After an integration it then runs the push of `fold push` as `fold` to each remote whose `push_on_integrate` is true, read at that moment. A commit covers every revision so far, so the integrations that arrive while one runs need one more run at most. A failed commit appends `git.commit_failed` and a failed push `remote.push_failed`, each in its own transaction, and logs the project and the code only; the integration stands either way.
+pub fn auto_commit(context: RemoteContext, git: Git) -> AutoCommit {
     let receiver = context.bus.subscribe();
-    AutoPush(tokio::spawn(run_auto_push(context, git, receiver)))
+    AutoCommit(tokio::spawn(run_auto_commit(context, git, receiver)))
 }
 
-async fn run_auto_push(
+async fn run_auto_commit(
     context: RemoteContext,
     git: Git,
     mut receiver: broadcast::Receiver<BusMessage>,
 ) {
+    commit_after_integration(&context, &git).await;
     loop {
         match receiver.recv().await {
             Ok(BusMessage::Durable(event)) if event.event_type == types::INTEGRATION_SUCCEEDED => {}
-            // A missed event may have been an integration; a push is cheap when nothing is new.
+            // A missed event may have been an integration; a commit is cheap when nothing is new.
             Err(RecvError::Lagged(_)) => {}
             Ok(_) => continue,
             Err(RecvError::Closed) => return,
         }
-        // Everything queued so far was committed before it was sent, so the push below covers it.
+        // Everything queued so far was committed before it was sent, so the run below covers it.
         while !matches!(
             receiver.try_recv(),
             Err(TryRecvError::Empty | TryRecvError::Closed)
         ) {}
-        push_after_integration(&context, &git).await;
+        if commit_after_integration(&context, &git).await {
+            push_after_integration(&context, &git).await;
+        }
     }
 }
 
+/// Whether every revision has its commit now.
+async fn commit_after_integration(context: &RemoteContext, git: &Git) -> bool {
+    let committed =
+        projects::commit_main(&context.store, &context.paths, git, context.clock.as_ref()).await;
+    let Err(error) = committed else {
+        return true;
+    };
+    let code = projects::error_code(&error);
+    tracing::warn!(project = %context.slug, code, "the Git commit of main failed");
+    let head = workspaces::head(context.store.read())
+        .await
+        .ok()
+        .flatten()
+        .map(|row| row.number);
+    let event = NewEvent::new(types::GIT_COMMIT_FAILED, Actor::System.event_actor())
+        .and_then(|event| event.data(json!({"code": code})))
+        .map(|event| match head {
+            Some(head) => event.revision(head),
+            None => event,
+        });
+    record_failure(context, event, "git.commit_failed").await;
+    false
+}
+
+/// Pushes to every remote whose `push_on_integrate` is true, one after the other.
 async fn push_after_integration(context: &RemoteContext, git: &Git) {
-    let config = match projects::load_config(&context.paths).await {
-        Ok(config) => config.git,
+    let remotes = match projects::load_config(&context.paths).await {
+        Ok(config) => config.remotes,
         Err(error) => {
             tracing::warn!(project = %context.slug, code = error.code().unwrap_or(codes::INTERNAL_ERROR), "the automatic push skipped an integration; the configuration is invalid");
             return;
         }
     };
-    if !config.push_on_integrate {
-        return;
+    for (name, remote) in remotes {
+        if !remote.push_on_integrate {
+            continue;
+        }
+        let pushed =
+            projects::push_with(context.clone(), &Actor::System, git, Some(name.clone())).await;
+        let Err(error) = pushed else {
+            continue;
+        };
+        let code = projects::error_code(&error);
+        tracing::warn!(project = %context.slug, remote = %name, code, "the automatic push failed");
+        let event = NewEvent::new(types::REMOTE_PUSH_FAILED, Actor::System.event_actor()).and_then(
+            |event| event.data(json!({"remote": name, "branch": remote.branch, "code": code})),
+        );
+        record_failure(context, event, "remote.push_failed").await;
     }
-    let Err(error) = projects::push_with(context.clone(), &Actor::System, git).await else {
+}
+
+/// Appends a failure event in its own transaction and publishes it.
+async fn record_failure(
+    context: &RemoteContext,
+    event: Result<NewEvent, fold_core::EventError>,
+    name: &'static str,
+) {
+    let Ok(event) = event else {
         return;
-    };
-    let code = error.code().unwrap_or(codes::INTERNAL_ERROR);
-    tracing::warn!(project = %context.slug, code, "the automatic push failed");
-    let event = match NewEvent::new(types::REMOTE_PUSH_FAILED, Actor::System.event_actor())
-        .and_then(|event| event.data(json!({"branch": config.branch, "code": code})))
-    {
-        Ok(event) => event,
-        Err(_) => return,
     };
     let now = context.clock.now();
     let recorded = context
@@ -735,7 +776,7 @@ async fn push_after_integration(context: &RemoteContext, git: &Git) {
     match recorded {
         Ok(buffer) => context.bus.publish(buffer),
         Err(error) => {
-            tracing::warn!(project = %context.slug, code = error.code().unwrap_or(codes::INTERNAL_ERROR), "remote.push_failed was not recorded");
+            tracing::warn!(project = %context.slug, event = name, code = error.code().unwrap_or(codes::INTERNAL_ERROR), "a failure event was not recorded");
         }
     }
 }

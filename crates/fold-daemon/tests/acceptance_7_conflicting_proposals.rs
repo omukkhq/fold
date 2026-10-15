@@ -114,7 +114,11 @@ async fn acceptance_7_second_proposal_is_refused_with_a_conflict_report_and_main
 
     let head = harness.head().await;
     assert_eq!(head.number.to_string(), "r2");
-    assert_eq!(&head, before);
+    // The Git job may write r2's commit at any moment, so the row is compared without it.
+    assert_eq!(
+        (head.hash, head.tree_hash, &head.integration),
+        (before.hash, before.tree_hash, &before.integration)
+    );
     main_shows(harness, FRONTEND_README).await;
     let r2 = harness
         .call("review", "get_revision", json!({"r": "r2"}))

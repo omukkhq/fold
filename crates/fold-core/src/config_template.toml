@@ -14,9 +14,7 @@
 # stall_minutes = 5
 # How many days a closed workspace directory stays before garbage collection.
 # closed_workspace_days = 14
-# The remote Git repository that `fold push` keeps current with main. `fold remote set <url>` writes this section; its `remote`, the URL or path of the repository, has no default.
+# The project's Git history: every integration becomes a commit on this branch of its repository .fold/git.
 # [git]
-# The remote branch fold syncs with.
 # branch = "main"
-# Whether fold pushes after each integration.
-# push_on_integrate = false
+# The remote Git repositories that `fold push` and `fold pull` use have one `[remotes.<name>]` section each, with the keys `url`, `branch` and `push_on_integrate`. `fold remote set <name> <url> [<branch>]` writes it, and no remote exists by default.

@@ -15,7 +15,6 @@ use fold_store::events;
 use fold_store::tasks::claims;
 use fold_store::testing::TestProject;
 use fold_store::workspaces::{create_initial_revision, initial_revision};
-use fold_vcs::git::Git;
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::revision_store::{write_initial_tree, write_revision};
 
@@ -53,7 +52,6 @@ fn services(project: &TestProject) -> Services {
             bus,
             clock,
             project.paths().clone(),
-            Git::default(),
             5,
         ),
     }

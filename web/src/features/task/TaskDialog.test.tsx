@@ -553,7 +553,13 @@ describe("the task dialog route", () => {
         version: 2,
         reviews: [{ reviewer: "review", verdict: "approve", version: 2, at }],
       },
-      integration: { revision: "r9", proposal: "P-2", by: "backend", at },
+      integration: {
+        revision: "r9",
+        proposal: "P-2",
+        by: "backend",
+        at,
+        commit: null,
+      },
       history: [
         {
           seq: 3,

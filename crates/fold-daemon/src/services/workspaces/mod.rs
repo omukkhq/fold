@@ -6,7 +6,6 @@ use fold_core::{
     codes,
 };
 use fold_store::{Store, StoreError};
-use fold_vcs::git::Git;
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::platform::Capabilities;
 use thiserror::Error;
@@ -26,7 +25,6 @@ mod changesets;
 mod checkpoints;
 mod compare;
 mod files;
-mod git;
 mod integration;
 mod lifecycle;
 mod reconcile;
@@ -45,8 +43,6 @@ pub(crate) use changesets::ProposalSnapshot;
 pub use changesets::RecordedChanges;
 pub use checkpoints::{CheckpointView, Restored};
 pub use compare::{ResolvedState, StateComparison, StateKind, StateRef, StateSummary};
-pub use git::{GitExport, MAIN_REF, commit_message};
-pub(crate) use git::{merge_parent, unsynced};
 pub use lifecycle::{
     ArchiveReason, CreatedWorkspace, WorkspaceDetails, WorkspaceRef, WorkspaceView, archive_in_tx,
 };
@@ -101,7 +97,6 @@ pub struct WorkspaceService {
     bus: EventBus,
     clock: Arc<dyn Clock>,
     paths: ProjectPaths,
-    git: Git,
     lease: Lease,
     /// Probed by the first command that touches files and shared by every clone of the service; in the daemon, by every service of the project.
     caps: Arc<OnceLock<Capabilities>>,
@@ -126,7 +121,6 @@ impl WorkspaceService {
         bus: EventBus,
         clock: Arc<dyn Clock>,
         paths: ProjectPaths,
-        git: Git,
         lease_minutes: u64,
     ) -> Self {
         Self {
@@ -134,7 +128,6 @@ impl WorkspaceService {
             bus,
             clock,
             paths,
-            git,
             lease: Lease::Minutes(lease_minutes),
             caps: Arc::new(OnceLock::new()),
             objects: Arc::new(RwLock::new(())),
@@ -144,13 +137,12 @@ impl WorkspaceService {
     }
 
     /// The service of an open project in the daemon. It shares the project's object lock, workspace locks and capabilities probe, so every session's commands and garbage collection keep out of each other's way. The claim lease is read from `config.toml` by each command that needs it, so an invalid file refuses no session or route.
-    pub fn for_project(handle: &ProjectHandle, git: Git) -> Self {
+    pub fn for_project(handle: &ProjectHandle) -> Self {
         Self::new(
             handle.store.clone(),
             handle.bus.clone(),
             handle.clock.clone(),
             handle.paths.clone(),
-            git,
             ProjectConfig::default().lease_minutes,
         )
         .with_project_config()
@@ -238,7 +230,6 @@ impl WorkspaceService {
     /// The service of the project at `paths` for a host command that runs without the daemon, with a bus nobody listens to and the project's configured lease. A directory without a project database is `project_not_found`, and nothing is created in it.
     pub async fn open_local(
         paths: ProjectPaths,
-        git: Git,
         clock: Arc<dyn Clock>,
     ) -> Result<Self, WorkspaceError> {
         let db = paths.db();
@@ -260,7 +251,6 @@ impl WorkspaceService {
             EventBus::new(),
             clock,
             paths,
-            git,
             config.lease_minutes,
         ))
     }

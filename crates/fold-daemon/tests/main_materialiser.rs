@@ -146,6 +146,7 @@ impl Project {
         }
         let pull = PullIntegration {
             remote_commit: "4b825dc642cb6eb9a060e54bf8d69288fbee4904".to_owned(),
+            remote: "origin".to_owned(),
             branch: "main".to_owned(),
             base_tree: workspaces::get_by_number(self.fx.project.store().read(), r(1))
                 .await

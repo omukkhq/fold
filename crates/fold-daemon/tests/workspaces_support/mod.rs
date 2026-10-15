@@ -10,7 +10,6 @@ use fold_daemon::services::events::EventBus;
 use fold_daemon::services::workspaces::WorkspaceService;
 use fold_store::testing::TestProject;
 use fold_store::{Store, StoreError, workspaces};
-use fold_vcs::git::Git;
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::revision_store::{write_initial_tree, write_revision};
 
@@ -56,7 +55,6 @@ pub fn service(project: &TestProject) -> WorkspaceService {
         EventBus::new(),
         Arc::new(project.clock().clone()),
         project.paths().clone(),
-        Git::default(),
         LEASE_MINUTES,
     )
 }

@@ -231,6 +231,12 @@ describe("eventLine", () => {
     );
     expect(eventLine(event("main.advanced", bare)).text).toBe("main advanced");
     expect(eventLine(event("main.advanced")).text).toBe("main advanced to r17");
+    expect(eventLine(event("git.commit_failed", bare)).text).toBe(
+      "writing the Git commit failed",
+    );
+    expect(eventLine(event("git.commit_failed")).text).toBe(
+      "writing the Git commit of r17 failed",
+    );
   });
 
   it("marks integrations, main moves and request approvals as emphasised, review approvals by their verdict", () => {

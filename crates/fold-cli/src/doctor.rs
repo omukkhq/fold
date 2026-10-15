@@ -9,6 +9,9 @@ use std::time::Duration;
 use clap::Args;
 use fold_core::{Clock, FoldError, HostPaths, ProjectPaths, Timestamp, codes};
 use fold_daemon::SystemClock;
+use fold_vcs::git::Git;
+use fold_vcs::git_remote::MIRROR_DIR;
+use fold_vcs::git_sync_map::{SYNC_MAP_FILE, SyncMap};
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection, Row, SqliteConnection};
 use thiserror::Error;
@@ -369,7 +372,7 @@ fn git_check(host: &Host) -> Check {
     } else {
         Check::warn(
             "git",
-            "git is not on PATH; only --from-git, export-git, fold remote, fold push and fold pull need it",
+            "git is not on PATH; fold needs it for the Git commit of every integration, --from-git, fold remote, fold push and fold pull",
             "install git",
         )
     }
@@ -553,6 +556,7 @@ fn project_checks(
     let mut checks = vec![
         database_check(&paths.db(), &facts),
         objects_check(&paths.objects()),
+        git_history_check(&paths, host),
     ];
     checks.push(if watch_applicable {
         degraded_check(&facts, now)
@@ -813,6 +817,38 @@ fn runs_hook(settings: &serde_json::Value, event: &str, command: &str) -> bool {
         .flat_map(|group| group["hooks"].as_array().into_iter().flatten())
         .filter_map(|hook| hook["command"].as_str())
         .any(|run| run.trim().ends_with(command))
+}
+
+/// Every integration continues the commit `.fold/git-sync.map` names last, so a `.fold/git` without that commit leaves each new revision without its Git commit.
+fn git_history_check(paths: &ProjectPaths, host: &Host) -> Check {
+    const NAME: &str = "git history";
+    let fold_dir = paths.fold_dir();
+    let last = match SyncMap::load(&fold_dir) {
+        Ok(map) => map.last().cloned(),
+        Err(_) => {
+            return Check::fail(
+                NAME,
+                format!("{SYNC_MAP_FILE} cannot be read"),
+                format!("restore .fold/{SYNC_MAP_FILE} from a backup"),
+            );
+        }
+    };
+    let Some((revision, commit)) = last else {
+        return Check::ok(NAME, "no revision has a Git commit yet");
+    };
+    let Some(program) = on_path("git", host.path.as_deref()) else {
+        return Check::not_applicable(NAME);
+    };
+    match Git::new(program).has_commit(&fold_dir.join(MIRROR_DIR), &commit) {
+        Ok(true) => Check::ok(NAME, format!("{revision} has its Git commit in .fold/git")),
+        _ => Check::warn(
+            NAME,
+            format!(
+                ".fold/git does not hold {commit}, the commit of {revision}, so new revisions get no Git commit"
+            ),
+            "run fold remote set <name> <url> with a repository that holds that commit, then fold pull <name>",
+        ),
+    }
 }
 
 fn claude_files_check(root: &Path) -> Check {

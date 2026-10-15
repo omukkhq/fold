@@ -385,6 +385,7 @@ pub async fn get_revision(server: &FoldServer, arguments: &JsonObject) -> Result
         "tree": summary.tree.to_string(),
         "task": summary.task,
         "proposal": summary.proposal,
+        "commit": summary.commit,
         "files": detail.files.iter().map(file_line).collect::<Vec<_>>(),
         "totals": {
             "files": detail.totals.files,

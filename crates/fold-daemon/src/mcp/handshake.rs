@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fold_core::{AgentName, FoldError, codes};
-use fold_vcs::git::Git;
 use rmcp::ServiceExt;
 use rmcp::service::ServerInitializeError;
 use serde::{Deserialize, Serialize};
@@ -238,7 +237,7 @@ async fn open(
         .map_err(from_project)?;
     let agents = handle.agents();
     let events = EventService::new(handle.store.clone(), handle.bus.clone());
-    let workspaces = WorkspaceService::for_project(&handle, Git::default());
+    let workspaces = WorkspaceService::for_project(&handle);
     let messages = MessageService::new(
         handle.store.clone(),
         state.registry.clone(),

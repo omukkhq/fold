@@ -20,7 +20,7 @@ const REPOSITORY_VARIABLES: &[&str] = &[
     "GIT_WORK_TREE",
 ];
 
-/// The `git` program, found on `PATH` unless a path is given. fold needs it only while a Git import, export, remote set or push runs. Arguments go to the process directly, never through a shell.
+/// The `git` program, found on `PATH` unless a path is given. fold needs it for the project's own Git history, a Git import, `fold remote` and push and pull. Arguments go to the process directly, never through a shell.
 #[derive(Debug, Clone)]
 pub struct Git {
     program: PathBuf,
@@ -237,7 +237,7 @@ impl Git {
             .any(|field| field == wanted.as_bytes()))
     }
 
-    /// Creates a bare SHA-1 repository in `dir` whose unborn `HEAD` names `branch`, whatever the user's defaults are. Bare, because a branch that is checked out would keep its old files in the working tree when an export moves it.
+    /// Creates a bare SHA-1 repository in `dir` whose unborn `HEAD` names `branch`, whatever the user's defaults are. Bare, because a branch that is checked out would keep its old files in the working tree when fold moves it.
     pub fn init_bare(&self, dir: &Path, branch: &str) -> Result<(), FoldError> {
         check_rev(branch)?;
         let initial = format!("--initial-branch={branch}");

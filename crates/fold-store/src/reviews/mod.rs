@@ -20,7 +20,7 @@ pub use claims::{
 };
 pub use integrations::{
     IntegrationFacts, IntegrationSubject, NewIntegration, conflict_report, insert_conflicted,
-    insert_refused, insert_succeeded, integration_facts, latest_remote_commit, mark_conflicted,
+    insert_refused, insert_succeeded, integration_facts, mark_conflicted,
 };
 pub use summaries::{
     IntegrationRecord, ProposalSummary, ReviewEntry, proposal_summaries, review_entries,

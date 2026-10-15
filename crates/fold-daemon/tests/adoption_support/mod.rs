@@ -20,7 +20,6 @@ use fold_store::workspaces::{
     advance_main, create_initial_revision, head, initial_revision, insert_revision,
 };
 use fold_store::{StoreError, events};
-use fold_vcs::git::Git;
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::revision_store::{write_initial_tree, write_revision};
 use sqlx::AssertSqlSafe;
@@ -137,7 +136,6 @@ impl Fixture {
             bus.clone(),
             clock,
             project.paths().clone(),
-            Git::default(),
             LEASE_MINUTES,
         )
         .with_locks(Arc::new(tokio::sync::RwLock::new(())), ops.clone());

@@ -17,7 +17,6 @@ use fold_daemon::services::workspaces::WorkspaceService;
 use fold_store::agents::WorkerRow;
 use fold_store::testing::{TestProject, eventually};
 use fold_store::{Store, StoreError, events};
-use fold_vcs::git::Git;
 use rmcp::model::{
     CallToolRequest, CallToolRequestParams, CallToolResult, ClientRequest,
     ProgressNotificationParam,
@@ -92,7 +91,6 @@ impl Fixture {
             self.bus.clone(),
             Arc::new(self.project.clock().clone()),
             self.project.paths().clone(),
-            Git::default(),
             30,
         )
     }

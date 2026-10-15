@@ -21,6 +21,7 @@ function revision(fields: Partial<Revision>): Revision {
     parent: "r7",
     proposal: null,
     pull: null,
+    commit: null,
     task: null,
     title: null,
     tree: "abc",

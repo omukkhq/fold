@@ -66,6 +66,8 @@ pub struct TaskIntegration {
     /// A worker name or `human:<name>`.
     pub by: String,
     pub at: Timestamp,
+    /// The Git commit the revision became; `None` until it is written.
+    pub commit: Option<String>,
 }
 
 /// The last tracked edit in the task's live workspace.
@@ -265,6 +267,7 @@ impl TaskService {
                 proposal: summary.id,
                 by: record.actor.clone(),
                 at: record.at,
+                commit: record.commit.clone(),
             })
         });
         let proposal = match summary {

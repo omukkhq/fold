@@ -21,6 +21,8 @@ pub struct RevisionRow {
     /// Where `r1` came from; `None` on every other revision.
     pub import_source: Option<String>,
     pub integration: Option<IntegrationInfo>,
+    /// The Git commit the revision became in `.fold/git`; `None` until it is written.
+    pub commit: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,7 +46,10 @@ pub struct IntegrationInfo {
 pub struct IntegratedProposal {
     pub number: ProposalId,
     pub title: String,
+    /// The version that was integrated.
+    pub version: u32,
     pub task: TaskId,
+    pub task_title: String,
     pub agent: String,
     pub worker: String,
 }
@@ -250,9 +255,12 @@ struct RawRow {
     remote_commit: Option<String>,
     proposal_number: Option<i64>,
     proposal_title: Option<String>,
+    version: Option<i64>,
     task_number: Option<i64>,
+    task_title: Option<String>,
     agent: Option<String>,
     worker: Option<String>,
+    git_commit: Option<String>,
 }
 
 async fn one<'e, E>(executor: E, number: RevisionId) -> Result<Option<RevisionRow>, StoreError>
@@ -283,7 +291,9 @@ where
                   i.number AS "integration_number?: i64", i.kind AS "integration_kind?",
                   i.actor AS "integration_actor?", i.remote_commit AS "remote_commit?",
                   pr.number AS "proposal_number?: i64", pr.title AS "proposal_title?",
-                  t.number AS "task_number?: i64", a.name AS "agent?", w.name AS "worker?"
+                  v.version AS "version?: i64", t.number AS "task_number?: i64",
+                  t.title AS "task_title?", a.name AS "agent?", w.name AS "worker?",
+                  rc."commit" AS "git_commit?"
            FROM revisions r
            LEFT JOIN revisions p ON p.id = r.parent_id
            LEFT JOIN integrations i ON i.id = r.integration_id
@@ -291,6 +301,8 @@ where
            LEFT JOIN tasks t ON t.id = pr.task_id
            LEFT JOIN workers w ON w.id = pr.author_worker_id
            LEFT JOIN agents a ON a.id = w.agent_id
+           LEFT JOIN proposal_versions v ON v.id = i.version_id
+           LEFT JOIN revision_commits rc ON rc.revision_id = r.id
            WHERE r.number BETWEEN ?1 AND ?2
            ORDER BY r.number ASC
            LIMIT ?3"#,
@@ -318,7 +330,9 @@ where
                   i.number AS "integration_number?: i64", i.kind AS "integration_kind?",
                   i.actor AS "integration_actor?", i.remote_commit AS "remote_commit?",
                   pr.number AS "proposal_number?: i64", pr.title AS "proposal_title?",
-                  t.number AS "task_number?: i64", a.name AS "agent?", w.name AS "worker?"
+                  v.version AS "version?: i64", t.number AS "task_number?: i64",
+                  t.title AS "task_title?", a.name AS "agent?", w.name AS "worker?",
+                  rc."commit" AS "git_commit?"
            FROM revisions r
            LEFT JOIN revisions p ON p.id = r.parent_id
            LEFT JOIN integrations i ON i.id = r.integration_id
@@ -326,6 +340,8 @@ where
            LEFT JOIN tasks t ON t.id = pr.task_id
            LEFT JOIN workers w ON w.id = pr.author_worker_id
            LEFT JOIN agents a ON a.id = w.agent_id
+           LEFT JOIN proposal_versions v ON v.id = i.version_id
+           LEFT JOIN revision_commits rc ON rc.revision_id = r.id
            WHERE r.number <= ?1
            ORDER BY r.number DESC
            LIMIT ?2"#,
@@ -354,21 +370,31 @@ fn row(raw: RawRow) -> Result<RevisionRow, StoreError> {
             proposal: match (
                 raw.proposal_number,
                 raw.proposal_title,
+                raw.version,
                 raw.task_number,
+                raw.task_title,
                 raw.agent,
                 raw.worker,
             ) {
-                (Some(number), Some(title), Some(task), Some(agent), Some(worker)) => {
-                    Some(IntegratedProposal {
-                        number: ProposalId::try_from_db(number)
-                            .ok_or(StoreError::Corrupt("proposals.number"))?,
-                        title,
-                        task: TaskId::try_from_db(task)
-                            .ok_or(StoreError::Corrupt("tasks.number"))?,
-                        agent,
-                        worker,
-                    })
-                }
+                (
+                    Some(number),
+                    Some(title),
+                    Some(version),
+                    Some(task),
+                    Some(task_title),
+                    Some(agent),
+                    Some(worker),
+                ) => Some(IntegratedProposal {
+                    number: ProposalId::try_from_db(number)
+                        .ok_or(StoreError::Corrupt("proposals.number"))?,
+                    title,
+                    version: u32::try_from(version)
+                        .map_err(|_| StoreError::Corrupt("proposal_versions.version"))?,
+                    task: TaskId::try_from_db(task).ok_or(StoreError::Corrupt("tasks.number"))?,
+                    task_title,
+                    agent,
+                    worker,
+                }),
                 _ => None,
             },
         }),
@@ -389,6 +415,7 @@ fn row(raw: RawRow) -> Result<RevisionRow, StoreError> {
             .map_err(|_| StoreError::Corrupt("revisions.created_at"))?,
         import_source: raw.import_source,
         integration,
+        commit: raw.git_commit,
     })
 }
 

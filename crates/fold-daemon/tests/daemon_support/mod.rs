@@ -24,7 +24,6 @@ use fold_store::testing::TestProject;
 use fold_store::workspaces::{
     self, advance_main, create_initial_revision, initial_revision, insert_revision,
 };
-use fold_vcs::git::Git;
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::revision_store::{write_initial_tree, write_revision};
 use http_body_util::BodyExt;
@@ -135,7 +134,7 @@ impl Opened {
     }
 
     pub fn workspaces(&self) -> WorkspaceService {
-        WorkspaceService::for_project(&self.handle, Git::default())
+        WorkspaceService::for_project(&self.handle)
     }
 
     /// Creates the workspace of `task` for `frontend` and returns its id and directory.

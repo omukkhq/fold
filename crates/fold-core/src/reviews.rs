@@ -200,6 +200,29 @@ pub fn standing_agent_approval(reviews: &[ReviewFact]) -> Option<AgentName> {
         .map(|(_, agent)| agent)
 }
 
+/// Every reviewer whose approval of the version stands: an approval after the last `request_changes`, workers and humans alike, each once, in the order of their first standing approval. Pass the reviews of one version only.
+pub fn standing_approvers(reviews: &[ReviewFact]) -> Vec<EventActor> {
+    let withdrawn = reviews
+        .iter()
+        .filter(|review| review.verdict == Verdict::RequestChanges)
+        .map(|review| review.seq)
+        .max();
+    let mut standing: Vec<&ReviewFact> = reviews
+        .iter()
+        .filter(|review| {
+            review.verdict == Verdict::Approve && withdrawn.is_none_or(|seq| review.seq > seq)
+        })
+        .collect();
+    standing.sort_by_key(|review| review.seq);
+    let mut approvers: Vec<EventActor> = Vec::new();
+    for review in standing {
+        if !approvers.contains(&review.reviewer) {
+            approvers.push(review.reviewer.clone());
+        }
+    }
+    approvers
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -447,5 +470,34 @@ mod tests {
             by("lead", Verdict::Approve, 2),
         ];
         assert_eq!(standing_agent_approval(&again), agent("lead"));
+    }
+
+    #[test]
+    fn every_reviewer_whose_approval_stands_is_listed_once_in_order() {
+        let by = |reviewer: &str, verdict: Verdict, seq: u64| ReviewFact {
+            reviewer: EventActor::parse(reviewer).unwrap(),
+            ..fact(verdict, seq)
+        };
+        let names = |reviews: &[ReviewFact]| -> Vec<String> {
+            standing_approvers(reviews)
+                .iter()
+                .map(ToString::to_string)
+                .collect()
+        };
+        assert!(standing_approvers(&[]).is_empty());
+        let reviews = [
+            by("review/deep", Verdict::Approve, 3),
+            by("lead", Verdict::Approve, 1),
+            by("human:ana", Verdict::Approve, 2),
+            by("lead", Verdict::Approve, 4),
+            by("other", Verdict::Comment, 5),
+        ];
+        assert_eq!(names(&reviews), ["lead", "human:ana", "review/deep"]);
+        let withdrawn = [
+            by("lead", Verdict::Approve, 1),
+            by("human:ana", Verdict::RequestChanges, 2),
+            by("review", Verdict::Approve, 3),
+        ];
+        assert_eq!(names(&withdrawn), ["review"]);
     }
 }

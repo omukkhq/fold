@@ -30,7 +30,6 @@ use fold_store::workspaces::{
     self, CheckpointReason, advance_main, create_initial_revision, initial_revision,
     insert_revision,
 };
-use fold_vcs::git::Git;
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::revision_store::{write_initial_tree, write_revision};
 
@@ -67,7 +66,6 @@ impl Project {
                 bus.clone(),
                 clock.clone(),
                 project.paths().clone(),
-                Git::default(),
                 5,
             )
             .with_locks(Arc::new(tokio::sync::RwLock::new(())), ops.clone())
@@ -503,7 +501,7 @@ async fn garbage_collection_waits_for_a_record_to_commit() {
             .await
             .unwrap(),
     );
-    let service = WorkspaceService::for_project(&handle, Git::default());
+    let service = WorkspaceService::for_project(&handle);
     let fixture = Arc::new(Project::over(&project, &handle.store, Some(service)));
     let actor = fixture.seed().await;
     fs::write(fixture.lib(), b"a file no object holds yet\n").unwrap();
@@ -803,7 +801,7 @@ async fn garbage_collection_waits_for_an_automatic_checkpoint_to_commit() {
             .await
             .unwrap(),
     );
-    let service = WorkspaceService::for_project(&handle, Git::default());
+    let service = WorkspaceService::for_project(&handle);
     let fixture = Arc::new(Project::over(&project, &handle.store, Some(service)));
     fixture.seed().await;
     fs::write(fixture.lib(), b"a file no object holds yet\n").unwrap();
@@ -857,7 +855,7 @@ async fn live_project(project: &TestProject) -> (Arc<ProjectHandle>, Project) {
             .await
             .unwrap(),
     );
-    let service = WorkspaceService::for_project(&handle, Git::default());
+    let service = WorkspaceService::for_project(&handle);
     let fixture = Project::over(project, &handle.store, Some(service));
     fixture.seed().await;
     handle.live.rescan(ws(1)).await.unwrap();

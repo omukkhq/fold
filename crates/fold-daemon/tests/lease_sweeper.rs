@@ -31,7 +31,6 @@ use fold_store::tasks::claims;
 use fold_store::testing::{TestProject, eventually};
 use fold_store::workspaces::{self, create_initial_revision, initial_revision};
 use fold_store::{events, reviews};
-use fold_vcs::git::Git;
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::revision_store::{write_initial_tree, write_revision};
 use http_body_util::BodyExt;
@@ -133,7 +132,7 @@ impl Fixture {
                 .await
                 .unwrap();
         }
-        let workspaces = WorkspaceService::for_project(&handle, Git::default());
+        let workspaces = WorkspaceService::for_project(&handle);
         Self {
             project,
             state,

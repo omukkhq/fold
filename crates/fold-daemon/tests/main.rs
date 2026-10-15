@@ -6,6 +6,8 @@ pub mod common;
 #[cfg(test)]
 pub mod daemon_support;
 #[cfg(test)]
+pub mod git_support;
+#[cfg(test)]
 pub mod proposal_tools_support;
 #[cfg(test)]
 pub mod reviews_support;
@@ -31,6 +33,8 @@ mod conflicts;
 #[cfg(feature = "failpoints")]
 mod crash_checkpoint;
 #[cfg(feature = "failpoints")]
+mod crash_git_commit;
+#[cfg(feature = "failpoints")]
 mod crash_init;
 #[cfg(feature = "failpoints")]
 mod crash_integration;
@@ -43,6 +47,7 @@ mod diff_routes;
 mod event_bus;
 mod events_service;
 mod gc;
+mod git_commits;
 mod http_agents;
 mod http_assets;
 mod http_auth;

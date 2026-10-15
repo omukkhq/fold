@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT r.number AS \"number!: i64\"\n           FROM revisions r\n           LEFT JOIN revision_commits c ON c.revision_id = r.id\n           WHERE c.revision_id IS NULL\n           ORDER BY r.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "revisions",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "66d08c862c30d2635ad93e0f4eba52aa1f82b292ad1984118cab9de186c80af4"
+}

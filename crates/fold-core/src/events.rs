@@ -106,6 +106,7 @@ define_event_types! {
     REQUEST_CHANGES_REQUESTED = "request.changes_requested",
     REQUEST_APPROVED = "request.approved",
     REQUEST_CLOSED = "request.closed",
+    GIT_COMMIT_FAILED = "git.commit_failed",
     AGENT_PRESENCE_CHANGED = "agent.presence_changed",
 }
 

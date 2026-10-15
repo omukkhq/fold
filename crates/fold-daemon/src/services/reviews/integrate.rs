@@ -47,6 +47,8 @@ pub enum IntegrationOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PullIntegration {
     pub remote_commit: String,
+    /// The name of the remote the pull fetched from.
+    pub remote: String,
     pub branch: String,
     pub base_tree: ObjectHash,
     pub remote_tree: ObjectHash,
@@ -130,6 +132,7 @@ enum Subject {
     },
     Pull {
         remote_commit: String,
+        remote: String,
         branch: String,
     },
 }
@@ -458,6 +461,7 @@ impl ReviewService {
             workspace: None,
             subject: Subject::Pull {
                 remote_commit: commit.to_owned(),
+                remote: pull.remote.clone(),
                 branch: pull.branch.clone(),
             },
         })
@@ -530,6 +534,7 @@ impl Commit<'_> {
             }
             Subject::Pull {
                 remote_commit,
+                remote,
                 branch,
             } => {
                 let subject = IntegrationSubject::Pull {
@@ -545,6 +550,7 @@ impl Commit<'_> {
                 let pulled = NewEvent::new(types::REMOTE_PULLED, label)?
                     .revision(revision)
                     .data(json!({
+                        "remote": remote,
                         "branch": branch,
                         "remote_commit": remote_commit,
                         "revision": revision.to_string(),

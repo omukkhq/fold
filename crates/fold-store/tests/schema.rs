@@ -83,6 +83,7 @@ async fn baseline_creates_every_table_of_the_data_model() {
         "requests",
         "review_comments",
         "reviews",
+        "revision_commits",
         "revisions",
         "sessions",
         "task_labels",
