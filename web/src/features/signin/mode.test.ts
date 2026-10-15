@@ -36,6 +36,9 @@ describe("signInErrorMessage", () => {
     expect(signInErrorMessage(new TypeError("fetch failed"))).toContain(
       "did not answer",
     );
+    expect(
+      signInErrorMessage(new ApiError("daemon_unavailable", "")),
+    ).toContain("did not answer");
     expect(signInErrorMessage(new ApiError("internal_error", ""))).toBe(
       "Sign-in failed. Try again.",
     );

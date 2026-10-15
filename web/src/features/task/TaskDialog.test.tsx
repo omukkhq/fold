@@ -28,6 +28,7 @@ import type { Board, BoardCard } from "@/api/board";
 import type { components } from "@/api/schema";
 import type { TaskDetail } from "@/api/tasks";
 import { liveStatusStore } from "@/live/status";
+import { agent, worker } from "@/test/agents";
 import { daemon, noContent, ok, refuse, type Call } from "@/test/daemon";
 import { boardCard, boardView, taskView } from "@/test/payloads";
 import { routeTree } from "@/routeTree.gen";
@@ -207,6 +208,7 @@ function setItems(task: string, next: ReturnType<typeof items>) {
 
 function registerDaemon(): void {
   daemon.latency = 30;
+  daemon.shell(["demo", "ledger"]);
   const known = (call: Call) => tasks.has(call.params.id ?? "");
   const missing = refuse(404, "task_not_found");
   daemon.on(`GET ${P}/:slug/board`, () => ok(board()));
@@ -319,11 +321,9 @@ function registerDaemon(): void {
   daemon.on(`GET ${P}/:slug/agents`, () =>
     ok({
       agents: [
-        {
-          name: "frontend",
-          tags: [],
-          workers: [{ name: "frontend/ui", parent: "frontend" }],
-        },
+        agent("frontend", {
+          workers: [worker("frontend"), worker("frontend/ui")],
+        }),
       ],
     }),
   );
@@ -341,6 +341,7 @@ function registerDaemon(): void {
           }))
         : [],
       next: null,
+      total_awaiting_human: 0,
     }),
   );
   daemon.on(`POST ${P}/:slug/feedback`, (call) => {

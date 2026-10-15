@@ -1,16 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { ProjectOverview } from "../../api/projects";
-import { countsLine, lastChangeLine } from "./counts";
+import { countsLine, lastChangeLine, summaryLine } from "./counts";
 
-function project(over: Partial<ProjectOverview>): ProjectOverview {
+function overview(over: Partial<ProjectOverview>): ProjectOverview {
   return {
-    slug: "demo",
-    name: "demo",
-    available: true,
-    counts: { backlog: 0, todo: 0, progress: 0, review: 0, done: 0 },
+    counts: { backlog: 0, todo: 0, in_progress: 0, review: 0, done: 0 },
     agents: [],
-    mainRevision: null,
-    lastChangeAt: null,
+    head: null,
+    last_change_at: null,
     ...over,
   };
 }
@@ -19,9 +16,9 @@ describe("countsLine", () => {
   it("lists the non-empty columns and the main head", () => {
     expect(
       countsLine(
-        project({
-          counts: { backlog: 6, todo: 3, progress: 4, review: 1, done: 3 },
-          mainRevision: 8,
+        overview({
+          counts: { backlog: 6, todo: 3, in_progress: 4, review: 1, done: 3 },
+          head: "r8",
         }),
       ),
     ).toBe(
@@ -32,20 +29,20 @@ describe("countsLine", () => {
   it("says when every task is Done", () => {
     expect(
       countsLine(
-        project({
-          counts: { backlog: 0, todo: 0, progress: 0, review: 0, done: 31 },
-          mainRevision: 42,
+        overview({
+          counts: { backlog: 0, todo: 0, in_progress: 0, review: 0, done: 31 },
+          head: "r42",
         }),
       ),
     ).toBe("31 tasks · all Done · main r42");
   });
 
   it("handles an empty board and a single task", () => {
-    expect(countsLine(project({}))).toBe("0 tasks");
+    expect(countsLine(overview({}))).toBe("0 tasks");
     expect(
       countsLine(
-        project({
-          counts: { backlog: 1, todo: 0, progress: 0, review: 0, done: 0 },
+        overview({
+          counts: { backlog: 1, todo: 0, in_progress: 0, review: 0, done: 0 },
         }),
       ),
     ).toBe("1 task · 1 in backlog");
@@ -54,12 +51,31 @@ describe("countsLine", () => {
 
 describe("lastChangeLine", () => {
   it("says how long ago the project changed", () => {
-    expect(lastChangeLine(project({ lastChangeAt: 1000 }), 13_000)).toBe(
+    expect(lastChangeLine(overview({ last_change_at: 1000 }), 13_000)).toBe(
       "changed 12 s ago",
     );
   });
 
   it("says when nothing has changed", () => {
-    expect(lastChangeLine(project({}), 13_000)).toBe("no changes yet");
+    expect(lastChangeLine(overview({}), 13_000)).toBe("no changes yet");
+  });
+});
+
+describe("summaryLine", () => {
+  const base = { slug: "demo", name: "demo" };
+
+  it("gives the counts of a project with an overview", () => {
+    expect(
+      summaryLine({ ...base, available: true, overview: overview({}) }),
+    ).toBe("0 tasks");
+  });
+
+  it("tells an open project without an overview from one that is not open", () => {
+    expect(summaryLine({ ...base, available: true, overview: null })).toBe(
+      "Could not read this project.",
+    );
+    expect(summaryLine({ ...base, available: false, overview: null })).toBe(
+      "Could not open this project.",
+    );
   });
 });

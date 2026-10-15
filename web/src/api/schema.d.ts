@@ -535,6 +535,19 @@ export interface components {
              */
             total: number;
         };
+        /** @description The number of tasks in each board column. */
+        BoardCounts: {
+            /** Format: int32 */
+            backlog: number;
+            /** Format: int32 */
+            done: number;
+            /** Format: int32 */
+            in_progress: number;
+            /** Format: int32 */
+            review: number;
+            /** Format: int32 */
+            todo: number;
+        };
         /** @description The five columns in board order: backlog, todo, in_progress, review, done. Archived tasks are left out. */
         BoardView: {
             columns: components["schemas"]["BoardColumn"][];
@@ -951,13 +964,35 @@ export interface components {
          * @enum {string}
          */
         PresenceState: "active" | "idle" | "offline";
+        ProjectAgent: {
+            name: string;
+            presence: components["schemas"]["PresenceState"];
+        };
         ProjectList: {
             projects: components["schemas"]["ProjectSummary"][];
+        };
+        /** @description What the project list shows of an open project. */
+        ProjectOverview: {
+            /** @description Agents with a connected session, by name. */
+            agents: components["schemas"]["ProjectAgent"][];
+            /** @description Unarchived tasks per board column. */
+            counts: components["schemas"]["BoardCounts"];
+            /**
+             * @description The revision `main` names, such as `r17`; null before `r1` exists.
+             * @example r17
+             */
+            head: string | null;
+            /**
+             * Format: int64
+             * @description UTC milliseconds of the newest stored event; null when nothing happened yet.
+             */
+            last_change_at: number | null;
         };
         ProjectSummary: {
             /** @description False while the project failed to open or has not been opened yet. */
             available: boolean;
             name: string;
+            overview: components["schemas"]["ProjectOverview"] | null;
             slug: string;
         };
         PushResult: {
@@ -1154,6 +1189,11 @@ export interface components {
              * @example m-40
              */
             next: string | null;
+            /**
+             * Format: int64
+             * @description How many threads in the whole project hold a question to a human that no human has answered, whatever the filter; the navigation badge reads it with `limit=1`.
+             */
+            total_awaiting_human: number;
         };
         /** @description A thread with every message in number order. */
         ThreadView: {
@@ -1436,6 +1476,15 @@ export interface operations {
             };
             /** @description The slug is not registered */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

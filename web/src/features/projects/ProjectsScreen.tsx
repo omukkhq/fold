@@ -9,7 +9,7 @@ import { Mono } from "@/components/mono/Mono";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
-import { countsLine, lastChangeLine } from "./counts";
+import { lastChangeLine, summaryLine } from "./counts";
 
 const ROW =
   "flex items-center gap-20 rounded-l bg-surface px-20 py-16 inset-ring inset-ring-border-subtle";
@@ -52,6 +52,7 @@ export function ProjectsScreen() {
           ) : (
             <ul aria-label="Projects" className="flex flex-col gap-12">
               {projects.map((project) => {
+                const { overview } = project;
                 const content = (
                   <>
                     <div className="flex min-w-0 flex-1 flex-col gap-4">
@@ -64,27 +65,25 @@ export function ProjectsScreen() {
                         </Mono>
                       </span>
                       <span className="text-bar text-text-muted">
-                        {project.available
-                          ? countsLine(project)
-                          : "Could not open this project."}
+                        {summaryLine(project)}
                       </span>
                     </div>
-                    {project.available ? (
+                    {overview ? (
                       <>
                         <div className="flex items-center gap-6">
-                          {project.agents.length === 0 ? (
+                          {overview.agents.length === 0 ? (
                             <span className="text-code text-text-muted">
                               no agents connected
                             </span>
                           ) : (
-                            project.agents.map((agent) => (
+                            overview.agents.map((agent) => (
                               <span
-                                key={agent}
+                                key={agent.name}
                                 className="flex items-center gap-5 rounded-full py-2 pr-8 pl-3 inset-ring inset-ring-border"
                               >
-                                <Avatar name={agent} />
+                                <Avatar name={agent.name} />
                                 <span className="text-code text-text">
-                                  {agent}
+                                  {agent.name}
                                 </span>
                               </span>
                             ))
@@ -95,19 +94,19 @@ export function ProjectsScreen() {
                             aria-hidden
                             className={cn(
                               "size-7 rounded-full",
-                              project.agents.length > 0
+                              overview.agents.length > 0
                                 ? "bg-primary"
                                 : "bg-status-backlog",
                             )}
                           />
                           <span
                             className={
-                              project.agents.length > 0
+                              overview.agents.length > 0
                                 ? "text-primary-text"
                                 : "text-text-muted"
                             }
                           >
-                            {lastChangeLine(project, now)}
+                            {lastChangeLine(overview, now)}
                           </span>
                         </span>
                         <ChevronRight

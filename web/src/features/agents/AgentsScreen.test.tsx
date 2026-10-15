@@ -15,20 +15,23 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentView } from "@/api/agents";
 import { keys } from "@/api/keys";
+import { agent, claim, worker, workspace } from "@/test/agents";
+import { stubFetch } from "@/test/stubFetch";
 import { AgentsScreen } from "./AgentsScreen";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
-async function setup(agents?: AgentView[]) {
+async function setup(agents: AgentView[]) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  if (agents) {
-    queryClient.setQueryData(keys.agents("demo"), agents);
-  }
+  queryClient.setQueryData(keys.agents("demo"), agents);
   const root = createRootRoute();
   const index = createRoute({
     getParentRoute: () => root,
@@ -47,6 +50,29 @@ async function setup(agents?: AgentView[]) {
   await screen.findByRole("heading", { name: "Agents" });
 }
 
+const AGENTS_ROUTE = "/api/v1/projects/demo/agents";
+const TAG_ROUTE = `${AGENTS_ROUTE}/frontend/tags/integrator`;
+
+const frontend = agent("frontend", {
+  last_call_at: Date.now() - 5000,
+  workers: [
+    worker("frontend", { activity: "list_tasks" }),
+    worker("frontend/ui", {
+      activity: "claim_task T-12",
+      last_call_at: Date.now() - 5000,
+      claims: [claim()],
+      workspaces: [workspace({ changed_files: 3 })],
+    }),
+  ],
+});
+const review = agent("review", {
+  workers: [
+    worker("review", {
+      claims: [claim({ task: "T-10", kind: "review", stale: true })],
+    }),
+  ],
+});
+
 describe("AgentsScreen", () => {
   it("shows the empty state before any agent connects", async () => {
     await setup([]);
@@ -55,25 +81,69 @@ describe("AgentsScreen", () => {
     ).toBeTruthy();
   });
 
-  it("separates stalled and stale, and links a review claim to its proposal", async () => {
-    await setup();
-    const backend = screen.getByRole("region", { name: "Agent backend" });
-    expect(within(backend).getByText("Stalled")).toBeTruthy();
-    expect(within(backend).getByText("Stale")).toBeTruthy();
-    const review = screen.getByRole("region", { name: "Agent review" });
+  it("shows presence, claims and workspaces from the daemon", async () => {
+    await setup([frontend, review]);
+    const card = screen.getByRole("region", { name: "Agent frontend" });
+    expect(within(card).getByText(/active · 1 session/)).toBeTruthy();
+    expect(within(card).getByText("T-12 · ws-7")).toBeTruthy();
     expect(
-      within(review)
-        .getAllByRole("link", { name: "P-4" })[0]
+      within(card).getByText(/frontend\/ui · 3 changed files/),
+    ).toBeTruthy();
+    expect(within(card).queryByText("Stale")).toBeNull();
+  });
+
+  it("draws the session lines, the stalled badge and the granter only when the payload carries them", async () => {
+    await setup([
+      {
+        ...frontend,
+        tags: ["integrator"],
+        open_sessions: [
+          { id: "s1", started_at: 0, pid: 81231, cwd: "~/ledger" },
+        ],
+        attention: [{ kind: "stalled", task: "T-12" }],
+        integrator_granted_by: "human:tanim",
+      },
+      review,
+    ]);
+    const card = screen.getByRole("region", { name: "Agent frontend" });
+    expect(within(card).getByText(/pid 81231 · ~\/ledger/)).toBeTruthy();
+    expect(within(card).getByText("Stalled")).toBeTruthy();
+    expect(within(card).getByText(/integrator granted by tanim/)).toBeTruthy();
+    const plain = screen.getByRole("region", { name: "Agent review" });
+    expect(within(plain).queryByText(/pid/)).toBeNull();
+    expect(within(plain).queryByText("Stalled")).toBeNull();
+    expect(within(plain).queryByText(/granted by/)).toBeNull();
+  });
+
+  it("marks a stale claim and links a review claim to its task", async () => {
+    await setup([frontend, review]);
+    const card = screen.getByRole("region", { name: "Agent review" });
+    expect(within(card).getByText("Stale")).toBeTruthy();
+    expect(
+      within(card)
+        .getAllByRole("link", { name: "T-10" })[0]
         ?.getAttribute("href"),
-    ).toBe("/p/demo/proposals/P-4");
+    ).toBe("/p/demo/t/T-10");
   });
 
   it("grants integrator after the confirmation and shows the tag once the daemon answers", async () => {
-    await setup();
-    const frontend = screen.getByRole("region", { name: "Agent frontend" });
-    expect(within(frontend).queryByText("integrator")).toBeNull();
+    let granted = false;
+    stubFetch({
+      [`PUT ${TAG_ROUTE}`]: () => {
+        granted = true;
+        return { body: { agent: "frontend", tags: ["integrator"] } };
+      },
+      [`GET ${AGENTS_ROUTE}`]: () => ({
+        body: {
+          agents: [{ ...frontend, tags: granted ? ["integrator"] : [] }],
+        },
+      }),
+    });
+    await setup([frontend]);
+    const card = screen.getByRole("region", { name: "Agent frontend" });
+    expect(within(card).queryByText("integrator")).toBeNull();
     await userEvent.click(
-      within(frontend).getByRole("button", { name: "Grant integrator" }),
+      within(card).getByRole("button", { name: "Grant integrator" }),
     );
     const dialog = screen.getByRole("dialog", {
       name: "Grant integrator to frontend?",
@@ -81,17 +151,33 @@ describe("AgentsScreen", () => {
     await userEvent.click(
       within(dialog).getByRole("button", { name: "Grant integrator" }),
     );
-    expect(
-      within(dialog)
-        .getByRole("button", { name: "Grant integrator" })
-        .getAttribute("aria-busy"),
-    ).toBe("true");
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).toBeNull();
     });
-    expect(within(frontend).getByText("integrator")).toBeTruthy();
+    expect(await within(card).findByText("integrator")).toBeTruthy();
     expect(
-      within(frontend).getByRole("button", { name: "Remove integrator" }),
+      within(card).getByRole("button", { name: "Remove integrator" }),
     ).toBeTruthy();
+  });
+
+  it("keeps the dialog open and says so when the daemon refuses", async () => {
+    stubFetch({
+      [`PUT ${TAG_ROUTE}`]: {
+        status: 404,
+        body: { error: { code: "agent_not_found", message: "", details: {} } },
+      },
+    });
+    await setup([frontend]);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Grant integrator" }),
+    );
+    const dialog = screen.getByRole("dialog");
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Grant integrator" }),
+    );
+    expect(await within(dialog).findByRole("alert")).toBeTruthy();
+    expect(within(dialog).getByRole("alert").textContent).toContain(
+      "fold has no agent with this name.",
+    );
   });
 });

@@ -2,11 +2,12 @@ import type { BadgeTone } from "@/components/badge/badges";
 import { presenceSpec } from "@/components/avatar/presence";
 import { formatAsOf, formatSince } from "@/format/time";
 import type {
+  AgentAttention,
   AgentView,
-  AttentionItem,
   ClaimView,
   SessionView,
   WorkerView,
+  WorkspaceView,
 } from "@/api/agents";
 
 export const INTEGRATOR_TAG = "integrator";
@@ -18,7 +19,7 @@ function plural(count: number, noun: string): string {
 /** The presence line under an agent's name. The state is the daemon's; this only words it. */
 export function presenceLine(agent: AgentView, now: number): string {
   const state = presenceSpec(agent.presence).label.toLowerCase();
-  const sessions = plural(agent.sessions.length, "session");
+  const sessions = plural(agent.sessions, "session");
   if (agent.last_call_at === null) {
     return `${state} · ${sessions} · no call yet`;
   }
@@ -30,71 +31,109 @@ export function sessionLine(session: SessionView, now: number): string {
   return `session since ${formatAsOf(now, session.started_at)} · pid ${String(session.pid)} · ${session.cwd}`;
 }
 
-/** What the worker did last, for example `editing routes/login.tsx · 12 s ago`. */
-export function activityText(worker: WorkerView, now: number): string {
-  const { activity } = worker;
-  if (!activity) {
-    return worker.claim === null ? "no claim of its own" : "no call yet";
-  }
-  const what = activity.detail
-    ? `${activity.tool} ${activity.detail}`
-    : activity.tool;
-  return `${what} · ${formatSince(now, activity.at)}`;
+/** The session lines of the agent; none when the payload lists no sessions. */
+export function sessionLines(agent: AgentView): SessionView[] {
+  return agent.open_sessions ?? [];
 }
 
-/** `T-12 · ws-7` for an implementation claim, `P-4 review` for a review claim, or null for a worker with no claim. */
-export function claimText(
+function hasItem(
+  attention: AgentAttention[] | undefined,
+  kind: AgentAttention["kind"],
+  task: string,
+): boolean {
+  return (attention ?? []).some((i) => i.kind === kind && i.task === task);
+}
+
+/** `stalled` for a worker whose claimed task has a stalled item. The web compares no times. */
+export function workerBadges(
   worker: WorkerView,
-  claims: ClaimView[],
-): string | null {
-  if (worker.claim === null) {
+  attention: AgentAttention[] | undefined,
+): BadgeTone[] {
+  return worker.claims.some((claim) =>
+    hasItem(attention, "stalled", claim.task),
+  )
+    ? ["stalled"]
+    : [];
+}
+
+/** `stale` for a claim whose lease ran out, or whose task has a stale_claim item. */
+export function claimBadges(
+  claim: ClaimView,
+  attention: AgentAttention[] | undefined,
+): BadgeTone[] {
+  return claim.stale || hasItem(attention, "stale_claim", claim.task)
+    ? ["stale"]
+    : [];
+}
+
+/** What the worker did last, for example `edit_file · 12 s ago`. The daemon words the activity; the time is its last call. */
+export function activityText(worker: WorkerView, now: number): string {
+  if (worker.last_call_at === null) {
+    return "no call yet";
+  }
+  const since = formatSince(now, worker.last_call_at);
+  return worker.activity ? `${worker.activity} · ${since}` : since;
+}
+
+/** A claim with the worker that holds it. */
+export interface HeldClaimRow {
+  worker: string;
+  claim: ClaimView;
+}
+
+/** Every claim of the agent's workers, in the order of the workers. */
+export function agentClaims(agent: AgentView): HeldClaimRow[] {
+  return agent.workers.flatMap((worker) =>
+    worker.claims.map((claim) => ({ worker: worker.name, claim })),
+  );
+}
+
+/** The workspace of an implementation claim: the worker's workspace on the claimed task. */
+export function claimWorkspace(
+  worker: WorkerView,
+  claim: ClaimView,
+): WorkspaceView | null {
+  return claim.kind === "implementation"
+    ? (worker.workspaces.find((ws) => ws.task === claim.task) ?? null)
+    : null;
+}
+
+/** `T-12 · ws-7` for an implementation claim with a workspace, `T-12 review` for a review claim, `T-12` otherwise; null for a worker with no claim. Several claims are joined with a comma. */
+export function claimText(worker: WorkerView): string | null {
+  if (worker.claims.length === 0) {
     return null;
   }
-  const claim = claims.find((c) => c.task === worker.claim);
-  if (claim?.kind === "review") {
-    return `${claim.proposal ?? claim.task} review`;
-  }
-  return claim?.workspace ? `${claim.task} · ${claim.workspace}` : worker.claim;
+  return worker.claims
+    .map((claim) => {
+      if (claim.kind === "review") {
+        return `${claim.task} review`;
+      }
+      const workspace = claimWorkspace(worker, claim);
+      return workspace ? `${claim.task} · ${workspace.ws}` : claim.task;
+    })
+    .join(", ");
 }
 
-/** A review claim is on a proposal and links to it; an implementation claim links to its task. */
+/** Every claim links to its task: a review claim names the task of the reviewed proposal. */
 export function claimTarget(
   slug: string,
   claim: ClaimView,
 ): { id: string; href: string } {
-  if (claim.kind === "review" && claim.proposal !== null) {
-    return {
-      id: claim.proposal,
-      href: `/p/${slug}/proposals/${claim.proposal}`,
-    };
-  }
   return { id: claim.task, href: `/p/${slug}/t/${claim.task}` };
 }
 
-function hasItem(
-  attention: AttentionItem[],
-  kind: AttentionItem["kind"],
-  task: string | null,
-): boolean {
-  return (
-    task !== null && attention.some((i) => i.kind === kind && i.task === task)
+/** Every workspace of the agent's workers, in the order of the workers. */
+export function agentWorkspaces(
+  agent: AgentView,
+): { worker: string; workspace: WorkspaceView }[] {
+  return agent.workers.flatMap((worker) =>
+    worker.workspaces.map((workspace) => ({ worker: worker.name, workspace })),
   );
 }
 
-/** `stalled` for a worker whose task has a stalled item. The web compares no times. */
-export function workerBadges(
-  worker: WorkerView,
-  attention: AttentionItem[],
-): BadgeTone[] {
-  return hasItem(attention, "stalled", worker.claim) ? ["stalled"] : [];
-}
-
-/** `stale` for a claim whose task has a stale_claim item. */
-export function claimBadges(
-  claim: ClaimView,
-  attention: AttentionItem[],
-): BadgeTone[] {
-  return hasItem(attention, "stale_claim", claim.task) ? ["stale"] : [];
+/** `3 changed files`; the daemon's cached count for the workspace. */
+export function changedFilesText(workspace: WorkspaceView): string {
+  return plural(workspace.changed_files, "changed file");
 }
 
 /** A human edits no tag but `integrator`. */
@@ -111,28 +150,25 @@ export function plainTags(agent: AgentView): string[] {
   return agent.tags.filter((tag) => !isEditableTag(tag));
 }
 
-/** `2 claims · 2 workspaces · 1 open proposal`, or `1 review claim · integrator granted by tanim`; a count of zero is left out. */
+/** `2 claims · 2 workspaces · 1 open proposal`, or `1 review claim · integrator granted by tanim`; a count of zero is left out, and so is an unknown granter. */
 export function footLine(agent: AgentView): string {
-  const implementation = agent.claims.filter(
-    (c) => c.kind === "implementation",
-  );
-  const review = agent.claims.length - implementation.length;
-  const proposals = new Set(
-    implementation.flatMap((c) => (c.proposal === null ? [] : [c.proposal])),
-  ).size;
+  const claims = agentClaims(agent).map((row) => row.claim);
+  const implementation = claims.filter((c) => c.kind === "implementation");
   const counts: [number, string][] = [
     [implementation.length, "claim"],
-    [review, "review claim"],
-    [agent.workspaces.length, "workspace"],
-    [proposals, "open proposal"],
+    [claims.length - implementation.length, "review claim"],
+    [agentWorkspaces(agent).length, "workspace"],
+    [
+      agent.workers.reduce((n, w) => n + w.proposals.length, 0),
+      "open proposal",
+    ],
   ];
   const parts = counts
     .filter(([count]) => count > 0)
     .map(([count, noun]) => plural(count, noun));
-  if (hasIntegrator(agent) && agent.integrator_granted_by !== null) {
-    parts.push(
-      `integrator granted by ${agent.integrator_granted_by.replace(/^human:/, "")}`,
-    );
+  const granter = agent.integrator_granted_by;
+  if (hasIntegrator(agent) && granter) {
+    parts.push(`integrator granted by ${granter.replace(/^human:/, "")}`);
   }
   return parts.length > 0 ? parts.join(" · ") : "no claims";
 }
@@ -145,20 +181,20 @@ export function orderWorkers(
   const seen = new Set<string>();
   const visit = (parent: string | null, depth: number) => {
     for (const worker of workers) {
-      if (worker.parent === parent && !seen.has(worker.label)) {
-        seen.add(worker.label);
+      if (worker.parent === parent && !seen.has(worker.name)) {
+        seen.add(worker.name);
         out.push({ worker, depth });
-        visit(worker.label, depth + 1);
+        visit(worker.name, depth + 1);
       }
     }
   };
   visit(null, 0);
   // A worker whose parent is missing from the payload still shows, at the top.
   for (const worker of workers) {
-    if (!seen.has(worker.label)) {
-      seen.add(worker.label);
+    if (!seen.has(worker.name)) {
+      seen.add(worker.name);
       out.push({ worker, depth: 0 });
-      visit(worker.label, 1);
+      visit(worker.name, 1);
     }
   }
   return out;

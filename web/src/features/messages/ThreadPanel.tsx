@@ -18,6 +18,7 @@ import { replySchema, type ReplyValues } from "./compose";
 import { deliveryLines, recipientNames } from "./delivery";
 import { replyTargets } from "./filters";
 import { MessageBody } from "./MessageBody";
+import { threadTitle } from "./title";
 
 interface ThreadPanelProps {
   slug: string;
@@ -55,13 +56,13 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
 
   return (
     <section
-      aria-label={thread.subject}
+      aria-label={threadTitle(thread)}
       className="flex min-w-0 flex-1 flex-col rounded-l bg-surface inset-ring inset-ring-border-subtle"
     >
       <header className="flex items-center gap-10 border-b border-border-subtle px-18 py-14">
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           <h2 className="text-section leading-snug font-semibold text-text">
-            {thread.subject}
+            {threadTitle(thread)}
           </h2>
           <p className="font-mono text-meta text-text-muted">
             thread {thread.id}

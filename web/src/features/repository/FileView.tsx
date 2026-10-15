@@ -1,9 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
-import { FileX } from "lucide-react";
+import { FileX, Link2, Ruler } from "lucide-react";
 import { Mono } from "@/components/mono/Mono";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
-import { formatSize } from "./describe";
+import { fileState, formatSize } from "./describe";
 import { fileQuery } from "./queries";
 
 interface FileViewProps {
@@ -12,9 +12,10 @@ interface FileViewProps {
   path: string;
 }
 
-/** A read-only view of one file. A binary file shows its size and hash and no content. */
+/** A read-only view of one file. A binary or too-large file shows its size and hash and no content; a symlink shows its target text and is never followed. */
 export function FileView({ slug, revision, path }: FileViewProps) {
   const file = useQuery(fileQuery(slug, revision, path));
+  const shown = file.data ? fileState(file.data) : null;
   return (
     <section
       aria-label={`File ${path}`}
@@ -32,16 +33,29 @@ export function FileView({ slug, revision, path }: FileViewProps) {
           onRetry={() => void file.refetch()}
         />
       ) : null}
-      {file.data?.kind === "text" ? (
+      {shown?.kind === "text" ? (
         <pre className="overflow-x-auto px-14 py-12 font-mono text-code leading-normal text-text">
-          {file.data.content}
+          {shown.text}
         </pre>
       ) : null}
-      {file.data?.kind === "binary" ? (
+      {shown?.kind === "symlink" ? (
+        <p className="flex items-center gap-8 px-14 py-12 text-bar text-text-muted">
+          <Link2 aria-hidden size={15} />
+          <Mono className="text-text">{`→ ${shown.target}`}</Mono>
+        </p>
+      ) : null}
+      {file.data &&
+      (shown?.kind === "binary" || shown?.kind === "too_large") ? (
         <div className="flex flex-col gap-6 px-14 py-12">
           <p className="flex items-center gap-8 text-bar text-text-muted">
-            <FileX aria-hidden size={15} />
-            Binary file, no content shown.
+            {shown.kind === "binary" ? (
+              <FileX aria-hidden size={15} />
+            ) : (
+              <Ruler aria-hidden size={15} />
+            )}
+            {shown.kind === "binary"
+              ? "Binary file, no content shown."
+              : "File too large, no content shown."}
           </p>
           <Mono className="text-label text-text-muted">
             {`${formatSize(file.data.size)} · ${file.data.hash}`}

@@ -1,4 +1,4 @@
-import type { Integration, Revision } from "../../api/repository";
+import type { FileView, Revision, TreeEntry } from "../../api/repository";
 import { formatAsOf } from "../../format/time";
 
 export interface RevisionLines {
@@ -12,33 +12,63 @@ export function describeRevision(
   revision: Revision,
   now: number,
 ): RevisionLines {
-  const at = formatAsOf(now, revision.integratedAt);
-  return {
-    title: titleOf(revision.integration),
-    meta: metaOf(revision.integration, at),
-  };
-}
-
-function titleOf(integration: Integration): string {
-  switch (integration.kind) {
+  const at = formatAsOf(now, revision.created_at);
+  const who = revision.author ?? "unknown";
+  switch (revision.origin) {
     case "proposal":
-      return `${integration.proposal} · ${integration.title}`;
+      return {
+        title: [revision.proposal ?? revision.id, revision.title]
+          .filter((part) => part !== null)
+          .join(" · "),
+        meta: [revision.task, who, at]
+          .filter((part) => part !== null)
+          .join(" · "),
+      };
     case "pull":
-      return `pull · ${integration.remoteCommit}`;
+      return {
+        title: `pull · ${revision.pull ?? ""}`,
+        meta: `${who} · ${at}`,
+      };
     case "initial":
-      return integration.title;
+      return {
+        title: revision.title ?? "Initial revision",
+        meta: `${who} · ${at}`,
+      };
   }
 }
 
-function metaOf(integration: Integration, at: string): string {
-  switch (integration.kind) {
-    case "proposal":
-      return `${integration.task} · ${integration.agent} · ${at}`;
-    case "pull":
-      return `${integration.human} · ${at}`;
-    case "initial":
-      return `${integration.human} · ${at}`;
+/** The daemon turns a name that is not UTF-8 into text with U+FFFD, and that text names no entry. Such an entry shows but is never read again by its path. */
+export function isOpenable(entry: Pick<TreeEntry, "name" | "path">): boolean {
+  return !entry.name.includes("\uFFFD") && !entry.path.includes("\uFFFD");
+}
+
+/** `→ ../shared/config.ts` beside a symlink in the tree, or null when the entry carries no target. The target is never followed. */
+export function symlinkLabel(
+  entry: Pick<TreeEntry, "kind" | "target">,
+): string | null {
+  return entry.kind === "symlink" && entry.target !== undefined
+    ? `→ ${entry.target}`
+    : null;
+}
+
+/** What the file view draws for a file. */
+export type FileState =
+  | { kind: "text"; text: string }
+  | { kind: "symlink"; target: string }
+  | { kind: "binary" }
+  | { kind: "too_large" };
+
+export function fileState(file: FileView): FileState {
+  if (file.too_large) {
+    return { kind: "too_large" };
   }
+  if (file.binary) {
+    return { kind: "binary" };
+  }
+  if (file.kind === "symlink") {
+    return { kind: "symlink", target: file.text ?? "" };
+  }
+  return { kind: "text", text: file.text ?? "" };
 }
 
 /** `14.2 KB` style sizes for the tree and the binary notice. */

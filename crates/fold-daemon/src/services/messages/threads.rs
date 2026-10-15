@@ -53,6 +53,8 @@ pub struct ThreadView {
 pub struct ThreadPage {
     pub items: Vec<ThreadView>,
     pub next: Option<MessageId>,
+    /// Threads with a question to a human that no human has answered, in the whole project whatever the filter.
+    pub total_awaiting_human: u64,
 }
 
 /// A human's feedback on a task or reply to a message. It needs `task` or `reply_to`.
@@ -83,7 +85,11 @@ impl MessageService {
             .collect();
         items.sort_by_key(|thread| std::cmp::Reverse(last_number(thread)));
         let next = more.then(|| heads.last().map(|head| head.last)).flatten();
-        Ok(ThreadPage { items, next })
+        Ok(ThreadPage {
+            items,
+            next,
+            total_awaiting_human: awaiting.len() as u64,
+        })
     }
 
     /// The thread that `message` belongs to; any message of the thread names it.

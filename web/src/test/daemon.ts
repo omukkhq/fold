@@ -86,6 +86,27 @@ export class FakeDaemon {
     ];
   }
 
+  /** Registers the routes the project shell reads besides each screen's own: the session, the project list, each project, its agents and its messages. A test that registers agents or messages afterwards replaces them. */
+  shell(slugs: readonly string[]): void {
+    const projects = slugs.map((slug) => ({
+      slug,
+      name: slug,
+      available: true,
+      overview: null,
+    }));
+    this.on("GET /api/v1/session", ok({ human: "tanim", authenticated: true }));
+    this.on("GET /api/v1/projects", ok({ projects }));
+    this.on("GET /api/v1/projects/:slug", (call) => {
+      const project = projects.find((p) => p.slug === call.params.slug);
+      return project ? ok(project) : refuse(404, "project_not_found");
+    });
+    this.on("GET /api/v1/projects/:slug/agents", ok({ agents: [] }));
+    this.on(
+      "GET /api/v1/projects/:slug/messages",
+      ok({ items: [], next: null, total_awaiting_human: 0 }),
+    );
+  }
+
   reset(): void {
     this.calls.length = 0;
     this.routes = [];

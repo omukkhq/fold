@@ -4,6 +4,7 @@ import { ArrowRight, Send } from "lucide-react";
 import { useId } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { keys } from "@/api/keys";
+import { olderNotListed } from "@/api/pages";
 import {
   messageTargetsQuery,
   sendFeedback,
@@ -183,7 +184,7 @@ export function MessagesSection({
   // Every claim of a task read is its implementation claim.
   const holder = task.claims[0]?.holder ?? null;
   const query = useQuery(taskMessagesQuery(slug, task.task));
-  const messages = query.data ?? [];
+  const messages = query.data?.items ?? [];
   return (
     <section aria-label="Messages" className="flex flex-col gap-10">
       <SectionHead title="Messages">
@@ -200,6 +201,11 @@ export function MessagesSection({
             <Message key={message.id} slug={slug} message={message} />
           ))}
         </ul>
+      ) : null}
+      {query.data?.more ? (
+        <p className="text-bar text-text-muted">
+          {olderNotListed(messages.length, "messages")}
+        </p>
       ) : null}
       <FeedbackBox slug={slug} task={task.task} holder={holder} />
     </section>

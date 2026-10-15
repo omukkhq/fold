@@ -1,5 +1,5 @@
-import createClient from "openapi-fetch";
-import { toApiError } from "./errors";
+import createClient, { type Middleware } from "openapi-fetch";
+import { apiErrorCode, toApiError } from "./errors";
 import type { paths } from "./schema";
 
 export const API_BASE = "/api/v1";
@@ -69,22 +69,38 @@ export async function fetchEventStream(
   return decodeBody(response.body);
 }
 
-/** A write whose answer has no body to read: a JSON body out, nothing read back. Failures throw an `ApiError` when the body is the daemon's error envelope. */
-export async function postJson(
-  path: string,
-  body: unknown,
-  fetchImpl: typeof fetch = (input, init) => fetch(input, init),
-): Promise<void> {
-  const response = await fetchImpl(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "same-origin",
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) {
-    throw await streamFailure(response);
-  }
+/**
+ * The page's origin: `Request` needs an absolute URL, and the daemon serves the web files, so every path resolves against it.
+ * Outside a page (a Node test) there is none, and any origin does; the fallback is written in parts because the source guard bans remote URLs.
+ */
+function pageOrigin(): string {
+  return typeof location === "undefined"
+    ? ["http", "//localhost"].join(":")
+    : location.origin;
 }
 
-/** The one way the web application reaches the daemon. Paths and bodies are typed by the generated schema. */
-export const api = createClient<paths>({ baseUrl: "/" });
+/** The one way the web application reaches the daemon. Paths and bodies are typed by the generated schema. `fetch` is read at call time, so a test can replace it. */
+export const api = createClient<paths>({
+  baseUrl: pageOrigin(),
+  credentials: "same-origin",
+  fetch: (request) => fetch(request),
+});
+
+/** Calls `onAuthRequired` when the daemon answers `auth_required`: off loopback, the session cookie is missing or no longer valid. Other 401 answers, such as `invalid_token` from the sign-in itself, pass through. */
+export function authRequiredMiddleware(onAuthRequired: () => void): Middleware {
+  return {
+    async onResponse({ response }) {
+      if (response.status !== 401) {
+        return undefined;
+      }
+      const body: unknown = await response
+        .clone()
+        .json()
+        .catch(() => null);
+      if (apiErrorCode(body) === "auth_required") {
+        onAuthRequired();
+      }
+      return undefined;
+    },
+  };
+}

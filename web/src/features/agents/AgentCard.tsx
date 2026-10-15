@@ -15,6 +15,9 @@ import { focusRing } from "@/lib/focus";
 import { IntegratorDialog } from "./IntegratorDialog";
 import {
   activityText,
+  agentClaims,
+  agentWorkspaces,
+  changedFilesText,
   claimBadges,
   claimTarget,
   claimText,
@@ -24,6 +27,7 @@ import {
   plainTags,
   presenceLine,
   sessionLine,
+  sessionLines,
   workerBadges,
 } from "./presence";
 
@@ -56,7 +60,9 @@ export function AgentCard({ slug, agent, now }: AgentCardProps) {
   const granted = hasIntegrator(agent);
   const workers = orderWorkers(agent.workers);
   const tags = plainTags(agent);
-  const live = agent.sessions;
+  const claims = agentClaims(agent);
+  const workspaces = agentWorkspaces(agent);
+  const live = sessionLines(agent);
 
   return (
     <section
@@ -105,11 +111,11 @@ export function AgentCard({ slug, agent, now }: AgentCardProps) {
         ) : (
           <ul className="flex flex-col gap-12">
             {workers.map(({ worker, depth }) => {
-              const claim = claimText(worker, agent.claims);
+              const claim = claimText(worker);
               const badges = workerBadges(worker, agent.attention);
               return (
                 <li
-                  key={worker.label}
+                  key={worker.name}
                   className={cn(
                     "flex flex-col gap-4",
                     depth > 0 && "border-l border-border-subtle pl-14",
@@ -117,7 +123,7 @@ export function AgentCard({ slug, agent, now }: AgentCardProps) {
                 >
                   <div className="flex items-center gap-8">
                     <span className="min-w-0 flex-1 font-mono text-code leading-snug text-text">
-                      {worker.label}
+                      {worker.name}
                     </span>
                     {badges.map((tone) => (
                       <Badge key={tone} tone={tone} />
@@ -145,18 +151,18 @@ export function AgentCard({ slug, agent, now }: AgentCardProps) {
         )}
       </div>
 
-      {agent.claims.length > 0 ? (
+      {claims.length > 0 ? (
         <div className="flex flex-col gap-8 border-t border-border-subtle px-16 py-12">
           <h3 className={OVERLINE}>Claims</h3>
           <ul className="flex flex-col gap-6">
-            {agent.claims.map((claim) => (
+            {claims.map(({ worker, claim }) => (
               <li
-                key={`${claim.kind}:${claim.task}`}
+                key={`${worker}:${claim.kind}:${claim.task}`}
                 className="flex items-center gap-8 text-code"
               >
                 <IdLink {...claimTarget(slug, claim)} />
                 <span className="text-text-muted">
-                  {claim.kind} · {claim.worker} · lease {claim.lease}
+                  {claim.kind} · {worker}
                 </span>
                 {claimBadges(claim, agent.attention).map((tone) => (
                   <Badge key={tone} tone={tone} />
@@ -167,22 +173,27 @@ export function AgentCard({ slug, agent, now }: AgentCardProps) {
         </div>
       ) : null}
 
-      {agent.workspaces.length > 0 ? (
+      {workspaces.length > 0 ? (
         <div className="flex flex-col gap-8 border-t border-border-subtle px-16 py-12">
           <h3 className={OVERLINE}>Workspaces</h3>
           <ul className="flex flex-col gap-6">
-            {agent.workspaces.map((ws) => (
+            {workspaces.map(({ worker, workspace }) => (
               <li
-                key={ws.workspace}
+                key={workspace.ws}
                 className="flex items-center gap-8 text-code"
               >
                 <span className="font-mono text-label text-text">
-                  {ws.workspace}
+                  {workspace.ws}
                 </span>
-                <IdLink href={`/p/${slug}/t/${ws.task}`} id={ws.task} />
+                <IdLink
+                  href={`/p/${slug}/t/${workspace.task}`}
+                  id={workspace.task}
+                />
                 <span className="text-text-muted">
-                  {ws.worker} · {ws.summary} ·{" "}
-                  {formatSince(now, ws.last_activity_at)}
+                  {worker} · {changedFilesText(workspace)}
+                  {workspace.last_activity_at === null
+                    ? ""
+                    : ` · ${formatSince(now, workspace.last_activity_at)}`}
                 </span>
               </li>
             ))}
@@ -260,7 +271,7 @@ export function AgentCard({ slug, agent, now }: AgentCardProps) {
         open={dialog}
         onOpenChange={setDialog}
         onConfirm={async () => {
-          await setIntegrator(agent.name, !granted);
+          await setIntegrator(slug, agent.name, !granted);
           await queryClient.invalidateQueries({ queryKey: keys.agents(slug) });
         }}
       />

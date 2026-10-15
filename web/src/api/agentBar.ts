@@ -1,28 +1,14 @@
 import { queryOptions } from "@tanstack/react-query";
-import type { Presence } from "../components/avatar/presence";
-import { fromFixture } from "./fixture";
+import { listAgents, type AgentView } from "./agents";
 import { keys } from "./keys";
 
-/** The schema has no agents route, so this is the one local declaration of what an agent chip reads. */
-export interface ProjectAgent {
-  name: string;
-  presence: Presence;
-  /** Tasks its workers hold an implementation claim on. */
-  working: number;
-  /** Of those, the ones whose worker is stalled. */
-  stalled: number;
-}
+/** The top bar reads the same agent type as the Agents screen, without the recent events. */
+export type ProjectAgent = AgentView;
 
-const fixture = import.meta.env.DEV
-  ? () => import("../../fixtures/agentBar")
-  : undefined;
-
-export async function getProjectAgents(slug: string): Promise<ProjectAgent[]> {
-  return fromFixture(fixture, (m) => m.agents(slug), []);
-}
-
+/** The event stream keeps this fresh, so a cached answer never goes stale by time. */
 export const agentBarQuery = (slug: string) =>
   queryOptions({
     queryKey: keys.agentBar(slug),
-    queryFn: () => getProjectAgents(slug),
+    queryFn: () => listAgents(slug),
+    staleTime: Infinity,
   });

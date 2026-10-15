@@ -180,10 +180,16 @@ async fn projects_are_listed_and_unknown_routes_and_slugs_use_the_envelope() {
 
     let (status, body) = call(router(state.clone()), Method::GET, "/api/v1/projects", None).await;
     assert_eq!(status, StatusCode::OK);
+    let project = &body["projects"][0];
     assert_eq!(
-        body,
-        json!({"projects": [{"slug": "alpha", "name": "Project alpha", "available": true}]})
+        (
+            project["slug"].as_str(),
+            project["name"].as_str(),
+            project["available"].as_bool()
+        ),
+        (Some("alpha"), Some("Project alpha"), Some(true))
     );
+    assert_eq!(project["overview"]["counts"]["backlog"], 0);
 
     let (status, body) = call(
         router(state.clone()),

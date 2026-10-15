@@ -240,6 +240,7 @@ async fn the_list_filters_by_agent_task_proposal_and_awaiting_human() {
     assert_eq!(status, StatusCode::OK, "{all}");
     assert_eq!(thread_ids(&all), ["m-3", "m-2", "m-1"]);
     assert_eq!(all["next"], Value::Null);
+    assert_eq!(all["total_awaiting_human"], 1);
     let first = &all["items"][2];
     assert_eq!(first["task"], "T-1");
     assert_eq!(first["proposal"], Value::Null);
@@ -278,6 +279,7 @@ async fn the_list_filters_by_agent_task_proposal_and_awaiting_human() {
         let (status, body) = fixture.get(&format!("/messages{query}")).await;
         assert_eq!(status, StatusCode::OK, "{query}: {body}");
         assert_eq!(thread_ids(&body), expected, "{query}");
+        assert_eq!(body["total_awaiting_human"], 1, "{query}");
     }
     let (_, page) = fixture.get("/messages?limit=2").await;
     assert_eq!(thread_ids(&page), ["m-3", "m-2"]);

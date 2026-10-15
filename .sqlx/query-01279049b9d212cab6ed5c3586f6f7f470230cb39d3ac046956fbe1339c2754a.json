@@ -1,0 +1,33 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT status, COUNT(*) AS \"count!: i64\" FROM tasks WHERE archived_at IS NULL GROUP BY status",
+  "describe": {
+    "columns": [
+      {
+        "name": "status",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "count!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "01279049b9d212cab6ed5c3586f6f7f470230cb39d3ac046956fbe1339c2754a"
+}

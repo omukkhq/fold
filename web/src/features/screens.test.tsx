@@ -1,28 +1,23 @@
 // @vitest-environment jsdom
 import { QueryClientProvider } from "@tanstack/react-query";
-import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
+import {
+  RouterProvider,
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+} from "@tanstack/react-router";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Suspense } from "react";
+import { Suspense, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { keys } from "../api/keys";
 import { createAppRouter } from "../app/router";
 import { createQueryClient } from "../app/queryClient";
 import { ThemeProvider } from "../theme/ThemeProvider";
+import { stubFetch, type StubRequest } from "../test/stubFetch";
 import { ProjectsScreen } from "./projects/ProjectsScreen";
-
-// The fixtures answer after a delay so that pending states show in development; these tests wait on content, so they answer at once.
-vi.mock("../api/fixture", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../api/fixture")>();
-  return {
-    ...actual,
-    fromFixture: <M, T>(
-      load: (() => Promise<M>) | undefined,
-      pick: (module: M) => T,
-      empty: T,
-    ) => actual.fromFixture(load, pick, empty, 0),
-  };
-});
+import { RepositoryScreen } from "./repository/RepositoryScreen";
 
 beforeEach(() => {
   // jsdom has no scrolling; the router restores the scroll position on every navigation.
@@ -31,6 +26,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 function renderAt(path: string) {
@@ -49,14 +45,43 @@ function renderAt(path: string) {
 }
 
 describe("Projects screen", () => {
-  it("lists the fixture projects with counts, agents and a link to the board", async () => {
+  it("lists the projects with counts, agents and head, links an available one to its board and marks one that did not open", async () => {
+    stubFetch({
+      "GET /api/v1/session": { body: { human: "tanim", authenticated: true } },
+      "GET /api/v1/projects": {
+        body: {
+          projects: [
+            {
+              slug: "demo",
+              name: "Demo",
+              available: true,
+              overview: {
+                counts: {
+                  backlog: 2,
+                  todo: 3,
+                  in_progress: 4,
+                  review: 1,
+                  done: 7,
+                },
+                agents: [{ name: "frontend", presence: "active" }],
+                head: "r5",
+                last_change_at: Date.now() - 12_000,
+              },
+            },
+            { slug: "archive", name: "Archive", available: false },
+          ],
+        },
+      },
+    });
     renderAt("/projects");
-    const demo = await screen.findByRole("link", { name: /demo/ });
+    const demo = await screen.findByRole("link", { name: /Demo/ });
     expect(demo.getAttribute("href")).toBe("/p/demo/board");
     expect(within(demo).getByText(/17 tasks/)).toBeTruthy();
     expect(within(demo).getByText(/main r5/)).toBeTruthy();
     expect(within(demo).getByRole("img", { name: "frontend" })).toBeTruthy();
+    expect(within(demo).getByText(/changed \d+ s ago/)).toBeTruthy();
     expect(screen.getByText("Could not open this project.")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: /Archive/ })).toBeNull();
   });
 
   it("shows the empty state with the next step when there are no projects", async () => {
@@ -80,9 +105,143 @@ describe("Projects screen", () => {
   });
 });
 
+const TIME = Date.UTC(2026, 9, 15, 14, 6, 0);
+
+function revision(number: number, fields: Record<string, unknown> = {}) {
+  return {
+    id: `r${String(number)}`,
+    created_at: TIME,
+    origin: "proposal",
+    author: "frontend/forms",
+    parent: number > 1 ? `r${String(number - 1)}` : null,
+    proposal: `P-${String(number)}`,
+    pull: null,
+    task: `T-${String(number)}`,
+    title: `Change ${String(number)}`,
+    tree: "t",
+    ...fields,
+  };
+}
+
+const REVISIONS = [
+  revision(5),
+  revision(4, { origin: "pull", pull: "9f2c1ab", proposal: null, task: null }),
+  revision(3),
+  revision(2),
+  revision(1, { origin: "initial", proposal: null, task: null, author: null }),
+];
+
+function entry(name: string, kind: string, dir = "", size: number | null = 10) {
+  return {
+    name,
+    kind,
+    path: dir === "" ? name : `${dir}/${name}`,
+    hash: "h",
+    size: kind === "directory" ? null : size,
+  };
+}
+
+const TREES: Record<string, ReturnType<typeof entry>[]> = {
+  "": [
+    entry("docs", "directory"),
+    entry("README.md", "file"),
+    entry("bad\uFFFD.txt", "file"),
+    entry("assets", "directory"),
+    entry("huge.dat", "file", "", 5_000_000),
+  ],
+  docs: [entry("latest", "symlink", "docs", 12)],
+  assets: [entry("logo.png", "file", "assets", 18_432)],
+};
+
+const FILES: Record<string, Record<string, unknown>> = {
+  "README.md": {
+    kind: "file",
+    binary: false,
+    too_large: false,
+    text: "A demo project.",
+  },
+  "docs/latest": {
+    kind: "symlink",
+    binary: false,
+    too_large: false,
+    text: "../README.md",
+  },
+  "assets/logo.png": {
+    kind: "file",
+    binary: true,
+    too_large: false,
+    text: null,
+    size: 18_432,
+  },
+  "huge.dat": {
+    kind: "file",
+    binary: false,
+    too_large: true,
+    text: null,
+    size: 5_000_000,
+  },
+};
+
+function stubRepository(revisions = REVISIONS): StubRequest[] {
+  return stubFetch({
+    "GET /api/v1/projects/demo/revisions": {
+      body: { revisions, before: null },
+    },
+    "GET /api/v1/projects/demo/revisions/r5/tree": (request) => ({
+      body: {
+        path: request.search.get("path") ?? "",
+        entries: TREES[request.search.get("path") ?? ""] ?? [],
+      },
+    }),
+    "GET /api/v1/projects/demo/revisions/r5/file": (request) => {
+      const path = request.search.get("path") ?? "";
+      return {
+        body: { path, size: 3, hash: "b3c1d2e4f5a60718", ...FILES[path] },
+      };
+    },
+  });
+}
+
+/** The screen as the route mounts it: the chosen revision lives in the address. */
+function renderRepository(initial?: string, revisions = REVISIONS) {
+  stubRepository(revisions);
+  const queryClient = createQueryClient();
+  const root = createRootRoute();
+  function Harness() {
+    const [revision, setRevision] = useState(initial);
+    return (
+      <RepositoryScreen
+        slug="demo"
+        revision={revision}
+        onSelectRevision={setRevision}
+      />
+    );
+  }
+  const repository = createRoute({
+    getParentRoute: () => root,
+    path: "/",
+    component: Harness,
+  });
+  const diff = createRoute({
+    getParentRoute: () => root,
+    path: "/p/$slug/diff",
+    component: () => <p>Diff</p>,
+  });
+  const router = createRouter({
+    routeTree: root.addChildren([repository, diff]),
+    history: createMemoryHistory({ initialEntries: ["/"] }),
+  });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  );
+  return router;
+}
+
 describe("Repository screen", () => {
   it("lists the main revisions newest first with their source and task", async () => {
-    renderAt("/p/demo/repository");
+    renderRepository();
     const revisions = await screen.findByRole("list", {
       name: "Main revisions",
     });
@@ -95,20 +254,22 @@ describe("Repository screen", () => {
       "r1",
     ]);
     expect(within(revisions).getByText(/pull · 9f2c1ab/)).toBeTruthy();
-    expect(
-      within(revisions).getByText(/P-5 · Form field components/),
-    ).toBeTruthy();
+    expect(within(revisions).getByText(/P-5 · Change 5/)).toBeTruthy();
   });
 
-  it("expands a directory to show a symlink target", async () => {
-    renderAt("/p/demo/repository");
+  it("opens a symlink to show its target without following it", async () => {
+    renderRepository();
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "docs" }));
-    expect(await screen.findByText("→ ../README.md")).toBeTruthy();
+    await user.click(await screen.findByRole("button", { name: /latest/ }));
+    const link = await screen.findByRole("region", {
+      name: "File docs/latest",
+    });
+    expect(await within(link).findByText("→ ../README.md")).toBeTruthy();
   });
 
   it("opens a text file", async () => {
-    renderAt("/p/demo/repository");
+    renderRepository();
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /README\.md/ }));
     const text = await screen.findByRole("region", { name: "File README.md" });
@@ -116,7 +277,7 @@ describe("Repository screen", () => {
   });
 
   it("opens a binary file with its size and hash", async () => {
-    renderAt("/p/demo/repository");
+    renderRepository();
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "assets" }));
     await user.click(await screen.findByRole("button", { name: /logo\.png/ }));
@@ -127,8 +288,28 @@ describe("Repository screen", () => {
     expect(within(binary).getByText(/18.0 KB · b3c1d2e4f5a60718/)).toBeTruthy();
   });
 
+  it("shows the too-large state for a file above the inline cap", async () => {
+    renderRepository();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /huge\.dat/ }));
+    const big = await screen.findByRole("region", { name: "File huge.dat" });
+    expect(await within(big).findByText(/File too large/)).toBeTruthy();
+    expect(within(big).getByText(/4\.8 MB · b3c1d2e4f5a60718/)).toBeTruthy();
+    expect(within(big).queryByRole("code")).toBeNull();
+  });
+
+  it("shows an entry whose name is not UTF-8 but never opens it", async () => {
+    const calls = stubRepository();
+    renderRepository();
+    const row = await screen.findByText("bad\uFFFD.txt");
+    expect(row).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /bad/ })).toBeNull();
+    expect(screen.getByText(/not openable/)).toBeTruthy();
+    expect(calls.some((c) => c.path.endsWith("/file"))).toBe(false);
+  });
+
   it("compares two chosen revisions", async () => {
-    const router = renderAt("/p/demo/repository");
+    const router = renderRepository();
     const user = userEvent.setup();
     expect(
       await screen.findByRole("button", { name: "Compare r4 → r5" }),
@@ -140,7 +321,7 @@ describe("Repository screen", () => {
   });
 
   it("rejects comparing a revision with itself", async () => {
-    const router = renderAt("/p/demo/repository");
+    const router = renderRepository();
     const user = userEvent.setup();
     await screen.findByRole("list", { name: "Main revisions" });
     await user.selectOptions(screen.getByLabelText("From"), "r5");
@@ -149,25 +330,25 @@ describe("Repository screen", () => {
     expect(screen.getByLabelText("To").getAttribute("aria-invalid")).toBe(
       "true",
     );
-    expect(router.state.location.pathname).toBe("/p/demo/repository");
+    expect(router.state.location.pathname).toBe("/");
   });
 
   it("has nothing to compare with only r1", async () => {
-    renderAt("/p/ledger/repository");
+    renderRepository(undefined, [revision(1, { origin: "initial" })]);
     await screen.findByRole("list", { name: "Main revisions" });
     expect(screen.queryByRole("button", { name: /^Compare/ })).toBeNull();
     expect(screen.getByText(/Only r1 exists/)).toBeTruthy();
   });
 
   it("opens the revision named in the address and ignores an unknown one", async () => {
-    renderAt("/p/demo/repository?revision=r3");
+    renderRepository("r3");
     const list = await screen.findByRole("list", { name: "Main revisions" });
     const current = within(list)
       .getAllByRole("button")
       .find((b) => b.getAttribute("aria-current") === "true");
     expect(current?.textContent.startsWith("r3")).toBe(true);
     cleanup();
-    renderAt("/p/demo/repository?revision=r99");
+    renderRepository("r99");
     const again = await screen.findByRole("list", { name: "Main revisions" });
     const newest = within(again)
       .getAllByRole("button")
@@ -175,8 +356,8 @@ describe("Repository screen", () => {
     expect(newest?.textContent.startsWith("r5")).toBe(true);
   });
 
-  it("puts the chosen revision in the address and compares it with the one before", async () => {
-    const router = renderAt("/p/demo/repository");
+  it("compares the chosen revision with the one before it", async () => {
+    renderRepository();
     const user = userEvent.setup();
     const list = await screen.findByRole("list", { name: "Main revisions" });
     const r3 = within(list)
@@ -186,7 +367,6 @@ describe("Repository screen", () => {
       throw new Error("no r3 row");
     }
     await user.click(r3);
-    expect(router.state.location.href).toBe("/p/demo/repository?revision=r3");
     expect(
       await screen.findByRole("button", { name: "Compare r2 → r3" }),
     ).toBeTruthy();

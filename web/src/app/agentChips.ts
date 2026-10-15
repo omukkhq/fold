@@ -6,18 +6,33 @@ import { syncedAt } from "./streamStatus";
 /** The top bar has room for three chips beside the stream status and the Theme button. */
 export const MAX_CHIPS = 3;
 
+/** Tasks the agent's workers hold an implementation claim on. */
+export function workingCount(agent: ProjectAgent): number {
+  return agent.workers.reduce(
+    (count, worker) =>
+      count + worker.claims.filter((c) => c.kind === "implementation").length,
+    0,
+  );
+}
+
+/** Tasks with a stalled worker; zero when the payload carries no attention. */
+export function stalledCount(agent: ProjectAgent): number {
+  return (agent.attention ?? []).filter((item) => item.kind === "stalled")
+    .length;
+}
+
 /** The chip's second line from the agent's claims, or that no session is connected. */
 export function agentStateText(agent: ProjectAgent): string {
   if (agent.presence === "offline") {
     return "not connected";
   }
-  if (agent.working === 0) {
+  const working = workingCount(agent);
+  if (working === 0) {
     return "waiting";
   }
-  const working = `${String(agent.working)} working`;
-  return agent.stalled > 0
-    ? `${working} · ${String(agent.stalled)} stalled`
-    : working;
+  const text = `${String(working)} working`;
+  const stalled = stalledCount(agent);
+  return stalled > 0 ? `${text} · ${String(stalled)} stalled` : text;
 }
 
 /** While the stream is down the counts may be old, so the chip says when they were true; before the first connection it says nothing. */

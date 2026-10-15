@@ -15,6 +15,7 @@ import {
 import { useState } from "react";
 import { keys } from "@/api/keys";
 import { sendMessage, type NewMessage } from "@/api/messages";
+import { olderNotListed } from "@/api/pages";
 import { messagesQuery } from "@/api/queries";
 import { Button } from "@/components/button/Button";
 import { Menu } from "@/components/overlay/Menu";
@@ -62,13 +63,16 @@ const FILTERS = [
 ] as const;
 
 export function MessagesScreen({ slug, search }: MessagesScreenProps) {
-  const { data, dataUpdatedAt } = useSuspenseQuery(messagesQuery(slug));
+  const { data: listing, dataUpdatedAt } = useSuspenseQuery(
+    messagesQuery(slug),
+  );
+  const data = listing.items;
   const router = useRouter();
   const queryClient = useQueryClient();
   const [feedback, setFeedback] = useState(false);
   const send = useMutation({
-    mutationFn: (input: NewMessage) => sendMessage(input),
-    // The daemon's answer decides whether a question is still unread, so the list is refetched rather than patched.
+    mutationFn: (input: NewMessage) => sendMessage(slug, input),
+    // The daemon's answer decides whether a thread still awaits a human, so the list is refetched rather than patched.
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: keys.messages(slug) }),
   });
@@ -160,6 +164,11 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
             }
           />
         )}
+        {listing.more ? (
+          <p className="text-bar text-text-muted">
+            {olderNotListed(data.length, "threads")}
+          </p>
+        ) : null}
       </div>
       {open ? (
         <ThreadPanel
@@ -178,7 +187,7 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
         onSend={async (task, body) => {
           const sent = await send.mutateAsync({ task, body });
           // A set filter could hide the new thread, so the screen opens it with none.
-          go({ thread: sent.message.thread });
+          go({ thread: sent.thread });
         }}
       />
     </div>

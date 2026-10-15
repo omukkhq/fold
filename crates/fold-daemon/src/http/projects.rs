@@ -10,6 +10,7 @@ use super::error::{ApiError, ApiJson, ErrorEnvelope};
 use super::{Project, SocketOnly};
 use crate::daemon::AppState;
 use crate::services::projects::{self, PushOutcome};
+use fold_core::{Presence, TaskStatus, Timestamp};
 use fold_vcs::git::Git;
 
 pub fn routes() -> OpenApiRouter<AppState> {
@@ -26,6 +27,69 @@ pub struct ProjectSummary {
     pub name: String,
     /// False while the project failed to open or has not been opened yet.
     pub available: bool,
+    /// Null for a project that is not available, and for an open project whose store could not be read.
+    #[schema(required = true)]
+    pub overview: Option<ProjectOverview>,
+}
+
+/// What the project list shows of an open project.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ProjectOverview {
+    /// Unarchived tasks per board column.
+    pub counts: BoardCounts,
+    /// Agents with a connected session, by name.
+    pub agents: Vec<ProjectAgent>,
+    /// The revision `main` names, such as `r17`; null before `r1` exists.
+    #[schema(required = true, example = "r17")]
+    pub head: Option<String>,
+    /// UTC milliseconds of the newest stored event; null when nothing happened yet.
+    #[schema(value_type = Option<i64>, required = true)]
+    pub last_change_at: Option<Timestamp>,
+}
+
+/// The number of tasks in each board column.
+#[derive(Debug, Default, Serialize, ToSchema)]
+pub struct BoardCounts {
+    pub backlog: u32,
+    pub todo: u32,
+    pub in_progress: u32,
+    pub review: u32,
+    pub done: u32,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ProjectAgent {
+    pub name: String,
+    #[schema(value_type = super::agents::PresenceState)]
+    pub presence: Presence,
+}
+
+impl From<projects::ProjectOverview> for ProjectOverview {
+    fn from(overview: projects::ProjectOverview) -> Self {
+        let mut counts = BoardCounts::default();
+        for (status, count) in overview.counts {
+            match status {
+                TaskStatus::Backlog => counts.backlog = count,
+                TaskStatus::Todo => counts.todo = count,
+                TaskStatus::InProgress => counts.in_progress = count,
+                TaskStatus::Review => counts.review = count,
+                TaskStatus::Done => counts.done = count,
+            }
+        }
+        Self {
+            counts,
+            agents: overview
+                .agents
+                .into_iter()
+                .map(|(name, presence)| ProjectAgent {
+                    name: name.to_string(),
+                    presence,
+                })
+                .collect(),
+            head: overview.head.map(|head| head.to_string()),
+            last_change_at: overview.last_change_at,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -63,6 +127,7 @@ pub async fn list(State(state): State<AppState>) -> Result<Json<ProjectList>, Ap
             slug: entry.slug,
             name: entry.name,
             available: entry.available,
+            overview: entry.overview.map(Into::into),
         })
         .collect();
     Ok(Json(ProjectList { projects }))
@@ -78,14 +143,16 @@ pub async fn list(State(state): State<AppState>) -> Result<Json<ProjectList>, Ap
         (status = 200, description = "The project", body = ProjectSummary),
         (status = 404, description = "The slug is not registered", body = ErrorEnvelope),
         (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
     )
 )]
-pub async fn show(Project(handle): Project) -> Json<ProjectSummary> {
-    Json(ProjectSummary {
+pub async fn show(Project(handle): Project) -> Result<Json<ProjectSummary>, ApiError> {
+    Ok(Json(ProjectSummary {
         slug: handle.slug.clone(),
         name: handle.name.clone(),
         available: true,
-    })
+        overview: Some(projects::overview(&handle).await?.into()),
+    }))
 }
 
 /// Opens a project that was registered after the daemon started. Socket only; an open project answers the same again.

@@ -3,6 +3,7 @@ import type { BoardActivity, BoardLabel, ProposalState } from "./board";
 import { api } from "./client";
 import { ApiError } from "./errors";
 import { keys } from "./keys";
+import { readPages, type Pages } from "./pages";
 import { expectOk, unwrap } from "./result";
 import type { components } from "./schema";
 
@@ -370,20 +371,30 @@ function idNumber(id: string): number {
   return Number(id.slice(id.indexOf("-") + 1));
 }
 
-/** The messages linked to the task, oldest first: every message of the threads the daemon finds for it that names the task. */
+const MESSAGE_PAGE_SIZE = 200;
+const MESSAGE_PAGES = 5;
+
+/** The messages linked to the task, oldest first: every message of the threads the daemon finds for it that names the task, from at most `MESSAGE_PAGES` pages of threads; `more` says that older threads were left out. */
 export async function getTaskMessages(
   slug: string,
   task: string,
-): Promise<TaskMessage[]> {
-  const { items } = await unwrap(
-    api.GET("/api/v1/projects/{slug}/messages", {
-      params: { path: { slug }, query: { task, limit: 200 } },
-    }),
-  );
-  return items
+): Promise<Pages<TaskMessage>> {
+  const threads = await readPages(async (before) => {
+    const page = await unwrap(
+      api.GET("/api/v1/projects/{slug}/messages", {
+        params: {
+          path: { slug },
+          query: { task, before, limit: MESSAGE_PAGE_SIZE },
+        },
+      }),
+    );
+    return { items: page.items, next: page.next };
+  }, MESSAGE_PAGES);
+  const items = threads.items
     .flatMap((thread) => thread.messages)
     .filter((message) => message.task === task)
     .sort((a, b) => a.sent_at - b.sent_at || idNumber(a.id) - idNumber(b.id));
+  return { items, more: threads.more };
 }
 
 /** The message is from the signed-in human and linked to the task. */

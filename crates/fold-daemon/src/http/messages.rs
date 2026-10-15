@@ -137,6 +137,8 @@ pub struct ThreadList {
     /// Pass as `before` for the next page; null on the last page.
     #[schema(required = true, example = "m-40")]
     pub next: Option<String>,
+    /// How many threads in the whole project hold a question to a human that no human has answered, whatever the filter; the navigation badge reads it with `limit=1`.
+    pub total_awaiting_human: u64,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -209,6 +211,7 @@ pub async fn list_messages(
     Ok(Json(ThreadList {
         items: page.items.into_iter().map(Into::into).collect(),
         next: page.next.map(|id| id.to_string()),
+        total_awaiting_human: page.total_awaiting_human,
     }))
 }
 

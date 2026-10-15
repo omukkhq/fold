@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ProjectAgent } from "../api/agentBar";
+import { agent as baseAgent, claim, worker } from "../test/agents";
 import { INITIAL_STATUS, type LiveStatus } from "../live/status";
 import {
   MAX_CHIPS,
@@ -9,12 +10,38 @@ import {
   chipStateText,
 } from "./agentChips";
 
-const agent = (extra: Partial<ProjectAgent>): ProjectAgent => ({
-  name: "frontend",
-  presence: "active",
-  working: 0,
-  stalled: 0,
-  ...extra,
+interface ChipOptions {
+  name?: string;
+  presence?: ProjectAgent["presence"];
+  /** Implementation claims held. */
+  working?: number;
+  /** Of those, the tasks with a stalled item; absent leaves the payload without attention. */
+  stalled?: number;
+}
+
+/** An agent whose single worker holds `working` implementation claims, `stalled` of their tasks stalled. */
+const agent = ({
+  name = "frontend",
+  presence = "active",
+  working = 0,
+  stalled,
+}: ChipOptions): ProjectAgent => ({
+  ...baseAgent(name, { presence }),
+  workers: [
+    worker(name, {
+      claims: Array.from({ length: working }, (_, i) =>
+        claim({ task: `T-${String(i + 1)}` }),
+      ),
+    }),
+  ],
+  ...(stalled === undefined
+    ? {}
+    : {
+        attention: Array.from({ length: stalled }, (_, i) => ({
+          kind: "stalled" as const,
+          task: `T-${String(i + 1)}`,
+        })),
+      }),
 });
 
 const status = (patch: Partial<LiveStatus>): LiveStatus => ({
@@ -33,8 +60,9 @@ describe("agentStateText", () => {
     expect(agentStateText(agent({ presence: "idle" }))).toBe("waiting");
   });
 
-  it("counts working and stalled tasks", () => {
+  it("counts working tasks and the stalled ones when the payload carries them", () => {
     expect(agentStateText(agent({ working: 2 }))).toBe("2 working");
+    expect(agentStateText(agent({ working: 2, stalled: 0 }))).toBe("2 working");
     expect(agentStateText(agent({ working: 2, stalled: 1 }))).toBe(
       "2 working · 1 stalled",
     );

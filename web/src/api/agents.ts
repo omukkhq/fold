@@ -1,104 +1,69 @@
-import { ApiError } from "./errors";
-import { fromFixture } from "./fixture";
+import { api } from "./client";
+import { expectOk, unwrap } from "./result";
 import type { components } from "./schema";
-import type { Presence } from "../components/avatar/presence";
 
-export type DurableEvent = components["schemas"]["DurableEvent"];
-export type LiveWorkspace = components["schemas"]["LiveWorkspace"];
+type Schemas = components["schemas"];
 
-/** The OpenAPI schema has no `GET /agents` route, so these types are the payload the screen reads; each is declared here once and gives way to the generated type when the route is in the schema. */
-export interface AttentionItem {
-  kind: "stalled" | "stale_claim";
-  /** @example T-12 */
-  task: string;
-}
-
+/** One connected session as the session line words it. */
 export interface SessionView {
   id: string;
   /** UTC milliseconds. */
   started_at: number;
-  /** UTC milliseconds. */
-  last_call_at: number;
   pid: number;
   cwd: string;
 }
 
-export interface WorkerActivity {
-  /** The tool the worker called last, for example `editing`. */
-  tool: string;
-  /** The path or id it called the tool on. */
-  detail: string | null;
-  /** UTC milliseconds. */
-  at: number;
-}
-
-export interface WorkerView {
-  /** `agent` or `agent/worker`. */
-  label: string;
-  /** The label of the parent worker; null for the agent's own worker. */
-  parent: string | null;
-  presence: Presence;
-  /** UTC milliseconds; null before the first call. */
-  last_call_at: number | null;
-  activity: WorkerActivity | null;
-  /** The task this worker holds a claim on. */
-  claim: string | null;
-}
-
-export interface ClaimView {
+/** A stalled worker or a stale claim, by the task it is on. */
+export interface AgentAttention {
+  kind: Extract<Schemas["AttentionKind"], "stalled" | "stale_claim">;
+  /** @example T-12 */
   task: string;
-  kind: "implementation" | "review";
-  worker: string;
-  /** The daemon's lease state as text. */
-  lease: string;
-  workspace: string | null;
-  /** The task's open proposal for an implementation claim; the reviewed proposal for a review claim. */
-  proposal: string | null;
 }
 
-export type WorkspaceRef = Pick<
-  LiveWorkspace,
-  "workspace" | "task" | "worker" | "summary" | "last_activity_at"
->;
-
-export interface AgentView {
-  name: string;
-  tags: string[];
-  presence: Presence;
-  /** UTC milliseconds; null before the first call. */
-  last_call_at: number | null;
-  sessions: SessionView[];
-  workers: WorkerView[];
-  claims: ClaimView[];
-  workspaces: WorkspaceRef[];
-  events: DurableEvent[];
-  attention: AttentionItem[];
-  /** The human that granted the integrator tag; null when the agent has none. */
-  integrator_granted_by: string | null;
+/** Fields the agents route leaves out of `AgentEntry`. Each is optional, and the screens draw nothing for an absent one. */
+export interface AgentDetails {
+  open_sessions?: SessionView[];
+  attention?: AgentAttention[];
+  /** The human that granted the integrator tag. */
+  integrator_granted_by?: string | null;
 }
 
-const fixture = import.meta.env.DEV
-  ? () => import("../../fixtures/agents")
-  : undefined;
+export type AgentView = Schemas["AgentEntry"] & AgentDetails;
+export type WorkerView = Schemas["WorkerEntry"];
+export type ClaimView = Schemas["HeldClaim"];
+export type WorkspaceView = Schemas["WorkerWorkspace"];
+export type ProposalView = Schemas["AuthoredProposal"];
+export type DurableEvent = Schemas["DurableEvent"];
 
-export async function listAgents(): Promise<AgentView[]> {
-  return fromFixture(fixture, (m) => m.agents, []);
+/** How many recent events the Agents screen asks for per agent. */
+export const RECENT_EVENTS = 5;
+
+/** Every agent of the project in registration order. `events` asks for that many newest events per agent. */
+export async function listAgents(
+  slug: string,
+  events?: number,
+): Promise<AgentView[]> {
+  const { agents } = await unwrap(
+    api.GET("/api/v1/projects/{slug}/agents", {
+      params: { path: { slug }, query: { events } },
+    }),
+  );
+  return agents;
 }
 
-/**
- * Grants or removes the `integrator` tag. Rejects with the daemon's codes, such as `agent_not_found`.
- * Without a fixture it rejects with `not_found`, the daemon's answer to a route it does not serve, so the write never looks done.
- */
+/** Grants or removes the `integrator` tag. Rejects with the daemon's codes, such as `agent_not_found`. */
 export async function setIntegrator(
+  slug: string,
   agent: string,
   enabled: boolean,
 ): Promise<void> {
-  const done = await fromFixture(
-    fixture,
-    (m) => m.setIntegrator(agent, enabled),
-    false,
+  const params = { params: { path: { slug, name: agent } } };
+  await expectOk(
+    enabled
+      ? api.PUT("/api/v1/projects/{slug}/agents/{name}/tags/integrator", params)
+      : api.DELETE(
+          "/api/v1/projects/{slug}/agents/{name}/tags/integrator",
+          params,
+        ),
   );
-  if (!done) {
-    throw new ApiError("not_found", "the daemon serves no agent tag route");
-  }
 }

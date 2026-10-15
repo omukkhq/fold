@@ -6,10 +6,16 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ThreadView } from "@/api/messages";
+import { message, recipient, thread as baseThread } from "@/test/messages";
 import { ThreadPanel } from "./ThreadPanel";
 
 afterEach(cleanup);
@@ -18,28 +24,19 @@ afterEach(cleanup);
 const MESSAGE = `m-${String(31)}`;
 const NOW = Date.UTC(2026, 9, 1, 12, 0, 0);
 
-const thread: ThreadView = {
-  id: MESSAGE,
-  subject: "A question",
+const thread = baseThread(MESSAGE, {
   task: "T-12",
-  proposal: null,
   participants: ["human:tanim", "frontend/ui"],
-  unread: true,
+  awaiting_human: true,
   last_at: NOW,
   messages: [
-    {
-      id: MESSAGE,
-      thread: MESSAGE,
-      sender: "frontend/ui",
-      recipients: [
-        { name: "human:tanim", delivered_at: NOW, acknowledged_at: null },
-      ],
+    message(MESSAGE, {
+      recipients: [recipient("human:tanim", { delivered_at: NOW })],
       body: "Which one?",
       sent_at: NOW,
-      reply_to: null,
-    },
+    }),
   ],
-};
+});
 
 async function setup(
   onReply: (replyTo: string, body: string) => Promise<void>,
@@ -63,7 +60,9 @@ async function setup(
 describe("ThreadPanel", () => {
   it("shows the thread, delivery lines and the task link", async () => {
     await setup(() => Promise.resolve());
-    expect(screen.getByText("Which one?")).toBeTruthy();
+    expect(
+      within(screen.getByRole("article")).getByText("Which one?"),
+    ).toBeTruthy();
     expect(
       screen.getByText("delivered to tanim", { exact: false }),
     ).toBeTruthy();

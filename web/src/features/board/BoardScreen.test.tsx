@@ -17,7 +17,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { agents } from "../../../fixtures/agentBar";
+import { agent } from "../../test/agents";
 import type { Board } from "@/api/board";
 import { keys } from "@/api/keys";
 import { formatAsOf } from "@/format/time";
@@ -129,7 +129,11 @@ function setup(
   });
   if (data) {
     client.setQueryData(keys.board("demo"), data);
-    client.setQueryData(keys.agentBar("demo"), agents("demo"));
+    client.setQueryData(keys.agentBar("demo"), [
+      agent("frontend"),
+      agent("backend"),
+      agent("review", { presence: "idle" }),
+    ]);
   }
   const router = makeRouter(path);
   render(

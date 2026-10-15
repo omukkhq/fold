@@ -21,7 +21,8 @@ pub use removal::{
     set_archived,
 };
 pub use views::{
-    BoardSnapshot, ChecklistCounts, TaskRef, board_snapshot, live_workspace, task_refs,
+    BoardSnapshot, ChecklistCounts, TaskRef, board_snapshot, live_workspace, status_counts,
+    task_refs,
 };
 
 /// A task as stored. The row id stays inside this crate; callers address a task by its public number.

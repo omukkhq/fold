@@ -4,6 +4,7 @@ import { formatAsOf } from "@/format/time";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { previewLine, routeLine } from "./delivery";
+import { threadTitle } from "./title";
 
 interface ThreadListProps {
   threads: ThreadView[];
@@ -42,22 +43,24 @@ export function ThreadList({
               )}
             >
               <span className="flex items-center gap-8">
-                {thread.unread ? (
+                {thread.awaiting_human ? (
                   <>
                     <span
                       aria-hidden="true"
                       className="size-7 shrink-0 rounded-full bg-ink"
                     />
-                    <span className="sr-only">Unread question to you.</span>
+                    <span className="sr-only">
+                      Question waiting for a human answer.
+                    </span>
                   </>
                 ) : null}
                 <span
                   className={cn(
                     "min-w-0 flex-1 truncate text-body leading-snug text-text",
-                    thread.unread ? "font-bold" : "font-semibold",
+                    thread.awaiting_human ? "font-bold" : "font-semibold",
                   )}
                 >
-                  {thread.subject}
+                  {threadTitle(thread)}
                 </span>
                 <span className="text-meta text-text-muted">
                   {formatAsOf(now, thread.last_at)}

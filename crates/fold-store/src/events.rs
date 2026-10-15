@@ -337,6 +337,17 @@ pub async fn head_seq(pool: &SqlitePool) -> Result<u64, StoreError> {
     u64::try_from(head).map_err(|_| StoreError::Corrupt("events.seq"))
 }
 
+/// When the newest stored event happened, or `None` when no event was ever stored. `created_at` has no index, so the newest event is found by `seq`.
+pub async fn newest_at(pool: &SqlitePool) -> Result<Option<Timestamp>, StoreError> {
+    let at = sqlx::query_scalar!("SELECT created_at FROM events ORDER BY seq DESC LIMIT 1")
+        .fetch_optional(pool)
+        .await?;
+    at.map(|millis| {
+        Timestamp::from_millis(millis).map_err(|_| StoreError::Corrupt("events.created_at"))
+    })
+    .transpose()
+}
+
 fn reference<T>(
     value: Option<i64>,
     convert: fn(i64) -> Option<T>,

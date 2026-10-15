@@ -14,6 +14,7 @@ import type { ReactNode } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ProjectAgent } from "../api/agentBar";
 import { keys } from "../api/keys";
+import { agent, claim, worker } from "../test/agents";
 import { liveStatusStore } from "../live/status";
 import { AgentChips } from "./AgentChips";
 import { StreamStatus } from "./StreamStatus";
@@ -68,12 +69,30 @@ async function renderChips(client: QueryClient) {
   return router;
 }
 
-const frontend: ProjectAgent = {
-  name: "frontend",
-  presence: "active",
-  working: 2,
-  stalled: 0,
-};
+/** An agent whose worker holds `working` implementation claims, `stalled` of their tasks stalled. */
+function chip(
+  name: string,
+  presence: ProjectAgent["presence"],
+  working: number,
+  stalled = 0,
+): ProjectAgent {
+  return {
+    ...agent(name, { presence }),
+    workers: [
+      worker(name, {
+        claims: Array.from({ length: working }, (_, i) =>
+          claim({ task: `T-${String(i + 1)}` }),
+        ),
+      }),
+    ],
+    attention: Array.from({ length: stalled }, (_, i) => ({
+      kind: "stalled" as const,
+      task: `T-${String(i + 1)}`,
+    })),
+  };
+}
+
+const frontend = chip("frontend", "active", 2);
 
 describe("AgentChips", () => {
   it("draws nothing for a project with no agents", () => {
@@ -94,8 +113,8 @@ describe("AgentChips", () => {
     expect(screen.getByRole("img", { name: "Active" })).toBeTruthy();
     act(() => {
       client.setQueryData(keys.agentBar("demo"), [
-        { ...frontend, presence: "idle", working: 1, stalled: 1 },
-        { name: "review", presence: "offline", working: 0, stalled: 0 },
+        chip("frontend", "idle", 1, 1),
+        chip("review", "offline", 0),
       ]);
     });
     expect(await screen.findByText("1 working · 1 stalled")).toBeTruthy();

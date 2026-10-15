@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { shellRoutes, stubFetch } from "@/test/stubFetch";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
 import {
@@ -70,12 +71,14 @@ vi.mock("../../../fixtures/proposals", async (importOriginal) => {
 });
 
 beforeEach(() => {
+  stubFetch(shellRoutes(["demo", "ledger"]));
   reset();
   failures.next = null;
   gate.wait = null;
   vi.spyOn(window, "scrollTo").mockImplementation(() => undefined);
 });
 afterEach(() => {
+  vi.unstubAllGlobals();
   cleanup();
   vi.restoreAllMocks();
 });

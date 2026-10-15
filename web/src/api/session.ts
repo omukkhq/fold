@@ -1,35 +1,19 @@
-import { API_BASE, postJson } from "./client";
-import { fromFixture } from "./fixture";
+import { api } from "./client";
+import { expectOk, unwrap } from "./result";
 import type { components } from "./schema";
 
 export type Session = components["schemas"]["SessionStatus"];
-type SessionRequest = components["schemas"]["SessionRequest"];
-
-/** A localhost daemon needs no token, so an empty answer asks only for the name. */
-const UNNAMED: Session = { human: null, authenticated: true };
-
-const fixture = import.meta.env.DEV
-  ? () => import("../../fixtures/session")
-  : undefined;
 
 export async function getSession(): Promise<Session> {
-  return fromFixture(fixture, (m) => m.session, UNNAMED);
+  return unwrap(api.GET("/api/v1/session"));
 }
 
 /** The daemon answers with the `fold_human` cookie; the name is read back through `getSession`. */
-export async function setName(
-  name: string,
-  fetchImpl?: typeof fetch,
-): Promise<void> {
-  const body: SessionRequest = { name };
-  await postJson(`${API_BASE}/session`, body, fetchImpl);
+export async function setName(name: string): Promise<void> {
+  await expectOk(api.POST("/api/v1/session", { body: { name } }));
 }
 
 /** The daemon answers with the `fold_session` cookie. The token is sent once and kept nowhere. */
-export async function signIn(
-  token: string,
-  fetchImpl?: typeof fetch,
-): Promise<void> {
-  const body: SessionRequest = { token };
-  await postJson(`${API_BASE}/session`, body, fetchImpl);
+export async function signIn(token: string): Promise<void> {
+  await expectOk(api.POST("/api/v1/session", { body: { token } }));
 }

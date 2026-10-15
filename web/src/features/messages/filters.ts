@@ -48,11 +48,6 @@ export function filterOptions(threads: ThreadView[]): {
   };
 }
 
-/** Threads with an unread question to a human, as counted in the navigation. */
-export function unreadCount(threads: ThreadView[]): number {
-  return threads.filter((t) => t.unread).length;
-}
-
 /** The thread with this id, or the thread that holds a message with it. */
 export function findThread(
   threads: ThreadView[],

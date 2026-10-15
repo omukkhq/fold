@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ThreadView } from "@/api/messages";
+import { message, thread } from "@/test/messages";
 import {
   filterLabel,
   filterOptions,
@@ -7,22 +8,7 @@ import {
   findThread,
   isHuman,
   replyTargets,
-  unreadCount,
 } from "./filters";
-
-function thread(id: string, fields: Partial<ThreadView> = {}): ThreadView {
-  return {
-    id,
-    subject: id,
-    task: null,
-    proposal: null,
-    participants: ["human:tanim", "frontend"],
-    unread: false,
-    last_at: 0,
-    messages: [],
-    ...fields,
-  };
-}
 
 const threads = [
   thread("m-1", {
@@ -30,7 +16,12 @@ const threads = [
     last_at: 1,
     participants: ["human:a", "fe/ui"],
   }),
-  thread("m-2", { task: "T-21", proposal: "P-4", last_at: 3, unread: true }),
+  thread("m-2", {
+    task: "T-21",
+    proposal: "P-4",
+    last_at: 3,
+    awaiting_human: true,
+  }),
   thread("m-3", { task: "T-12", proposal: "P-4", last_at: 2 }),
 ];
 
@@ -83,35 +74,12 @@ describe("filterOptions", () => {
   });
 });
 
-describe("unreadCount", () => {
-  it("counts the threads with an unread question", () => {
-    expect(unreadCount(threads)).toBe(1);
-    expect(unreadCount([])).toBe(0);
-  });
-});
-
 describe("findThread", () => {
   const withMessages = [
     thread("m-1", {
       messages: [
-        {
-          id: "m-1",
-          thread: "m-1",
-          sender: "x",
-          recipients: [],
-          body: "",
-          sent_at: 0,
-          reply_to: null,
-        },
-        {
-          id: "m-9",
-          thread: "m-1",
-          sender: "x",
-          recipients: [],
-          body: "",
-          sent_at: 0,
-          reply_to: "m-1",
-        },
+        message("m-1"),
+        message("m-9", { thread: "m-1", reply_to: "m-1" }),
       ],
     }),
   ];

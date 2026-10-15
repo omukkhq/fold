@@ -3,6 +3,7 @@ import {
   ChevronDown,
   ChevronRight,
   File,
+  FileQuestion,
   Folder,
   FolderOpen,
   Link2,
@@ -13,7 +14,7 @@ import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
-import { formatSize } from "./describe";
+import { formatSize, isOpenable, symlinkLabel } from "./describe";
 import { treeQuery } from "./queries";
 
 interface TreeViewProps {
@@ -25,7 +26,7 @@ interface TreeViewProps {
   onOpenFile: (path: string) => void;
 }
 
-/** The tree at one revision. A directory loads its children when it first opens; a symlink shows its target text and is never followed. */
+/** The tree at one revision. A directory loads its children when it first opens; a symlink opens like a file and shows its target text, and is never followed. An entry whose name is not UTF-8 shows but cannot be opened. */
 export function TreeView(props: TreeViewProps) {
   return (
     <div className="overflow-hidden rounded-l bg-surface inset-ring inset-ring-border-subtle">
@@ -62,6 +63,19 @@ function TreeRow({ entry, ...props }: TreeViewProps & { entry: TreeEntry }) {
   const { expanded, openPath, onToggle, onOpenFile } = props;
   const row =
     "flex w-full items-center gap-10 px-14 py-10 text-left hover:bg-sunken";
+  if (!isOpenable(entry)) {
+    return (
+      <li className="border-b border-border-subtle last:border-b-0">
+        <div className={cn(row, "hover:bg-transparent")}>
+          <FileQuestion aria-hidden size={15} className="text-text-muted" />
+          <Mono className="flex-1 text-bar text-text">{entry.name}</Mono>
+          <Mono className="text-label text-text-muted">
+            name is not UTF-8, not openable
+          </Mono>
+        </div>
+      </li>
+    );
+  }
   if (entry.kind === "directory") {
     const open = expanded.has(entry.path);
     const FolderIcon = open ? FolderOpen : Folder;
@@ -88,19 +102,6 @@ function TreeRow({ entry, ...props }: TreeViewProps & { entry: TreeEntry }) {
       </li>
     );
   }
-  if (entry.kind === "symlink") {
-    return (
-      <li className="border-b border-border-subtle last:border-b-0">
-        <div className={cn(row, "hover:bg-transparent")}>
-          <Link2 aria-hidden size={15} className="text-text-muted" />
-          <Mono className="text-bar text-text">{entry.name}</Mono>
-          <Mono className="text-label text-text-muted">
-            {`→ ${entry.target ?? ""}`}
-          </Mono>
-        </div>
-      </li>
-    );
-  }
   return (
     <li className="border-b border-border-subtle last:border-b-0">
       <button
@@ -115,9 +116,18 @@ function TreeRow({ entry, ...props }: TreeViewProps & { entry: TreeEntry }) {
           focusRing,
         )}
       >
-        <File aria-hidden size={15} className="text-text-muted" />
+        {entry.kind === "symlink" ? (
+          <Link2 aria-hidden size={15} className="text-text-muted" />
+        ) : (
+          <File aria-hidden size={15} className="text-text-muted" />
+        )}
         <Mono className="flex-1 text-bar text-text">{entry.name}</Mono>
-        {entry.size === undefined ? null : (
+        {symlinkLabel(entry) === null ? null : (
+          <Mono className="text-label text-text-muted">
+            {symlinkLabel(entry)}
+          </Mono>
+        )}
+        {entry.size === null || entry.kind === "symlink" ? null : (
           <Mono className="text-label text-text-muted">
             {formatSize(entry.size)}
           </Mono>

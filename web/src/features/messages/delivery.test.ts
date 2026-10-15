@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { MessageView } from "@/api/messages";
+import { message as baseMessage, recipient } from "@/test/messages";
 import {
   deliveryLines,
   previewLine,
@@ -10,20 +10,21 @@ import {
 
 const NOW = Date.UTC(2026, 9, 1, 12, 0, 0);
 
-const message: MessageView = {
-  id: "m-1",
-  thread: "m-1",
+const message = baseMessage("m-1", {
   sender: "human:tanim",
   recipients: [
-    { name: "frontend/ui", delivered_at: NOW, acknowledged_at: NOW },
-    { name: "backend", delivered_at: NOW, acknowledged_at: null },
-    { name: "review", delivered_at: null, acknowledged_at: null },
-    { name: "human:tanim", delivered_at: NOW, acknowledged_at: NOW },
+    recipient("frontend/ui", { delivered_at: NOW, acknowledged_at: NOW }),
+    recipient("backend", { delivered_at: NOW }),
+    recipient("review"),
+    recipient("human:tanim", {
+      addressed_as: "human",
+      delivered_at: NOW,
+      acknowledged_at: NOW,
+    }),
   ],
   body: "Hello",
   sent_at: NOW,
-  reply_to: null,
-};
+});
 
 describe("delivery", () => {
   it("shows acknowledgement before delivery before neither", () => {

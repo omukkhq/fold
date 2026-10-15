@@ -49,6 +49,24 @@ fn count(value: i64, column: &'static str) -> Result<u32, StoreError> {
     u32::try_from(value).map_err(|_| StoreError::Corrupt(column))
 }
 
+/// How many unarchived tasks hold each status; a status without tasks is absent.
+pub async fn status_counts(pool: &SqlitePool) -> Result<Vec<(TaskStatus, u32)>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT status, COUNT(*) AS "count!: i64" FROM tasks WHERE archived_at IS NULL GROUP BY status"#
+    )
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            let status = row
+                .status
+                .parse::<TaskStatus>()
+                .map_err(|_| StoreError::Corrupt("tasks.status"))?;
+            Ok((status, count(row.count, "tasks.status")?))
+        })
+        .collect()
+}
+
 pub async fn board_snapshot(pool: &SqlitePool) -> Result<BoardSnapshot, StoreError> {
     let mut tx = pool.begin().await?;
     let tasks = sqlx::query_as!(

@@ -8,6 +8,7 @@ export function signInErrorMessage(error: unknown): string {
       return "That token was not accepted. Check it and try again.";
     case "invalid_name":
       return "The daemon did not accept that name.";
+    case "daemon_unavailable":
     case null:
       return "The daemon did not answer. Try again.";
     default:

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { FolderLock } from "lucide-react";
 import { useState } from "react";
+import { olderNotListed } from "@/api/pages";
 import { Mono } from "@/components/mono/Mono";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
@@ -46,7 +47,8 @@ export function RepositoryScreen({
       />
     );
   }
-  const [newest] = revisions.data;
+  const { items: history, more } = revisions.data;
+  const [newest] = history;
   if (!newest) {
     return (
       <div className="px-24 pt-20 pb-24">
@@ -56,9 +58,8 @@ export function RepositoryScreen({
       </div>
     );
   }
-  const selected =
-    revisions.data.find((r) => r.id === revision)?.id ?? newest.id;
-  const onlyFirst = revisions.data.length === 1;
+  const selected = history.find((r) => r.id === revision)?.id ?? newest.id;
+  const onlyFirst = history.length === 1;
 
   function toggle(path: string) {
     const next = new Set(expanded);
@@ -83,11 +84,16 @@ export function RepositoryScreen({
           </p>
         </div>
         <RevisionList
-          revisions={revisions.data}
+          revisions={history}
           selected={selected}
           now={now}
           onSelect={onSelectRevision}
         />
+        {more ? (
+          <p className="text-bar text-text-muted">
+            {olderNotListed(history.length, "revisions")}
+          </p>
+        ) : null}
         {onlyFirst ? (
           <p className="text-bar text-text-muted">
             Only r1 exists, so there is nothing to compare yet.
@@ -104,7 +110,7 @@ export function RepositoryScreen({
             <CompareBar
               key={selected}
               slug={slug}
-              revisions={revisions.data}
+              revisions={history}
               selected={selected}
             />
           )}

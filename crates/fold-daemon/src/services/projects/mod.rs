@@ -6,8 +6,9 @@ use std::sync::Arc;
 use fold_core::projects::find_root;
 use fold_core::tree::FlatTree;
 use fold_core::{
-    CONFIG_TEMPLATE, Clock, FoldError, HostPaths, HumanName, ProjectConfig, ProjectPaths,
-    RevisionId, Timestamp, choose_slug, codes, slugify,
+    AgentName, CONFIG_TEMPLATE, Clock, FoldError, HostPaths, HumanName, Presence, ProjectConfig,
+    ProjectPaths, RevisionId, SessionFact, TaskStatus, Timestamp, choose_slug, codes, presence_of,
+    slugify,
 };
 use fold_store::projects::{self, HumanRow, ProjectRow};
 use fold_store::workspaces::{create_initial_revision, initial_revision};
@@ -536,19 +537,88 @@ pub struct ProjectEntry {
     pub slug: String,
     pub name: String,
     pub available: bool,
+    /// Read from the store of an open project; `None` for an unavailable one, and for an open one whose store could not be read.
+    pub overview: Option<ProjectOverview>,
 }
 
-/// Every registered project, ordered by slug.
+/// What the project list shows of an open project.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectOverview {
+    /// Unarchived tasks per board column, in board order.
+    pub counts: Vec<(TaskStatus, u32)>,
+    /// Agents with a connected session, by name; presence needs no claim lease, so an invalid configuration cannot fail the read.
+    pub agents: Vec<(AgentName, Presence)>,
+    /// The revision `main` names; `None` before `r1` exists.
+    pub head: Option<RevisionId>,
+    /// When the newest stored event happened.
+    pub last_change_at: Option<Timestamp>,
+}
+
+/// Reads the overview of an open project from its store.
+pub async fn overview(handle: &ProjectHandle) -> Result<ProjectOverview, ProjectError> {
+    let pool = handle.store.read();
+    let stored = fold_store::tasks::status_counts(pool).await?;
+    let counts = TaskStatus::ALL
+        .iter()
+        .map(|status| {
+            let count = stored
+                .iter()
+                .find(|(stored, _)| stored == status)
+                .map_or(0, |(_, count)| *count);
+            (*status, count)
+        })
+        .collect();
+    let now = handle.clock.now();
+    let mut calls: Vec<(AgentName, Vec<SessionFact>)> = Vec::new();
+    for (name, last_call_at) in fold_store::agents::open_session_calls_by_agent(pool).await? {
+        let fact = SessionFact {
+            ended: false,
+            last_call_at,
+        };
+        match calls.iter_mut().find(|(known, _)| *known == name) {
+            Some((_, facts)) => facts.push(fact),
+            None => calls.push((name, vec![fact])),
+        }
+    }
+    let mut agents: Vec<(AgentName, Presence)> = calls
+        .into_iter()
+        .map(|(name, facts)| (name, presence_of(now, &facts)))
+        .filter(|(_, presence)| *presence != Presence::Offline)
+        .collect();
+    agents.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(ProjectOverview {
+        counts,
+        agents,
+        head: fold_store::workspaces::head(pool)
+            .await?
+            .map(|revision| revision.number),
+        last_change_at: fold_store::events::newest_at(pool).await?,
+    })
+}
+
+/// Every registered project, ordered by slug, with the overview of each open one. A project whose overview cannot be read is listed without it, so one damaged store does not hide the others.
 pub async fn list(state: &DaemonState) -> Result<Vec<ProjectEntry>, ProjectError> {
     let rows = projects::list_projects(state.registry.read()).await?;
-    Ok(rows
-        .into_iter()
-        .map(|row| ProjectEntry {
-            available: matches!(state.projects.slot(&row.slug), Some(Slot::Open(_))),
+    let mut entries = Vec::with_capacity(rows.len());
+    for row in rows {
+        let (available, overview) = match state.projects.slot(&row.slug) {
+            Some(Slot::Open(handle)) => match self::overview(&handle).await {
+                Ok(overview) => (true, Some(overview)),
+                Err(error) => {
+                    tracing::warn!(project = %row.slug, %error, "project overview could not be read");
+                    (true, None)
+                }
+            },
+            _ => (false, None),
+        };
+        entries.push(ProjectEntry {
+            available,
+            overview,
             slug: row.slug,
             name: row.name,
-        })
-        .collect())
+        });
+    }
+    Ok(entries)
 }
 
 /// Opens a project that `fold init` registered after the daemon started. An open project returns its handle again; a slug the registry does not hold is `project_not_found`.

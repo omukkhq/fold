@@ -350,7 +350,8 @@ describe("the task's messages", () => {
     expect(query.queryKey).toEqual(["demo", "messages", "task", "T-2"]);
     expect(query.staleTime).toBe(Infinity);
     const read = await getTaskMessages("demo", "T-2");
-    expect(read.map((m) => m.id)).toEqual(["m-1", "m-3", "m-9", "m-10"]);
+    expect(read.items.map((m) => m.id)).toEqual(["m-1", "m-3", "m-9", "m-10"]);
+    expect(read.more).toBe(false);
     expect(daemon.calls[0]?.path).toBe(`${P}/messages?task=T-2&limit=200`);
   });
 
