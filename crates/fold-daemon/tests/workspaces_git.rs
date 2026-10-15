@@ -420,6 +420,199 @@ async fn exports_are_incremental_and_refuse_a_diverged_target() {
     );
 }
 
+/// A project with `r1` to `r3` exported, then `r4` and `r5` recorded; returns the root, the target and the map before the second export.
+#[cfg(test)]
+async fn exported_then_two_more(host: &Host) -> (PathBuf, PathBuf, String) {
+    let root = host.path("app");
+    init_project(&host.paths, &root, None, &host.clock)
+        .await
+        .unwrap();
+    add_revision(&root, &[("a.txt", b"one\n")], None).await;
+    add_revision(&root, &[("a.txt", b"two\n")], None).await;
+    let target = host.path("out");
+    export(&root, &target).await.unwrap();
+    let map = fs::read_to_string(root.join(".fold").join(SYNC_MAP_FILE)).unwrap();
+    add_revision(&root, &[("a.txt", b"three\n")], None).await;
+    add_revision(&root, &[("a.txt", b"four\n")], None).await;
+    (root, target, map)
+}
+
+#[tokio::test]
+async fn an_export_stopped_after_fast_import_finishes_on_the_next_run() {
+    let host = Host::new();
+    let (root, target, mapped) = exported_then_two_more(&host).await;
+    let map_path = root.join(".fold").join(SYNC_MAP_FILE);
+    let first = export(&root, &target).await.unwrap();
+    let GitExport::Exported { head, .. } = first else {
+        panic!("expected an export, got {first:?}");
+    };
+    // The crash: the commits are in the target, the map never got their lines.
+    fs::write(&map_path, &mapped).unwrap();
+
+    let recovered = export(&root, &target).await.unwrap();
+    assert!(matches!(
+        recovered,
+        GitExport::Exported { first, last, commits: 2, head: ref again }
+            if first == id(4) && last == id(5) && *again == head
+    ));
+    assert_eq!(log(&target).len(), 5);
+    let map = fs::read_to_string(&map_path).unwrap();
+    assert_eq!(map.lines().count(), 5);
+    assert!(map.ends_with(&format!("r5 {}\n", head.as_str())));
+    assert_eq!(
+        export(&root, &target).await.unwrap(),
+        GitExport::UpToDate { last: Some(id(5)) }
+    );
+}
+
+#[tokio::test]
+async fn an_export_stopped_part_way_finishes_the_chain() {
+    let host = Host::new();
+    let (root, target, mapped) = exported_then_two_more(&host).await;
+    let map_path = root.join(".fold").join(SYNC_MAP_FILE);
+    export(&root, &target).await.unwrap();
+    fs::write(&map_path, &mapped).unwrap();
+    // Only r4 reached the branch.
+    git(&target, &["update-ref", "refs/heads/main", "main~1"]);
+
+    assert!(matches!(
+        export(&root, &target).await.unwrap(),
+        GitExport::Exported { commits: 2, .. }
+    ));
+    assert_eq!(log(&target).len(), 5);
+    assert_eq!(fs::read_to_string(&map_path).unwrap().lines().count(), 5);
+    assert!(!git(&target, &["for-each-ref", "refs/fold"]).contains("refs/fold"));
+}
+
+#[tokio::test]
+async fn a_stopped_export_with_a_foreign_commit_stays_diverged() {
+    let host = Host::new();
+    let (root, target, mapped) = exported_then_two_more(&host).await;
+    let map_path = root.join(".fold").join(SYNC_MAP_FILE);
+    export(&root, &target).await.unwrap();
+    fs::write(&map_path, &mapped).unwrap();
+    let outside = git(
+        &target,
+        &[
+            "commit-tree",
+            "-p",
+            "main",
+            "-m",
+            "outside fold",
+            "main^{tree}",
+        ],
+    );
+    git(&target, &["update-ref", "refs/heads/main", outside.trim()]);
+    let before = log(&target);
+
+    assert_eq!(
+        export(&root, &target).await,
+        Err(Some(codes::EXPORT_DIVERGED))
+    );
+    assert_eq!(log(&target), before);
+    assert_eq!(fs::read_to_string(&map_path).unwrap(), mapped);
+
+    // A foreign commit in place of fold's r4.
+    let foreign = git(
+        &target,
+        &[
+            "commit-tree",
+            "-p",
+            &before[before.len() - 3],
+            "-m",
+            "other",
+            "main^{tree}",
+        ],
+    );
+    git(&target, &["update-ref", "refs/heads/main", foreign.trim()]);
+    assert_eq!(
+        export(&root, &target).await,
+        Err(Some(codes::EXPORT_DIVERGED))
+    );
+    assert_eq!(log(&target)[0], foreign.trim());
+    assert_eq!(fs::read_to_string(&map_path).unwrap(), mapped);
+    assert!(!git(&target, &["for-each-ref", "refs/fold"]).contains("refs/fold"));
+}
+
+#[tokio::test]
+async fn a_first_export_stopped_after_fast_import_finishes_on_the_next_run() {
+    let host = Host::new();
+    let root = host.path("app");
+    init_project(&host.paths, &root, None, &host.clock)
+        .await
+        .unwrap();
+    add_revision(&root, &[("a.txt", b"one\n")], None).await;
+    add_revision(&root, &[("a.txt", b"two\n")], None).await;
+    let map_path = root.join(".fold").join(SYNC_MAP_FILE);
+    let target = host.path("out");
+    let GitExport::Exported { head, .. } = export(&root, &target).await.unwrap() else {
+        panic!("expected an export");
+    };
+    let map = fs::read_to_string(&map_path).unwrap();
+    // The crash: the first export's commits are in the target, the map has no line yet.
+    fs::write(&map_path, "").unwrap();
+    // A scratch ref left by a recovery that stopped, on a commit the expected chain does not continue.
+    let stale = git(&target, &["commit-tree", "-m", "stale", "main^{tree}"]);
+    git(
+        &target,
+        &["update-ref", "refs/fold/export-recovery", stale.trim()],
+    );
+
+    let recovered = export(&root, &target).await.unwrap();
+    assert!(matches!(
+        recovered,
+        GitExport::Exported { first, last, commits: 3, head: ref again }
+            if first == id(1) && last == id(3) && *again == head
+    ));
+    assert_eq!(fs::read_to_string(&map_path).unwrap(), map);
+    assert_eq!(log(&target).len(), 3);
+    assert!(!git(&target, &["for-each-ref", "refs/fold"]).contains("refs/fold"));
+
+    // Another project's first export finds a branch it did not write.
+    let other = host.path("other");
+    init_project(&host.paths, &other, None, &host.clock)
+        .await
+        .unwrap();
+    add_revision(&other, &[("b.txt", b"other\n")], None).await;
+    assert_eq!(
+        export(&other, &target).await,
+        Err(Some(codes::EXPORT_DIVERGED))
+    );
+    assert_eq!(git(&target, &["rev-parse", "main"]).trim(), head.as_str());
+    assert!(!git(&target, &["for-each-ref", "refs/fold"]).contains("refs/fold"));
+    assert_eq!(
+        fs::read_to_string(other.join(".fold").join(SYNC_MAP_FILE)).unwrap_or_default(),
+        ""
+    );
+}
+
+#[cfg(feature = "failpoints")]
+#[tokio::test]
+async fn an_export_stopped_by_the_failpoint_recovers_with_one_map_line_per_revision() {
+    let scenario = fail::FailScenario::setup();
+    let host = Host::new();
+    let (root, target, mapped) = exported_then_two_more(&host).await;
+    let map_path = root.join(".fold").join(SYNC_MAP_FILE);
+
+    fail::cfg("git_export_before_map", "return").unwrap();
+    assert_eq!(export(&root, &target).await, Err(Some(codes::FAILPOINT)));
+    fail::remove("git_export_before_map");
+    assert_eq!(log(&target).len(), 5);
+    assert_eq!(fs::read_to_string(&map_path).unwrap(), mapped);
+
+    assert!(matches!(
+        export(&root, &target).await.unwrap(),
+        GitExport::Exported { commits: 2, .. }
+    ));
+    let map = fs::read_to_string(&map_path).unwrap();
+    let revisions: Vec<&str> = map
+        .lines()
+        .map(|line| line.split(' ').next().unwrap())
+        .collect();
+    assert_eq!(revisions, ["r1", "r2", "r3", "r4", "r5"]);
+    scenario.teardown();
+}
+
 #[tokio::test]
 async fn a_from_git_project_continues_its_source_repository() {
     let host = Host::new();

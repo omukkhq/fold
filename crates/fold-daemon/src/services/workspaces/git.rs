@@ -1,12 +1,12 @@
 use std::path::Path;
 
-use fold_core::RevisionId;
+use fold_core::{FoldError, RevisionId, codes};
 use fold_store::workspaces::{RevisionRow, get_by_number, list_after};
 use fold_store::{Store, StoreError};
 use fold_vcs::git::CommitId;
 use fold_vcs::git_export::{
     ExportBase, ExportRevision, ExportTarget, Signature, TargetState, check_target, create_target,
-    export,
+    recover_stopped, write_commits,
 };
 use fold_vcs::git_remote::{MIRROR_DIR, fetch_remote_refs};
 use fold_vcs::git_sync_map::SyncMap;
@@ -30,8 +30,15 @@ pub enum GitExport {
     },
 }
 
+/// What an export does with the target `check_target` found.
+enum Plan {
+    Write(TargetState),
+    /// The branch is not where the map says; the error is what a branch fold did not write gets.
+    Recover(FoldError),
+}
+
 impl WorkspaceService {
-    /// Appends the main revisions after the last one in `.fold/git-sync.map` to `main` in the Git repository `repo`, one commit each, creating a bare repository when the path is missing or an empty directory. A revision that brought a remote commit in gets that commit as its second parent; the mirror's fetched refs are copied into `repo` first, so the commit is there. The target must continue the mapped chain, or the export is refused with `export_diverged` before anything is written; with nothing new it reports up to date. The map gains the new commits only after `git fast-import` succeeds. The project's Git sync lock is held throughout, so concurrent exports, in this process or another, run one after the other.
+    /// Appends the main revisions after the last one in `.fold/git-sync.map` to `main` in the Git repository `repo`, one commit each, creating a bare repository when the path is missing or an empty directory. A revision that brought a remote commit in gets that commit as its second parent; the mirror's fetched refs are copied into `repo` first, so the commit is there. The target must continue the mapped chain, or the export is refused with `export_diverged` and its branch does not move; with nothing new it reports up to date. The map gains the new commits only after `git fast-import` succeeds; a branch that fast-import moved before the map was appended to, on the first export too, is recognised as fold's own by its commits and finished on the next export. Telling the two apart writes the expected commits into the target, where a refused export leaves them unreferenced. The project's Git sync lock is held throughout, so concurrent exports, in this process or another, run one after the other.
     pub async fn export_git(&self, repo: &Path) -> Result<GitExport, WorkspaceError> {
         let fold_dir = self.paths.fold_dir();
         // Held until the map is appended to, so a second export waits and then finds the first one's commits.
@@ -40,14 +47,14 @@ impl WorkspaceService {
             blocking(move || SyncMap::lock(&fold_dir)).await?
         };
         let last = map.last().cloned();
-        let state = {
+        let checked = {
             let (git, repo, last) = (self.git.clone(), repo.to_owned(), last.clone());
             blocking(move || {
                 let target = ExportTarget {
                     repo: &repo,
                     refname: MAIN_REF,
                 };
-                check_target(&git, &target, last.as_ref())
+                Ok(check_target(&git, &target, last.as_ref()))
             })
             .await?
         };
@@ -55,9 +62,15 @@ impl WorkspaceService {
         let up_to_date = GitExport::UpToDate {
             last: last.as_ref().map(|(number, _)| *number),
         };
-        if rows.is_empty() {
-            return Ok(up_to_date);
-        }
+        // A branch that moved on from the last mapped commit may be an export that stopped before the map was appended to; `recover_stopped` tells that from a commit fold did not write.
+        let plan = match checked {
+            Ok(_) if rows.is_empty() => return Ok(up_to_date),
+            Ok(state) => Plan::Write(state),
+            Err(error) if error.code() == codes::EXPORT_DIVERGED && !rows.is_empty() => {
+                Plan::Recover(error)
+            }
+            Err(error) => return Err(error.into()),
+        };
         let fold = Signature {
             name: "fold".to_owned(),
             email: "fold@localhost".to_owned(),
@@ -83,23 +96,47 @@ impl WorkspaceService {
                 repo: &repo,
                 refname: MAIN_REF,
             };
-            if state == TargetState::Missing {
-                create_target(&git, &target)?;
-            }
-            if merges {
-                fetch_remote_refs(&git, &repo, &fold_dir.join(MIRROR_DIR))?;
-            }
             let objects = ObjectStore::open(&fold_dir)?;
+            let added = match plan {
+                Plan::Write(state) => {
+                    if state == TargetState::Missing {
+                        create_target(&git, &target)?;
+                    }
+                    if merges {
+                        fetch_remote_refs(&git, &repo, &fold_dir.join(MIRROR_DIR))?;
+                    }
+                    write_commits(
+                        &objects,
+                        &git,
+                        &target,
+                        base.as_ref(),
+                        &revisions,
+                        &fold_dir,
+                    )?
+                }
+                Plan::Recover(diverged) => {
+                    if merges {
+                        fetch_remote_refs(&git, &repo, &fold_dir.join(MIRROR_DIR))?;
+                    }
+                    recover_stopped(
+                        &objects,
+                        &git,
+                        &target,
+                        base.as_ref(),
+                        &revisions,
+                        &fold_dir,
+                    )?
+                    .ok_or(diverged)?
+                }
+            };
+            #[cfg(feature = "failpoints")]
+            fail::fail_point!("git_export_before_map", |_| Err(FoldError::new(
+                codes::FAILPOINT,
+                "git_export_before_map fired"
+            )));
             let mut map = map;
-            export(
-                &objects,
-                &git,
-                &target,
-                base.as_ref(),
-                &revisions,
-                &mut map,
-                &fold_dir,
-            )
+            map.append(&added)?;
+            Ok(added)
         })
         .await?;
         Ok(match (added.first(), added.last()) {

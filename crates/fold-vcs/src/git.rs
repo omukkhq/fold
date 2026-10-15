@@ -148,6 +148,32 @@ impl Git {
         }
     }
 
+    /// Moves `refname` to `new` only while it points to `old`, or deletes it while it points to `old` when `new` is `None`.
+    pub fn update_ref(
+        &self,
+        repo: &Path,
+        refname: &str,
+        new: Option<&CommitId>,
+        old: &CommitId,
+    ) -> Result<(), FoldError> {
+        check_rev(refname)?;
+        let mut command = self.command(repo);
+        command.arg("update-ref");
+        match new {
+            Some(new) => command.arg(refname).arg(new.as_str()),
+            None => command.arg("-d").arg(refname),
+        };
+        command.arg(old.as_str());
+        let status = Self::spawn(&mut command, "update-ref")?
+            .wait()
+            .map_err(|error| wait_error(&error, "update-ref"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(failed("update-ref", status))
+        }
+    }
+
     /// Whether `repo` holds `commit` as a commit object.
     pub fn has_commit(&self, repo: &Path, commit: &CommitId) -> Result<bool, FoldError> {
         let spec = format!("{commit}^{{commit}}");

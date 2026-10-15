@@ -113,6 +113,62 @@ pub fn create_target(git: &Git, target: &ExportTarget<'_>) -> Result<(), FoldErr
     git.init_bare(target.repo, branch)
 }
 
+/// The ref [`recover_stopped`] writes the expected commits to, to compare them with the branch before the branch moves.
+const RECOVERY_REF: &str = "refs/fold/export-recovery";
+
+/// Recovers an export that stopped after `git fast-import` and before the sync map was appended to: `target.refname` is not the last mapped commit `base.commit` (or exists although nothing is mapped, when `base` is `None`), but is one of the commits fold writes for `revisions`, the revisions after it. A commit has the same id whenever its tree, parent, message, author and time are the same, so the expected chain is written to a scratch ref first and the branch is compared with it. When the branch is one of those commits it moves on to the newest, and every revision with its commit is returned for the map. When it is anything else, such as a commit fold did not write, the branch does not move, the commits written for the comparison stay unreferenced in the repository, and the result is `None`. Blocking: async callers go through `spawn_blocking`.
+pub fn recover_stopped(
+    objects: &ObjectStore,
+    git: &Git,
+    target: &ExportTarget<'_>,
+    base: Option<&ExportBase>,
+    revisions: &[ExportRevision],
+    scratch: &Path,
+) -> Result<Option<Vec<(RevisionId, CommitId)>>, FoldError> {
+    check_rev(target.refname)?;
+    if revisions.is_empty() || git.repository(target.repo)?.is_none() {
+        return Ok(None);
+    }
+    if let Some(base) = base
+        && !git.has_commit(target.repo, &base.commit)?
+    {
+        return Ok(None);
+    }
+    let Some(current) = git.ref_commit(target.repo, target.refname)? else {
+        return Ok(None);
+    };
+    if git.checked_out(target.repo, target.refname)? {
+        return Err(checked_out(target));
+    }
+    let scratch_target = ExportTarget {
+        repo: target.repo,
+        refname: RECOVERY_REF,
+    };
+    // A scratch ref left by a recovery that stopped would make fast-import refuse a chain that does not continue it.
+    drop_recovery_ref(git, target.repo)?;
+    let written = write_commits(objects, git, &scratch_target, base, revisions, scratch);
+    let dropped = drop_recovery_ref(git, target.repo);
+    let added = written?;
+    dropped?;
+    let Some(tip) = added.last().map(|(_, commit)| commit.clone()) else {
+        return Ok(None);
+    };
+    if !added.iter().any(|(_, commit)| *commit == current) {
+        return Ok(None);
+    }
+    if current != tip {
+        git.update_ref(target.repo, target.refname, Some(&tip), &current)?;
+    }
+    Ok(Some(added))
+}
+
+fn drop_recovery_ref(git: &Git, repo: &Path) -> Result<(), FoldError> {
+    match git.ref_commit(repo, RECOVERY_REF)? {
+        Some(tip) => git.update_ref(repo, RECOVERY_REF, None, &tip),
+        None => Ok(()),
+    }
+}
+
 fn diverged(target: &ExportTarget<'_>, last: Option<&(RevisionId, CommitId)>) -> FoldError {
     let message = match last {
         Some((revision, commit)) => format!(
