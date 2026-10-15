@@ -219,8 +219,8 @@ describe("waitingSummary", () => {
 
   it("says every gate is met and who integrates next", () => {
     const p = proposal("P-3", { with: "reviewer", latest_verdict: "approve" });
-    p.gates = p.gates.map((g): Gate =>
-      g.kind === "approval" ? { ...g, state: "met" } : g,
+    p.gates = p.gates.map(
+      (g): Gate => (g.kind === "approval" ? { ...g, state: "met" } : g),
     );
     expect(waitingSummary(p)).toBe(
       "Every gate is met. Next, the review agent integrates, or a human can integrate here.",

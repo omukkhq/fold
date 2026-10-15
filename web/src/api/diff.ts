@@ -11,7 +11,11 @@ export type ComparedFile = components["schemas"]["ChangedFile"] & {
 };
 
 export type StateKind =
-  "revision" | "changeset" | "proposal_version" | "checkpoint" | "workspace";
+  | "revision"
+  | "changeset"
+  | "proposal_version"
+  | "checkpoint"
+  | "workspace";
 
 /** One side of a comparison as the daemon resolved the `from` or `to` reference. */
 export interface ComparedState {

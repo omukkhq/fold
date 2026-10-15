@@ -8,7 +8,8 @@ export interface ComparePair {
 }
 
 export type CompareResult =
-  { ok: true; pair: ComparePair } | { ok: false; reason: "same" | "invalid" };
+  | { ok: true; pair: ComparePair }
+  | { ok: false; reason: "same" | "invalid" };
 
 function revisionNumber(id: string): number | null {
   const found = parseId(id);

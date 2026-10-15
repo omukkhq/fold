@@ -1,5 +1,10 @@
 export type NavId =
-  "board" | "activity" | "proposals" | "agents" | "messages" | "repository";
+  | "board"
+  | "activity"
+  | "proposals"
+  | "agents"
+  | "messages"
+  | "repository";
 
 export interface NavEntry {
   id: NavId;

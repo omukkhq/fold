@@ -5,7 +5,10 @@ import { fromFixture } from "./fixture";
 export type WorkspaceState = "active" | "missing";
 
 export type AttentionKind =
-  "question" | "human_review" | "stalled" | "stale_claim";
+  | "question"
+  | "human_review"
+  | "stalled"
+  | "stale_claim";
 
 /** The daemon decides attention; the web only shows it. */
 export interface AttentionItem {

@@ -8,7 +8,8 @@ export const NAME_HINT = `Up to ${String(NAME_MAX_LENGTH)} lowercase letters, di
 export type NameProblem = "empty" | "too_long" | "characters" | "start";
 
 export type NameCheck =
-  { ok: true; name: string } | { ok: false; problem: NameProblem };
+  | { ok: true; name: string }
+  | { ok: false; problem: NameProblem };
 
 /** The trimmed name when the daemon accepts it as a human name: 1 to 32 characters of `a-z`, `0-9`, `-` and `_`, starting with a letter or digit. The form checks it first so it never sends a name the daemon refuses with `invalid_name`. */
 export function validateName(raw: string): NameCheck {

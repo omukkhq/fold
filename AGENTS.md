@@ -30,7 +30,7 @@ make dev-daemon            # daemon only (also dev-web)
 make gen-api               # regenerate web/src/api/schema.d.ts from `fold openapi` (no daemon needed)
 make migration NAME=<name> # new project migration; DB=registry for the host registry. The daemon applies migrations itself.
 make sqlx-prepare          # refresh .sqlx/ query metadata after changing a query
-make fmt                   # cargo fmt, eslint --fix, prettier --write
+make fmt                   # cargo fmt, eslint --fix, biome format --write
 make check                 # fmt check, clippy, nextest, coverage floors, tsc, eslint, vitest, web build, stale-client check; run before declaring work done
 make check-rust            # the Rust half of check
 make check-web             # the web half of check

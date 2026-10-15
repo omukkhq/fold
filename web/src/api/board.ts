@@ -7,7 +7,10 @@ export type TaskStatus = "backlog" | "todo" | "in_progress" | "review" | "done";
 
 /** The daemon computes every kind; the web derives none of them. */
 export type AttentionKind =
-  "question" | "human_review" | "stalled" | "stale_claim";
+  | "question"
+  | "human_review"
+  | "stalled"
+  | "stale_claim";
 
 export interface AttentionItem {
   kind: AttentionKind;
@@ -28,7 +31,11 @@ export interface ChecklistCounts {
 }
 
 export type ProposalState =
-  "open" | "approved" | "changes_requested" | "conflict" | "integrated";
+  | "open"
+  | "approved"
+  | "changes_requested"
+  | "conflict"
+  | "integrated";
 
 export interface BoardProposal {
   /** @example P-3 */

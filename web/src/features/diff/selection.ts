@@ -24,7 +24,13 @@ export interface SelectionState {
 }
 
 export type KeyCommand =
-  "select" | "extend" | "up" | "down" | "extend-up" | "extend-down" | "clear";
+  | "select"
+  | "extend"
+  | "up"
+  | "down"
+  | "extend-up"
+  | "extend-down"
+  | "clear";
 
 export type SelectionAction =
   | { type: "click"; point: LinePoint; shift: boolean }

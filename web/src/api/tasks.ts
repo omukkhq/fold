@@ -93,7 +93,10 @@ export interface TaskChangeset {
 }
 
 export type ReviewVerdict =
-  "comment" | "request_changes" | "approve" | "reject";
+  | "comment"
+  | "request_changes"
+  | "approve"
+  | "reject";
 
 export interface TaskReview {
   reviewer: string;
@@ -197,7 +200,8 @@ export type FeedbackRecipient =
   | { kind: "tag"; name: string };
 
 export type NewChecklistItem =
-  { kind: "step"; text: string } | { kind: "linked"; task: string };
+  | { kind: "step"; text: string }
+  | { kind: "linked"; task: string };
 
 const fixture = import.meta.env.DEV
   ? () => import("../../fixtures/tasks")

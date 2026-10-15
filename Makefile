@@ -134,8 +134,22 @@ check-api: ## Fail when web/src/api/schema.d.ts differs from the daemon's OpenAP
 
 check: web-build check-api check-rust check-web ## Run every check, after the web build that the binary embeds
 
-clean: clean-keep-cargo ## Delete build output and dev projects
+# cargo reports the directories it really builds into (the target directory and the build directory for intermediate files), whether they come from CARGO_TARGET_DIR, a config file or the default. Only when both are the repository's own target/, and target/ is not a symlink, does `cargo clean` delete it all; anywhere else the directory can be shared with other projects, so only fold's crates are cleaned there, for the dev and test profiles (debug/) and for release. When cargo cannot say, the shared branch is the safe one. The choice is made when make reads the file and only for the clean goal, so `make -n clean` shows just the branch that runs.
+ifneq ($(filter clean,$(MAKECMDGOALS)),)
+CARGO_BUILD_DIRS := $(shell cargo metadata --format-version 1 --no-deps 2>/dev/null | grep -oE '"(target|build)_directory":"[^"]*"' | sed 's/^"[a-z_]*":"//; s/"$$//' | sort -u)
+TARGET_IS_SYMLINK := $(shell test -L target && echo yes)
+FOLD_CRATES := $(notdir $(patsubst %/Cargo.toml,%,$(wildcard crates/*/Cargo.toml)))
+endif
+
+ifeq ($(CARGO_BUILD_DIRS)$(TARGET_IS_SYMLINK),$(CURDIR)/target)
+clean: clean-keep-cargo ## Delete build output and dev projects; in a shared cargo target directory, only fold's own artifacts
 	cargo clean
+else
+clean: clean-keep-cargo
+	@echo "Shared cargo target directory $(or $(CARGO_BUILD_DIRS),(cargo did not report it)): cleaning only fold's crates; other projects' builds stay."
+	rm -rf target/sqlx target/gen
+	for crate in $(FOLD_CRATES); do cargo clean -q -p $$crate && cargo clean -q --release -p $$crate || exit 1; done
+endif
 
 clean-keep-cargo: ## Delete build output and dev projects, but keep the cargo target directory
 	rm -rf dist .dev target/dev web/dist web/coverage target/llvm-cov-target

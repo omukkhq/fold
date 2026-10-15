@@ -189,11 +189,13 @@ function toNodes(dir: DirBuild, prefix: string): TreeNode[] {
     });
   const files = [...dir.files]
     .sort((a, b) => a.path.localeCompare(b.path))
-    .map((file): TreeNode => ({
-      type: "file",
-      name: file.path.slice(file.path.lastIndexOf("/") + 1),
-      file,
-    }));
+    .map(
+      (file): TreeNode => ({
+        type: "file",
+        name: file.path.slice(file.path.lastIndexOf("/") + 1),
+        file,
+      }),
+    );
   return [...dirs, ...files];
 }
 

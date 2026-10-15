@@ -1,0 +1,43 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "files": {
+    "includes": [
+      "**",
+      "!dist",
+      "!coverage",
+      "!node_modules",
+      "!bun.lock",
+      "!src/routeTree.gen.ts",
+      "!src/api/schema.d.ts",
+      // Biome 2.5 cannot parse Tailwind's `@theme inline reference` block, even with `css.parser.tailwindDirectives`, so this file is not format-checked.
+      "!src/styles/index.css"
+    ]
+  },
+  "linter": { "enabled": false },
+  "assist": { "enabled": false },
+  "formatter": {
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 80,
+    "lineEnding": "lf"
+  },
+  // `selfCloseVoidElements` and `indentScriptAndStyle` keep Prettier's layout of index.html.
+  "html": {
+    "formatter": {
+      "enabled": true,
+      "selfCloseVoidElements": "always",
+      "indentScriptAndStyle": true
+    }
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double",
+      "jsxQuoteStyle": "double",
+      "semicolons": "always",
+      "trailingCommas": "all",
+      "arrowParentheses": "always",
+      "bracketSpacing": true,
+      "bracketSameLine": false
+    }
+  }
+}
