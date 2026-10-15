@@ -84,7 +84,7 @@ Before declaring Rust work done, run `make check-rust`; for web work, `make chec
 6. **Messages never change task state,** never stand in for a dependency and never stand in for a claim.
 7. **Every path from an agent or a tree is checked** to be relative, normalised and inside its workspace before it is read or written. Symlinks are recorded, never followed.
 8. **Log ids, never content.** No file content, diff text, message body, review body or token in a log line or an error detail.
-9. **Off loopback, every `/api` route needs the session cookie.** The static web files load without it so the sign-in screen can open. Tokens are stored hashed and compared in constant time. The Unix socket is mode `0600` and never exposed on the network.
+9. **Off loopback, every `/api` route needs the session cookie** except the `/api/v1/session` routes, through which a human signs in. The static web files load without it so the sign-in screen can open. Tokens are stored hashed and compared in constant time. The Unix socket is mode `0600` and never exposed on the network.
 
 ## Web
 

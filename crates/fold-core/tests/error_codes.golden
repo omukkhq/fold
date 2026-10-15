@@ -73,3 +73,5 @@ message_not_found
 recipient_not_found
 unknown_human
 proposal_not_found
+invalid_token
+host_not_allowed

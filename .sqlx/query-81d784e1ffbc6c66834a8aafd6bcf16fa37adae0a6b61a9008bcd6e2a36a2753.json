@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT t.id AS \"id!: i64\", t.token_hash, h.name, t.last_used_at\n           FROM web_tokens t JOIN humans h ON h.id = t.human_id\n           WHERE t.token_hash = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "web_tokens",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "token_hash",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "web_tokens",
+            "name": "token_hash"
+          }
+        }
+      },
+      {
+        "name": "name",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "humans",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "last_used_at",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "web_tokens",
+            "name": "last_used_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "81d784e1ffbc6c66834a8aafd6bcf16fa37adae0a6b61a9008bcd6e2a36a2753"
+}

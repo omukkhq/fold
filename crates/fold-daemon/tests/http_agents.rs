@@ -35,6 +35,7 @@ impl Fixture {
             projects: Projects::default(),
             clock: clock.clone(),
             assets: AssetSource::Embedded,
+            listen: "127.0.0.1".parse().unwrap(),
         });
         let row = ProjectRow {
             slug: "demo".to_owned(),

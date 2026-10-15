@@ -69,7 +69,7 @@ export async function fetchEventStream(
   return decodeBody(response.body);
 }
 
-/** A write to a route the generated schema does not describe yet: a JSON body out, nothing read back. Failures throw an `ApiError` when the body is the daemon's error envelope. */
+/** A write whose answer has no body to read: a JSON body out, nothing read back. Failures throw an `ApiError` when the body is the daemon's error envelope. */
 export async function postJson(
   path: string,
   body: unknown,

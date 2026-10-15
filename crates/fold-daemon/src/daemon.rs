@@ -1,6 +1,6 @@
 use std::fs::{File, TryLockError};
 use std::io;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,6 +30,15 @@ pub struct DaemonState {
     pub projects: Projects,
     pub clock: Arc<dyn Clock>,
     pub assets: AssetSource,
+    /// The IP address the HTTP listener is bound to. It fixes the auth mode at start and names the hosts the `/api` routes answer.
+    pub listen: IpAddr,
+}
+
+impl DaemonState {
+    /// True off loopback, where every guarded `/api` route needs the `fold_session` cookie. `0.0.0.0` and `::` are off loopback, so they need it even for a request from `127.0.0.1`.
+    pub fn auth_required(&self) -> bool {
+        !self.listen.is_loopback()
+    }
 }
 
 impl std::fmt::Debug for DaemonState {
@@ -46,8 +55,6 @@ pub enum DaemonError {
     RuntimeDirMissing,
     #[error("another daemon holds {path}")]
     AlreadyRunning { path: PathBuf },
-    #[error("listening on {listen} needs the session cookie, which this daemon does not have yet")]
-    AuthRequired { listen: SocketAddr },
     #[error(transparent)]
     Store(#[from] StoreError),
     #[error("{context}: {source}")]
@@ -67,7 +74,6 @@ impl DaemonError {
         match self {
             Self::RuntimeDirMissing => Some(codes::RUNTIME_DIR_MISSING),
             Self::AlreadyRunning { .. } => Some(codes::DAEMON_ALREADY_RUNNING),
-            Self::AuthRequired { .. } => Some(codes::AUTH_REQUIRED),
             Self::Store(error) => error.code(),
             Self::Io { .. } => None,
         }
@@ -91,11 +97,6 @@ impl Daemon {
         config: DaemonConfig,
         clock: Arc<dyn Clock>,
     ) -> Result<RunningDaemon, DaemonError> {
-        if !config.is_loopback() {
-            return Err(DaemonError::AuthRequired {
-                listen: config.listen,
-            });
-        }
         let lock = {
             let config = config.clone();
             tokio::task::spawn_blocking(move || prepare_runtime_dir(&config))
@@ -115,6 +116,7 @@ impl Daemon {
                 .web_dir
                 .clone()
                 .map_or(AssetSource::Embedded, AssetSource::Dir),
+            listen: config.listen.ip(),
         });
         for row in fold_store::projects::list_projects(state.registry.read()).await? {
             // A project that fails to open is logged and marked unavailable; the others start.

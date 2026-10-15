@@ -7,5 +7,5 @@ export function signInMode(session: Session): SignInMode {
   if (!session.authenticated) {
     return "token";
   }
-  return session.humanName === null ? "name" : "ready";
+  return session.human === null ? "name" : "ready";
 }

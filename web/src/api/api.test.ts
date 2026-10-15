@@ -62,7 +62,7 @@ describe("a production build", () => {
     const errors = await import("./errors");
     await expect(projects.listProjects()).resolves.toEqual([]);
     await expect(session.getSession()).resolves.toEqual({
-      humanName: null,
+      human: null,
       authenticated: true,
     });
     await expect(projects.getProject("demo")).rejects.toSatisfy((e: unknown) =>
@@ -196,7 +196,7 @@ describe("session", () => {
   it("returns the human name", async () => {
     const s = getSession();
     await vi.runAllTimersAsync();
-    expect((await s).humanName).not.toBe("");
+    expect((await s).human).not.toBe("");
   });
 });
 
@@ -216,7 +216,7 @@ describe("queries", () => {
     expect(threads.length).toBeGreaterThan(0);
     expect(list.length).toBeGreaterThan(0);
     expect(project.slug).toBe("demo");
-    expect(who.humanName).not.toBe("");
+    expect(who.human).not.toBe("");
     expect(client.getQueryData(keys.project("demo"))).toEqual(project);
   });
 });

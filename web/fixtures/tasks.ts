@@ -398,7 +398,7 @@ export function createdCards(slug: string): BoardCard[] {
 
 /** The signed-in human as an actor; the fixture session always has a name. */
 function human(): string {
-  return `human:${session.humanName ?? "tanim"}`;
+  return `human:${session.human ?? "tanim"}`;
 }
 
 function notFound(task: string): ApiError {

@@ -502,6 +502,7 @@ async fn state_with(fixtures: &[&Fixture], clock: &ManualClock) -> AppState {
         projects: Projects::default(),
         clock: Arc::new(clock.clone()),
         assets: AssetSource::Embedded,
+        listen: "127.0.0.1".parse().unwrap(),
     });
     for (n, fixture) in fixtures.iter().enumerate() {
         state

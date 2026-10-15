@@ -2,7 +2,10 @@ use std::collections::BTreeSet;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use fold_core::projects::find_root;
 use fold_core::tree::FlatTree;
 use fold_core::{
@@ -579,4 +582,73 @@ pub async fn ensure_human(
     registry
         .write(async |tx| projects::ensure_human(tx, name, now).await)
         .await
+}
+
+/// How long a sign-in leaves `web_tokens.last_used_at` alone, so checking a token on every request is not a write on every request.
+pub const WEB_TOKEN_TOUCH_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Makes a web sign-in token for `human`, creating the human when absent, and returns its plaintext. This is the only time the plaintext exists: the registry keeps its BLAKE3 hash.
+pub async fn create_web_token(
+    registry: &Store,
+    human: &HumanName,
+    label: Option<&str>,
+    now: Timestamp,
+) -> Result<String, ProjectError> {
+    let mut secret = [0_u8; 32];
+    getrandom::fill(&mut secret).map_err(|error| {
+        FoldError::new(
+            codes::INTERNAL_ERROR,
+            format!("the OS random source failed: {error}"),
+        )
+    })?;
+    let token = URL_SAFE_NO_PAD.encode(secret);
+    let hash = blake3::hash(token.as_bytes());
+    registry
+        .write(async |tx| {
+            let row = projects::ensure_human(tx, human, now).await?;
+            projects::insert_web_token(tx, hash.as_bytes(), row.id, label, now).await
+        })
+        .await?;
+    Ok(token)
+}
+
+/// [`create_web_token`] for `fold token create`, which writes the host registry without a running daemon.
+pub async fn create_web_token_on_host(
+    host: &HostPaths,
+    clock: &dyn Clock,
+    human: &HumanName,
+    label: Option<&str>,
+) -> Result<String, ProjectError> {
+    let registry = Store::open_registry(&host.registry_db()).await?;
+    let token = create_web_token(&registry, human, label, clock.now()).await;
+    registry.close().await?;
+    token
+}
+
+/// The human that `token` signs in, or `None` for a token the registry does not hold. It touches `last_used_at` at most once per [`WEB_TOKEN_TOUCH_INTERVAL`].
+pub async fn check_web_token(
+    registry: &Store,
+    clock: &dyn Clock,
+    token: &str,
+) -> Result<Option<HumanName>, StoreError> {
+    let hash = blake3::hash(token.as_bytes());
+    let Some(row) = projects::find_web_token(registry.read(), hash.as_bytes()).await? else {
+        return Ok(None);
+    };
+    // The lookup found the row by its hash; this comparison is the constant-time one `blake3::Hash` provides.
+    let stored = <[u8; 32]>::try_from(row.token_hash.as_slice())
+        .map_err(|_| StoreError::Corrupt("web_tokens.token_hash"))?;
+    if blake3::Hash::from_bytes(stored) != hash {
+        return Ok(None);
+    }
+    let now = clock.now();
+    let stale_before = now
+        .checked_sub(WEB_TOKEN_TOUCH_INTERVAL)
+        .unwrap_or(Timestamp::EPOCH);
+    if row.last_used_at.is_none_or(|used| used <= stale_before) {
+        registry
+            .write(async |tx| projects::touch_web_token(tx, row.id, now, stale_before).await)
+            .await?;
+    }
+    Ok(Some(row.human))
 }

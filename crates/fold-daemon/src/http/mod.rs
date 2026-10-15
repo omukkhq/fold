@@ -1,14 +1,16 @@
 pub mod actor;
 pub mod agents;
 pub mod assets;
+pub mod auth;
 pub mod error;
 pub mod events;
+pub mod host;
 pub mod openapi;
 pub mod projects;
 
 use axum::extract::{FromRequestParts, MatchedPath, RawPathParams, Request};
 use axum::http::request::Parts;
-use axum::{Extension, Router};
+use axum::{Extension, Router, middleware};
 use tower_http::trace::{DefaultOnResponse, TraceLayer};
 use tracing::Level;
 use utoipa_axum::router::OpenApiRouter;
@@ -25,22 +27,41 @@ pub enum Transport {
     Socket,
 }
 
-/// Every `/api` route with its declaration, so a route and its schema cannot drift apart.
-pub fn api_router() -> OpenApiRouter<AppState> {
-    OpenApiRouter::with_openapi(openapi::base())
+/// Every `/api` route that [`auth::require_session`] guards.
+fn guarded_routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
         .merge(agents::routes())
         .merge(projects::routes())
 }
 
-/// The OpenAPI document. It needs no state, socket or project.
-pub fn openapi() -> utoipa::openapi::OpenApi {
-    api_router().split_for_parts().1
+/// Every `/api` route with its declaration, so a route and its schema cannot drift apart.
+pub fn api_router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::with_openapi(openapi::base())
+        .merge(guarded_routes())
+        .merge(auth::routes())
 }
 
-/// The router the TCP listener serves.
+/// The OpenAPI document. It needs no state, socket or project.
+pub fn openapi() -> utoipa::openapi::OpenApi {
+    let mut doc = api_router().split_for_parts().1;
+    openapi::declare_layer_errors(&mut doc, &guarded_routes().split_for_parts().1);
+    doc
+}
+
+/// The router the TCP listener serves. The session check is a route layer of the guarded routes only, so the session routes and the web files of the fallback load without a cookie. The host check is a route layer of every `/api` route and runs first.
 pub fn router(state: AppState) -> Router {
-    let (routes, _) = api_router().split_for_parts();
-    routes
+    let (guarded, _) = guarded_routes().split_for_parts();
+    let (session, _) = auth::routes().split_for_parts();
+    guarded
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_session,
+        ))
+        .merge(session)
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            host::require_listen_host,
+        ))
         .fallback(assets::serve)
         .method_not_allowed_fallback(unmatched)
         .layer(

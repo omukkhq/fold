@@ -717,10 +717,13 @@ name = "fold-daemon"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64 0.23.1",
+ "blake3",
  "fail",
  "fold-core",
  "fold-store",
  "fold-vcs",
+ "getrandom 0.4.3",
  "http-body-util",
  "hyper",
  "hyper-util",
@@ -738,6 +741,7 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+ "tracing-subscriber",
  "utoipa",
  "utoipa-axum",
 ]

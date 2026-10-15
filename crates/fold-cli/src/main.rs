@@ -8,6 +8,7 @@ mod output;
 mod platform;
 mod serve;
 mod service;
+mod token;
 
 use std::ffi::OsString;
 use std::io::{self, Write};
@@ -41,6 +42,8 @@ enum Command {
     Gc(commands::gc::GcArgs),
     /// Manage the agents of the project in the working directory
     Agent(agent::AgentArgs),
+    /// Manage the tokens that sign humans in to the web interface off localhost
+    Token(token::TokenArgs),
 }
 
 /// clap prints a parse outcome, including `--help` and `--version`, and exits with its own code; a failed write is a runtime error with exit code 1.
@@ -56,6 +59,7 @@ enum Failure {
     Service(service::ServiceError),
     Gc(commands::gc::GcError),
     Agent(agent::AgentError),
+    Token(token::TokenError),
 }
 
 fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result<(), Failure> {
@@ -82,6 +86,9 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         Some(Command::Agent(args)) => {
             agent::run(&args, &serve::Dirs::from_env(), out).map_err(Failure::Agent)
         }
+        Some(Command::Token(args)) => {
+            token::run(&args, &serve::Dirs::from_env(), out).map_err(Failure::Token)
+        }
         None => output::line(out, &output::version_line()).map_err(Failure::Write),
     }
 }
@@ -101,6 +108,10 @@ fn main() -> anyhow::Result<()> {
             None => error.into(),
         }),
         Err(Failure::Agent(error)) => Err(match error.code() {
+            Some(code) => anyhow::anyhow!("{code}: {error}"),
+            None => error.into(),
+        }),
+        Err(Failure::Token(error)) => Err(match error.code() {
             Some(code) => anyhow::anyhow!("{code}: {error}"),
             None => error.into(),
         }),

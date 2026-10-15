@@ -5,20 +5,16 @@ import { signInMode } from "./mode";
 
 describe("signInMode", () => {
   it("asks for a token when the request is not authenticated", () => {
-    expect(signInMode({ authenticated: false, humanName: null })).toBe("token");
-    expect(signInMode({ authenticated: false, humanName: "tanim" })).toBe(
-      "token",
-    );
+    expect(signInMode({ authenticated: false, human: null })).toBe("token");
+    expect(signInMode({ authenticated: false, human: "tanim" })).toBe("token");
   });
 
   it("asks for a name when authenticated without one", () => {
-    expect(signInMode({ authenticated: true, humanName: null })).toBe("name");
+    expect(signInMode({ authenticated: true, human: null })).toBe("name");
   });
 
   it("is ready with a name", () => {
-    expect(signInMode({ authenticated: true, humanName: "tanim" })).toBe(
-      "ready",
-    );
+    expect(signInMode({ authenticated: true, human: "tanim" })).toBe("ready");
   });
 });
 

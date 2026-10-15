@@ -285,9 +285,9 @@ function HumanReviewForm({
   );
   const form = useForm<HumanReviewInput, unknown, HumanReviewForm>({
     resolver: zodResolver(humanReviewSchema),
-    defaultValues: { reviewer: session.data?.humanName ?? "", reason: "" },
+    defaultValues: { reviewer: session.data?.human ?? "", reason: "" },
   });
-  const me = session.data?.humanName;
+  const me = session.data?.human;
   // "Require my review" names the signed-in human, whose name can arrive after the form opens.
   useEffect(() => {
     if (typeof me === "string" && !form.getFieldState("reviewer").isDirty) {

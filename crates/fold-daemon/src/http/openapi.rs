@@ -1,6 +1,6 @@
 use utoipa::OpenApi as _;
-use utoipa::openapi::path::Operation;
-use utoipa::openapi::{Info, OpenApi, OpenApiVersion, RefOr, Response};
+use utoipa::openapi::path::{Operation, PathItem};
+use utoipa::openapi::{Content, Info, OpenApi, OpenApiVersion, Ref, RefOr, Response};
 
 use super::error::ErrorEnvelope;
 use super::events::EventEnvelope;
@@ -18,6 +18,62 @@ pub fn base() -> OpenApi {
     doc.openapi = OpenApiVersion::Version31;
     doc.info = Info::new("fold", env!("CARGO_PKG_VERSION"));
     doc
+}
+
+const HOST_NOT_ALLOWED: &str = "`host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on";
+const SESSION_REFUSED: &str = "`auth_required`: off loopback, the request has no `fold_session` cookie; `invalid_token`: the cookie holds a token the registry does not have";
+
+/// Declares the errors of the route layers, which answer before any handler and so are in no route's own declaration: `host_not_allowed` on every operation, the session errors on every operation of `guarded`.
+pub fn declare_layer_errors(doc: &mut OpenApi, guarded: &OpenApi) {
+    for (path, item) in &mut doc.paths.paths {
+        let session = guarded.paths.paths.contains_key(path);
+        for operation in operations_mut(item) {
+            add_error(operation, "403", HOST_NOT_ALLOWED);
+            if session {
+                add_error(operation, "401", SESSION_REFUSED);
+            }
+        }
+    }
+}
+
+fn operations_mut(item: &mut PathItem) -> impl Iterator<Item = &mut Operation> {
+    [
+        &mut item.get,
+        &mut item.put,
+        &mut item.post,
+        &mut item.delete,
+        &mut item.options,
+        &mut item.head,
+        &mut item.patch,
+        &mut item.trace,
+        &mut item.query,
+    ]
+    .into_iter()
+    .filter_map(Option::as_mut)
+    .chain(item.additional_operations.values_mut())
+}
+
+/// A status the route already declares keeps its body and gains the layer's codes in its description.
+fn add_error(operation: &mut Operation, status: &str, description: &str) {
+    match operation.responses.responses.get_mut(status) {
+        Some(RefOr::T(response)) => {
+            response.description = format!("{}; {description}", response.description);
+        }
+        Some(RefOr::Ref(_)) => {}
+        None => {
+            let response = Response::builder()
+                .description(description)
+                .content(
+                    "application/json",
+                    Content::new(Some(Ref::new(ERROR_ENVELOPE_REF))),
+                )
+                .build();
+            operation
+                .responses
+                .responses
+                .insert(status.to_owned(), RefOr::T(response));
+        }
+    }
 }
 
 /// The document as pretty JSON without a trailing newline. Every map serialises sorted, so equal documents give equal text.

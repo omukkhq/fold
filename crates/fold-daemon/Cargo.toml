@@ -7,10 +7,13 @@ publish.workspace = true
 
 [dependencies]
 axum = "0.8.9"
+base64 = "0.23.1"
+blake3 = "1.8.7"
 fail = { version = "0.5.1", optional = true }
 fold-core = { version = "0.1.0", path = "../fold-core" }
 fold-store = { version = "0.1.0", path = "../fold-store" }
 fold-vcs = { version = "0.1.0", path = "../fold-vcs" }
+getrandom = "0.4.3"
 hyper = { version = "1.12.0", features = ["server", "http1"] }
 hyper-util = { version = "0.1.21", features = ["tokio", "server", "http1", "service"] }
 mime_guess = "2.0.5"
@@ -40,6 +43,7 @@ sqlx = { version = "0.9.0", default-features = false, features = ["sqlite", "run
 tempfile = "3.27.0"
 tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "time", "test-util"] }
 tower = { version = "0.5.3", features = ["util"] }
+tracing-subscriber = "0.3.23"
 
 [features]
 # Compiles the failpoints that crash-safety tests fire; release builds leave it off.

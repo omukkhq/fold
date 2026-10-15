@@ -35,7 +35,7 @@ function ProposalDetailRoute() {
       slug={slug}
       id={id}
       search={search}
-      human={session.data?.humanName ?? null}
+      human={session.data?.human ?? null}
       onSearch={(next) => {
         void navigate({
           search: parseDetailSearch({ ...next }),

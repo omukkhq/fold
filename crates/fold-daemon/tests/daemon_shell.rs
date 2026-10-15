@@ -109,7 +109,7 @@ where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
 {
     let request = format!(
-        "{method} {path} HTTP/1.1\r\nhost: fold\r\nconnection: close\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+        "{method} {path} HTTP/1.1\r\nhost: 127.0.0.1\r\nconnection: close\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
         body.len()
     );
     stream.write_all(request.as_bytes()).await.unwrap();
@@ -155,16 +155,18 @@ async fn the_socket_is_private_and_a_second_daemon_is_refused() {
 }
 
 #[tokio::test]
-async fn a_non_loopback_listen_address_needs_auth() {
+async fn a_non_loopback_daemon_starts_and_its_api_needs_the_session_cookie() {
     let mut host = Host::new();
     host.config.listen = "0.0.0.0:0".parse().unwrap();
-    let error = Daemon::start(host.config.clone(), Arc::new(host.clock.clone()))
-        .await
-        .unwrap_err();
-    assert_eq!(error.code(), Some("auth_required"));
-    assert!(!host.config.runtime_dir.exists());
-    let fold: fold_core::FoldError = error.into();
-    assert_eq!(fold.code(), "auth_required");
+    let daemon = host.start().await;
+    assert!(daemon.state().auth_required());
+    let tcp = TcpStream::connect(daemon.http_addr()).await.unwrap();
+    let (status, body) = raw_http(tcp, "GET", "/api/v1/projects", "").await;
+    assert_eq!((status, code(&body)), (401, "auth_required"));
+    let unix = UnixStream::connect(daemon.socket_path()).await.unwrap();
+    let (status, body) = raw_http(unix, "GET", "/api/v1/projects", "").await;
+    assert_eq!((status, body), (200, json!({"projects": []})));
+    daemon.shutdown().await;
 }
 
 #[tokio::test]

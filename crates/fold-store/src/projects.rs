@@ -146,3 +146,79 @@ pub async fn list_humans(executor: impl SqliteExecutor<'_>) -> Result<Vec<HumanN
         .map(|name| HumanName::parse(name).map_err(|_| StoreError::Corrupt("humans.name")))
         .collect()
 }
+
+/// A web sign-in token of the host registry. The registry holds only the token's BLAKE3 hash, never the token.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebTokenRow {
+    pub id: i64,
+    pub token_hash: Vec<u8>,
+    pub human: HumanName,
+    pub last_used_at: Option<Timestamp>,
+}
+
+pub async fn insert_web_token(
+    tx: &mut WriteTx,
+    token_hash: &[u8],
+    human_id: i64,
+    label: Option<&str>,
+    now: Timestamp,
+) -> Result<i64, StoreError> {
+    let created_at = now.as_millis();
+    Ok(sqlx::query_scalar!(
+        r#"INSERT INTO web_tokens (token_hash, human_id, label, created_at) VALUES (?, ?, ?, ?) RETURNING id AS "id!: i64""#,
+        token_hash,
+        human_id,
+        label,
+        created_at
+    )
+    .fetch_one(tx.conn())
+    .await?)
+}
+
+/// The token whose hash is `token_hash`, with the name of the human it signs in.
+pub async fn find_web_token(
+    executor: impl SqliteExecutor<'_>,
+    token_hash: &[u8],
+) -> Result<Option<WebTokenRow>, StoreError> {
+    let row = sqlx::query!(
+        r#"SELECT t.id AS "id!: i64", t.token_hash, h.name, t.last_used_at
+           FROM web_tokens t JOIN humans h ON h.id = t.human_id
+           WHERE t.token_hash = ?"#,
+        token_hash
+    )
+    .fetch_optional(executor)
+    .await?;
+    row.map(|row| {
+        Ok(WebTokenRow {
+            id: row.id,
+            token_hash: row.token_hash,
+            human: HumanName::parse(&row.name).map_err(|_| StoreError::Corrupt("humans.name"))?,
+            last_used_at: row
+                .last_used_at
+                .map(Timestamp::from_millis)
+                .transpose()
+                .map_err(|_| StoreError::Corrupt("web_tokens.last_used_at"))?,
+        })
+    })
+    .transpose()
+}
+
+/// Sets `last_used_at` to `now` unless it is already later than `stale_before`. True when the row changed.
+pub async fn touch_web_token(
+    tx: &mut WriteTx,
+    id: i64,
+    now: Timestamp,
+    stale_before: Timestamp,
+) -> Result<bool, StoreError> {
+    let now = now.as_millis();
+    let stale_before = stale_before.as_millis();
+    let result = sqlx::query!(
+        "UPDATE web_tokens SET last_used_at = ? WHERE id = ? AND (last_used_at IS NULL OR last_used_at <= ?)",
+        now,
+        id,
+        stale_before
+    )
+    .execute(tx.conn())
+    .await?;
+    Ok(result.rows_affected() == 1)
+}

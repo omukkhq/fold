@@ -74,6 +74,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Reports who the request acts as. It is the only way the web application learns the name, because `fold_human` is HttpOnly. */
+        get: operations["get_session"];
+        put?: never;
+        /** Signs in. Off loopback the body is `{ token }` and a valid token sets `fold_session`; on loopback it is `{ name }`, which registers the human on first use and sets `fold_human`. */
+        post: operations["create_session"];
+        /** Signs out: expires `fold_session` and `fold_human`. */
+        delete: operations["delete_session"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -236,6 +255,10 @@ export interface components {
             /** @example ws-9 */
             workspace: string;
         };
+        /** @description On loopback, the name the person works under. */
+        NameSignIn: {
+            name: string;
+        };
         OpenProject: {
             /** @description The slug of a project already in the registry. */
             slug: string;
@@ -253,6 +276,15 @@ export interface components {
             name: string;
             slug: string;
         };
+        /** @description A token off loopback, a name on loopback. */
+        SessionRequest: components["schemas"]["TokenSignIn"] | components["schemas"]["NameSignIn"];
+        /** @description What the sign-in screen needs to know. */
+        SessionStatus: {
+            /** @description False only off loopback without a valid session cookie: the sign-in screen then asks for a token. True with a null `human` asks for a name. */
+            authenticated: boolean;
+            /** @description The name the request acts under; null before a name or a token gives one. */
+            human: string | null;
+        };
         /** @description The newest durable sequence number and every live workspace, sent after a replay so a client starts from current state. */
         Snapshot: {
             /**
@@ -261,6 +293,10 @@ export interface components {
              */
             seq: number;
             workspaces: components["schemas"]["LiveWorkspace"][];
+        };
+        /** @description Off loopback, a web token from `fold token create`. */
+        TokenSignIn: {
+            token: string;
         };
     };
     responses: never;
@@ -287,6 +323,24 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectList"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie; `invalid_token`: the cookie holds a token the registry does not have */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description Internal error */
@@ -324,6 +378,24 @@ export interface operations {
             };
             /** @description The body is not valid */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie; `invalid_token`: the cookie holds a token the registry does not have */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -381,6 +453,24 @@ export interface operations {
                     "application/json": components["schemas"]["ProjectSummary"];
                 };
             };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie; `invalid_token`: the cookie holds a token the registry does not have */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description The slug is not registered */
             404: {
                 headers: {
@@ -433,7 +523,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`: the request names no human */
+            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie; `invalid_token`: the cookie holds a token the registry does not have */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -442,7 +532,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_required`: the actor is not a human */
+            /** @description `human_required`: the actor is not a human; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -512,7 +602,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`: the request names no human */
+            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie; `invalid_token`: the cookie holds a token the registry does not have */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -521,7 +611,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_required`: the actor is not a human */
+            /** @description `human_required`: the actor is not a human; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -593,6 +683,24 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie; `invalid_token`: the cookie holds a token the registry does not have */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Not on the socket, or the slug is not registered */
             404: {
                 headers: {
@@ -622,6 +730,142 @@ export interface operations {
             };
             /** @description The project failed to open */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_session: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The session of this request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionStatus"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    create_session: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionRequest"];
+            };
+        };
+        responses: {
+            /** @description Signed in */
+            204: {
+                headers: {
+                    /** @description `fold_session` off loopback, `fold_human` on loopback */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `invalid_request`: a name off loopback, a token on loopback, or a malformed body; `invalid_name`: the name breaks the name pattern */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `invalid_token`: the registry holds no such token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    delete_session: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Signed out */
+            204: {
+                headers: {
+                    /** @description `fold_session` and `fold_human` with `Max-Age=0` */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

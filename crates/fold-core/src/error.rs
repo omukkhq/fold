@@ -88,6 +88,8 @@ define_codes! {
     RECIPIENT_NOT_FOUND = "recipient_not_found",
     UNKNOWN_HUMAN = "unknown_human",
     PROPOSAL_NOT_FOUND = "proposal_not_found",
+    INVALID_TOKEN = "invalid_token",
+    HOST_NOT_ALLOWED = "host_not_allowed",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

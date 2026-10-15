@@ -37,8 +37,12 @@ fn status_of(code: &str) -> Option<StatusCode> {
         | codes::WEB_NOT_BUILT
         | codes::AGENT_NOT_FOUND => Some(StatusCode::NOT_FOUND),
         codes::INVALID_REQUEST | codes::INVALID_NAME => Some(StatusCode::BAD_REQUEST),
-        codes::HUMAN_NAME_REQUIRED => Some(StatusCode::UNAUTHORIZED),
-        codes::HUMAN_REQUIRED | codes::ACTOR_CANNOT_CLAIM => Some(StatusCode::FORBIDDEN),
+        codes::HUMAN_NAME_REQUIRED | codes::AUTH_REQUIRED | codes::INVALID_TOKEN => {
+            Some(StatusCode::UNAUTHORIZED)
+        }
+        codes::HUMAN_REQUIRED | codes::ACTOR_CANNOT_CLAIM | codes::HOST_NOT_ALLOWED => {
+            Some(StatusCode::FORBIDDEN)
+        }
         codes::PROJECT_UNAVAILABLE => Some(StatusCode::SERVICE_UNAVAILABLE),
         codes::GC_IN_PROGRESS => Some(StatusCode::CONFLICT),
         _ => None,
@@ -168,6 +172,9 @@ mod tests {
             (codes::AGENT_NOT_FOUND, StatusCode::NOT_FOUND),
             (codes::INVALID_NAME, StatusCode::BAD_REQUEST),
             (codes::HUMAN_NAME_REQUIRED, StatusCode::UNAUTHORIZED),
+            (codes::AUTH_REQUIRED, StatusCode::UNAUTHORIZED),
+            (codes::INVALID_TOKEN, StatusCode::UNAUTHORIZED),
+            (codes::HOST_NOT_ALLOWED, StatusCode::FORBIDDEN),
             (codes::HUMAN_REQUIRED, StatusCode::FORBIDDEN),
             (codes::ACTOR_CANNOT_CLAIM, StatusCode::FORBIDDEN),
         ] {
