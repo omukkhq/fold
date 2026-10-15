@@ -30,14 +30,6 @@ export function reconnectAsOf(
   return Math.max(status.lastEventAt ?? 0, dataUpdatedAt);
 }
 
-/** Never earlier than the data it labels, so a fresh event never reads as from the future. */
-export function clockTime(
-  times: readonly (number | null)[],
-  current: number = Date.now(),
-): number {
-  return Math.max(current, ...times.map((t) => t ?? 0));
-}
-
 export interface NeedsYouLook {
   variant: "primary" | "secondary";
   /** The count pill's text, or null when the button says `· 0` in its label. */

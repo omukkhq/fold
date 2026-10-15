@@ -153,6 +153,7 @@
   --width-history: var(--width-history);
   --width-sign-in: var(--width-sign-in);
   --width-thread-list: var(--width-thread-list);
+  --width-dialog: var(--width-dialog);
 
   --height-*: initial;
   --height-bar: var(--height-bar);

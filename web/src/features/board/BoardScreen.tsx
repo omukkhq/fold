@@ -1,11 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
 import { agentBarQuery } from "@/api/agentBar";
 import { boardQuery } from "@/api/board";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { ReconnectingBanner } from "@/components/states/ReconnectingBanner";
 import { cn } from "@/lib/cn";
 import { useLiveRetry } from "@/live/retry";
+import { useDataClock } from "@/live/useDataClock";
 import { useLiveStatus } from "@/live/status";
 import {
   BareColumns,
@@ -17,28 +17,7 @@ import { BoardToolbar } from "./BoardToolbar";
 import { boardCards, groupColumns } from "./columns";
 import { applyFilters, labelOptions, needsYouCount } from "./filters";
 import type { BoardSearch } from "./search";
-import { clockTime, reconnectAsOf, summaryText } from "./view";
-
-/**
- * The time the board last rendered new data, for its relative times and the reconnect countdown. It never ticks:
- * the screens run no timer, so the times move when a fetch, an event or a new reconnect attempt arrives.
- */
-function useBoardClock(
-  dataTimes: readonly (number | null)[],
-  retryAt: number | null,
-): number {
-  const stamp = [...dataTimes, retryAt].map(String).join(":");
-  const [clock, setClock] = useState(() => ({
-    stamp,
-    now: clockTime(dataTimes),
-  }));
-  if (clock.stamp !== stamp) {
-    const next = { stamp, now: clockTime(dataTimes) };
-    setClock(next);
-    return next.now;
-  }
-  return clock.now;
-}
+import { reconnectAsOf, summaryText } from "./view";
 
 export interface BoardScreenProps {
   slug: string;
@@ -55,9 +34,10 @@ export function BoardScreen({ slug, search, onSearch }: BoardScreenProps) {
   const agents = useQuery(agentBarQuery(slug));
   const status = useLiveStatus();
   const retry = useLiveRetry();
-  const now = useBoardClock(
+  // A new reconnect attempt renews the time too, so the reconnect countdown moves.
+  const now = useDataClock(
     [board.dataUpdatedAt, status.lastEventAt],
-    status.retryAt,
+    [status.retryAt],
   );
   const all = board.data ? boardCards(board.data) : [];
   const columns = groupColumns(applyFilters(all, search));
@@ -69,7 +49,7 @@ export function BoardScreen({ slug, search, onSearch }: BoardScreenProps) {
   } else if (board.isError) {
     body = <BareColumns />;
   } else if (all.length === 0) {
-    body = <EmptyColumns />;
+    body = <EmptyColumns slug={slug} />;
   } else {
     body = <BoardColumns slug={slug} columns={columns} now={now} />;
   }

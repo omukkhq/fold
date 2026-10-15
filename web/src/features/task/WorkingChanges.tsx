@@ -1,0 +1,141 @@
+import { FileDiff, GitCompare } from "lucide-react";
+import type { LiveWorkspace, TaskWorkspace } from "@/api/tasks";
+import { HrefLink } from "@/app/HrefLink";
+import { cn } from "@/lib/cn";
+import { focusRing } from "@/lib/focus";
+import { diffPath } from "./links";
+import {
+  changeLetter,
+  changesNote,
+  changeTone,
+  lineCounts,
+  liveChipText,
+  type ChangeTone,
+} from "./liveStrip";
+import { LinkButton, SectionHead } from "./parts";
+
+const TONES: Record<ChangeTone, string> = {
+  added: "bg-primary-soft text-primary-text",
+  deleted: "bg-danger-soft text-danger",
+  other: "bg-surface text-text-muted",
+};
+
+function FileRow({
+  slug,
+  workspace,
+  file,
+}: {
+  slug: string;
+  workspace: string;
+  file: LiveWorkspace["files"][number];
+}) {
+  const counts = lineCounts(file);
+  return (
+    <li>
+      <HrefLink
+        href={diffPath(slug, { to: workspace, path: file.path })}
+        className={cn(
+          "flex items-center gap-10 rounded-s px-10 py-6 hover:bg-surface",
+          focusRing,
+        )}
+      >
+        <span className="sr-only">{file.change}</span>
+        <span
+          aria-hidden="true"
+          className={cn(
+            "inline-flex size-18 shrink-0 items-center justify-center rounded-s font-mono text-caption font-bold",
+            TONES[changeTone(file.change)],
+          )}
+        >
+          {changeLetter(file.change)}
+        </span>
+        <span className="min-w-0 flex-1 truncate font-mono text-meta text-text">
+          {file.previous_path
+            ? `${file.previous_path} → ${file.path}`
+            : file.path}
+        </span>
+        {counts.added ? (
+          <span className="font-mono text-meta text-primary-text">
+            {counts.added}
+          </span>
+        ) : null}
+        {counts.removed ? (
+          <span className="font-mono text-meta text-danger">
+            {counts.removed}
+          </span>
+        ) : null}
+      </HrefLink>
+    </li>
+  );
+}
+
+/** The workspace's uncommitted changes. They are never history, so the section says they are not in main. */
+export function WorkingChanges({
+  slug,
+  workspace,
+  live,
+  now,
+}: {
+  slug: string;
+  workspace: TaskWorkspace | null;
+  live: LiveWorkspace | null;
+  now: number;
+}) {
+  return (
+    <section aria-label="Working changes" className="flex flex-col gap-10">
+      <SectionHead title="Working changes">
+        {workspace && live ? (
+          <>
+            <span className="inline-flex items-center gap-6 rounded-s bg-primary-soft px-8 py-2 text-caption font-medium text-primary-strong">
+              <span
+                aria-hidden="true"
+                className="size-7 rounded-full bg-primary"
+              />
+              {liveChipText(live, now)}
+            </span>
+            <span className="text-bar text-text-muted">
+              {changesNote(live, workspace)}
+            </span>
+          </>
+        ) : null}
+      </SectionHead>
+      {workspace === null ? (
+        <p className="text-bar text-text-muted">
+          No workspace yet. A worker opens one when it starts the task.
+        </p>
+      ) : live === null || live.files.length === 0 ? (
+        <p className="text-bar text-text-muted">
+          No working changes in {workspace.id}.
+        </p>
+      ) : (
+        <ul className="flex flex-col rounded-m bg-sunken p-6">
+          {live.files.map((file) => (
+            <FileRow
+              key={file.path}
+              slug={slug}
+              workspace={workspace.id}
+              file={file}
+            />
+          ))}
+        </ul>
+      )}
+      {workspace ? (
+        <div className="flex gap-8">
+          <LinkButton
+            href={diffPath(slug, { to: workspace.id })}
+            icon={FileDiff}
+          >
+            Open diff
+          </LinkButton>
+          <LinkButton
+            href={diffPath(slug, { from: workspace.main, to: workspace.id })}
+            variant="ghost"
+            icon={GitCompare}
+          >
+            Compare with main
+          </LinkButton>
+        </div>
+      ) : null}
+    </section>
+  );
+}

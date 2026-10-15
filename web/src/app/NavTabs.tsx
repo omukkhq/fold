@@ -7,6 +7,7 @@ import {
   History,
   Kanban,
   MessagesSquare,
+  Plus,
   type LucideIcon,
 } from "lucide-react";
 import { messagesQuery } from "../api/queries";
@@ -14,7 +15,9 @@ import { unreadCount } from "../features/messages/filters";
 import { HrefLink } from "./HrefLink";
 import { cn } from "../lib/cn";
 import { focusRing } from "../lib/focus";
+import { buttonClasses } from "../components/button/buttonStyles";
 import { TAB_LIST, tabClasses } from "../components/overlay/tabStyles";
+import { newTaskPath } from "../features/board/card";
 import { NAV_ENTRIES, activeNav, navPath, type NavId } from "../routes/nav";
 
 const ICONS: Record<NavId, LucideIcon> = {
@@ -59,6 +62,14 @@ export function NavTabs({ slug }: { slug: string }) {
           </HrefLink>
         );
       })}
+      {/* W02 draws the create control at the end of the tab row on every screen; it opens the dialog over the board. */}
+      <HrefLink
+        href={newTaskPath(slug)}
+        className={cn(buttonClasses("primary", "md"), focusRing, "ml-auto")}
+      >
+        <Plus size={15} aria-hidden />
+        New task
+      </HrefLink>
     </nav>
   );
 }

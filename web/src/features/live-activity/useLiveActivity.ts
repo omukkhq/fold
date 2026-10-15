@@ -3,6 +3,7 @@ import { useMemo, useState, useSyncExternalStore } from "react";
 import { keys } from "../../api/keys";
 import { listWorkspaces } from "../../api/workspaces";
 import { useLiveStatus, type LiveStatus } from "../../live/status";
+import { useDataClock } from "../../live/useDataClock";
 import { createLiveStatesStore } from "./liveStates";
 import { orderPanels } from "./order";
 import { buildPanels, lastActivity, seedLive, type Panel } from "./panels";
@@ -15,10 +16,6 @@ export interface LiveActivity {
   now: number;
   retry: () => void;
 }
-
-/** Never earlier than the data it labels, so a fresh event never reads as from the future. */
-const currentTime = (...times: (number | null)[]): number =>
-  Math.max(Date.now(), ...times.map((t) => t ?? 0));
 
 export function useLiveActivity(slug: string): LiveActivity {
   const queryClient = useQueryClient();
@@ -55,15 +52,7 @@ export function useLiveActivity(slug: string): LiveActivity {
   const panels = next.flatMap((id) =>
     unordered.filter((panel) => panel.entry.workspace === id),
   );
-  const stamp = `${String(list.dataUpdatedAt)}:${String(live.lastEventAt)}`;
-  const [clock, setClock] = useState(() => ({ stamp, now: currentTime() }));
-  if (clock.stamp !== stamp) {
-    setClock({ stamp, now: currentTime(list.dataUpdatedAt, live.lastEventAt) });
-  }
-  const now =
-    clock.stamp === stamp
-      ? clock.now
-      : currentTime(list.dataUpdatedAt, live.lastEventAt);
+  const now = useDataClock([list.dataUpdatedAt, live.lastEventAt]);
   return {
     status: list.isError
       ? "error"

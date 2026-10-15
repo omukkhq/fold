@@ -19,6 +19,8 @@ import { Route as PSlugBoardRouteImport } from './routes/p.$slug.board'
 import { Route as PSlugDiffRouteImport } from './routes/p.$slug.diff'
 import { Route as PSlugMessagesRouteImport } from './routes/p.$slug.messages'
 import { Route as PSlugRepositoryRouteImport } from './routes/p.$slug.repository'
+import { Route as PSlugTTaskRouteImport } from './routes/p.$slug.t.$task'
+import { Route as PSlugTNewRouteImport } from './routes/p.$slug.t.new'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -70,6 +72,16 @@ const PSlugRepositoryRoute = PSlugRepositoryRouteImport.update({
   path: '/repository',
   getParentRoute: () => PSlugRoute,
 } as any)
+const PSlugTTaskRoute = PSlugTTaskRouteImport.update({
+  id: '/t/$task',
+  path: '/t/$task',
+  getParentRoute: () => PSlugRoute,
+} as any)
+const PSlugTNewRoute = PSlugTNewRouteImport.update({
+  id: '/t/new',
+  path: '/t/new',
+  getParentRoute: () => PSlugRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -82,6 +94,8 @@ export interface FileRoutesByFullPath {
   '/p/$slug/diff': typeof PSlugDiffRoute
   '/p/$slug/messages': typeof PSlugMessagesRoute
   '/p/$slug/repository': typeof PSlugRepositoryRoute
+  '/p/$slug/t/$task': typeof PSlugTTaskRoute
+  '/p/$slug/t/new': typeof PSlugTNewRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -94,6 +108,8 @@ export interface FileRoutesByTo {
   '/p/$slug/diff': typeof PSlugDiffRoute
   '/p/$slug/messages': typeof PSlugMessagesRoute
   '/p/$slug/repository': typeof PSlugRepositoryRoute
+  '/p/$slug/t/$task': typeof PSlugTTaskRoute
+  '/p/$slug/t/new': typeof PSlugTNewRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -107,6 +123,8 @@ export interface FileRoutesById {
   '/p/$slug/diff': typeof PSlugDiffRoute
   '/p/$slug/messages': typeof PSlugMessagesRoute
   '/p/$slug/repository': typeof PSlugRepositoryRoute
+  '/p/$slug/t/$task': typeof PSlugTTaskRoute
+  '/p/$slug/t/new': typeof PSlugTNewRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -121,6 +139,8 @@ export interface FileRouteTypes {
     | '/p/$slug/diff'
     | '/p/$slug/messages'
     | '/p/$slug/repository'
+    | '/p/$slug/t/$task'
+    | '/p/$slug/t/new'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -133,6 +153,8 @@ export interface FileRouteTypes {
     | '/p/$slug/diff'
     | '/p/$slug/messages'
     | '/p/$slug/repository'
+    | '/p/$slug/t/$task'
+    | '/p/$slug/t/new'
   id:
     | '__root__'
     | '/'
@@ -145,6 +167,8 @@ export interface FileRouteTypes {
     | '/p/$slug/diff'
     | '/p/$slug/messages'
     | '/p/$slug/repository'
+    | '/p/$slug/t/$task'
+    | '/p/$slug/t/new'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -226,6 +250,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PSlugRepositoryRouteImport
       parentRoute: typeof PSlugRoute
     }
+    '/p/$slug/t/$task': {
+      id: '/p/$slug/t/$task'
+      path: '/t/$task'
+      fullPath: '/p/$slug/t/$task'
+      preLoaderRoute: typeof PSlugTTaskRouteImport
+      parentRoute: typeof PSlugRoute
+    }
+    '/p/$slug/t/new': {
+      id: '/p/$slug/t/new'
+      path: '/t/new'
+      fullPath: '/p/$slug/t/new'
+      preLoaderRoute: typeof PSlugTNewRouteImport
+      parentRoute: typeof PSlugRoute
+    }
   }
 }
 
@@ -236,6 +274,8 @@ interface PSlugRouteChildren {
   PSlugDiffRoute: typeof PSlugDiffRoute
   PSlugMessagesRoute: typeof PSlugMessagesRoute
   PSlugRepositoryRoute: typeof PSlugRepositoryRoute
+  PSlugTTaskRoute: typeof PSlugTTaskRoute
+  PSlugTNewRoute: typeof PSlugTNewRoute
 }
 
 const PSlugRouteChildren: PSlugRouteChildren = {
@@ -245,6 +285,8 @@ const PSlugRouteChildren: PSlugRouteChildren = {
   PSlugDiffRoute: PSlugDiffRoute,
   PSlugMessagesRoute: PSlugMessagesRoute,
   PSlugRepositoryRoute: PSlugRepositoryRoute,
+  PSlugTTaskRoute: PSlugTTaskRoute,
+  PSlugTNewRoute: PSlugTNewRoute,
 }
 
 const PSlugRouteWithChildren = PSlugRoute._addFileChildren(PSlugRouteChildren)

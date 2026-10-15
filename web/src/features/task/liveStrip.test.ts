@@ -1,0 +1,215 @@
+import { describe, expect, it } from "vitest";
+import type {
+  CheckpointSummary,
+  LiveWorkspace,
+  TaskDetail,
+  TaskWorkspace,
+} from "@/api/tasks";
+import {
+  baseText,
+  changeLetter,
+  changesNote,
+  changeTone,
+  currentLive,
+  latestCheckpoint,
+  lineCounts,
+  liveChipText,
+  liveStrip,
+} from "./liveStrip";
+
+const NOW = 1_800_000_000_000;
+const SECOND = 1_000;
+const MINUTE = 60 * SECOND;
+
+function live(extra: Partial<LiveWorkspace> = {}): LiveWorkspace {
+  return {
+    workspace: "ws-2",
+    task: "T-2",
+    worker: "frontend/ui",
+    base: "r7",
+    files: [
+      {
+        path: "a.ts",
+        previous_path: null,
+        change: "modified",
+        added_lines: 1,
+        removed_lines: 0,
+        binary: false,
+      },
+    ],
+    summary: "",
+    last_activity_at: NOW - 12 * SECOND,
+    checkpoints: [],
+    proposal: null,
+    ...extra,
+  };
+}
+
+function workspace(extra: Partial<TaskWorkspace> = {}): TaskWorkspace {
+  return {
+    id: "ws-2",
+    directory: "ws/T-2",
+    base: "r7",
+    main: "r8",
+    behind: 1,
+    live: null,
+    ...extra,
+  };
+}
+
+const ck = (id: string, ago: number): CheckpointSummary => ({
+  id,
+  label: null,
+  automatic: true,
+  created_at: NOW - ago,
+});
+
+type StripTask = Pick<
+  TaskDetail,
+  "activity" | "attention" | "claims" | "checkpoints" | "workspace"
+>;
+
+function task(extra: Partial<StripTask> = {}): StripTask {
+  return {
+    activity: { path: "src/routes/login.tsx", at: NOW - 12 * SECOND },
+    attention: [],
+    claims: [
+      {
+        kind: "implementation",
+        holder: "frontend/ui",
+        claimed_at: NOW - 40 * MINUTE,
+        renewed_at: NOW - 2 * MINUTE,
+        stale: false,
+      },
+    ],
+    checkpoints: [ck("ck-31", 3 * MINUTE)],
+    workspace: workspace(),
+    ...extra,
+  };
+}
+
+describe("currentLive", () => {
+  it("is null without a workspace", () => {
+    expect(currentLive(null, live())).toBeNull();
+  });
+
+  it("keeps the payload when the stream has nothing for the workspace", () => {
+    const fromTask = live();
+    expect(currentLive(workspace({ live: fromTask }), undefined)).toBe(
+      fromTask,
+    );
+    expect(
+      currentLive(workspace({ live: fromTask }), live({ workspace: "ws-9" })),
+    ).toBe(fromTask);
+  });
+
+  it("takes the later of the payload and the stream", () => {
+    const old = live({ last_activity_at: NOW - MINUTE });
+    const fresh = live({ last_activity_at: NOW - SECOND });
+    expect(currentLive(workspace({ live: old }), fresh)).toBe(fresh);
+    expect(currentLive(workspace({ live: fresh }), old)).toBe(fresh);
+    expect(currentLive(workspace(), old)).toBe(old);
+  });
+});
+
+describe("liveStrip", () => {
+  it("says who edits which file, the files, the latest checkpoint and the base against main", () => {
+    expect(liveStrip(task(), live(), NOW)).toEqual({
+      worker: "frontend/ui",
+      verb: "is editing",
+      file: "src/routes/login.tsx",
+      rest: "· 1 file · ck-31 3 min ago · base r7 (main r8)",
+      stalled: false,
+    });
+  });
+
+  it("counts files in the plural and marks a base on the main head", () => {
+    const two = live({ files: [...live().files, ...live().files] });
+    const strip = liveStrip(
+      task({ workspace: workspace({ base: "r8" }), checkpoints: [] }),
+      two,
+      NOW,
+    );
+    expect(strip?.rest).toBe("· 2 files · base r8 (main)");
+  });
+
+  it("falls back to the claim holder before the stream reports the workspace", () => {
+    const strip = liveStrip(task({ activity: null }), null, NOW);
+    expect(strip).toMatchObject({ worker: "frontend/ui", file: null });
+    expect(strip?.rest).toBe("· ck-31 3 min ago · base r7 (main r8)");
+  });
+
+  it("says how long the worker has been quiet while the daemon reports it stalled", () => {
+    const strip = liveStrip(
+      task({
+        attention: [{ kind: "stalled" }],
+        activity: { path: "a.ts", at: NOW - 7 * MINUTE },
+      }),
+      live({ last_activity_at: NOW - 8 * MINUTE }),
+      NOW,
+    );
+    expect(strip).toMatchObject({
+      verb: "no edits for 7 min",
+      file: null,
+      stalled: true,
+    });
+  });
+
+  it("keeps the verb when a stalled worker has no recorded edit", () => {
+    const strip = liveStrip(
+      task({ attention: [{ kind: "stalled" }], activity: null }),
+      null,
+      NOW,
+    );
+    expect(strip?.verb).toBe("is editing");
+  });
+
+  it("is null without a workspace or without anyone working in it", () => {
+    expect(liveStrip(task({ workspace: null }), null, NOW)).toBeNull();
+    expect(liveStrip(task({ claims: [] }), null, NOW)).toBeNull();
+  });
+});
+
+describe("latestCheckpoint", () => {
+  it("takes the newest of the task and the live frame", () => {
+    const frame = live({ checkpoints: [ck("ck-40", SECOND)] });
+    expect(latestCheckpoint([ck("ck-31", MINUTE)], frame)?.id).toBe("ck-40");
+    expect(
+      latestCheckpoint([ck("ck-31", MINUTE), ck("ck-30", 2 * MINUTE)], null)
+        ?.id,
+    ).toBe("ck-31");
+    expect(latestCheckpoint([], null)).toBeNull();
+  });
+});
+
+describe("the working-changes texts", () => {
+  it("say live, how many files and that they are not in main", () => {
+    expect(liveChipText(live(), NOW)).toBe("Live · 12 s ago");
+    expect(changesNote(live(), workspace())).toBe(
+      "1 file against base r7 · not in main",
+    );
+    expect(baseText({ base: "r7", main: "r9" })).toBe("base r7 (main r9)");
+  });
+
+  it("letter and colour each change kind", () => {
+    expect(
+      (["added", "modified", "deleted", "renamed"] as const).map(changeLetter),
+    ).toEqual(["A", "M", "D", "R"]);
+    expect(changeTone("added")).toBe("added");
+    expect(changeTone("deleted")).toBe("deleted");
+    expect(changeTone("modified")).toBe("other");
+    expect(changeTone("renamed")).toBe("other");
+  });
+
+  it("count lines with a true minus sign and leave out zeros and binaries", () => {
+    expect(
+      lineCounts({ added_lines: 42, removed_lines: 8, binary: false }),
+    ).toEqual({ added: "+42", removed: "−8" });
+    expect(
+      lineCounts({ added_lines: 0, removed_lines: 3, binary: false }),
+    ).toEqual({ added: null, removed: "−3" });
+    expect(
+      lineCounts({ added_lines: 5, removed_lines: 5, binary: true }),
+    ).toEqual({ added: null, removed: null });
+  });
+});

@@ -1,9 +1,14 @@
+import { Plus } from "lucide-react";
 import type { ReactNode } from "react";
+import { HrefLink } from "@/app/HrefLink";
+import { buttonClasses } from "@/components/button/buttonStyles";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { Skeleton } from "@/components/states/Skeleton";
 import { Mono } from "@/components/mono/Mono";
 import { cn } from "@/lib/cn";
+import { focusRing } from "@/lib/focus";
 import { BoardCard } from "./BoardCard";
+import { newTaskPath } from "./card";
 import { COLUMNS, type ColumnSpec, type ColumnView } from "./columns";
 
 const LOADING_CARDS = [0, 1, 2];
@@ -94,7 +99,7 @@ export function LoadingColumns() {
 }
 
 /** W02 · empty: the five columns at zero, and the next step in the Todo column, where new tasks arrive. */
-export function EmptyColumns() {
+export function EmptyColumns({ slug }: { slug: string }) {
   return (
     <Row>
       {COLUMNS.map((spec) => (
@@ -103,12 +108,30 @@ export function EmptyColumns() {
             <EmptyPanel
               title="No tasks yet"
               action={
-                <Mono className="block whitespace-pre-wrap text-meta text-text">
-                  {"FOLD_AGENT=frontend \\\n  claude --name frontend"}
-                </Mono>
+                <>
+                  <Mono className="block whitespace-pre-wrap text-meta text-text">
+                    {"FOLD_AGENT=frontend \\\n  claude --name frontend"}
+                  </Mono>
+                  <HrefLink
+                    href={newTaskPath(slug)}
+                    className={cn(
+                      buttonClasses("secondary", "md"),
+                      focusRing,
+                      "self-start",
+                    )}
+                  >
+                    <Plus
+                      aria-hidden="true"
+                      size={15}
+                      className="text-text-muted"
+                    />
+                    New task
+                  </HrefLink>
+                </>
               }
             >
-              Give an orchestrator a goal; it creates the tasks here.
+              Give an orchestrator a goal; it creates the tasks here. You can
+              also add one yourself.
             </EmptyPanel>
           ) : null}
         </Column>

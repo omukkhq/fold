@@ -1,4 +1,5 @@
 import { skipToken, useQuery } from "@tanstack/react-query";
+import { useRouterState } from "@tanstack/react-router";
 import {
   GitFork,
   GitMerge,
@@ -107,6 +108,7 @@ export function BoardCard({
     queryKey: keys.workspaceLive(slug, card.workspace ?? ""),
     queryFn: skipToken,
   });
+  const filters = useRouterState({ select: (s) => s.location.searchStr });
   const line = activityLine(card, card.workspace ? live : undefined, now);
   const filesText = liveFilesText(line);
   const mark = attentionMark(card.attention);
@@ -147,7 +149,7 @@ export function BoardCard({
         </div>
       ) : null}
       <HrefLink
-        href={taskPath(slug, card.task)}
+        href={taskPath(slug, card.task, filters)}
         draggable={false}
         className="text-card leading-snug font-medium text-text outline-none after:absolute after:inset-0 after:rounded-m"
       >

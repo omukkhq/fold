@@ -10,11 +10,18 @@ interface CodedBody {
 /** A failed request, thrown so that queries and the event stream see it. `code` is the envelope's stable code. */
 export class ApiError extends Error {
   readonly code: string;
+  /** The envelope's ids, counts and names for the code, such as the task ids of a refused cycle. */
+  readonly details: Readonly<ErrorBody["details"]>;
 
-  constructor(code: string, message: string) {
+  constructor(
+    code: string,
+    message: string,
+    details: ErrorBody["details"] = {},
+  ) {
     super(message);
     this.name = "ApiError";
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -35,8 +42,12 @@ export function toApiError(body: unknown): ApiError | null {
   if (!isCodedBody(body)) {
     return null;
   }
-  const { code, message } = body.error;
-  return new ApiError(code, typeof message === "string" ? message : "");
+  const { code, message, details } = body.error;
+  return new ApiError(
+    code,
+    typeof message === "string" ? message : "",
+    isRecord(details) ? details : {},
+  );
 }
 
 /** The stable code of a thrown `ApiError` or of a response body in the error envelope, or null for any other value. Screens branch on it, never on the message. */

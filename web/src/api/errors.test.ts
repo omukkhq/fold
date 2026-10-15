@@ -71,3 +71,18 @@ describe("toApiError", () => {
     }
   });
 });
+
+describe("details", () => {
+  it("carries_the_envelope_details_and_defaults_to_none", () => {
+    const error = toApiError({
+      error: {
+        code: "dependency_cycle",
+        message: "cycle",
+        details: { cycle: ["T-2", "T-5", "T-2"] },
+      },
+    });
+    expect(error?.details).toEqual({ cycle: ["T-2", "T-5", "T-2"] });
+    expect(toApiError({ error: { code: "x" } })?.details).toEqual({});
+    expect(new ApiError("x", "m").details).toEqual({});
+  });
+});

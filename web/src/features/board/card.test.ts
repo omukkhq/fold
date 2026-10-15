@@ -19,6 +19,9 @@ const proposal = (
 describe("taskPath", () => {
   it("is the task dialog route", () => {
     expect(taskPath("demo", "T-12")).toBe("/p/demo/t/T-12");
+    expect(taskPath("demo", "T-12", "?label=ui")).toBe(
+      "/p/demo/t/T-12?label=ui",
+    );
   });
 });
 

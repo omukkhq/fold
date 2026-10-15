@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { formatAsOf, formatAsOfMinute, formatQuiet, formatSince } from "./time";
+import {
+  formatAge,
+  formatAsOf,
+  formatAsOfMinute,
+  formatQuiet,
+  formatSince,
+} from "./time";
 
 const NOW = 1_800_000_000_000;
 const SEC = 1000;
@@ -24,6 +30,13 @@ describe("formatSince", () => {
 
   it("treats a time ahead of now as zero seconds", () => {
     expect(formatSince(NOW, NOW + 5 * SEC)).toBe("0 s ago");
+  });
+});
+
+describe("formatAge", () => {
+  it("is the span alone", () => {
+    expect(formatAge(NOW, NOW - 3 * MIN)).toBe("3 min");
+    expect(formatAge(NOW, NOW + SEC)).toBe("0 s");
   });
 });
 

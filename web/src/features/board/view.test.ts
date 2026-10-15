@@ -2,13 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { BoardCard, TaskStatus } from "@/api/board";
 import { INITIAL_STATUS } from "@/live/status";
 import { groupColumns } from "./columns";
-import {
-  cardCount,
-  clockTime,
-  needsYouLook,
-  reconnectAsOf,
-  summaryText,
-} from "./view";
+import { cardCount, needsYouLook, reconnectAsOf, summaryText } from "./view";
 
 function make(task: string, status: TaskStatus): BoardCard {
   return {
@@ -89,14 +83,6 @@ describe("reconnectAsOf", () => {
     expect(reconnectAsOf(status(9, 1), 5)).toBe(9);
     expect(reconnectAsOf(status(2, 1), 5)).toBe(5);
     expect(reconnectAsOf(status(null), 5)).toBe(5);
-  });
-});
-
-describe("clockTime", () => {
-  it("is the current time, or a later data time", () => {
-    expect(clockTime([1, null], 5)).toBe(5);
-    expect(clockTime([9, null], 5)).toBe(9);
-    expect(clockTime([])).toBeGreaterThan(0);
   });
 });
 

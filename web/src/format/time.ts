@@ -38,6 +38,11 @@ export function formatSince(now: number, then: number): string {
   return `${span(now, then)} ago`;
 }
 
+/** `3 min`, for a list whose column already reads as an age, such as W03's checkpoints and changesets. */
+export function formatAge(now: number, then: number): string {
+  return span(now, then);
+}
+
 /** `no edits for 7 min`. */
 export function formatQuiet(now: number, then: number): string {
   return `no edits for ${span(now, then)}`;

@@ -1,0 +1,159 @@
+import * as RadixDialog from "@radix-ui/react-dialog";
+import { skipToken, useQuery } from "@tanstack/react-query";
+import { Check, Link, SearchX } from "lucide-react";
+import { useState } from "react";
+import { isApiError } from "@/api/errors";
+import { keys } from "@/api/keys";
+import { taskQuery, type LiveWorkspace, type TaskDetail } from "@/api/tasks";
+import { Button } from "@/components/button/Button";
+import { EmptyPanel } from "@/components/states/EmptyPanel";
+import { ErrorBanner } from "@/components/states/ErrorBanner";
+import { Skeleton } from "@/components/states/Skeleton";
+import { useLiveStatus } from "@/live/status";
+import { useDataClock } from "@/live/useDataClock";
+import { ChecklistSection } from "./ChecklistSection";
+import { DescriptionSection } from "./DescriptionSection";
+import { DialogFrame } from "./DialogFrame";
+import { currentLive, liveStrip } from "./liveStrip";
+import { MessagesSection } from "./MessagesSection";
+import { TaskSide } from "./TaskSide";
+import { TitleBlock } from "./TitleBlock";
+import { WorkingChanges } from "./WorkingChanges";
+
+export interface TaskDialogProps {
+  slug: string;
+  task: string;
+  onClose: () => void;
+}
+
+function CopyLink() {
+  const [copied, setCopied] = useState(false);
+  return (
+    <Button
+      variant="ghost"
+      icon={
+        copied ? (
+          <Check aria-hidden="true" size={15} />
+        ) : (
+          <Link aria-hidden="true" size={15} />
+        )
+      }
+      onClick={() => {
+        void navigator.clipboard.writeText(location.href).then(() => {
+          setCopied(true);
+        });
+      }}
+    >
+      {copied ? "Link copied" : "Copy link"}
+    </Button>
+  );
+}
+
+function Loaded({
+  slug,
+  task,
+  readAt,
+}: {
+  slug: string;
+  task: TaskDetail;
+  readAt: number;
+}) {
+  // Live workspace state is written only by the event stream, so this query observes the cache and never fetches.
+  const { data: streamed } = useQuery<LiveWorkspace>({
+    queryKey: keys.workspaceLive(slug, task.workspace?.id ?? ""),
+    queryFn: skipToken,
+  });
+  const status = useLiveStatus();
+  const now = useDataClock([
+    readAt,
+    status.lastEventAt,
+    streamed?.last_activity_at,
+  ]);
+  const live = currentLive(task.workspace, streamed);
+  return (
+    <div className="flex flex-col gap-28 px-24 pt-22 pb-24 md:flex-row">
+      <div className="flex min-w-0 flex-1 flex-col gap-24">
+        <TitleBlock
+          slug={slug}
+          task={task}
+          strip={liveStrip(task, live, now)}
+        />
+        <DescriptionSection slug={slug} task={task} />
+        <ChecklistSection slug={slug} task={task} />
+        <WorkingChanges
+          slug={slug}
+          workspace={task.workspace}
+          live={live}
+          now={now}
+        />
+        <MessagesSection slug={slug} task={task} />
+      </div>
+      <TaskSide slug={slug} task={task} now={now} />
+    </div>
+  );
+}
+
+function Loading() {
+  return (
+    <div className="flex flex-col gap-12 px-24 pt-22 pb-24">
+      <RadixDialog.Title className="sr-only">
+        Loading the task
+      </RadixDialog.Title>
+      <Skeleton />
+      <Skeleton />
+      <Skeleton />
+    </div>
+  );
+}
+
+/**
+ * W03. The task opens over the board, which stays mounted beneath it. Every value on screen is the daemon's: a write
+ * shows its pending state until the task has been read again.
+ */
+export function TaskDialog({ slug, task, onClose }: TaskDialogProps) {
+  const query = useQuery(taskQuery(slug, task));
+  let body;
+  if (query.isPending) {
+    body = <Loading />;
+  } else if (query.isError && isApiError(query.error, "task_not_found")) {
+    body = (
+      <div className="px-24 pt-22 pb-24">
+        <RadixDialog.Title className="sr-only">
+          Task not found
+        </RadixDialog.Title>
+        <EmptyPanel icon={SearchX} title={`${task} does not exist`}>
+          The task may have been deleted or archived. Its history stays in the
+          activity list.
+        </EmptyPanel>
+      </div>
+    );
+  } else if (query.isError) {
+    body = (
+      <>
+        <RadixDialog.Title className="sr-only">
+          The task could not load
+        </RadixDialog.Title>
+        <ErrorBanner
+          title="The task could not load."
+          message="The daemon did not answer."
+          onRetry={() => void query.refetch()}
+        />
+      </>
+    );
+  } else {
+    body = (
+      <Loaded slug={slug} task={query.data} readAt={query.dataUpdatedAt} />
+    );
+  }
+  return (
+    <DialogFrame
+      crumb={task}
+      crumbIsId
+      actions={query.isError ? undefined : <CopyLink />}
+      described={query.isSuccess}
+      onClose={onClose}
+    >
+      {body}
+    </DialogFrame>
+  );
+}
