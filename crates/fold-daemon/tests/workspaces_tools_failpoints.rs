@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 
+use fold_core::checkpoint_policy::AutoReason;
 use fold_core::object::ObjectKind;
 use fold_core::revision::Revision;
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
@@ -12,12 +13,15 @@ use fold_core::{
     Actor, AgentName, ChangesetId, CheckpointId, EventFilter, HumanName, RevisionId,
     TaskDescription, TaskId, TaskTitle, Timestamp, WorkspaceId,
 };
+use fold_daemon::jobs::QuietCheckpoints;
 use fold_daemon::projects::ProjectHandle;
 use fold_daemon::services::agents::AgentService;
 use fold_daemon::services::events::EventBus;
 use fold_daemon::services::projects::gc;
 use fold_daemon::services::tasks::{CreateTask, TaskService};
-use fold_daemon::services::workspaces::{WorkspaceError, WorkspaceLocks, WorkspaceService};
+use fold_daemon::services::workspaces::{
+    QuietCheckpoint, WorkspaceError, WorkspaceLocks, WorkspaceService,
+};
 use fold_store::Store;
 use fold_store::events;
 use fold_store::projects::ProjectRow;
@@ -736,5 +740,196 @@ async fn an_archive_waits_for_a_running_sync_and_later_ones_are_refused() {
         .unwrap_err();
     assert_eq!(refused.code(), Some("workspace_not_active"));
     assert_eq!(files(&fixture.root.join("ws/t-1")), after);
+    scenario.teardown();
+}
+
+/// The failpoint stops an automatic checkpoint after its objects are written and before its row commits, as a crash there would. No row and no event is left, and the next attempt records the checkpoint.
+#[tokio::test]
+async fn an_automatic_checkpoint_stopped_before_its_row_leaves_none_and_a_retry_succeeds() {
+    let scenario = fail::FailScenario::setup();
+    let project = TestProject::new().await;
+    let fixture = Project::over(&project, project.store(), None);
+    let actor = fixture.seed().await;
+    fail::cfg("workspace_auto_checkpoint_after_snapshot", "return").unwrap();
+    let stopped = fixture
+        .workspaces
+        .take_auto_checkpoint(&actor, ws(1), AutoReason::BeforeRecord)
+        .await;
+    assert_eq!(
+        stopped.unwrap_err().code(),
+        Some(fold_core::codes::FAILPOINT)
+    );
+    assert!(
+        workspaces::list_checkpoints(fixture.store.read(), ws(1), true)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(fixture.event_seq("checkpoint.recorded").await.is_empty());
+    fail::remove("workspace_auto_checkpoint_after_snapshot");
+
+    let taken = fixture
+        .workspaces
+        .take_auto_checkpoint(&actor, ws(1), AutoReason::BeforeRecord)
+        .await
+        .unwrap();
+    assert!(taken.recorded);
+    let checkpoints = workspaces::list_checkpoints(fixture.store.read(), ws(1), true)
+        .await
+        .unwrap();
+    assert_eq!(checkpoints.len(), 1);
+    assert_eq!(checkpoints[0].id, taken.checkpoint);
+    assert_eq!(checkpoints[0].reason, CheckpointReason::BeforeRecord);
+    let objects = ObjectStore::open(&project.paths().fold_dir()).unwrap();
+    assert!(objects.contains(&checkpoints[0].tree).unwrap());
+    scenario.teardown();
+}
+
+/// Garbage collection started while an automatic checkpoint holds objects it has written but not yet named waits until the checkpoint commits, so it never sweeps them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn garbage_collection_waits_for_an_automatic_checkpoint_to_commit() {
+    let scenario = fail::FailScenario::setup();
+    let project = TestProject::new().await;
+    project
+        .clock()
+        .set(Timestamp::from_system_time(SystemTime::now()).unwrap());
+    let row = ProjectRow {
+        slug: "demo".to_owned(),
+        name: "demo".to_owned(),
+        root: project.paths().root().to_string_lossy().into_owned(),
+    };
+    let handle = Arc::new(
+        ProjectHandle::open(&row, Arc::new(project.clock().clone()))
+            .await
+            .unwrap(),
+    );
+    let service = WorkspaceService::for_project(&handle, Git::default());
+    let fixture = Arc::new(Project::over(&project, &handle.store, Some(service)));
+    fixture.seed().await;
+    fs::write(fixture.lib(), b"a file no object holds yet\n").unwrap();
+
+    let gate = Gate::install("workspace_auto_checkpoint_after_snapshot");
+    let taking = tokio::spawn({
+        let fixture = Arc::clone(&fixture);
+        async move { fixture.workspaces.take_quiet_checkpoint(ws(1)).await }
+    });
+    gate.wait_reached().await;
+    let mut collect = tokio::spawn({
+        let handle = Arc::clone(&handle);
+        async move { gc(&handle, false).await }
+    });
+    let waited = tokio::time::timeout(STALL, &mut collect).await.is_err();
+    gate.open();
+    assert!(
+        waited,
+        "garbage collection swept while an automatic checkpoint held unnamed objects"
+    );
+    let QuietCheckpoint::Taken(taken) = taking.await.unwrap().unwrap() else {
+        panic!("nothing else held the workspace");
+    };
+    tokio::time::timeout(WAIT, collect)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    fail::remove("workspace_auto_checkpoint_after_snapshot");
+
+    let checkpoint = workspaces::get_checkpoint(fixture.store.read(), taken.checkpoint)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(checkpoint.reason, CheckpointReason::Quiet);
+    let objects = ObjectStore::open(&project.paths().fold_dir()).unwrap();
+    assert!(objects.contains(&checkpoint.tree).unwrap());
+    scenario.teardown();
+}
+
+/// The seeded project opened as the daemon opens it, so its workspace has a live state for the quiet-period job to read.
+#[cfg(test)]
+async fn live_project(project: &TestProject) -> (Arc<ProjectHandle>, Project) {
+    let row = ProjectRow {
+        slug: "demo".to_owned(),
+        name: "demo".to_owned(),
+        root: project.paths().root().to_string_lossy().into_owned(),
+    };
+    let handle = Arc::new(
+        ProjectHandle::open(&row, Arc::new(project.clock().clone()))
+            .await
+            .unwrap(),
+    );
+    let service = WorkspaceService::for_project(&handle, Git::default());
+    let fixture = Project::over(project, &handle.store, Some(service));
+    fixture.seed().await;
+    handle.live.rescan(ws(1)).await.unwrap();
+    (handle, fixture)
+}
+
+/// A quiet checkpoint that fails leaves no row, and the job does not try the same burst again on every tick; the next burst gets its checkpoint.
+#[tokio::test]
+async fn a_failed_quiet_checkpoint_waits_for_the_next_editing_burst() {
+    let scenario = fail::FailScenario::setup();
+    let project = TestProject::new().await;
+    let (handle, fixture) = live_project(&project).await;
+    let quiet_period = Duration::from_secs(120);
+    let mut quiet = QuietCheckpoints::default();
+    project.clock().advance(quiet_period).unwrap();
+    fail::cfg("workspace_auto_checkpoint_after_snapshot", "return").unwrap();
+    assert_eq!(quiet.run(&handle).await, 0);
+    fail::remove("workspace_auto_checkpoint_after_snapshot");
+    assert!(
+        workspaces::list_checkpoints(fixture.store.read(), ws(1), true)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(fixture.event_seq("checkpoint.recorded").await.is_empty());
+
+    project.clock().advance(quiet_period).unwrap();
+    assert_eq!(
+        quiet.run(&handle).await,
+        0,
+        "the failed burst is not retried"
+    );
+    fs::write(fixture.lib(), b"the next burst\n").unwrap();
+    handle.live.rescan(ws(1)).await.unwrap();
+    project.clock().advance(quiet_period).unwrap();
+    assert_eq!(quiet.run(&handle).await, 1);
+    scenario.teardown();
+}
+
+/// An edit the live state sees while a quiet checkpoint snapshots may be missing from that checkpoint, so it counts as a new burst and gets a checkpoint of its own.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_edit_seen_during_a_quiet_snapshot_gets_its_own_checkpoint() {
+    let scenario = fail::FailScenario::setup();
+    let project = TestProject::new().await;
+    let (handle, fixture) = live_project(&project).await;
+    let quiet_period = Duration::from_secs(120);
+    project.clock().advance(quiet_period).unwrap();
+
+    let gate = Gate::install("workspace_auto_checkpoint_after_snapshot");
+    let taking = tokio::spawn({
+        let handle = Arc::clone(&handle);
+        async move {
+            let mut quiet = QuietCheckpoints::default();
+            let recorded = quiet.run(&handle).await;
+            (quiet, recorded)
+        }
+    });
+    gate.wait_reached().await;
+    project.clock().advance(Duration::from_secs(1)).unwrap();
+    fs::write(fixture.lib(), b"written during the snapshot\n").unwrap();
+    handle.live.rescan(ws(1)).await.unwrap();
+    gate.open();
+    let (mut quiet, recorded) = tokio::time::timeout(WAIT, taking).await.unwrap().unwrap();
+    fail::remove("workspace_auto_checkpoint_after_snapshot");
+    assert_eq!(recorded, 1);
+
+    project.clock().advance(quiet_period).unwrap();
+    assert_eq!(quiet.run(&handle).await, 1);
+    let checkpoints = workspaces::list_checkpoints(fixture.store.read(), ws(1), true)
+        .await
+        .unwrap();
+    assert_eq!(checkpoints.len(), 2);
+    assert_ne!(checkpoints[0].tree, checkpoints[1].tree);
     scenario.teardown();
 }

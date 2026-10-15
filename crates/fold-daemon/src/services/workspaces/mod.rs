@@ -19,6 +19,7 @@ use crate::live::LiveState;
 use crate::projects::ProjectHandle;
 
 mod adoption;
+mod auto;
 mod changesets;
 mod checkpoints;
 mod compare;
@@ -30,11 +31,12 @@ mod sync;
 
 pub use adoption::AdoptReason;
 pub(crate) use adoption::adopt_if_orphaned;
+pub use auto::{AutoCheckpoint, QuietCheckpoint};
+pub(crate) use auto::{auto_checkpoint_in_tx, pruned_event};
 pub(crate) use changesets::ProposalSnapshot;
 pub use changesets::RecordedChanges;
 pub use checkpoints::{CheckpointView, Restored};
 pub use compare::{ResolvedState, StateComparison, StateKind, StateRef, StateSummary};
-pub(crate) use files::checkpoint_in_tx;
 pub(crate) use git::unsynced;
 pub use git::{GitExport, MAIN_REF, commit_message};
 pub use lifecycle::{
@@ -271,6 +273,16 @@ impl WorkspaceLocks {
             locks.entry(workspace).or_default().clone()
         };
         lock.lock_owned().await
+    }
+
+    /// The lock of `workspace` when no other operation holds it, for work that is skipped rather than queued behind a command.
+    pub fn try_lock(&self, workspace: WorkspaceId) -> Option<OwnedMutexGuard<()>> {
+        let lock = {
+            let mut locks = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+            locks.retain(|_, lock| Arc::strong_count(lock) > 1);
+            locks.entry(workspace).or_default().clone()
+        };
+        lock.try_lock_owned().ok()
     }
 }
 

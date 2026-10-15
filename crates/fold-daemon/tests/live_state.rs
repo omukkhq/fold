@@ -849,9 +849,10 @@ async fn sync_and_restore_move_the_base_the_live_state_compares_against() {
         .record_changes(&actor, id, "keep mine")
         .await
         .unwrap();
+    // The explicit checkpoint already holds the recorded files on the same base, so the record adds none.
     let after_changes = fx.live.get(id).unwrap();
-    assert_eq!(after_changes.view.checkpoints.len(), 4);
-    assert_eq!(after_changes.view.checkpoints[3].id, changes.checkpoint);
+    assert_eq!(after_changes.view.checkpoints.len(), 3);
+    assert_eq!(changes.checkpoint, recorded.id);
 }
 
 #[cfg(unix)]

@@ -1,3 +1,4 @@
+use fold_core::checkpoint_policy::{AutoReason, prune_set};
 use fold_core::object::ObjectHash;
 use fold_core::{CheckpointId, IdKind, RevisionId, Timestamp, WorkspaceId};
 use sqlx::SqliteExecutor;
@@ -40,17 +41,19 @@ pub enum CheckpointReason {
     BeforeSync,
     BeforeRecord,
     BeforeProposal,
+    BeforeProposalUpdate,
     BeforeRestore,
     /// The workspace was quiet for two minutes after a change.
     Quiet,
 }
 
 impl CheckpointReason {
-    pub const ALL: [CheckpointReason; 6] = [
+    pub const ALL: [CheckpointReason; 7] = [
         CheckpointReason::Explicit,
         CheckpointReason::BeforeSync,
         CheckpointReason::BeforeRecord,
         CheckpointReason::BeforeProposal,
+        CheckpointReason::BeforeProposalUpdate,
         CheckpointReason::BeforeRestore,
         CheckpointReason::Quiet,
     ];
@@ -61,6 +64,7 @@ impl CheckpointReason {
             CheckpointReason::BeforeSync => "before_sync",
             CheckpointReason::BeforeRecord => "before_record",
             CheckpointReason::BeforeProposal => "before_proposal",
+            CheckpointReason::BeforeProposalUpdate => "before_proposal_update",
             CheckpointReason::BeforeRestore => "before_restore",
             CheckpointReason::Quiet => "quiet",
         }
@@ -75,6 +79,18 @@ impl CheckpointReason {
         match self {
             CheckpointReason::Explicit => CheckpointKind::Explicit,
             _ => CheckpointKind::Auto,
+        }
+    }
+}
+
+impl From<AutoReason> for CheckpointReason {
+    fn from(reason: AutoReason) -> Self {
+        match reason {
+            AutoReason::BeforeSync => CheckpointReason::BeforeSync,
+            AutoReason::BeforeRecord => CheckpointReason::BeforeRecord,
+            AutoReason::BeforeProposal => CheckpointReason::BeforeProposal,
+            AutoReason::BeforeProposalUpdate => CheckpointReason::BeforeProposalUpdate,
+            AutoReason::Quiet => CheckpointReason::Quiet,
         }
     }
 }
@@ -183,6 +199,28 @@ pub async fn list_checkpoints<'e>(
     rows.into_iter().map(Row::into_checkpoint).collect()
 }
 
+/// The newest checkpoint of one workspace that is not pruned, of either kind.
+pub async fn latest_checkpoint<'e>(
+    db: impl SqliteExecutor<'e>,
+    workspace: WorkspaceId,
+) -> Result<Option<Checkpoint>, StoreError> {
+    let workspace_number = workspace.to_db();
+    let row = sqlx::query_as!(
+        Row,
+        r#"SELECT c.number AS "number!: i64", w.number AS "workspace!: i64", c.tree_hash,
+                  c.kind, c.reason, c.label, c.created_at, c.pruned_at, r.number AS "base?: i64"
+           FROM checkpoints c JOIN workspaces w ON w.id = c.workspace_id
+           LEFT JOIN revisions r ON r.id = c.base_revision_id
+           WHERE w.number = ? AND c.pruned_at IS NULL
+           ORDER BY c.number DESC
+           LIMIT 1"#,
+        workspace_number
+    )
+    .fetch_optional(db)
+    .await?;
+    row.map(Row::into_checkpoint).transpose()
+}
+
 pub async fn get_checkpoint<'e>(
     db: impl SqliteExecutor<'e>,
     id: CheckpointId,
@@ -202,38 +240,50 @@ pub async fn get_checkpoint<'e>(
     row.map(Row::into_checkpoint).transpose()
 }
 
-/// Marks every unpruned automatic checkpoint of the workspace except the newest `keep` of them as pruned at `now`, and returns the ones it marked. Explicit checkpoints and checkpoints already pruned are left alone, and already-pruned ones do not count toward `keep`. The checkpoint a workspace names as `sync_checkpoint_id` is left alone too: the next sync restores it, so its objects must stay.
+/// Marks the unpruned automatic checkpoints of the workspace that `prune_set` gives for `keep` as pruned at `now`, and returns the ones it marked. Explicit checkpoints and checkpoints already pruned are left alone, and already-pruned ones do not count toward `keep`. The checkpoint a workspace names as `sync_checkpoint_id` is left alone too: the next sync restores it, so its objects must stay.
 pub async fn prune_auto(
     tx: &mut WriteTx,
     workspace: WorkspaceId,
     keep: u32,
     now: Timestamp,
 ) -> Result<Vec<CheckpointId>, StoreError> {
-    let pruned_at = now.as_millis();
     let workspace_number = workspace.to_db();
-    let keep = i64::from(keep);
-    let numbers = sqlx::query_scalar!(
-        r#"UPDATE checkpoints SET pruned_at = ?1
-           WHERE workspace_id = (SELECT id FROM workspaces WHERE number = ?2)
-             AND kind = 'auto' AND pruned_at IS NULL
-             AND id NOT IN (
-                 SELECT sync_checkpoint_id FROM workspaces WHERE sync_checkpoint_id IS NOT NULL
-             )
-             AND id NOT IN (
-                 SELECT id FROM checkpoints
-                 WHERE workspace_id = (SELECT id FROM workspaces WHERE number = ?2)
-                   AND kind = 'auto' AND pruned_at IS NULL
-                 ORDER BY number DESC
-                 LIMIT ?3
-             )
-           RETURNING number AS "number!: i64""#,
-        pruned_at,
-        workspace_number,
-        keep
+    let found = sqlx::query!(
+        r#"SELECT c.number AS "number!: i64",
+                  c.id IS w.sync_checkpoint_id AS "marked!: bool"
+           FROM checkpoints c JOIN workspaces w ON w.id = c.workspace_id
+           WHERE w.number = ? AND c.kind = 'auto' AND c.pruned_at IS NULL
+           ORDER BY c.number DESC"#,
+        workspace_number
     )
     .fetch_all(tx.conn())
     .await?;
-    sorted_ids(numbers)
+    let mut autos = Vec::with_capacity(found.len());
+    let mut marked = None;
+    for row in found {
+        let id = number(row.number, CheckpointId::try_from_db, "checkpoints.number")?;
+        if row.marked {
+            marked = Some(id);
+        }
+        autos.push(id);
+    }
+    let mut pruned: Vec<CheckpointId> = prune_set(&autos, u64::from(keep))
+        .into_iter()
+        .filter(|id| Some(*id) != marked)
+        .collect();
+    let pruned_at = now.as_millis();
+    for id in &pruned {
+        let number_value = id.to_db();
+        sqlx::query!(
+            "UPDATE checkpoints SET pruned_at = ? WHERE number = ?",
+            pruned_at,
+            number_value
+        )
+        .execute(tx.conn())
+        .await?;
+    }
+    pruned.sort();
+    Ok(pruned)
 }
 
 /// Marks every unpruned checkpoint of the workspace, explicit ones included, as pruned at `now`, and returns the ones it marked.

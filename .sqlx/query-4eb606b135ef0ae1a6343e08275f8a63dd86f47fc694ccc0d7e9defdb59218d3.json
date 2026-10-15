@@ -1,0 +1,33 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT c.number AS \"number!: i64\",\n                  c.id IS w.sync_checkpoint_id AS \"marked!: bool\"\n           FROM checkpoints c JOIN workspaces w ON w.id = c.workspace_id\n           WHERE w.number = ? AND c.kind = 'auto' AND c.pruned_at IS NULL\n           ORDER BY c.number DESC",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "checkpoints",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "marked!: bool",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "4eb606b135ef0ae1a6343e08275f8a63dd86f47fc694ccc0d7e9defdb59218d3"
+}

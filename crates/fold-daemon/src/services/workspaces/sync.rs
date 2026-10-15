@@ -1,17 +1,19 @@
 use std::sync::Arc;
 
+use fold_core::checkpoint_policy::AutoReason;
 use fold_core::events::types;
 use fold_core::{Actor, CheckpointId, FoldError, NewEvent, RevisionId, WorkspaceId, codes};
-use fold_store::workspaces::{self, CheckpointReason, ConflictRow, WorkspaceRow};
+use fold_store::workspaces::{self, ConflictRow, WorkspaceRow};
 use fold_vcs::sync::{SyncInput, sync};
 use serde_json::json;
 
+use super::auto::auto_checkpoint_in_tx;
 use super::checkpoints::retry_hint;
-use super::files::{checkpoint_in_tx, owned_in_tx, set_base};
+use super::files::{owned_in_tx, set_base};
 use super::{WorkspaceError, WorkspaceService, blocking};
 use crate::services::events::EventBuffer;
 
-/// What a sync left: the new base, the conflicted paths in path order, and the checkpoint it took before it wrote anything. `checkpoint` is `None` when the base already was main and nothing was read or written.
+/// What a sync left: the new base, the conflicted paths in path order, and the checkpoint that holds the files from before it wrote anything, the one it took or an identical latest one. `checkpoint` is `None` when the base already was main and nothing was read or written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Synced {
     pub base: RevisionId,
@@ -20,7 +22,7 @@ pub struct Synced {
 }
 
 impl WorkspaceService {
-    /// Brings main into a workspace the actor's worker owns with a three-way merge of its base, its current files and main. A `before_sync` checkpoint commits first and is marked as the sync in progress; the files are written; then the new base, the conflict list and `workspace.synced` commit and clear the mark.
+    /// Brings main into a workspace the actor's worker owns with a three-way merge of its base, its current files and main. A `before_sync` automatic checkpoint commits first, unless the latest checkpoint already holds the same files on the same base, and is marked as the sync in progress; a checkpoint that cannot be taken refuses the sync; the files are written; then the new base, the conflict list and `workspace.synced` commit and clear the mark.
     ///
     /// A mark left by a sync or a restore that stopped after it began to write means the files may be half written. Merging over them would put markers inside markers, so the marked checkpoint is restored first, through a restore with its own safety checkpoint, and the sync runs from clean files.
     pub async fn sync_workspace(
@@ -71,6 +73,8 @@ impl WorkspaceService {
         }
 
         let base_tree = self.tree_of(row.base).await?;
+        // Read before the snapshot, so an edit made while it runs is later than its checkpoint.
+        let checkpointed_at = self.clock.now();
         let snapshot = blocking({
             let files = Arc::clone(&files);
             move || files.snapshot(base_tree)
@@ -81,19 +85,19 @@ impl WorkspaceService {
             .store
             .write(async |tx| {
                 let row = owned_in_tx(tx, actor, workspace).await?;
-                let checkpoint = checkpoint_in_tx(
+                let taken = auto_checkpoint_in_tx(
                     tx,
                     &mut buffer,
                     actor,
                     &row,
                     snapshot.tree,
-                    CheckpointReason::BeforeSync,
-                    None,
-                    self.clock.now(),
+                    AutoReason::BeforeSync,
+                    files.auto_kept,
+                    checkpointed_at,
                 )
                 .await?;
-                workspaces::set_sync_checkpoint(tx, workspace, Some(checkpoint.id)).await?;
-                Ok::<_, WorkspaceError>(checkpoint)
+                workspaces::set_sync_checkpoint(tx, workspace, Some(taken.checkpoint)).await?;
+                Ok::<_, WorkspaceError>(taken.checkpoint)
             })
             .await?;
         self.bus.publish(buffer);
@@ -167,7 +171,7 @@ impl WorkspaceService {
                     .data(json!({
                         "from": row.base.to_string(),
                         "to": outcome.new_base.to_string(),
-                        "checkpoint": checkpoint.id.to_string(),
+                        "checkpoint": checkpoint.to_string(),
                         "conflicted": conflicted.len(),
                     }))?;
                 buffer.append(tx, &event, now).await?;
@@ -179,7 +183,7 @@ impl WorkspaceService {
         Ok(Synced {
             base: outcome.new_base,
             conflicted: conflicted.iter().map(path_text).collect(),
-            checkpoint: Some(checkpoint.id),
+            checkpoint: Some(checkpoint),
         })
     }
 }

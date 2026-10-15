@@ -1,15 +1,19 @@
 use std::sync::Arc;
 
+use fold_core::checkpoint_policy::AutoReason;
 use fold_core::events::types;
 use fold_core::object::ObjectHash;
 use fold_core::tree::ChangeCounts;
-use fold_core::{Actor, ChangesetId, CheckpointId, FoldError, NewEvent, WorkspaceId, codes};
-use fold_store::workspaces::{self, CheckpointReason, WorkspaceRow};
+use fold_core::{
+    Actor, ChangesetId, CheckpointId, FoldError, NewEvent, Timestamp, WorkspaceId, codes,
+};
+use fold_store::workspaces::{self, WorkspaceRow};
 use fold_vcs::scan::{changes, count_changes};
 use serde_json::json;
 use tokio::sync::{OwnedMutexGuard, OwnedRwLockReadGuard};
 
-use super::files::{Files, checkpoint_in_tx, owned_in_tx};
+use super::auto::auto_checkpoint_in_tx;
+use super::files::{Files, owned_in_tx};
 use super::{WorkspaceError, WorkspaceService, blocking};
 use crate::services::events::EventBuffer;
 
@@ -22,10 +26,14 @@ pub(crate) struct ProposalSnapshot {
     pub tree: ObjectHash,
     /// Against the workspace's base revision.
     pub stats: ChangeCounts,
+    /// How many automatic checkpoints of the workspace stay unpruned.
+    pub auto_kept: u32,
+    /// The clock just before the snapshot, which the proposal command uses as its `now`: an edit made while the snapshot runs is then later than its checkpoint.
+    pub taken_at: Timestamp,
     _held: (OwnedMutexGuard<()>, OwnedRwLockReadGuard<()>),
 }
 
-/// What `record_changes` recorded. `files` counts the paths that differ from the base revision.
+/// What `record_changes` recorded. `files` counts the paths that differ from the base revision. `checkpoint` holds the recorded files: the `before_record` checkpoint, or the latest checkpoint when it already held them on the same base.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RecordedChanges {
     pub changeset: ChangesetId,
@@ -34,7 +42,7 @@ pub struct RecordedChanges {
 }
 
 impl WorkspaceService {
-    /// Records the files of a workspace the actor's worker owns as a changeset with `message`, chained to the workspace's previous changeset. A `before_record` checkpoint of the same tree commits in the same transaction. Refused with `unresolved_conflicts` while a conflicted path still holds a marker line or its `<path>.fold-main`; once none does, the conflict list is cleared with the record. Refused with `workspace_write_unfinished` while a sync or restore that stopped part-way has left the files half written.
+    /// Records the files of a workspace the actor's worker owns as a changeset with `message`, chained to the workspace's previous changeset. A `before_record` automatic checkpoint of the same tree is the first step of the same transaction, so a checkpoint that cannot be taken refuses the record. Refused with `unresolved_conflicts` while a conflicted path still holds a marker line or its `<path>.fold-main`; once none does, the conflict list is cleared with the record. Refused with `workspace_write_unfinished` while a sync or restore that stopped part-way has left the files half written.
     pub async fn record_changes(
         &self,
         actor: &Actor,
@@ -57,6 +65,8 @@ impl WorkspaceService {
         let files = self.ready_to_record(&row).await?;
         let base_tree = self.tree_of(row.base).await?;
         let _objects = self.objects.clone().read_owned().await;
+        // Read before the snapshot, so an edit made while it runs is later than its checkpoint.
+        let now = self.clock.now();
         let (snapshot, counts) = blocking({
             let files = Arc::clone(&files);
             move || {
@@ -74,21 +84,20 @@ impl WorkspaceService {
             }
         })
         .await?;
-        let now = self.clock.now();
         let created_by = actor.event_actor();
         let mut buffer = EventBuffer::new();
         let recorded = self
             .store
             .write(async |tx| {
                 let row = owned_in_tx(tx, actor, workspace).await?;
-                let checkpoint = checkpoint_in_tx(
+                let checkpoint = auto_checkpoint_in_tx(
                     tx,
                     &mut buffer,
                     actor,
                     &row,
                     snapshot.tree,
-                    CheckpointReason::BeforeRecord,
-                    None,
+                    AutoReason::BeforeRecord,
+                    files.auto_kept,
                     now,
                 )
                 .await?;
@@ -120,7 +129,7 @@ impl WorkspaceService {
                 buffer.append(tx, &event, now).await?;
                 Ok::<_, WorkspaceError>(RecordedChanges {
                     changeset: changeset.id,
-                    checkpoint: checkpoint.id,
+                    checkpoint: checkpoint.checkpoint,
                     files,
                 })
             })
@@ -142,6 +151,7 @@ impl WorkspaceService {
         let files = self.ready_to_record(row).await?;
         let base_tree = self.tree_of(row.base).await?;
         let objects = self.objects.clone().read_owned().await;
+        let taken_at = self.clock.now();
         blocking(move || {
             let held = (op, objects);
             let snapshot = files.snapshot(base_tree)?;
@@ -149,6 +159,8 @@ impl WorkspaceService {
             Ok(ProposalSnapshot {
                 tree: snapshot.tree,
                 stats: count_changes(&changes(&base, &snapshot.entries)),
+                auto_kept: files.auto_kept,
+                taken_at,
                 _held: held,
             })
         })

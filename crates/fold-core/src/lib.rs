@@ -1,5 +1,6 @@
 pub mod actor;
 pub mod agents;
+pub mod checkpoint_policy;
 pub mod claims;
 pub mod clock;
 pub mod config;

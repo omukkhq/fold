@@ -1,3 +1,4 @@
+use fold_core::checkpoint_policy::AutoReason;
 use fold_core::events::types;
 use fold_core::object::ObjectHash;
 use fold_core::status::ProposalFact;
@@ -10,7 +11,7 @@ use fold_store::reviews::{
     self, NewProposal, NewVersion, ProposalRow, ProposalState, RetiredState, VersionRow,
 };
 use fold_store::tasks::{TaskRow, claims};
-use fold_store::workspaces::{self, CheckpointReason, WorkspaceRow, WorkspaceState};
+use fold_store::workspaces::{self, WorkspaceRow, WorkspaceState};
 use fold_store::{StoreError, WriteTx, counters, tasks};
 use fold_vcs::restore::differs_from_latest;
 use serde_json::json;
@@ -19,7 +20,7 @@ use super::{ReviewError, ReviewService};
 use crate::services::events::EventBuffer;
 use crate::services::tasks::{closed_refusal, recompute, task_not_found, worker_row};
 use crate::services::workspaces::{
-    ArchiveReason, ProposalSnapshot, archive_in_tx, checkpoint_in_tx,
+    ArchiveReason, ProposalSnapshot, archive_in_tx, auto_checkpoint_in_tx,
 };
 
 /// The longest proposal title, in characters.
@@ -181,7 +182,7 @@ impl<'a> Retirement<'a> {
 }
 
 impl ReviewService {
-    /// Opens a proposal for `task` with version 1, by the worker that holds the task's implementation claim and owns its active task workspace. The workspace is snapshotted first, outside the transaction, so every object exists before a row names it; the snapshot follows the rules of `record_changes`, so a workspace with an unresolved conflict or a sync or restore that stopped part-way is refused, and a resolved conflict list is cleared with the proposal. When the snapshot differs from the workspace's latest changeset, an automatic `before_proposal` checkpoint and a changeset with the title as its message are recorded with it. The task moves to Review.
+    /// Opens a proposal for `task` with version 1, by the worker that holds the task's implementation claim and owns its active task workspace. The workspace is snapshotted first, outside the transaction, so every object exists before a row names it; the snapshot follows the rules of `record_changes`, so a workspace with an unresolved conflict or a sync or restore that stopped part-way is refused, and a resolved conflict list is cleared with the proposal. The first step of the transaction is an automatic `before_proposal` checkpoint of the snapshot, unless the latest checkpoint already holds it on the same base, so a checkpoint that cannot be taken refuses the proposal. When the snapshot differs from the workspace's latest changeset, a changeset with the title as its message is recorded with it. The task moves to Review.
     pub async fn create_proposal(
         &self,
         actor: &Actor,
@@ -200,7 +201,7 @@ impl ReviewService {
         };
         let workspace = open_checks(actor, task, facts)?.1;
         let recorded = self.workspaces.snapshot_for_proposal(&workspace).await?;
-        let now = self.clock.now();
+        let now = recorded.taken_at;
         let mut buffer = EventBuffer::new();
         let id = self
             .store
@@ -214,8 +215,17 @@ impl ReviewService {
                 let (author, live) = open_checks(actor, task, facts)?;
                 same_workspace(&workspace, &live)?;
                 let worker = worker_row(tx, author).await?;
-                let head =
-                    record_in_tx(tx, &mut buffer, actor, &live, &recorded, title, now).await?;
+                let head = record_in_tx(
+                    tx,
+                    &mut buffer,
+                    actor,
+                    &live,
+                    &recorded,
+                    AutoReason::BeforeProposal,
+                    title,
+                    now,
+                )
+                .await?;
                 let number = counters::allocate(tx, IdKind::Proposal).await?;
                 let id =
                     ProposalId::from_number(number).ok_or(StoreError::Corrupt("counters.next"))?;
@@ -266,7 +276,7 @@ impl ReviewService {
         self.get_proposal(id, None).await
     }
 
-    /// Adds the next version to an open proposal, by the author's worker: the task workspace is snapshotted as `create_proposal` does, and the version takes the workspace's current base. `evidence` replaces the current version's evidence; `None` keeps it. A version whose base, tree and evidence all equal the current one is refused with `version_unchanged`. The conflict flag is cleared and the task returns to Review; earlier versions, their reviews and their approvals stay as they are.
+    /// Adds the next version to an open proposal, by the author's worker: the task workspace is snapshotted as `create_proposal` does, and the version takes the workspace's current base; its automatic checkpoint has the reason `before_proposal_update`. `evidence` replaces the current version's evidence; `None` keeps it. A version whose base, tree and evidence all equal the current one is refused with `version_unchanged`. The conflict flag is cleared and the task returns to Review; earlier versions, their reviews and their approvals stay as they are.
     pub async fn update_proposal(
         &self,
         actor: &Actor,
@@ -283,7 +293,7 @@ impl ReviewService {
         let live = workspaces::live_task_workspace(read, row.task).await?;
         let workspace = usable_workspace(live, row.task, &row.author)?;
         let recorded = self.workspaces.snapshot_for_proposal(&workspace).await?;
-        let now = self.clock.now();
+        let now = recorded.taken_at;
         let mut buffer = EventBuffer::new();
         self.store
             .write(async |tx| {
@@ -313,8 +323,17 @@ impl ReviewService {
                     .into());
                 }
                 let author = row.author.clone();
-                let head =
-                    record_in_tx(tx, &mut buffer, actor, &live, &recorded, &row.title, now).await?;
+                let head = record_in_tx(
+                    tx,
+                    &mut buffer,
+                    actor,
+                    &live,
+                    &recorded,
+                    AutoReason::BeforeProposalUpdate,
+                    &row.title,
+                    now,
+                )
+                .await?;
                 let version = current.version.saturating_add(1);
                 let new = NewVersion {
                     base: live.base,
@@ -593,16 +612,32 @@ fn same_workspace(snapped: &WorkspaceRow, live: &WorkspaceRow) -> Result<(), Rev
     .into())
 }
 
-/// Records the snapshot as the workspace's newest changeset when it differs from the latest one, after an automatic `before_proposal` checkpoint of the same tree, and returns the head changeset the version names.
+/// Takes the automatic checkpoint of the snapshot with `reason`, then records the snapshot as the workspace's newest changeset when it differs from the latest one, and returns the head changeset the version names.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the step of a command, with the inputs its earlier steps produced"
+)]
 async fn record_in_tx(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,
     actor: &Actor,
     workspace: &WorkspaceRow,
     recorded: &ProposalSnapshot,
+    reason: AutoReason,
     message: &str,
     now: Timestamp,
 ) -> Result<ChangesetId, ReviewError> {
+    auto_checkpoint_in_tx(
+        tx,
+        buffer,
+        actor,
+        workspace,
+        recorded.tree,
+        reason,
+        recorded.auto_kept,
+        now,
+    )
+    .await?;
     workspaces::set_conflicts(tx, workspace.id, &[]).await?;
     let latest = workspaces::latest_changeset(tx.conn(), workspace.id).await?;
     if let Some(latest) = &latest
@@ -610,18 +645,6 @@ async fn record_in_tx(
     {
         return Ok(latest.id);
     }
-    let reason = CheckpointReason::BeforeProposal;
-    checkpoint_in_tx(
-        tx,
-        buffer,
-        actor,
-        workspace,
-        recorded.tree,
-        reason,
-        None,
-        now,
-    )
-    .await?;
     let created_by = actor.event_actor();
     let changeset = workspaces::insert_changeset(
         tx,

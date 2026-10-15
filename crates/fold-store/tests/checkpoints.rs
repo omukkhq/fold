@@ -4,6 +4,7 @@ pub mod seed;
 
 use std::time::Duration;
 
+use fold_core::checkpoint_policy::AutoReason;
 use fold_core::{CheckpointId, Timestamp, WorkspaceId};
 use fold_store::testing::TestProject;
 use fold_store::workspaces::{
@@ -352,6 +353,11 @@ async fn reasons_round_trip_and_fix_the_kind() {
         assert_eq!(reason.kind(), expected);
     }
     assert_eq!(CheckpointReason::parse("manual"), None);
+    for reason in AutoReason::ALL {
+        let stored = CheckpointReason::from(reason);
+        assert_eq!(stored.as_str(), reason.as_str());
+        assert_eq!(stored.kind(), CheckpointKind::Auto);
+    }
     for kind in [CheckpointKind::Auto, CheckpointKind::Explicit] {
         assert_eq!(CheckpointKind::parse(kind.as_str()), Some(kind));
     }

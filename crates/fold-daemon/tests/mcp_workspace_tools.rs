@@ -293,12 +293,13 @@ async fn an_agent_works_in_its_workspace_from_create_to_abandon() {
     .await;
     assert_eq!(recorded, json!({"changeset": "C-1", "files": 1}));
 
+    // `ck-1` already holds these files on this base, so neither the record nor the sync adds a checkpoint.
     let main = fx.move_main(THEIRS).await;
     assert_eq!(main.to_string(), "r2");
     let synced = call(&frontend, "sync_workspace", json!({"ws": "ws-1"})).await;
     assert_eq!(
         synced,
-        json!({"base": "r2", "conflicted": ["src/lib.rs"], "checkpoint": "ck-3"})
+        json!({"base": "r2", "conflicted": ["src/lib.rs"], "checkpoint": "ck-1"})
     );
     let merged = fs::read_to_string(&lib).unwrap();
     assert!(merged.contains("<<<<<<< workspace"), "{merged}");
@@ -312,23 +313,23 @@ async fn an_agent_works_in_its_workspace_from_create_to_abandon() {
     assert_eq!(got["task"], "T-1");
     assert_eq!(got["worker"], "frontend");
     assert_eq!(got["conflicted"], json!(["src/lib.rs"]));
-    assert_eq!(got["latest_checkpoint"], "ck-3");
+    assert_eq!(got["latest_checkpoint"], "ck-1");
     assert_eq!(got["latest_changeset"], "C-1");
     assert!(got.get("changed_files").is_some());
     assert!(got.get("last_activity_at").is_some());
 
-    let restored = call(&frontend, "restore_checkpoint", json!({"ck": "ck-3"})).await;
+    let restored = call(&frontend, "restore_checkpoint", json!({"ck": "ck-1"})).await;
     assert_eq!(
         restored,
-        json!({"restored": "ck-3", "safety": "ck-4", "base": "r1"})
+        json!({"restored": "ck-1", "safety": "ck-2", "base": "r1"})
     );
     assert_eq!(fs::read(&lib).unwrap(), MINE);
     let got = call(&frontend, "get_workspace", json!({"ws": "ws-1"})).await;
     assert_eq!(got["base"], "r1");
-    assert_eq!(got["latest_checkpoint"], "ck-4");
+    assert_eq!(got["latest_checkpoint"], "ck-2");
 
     // The safety checkpoint holds the merged files, so the restore can be undone too.
-    call(&frontend, "restore_checkpoint", json!({"ck": "ck-4"})).await;
+    call(&frontend, "restore_checkpoint", json!({"ck": "ck-2"})).await;
     assert_eq!(fs::read_to_string(&lib).unwrap(), merged);
     let got = call(&frontend, "get_workspace", json!({"ws": "ws-1"})).await;
     assert_eq!(got["base"], "r2");

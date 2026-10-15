@@ -193,3 +193,20 @@ fn only_the_owning_worker_changes_a_workspace() {
     }
     assert!(can_change_workspace(&agent("frontend/ui", &[]), None).is_err());
 }
+
+#[test]
+fn the_owning_worker_or_the_daemon_takes_an_automatic_checkpoint() {
+    use fold_core::policy::can_take_auto_checkpoint;
+    let owner = WorkerName::parse("frontend/ui").unwrap();
+    assert!(can_take_auto_checkpoint(&agent("frontend/ui", &[]), Some(&owner)).is_ok());
+    assert!(can_take_auto_checkpoint(&Actor::System, Some(&owner)).is_ok());
+    assert!(can_take_auto_checkpoint(&Actor::System, None).is_ok());
+    for actor in [
+        agent("frontend", &[]),
+        agent("backend", &["integrator"]),
+        human("tanim"),
+    ] {
+        let denied = can_take_auto_checkpoint(&actor, Some(&owner)).unwrap_err();
+        assert_eq!(denied.code(), codes::NOT_WORKSPACE_OWNER, "{actor:?}");
+    }
+}

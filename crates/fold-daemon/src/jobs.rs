@@ -1,12 +1,17 @@
+use std::collections::HashMap;
 use std::time::Duration;
 
-use fold_core::{Timestamp, codes};
+use fold_core::checkpoint_policy::quiet_checkpoint_due;
+use fold_core::{Timestamp, WorkspaceId, codes};
+use fold_vcs::git::Git;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::daemon::AppState;
+use crate::projects::ProjectHandle;
 use crate::services::agents::AgentError;
 use crate::services::projects;
+use crate::services::workspaces::{QuietCheckpoint, WorkspaceService};
 
 /// How often a running daemon's jobs look at the clock.
 pub const JOB_TICK: Duration = Duration::from_secs(60);
@@ -18,6 +23,9 @@ pub const PRESENCE_TICK: Duration = Duration::from_secs(5);
 
 /// How often the live job lets each workspace pipeline look at the clock for a due rescan.
 pub const LIVE_TICK: Duration = Duration::from_secs(1);
+
+/// How often the quiet-period job looks at each workspace's live state. It is short against the two-minute quiet period, so a burst's checkpoint comes at most this much late.
+pub const AUTO_CHECKPOINT_TICK: Duration = Duration::from_secs(10);
 
 /// When the daily collection is due: every [`GC_INTERVAL`] of clock time after the start, never at the start itself. A clock that jumps past several due times runs once, and the next due time stays on the grid of the start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,6 +114,102 @@ pub fn spawn_live(state: AppState, tick: Duration, stop: watch::Receiver<bool>) 
     Job {
         task,
         progress: watcher,
+    }
+}
+
+/// Starts the quiet-period job: every `tick` it runs [`QuietCheckpoints::run`] for each open project, one after the other. A cycle is a tick that recorded at least one checkpoint. It stops when `stop` changes.
+pub fn spawn_auto_checkpoints(state: AppState, tick: Duration, stop: watch::Receiver<bool>) -> Job {
+    let (progress, watcher) = watch::channel(JobProgress::default());
+    let task = tokio::spawn(auto_checkpoints(state, tick, stop, progress));
+    Job {
+        task,
+        progress: watcher,
+    }
+}
+
+async fn auto_checkpoints(
+    state: AppState,
+    tick: Duration,
+    mut stop: watch::Receiver<bool>,
+    progress: watch::Sender<JobProgress>,
+) {
+    let mut quiet = QuietCheckpoints::default();
+    let mut ticks = tokio::time::interval(tick);
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            _ = stop.changed() => break,
+            _ = ticks.tick() => {}
+        }
+        let mut recorded = 0;
+        for handle in state.projects.handles() {
+            recorded += quiet.run(&handle).await;
+        }
+        progress.send_modify(|seen| {
+            seen.checks += 1;
+            seen.cycles += u64::from(recorded > 0);
+        });
+    }
+}
+
+/// The quiet-period checkpoints of the daemon's projects. The live state gives each workspace's last activity and the time of its newest automatic checkpoint; this keeps, per workspace, the last activity a run already handled without a new row, so a workspace that equals its latest checkpoint is not snapshotted again on every tick.
+#[derive(Debug, Default)]
+pub struct QuietCheckpoints {
+    handled: HashMap<String, HashMap<WorkspaceId, Timestamp>>,
+}
+
+impl QuietCheckpoints {
+    /// Takes a `Quiet` checkpoint, as the daemon, of every live workspace of `project` that [`quiet_checkpoint_due`] finds due at the project clock's `now`, and returns how many it recorded. A workspace another operation holds is left for a later run. A workspace that still equals its base and has no checkpoint has nothing to go back to, so it gets none.
+    pub async fn run(&mut self, project: &ProjectHandle) -> usize {
+        let config = match projects::load_config(&project.paths).await {
+            Ok(config) => config,
+            Err(error) => {
+                tracing::warn!(project = %project.slug, code = error.code().unwrap_or(codes::INTERNAL_ERROR), "quiet checkpoints skipped; the next tick tries again");
+                return 0;
+            }
+        };
+        let live = project.live.all();
+        let handled = self.handled.entry(project.slug.clone()).or_default();
+        handled.retain(|workspace, _| live.iter().any(|state| state.view.workspace == *workspace));
+        let now = project.clock.now();
+        let service = WorkspaceService::for_project(project, Git::default());
+        let mut recorded = 0;
+        for state in live {
+            let view = &state.view;
+            let workspace = view.workspace;
+            let activity = view.last_activity_at;
+            let newest_auto = view
+                .checkpoints
+                .iter()
+                .filter(|checkpoint| checkpoint.automatic)
+                .map(|checkpoint| checkpoint.created_at)
+                .max();
+            let covered = newest_auto.max(handled.get(&workspace).copied());
+            if !quiet_checkpoint_due(
+                now,
+                Some(activity),
+                covered,
+                config.auto_checkpoint_quiet_seconds,
+            ) {
+                continue;
+            }
+            if view.files.is_empty() && view.checkpoints.is_empty() {
+                handled.insert(workspace, activity);
+                continue;
+            }
+            match service.take_quiet_checkpoint(workspace).await {
+                Ok(QuietCheckpoint::Busy) => {}
+                Ok(QuietCheckpoint::Taken(taken)) => {
+                    handled.insert(workspace, activity);
+                    recorded += usize::from(taken.recorded);
+                }
+                Err(error) => {
+                    handled.insert(workspace, activity);
+                    tracing::warn!(project = %project.slug, workspace = %workspace, code = error.code().unwrap_or(codes::INTERNAL_ERROR), "a quiet checkpoint was not taken; the next editing burst tries again");
+                }
+            }
+        }
+        recorded
     }
 }
 

@@ -2,9 +2,8 @@ use std::convert::Infallible;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
-use fold_core::events::types;
 use fold_core::object::ObjectHash;
-use fold_core::{CheckpointId, EventActor, FoldError, NewEvent, Timestamp, WorkspaceId, codes};
+use fold_core::{CheckpointId, FoldError, Timestamp, WorkspaceId, codes};
 use fold_store::workspaces::{
     ClosedWorkspace, closed_workspaces_due, gc_roots, prune_auto, prune_workspace,
     workspaces_over_auto_limit,
@@ -13,11 +12,11 @@ use fold_store::{StoreError, WriteTx};
 pub use fold_vcs::gc::GcReport;
 use fold_vcs::gc::{self as vcs_gc, GRACE};
 use fold_vcs::objects::ObjectStore;
-use serde_json::json;
 
 use super::{ProjectError, load_config};
 use crate::projects::ProjectHandle;
 use crate::services::events::EventBuffer;
+use crate::services::workspaces::pruned_event;
 
 /// Collects the garbage of one project. It reads `now` once, prunes the automatic checkpoints of each workspace beyond the configured number, removes the directories of closed workspaces past their retention and prunes all their checkpoints, then marks every object the remaining rows reach and sweeps the rest that is older than the grace period while it holds the project's object lock exclusive. A dry run makes the same database changes in a write that always rolls back and plans the sweep, so its counts are those of a real run and nothing changes. One run per project at a time; a second call is `gc_in_progress`.
 pub async fn gc(project: &ProjectHandle, dry_run: bool) -> Result<GcReport, ProjectError> {
@@ -205,12 +204,7 @@ async fn append_pruned(
     now: Timestamp,
 ) -> Result<u64, ProjectError> {
     for id in ids {
-        let event = NewEvent::new(types::CHECKPOINT_PRUNED, EventActor::fold())
-            .and_then(|event| {
-                event
-                    .workspace(workspace)
-                    .data(json!({"checkpoint": id.to_string()}))
-            })
+        let event = pruned_event(workspace, *id)
             .map_err(|error| FoldError::new(codes::INTERNAL_ERROR, error.to_string()))?;
         buffer.append(tx, &event, now).await?;
     }

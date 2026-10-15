@@ -109,6 +109,17 @@ pub fn can_change_workspace(actor: &Actor, owner: Option<&WorkerName>) -> Result
     }
 }
 
+/// An automatic checkpoint only reads the files, so besides the owning worker the daemon itself takes one, as the quiet-period job does. A human and every other worker are refused.
+pub fn can_take_auto_checkpoint(
+    actor: &Actor,
+    owner: Option<&WorkerName>,
+) -> Result<(), PolicyDenied> {
+    match actor {
+        Actor::System => Ok(()),
+        _ => can_change_workspace(actor, owner),
+    }
+}
+
 /// A proposal offers the work done under the implementation claim, so only the worker that holds the claim opens one. `holder` is the claim's worker; a human, the system, another worker and an unclaimed task are refused. It returns the admitted agent, which becomes the author.
 pub fn can_open_proposal<'a>(
     actor: &'a Actor,

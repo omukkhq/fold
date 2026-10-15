@@ -13,7 +13,7 @@ pub use changesets::{
 };
 pub use checkpoints::{
     AUTO_CHECKPOINTS_KEPT, Checkpoint, CheckpointKind, CheckpointReason, get_checkpoint,
-    insert_checkpoint, list_checkpoints, prune_auto, prune_workspace,
+    insert_checkpoint, latest_checkpoint, list_checkpoints, prune_auto, prune_workspace,
 };
 pub use conflicts::{ConflictRow, clear_conflict, list_conflicts, set_conflicts};
 pub use gc::{ClosedWorkspace, closed_workspaces_due, gc_roots, workspaces_over_auto_limit};

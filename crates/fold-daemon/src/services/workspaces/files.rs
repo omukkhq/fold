@@ -33,6 +33,8 @@ pub(super) struct Files {
     index_path: PathBuf,
     caps: Capabilities,
     max_file_bytes: u64,
+    /// How many automatic checkpoints of the workspace stay unpruned (`auto_checkpoints_kept`).
+    pub(super) auto_kept: u32,
 }
 
 impl Files {
@@ -162,6 +164,7 @@ impl WorkspaceService {
                 index_path,
                 caps,
                 max_file_bytes: config.max_file_bytes,
+                auto_kept: u32::try_from(config.auto_checkpoints_kept).unwrap_or(u32::MAX),
             }))
         })
         .await
@@ -200,8 +203,26 @@ pub(super) async fn owned_in_tx(
     Ok(row)
 }
 
-/// A review checkout is refused before the owner check: it is read, built and tested, and never recorded, synced or restored, also by its own worker.
 fn check_change(actor: &Actor, row: &WorkspaceRow) -> Result<(), FoldError> {
+    check_active(
+        policy::can_change_workspace(actor, row.worker.as_ref()),
+        row,
+    )
+}
+
+/// The checks of an automatic checkpoint: `check_change`, except that the daemon itself may take one.
+pub(super) fn check_auto(actor: &Actor, row: &WorkspaceRow) -> Result<(), FoldError> {
+    check_active(
+        policy::can_take_auto_checkpoint(actor, row.worker.as_ref()),
+        row,
+    )
+}
+
+/// A review checkout is refused before the owner check, for the daemon too: it is read, built and tested, and never recorded, synced, restored or checkpointed.
+fn check_active(
+    allowed: Result<(), policy::PolicyDenied>,
+    row: &WorkspaceRow,
+) -> Result<(), FoldError> {
     if row.kind == WorkspaceKind::Review {
         return Err(FoldError::new(
             codes::INVALID_REQUEST,
@@ -215,7 +236,7 @@ fn check_change(actor: &Actor, row: &WorkspaceRow) -> Result<(), FoldError> {
             "record work in a task workspace; a review checkout is only read, built and tested",
         ));
     }
-    if let Err(denied) = policy::can_change_workspace(actor, row.worker.as_ref()) {
+    if let Err(denied) = allowed {
         return Err(FoldError::from(denied).with_details([
             ("workspace", json!(row.id.to_string())),
             ("owner", json!(row.worker.as_ref().map(WorkerName::as_str))),
@@ -248,7 +269,7 @@ pub(super) fn not_found(workspace: WorkspaceId) -> FoldError {
     clippy::too_many_arguments,
     reason = "the step of a command, with the inputs its earlier steps produced"
 )]
-pub(crate) async fn checkpoint_in_tx(
+pub(super) async fn checkpoint_in_tx(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,
     actor: &Actor,

@@ -446,7 +446,7 @@ async fn create_proposal_records_a_changeset_only_when_the_tree_changed() {
     let checkpoints = list_checkpoints(store, ws(1), true).await.unwrap();
     assert_eq!(checkpoints.len(), 2);
     assert_eq!(checkpoints[1].tree, third.selected.tree);
-    assert_eq!(checkpoints[1].reason.as_str(), "before_proposal");
+    assert_eq!(checkpoints[1].reason.as_str(), "before_proposal_update");
 }
 
 #[tokio::test]
