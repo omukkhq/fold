@@ -1,4 +1,7 @@
-export type DiffLineKind = "add" | "remove" | "context" | "hunk";
+import type { components } from "@/api/schema";
+
+/** A line of the generated diff, or the header row of a hunk. */
+export type DiffLineKind = components["schemas"]["DiffLineKind"] | "hunk";
 
 export interface DiffLineStyle {
   sign: string;
@@ -11,14 +14,14 @@ export interface DiffLineStyle {
 }
 
 const STYLES: Record<DiffLineKind, DiffLineStyle> = {
-  add: {
+  added: {
     sign: "+",
     description: "Added line",
     row: "bg-diff-add",
     signClass: "text-primary-text",
     header: false,
   },
-  remove: {
+  removed: {
     // W06 signs a removal with the minus sign, U+2212, not a hyphen.
     sign: "\u2212",
     description: "Removed line",

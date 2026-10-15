@@ -1,0 +1,81 @@
+{
+  "workspaces": [
+    {
+      "id": "ws-1",
+      "task": "T-1",
+      "task_title": "Title T-1",
+      "owner": "frontend/ui",
+      "kind": "task",
+      "path": "ws/t-1",
+      "base": "r7",
+      "state": "active",
+      "proposal": null,
+      "changed_files": 1,
+      "conflicted": 0,
+      "last_activity_at": 1760000060000,
+      "created_at": 1760000000000,
+      "closed_at": null,
+      "live": {
+        "workspace": "ws-1",
+        "task": "T-1",
+        "worker": "frontend/ui",
+        "base": "r7",
+        "files": [
+          {
+            "path": "src/login.tsx",
+            "previous_path": null,
+            "change": "modified",
+            "added_lines": 3,
+            "removed_lines": 1,
+            "binary": false
+          }
+        ],
+        "summary": "1 file: 1 modified (+3 -1)",
+        "last_activity_at": 1760000060000,
+        "checkpoints": [],
+        "proposal": null,
+        "stalled": true
+      },
+      "watch": "watching",
+      "attention": [
+        {
+          "kind": "stalled"
+        }
+      ]
+    },
+    {
+      "id": "ws-2",
+      "task": "T-2",
+      "task_title": "Title T-2",
+      "owner": "backend",
+      "kind": "task",
+      "path": "ws/t-2",
+      "base": "r7",
+      "state": "active",
+      "proposal": null,
+      "changed_files": 0,
+      "conflicted": 0,
+      "last_activity_at": 1760000030000,
+      "created_at": 1760000000000,
+      "closed_at": null,
+      "live": {
+        "workspace": "ws-2",
+        "task": "T-2",
+        "worker": "backend",
+        "base": "r7",
+        "files": [],
+        "summary": "no changes",
+        "last_activity_at": 1760000030000,
+        "checkpoints": [],
+        "proposal": null,
+        "stalled": false
+      },
+      "watch": "watching",
+      "attention": [
+        {
+          "kind": "stale_claim"
+        }
+      ]
+    }
+  ]
+}

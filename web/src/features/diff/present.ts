@@ -3,7 +3,10 @@ import type {
   ComparedFile,
   ComparedState,
   Comparison,
+  FileWarning,
 } from "@/api/diff";
+import type { CheckpointSummary } from "@/api/tasks";
+import { revisionCount, revisionsAhead } from "@/format/revisions";
 import type { LineRow } from "./layout";
 
 export interface ChangeBadge {
@@ -34,6 +37,11 @@ const BADGES: Record<ChangeKind, ChangeBadge> = {
     label: "Renamed",
     classes: "bg-secondary-soft text-secondary-text",
   },
+  mode_changed: {
+    letter: "T",
+    label: "Mode changed",
+    classes: "bg-sunken text-text-muted",
+  },
 };
 
 export function changeBadge(kind: ChangeKind): ChangeBadge {
@@ -60,12 +68,39 @@ export function changeNote(file: ComparedFile): string | null {
   }
   if (file.change === "added") return "new file";
   if (file.change === "deleted") return "deleted";
+  if (file.change === "mode_changed") return "mode changed";
   return null;
 }
 
 /** The line over a binary file's hashes, which names its change kind since the hashes alone do not. */
 export function binaryNote(kind: ChangeKind): string {
   return `${BADGES[kind].label} binary file, compared by hash.`;
+}
+
+/** A side of a file larger than 1 MiB, which the daemon compares by hash only. */
+export function tooLargeNote(kind: ChangeKind): string {
+  return `${BADGES[kind].label} file over 1 MiB, compared by hash.`;
+}
+
+const WARNING_TEXT: Record<FileWarning["reason"], string> = {
+  unstable: "unstable",
+  too_large: "too large to read",
+  special: "not a regular file",
+  unreadable: "not readable",
+  changed_during_snapshot: "changed while it was read",
+};
+
+/** The short mark beside a warned path in the file list. */
+export function warningMark(warning: FileWarning): string {
+  return WARNING_TEXT[warning.reason];
+}
+
+/** Why a warned file has no diff, in the panel where the diff would be. */
+export function warningNote(warning: FileWarning): string {
+  if (warning.reason === "unstable") {
+    return "This file kept changing while fold read it, so no diff is shown. fold keeps the base version and reads the file again on the next change.";
+  }
+  return `fold could not read this file (${WARNING_TEXT[warning.reason]}), so no diff is shown. It keeps its base version.`;
 }
 
 /** The working files of a workspace against the revision it is based on: live edits, never history. */
@@ -99,12 +134,6 @@ export function comparisonCrumbs(
   if (to.kind === "workspace") {
     return [
       { label: "Activity", href: `/p/${slug}/activity`, mono: false },
-      { label: to.id, href: null, mono: true },
-    ];
-  }
-  if (to.kind === "proposal_version") {
-    return [
-      { label: "Proposals", href: `/p/${slug}/proposals`, mono: false },
       { label: to.id, href: null, mono: true },
     ];
   }
@@ -153,14 +182,16 @@ export function workingNote(comparison: Comparison): string {
     task === null
       ? "nothing here is in main until it is integrated."
       : `nothing here is in main until ${task}'s proposal is integrated.`;
-  return `Working files are read from disk when you open this page. They are not history: ${until}`;
+  return `Working files are read from disk when you open this page and again on each change. They are not history: ${until}`;
 }
 
 const LINE_WORDS: Record<LineRow["kind"], string> = {
-  add: "Added line",
-  remove: "Removed line",
+  added: "Added line",
+  removed: "Removed line",
   context: "Unchanged line",
 };
+
+export const NO_NEWLINE = "no newline at end of file";
 
 /** The name a screen reader gives a line: its kind, its numbers and its text. */
 export function lineLabel(row: LineRow): string {
@@ -168,7 +199,8 @@ export function lineLabel(row: LineRow): string {
     row.oldNo === null ? null : `old ${String(row.oldNo)}`,
     row.newNo === null ? null : `new ${String(row.newNo)}`,
   ].filter((part): part is string => part !== null);
-  return `${LINE_WORDS[row.kind]}, ${numbers.join(", ")}: ${row.text}`;
+  const tail = row.noNewline ? `, ${NO_NEWLINE}` : "";
+  return `${LINE_WORDS[row.kind]}, ${numbers.join(", ")}: ${row.text}${tail}`;
 }
 
 export function hiddenLinesText(hidden: number): string {
@@ -177,4 +209,57 @@ export function hiddenLinesText(hidden: number): string {
 
 export function moreRowsText(remaining: number): string {
   return `Show more · ${plural(remaining, "more row")}`;
+}
+
+export interface CompareOption {
+  /** The `from` this option compares the workspace with. */
+  from: string;
+  text: string;
+  href: string;
+  current: boolean;
+}
+
+export interface CompareSources {
+  /** The workspace's base revision. */
+  base: string;
+  /** Main's head and newest revisions; null until they are read. */
+  main: {
+    head: string;
+    recent: { id: string; parent: string | null }[];
+  } | null;
+  checkpoints: readonly CheckpointSummary[];
+}
+
+function diffHref(slug: string, from: string, to: string): string {
+  return `/p/${slug}/diff?${new URLSearchParams({ from, to }).toString()}`;
+}
+
+/** W06's "Compare with" list for a workspace: its base, main when main moved past the base, and its checkpoints, newest first. */
+export function compareOptions(
+  slug: string,
+  comparison: Comparison,
+  sources: CompareSources,
+): CompareOption[] {
+  const to = comparison.to.id;
+  const option = (from: string, text: string): CompareOption => ({
+    from,
+    text,
+    href: diffHref(slug, from, to),
+    current: comparison.from.id === from,
+  });
+  const options = [option(sources.base, `base ${sources.base} (default)`)];
+  const main = sources.main;
+  if (main !== null && main.head !== sources.base) {
+    const ahead = revisionsAhead(main.recent, sources.base);
+    options.push(
+      option(main.head, `main ${main.head} · ${revisionCount(ahead)} ahead`),
+    );
+  }
+  const checkpoints = [...sources.checkpoints].sort(
+    (a, b) => b.created_at - a.created_at,
+  );
+  for (const checkpoint of checkpoints) {
+    options.push(option(checkpoint.id, `checkpoint ${checkpoint.id}`));
+  }
+  return options;
 }

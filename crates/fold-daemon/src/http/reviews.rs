@@ -6,7 +6,7 @@ use fold_core::merge::{
 };
 use fold_core::policy::{Gate, GateState, GateStatus};
 use fold_core::reviews::{Side, Verdict};
-use fold_core::{FoldError, HumanName, ProposalId, TaskId};
+use fold_core::{FoldError, HumanName, ProposalId, RevisionId, TaskId, Timestamp, WorkspaceId};
 use fold_store::reviews::ProposalState;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -21,7 +21,7 @@ use super::workspaces::{ComparedFile, ComparisonTotals};
 use crate::daemon::AppState;
 use crate::services::reviews::{
     self as service, CommentInput, CommentLocation, IntegrationOutcome, ProposalFilter,
-    ReviewService, Turn, integration_conflicted,
+    ReviewCheckout, ReviewService, Turn, integration_conflicted,
 };
 
 pub fn routes() -> OpenApiRouter<AppState> {
@@ -32,6 +32,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(list_review_comments, add_review_comment))
         .routes(routes!(submit_review))
         .routes(routes!(integrate_proposal))
+        .routes(routes!(list_review_checkouts))
 }
 
 fn service(state: &AppState, project: &Project) -> ReviewService {
@@ -1074,4 +1075,73 @@ pub async fn integrate_proposal(
             Err(integration_conflicted(proposal, &conflicts).into())
         }
     }
+}
+
+/// A read-only checkout of a proposal version for its reviewer. The daemon records no command run in it.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ReviewCheckoutView {
+    #[schema(value_type = String, example = "ws-12")]
+    pub workspace: WorkspaceId,
+    /// Relative to the project root, such as `ws/review-p-4`.
+    pub path: String,
+    #[schema(value_type = String, example = "P-4")]
+    pub proposal: ProposalId,
+    /// The proposal version the checkout holds.
+    pub version: u32,
+    /// The review worker that owns the checkout, such as `review/ci`.
+    #[schema(required = true)]
+    pub worker: Option<String>,
+    /// The base revision of the version.
+    #[schema(value_type = String, example = "r17")]
+    pub base: RevisionId,
+    /// UTC milliseconds.
+    #[schema(value_type = i64)]
+    pub created_at: Timestamp,
+}
+
+impl From<ReviewCheckout> for ReviewCheckoutView {
+    fn from(checkout: ReviewCheckout) -> Self {
+        let workspace = checkout.workspace;
+        Self {
+            workspace: workspace.id,
+            path: workspace.path,
+            proposal: checkout.proposal,
+            version: checkout.version,
+            worker: workspace.worker.map(|worker| worker.as_str().to_owned()),
+            base: workspace.base,
+            created_at: workspace.created_at,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ReviewCheckoutList {
+    /// The active review checkouts, oldest first.
+    pub checkouts: Vec<ReviewCheckoutView>,
+}
+
+/// The project's active review checkouts with their worker, directory and proposal version.
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{slug}/reviews/checkouts",
+    operation_id = "list_review_checkouts",
+    params(("slug" = String, Path, description = "The project slug")),
+    responses(
+        (status = 200, description = "The active review checkouts", body = ReviewCheckoutList),
+        (status = 404, description = "`project_not_found`: the slug is not registered", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn list_review_checkouts(
+    State(state): State<AppState>,
+    project: Project,
+) -> Result<Json<ReviewCheckoutList>, ApiError> {
+    let checkouts = service(&state, &project).list_review_checkouts().await?;
+    Ok(Json(ReviewCheckoutList {
+        checkouts: checkouts
+            .into_iter()
+            .map(ReviewCheckoutView::from)
+            .collect(),
+    }))
 }

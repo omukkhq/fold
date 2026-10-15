@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fixtureEventTransport } from "../../fixtures/events";
 import { nextDelay } from "./backoff";
 import type { EventEnvelope } from "./envelope";
 import { ApiError } from "../api/errors";
@@ -432,44 +431,5 @@ describe("startStream", () => {
     h.handle.stop();
     await vi.advanceTimersByTimeAsync(0);
     expect(h.log).toEqual(["open", "event 1"]);
-  });
-});
-
-describe("fixture transport", () => {
-  it("sends a snapshot, then events after the cursor, then keep-alives, and stops on abort", async () => {
-    const controller = new AbortController();
-    const transport = fixtureEventTransport("demo", 10, 100);
-    const chunks: string[] = [];
-    const reading = (async () => {
-      for await (const chunk of await transport(1, controller.signal)) {
-        chunks.push(chunk);
-      }
-    })();
-    await vi.advanceTimersByTimeAsync(20);
-    expect(chunks).toHaveLength(3);
-    expect(chunks[0]).toContain('"kind":"snapshot"');
-    expect(chunks[1]).toContain('"kind":"workspace_changed"');
-    expect(chunks[1]).not.toContain("id:");
-    expect(chunks[2]).toContain('"seq":2');
-    expect(chunks[2]).toContain("id: 2");
-    await vi.advanceTimersByTimeAsync(100);
-    expect(chunks[3]).toBe(": keep-alive\n\n");
-    controller.abort();
-    await vi.advanceTimersByTimeAsync(0);
-    await reading;
-  });
-
-  it("returns early when aborted before or between steps", async () => {
-    const aborted = new AbortController();
-    aborted.abort();
-    const chunks: string[] = [];
-    for await (const chunk of await fixtureEventTransport(
-      "demo",
-      10,
-      100,
-    )(null, aborted.signal)) {
-      chunks.push(chunk);
-    }
-    expect(chunks).toHaveLength(1);
   });
 });

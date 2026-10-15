@@ -1,4 +1,4 @@
-import type { ComparedFile, Hunk, HunkLineKind } from "@/api/diff";
+import type { ComparedFile, FileWarning, Hunk, HunkLineKind } from "@/api/diff";
 
 /** An unchanged run longer than this many lines collapses behind an expander. */
 export const COLLAPSE_THRESHOLD = 8;
@@ -15,7 +15,10 @@ export type LineRow = {
   kind: HunkLineKind;
   oldNo: number | null;
   newNo: number | null;
+  /** The line without its terminator. */
   text: string;
+  /** The last line of a file that does not end with a line terminator. */
+  noNewline: boolean;
 };
 
 export type ExpanderRow = { type: "expander"; key: string; hidden: number };
@@ -24,27 +27,29 @@ export type DiffRow = HunkRow | LineRow | ExpanderRow;
 
 /** The header of a hunk as W06 draws it, with U+2212 before the old range. */
 export function hunkHeader(hunk: Hunk): string {
-  const ranges = `@@ −${String(hunk.old_start)},${String(hunk.old_lines)} +${String(hunk.new_start)},${String(hunk.new_lines)} @@`;
-  return hunk.section === "" ? ranges : `${ranges} ${hunk.section}`;
+  return `@@ −${String(hunk.old_start)},${String(hunk.old_lines)} +${String(hunk.new_start)},${String(hunk.new_lines)} @@`;
 }
 
-/** Every hunk as its header row and its line rows, numbered from the hunk's start on each side. */
+/** The daemon keeps each line's terminator; the row shows the line without it. */
+export function lineText(text: string): string {
+  return text.replace(/\r?\n$/, "");
+}
+
+/** Every hunk as its header row and its line rows, with the line numbers the daemon sent. */
 export function hunkRows(hunks: readonly Hunk[]): (HunkRow | LineRow)[] {
   const rows: (HunkRow | LineRow)[] = [];
   hunks.forEach((hunk, h) => {
     rows.push({ type: "hunk", key: `h${String(h)}`, header: hunkHeader(hunk) });
-    let oldNo = hunk.old_start;
-    let newNo = hunk.new_start;
     hunk.lines.forEach((line, i) => {
-      const row: LineRow = {
+      rows.push({
         type: "line",
         key: `h${String(h)}-${String(i)}`,
         kind: line.kind,
-        oldNo: line.kind === "add" ? null : oldNo++,
-        newNo: line.kind === "remove" ? null : newNo++,
-        text: line.text,
-      };
-      rows.push(row);
+        oldNo: line.old_no,
+        newNo: line.new_no,
+        text: lineText(line.text),
+        noNewline: line.no_newline,
+      });
     });
   });
   return rows;
@@ -232,10 +237,13 @@ export function listedFiles(files: readonly ComparedFile[]): ComparedFile[] {
 
 export type FileBody = "binary" | "unchanged" | "text";
 
-/** What the diff panel shows for a file: hashes for a binary file, a note for a rename with no content change, and hunks otherwise. */
+/** What the diff panel shows for a file: hashes for a binary file, a note for a rename or mode change with no content change, and hunks otherwise. A file too large to diff is known only once its hunks are read. */
 export function fileBody(file: ComparedFile): FileBody {
   if (file.binary) return "binary";
-  if (file.change === "renamed" && file.old_hash === file.new_hash) {
+  if (
+    (file.change === "renamed" || file.change === "mode_changed") &&
+    file.old_hash === file.new_hash
+  ) {
     return "unchanged";
   }
   return "text";
@@ -247,4 +255,25 @@ export function currentFile(
   path: string | undefined,
 ): ComparedFile | null {
   return files.find((f) => f.path === path) ?? files[0] ?? null;
+}
+
+/** What the panel shows: the warning of the path the address names, a file, or the first warning when nothing else is listed. A warned file has no trustworthy diff, so its warning wins over its file. */
+export type Shown =
+  | { kind: "file"; file: ComparedFile }
+  | { kind: "warning"; warning: FileWarning };
+
+export function shownEntry(
+  files: readonly ComparedFile[],
+  warnings: readonly FileWarning[],
+  path: string | undefined,
+): Shown | null {
+  const warned = warnings.find((w) => w.path === path);
+  if (warned) return { kind: "warning", warning: warned };
+  const file = currentFile(files, path);
+  if (file) {
+    const own = warnings.find((w) => w.path === file.path);
+    return own ? { kind: "warning", warning: own } : { kind: "file", file };
+  }
+  const first = warnings[0];
+  return first ? { kind: "warning", warning: first } : null;
 }

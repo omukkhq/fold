@@ -1,5 +1,6 @@
 import type { Board, BoardCard, TaskStatus } from "@/api/board";
 import type { LiveWorkspace, TaskDetail } from "@/api/tasks";
+import type { WorkspaceEntry } from "@/api/workspaces";
 
 const STATUSES: TaskStatus[] = [
   "backlog",
@@ -111,6 +112,33 @@ export function liveWorkspace(
     checkpoints: [],
     proposal: null,
     stalled: false,
+    ...over,
+  };
+}
+
+/** An active task workspace of T-1 as the workspace list sends it, its live state attached. */
+export function workspaceEntry(
+  id: string,
+  over: Partial<WorkspaceEntry> = {},
+): WorkspaceEntry {
+  return {
+    id,
+    task: "T-1",
+    task_title: "Title T-1",
+    owner: "frontend/ui",
+    kind: "task",
+    path: `ws/${id}`,
+    base: "r7",
+    state: "active",
+    proposal: null,
+    changed_files: 0,
+    conflicted: 0,
+    last_activity_at: 1,
+    created_at: 0,
+    closed_at: null,
+    live: liveWorkspace(id, "T-1"),
+    watch: "watching",
+    attention: [],
     ...over,
   };
 }

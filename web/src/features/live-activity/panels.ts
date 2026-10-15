@@ -16,7 +16,7 @@ export function seedLive(
   entries: readonly WorkspaceEntry[],
 ): void {
   for (const entry of entries) {
-    const key = keys.workspaceLive(slug, entry.workspace);
+    const key = keys.workspaceLive(slug, entry.id);
     if (entry.live !== null && queryClient.getQueryData(key) === undefined) {
       queryClient.setQueryData(key, entry.live);
     }
@@ -45,6 +45,16 @@ export function buildPanels(
   return panels;
 }
 
+/** The live state's last edit, else the row's, else when the workspace was created. */
 export function lastActivity(panel: Panel): number {
-  return panel.live?.last_activity_at ?? panel.entry.last_activity_at;
+  return (
+    panel.live?.last_activity_at ??
+    panel.entry.last_activity_at ??
+    panel.entry.created_at
+  );
+}
+
+/** The worker the live state names, else the owner of the row; null for a workspace whose worker is gone. */
+export function workerOf(panel: Panel): string | null {
+  return panel.live?.worker ?? panel.entry.owner;
 }

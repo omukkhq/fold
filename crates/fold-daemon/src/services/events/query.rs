@@ -96,6 +96,39 @@ pub async fn query(store: &Store, query: &EventQuery) -> Result<EventPage, Event
     Ok(page(events, after))
 }
 
+/// Stored events newest first and the `before` of the next older page: the lowest `seq` returned, or `None` once the page reaches the first event.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HistoryPage {
+    pub events: Vec<Event>,
+    pub before: Option<u64>,
+}
+
+/// The newest stored events with `seq < before` (every event when `before` is absent or past the newest one), newest first, at most `limit` ([`DEFAULT_LIMIT`] when absent, lowered to [`MAX_LIMIT`]). Stored events are numbered without holes, so the page is the range just below `before`, read with the same query as [`query`].
+pub async fn history(
+    store: &Store,
+    before: Option<u64>,
+    limit: Option<u32>,
+) -> Result<HistoryPage, EventsError> {
+    let limit = u64::try_from(parse_limit(limit)?).unwrap_or(u64::MAX);
+    let past_newest = events::head_seq(store.read()).await?.saturating_add(1);
+    let before = before.map_or(past_newest, |before| before.min(past_newest));
+    let after = before.saturating_sub(1).saturating_sub(limit);
+    let count = before.saturating_sub(1) - after;
+    let mut events = events::read_after(
+        store.read(),
+        after,
+        &EventFilter::default(),
+        usize::try_from(count).unwrap_or(usize::MAX),
+    )
+    .await?;
+    events.reverse();
+    let before = events
+        .last()
+        .map(|oldest| oldest.seq)
+        .filter(|oldest| *oldest > 1);
+    Ok(HistoryPage { events, before })
+}
+
 /// The events after the agent's cursor (0 when it has none), and the cursor moved to the highest `seq` returned in the same write transaction. A query with an explicit `after` is [`query`] and leaves the cursor alone.
 pub async fn read_since_cursor(
     store: &Store,

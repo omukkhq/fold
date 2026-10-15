@@ -23,7 +23,8 @@ import {
 const PATH = "src/a.ts";
 
 function row(oldNo: number | null, newNo: number | null): DiffRow {
-  const kind = oldNo === null ? "add" : newNo === null ? "remove" : "context";
+  const kind =
+    oldNo === null ? "added" : newNo === null ? "removed" : "context";
   return {
     type: "line",
     key: `${String(oldNo)}-${String(newNo)}`,
@@ -31,6 +32,7 @@ function row(oldNo: number | null, newNo: number | null): DiffRow {
     oldNo,
     newNo,
     text: "",
+    noNewline: false,
   };
 }
 
@@ -103,6 +105,7 @@ describe("sides", () => {
         oldNo: 5,
         newNo: null,
         text: "",
+        noNewline: false,
       }),
     ).toEqual(o(5));
   });
@@ -118,6 +121,7 @@ describe("sides", () => {
         oldNo: null,
         newNo: null,
         text: "",
+        noNewline: false,
       }),
     ).toBeNull();
   });

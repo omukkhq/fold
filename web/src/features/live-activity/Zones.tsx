@@ -4,7 +4,6 @@ import { formatSince } from "../../format/time";
 import { cn } from "../../lib/cn";
 import { focusRing } from "../../lib/focus";
 import type { LiveWorkspace } from "../../live/envelope";
-import { mainLine } from "./attention";
 import { ChangedFileRow } from "./ChangedFileRow";
 import { visibleFiles } from "./files";
 import { IdLink } from "./IdLink";
@@ -78,7 +77,7 @@ export function WorkingZone({ slug, entry, live }: WorkingZoneProps) {
   const { shown, hidden } = visibleFiles(live.files, expanded);
   return (
     <section
-      aria-label={`Working changes in ${entry.workspace}`}
+      aria-label={`Working changes in ${entry.id}`}
       className="flex min-w-0 flex-1 flex-col gap-4"
     >
       <ZoneHead tone="working">
@@ -93,7 +92,7 @@ export function WorkingZone({ slug, entry, live }: WorkingZoneProps) {
               key={file.path}
               slug={slug}
               base={live.base}
-              workspace={entry.workspace}
+              workspace={entry.id}
               file={file}
             />
           ))}
@@ -126,7 +125,7 @@ interface RecordedZoneProps {
 export function RecordedZone({ entry, items, now }: RecordedZoneProps) {
   return (
     <section
-      aria-label={`Recorded changes in ${entry.workspace}`}
+      aria-label={`Recorded changes in ${entry.id}`}
       className="flex w-full flex-col gap-6 md:w-1/3"
     >
       <ZoneHead tone="recorded">Recorded changes</ZoneHead>
@@ -151,14 +150,20 @@ export function RecordedZone({ entry, items, now }: RecordedZoneProps) {
   );
 }
 
-export function MainZone({ entry }: { entry: WorkspaceEntry }) {
+export function MainZone({
+  entry,
+  text,
+}: {
+  entry: WorkspaceEntry;
+  text: string;
+}) {
   return (
     <section
-      aria-label={`Main for ${entry.workspace}`}
+      aria-label={`Main for ${entry.id}`}
       className="flex items-center gap-8 border-t border-border-subtle px-16 py-8"
     >
       <ZoneHead tone="main">Main</ZoneHead>
-      <p className="text-bar text-text-muted">{mainLine(entry)}</p>
+      <p className="text-bar text-text-muted">{text}</p>
     </section>
   );
 }

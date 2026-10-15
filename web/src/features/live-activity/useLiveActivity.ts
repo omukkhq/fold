@@ -27,6 +27,7 @@ export function useLiveActivity(slug: string): LiveActivity {
       seedLive(queryClient, slug, entries);
       return entries;
     },
+    staleTime: Infinity,
   });
   const entries = list.data;
   const store = useMemo(
@@ -36,13 +37,13 @@ export function useLiveActivity(slug: string): LiveActivity {
   useSyncExternalStore(store.subscribe, store.getVersion, store.getVersion);
   const unordered = buildPanels(
     entries ?? [],
-    (entries ?? []).map((entry) => store.read(entry.workspace)),
+    (entries ?? []).map((entry) => store.read(entry.id)),
   );
   const [order, setOrder] = useState<string[]>([]);
   const next = orderPanels(
     order,
     unordered.map((panel) => ({
-      id: panel.entry.workspace,
+      id: panel.entry.id,
       lastActivityAt: lastActivity(panel),
     })),
   );
@@ -50,7 +51,7 @@ export function useLiveActivity(slug: string): LiveActivity {
     setOrder(next);
   }
   const panels = next.flatMap((id) =>
-    unordered.filter((panel) => panel.entry.workspace === id),
+    unordered.filter((panel) => panel.entry.id === id),
   );
   const now = useDataClock([list.dataUpdatedAt, live.lastEventAt]);
   return {

@@ -111,6 +111,7 @@ async fn the_workspace_routes_list_one_entry_with_its_attention() {
     let entry = &entries[0];
     assert_eq!(entry["id"], id.to_string());
     assert_eq!(entry["task"], "T-1");
+    assert_eq!(entry["task_title"], "task");
     assert_eq!(entry["owner"], "frontend");
     assert_eq!(entry["kind"], "task");
     assert_eq!(entry["base"], "r1");
@@ -118,6 +119,7 @@ async fn the_workspace_routes_list_one_entry_with_its_attention() {
     assert_eq!(entry["attention"], json!([{"kind": "question"}]));
     assert_eq!(entry["live"]["workspace"], id.to_string());
     assert_eq!(entry["live"]["summary"], "no changes");
+    assert_eq!(entry["watch"], "watching");
 
     let (status, one) = fx.get(&format!("/workspaces/{id}")).await;
     assert_eq!(status, StatusCode::OK);

@@ -342,6 +342,76 @@ pub async fn list_live_task_workspaces(
     rows.into_iter().map(workspace_row).collect()
 }
 
+/// An active review checkout, its proposal and the proposal version its files hold.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewCheckoutRow {
+    pub workspace: WorkspaceRow,
+    pub proposal: ProposalId,
+    pub version: u32,
+}
+
+/// Every active review checkout of the project, oldest first.
+pub async fn list_active_review_checkouts(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Vec<ReviewCheckoutRow>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT w.number AS "number!: i64",
+                  t.number AS "task!: i64",
+                  w.worker_id,
+                  k.name AS "worker?: String",
+                  w.kind,
+                  w.path,
+                  r.number AS "base!: i64",
+                  p.number AS "proposal!: i64",
+                  w.state,
+                  w.changed_files,
+                  w.last_activity_at,
+                  w.created_at,
+                  w.closed_at,
+                  v.version AS "version!: i64"
+           FROM workspaces w
+           JOIN tasks t ON t.id = w.task_id
+           JOIN revisions r ON r.id = w.base_revision_id
+           JOIN proposal_versions v ON v.id = w.version_id
+           JOIN proposals p ON p.id = w.proposal_id
+           LEFT JOIN workers k ON k.id = w.worker_id
+           WHERE w.kind = 'review' AND w.state = 'active'
+           ORDER BY w.number"#
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            let workspace = workspace_row(RawWorkspace {
+                number: row.number,
+                task: row.task,
+                worker_id: row.worker_id,
+                worker: row.worker,
+                kind: row.kind,
+                path: row.path,
+                base: row.base,
+                proposal: Some(row.proposal),
+                state: row.state,
+                changed_files: row.changed_files,
+                conflicted: 0,
+                last_activity_at: row.last_activity_at,
+                created_at: row.created_at,
+                closed_at: row.closed_at,
+            })?;
+            let proposal = workspace
+                .proposal
+                .ok_or(StoreError::Corrupt("workspaces.proposal_id"))?;
+            let version = u32::try_from(row.version)
+                .map_err(|_| StoreError::Corrupt("proposal_versions.version"))?;
+            Ok(ReviewCheckoutRow {
+                workspace,
+                proposal,
+                version,
+            })
+        })
+        .collect()
+}
+
 fn workspace_row(row: RawWorkspace) -> Result<WorkspaceRow, StoreError> {
     Ok(WorkspaceRow {
         id: number(row.number, WorkspaceId::try_from_db, "workspaces.number")?,

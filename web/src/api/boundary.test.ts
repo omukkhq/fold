@@ -25,7 +25,7 @@ describe("fixture boundary", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("keeps the retired board and task fixtures out of every source, tests included", () => {
+  it("keeps the retired board, task, workspace, diff, event and review fixtures out of every source, tests included", () => {
     const offenders = Object.entries(sources)
       .filter(
         ([path, source]) =>

@@ -2,9 +2,9 @@ import {
   Bookmark,
   ChevronRight,
   FilePen,
+  FolderTree,
   GitCommitHorizontal,
   GitCommitVertical,
-  GitPullRequest,
   type LucideIcon,
 } from "lucide-react";
 import type {
@@ -27,9 +27,9 @@ import {
 const STATE_ICONS: Record<StateKind, LucideIcon> = {
   revision: GitCommitHorizontal,
   changeset: GitCommitVertical,
-  proposal_version: GitPullRequest,
   checkpoint: Bookmark,
   workspace: FilePen,
+  tree: FolderTree,
 };
 
 function StateChip({
@@ -53,9 +53,17 @@ interface DiffHeaderProps {
   comparison: Comparison;
   files: readonly ComparedFile[];
   now: number;
+  /** When the working files were last read; null for a comparison of recorded states. */
+  readAt: number | null;
 }
 
-export function DiffHeader({ slug, comparison, files, now }: DiffHeaderProps) {
+export function DiffHeader({
+  slug,
+  comparison,
+  files,
+  now,
+  readAt,
+}: DiffHeaderProps) {
   const crumbs = comparisonCrumbs(slug, comparison);
   return (
     <header className="flex flex-col gap-8 px-24 pt-18 pb-12">
@@ -96,9 +104,13 @@ export function DiffHeader({ slug, comparison, files, now }: DiffHeaderProps) {
         <h1 className="text-screen leading-snug font-semibold text-text">
           {comparisonTitle(comparison)}
         </h1>
-        {comparison.read_at === null ? null : (
-          <span className="rounded-s bg-primary-soft px-8 py-2 text-caption font-medium text-primary-strong">
-            read {formatAsOf(now, comparison.read_at)}
+        {readAt === null ? null : (
+          <span className="inline-flex items-center gap-6 rounded-s bg-primary-soft px-8 py-2 text-caption font-medium text-primary-strong">
+            <span
+              aria-hidden="true"
+              className="size-7 rounded-full bg-primary"
+            />
+            live · read {formatAsOf(now, readAt)}
           </span>
         )}
       </div>

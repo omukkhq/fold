@@ -1,20 +1,13 @@
-import type { LiveWorkspace } from "../live/envelope";
-import { fromFixture } from "./fixture";
+import { api } from "./client";
+import { unwrap } from "./result";
+import type { components } from "./schema";
 
-/** No workspace-list route exists yet, so the schema has no type for it; these are the one local declaration of the list's shape. */
-export type WorkspaceState = "active" | "missing";
+type Schemas = components["schemas"];
 
-export type AttentionKind =
-  | "question"
-  | "human_review"
-  | "stalled"
-  | "stale_claim";
-
+export type WorkspaceState = Schemas["WorkspaceStateView"];
+export type AttentionKind = Schemas["AttentionKind"];
 /** The daemon decides attention; the web only shows it. */
-export interface AttentionItem {
-  kind: AttentionKind;
-}
-
+export type AttentionItem = Schemas["AttentionItem"];
 export interface ChangesetSummary {
   /** @example C-40 */
   id: string;
@@ -25,35 +18,47 @@ export interface ChangesetSummary {
   base: string;
 }
 
-export interface WorkspaceEntry {
-  /** @example ws-9 */
-  workspace: string;
-  /** @example T-12 */
-  task: string;
-  task_title: string;
-  /** The worker label, `agent` or `agent/worker`. */
-  worker: string;
-  state: WorkspaceState;
-  /** The revision the workspace is based on. */
-  base: string;
-  /** The current main revision. */
-  main: string;
-  /** How many revisions main is ahead of `base`; 0 when the base is current. */
-  behind: number;
-  /** UTC milliseconds. */
-  last_activity_at: number;
-  attention: AttentionItem[];
-  /** True after a `workspace.watch_degraded` event: changes refresh on a periodic scan. */
-  watch_degraded: boolean;
-  changesets: ChangesetSummary[];
-  /** The live state when the list was read; null for a workspace that is not active. */
-  live: LiveWorkspace | null;
+/** Fields the workspace routes leave out of `WorkspaceEntryView`. Each is optional, and the screen draws nothing for an absent one. */
+export interface WorkspaceDetails {
+  /** The changesets recorded in the workspace. */
+  changesets?: ChangesetSummary[];
 }
 
-const fixture = import.meta.env.DEV
-  ? () => import("../../fixtures/workspaces")
-  : undefined;
+/** A workspace with its live state when the list was read (null when not attached) and the attention items of its task. */
+export type WorkspaceEntry = Schemas["WorkspaceEntryView"] & WorkspaceDetails;
+/** The working changes of an active workspace after a full scan, with its watch mode and the files the scan could not read. */
+export type WorkspaceChanges = Schemas["WorkspaceChangesView"];
 
+/** The project's active and missing task workspaces, by id. */
 export async function listWorkspaces(slug: string): Promise<WorkspaceEntry[]> {
-  return fromFixture(fixture, (m) => (slug === "demo" ? m.workspaces : []), []);
+  const { workspaces } = await unwrap(
+    api.GET("/api/v1/projects/{slug}/workspaces", {
+      params: { path: { slug } },
+    }),
+  );
+  return workspaces;
+}
+
+/** One workspace in any state. Rejects with `workspace_not_found`. */
+export async function getWorkspace(
+  slug: string,
+  id: string,
+): Promise<WorkspaceEntry> {
+  return unwrap(
+    api.GET("/api/v1/projects/{slug}/workspaces/{id}", {
+      params: { path: { slug, id } },
+    }),
+  );
+}
+
+/** Rejects with `workspace_not_active` for a missing or closed workspace. */
+export async function getWorkspaceChanges(
+  slug: string,
+  id: string,
+): Promise<WorkspaceChanges> {
+  return unwrap(
+    api.GET("/api/v1/projects/{slug}/workspaces/{id}/changes", {
+      params: { path: { slug, id } },
+    }),
+  );
 }

@@ -40,6 +40,10 @@ describe("importsRetiredFixture", () => {
     'import { board } from "../../fixtures/board";',
     "import {x} from '../fixtures/tasks'",
     'const m = await import("../../fixtures/demoBoard");',
+    'import { workspaces } from "../../fixtures/workspaces";',
+    "import { comparisons } from '../../../fixtures/diff'",
+    'const e = await import("../../fixtures/events");',
+    'import { checkouts } from "../../fixtures/reviews";',
   ])("flags %s", (source) => {
     expect(importsRetiredFixture(source)).toBe(true);
   });
@@ -47,7 +51,9 @@ describe("importsRetiredFixture", () => {
   it.each([
     'import { agents } from "../../fixtures/agents";',
     'import { projects } from "../../fixtures/projects";',
+    'import { detail } from "../../fixtures/proposals";',
     'import { tasks } from "./tasks";',
+    'import { comparisons } from "../../fixtures/diffs";',
   ])("passes %s", (source) => {
     expect(importsRetiredFixture(source)).toBe(false);
   });

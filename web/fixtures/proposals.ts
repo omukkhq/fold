@@ -1,11 +1,4 @@
-import type {
-  ComparedFile,
-  ComparedState,
-  ComparisonFixture,
-  FileDiff,
-  Hunk,
-  HunkLine,
-} from "../src/api/diff";
+import type { ComparedFile, FileDiff, Hunk, HunkLine } from "../src/api/diff";
 import { ApiError } from "../src/api/errors";
 import type {
   ConflictFile,
@@ -18,6 +11,7 @@ import type {
   ProposalVersion,
   Review,
   ReviewComment,
+  VersionComparisonFixture,
 } from "../src/api/proposals";
 
 const NOW = Date.now();
@@ -28,22 +22,27 @@ function hash(seed: string): string {
   return seed.repeat(64).slice(0, 64);
 }
 
-const ctx = (text: string): HunkLine => ({ kind: "context", text });
-const add = (text: string): HunkLine => ({ kind: "add", text });
-const del = (text: string): HunkLine => ({ kind: "remove", text });
+type Draft = Pick<HunkLine, "kind" | "text">;
 
-function hunk(
-  oldStart: number,
-  newStart: number,
-  section: string,
-  lines: HunkLine[],
-): Hunk {
+const ctx = (text: string): Draft => ({ kind: "context", text: `${text}\n` });
+const add = (text: string): Draft => ({ kind: "added", text: `${text}\n` });
+const del = (text: string): Draft => ({ kind: "removed", text: `${text}\n` });
+
+/** Numbers each line from the hunk's start on its sides, as the daemon sends them. */
+function hunk(oldStart: number, newStart: number, drafts: Draft[]): Hunk {
+  let oldNo = oldStart;
+  let newNo = newStart;
+  const lines: HunkLine[] = drafts.map((d) => ({
+    ...d,
+    old_no: d.kind === "added" ? null : oldNo++,
+    new_no: d.kind === "removed" ? null : newNo++,
+    no_newline: false,
+  }));
   return {
     old_start: oldStart,
-    old_lines: lines.filter((l) => l.kind !== "add").length,
+    old_lines: lines.filter((l) => l.kind !== "added").length,
     new_start: newStart,
-    new_lines: lines.filter((l) => l.kind !== "remove").length,
-    section,
+    new_lines: lines.filter((l) => l.kind !== "removed").length,
     lines,
   };
 }
@@ -53,6 +52,20 @@ interface Entry {
   diff: FileDiff;
 }
 
+function diffOf(file: ComparedFile, hunks: Hunk[]): FileDiff {
+  return {
+    source: "recorded",
+    path: file.path,
+    previous_path: file.previous_path,
+    change: file.change,
+    binary: file.binary,
+    too_large: false,
+    old_hash: file.old_hash,
+    new_hash: file.new_hash,
+    hunks,
+  };
+}
+
 function text(
   path: string,
   change: ComparedFile["change"],
@@ -60,56 +73,44 @@ function text(
   seed: string,
 ): Entry {
   const lines = hunks.flatMap((h) => h.lines);
-  return {
-    file: {
-      path,
-      previous_path: null,
-      change,
-      added_lines: lines.filter((l) => l.kind === "add").length,
-      removed_lines: lines.filter((l) => l.kind === "remove").length,
-      binary: false,
-      old_hash: change === "added" ? null : hash(`${seed}0`),
-      new_hash: change === "deleted" ? null : hash(`${seed}1`),
-    },
-    diff: { path, binary: false, hunks },
+  const file: ComparedFile = {
+    path,
+    previous_path: null,
+    change,
+    added_lines: lines.filter((l) => l.kind === "added").length,
+    removed_lines: lines.filter((l) => l.kind === "removed").length,
+    binary: false,
+    old_hash: change === "added" ? null : hash(`${seed}0`),
+    new_hash: change === "deleted" ? null : hash(`${seed}1`),
   };
+  return { file, diff: diffOf(file, hunks) };
 }
 
 function binary(path: string, seed: string): Entry {
-  return {
-    file: {
-      path,
-      previous_path: null,
-      change: "modified",
-      added_lines: 0,
-      removed_lines: 0,
-      binary: true,
-      old_hash: hash(`${seed}0`),
-      new_hash: hash(`${seed}1`),
-    },
-    diff: { path, binary: true, hunks: [] },
+  const file: ComparedFile = {
+    path,
+    previous_path: null,
+    change: "modified",
+    added_lines: 0,
+    removed_lines: 0,
+    binary: true,
+    old_hash: hash(`${seed}0`),
+    new_hash: hash(`${seed}1`),
   };
-}
-
-function revision(id: string): ComparedState {
-  return { kind: "revision", id, base: null, task: null, worker: null };
-}
-
-function versionState(id: string, task: string): ComparedState {
-  return { kind: "proposal_version", id, base: null, task, worker: null };
+  return { file, diff: diffOf(file, []) };
 }
 
 function comparison(
-  from: ComparedState,
-  to: ComparedState,
+  from: string,
+  to: string,
   entries: Entry[],
-): ComparisonFixture {
+): VersionComparisonFixture {
   return {
     comparison: {
       from,
       to,
-      read_at: null,
       files: entries.map((e) => e.file),
+      warnings: [],
     },
     diffs: entries.map((e) => e.diff),
   };
@@ -131,7 +132,7 @@ const migrationV1 = text(
   "migrations/0004_reports.sql",
   "added",
   [
-    hunk(0, 1, "", [
+    hunk(0, 1, [
       ...TABLE.map(add),
       add("CREATE INDEX reports_kind_idx ON reports (kind);"),
     ]),
@@ -143,7 +144,7 @@ const migrationV2 = text(
   "migrations/0004_reports.sql",
   "added",
   [
-    hunk(0, 1, "", [
+    hunk(0, 1, [
       ...TABLE.map(add),
       add("CREATE INDEX reports_owner_date_idx"),
       add("    ON reports (owner_id, report_date);"),
@@ -156,7 +157,7 @@ const reportsRs = text(
   "src/db/reports.rs",
   "added",
   [
-    hunk(0, 1, "", [
+    hunk(0, 1, [
       add("use sqlx::SqlitePool;"),
       add(""),
       add("pub struct Report {"),
@@ -185,7 +186,7 @@ const dbMod = text(
   "src/db/mod.rs",
   "modified",
   [
-    hunk(10, 10, "pub mod schema {", [
+    hunk(10, 10, [
       ctx("pub mod schema {"),
       del("    pub mod users;"),
       del("    pub mod sessions;"),
@@ -202,7 +203,7 @@ const migrationV1ToV2 = text(
   "migrations/0004_reports.sql",
   "modified",
   [
-    hunk(8, 8, "", [
+    hunk(8, 8, [
       ctx(");"),
       ctx(""),
       del("CREATE INDEX reports_kind_idx ON reports (kind);"),
@@ -217,7 +218,7 @@ const tokensCss = text(
   "src/styles/tokens.css",
   "modified",
   [
-    hunk(1, 1, ":root {", [
+    hunk(1, 1, [
       ctx(":root {"),
       add("  --focus-ring: #4a7a73;"),
       add("  --scrim: #0a0a0b8c;"),
@@ -234,7 +235,7 @@ const themeToggle = text(
   "src/app/ThemeToggle.tsx",
   "added",
   [
-    hunk(0, 1, "", [
+    hunk(0, 1, [
       add("export function ThemeToggle() {"),
       add("  const { theme, setTheme } = useTheme()"),
       add(
@@ -250,7 +251,7 @@ const weekly = text(
   "src/charts/weekly.tsx",
   "modified",
   [
-    hunk(18, 18, "export function WeeklyChart({ rows }: Props) {", [
+    hunk(18, 18, [
       ctx("export function WeeklyChart({ rows }: Props) {"),
       del("  const totals = rows.map((r) => r.total)"),
       add("  const totals = weeklyTotals(rows)"),
@@ -265,7 +266,7 @@ const legacy = text(
   "src/charts/legacy.ts",
   "modified",
   [
-    hunk(3, 3, "", [
+    hunk(3, 3, [
       ctx("export function legacyScale(value: number) {"),
       del("  return value / 100"),
       add("  return value / 1000"),
@@ -279,7 +280,7 @@ const colors = text(
   "src/charts/colors.ts",
   "added",
   [
-    hunk(0, 1, "", [
+    hunk(0, 1, [
       add("export const SERIES = ['var(--label-sage)', 'var(--label-gold)']"),
     ]),
   ],
@@ -290,7 +291,7 @@ const themeLink = text(
   "src/charts/theme.ts",
   "modified",
   [
-    hunk(1, 1, "", [
+    hunk(1, 1, [
       del("export * from '../styles/chart-theme'"),
       add("../styles/chart-theme.ts"),
     ]),
@@ -301,54 +302,39 @@ const themeLink = text(
 const sprite = binary("public/chart-sprite.png", "l");
 
 function single(path: string, line: string, seed: string): Entry {
-  return text(path, "added", [hunk(0, 1, "", [add(line)])], seed);
+  return text(path, "added", [hunk(0, 1, [add(line)])], seed);
 }
 
 /** Keyed by `P-n vN` for a version against its base, and by `from..to` for two versions. */
-export const comparisons: Record<string, ComparisonFixture> = {
-  "P-1 v1": comparison(revision("r4"), versionState("P-1 v1", "T-16"), [
+export const comparisons: Record<string, VersionComparisonFixture> = {
+  "P-1 v1": comparison("r4", "P-1 v1", [
     single("web/package.json", '{ "name": "web" }', "m"),
   ]),
-  "P-2 v1": comparison(revision("r5"), versionState("P-2 v1", "T-15"), [
+  "P-2 v1": comparison("r5", "P-2 v1", [
     single("api/Cargo.toml", '[package] name = "api"', "n"),
   ]),
-  "P-3 v1": comparison(revision("r6"), versionState("P-3 v1", "T-11"), [
-    tokensCss,
-    themeToggle,
-  ]),
-  "P-4 v1": comparison(revision("r7"), versionState("P-4 v1", "T-3"), [
-    migrationV1,
-    reportsRs,
-    dbMod,
-  ]),
-  "P-4 v1..P-4 v2": comparison(
-    versionState("P-4 v1", "T-3"),
-    versionState("P-4 v2", "T-3"),
-    [migrationV1ToV2],
-  ),
-  "P-4 v2": comparison(revision("r7"), versionState("P-4 v2", "T-3"), [
-    migrationV2,
-    reportsRs,
-    dbMod,
-  ]),
-  "P-5 v1": comparison(revision("r7"), versionState("P-5 v1", "T-13"), [
+  "P-3 v1": comparison("r6", "P-3 v1", [tokensCss, themeToggle]),
+  "P-4 v1": comparison("r7", "P-4 v1", [migrationV1, reportsRs, dbMod]),
+  "P-4 v1..P-4 v2": comparison("P-4 v1", "P-4 v2", [migrationV1ToV2]),
+  "P-4 v2": comparison("r7", "P-4 v2", [migrationV2, reportsRs, dbMod]),
+  "P-5 v1": comparison("r7", "P-5 v1", [
     single(
       "src/components/TextField.tsx",
       "export function TextField() {}",
       "o",
     ),
   ]),
-  "P-6 v1": comparison(revision("r7"), versionState("P-6 v1", "T-12"), [
+  "P-6 v1": comparison("r7", "P-6 v1", [
     weekly,
     sprite,
     legacy,
     colors,
     themeLink,
   ]),
-  "P-7 v1": comparison(revision("r6"), versionState("P-7 v1", "T-14"), [
+  "P-7 v1": comparison("r6", "P-7 v1", [
     single("api/src/error.rs", "pub struct ErrorBody;", "p"),
   ]),
-  "P-8 v1": comparison(revision("r7"), versionState("P-8 v1", "T-9"), [
+  "P-8 v1": comparison("r7", "P-8 v1", [
     single("api/src/limit.rs", "pub struct Limiter;", "q"),
   ]),
 };
@@ -856,6 +842,14 @@ function summary(p: ProposalDetail): ProposalSummary {
 
 export function list(slug: string): ProposalSummary[] {
   return project(slug).map(summary);
+}
+
+/** Keyed as `pairKey` in the proposal seam writes it. */
+export function versionComparison(
+  slug: string,
+  key: string,
+): VersionComparisonFixture | null {
+  return slug === "demo" ? (comparisons[key] ?? null) : null;
 }
 
 export function detail(slug: string, id: string): ProposalDetail | null {

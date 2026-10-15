@@ -1,10 +1,13 @@
+import { useQuery } from "@tanstack/react-query";
+import { repositoryQuery } from "../repository/queries";
 import { Badge } from "../../components/badge/Badge";
 import { Avatar } from "../../components/avatar/Avatar";
 import { formatSince } from "../../format/time";
 import { attentionView } from "./attention";
 import { IdLink } from "./IdLink";
 import { taskHref } from "./links";
-import { lastActivity, type Panel } from "./panels";
+import { mainLine } from "./attention";
+import { lastActivity, workerOf, type Panel } from "./panels";
 import { recordedItems } from "./recorded";
 import { EditingPill, MissingBadge } from "./StatePill";
 import { MainZone, RecordedZone, WorkingZone } from "./Zones";
@@ -19,24 +22,33 @@ export function WorkspacePanel({ slug, panel, now }: WorkspacePanelProps) {
   const { entry, live } = panel;
   const activity = lastActivity(panel);
   const attention = attentionView(entry.attention, activity, now);
+  const worker = workerOf(panel);
+  const base = live?.base ?? entry.base;
+  const repository = useQuery(repositoryQuery(slug)).data;
   return (
     <section
-      aria-label={`Workspace ${entry.workspace}`}
+      aria-label={`Workspace ${entry.id}`}
       className="flex flex-col rounded-l bg-surface inset-ring inset-ring-border-subtle"
     >
       <header className="flex flex-wrap items-center gap-12 border-b border-border-subtle px-16 py-12">
         <span className="flex items-center gap-6 font-mono text-meta text-text">
-          <span aria-hidden="true" className="flex">
-            <Avatar name={entry.worker} />
-          </span>
-          {entry.worker}
+          {worker === null ? (
+            "no worker"
+          ) : (
+            <>
+              <span aria-hidden="true" className="flex">
+                <Avatar name={worker} />
+              </span>
+              {worker}
+            </>
+          )}
         </span>
         <IdLink href={taskHref(slug, entry.task)}>{entry.task}</IdLink>
         <h2 className="min-w-0 flex-1 truncate text-body font-semibold text-text">
           {entry.task_title}
         </h2>
         <span className="font-mono text-meta text-text-muted">
-          {entry.workspace} · base {entry.base}
+          {entry.id} · base {base}
         </span>
         <span className="text-meta text-text-muted">
           {formatSince(now, activity)}
@@ -56,7 +68,7 @@ export function WorkspacePanel({ slug, panel, now }: WorkspacePanelProps) {
         )}
         {attention.staleClaim ? <Badge tone="stale" /> : null}
       </header>
-      {entry.watch_degraded ? (
+      {entry.watch === "degraded" ? (
         <p
           role="note"
           className="border-b border-border-subtle bg-secondary-soft px-16 py-8 text-bar text-secondary-text"
@@ -84,7 +96,7 @@ export function WorkspacePanel({ slug, panel, now }: WorkspacePanelProps) {
           />
         </div>
       )}
-      <MainZone entry={entry} />
+      <MainZone entry={entry} text={mainLine(base, repository)} />
     </section>
   );
 }

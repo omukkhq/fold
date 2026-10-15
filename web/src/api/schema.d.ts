@@ -177,6 +177,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/events/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The project's stored events, newest first, one page at a time. The event stream carries every newer event as it happens. */
+        get: operations["list_event_history"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/feedback": {
         parameters: {
             query?: never;
@@ -375,6 +392,23 @@ export interface paths {
         };
         /** The head of main, the main directory and the newest 10 revisions. */
         get: operations["get_repository_state"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/reviews/checkouts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The project's active review checkouts with their worker, directory and proposal version. */
+        get: operations["list_review_checkouts"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1201,6 +1235,15 @@ export interface components {
             /** @enum {string} */
             kind: "snapshot";
         });
+        /** @description One page of stored events, newest first. */
+        EventHistory: {
+            /**
+             * Format: int64
+             * @description Pass it as `before` for the next older page; null once the page reaches the first event.
+             */
+            before: number | null;
+            events: components["schemas"]["DurableEvent"][];
+        };
         /** @description A human's feedback on a task, or reply to a message. */
         FeedbackRequest: {
             /** @description Plain text with some visible character. */
@@ -1731,6 +1774,36 @@ export interface components {
             comments?: components["schemas"]["CommentBody"][];
             verdict: components["schemas"]["ReviewVerdict"];
         };
+        ReviewCheckoutList: {
+            /** @description The active review checkouts, oldest first. */
+            checkouts: components["schemas"]["ReviewCheckoutView"][];
+        };
+        /** @description A read-only checkout of a proposal version for its reviewer. The daemon records no command run in it. */
+        ReviewCheckoutView: {
+            /**
+             * @description The base revision of the version.
+             * @example r17
+             */
+            base: string;
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            created_at: number;
+            /** @description Relative to the project root, such as `ws/review-p-4`. */
+            path: string;
+            /** @example P-4 */
+            proposal: string;
+            /**
+             * Format: int32
+             * @description The proposal version the checkout holds.
+             */
+            version: number;
+            /** @description The review worker that owns the checkout, such as `review/ci`. */
+            worker: string | null;
+            /** @example ws-12 */
+            workspace: string;
+        };
         ReviewClaim: {
             /**
              * Format: int64
@@ -2253,6 +2326,9 @@ export interface components {
             state: components["schemas"]["WorkspaceStateView"];
             /** @example T-12 */
             task: string;
+            /** @description The title of the task. */
+            task_title: string;
+            watch: components["schemas"]["WatchModeView"] | null;
         };
         /** @enum {string} */
         WorkspaceKindView: "task" | "review";
@@ -3231,6 +3307,88 @@ export interface operations {
                 };
             };
             /** @description `invalid_last_event_id`: `Last-Event-ID` is not a number or is above the newest event of the project */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_not_found`: the slug is not registered */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    list_event_history: {
+        parameters: {
+            query?: {
+                /** @description Only events with a lower `seq`; the newest events when absent. */
+                before?: number;
+                /** @description At most this many events; 100 when absent, at least 1, and above 500 gives 500. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of stored events */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventHistory"];
+                };
+            };
+            /** @description `invalid_request`: the query string is not valid; `invalid_event_filter`: `limit` is 0 */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -4484,6 +4642,74 @@ export interface operations {
                 };
             };
             /** @description The slug is not registered */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    list_review_checkouts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The active review checkouts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewCheckoutList"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_not_found`: the slug is not registered */
             404: {
                 headers: {
                     [name: string]: unknown;

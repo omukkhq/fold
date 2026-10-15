@@ -3,15 +3,12 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ComparedFile, Comparison, FileDiff, HunkLine } from "@/api/diff";
+import type { ComparedFile, FileDiff, FileWarning } from "@/api/diff";
+import { add, comparison, ctx, del, fileDiff, hunk } from "@/test/diff";
 import { DiffViewer, type FileDiffView } from "./DiffViewer";
 import type { DiffSelection, DiffThread } from "./selection";
 
 afterEach(cleanup);
-
-const ctx = (text: string): HunkLine => ({ kind: "context", text });
-const add = (text: string): HunkLine => ({ kind: "add", text });
-const del = (text: string): HunkLine => ({ kind: "remove", text });
 
 function file(path: string, extra: Partial<ComparedFile> = {}): ComparedFile {
   return {
@@ -27,40 +24,21 @@ function file(path: string, extra: Partial<ComparedFile> = {}): ComparedFile {
   };
 }
 
-const COMPARISON: Comparison = {
-  from: { kind: "revision", id: "r7", base: null, task: null, worker: null },
-  to: {
-    kind: "workspace",
-    id: "ws-7",
-    base: "r7",
-    task: "T-12",
-    worker: "frontend/ui",
-  },
-  read_at: null,
-  files: [
-    file("src/a.ts"),
-    file("img/logo.png", { binary: true, added_lines: 0, removed_lines: 0 }),
-  ],
-};
+const A = file("src/a.ts");
+
+const COMPARISON = comparison([
+  A,
+  file("img/logo.png", { binary: true, added_lines: 0, removed_lines: 0 }),
+]);
 
 // Context 1/1, removed 2, added 2 and 3, context 3/4.
-const DIFF: FileDiff = {
-  path: "src/a.ts",
-  binary: false,
-  hunks: [
-    {
-      old_start: 1,
-      old_lines: 3,
-      new_start: 1,
-      new_lines: 4,
-      section: "",
-      lines: [ctx("one"), del("two"), add("two!"), add("extra"), ctx("three")],
-    },
-  ],
-};
+const DIFF: FileDiff = fileDiff(A, [
+  hunk(1, 1, [ctx("one"), del("two"), add("two!"), add("extra"), ctx("three")]),
+]);
 
 interface HarnessProps {
   fileDiff?: FileDiffView;
+  warnings?: FileWarning[];
   threads?: DiffThread[];
   rowLimit?: number;
   onSelect?: (selection: DiffSelection | null) => void;
@@ -69,6 +47,7 @@ interface HarnessProps {
 
 function Harness({
   fileDiff = { status: "ready", diff: DIFF },
+  warnings = [],
   threads,
   rowLimit,
   onSelect,
@@ -80,7 +59,7 @@ function Harness({
     <>
       <output data-testid="selection">{JSON.stringify(selection)}</output>
       <DiffViewer
-        comparison={COMPARISON}
+        comparison={{ ...COMPARISON, warnings }}
         selectedPath={path}
         onSelectFile={setPath}
         fileDiff={fileDiff}
@@ -256,25 +235,12 @@ describe("DiffViewer", () => {
 
   it("opens a collapsed run and shows more rows of a large file", async () => {
     const user = userEvent.setup();
-    const long: FileDiff = {
-      path: "src/a.ts",
-      binary: false,
-      hunks: [
-        {
-          old_start: 1,
-          old_lines: 12,
-          new_start: 1,
-          new_lines: 13,
-          section: "",
-          lines: [
-            add("first"),
-            ...Array.from({ length: 12 }, (_, i) =>
-              ctx(`same ${String(i + 1)}`),
-            ),
-          ],
-        },
-      ],
-    };
+    const long: FileDiff = fileDiff(A, [
+      hunk(1, 1, [
+        add("first"),
+        ...Array.from({ length: 12 }, (_, i) => ctx(`same ${String(i + 1)}`)),
+      ]),
+    ]);
     render(<Harness fileDiff={{ status: "ready", diff: long }} rowLimit={6} />);
     await user.click(
       screen.getByRole("button", { name: "Show 9 unchanged lines" }),
@@ -287,6 +253,73 @@ describe("DiffViewer", () => {
     expect(
       screen.getAllByRole("gridcell", { name: /^Unchanged/ }),
     ).toHaveLength(10);
+  });
+
+  it("shows a file the daemon found too large by its hashes, not as an empty diff", () => {
+    render(
+      <Harness
+        fileDiff={{
+          status: "ready",
+          diff: fileDiff(A, [], { too_large: true }),
+        }}
+      />,
+    );
+    expect(
+      screen.getByText("Modified file over 1 MiB, compared by hash."),
+    ).toBeTruthy();
+    expect(screen.getByText("a".repeat(64))).toBeTruthy();
+    expect(screen.queryByRole("grid")).toBeNull();
+  });
+
+  it("shows a file the hunks call binary by its hashes", () => {
+    render(
+      <Harness
+        fileDiff={{ status: "ready", diff: fileDiff(A, [], { binary: true }) }}
+      />,
+    );
+    expect(
+      screen.getByText("Modified binary file, compared by hash."),
+    ).toBeTruthy();
+  });
+
+  it("lists an unstable file and shows it as unstable instead of an empty diff", async () => {
+    const user = userEvent.setup();
+    render(
+      <Harness warnings={[{ path: "logs/noisy.log", reason: "unstable" }]} />,
+    );
+    const list = screen.getByRole("navigation", { name: "Changed files" });
+    const row = within(list).getByRole("button", { name: /noisy\.log/ });
+    expect(row.textContent).toContain("unstable");
+    await user.click(row);
+    expect(
+      screen.getByRole("heading", { name: "logs/noisy.log" }),
+    ).toBeTruthy();
+    expect(screen.getByText(/kept changing while fold read it/)).toBeTruthy();
+    expect(screen.queryByRole("grid")).toBeNull();
+  });
+
+  it("shows a changed file that is also unstable as unstable", () => {
+    render(<Harness warnings={[{ path: "src/a.ts", reason: "unstable" }]} />);
+    const list = screen.getByRole("navigation", { name: "Changed files" });
+    expect(within(list).getAllByRole("button")).toHaveLength(2);
+    expect(screen.getByText(/kept changing while fold read it/)).toBeTruthy();
+    expect(screen.queryByRole("grid")).toBeNull();
+  });
+
+  it("marks the last line of a file without a terminator", () => {
+    const last = hunk(1, 1, [ctx("one"), add("end")]);
+    const line = last.lines[1];
+    if (line) {
+      line.text = "end";
+      line.no_newline = true;
+    }
+    render(
+      <Harness fileDiff={{ status: "ready", diff: fileDiff(A, [last]) }} />,
+    );
+    expect(
+      cell(/^Added line, new 2: end, no newline at end of file$/),
+    ).toBeTruthy();
+    expect(cell(/^Unchanged line, old 1, new 1: one$/)).toBeTruthy();
   });
 
   it("shows a skeleton while the file loads and an error with Retry when it fails", async () => {

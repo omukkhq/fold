@@ -2,6 +2,7 @@ import { ScanEye } from "lucide-react";
 import type { ReactNode } from "react";
 import { Avatar } from "../../components/avatar/Avatar";
 import { cn } from "../../lib/cn";
+import { checkoutText } from "./eventStream";
 import { useReviewCheckouts } from "./useEventStream";
 
 const ROW = "flex flex-wrap items-center gap-12 px-16 py-12";
@@ -79,13 +80,19 @@ export function ReviewCheckouts({ slug }: { slug: string }) {
         <div key={row.workspace} className={ROW}>
           <Title hidden={index > 0} />
           <span className="flex items-center gap-6 font-mono text-meta text-text">
-            <span aria-hidden="true" className="flex">
-              <Avatar name={row.worker} />
-            </span>
-            {row.worker}
+            {row.worker === null ? (
+              "no worker"
+            ) : (
+              <>
+                <span aria-hidden="true" className="flex">
+                  <Avatar name={row.worker} />
+                </span>
+                {row.worker}
+              </>
+            )}
           </span>
           <p className="min-w-0 flex-1 text-bar text-text-muted">
-            {row.where} · {row.last} · not recordable
+            {checkoutText(row)}
           </p>
         </div>
       ))}

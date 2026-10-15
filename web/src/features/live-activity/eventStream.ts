@@ -55,11 +55,12 @@ export function liveDot(state: ConnectionState): LiveDot {
 
 export interface CheckoutRow {
   workspace: string;
-  worker: string;
+  /** Null for a checkout whose worker is gone. */
+  worker: string | null;
   /** `P-4 v2 in ws/review-p-4`. */
   where: string;
-  /** `ran cargo nextest, 48 passed · 2 min ago`; the word before the first command. */
-  last: string;
+  /** `ran cargo nextest, 48 passed · 2 min ago`, or `no command yet`; null when the read carries no command field, as the daemon records none. */
+  last: string | null;
 }
 
 export function checkoutRows(
@@ -71,8 +72,17 @@ export function checkoutRows(
     worker: checkout.worker,
     where: `${checkout.proposal} v${String(checkout.version)} in ${checkout.path}`,
     last:
-      checkout.last_command === null
-        ? "no command yet"
-        : `${checkout.last_command.result} · ${formatSince(now, checkout.last_command.at)}`,
+      checkout.last_command === undefined
+        ? null
+        : checkout.last_command === null
+          ? "no command yet"
+          : `${checkout.last_command.result} · ${formatSince(now, checkout.last_command.at)}`,
   }));
+}
+
+/** The text after the worker: where the checkout is, the last command when known, and that nothing in it is recorded. */
+export function checkoutText(row: CheckoutRow): string {
+  return [row.where, row.last, "not recordable"]
+    .filter((part): part is string => part !== null)
+    .join(" · ");
 }

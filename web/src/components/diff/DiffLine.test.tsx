@@ -8,12 +8,12 @@ afterEach(cleanup);
 describe("DiffLine", () => {
   it("shows an added line with its sign, number and kind", () => {
     const { container } = render(
-      <DiffLine kind="add" newNo={12}>
+      <DiffLine kind="added" newNo={12}>
         let a = 1;
       </DiffLine>,
     );
     const row = container.firstElementChild;
-    expect(row?.getAttribute("data-kind")).toBe("add");
+    expect(row?.getAttribute("data-kind")).toBe("added");
     expect(row?.className).toContain("bg-diff-add");
     expect(screen.getByText("Added line")).toBeTruthy();
     expect(screen.getByText("+")).toBeTruthy();
@@ -25,7 +25,7 @@ describe("DiffLine", () => {
   it("uses the selected fill and shows the marker", () => {
     const { container } = render(
       <DiffLine
-        kind="remove"
+        kind="removed"
         oldNo={3}
         selected
         marker={<button type="button">Comment</button>}

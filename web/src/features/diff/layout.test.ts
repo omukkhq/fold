@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { ComparedFile, Hunk, HunkLine } from "@/api/diff";
+import { add, comparedFile as file, ctx, del, hunk } from "@/test/diff";
 import {
   collapseRuns,
   currentFile,
+  lineText,
+  shownEntry,
   fileBody,
   fileTree,
   hunkHeader,
@@ -15,44 +17,6 @@ import {
   type LineRow,
 } from "./layout";
 
-const ctx = (text: string): HunkLine => ({ kind: "context", text });
-const add = (text: string): HunkLine => ({ kind: "add", text });
-const del = (text: string): HunkLine => ({ kind: "remove", text });
-
-function hunk(
-  oldStart: number,
-  newStart: number,
-  lines: HunkLine[],
-  section = "",
-): Hunk {
-  return {
-    old_start: oldStart,
-    old_lines: lines.filter((l) => l.kind !== "add").length,
-    new_start: newStart,
-    new_lines: lines.filter((l) => l.kind !== "remove").length,
-    section,
-    lines,
-  };
-}
-
-function file(
-  path: string,
-  change: ComparedFile["change"],
-  extra: Partial<ComparedFile> = {},
-): ComparedFile {
-  return {
-    path,
-    previous_path: null,
-    change,
-    added_lines: 1,
-    removed_lines: 1,
-    binary: false,
-    old_hash: change === "added" ? null : `old-${path}`,
-    new_hash: change === "deleted" ? null : `new-${path}`,
-    ...extra,
-  };
-}
-
 const lines = (rows: DiffRow[]) =>
   rows.filter((r): r is LineRow => r.type === "line");
 
@@ -60,14 +24,55 @@ const context = (n: number, from = 1) =>
   Array.from({ length: n }, (_, i) => ctx(`c${String(from + i)}`));
 
 describe("hunkHeader", () => {
-  it("writes both ranges with U+2212 and the section", () => {
-    expect(
-      hunkHeader(hunk(12, 12, [ctx("a"), add("b")], "export function f() {")),
-    ).toBe("@@ −12,1 +12,2 @@ export function f() {");
+  it("writes both ranges with U+2212", () => {
+    expect(hunkHeader(hunk(12, 12, [ctx("a"), add("b")]))).toBe(
+      "@@ −12,1 +12,2 @@",
+    );
+  });
+});
+
+describe("lineText", () => {
+  it("drops the line terminator the daemon keeps, and only that", () => {
+    expect(lineText("a\n")).toBe("a");
+    expect(lineText("a\r\n")).toBe("a");
+    expect(lineText("a")).toBe("a");
+    expect(lineText("  \n\n")).toBe("  \n");
+  });
+});
+
+describe("line rows", () => {
+  it("take the numbers the daemon sent, not a count of their own", () => {
+    const [row] = hunkRows([
+      {
+        old_start: 1,
+        old_lines: 1,
+        new_start: 1,
+        new_lines: 1,
+        lines: [
+          {
+            kind: "context",
+            old_no: 7,
+            new_no: 9,
+            text: "x\n",
+            no_newline: false,
+          },
+        ],
+      },
+    ]).filter((r): r is LineRow => r.type === "line");
+    expect(row).toMatchObject({ oldNo: 7, newNo: 9, text: "x" });
   });
 
-  it("leaves out an empty section", () => {
-    expect(hunkHeader(hunk(1, 1, [ctx("a")]))).toBe("@@ −1,1 +1,1 @@");
+  it("carry the last line's missing terminator", () => {
+    const h = hunk(1, 1, [ctx("a"), add("b")]);
+    const last = h.lines[1];
+    if (last) {
+      last.text = "b";
+      last.no_newline = true;
+    }
+    expect(lines(hunkRows([h])).map((r) => [r.text, r.noNewline])).toEqual([
+      ["a", false],
+      ["b", true],
+    ]);
   });
 });
 
@@ -79,9 +84,9 @@ describe("line numbers", () => {
     expect(rows[0]).toMatchObject({ type: "hunk" });
     expect(lines(rows).map((r) => [r.kind, r.oldNo, r.newNo])).toEqual([
       ["context", 12, 12],
-      ["remove", 13, null],
-      ["remove", 14, null],
-      ["add", null, 13],
+      ["removed", 13, null],
+      ["removed", 14, null],
+      ["added", null, 13],
       ["context", 15, 14],
     ]);
   });
@@ -317,8 +322,55 @@ describe("fileBody", () => {
     ).toBe("unchanged");
   });
 
+  it("shows a note for a mode change with the same content", () => {
+    expect(
+      fileBody(
+        file("run.sh", "mode_changed", { old_hash: "h", new_hash: "h" }),
+      ),
+    ).toBe("unchanged");
+  });
+
   it("shows hunks for a rename with changes and for every other text file", () => {
     expect(fileBody(file("b.ts", "renamed"))).toBe("text");
     expect(fileBody(file("b.ts", "deleted"))).toBe("text");
+  });
+});
+
+describe("shownEntry", () => {
+  const files = [file("a.ts", "modified"), file("b.ts", "added")];
+  const unstable = { path: "noisy.log", reason: "unstable" as const };
+
+  it("shows the file the address names, else the first", () => {
+    expect(shownEntry(files, [], "b.ts")).toEqual({
+      kind: "file",
+      file: files[1],
+    });
+    expect(shownEntry(files, [unstable], undefined)).toEqual({
+      kind: "file",
+      file: files[0],
+    });
+  });
+
+  it("shows the warning of a warned path the address names", () => {
+    expect(shownEntry(files, [unstable], "noisy.log")).toEqual({
+      kind: "warning",
+      warning: unstable,
+    });
+  });
+
+  it("shows a warned file as its warning, never as an empty diff", () => {
+    const warned = { path: "a.ts", reason: "unstable" as const };
+    expect(shownEntry(files, [warned], "a.ts")).toEqual({
+      kind: "warning",
+      warning: warned,
+    });
+  });
+
+  it("shows the first warning when no file changed, and nothing when nothing is listed", () => {
+    expect(shownEntry([], [unstable], undefined)).toEqual({
+      kind: "warning",
+      warning: unstable,
+    });
+    expect(shownEntry([], [], undefined)).toBeNull();
   });
 });

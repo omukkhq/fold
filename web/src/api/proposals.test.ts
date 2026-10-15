@@ -1,17 +1,24 @@
 import { QueryClient } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { comparisons } from "../../fixtures/diff";
-import { reset } from "../../fixtures/proposals";
+import { comparisons, reset } from "../../fixtures/proposals";
 import { isApiError } from "./errors";
 import { keys } from "./keys";
 import {
   addComment,
   getProposal,
+  getVersionComparison,
+  getVersionFileDiff,
   integrateProposal,
   listProposals,
+  pairKey,
   submitReview,
 } from "./proposals";
-import { proposalQuery, proposalsQuery } from "./queries";
+import {
+  proposalQuery,
+  proposalsQuery,
+  versionComparisonQuery,
+  versionFileDiffQuery,
+} from "./queries";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -66,6 +73,70 @@ describe("the proposal fixture", () => {
 
   it("answers null for a proposal the project does not have", async () => {
     expect(await settle(getProposal("demo", "P-99"))).toBeNull();
+  });
+});
+
+describe("version comparisons", () => {
+  it("key a version alone and a pair of versions", () => {
+    expect(pairKey(undefined, "P-4 v2")).toBe("P-4 v2");
+    expect(pairKey("P-4 v1", "P-4 v2")).toBe("P-4 v1..P-4 v2");
+  });
+
+  it("have a diff with the generated shapes for every file, whose line counts match the hunks", () => {
+    for (const entry of Object.values(comparisons)) {
+      for (const file of entry.comparison.files) {
+        const diff = entry.diffs.find((d) => d.path === file.path);
+        expect(diff, file.path).toBeDefined();
+        const lines = diff?.hunks.flatMap((h) => h.lines) ?? [];
+        expect(lines.filter((l) => l.kind === "added")).toHaveLength(
+          file.added_lines,
+        );
+        expect(lines.filter((l) => l.kind === "removed")).toHaveLength(
+          file.removed_lines,
+        );
+        expect(lines.every((l) => l.text.endsWith("\n"))).toBe(true);
+        expect(diff?.binary).toBe(file.binary);
+      }
+    }
+  });
+
+  it("answer a version's comparison and one file's hunks", async () => {
+    const comparison = await settle(
+      getVersionComparison("demo", undefined, "P-4 v2"),
+    );
+    expect(comparison?.to).toBe("P-4 v2");
+    const path = comparison?.files[0]?.path ?? "";
+    const diff = await settle(
+      getVersionFileDiff("demo", undefined, "P-4 v2", path),
+    );
+    expect(diff.path).toBe(path);
+    expect(
+      await settle(getVersionComparison("other", undefined, "P-4 v2")),
+    ).toBeNull();
+  });
+
+  it("reject a path the comparison does not list", async () => {
+    const missing = getVersionFileDiff("demo", undefined, "P-4 v2", "nope");
+    const check = expect(missing).rejects.toSatisfy((e: unknown) =>
+      isApiError(e, "path_not_in_comparison"),
+    );
+    await vi.runAllTimersAsync();
+    await check;
+  });
+
+  it("are keyed apart from the diff route's comparisons", async () => {
+    const client = new QueryClient();
+    expect(
+      versionComparisonQuery("demo", undefined, "P-4 v2").queryKey,
+    ).toEqual(keys.versionComparison("demo", undefined, "P-4 v2"));
+    expect(
+      versionFileDiffQuery("demo", "P-4 v1", "P-4 v2", "a").queryKey,
+    ).toEqual(["demo", "version-file-diff", "P-4 v1", "P-4 v2", "a"]);
+    const loaded = client.query(
+      versionComparisonQuery("demo", "P-4 v1", "P-4 v2"),
+    );
+    await vi.runAllTimersAsync();
+    expect((await loaded)?.files.length).toBeGreaterThan(0);
   });
 });
 
@@ -202,6 +273,9 @@ describe("a production build", () => {
     const errors = await import("./errors");
     await expect(proposals.listProposals("demo")).resolves.toEqual([]);
     await expect(proposals.getProposal("demo", "P-4")).resolves.toBeNull();
+    await expect(
+      proposals.getVersionComparison("demo", undefined, "P-4 v2"),
+    ).resolves.toBeNull();
     const notFound = (e: unknown) => errors.isApiError(e, "not_found");
     await expect(
       proposals.submitReview("demo", "P-4", {

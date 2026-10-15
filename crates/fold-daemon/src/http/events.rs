@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::time::Duration;
 
+use axum::Json;
 use axum::http::HeaderMap;
 use axum::response::sse::{self, KeepAlive, Sse};
 use fold_core::events::{Event, EventType, types};
@@ -11,21 +12,23 @@ use futures_util::Stream;
 use serde::{Deserialize, Serialize};
 use utoipa::openapi::schema::{ObjectBuilder, SchemaType, Type};
 use utoipa::openapi::{RefOr, Schema};
-use utoipa::{PartialSchema, ToSchema};
+use utoipa::{IntoParams, PartialSchema, ToSchema};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 use super::Project;
 use super::agents::PresenceState;
-use super::error::{ApiError, ErrorEnvelope};
+use super::error::{ApiError, ApiQuery, ErrorEnvelope};
 use crate::daemon::AppState;
-use crate::services::events::{Feed, FeedItem, parse_last_event_id};
+use crate::services::events::{self, Feed, FeedItem, HistoryPage, parse_last_event_id};
 
 /// A comment line this often keeps proxies from closing a quiet stream; the web client counts the stream dead after three missed periods.
 const KEEP_ALIVE: Duration = Duration::from_secs(15);
 
 pub fn routes() -> OpenApiRouter<AppState> {
-    OpenApiRouter::new().routes(routes!(stream_events))
+    OpenApiRouter::new()
+        .routes(routes!(stream_events))
+        .routes(routes!(list_event_history))
 }
 
 /// The project's events as Server-Sent Events: every stored event after `Last-Event-ID`, then one `snapshot` of the live workspaces, then each stored and live event as it happens. A stored event's frame carries its `seq` as the SSE `id`; live and snapshot frames carry none, so the browser keeps the last stored `seq`. Live frames a client has not read yet collapse to the newest per workspace and per agent. A client that falls more than the bus capacity behind has its stream ended and reconnects with its last id.
@@ -73,6 +76,56 @@ pub async fn stream_events(
         }
     });
     Ok(Sse::new(frames).keep_alive(KeepAlive::new().interval(KEEP_ALIVE)))
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct HistoryQuery {
+    /// Only events with a lower `seq`; the newest events when absent.
+    pub before: Option<u64>,
+    /// At most this many events; 100 when absent, at least 1, and above 500 gives 500.
+    pub limit: Option<u32>,
+}
+
+/// One page of stored events, newest first.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct EventHistory {
+    #[schema(value_type = Vec<DurableEvent>)]
+    pub events: Vec<Event>,
+    /// Pass it as `before` for the next older page; null once the page reaches the first event.
+    #[schema(required = true)]
+    pub before: Option<u64>,
+}
+
+impl From<HistoryPage> for EventHistory {
+    fn from(page: HistoryPage) -> Self {
+        Self {
+            events: page.events,
+            before: page.before,
+        }
+    }
+}
+
+/// The project's stored events, newest first, one page at a time. The event stream carries every newer event as it happens.
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{slug}/events/history",
+    operation_id = "list_event_history",
+    params(("slug" = String, Path, description = "The project slug"), HistoryQuery),
+    responses(
+        (status = 200, description = "One page of stored events", body = EventHistory),
+        (status = 400, description = "`invalid_request`: the query string is not valid; `invalid_event_filter`: `limit` is 0", body = ErrorEnvelope),
+        (status = 404, description = "`project_not_found`: the slug is not registered", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn list_event_history(
+    Project(handle): Project,
+    ApiQuery(query): ApiQuery<HistoryQuery>,
+) -> Result<Json<EventHistory>, ApiError> {
+    let page = events::history(&handle.store, query.before, query.limit).await?;
+    Ok(Json(page.into()))
 }
 
 /// `None` for a live event that has no envelope variant, which this daemon never sends.

@@ -15,7 +15,11 @@ import {
   type NewReview,
   type ProposalDetail,
 } from "@/api/proposals";
-import { comparisonQuery, fileDiffQuery, proposalQuery } from "@/api/queries";
+import {
+  proposalQuery,
+  versionComparisonQuery,
+  versionFileDiffQuery,
+} from "@/api/queries";
 import { HrefLink } from "@/app/HrefLink";
 import { buttonClasses } from "@/components/button/buttonStyles";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
@@ -69,7 +73,7 @@ function useFileDiff(
   path: string | null,
 ): FileDiffView {
   const query = useQuery({
-    ...fileDiffQuery(slug, from, to, path ?? ""),
+    ...versionFileDiffQuery(slug, from, to, path ?? ""),
     enabled: path !== null,
   });
   if (query.isError) {
@@ -107,7 +111,7 @@ function DiffArea({
   onComment,
 }: DiffAreaProps) {
   const from = view.kind === "compare" ? view.fromRef : undefined;
-  const comparison = useQuery(comparisonQuery(slug, from, view.to));
+  const comparison = useQuery(versionComparisonQuery(slug, from, view.to));
   const [selection, setSelection] = useState<DiffSelection | null>(null);
   const files = comparison.data ? listedFiles(comparison.data.files) : [];
   const file = currentFile(files, search.path);

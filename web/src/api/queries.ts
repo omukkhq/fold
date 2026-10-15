@@ -4,8 +4,14 @@ import { RECENT_EVENTS, listAgents } from "./agents";
 import { keys } from "./keys";
 import { countAwaitingHuman, listThreads } from "./messages";
 import { getProject, listProjects } from "./projects";
-import { getProposal, listProposals } from "./proposals";
+import {
+  getProposal,
+  getVersionComparison,
+  getVersionFileDiff,
+  listProposals,
+} from "./proposals";
 import { getSession } from "./session";
+import { getWorkspace } from "./workspaces";
 
 export const projectsQuery = () =>
   queryOptions({ queryKey: keys.projects(), queryFn: listProjects });
@@ -19,6 +25,7 @@ export const projectQuery = (slug: string) =>
 export const sessionQuery = () =>
   queryOptions({ queryKey: keys.session(), queryFn: getSession });
 
+/** Recorded states never change; a workspace side is read again when the event stream reports a change. */
 export const comparisonQuery = (
   slug: string,
   from: string | undefined,
@@ -27,6 +34,7 @@ export const comparisonQuery = (
   queryOptions({
     queryKey: keys.comparison(slug, from, to),
     queryFn: () => getComparison(slug, from, to),
+    staleTime: Infinity,
   });
 
 export const fileDiffQuery = (
@@ -38,6 +46,30 @@ export const fileDiffQuery = (
   queryOptions({
     queryKey: keys.fileDiff(slug, from, to, path),
     queryFn: () => getFileDiff(slug, from, to, path),
+    staleTime: Infinity,
+  });
+
+export const versionComparisonQuery = (
+  slug: string,
+  from: string | undefined,
+  to: string,
+) =>
+  queryOptions({
+    queryKey: keys.versionComparison(slug, from, to),
+    queryFn: () => getVersionComparison(slug, from, to),
+    staleTime: Infinity,
+  });
+
+export const versionFileDiffQuery = (
+  slug: string,
+  from: string | undefined,
+  to: string,
+  path: string,
+) =>
+  queryOptions({
+    queryKey: keys.versionFileDiff(slug, from, to, path),
+    queryFn: () => getVersionFileDiff(slug, from, to, path),
+    staleTime: Infinity,
   });
 
 /** The event stream keeps these fresh, so a cached answer never goes stale by time. */
@@ -73,5 +105,12 @@ export const proposalQuery = (slug: string, id: string) =>
   queryOptions({
     queryKey: keys.proposal(slug, id),
     queryFn: () => getProposal(slug, id),
+    staleTime: Infinity,
+  });
+
+export const workspaceQuery = (slug: string, id: string) =>
+  queryOptions({
+    queryKey: keys.workspace(slug, id),
+    queryFn: () => getWorkspace(slug, id),
     staleTime: Infinity,
   });

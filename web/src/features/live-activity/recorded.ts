@@ -11,12 +11,12 @@ export interface RecordedItem {
   href: string;
 }
 
-/** Checkpoints and changesets of one workspace, newest first, each with the link to its comparison. */
+/** Checkpoints and changesets of one workspace, newest first, each with the link to its comparison. No route sends changesets yet, so the list holds them only when a workspace read carries them. */
 export function recordedItems(
   slug: string,
   base: string,
   checkpoints: LiveWorkspace["checkpoints"],
-  changesets: readonly ChangesetSummary[],
+  changesets: readonly ChangesetSummary[] = [],
 ): RecordedItem[] {
   const items: RecordedItem[] = [
     ...checkpoints.map((checkpoint) => ({

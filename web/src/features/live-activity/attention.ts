@@ -1,4 +1,5 @@
-import type { AttentionItem, WorkspaceEntry } from "../../api/workspaces";
+import type { AttentionItem } from "../../api/workspaces";
+import { revisionCount, revisionsAhead } from "../../format/revisions";
 import { formatQuiet } from "../../format/time";
 
 export interface AttentionView {
@@ -24,12 +25,23 @@ export function attentionView(
   };
 }
 
+/** Where the base stands against main; the base alone until main has been read. */
 export function mainLine(
-  entry: Pick<WorkspaceEntry, "base" | "main" | "behind">,
+  base: string,
+  repository:
+    | {
+        head: string | null;
+        recent: readonly { id: string; parent: string | null }[];
+      }
+    | undefined,
 ): string {
-  if (entry.behind === 0) {
-    return `Base ${entry.base} is current main.`;
+  const head = repository?.head ?? null;
+  if (repository === undefined || head === null) {
+    return `Base ${base}.`;
   }
-  const noun = entry.behind === 1 ? "revision" : "revisions";
-  return `Main is at ${entry.main}; base ${entry.base} is ${String(entry.behind)} ${noun} behind.`;
+  if (head === base) {
+    return `Base ${base} is current main.`;
+  }
+  const behind = revisionCount(revisionsAhead(repository.recent, base));
+  return `Main is at ${head}; base ${base} is ${behind} behind.`;
 }

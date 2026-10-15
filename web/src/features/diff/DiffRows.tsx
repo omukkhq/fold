@@ -9,7 +9,7 @@ import {
 import { DiffLine } from "@/components/diff/DiffLine";
 import { cn } from "@/lib/cn";
 import type { DiffRow, LineRow } from "./layout";
-import { hiddenLinesText, lineLabel } from "./present";
+import { NO_NEWLINE, hiddenLinesText, lineLabel } from "./present";
 import {
   EMPTY_STATE,
   isLastSelected,
@@ -147,6 +147,14 @@ export function DiffRows({
             }}
           >
             {row.text}
+            {row.noNewline ? (
+              <span
+                aria-hidden="true"
+                className="ml-8 text-meta text-text-muted"
+              >
+                {NO_NEWLINE}
+              </span>
+            ) : null}
           </DiffLine>
         </div>
         {renderThread

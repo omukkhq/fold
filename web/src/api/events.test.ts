@@ -1,13 +1,14 @@
-import { describe, expect, it } from "vitest";
-import { ApiError } from "./errors";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { errorReply, stubFetch } from "@/test/stubFetch";
+import { EVENT_LIMIT } from "../live/eventList";
+import { ApiError, isApiError } from "./errors";
 import { eventTransport, listEvents, openEventStream } from "./events";
 
 describe("eventTransport", () => {
-  it("opens the daemon stream when no fixture loader is given", async () => {
+  it("opens the daemon's event stream of the project", async () => {
     const urls: string[] = [];
     const transport = eventTransport(
       "demo",
-      undefined,
       (input) => {
         urls.push((input as Request).url);
         return Promise.resolve(new Response("data: x\n\n"));
@@ -24,32 +25,6 @@ describe("eventTransport", () => {
     expect(urls).toEqual(["http://localhost/api/v1/projects/demo/events"]);
     expect(out.join("")).toBe("data: x\n\n");
   });
-
-  it("streams the fixture script for the slug when a loader is given", async () => {
-    const calls: [string, number | null][] = [];
-    const transport = eventTransport("demo", () =>
-      Promise.resolve({
-        fixtureEventTransport: (slug: string) => (lastSeq: number | null) => {
-          calls.push([slug, lastSeq]);
-          return Promise.resolve(
-            (async function* () {
-              await Promise.resolve();
-              yield "data: fixture\n\n";
-            })(),
-          );
-        },
-      }),
-    );
-    const out: string[] = [];
-    for await (const chunk of await transport(
-      7,
-      new AbortController().signal,
-    )) {
-      out.push(chunk);
-    }
-    expect(calls).toEqual([["demo", 7]]);
-    expect(out).toEqual(["data: fixture\n\n"]);
-  });
 });
 
 const BASE = "http://localhost/";
@@ -59,7 +34,6 @@ function daemon(respond: (request: Request) => Response) {
   const requests: Request[] = [];
   const transport = eventTransport(
     "demo",
-    undefined,
     (input) => {
       const request = input as Request;
       requests.push(request);
@@ -144,31 +118,64 @@ describe("the daemon transport", () => {
 });
 
 describe("openEventStream", () => {
-  it("streams the fixture script in a development build", async () => {
-    const aborted = new AbortController();
-    aborted.abort();
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("reads the daemon's stream through fetch", async () => {
+    const requests: Request[] = [];
+    vi.stubGlobal("location", new URL("http://localhost/p/demo/activity"));
+    vi.stubGlobal("fetch", (request: Request) => {
+      requests.push(request);
+      return Promise.resolve(new Response("data: live\n\n"));
+    });
     const chunks: string[] = [];
-    for await (const chunk of await openEventStream("demo")(
-      null,
-      aborted.signal,
-    )) {
+    for await (const chunk of await openEventStream("demo")(7, signal())) {
       chunks.push(chunk);
     }
-    expect(chunks).toHaveLength(1);
-    expect(chunks[0]).toContain('"kind":"snapshot"');
+    expect(chunks.join("")).toBe("data: live\n\n");
+    expect(new URL(requests[0]?.url ?? "").pathname).toBe(
+      "/api/v1/projects/demo/events",
+    );
+    expect(requests[0]?.headers.get("Last-Event-ID")).toBe("7");
   });
 });
 
 describe("listEvents", () => {
-  it("answers empty where no fixture is loaded and for another slug", async () => {
-    expect(await listEvents("other")).toEqual([]);
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
-  it("lists the fixture history of the demo project newest first", async () => {
-    const events = await listEvents("demo");
-    expect(events.length).toBeGreaterThan(0);
-    expect(events.map((e) => e.seq)).toEqual(
-      [...events.map((e) => e.seq)].sort((a, b) => b - a),
+  it("reads the newest stored events, as many as the sidebar keeps", async () => {
+    const event = {
+      seq: 9,
+      type: "task.created",
+      actor: "frontend",
+      task: "T-1",
+      proposal: null,
+      workspace: null,
+      revision: null,
+      data: {},
+      created_at: 1,
+    };
+    const calls = stubFetch({
+      "GET /api/v1/projects/demo/events/history": {
+        body: { events: [event], before: null },
+      },
+    });
+    expect(await listEvents("demo")).toEqual([event]);
+    expect(calls[0]?.search.get("limit")).toBe(String(EVENT_LIMIT));
+  });
+
+  it("rejects with the daemon's code", async () => {
+    stubFetch({
+      "GET /api/v1/projects/demo/events/history": errorReply(
+        404,
+        "project_not_found",
+      ),
+    });
+    await expect(listEvents("demo")).rejects.toSatisfy((e: unknown) =>
+      isApiError(e, "project_not_found"),
     );
   });
 });

@@ -1,0 +1,280 @@
+{
+  "first": {
+    "last_event_id": null,
+    "frames": [
+      {
+        "event": "snapshot",
+        "data": {
+          "kind": "snapshot",
+          "seq": 41,
+          "workspaces": [
+            {
+              "workspace": "ws-1",
+              "task": "T-1",
+              "worker": "frontend/ui",
+              "base": "r7",
+              "files": [],
+              "summary": "no changes",
+              "last_activity_at": 1760000040000,
+              "checkpoints": [],
+              "proposal": null,
+              "stalled": false
+            },
+            {
+              "workspace": "ws-2",
+              "task": "T-2",
+              "worker": "backend",
+              "base": "r7",
+              "files": [
+                {
+                  "path": "api/src/lib.rs",
+                  "previous_path": null,
+                  "change": "modified",
+                  "added_lines": 4,
+                  "removed_lines": 1,
+                  "binary": false
+                }
+              ],
+              "summary": "1 file: 1 modified (+4 -1)",
+              "last_activity_at": 1760000030000,
+              "checkpoints": [],
+              "proposal": null,
+              "stalled": false
+            },
+            {
+              "workspace": "ws-3",
+              "task": "T-3",
+              "worker": "frontend/forms",
+              "base": "r7",
+              "files": [],
+              "summary": "no changes",
+              "last_activity_at": 1760000020000,
+              "checkpoints": [],
+              "proposal": null,
+              "stalled": false
+            }
+          ]
+        }
+      },
+      {
+        "event": "workspace.changed",
+        "data": {
+          "kind": "workspace_changed",
+          "workspace": "ws-1",
+          "task": "T-1",
+          "worker": "frontend/ui",
+          "base": "r7",
+          "files": [
+            {
+              "path": "src/login.tsx",
+              "previous_path": null,
+              "change": "modified",
+              "added_lines": 3,
+              "removed_lines": 1,
+              "binary": false
+            }
+          ],
+          "summary": "1 file: 1 modified (+3 -1)",
+          "last_activity_at": 1760000041500,
+          "checkpoints": [],
+          "proposal": null,
+          "stalled": false
+        }
+      },
+      {
+        "id": 42,
+        "event": "checkpoint.recorded",
+        "data": {
+          "kind": "event",
+          "seq": 42,
+          "type": "checkpoint.recorded",
+          "actor": "frontend/ui",
+          "task": "T-1",
+          "proposal": null,
+          "workspace": "ws-1",
+          "revision": null,
+          "data": {
+            "checkpoint": "ck-4",
+            "kind": "automatic",
+            "reason": "quiet"
+          },
+          "created_at": 1760000042000
+        }
+      }
+    ]
+  },
+  "second": {
+    "last_event_id": 42,
+    "frames": [
+      {
+        "id": 43,
+        "event": "workspace.archived",
+        "data": {
+          "kind": "event",
+          "seq": 43,
+          "type": "workspace.archived",
+          "actor": "fold",
+          "task": "T-2",
+          "proposal": null,
+          "workspace": "ws-2",
+          "revision": null,
+          "data": {
+            "reason": "integrated"
+          },
+          "created_at": 1760000043000
+        }
+      },
+      {
+        "id": 44,
+        "event": "task.status_changed",
+        "data": {
+          "kind": "event",
+          "seq": 44,
+          "type": "task.status_changed",
+          "actor": "fold",
+          "task": "T-2",
+          "proposal": null,
+          "workspace": null,
+          "revision": null,
+          "data": {
+            "from": "review",
+            "to": "done"
+          },
+          "created_at": 1760000044000
+        }
+      },
+      {
+        "event": "snapshot",
+        "data": {
+          "kind": "snapshot",
+          "seq": 44,
+          "workspaces": [
+            {
+              "workspace": "ws-1",
+              "task": "T-1",
+              "worker": "frontend/ui",
+              "base": "r7",
+              "files": [
+                {
+                  "path": "src/login.tsx",
+                  "previous_path": null,
+                  "change": "modified",
+                  "added_lines": 5,
+                  "removed_lines": 1,
+                  "binary": false
+                }
+              ],
+              "summary": "1 file: 1 modified (+5 -1)",
+              "last_activity_at": 1760000045500,
+              "checkpoints": [
+                {
+                  "id": "ck-4",
+                  "label": null,
+                  "automatic": true,
+                  "created_at": 1760000044000
+                }
+              ],
+              "proposal": null,
+              "stalled": false
+            },
+            {
+              "workspace": "ws-3",
+              "task": "T-3",
+              "worker": "frontend/forms",
+              "base": "r7",
+              "files": [],
+              "summary": "no changes",
+              "last_activity_at": 1760000020000,
+              "checkpoints": [],
+              "proposal": null,
+              "stalled": false
+            }
+          ]
+        }
+      },
+      {
+        "event": "workspace.changed",
+        "data": {
+          "kind": "workspace_changed",
+          "workspace": "ws-1",
+          "task": "T-1",
+          "worker": "frontend/ui",
+          "base": "r7",
+          "files": [
+            {
+              "path": "src/login.tsx",
+              "previous_path": null,
+              "change": "modified",
+              "added_lines": 6,
+              "removed_lines": 1,
+              "binary": false
+            },
+            {
+              "path": "src/forms.ts",
+              "previous_path": null,
+              "change": "modified",
+              "added_lines": 2,
+              "removed_lines": 0,
+              "binary": false
+            }
+          ],
+          "summary": "2 files: 2 modified (+8 -1)",
+          "last_activity_at": 1760000047000,
+          "checkpoints": [
+            {
+              "id": "ck-4",
+              "label": null,
+              "automatic": true,
+              "created_at": 1760000044000
+            }
+          ],
+          "proposal": null,
+          "stalled": false
+        }
+      },
+      {
+        "id": 45,
+        "event": "workspace.abandoned",
+        "data": {
+          "kind": "event",
+          "seq": 45,
+          "type": "workspace.abandoned",
+          "actor": "frontend/forms",
+          "task": "T-3",
+          "proposal": null,
+          "workspace": "ws-3",
+          "revision": null,
+          "data": {
+            "reason": "restarting"
+          },
+          "created_at": 1760000045000
+        }
+      },
+      {
+        "event": "workspace.changed",
+        "data": {
+          "kind": "workspace_changed",
+          "workspace": "ws-3",
+          "task": "T-3",
+          "worker": "frontend/forms",
+          "base": "r7",
+          "files": [
+            {
+              "path": "src/a.ts",
+              "previous_path": null,
+              "change": "modified",
+              "added_lines": 1,
+              "removed_lines": 0,
+              "binary": false
+            }
+          ],
+          "summary": "1 file: 1 modified (+1 -0)",
+          "last_activity_at": 1760000048500,
+          "checkpoints": [],
+          "proposal": null,
+          "stalled": false
+        }
+      }
+    ]
+  }
+}

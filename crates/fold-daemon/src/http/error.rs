@@ -69,7 +69,8 @@ fn status_of(code: &str) -> Option<StatusCode> {
         | codes::INVALID_CHECKLIST_NAME
         | codes::INVALID_STEP_TEXT
         | codes::INVALID_LAST_EVENT_ID
-        | codes::INVALID_PUSH_TARGET => Some(StatusCode::BAD_REQUEST),
+        | codes::INVALID_PUSH_TARGET
+        | codes::INVALID_EVENT_FILTER => Some(StatusCode::BAD_REQUEST),
         codes::HUMAN_NAME_REQUIRED | codes::AUTH_REQUIRED | codes::INVALID_TOKEN => {
             Some(StatusCode::UNAUTHORIZED)
         }

@@ -21,6 +21,7 @@ use crate::services::workspaces::{WorkspaceError, WorkspaceRef, WorkspaceView};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReviewCheckout {
     pub workspace: WorkspaceView,
+    pub proposal: ProposalId,
     pub version: u32,
 }
 
@@ -48,7 +49,7 @@ impl ReviewService {
         if let Some(existing) =
             workspaces::active_review_checkout(read, proposal, version, worker.id).await?
         {
-            return self.checkout(existing, version).await;
+            return self.checkout(existing, proposal, version).await;
         }
         let tree = reviews::list_versions(read, proposal)
             .await?
@@ -114,7 +115,7 @@ impl ReviewService {
             Ok(Inserted::Created(id)) => id,
             Ok(Inserted::Existing(existing)) => {
                 remove_unnamed(proposal, &path, dir).await;
-                return self.checkout(existing, version).await;
+                return self.checkout(existing, proposal, version).await;
             }
             Err(error) => {
                 remove_unnamed(proposal, &path, dir).await;
@@ -122,19 +123,37 @@ impl ReviewService {
             }
         };
         self.bus.publish(buffer);
-        self.checkout(id, version).await
+        self.checkout(id, proposal, version).await
+    }
+
+    /// Every active review checkout of the project with the version it holds, oldest first. It reads only.
+    pub async fn list_review_checkouts(&self) -> Result<Vec<ReviewCheckout>, ReviewError> {
+        let rows = workspaces::list_active_review_checkouts(self.store.read()).await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| ReviewCheckout {
+                workspace: WorkspaceView::from(row.workspace),
+                proposal: row.proposal,
+                version: row.version,
+            })
+            .collect())
     }
 
     async fn checkout(
         &self,
         workspace: WorkspaceId,
+        proposal: ProposalId,
         version: u32,
     ) -> Result<ReviewCheckout, ReviewError> {
         let workspace = self
             .workspaces
             .get(WorkspaceRef::Workspace(workspace))
             .await?;
-        Ok(ReviewCheckout { workspace, version })
+        Ok(ReviewCheckout {
+            workspace,
+            proposal,
+            version,
+        })
     }
 }
 

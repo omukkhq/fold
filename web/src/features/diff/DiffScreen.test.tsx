@@ -6,22 +6,110 @@ import {
   createRootRoute,
   createRouter,
 } from "@tanstack/react-router";
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, render, screen, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Comparison } from "@/api/diff";
-import { comparisons } from "../../../fixtures/diff";
+import {
+  add,
+  comparedFile,
+  comparison,
+  ctx,
+  fileDiff,
+  hunk,
+  state,
+} from "@/test/diff";
+import { stubFetch } from "@/test/stubFetch";
 import { DiffScreen } from "./DiffScreen";
 import type { DiffSearch } from "./search";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
-function show(search: DiffSearch, comparison: Comparison | null) {
+const LOGIN = comparedFile("src/routes/login.tsx", "modified");
+const WORKING = comparison([LOGIN]);
+// Today, so the pill shows the time without a date.
+const READ_AT = new Date().setHours(14, 12, 31, 0);
+
+const WORKSPACE = {
+  id: "ws-7",
+  task: "T-12",
+  owner: "frontend/ui",
+  kind: "task",
+  path: "ws/t-12",
+  base: "r7",
+  state: "active",
+  proposal: null,
+  changed_files: 1,
+  conflicted: 0,
+  last_activity_at: READ_AT,
+  created_at: READ_AT,
+  closed_at: null,
+  live: {
+    workspace: "ws-7",
+    task: "T-12",
+    worker: "frontend/ui",
+    base: "r7",
+    files: [],
+    summary: "no changes",
+    last_activity_at: READ_AT,
+    checkpoints: [
+      { id: "ck-31", label: null, automatic: true, created_at: READ_AT },
+    ],
+    proposal: null,
+    stalled: false,
+  },
+  attention: [],
+};
+
+function daemon() {
+  return stubFetch({
+    "GET /api/v1/projects/demo/diff": (request) => ({
+      body: {
+        view: "file",
+        ...fileDiff(LOGIN, [hunk(1, 1, [ctx("a"), add("b")])]),
+        path: request.search.get("path") ?? "",
+      },
+    }),
+    "GET /api/v1/projects/demo/workspaces/ws-7": { body: WORKSPACE },
+    "GET /api/v1/projects/demo/repository": {
+      body: {
+        head: "r8",
+        main_path: "main",
+        recent: [revision("r8", "r7"), revision("r7", null)],
+      },
+    },
+  });
+}
+
+function revision(id: string, parent: string | null) {
+  return {
+    id,
+    parent,
+    created_at: READ_AT,
+    tree: "t",
+    origin: "proposal",
+    task: null,
+    proposal: null,
+    title: null,
+    author: null,
+    pull: null,
+  };
+}
+
+function show(
+  search: DiffSearch,
+  data: Comparison | null,
+  readAt: number | null = READ_AT,
+) {
   const root = createRootRoute({
     component: () => (
       <DiffScreen
         slug="demo"
         search={search}
-        comparison={comparison}
+        comparison={data}
+        readAt={readAt}
         onSelectFile={() => undefined}
       />
     ),
@@ -39,45 +127,94 @@ function show(search: DiffSearch, comparison: Comparison | null) {
 
 describe("DiffScreen", () => {
   it("labels a workspace against its base Working changes and says it is not history", async () => {
-    const entry = comparisons["r7..ws-7"];
-    show(
-      { from: "r7", to: "ws-7", path: "src/routes/login.tsx" },
-      entry?.comparison ?? null,
-    );
+    const calls = daemon();
+    show({ from: "r7", to: "ws-7", path: "src/routes/login.tsx" }, WORKING);
     expect(
       await screen.findByRole("heading", { name: "Working changes in ws-7" }),
     ).toBeTruthy();
     expect(screen.getByText(/They are not history/)).toBeTruthy();
+    expect(screen.getByText(/and again on each change/)).toBeTruthy();
     expect(screen.getByText("Working files")).toBeTruthy();
     expect(screen.getByText("base r7")).toBeTruthy();
     expect(
       await screen.findByRole("grid", { name: "Diff of src/routes/login.tsx" }),
     ).toBeTruthy();
+    const read = calls.find((c) => c.path.endsWith("/diff"));
+    expect(Object.fromEntries(read?.search ?? [])).toEqual({
+      from: "r7",
+      to: "ws-7",
+      path: "src/routes/login.tsx",
+    });
   });
 
-  it("shows the same working changes for to alone and reads the file without from", async () => {
-    show(
-      { to: "ws-7", path: "src/routes/login.tsx" },
-      comparisons["ws-7"]?.comparison ?? null,
+  it("shows the live pill with the time the working files were read", async () => {
+    daemon();
+    show({ from: "r7", to: "ws-7" }, WORKING);
+    expect(await screen.findByText("live · read 14:12:31")).toBeTruthy();
+  });
+
+  it("fills Compare with from the base, main and the checkpoints", async () => {
+    daemon();
+    show({ from: "r7", to: "ws-7" }, WORKING);
+    const list = await screen.findByRole("navigation", {
+      name: "Compare with",
+    });
+    expect(
+      await within(list).findByRole("link", {
+        name: "main r8 · 1 revision ahead",
+      }),
+    ).toBeTruthy();
+    const links = within(list).getAllByRole("link");
+    expect(links.map((l) => l.textContent)).toEqual([
+      "base r7 (default)",
+      "main r8 · 1 revision ahead",
+      "checkpoint ck-31",
+    ]);
+    expect(links[0]?.getAttribute("aria-current")).toBe("page");
+    expect(links[2]?.getAttribute("href")).toBe(
+      "/p/demo/diff?from=ck-31&to=ws-7",
     );
-    expect(
-      await screen.findByRole("heading", { name: "Working changes in ws-7" }),
-    ).toBeTruthy();
-    expect(
-      await screen.findByRole("grid", { name: "Diff of src/routes/login.tsx" }),
-    ).toBeTruthy();
   });
 
-  it("names two revisions and shows no working-changes note", async () => {
-    show({ from: "r7", to: "r8" }, comparisons["r7..r8"]?.comparison ?? null);
+  it("names two revisions and shows no working-changes note or live pill", async () => {
+    daemon();
+    show(
+      { from: "r7", to: "r8" },
+      comparison([LOGIN], {
+        source: "recorded",
+        from: state("revision", "r7"),
+        to: state("revision", "r8"),
+      }),
+    );
     expect(
       await screen.findByRole("heading", { name: "Changes from r7 to r8" }),
     ).toBeTruthy();
     expect(screen.queryByText(/They are not history/)).toBeNull();
+    expect(screen.queryByText(/live · read/)).toBeNull();
+  });
+
+  it("lists an unstable file of a workspace without other changes", async () => {
+    daemon();
+    show(
+      { from: "r7", to: "ws-7" },
+      comparison([], { warnings: [{ path: "noisy.log", reason: "unstable" }] }),
+    );
+    expect(
+      await screen.findByText(/kept changing while fold read it/),
+    ).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "No changes" })).toBeNull();
   });
 
   it("shows No changes for a comparison without files", async () => {
-    show({ from: "r8", to: "r8" }, comparisons["r8..r8"]?.comparison ?? null);
+    daemon();
+    show(
+      { from: "r8", to: "r8" },
+      comparison([], {
+        source: "recorded",
+        from: state("revision", "r8"),
+        to: state("revision", "r8"),
+      }),
+    );
     expect(
       await screen.findByRole("heading", { name: "No changes" }),
     ).toBeTruthy();

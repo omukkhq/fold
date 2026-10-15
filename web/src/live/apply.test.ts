@@ -34,7 +34,8 @@ function board() {
 }
 
 let client: QueryClient;
-let invalidated: string[];
+/** A filter without a key, such as a predicate, records `undefined`. */
+let invalidated: (string | undefined)[];
 
 beforeEach(() => {
   client = new QueryClient();
@@ -248,7 +249,8 @@ describe("patch rules", () => {
     const next = live("ws-1", "1 file, +2 -0");
     applyEvent(client, slug, guarded({ kind: "workspace_changed", ...next }));
     expect(client.getQueryData(keys.workspaceLive(slug, "ws-1"))).toEqual(next);
-    expect(invalidated).toEqual([]);
+    // Only the workspace diffs, picked by a predicate rather than a key, are read again.
+    expect(invalidated.every((key) => key === undefined)).toBe(true);
   });
 
   it("leaves the workspace list and the activity list alone on a workspace_changed frame", () => {
@@ -354,7 +356,8 @@ describe("patch rules", () => {
     expect(client.getQueryData(keys.workspace(slug, "ws-2"))).toEqual({
       id: "ws-2",
     });
-    expect(invalidated).toEqual([]);
+    // Only the workspace diffs, picked by a predicate rather than a key, are read again.
+    expect(invalidated.every((key) => key === undefined)).toBe(true);
   });
 });
 
@@ -375,7 +378,7 @@ describe("invalidation rules", () => {
       applyEvent(client, slug, ev(type));
       expect(hit(keys.repository(slug))).toBe(true);
       expect(hit(keys.board(slug))).toBe(true);
-      expect(invalidated.filter((k) => k.includes("proposal"))).toEqual([]);
+      expect(invalidated.filter((k) => k?.includes("proposal"))).toEqual([]);
     }
   });
 
@@ -499,6 +502,58 @@ describe("invalidation rules", () => {
     expect(client.getQueryData(keys.workspaceLive(slug, "ws-5"))).toEqual(
       live("ws-5", "x"),
     );
+  });
+});
+
+describe("ended workspaces", () => {
+  it("drop a change frame that arrives after the stored event that ended the workspace, until the next snapshot", () => {
+    applyEvent(
+      client,
+      slug,
+      ev("workspace.abandoned", { workspace: "ws-4", task: "T-1" }),
+    );
+    applyEvent(client, slug, {
+      kind: "workspace_changed",
+      ...live("ws-4", "late"),
+    });
+    expect(
+      client.getQueryData(keys.workspaceLive(slug, "ws-4")),
+    ).toBeUndefined();
+    applyEvent(client, slug, {
+      kind: "workspace_changed",
+      ...live("ws-5", "other"),
+    });
+    expect(client.getQueryData(keys.workspaceLive(slug, "ws-5"))).toEqual(
+      live("ws-5", "other"),
+    );
+    applyEvent(
+      client,
+      slug,
+      ev("workspace.archived", { workspace: "ws-4", task: "T-1" }),
+    );
+    expect(client.getQueryData(keys.endedWorkspaces(slug))).toEqual(["ws-4"]);
+    applyEvent(client, slug, { kind: "snapshot", seq: 3, workspaces: [] });
+    expect(client.getQueryData(keys.endedWorkspaces(slug))).toBeUndefined();
+  });
+
+  it("read every live workspace's diffs again on a snapshot", () => {
+    client.setQueryData(keys.comparison(slug, "r1", "ws-5"), { files: [] });
+    client.setQueryData(keys.comparison(slug, "ws-5", "r1"), { files: [] });
+    client.setQueryData(keys.comparison(slug, "r1", "r2"), { files: [] });
+    client.setQueryData(keys.comparison("other", "r1", "ws-5"), {
+      files: [],
+    });
+    applyEvent(client, slug, {
+      kind: "snapshot",
+      seq: 3,
+      workspaces: [live("ws-5", "x")],
+    });
+    const invalid = (key: readonly unknown[]) =>
+      client.getQueryState(key)?.isInvalidated;
+    expect(invalid(keys.comparison(slug, "r1", "ws-5"))).toBe(true);
+    expect(invalid(keys.comparison(slug, "ws-5", "r1"))).toBe(true);
+    expect(invalid(keys.comparison(slug, "r1", "r2"))).toBe(false);
+    expect(invalid(keys.comparison("other", "r1", "ws-5"))).toBe(false);
   });
 });
 

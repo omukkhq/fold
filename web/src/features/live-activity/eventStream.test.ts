@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { DurableEvent } from "../../api/events";
 import { EVENT_LIMIT } from "../../live/eventList";
-import { checkoutRows, eventRows, liveDot } from "./eventStream";
+import { checkoutRows, checkoutText, eventRows, liveDot } from "./eventStream";
 
 function event(seq: number, over: Partial<DurableEvent> = {}): DurableEvent {
   return {
@@ -73,6 +73,8 @@ describe("checkoutRows", () => {
           proposal: "P-4",
           version: 2,
           worker: "review/quality",
+          base: "r7",
+          created_at: NOW,
           last_command: {
             result: "ran cargo nextest, 48 passed",
             at: NOW - 120_000,
@@ -83,8 +85,9 @@ describe("checkoutRows", () => {
           path: "ws/review-p-5",
           proposal: "P-5",
           version: 1,
-          worker: "review/security",
-          last_command: null,
+          worker: null,
+          base: "r7",
+          created_at: NOW,
         },
       ],
       NOW,
@@ -95,6 +98,41 @@ describe("checkoutRows", () => {
       where: "P-4 v2 in ws/review-p-4",
       last: "ran cargo nextest, 48 passed · 2 min ago",
     });
-    expect(rows[1]?.last).toBe("no command yet");
+    expect(rows[1]).toMatchObject({ worker: null, last: null });
+    const [none] = checkoutRows(
+      [
+        {
+          workspace: "ws-14",
+          path: "ws/review-p-6",
+          proposal: "P-6",
+          version: 1,
+          worker: "review",
+          base: "r7",
+          created_at: NOW,
+          last_command: null,
+        },
+      ],
+      NOW,
+    );
+    expect(none?.last).toBe("no command yet");
+  });
+
+  it("leaves out an unknown last command, as the daemon records none", () => {
+    expect(
+      checkoutText({
+        workspace: "ws-13",
+        worker: "review",
+        where: "P-5 v1 in ws/review-p-5",
+        last: null,
+      }),
+    ).toBe("P-5 v1 in ws/review-p-5 · not recordable");
+    expect(
+      checkoutText({
+        workspace: "ws-12",
+        worker: "review",
+        where: "P-4 v2 in ws/review-p-4",
+        last: "ran tests · 2 min ago",
+      }),
+    ).toBe("P-4 v2 in ws/review-p-4 · ran tests · 2 min ago · not recordable");
   });
 });

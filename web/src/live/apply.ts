@@ -222,11 +222,64 @@ function patchTask(
   }
 }
 
+const DIFF_KEYS = new Set(["comparison", "file-diff"]);
+
+/** A comparison or file diff with the workspace on either side reads working files, which a change makes stale. */
+function invalidateWorkspaceDiffs(
+  queryClient: QueryClient,
+  slug: string,
+  workspace: string,
+): void {
+  void queryClient.invalidateQueries({
+    predicate: ({ queryKey }) =>
+      queryKey[0] === slug &&
+      typeof queryKey[1] === "string" &&
+      DIFF_KEYS.has(queryKey[1]) &&
+      (queryKey[2] === workspace || queryKey[3] === workspace),
+  });
+}
+
+function endedWorkspaces(queryClient: QueryClient, slug: string): string[] {
+  const ended = queryClient.getQueryData(keys.endedWorkspaces(slug));
+  return Array.isArray(ended)
+    ? ended.filter((id): id is string => typeof id === "string")
+    : [];
+}
+
+/** The watcher can publish a change after the commit that ended the workspace; the snapshot after that knows the workspace is gone. */
+function markEnded(
+  queryClient: QueryClient,
+  slug: string,
+  workspace: string,
+): void {
+  const ended = endedWorkspaces(queryClient, slug);
+  if (!ended.includes(workspace)) {
+    queryClient.setQueryData(keys.endedWorkspaces(slug), [...ended, workspace]);
+  }
+}
+
+function applyWorkspaceChanged(
+  queryClient: QueryClient,
+  slug: string,
+  live: LiveWorkspace,
+): void {
+  if (endedWorkspaces(queryClient, slug).includes(live.workspace)) {
+    return;
+  }
+  queryClient.setQueryData(keys.workspaceLive(slug, live.workspace), live);
+  invalidateWorkspaceDiffs(queryClient, slug, live.workspace);
+}
+
+/** The snapshot replaces every live state, so a workspace that ended while the client was away disappears, and the diffs of each live workspace are read again for the changes the client missed. */
 function applySnapshot(
   queryClient: QueryClient,
   slug: string,
   workspaces: LiveWorkspace[],
 ): void {
+  queryClient.removeQueries({
+    queryKey: keys.endedWorkspaces(slug),
+    exact: true,
+  });
   const present = new Set(workspaces.map((w) => w.workspace));
   for (const query of queryClient
     .getQueryCache()
@@ -241,6 +294,7 @@ function applySnapshot(
       keys.workspaceLive(slug, workspace.workspace),
       workspace,
     );
+    invalidateWorkspaceDiffs(queryClient, slug, workspace.workspace);
   }
 }
 
@@ -353,7 +407,9 @@ export function invalidateProject(
 ): void {
   void queryClient.invalidateQueries({
     queryKey: [slug],
-    predicate: (query) => query.queryKey[1] !== keys.workspaceLiveAll(slug)[1],
+    predicate: (query) =>
+      query.queryKey[1] !== keys.workspaceLiveAll(slug)[1] &&
+      query.queryKey[1] !== keys.endedWorkspaces(slug)[1],
   });
 }
 
@@ -390,6 +446,7 @@ function applyStored(
       queryKey: keys.workspaceLive(slug, event.workspace),
       exact: true,
     });
+    markEnded(queryClient, slug, event.workspace);
   }
   for (const queryKey of invalidationKeys(slug, event.type, domain, event)) {
     void queryClient.invalidateQueries({ queryKey });
@@ -411,10 +468,7 @@ export function applyEvent(
     return;
   }
   if (event.kind === "workspace_changed") {
-    queryClient.setQueryData(
-      keys.workspaceLive(slug, event.workspace),
-      liveWorkspaceOf(event),
-    );
+    applyWorkspaceChanged(queryClient, slug, liveWorkspaceOf(event));
     return;
   }
   if (event.kind === "agent_presence_changed") {

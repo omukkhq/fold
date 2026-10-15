@@ -378,6 +378,8 @@ pub struct WorkspaceEntryView {
     pub id: WorkspaceId,
     #[schema(value_type = String, example = "T-12")]
     pub task: TaskId,
+    /// The title of the task.
+    pub task_title: String,
     /// The worker that owns the workspace, such as `frontend/ui`.
     #[schema(required = true)]
     pub owner: Option<String>,
@@ -406,6 +408,9 @@ pub struct WorkspaceEntryView {
     /// The working changes now; null for a missing or closed workspace and for a review checkout.
     #[schema(required = true)]
     pub live: Option<LiveWorkspace>,
+    /// How the daemon follows the working files; null when `live` is null. A `workspace.watch_degraded` event reports the change to `degraded`.
+    #[schema(required = true)]
+    pub watch: Option<WatchModeView>,
     /// Why the task needs a person; empty when nothing does.
     pub attention: Vec<AttentionItem>,
 }
@@ -416,6 +421,7 @@ impl From<WorkspaceEntry> for WorkspaceEntryView {
         Self {
             id: workspace.id,
             task: workspace.task,
+            task_title: entry.task_title.as_str().to_owned(),
             owner: workspace.worker.map(|worker| worker.as_str().to_owned()),
             kind: workspace.kind.into(),
             path: workspace.path,
@@ -427,6 +433,7 @@ impl From<WorkspaceEntry> for WorkspaceEntryView {
             last_activity_at: workspace.last_activity_at,
             created_at: workspace.created_at,
             closed_at: workspace.closed_at,
+            watch: entry.live.as_ref().map(|live| live.watch.into()),
             live: entry.live.map(|live| live.view.clone()),
             attention: attention(entry.attention),
         }
@@ -495,6 +502,15 @@ pub enum WatchModeView {
     Degraded,
 }
 
+impl From<WatchMode> for WatchModeView {
+    fn from(mode: WatchMode) -> Self {
+        match mode {
+            WatchMode::Watching => Self::Watching,
+            WatchMode::Degraded => Self::Degraded,
+        }
+    }
+}
+
 /// The working changes of an active task workspace, read after a full scan.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct WorkspaceChangesView {
@@ -516,10 +532,7 @@ impl From<WorkspaceChanges> for WorkspaceChangesView {
         Self {
             source: ChangeSource::Working,
             live: state.view.clone(),
-            watch: match state.watch {
-                WatchMode::Watching => WatchModeView::Watching,
-                WatchMode::Degraded => WatchModeView::Degraded,
-            },
+            watch: state.watch.into(),
             warnings: state.warnings.iter().map(FileWarning::from).collect(),
             unfinished_write: changes.unfinished,
         }

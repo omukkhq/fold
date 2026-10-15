@@ -6,12 +6,12 @@ import {
   type DiffLineKind,
 } from "./diffLine";
 
-const KINDS: DiffLineKind[] = ["add", "remove", "context", "hunk"];
+const KINDS: DiffLineKind[] = ["added", "removed", "context", "hunk"];
 
 describe("diffLineStyle", () => {
   it("signs additions and removals", () => {
-    expect(diffLineStyle("add").sign).toBe("+");
-    expect(diffLineStyle("remove").sign).toBe("\u2212");
+    expect(diffLineStyle("added").sign).toBe("+");
+    expect(diffLineStyle("removed").sign).toBe("\u2212");
     expect(diffLineStyle("context").sign).toBe(" ");
     expect(diffLineStyle("hunk").sign).toBe("");
   });
@@ -29,8 +29,8 @@ describe("W06 diff rows", () => {
   });
 
   it("signs an addition in primary text and a removal in danger", () => {
-    expect(diffLineStyle("add").signClass).toBe("text-primary-text");
-    expect(diffLineStyle("remove").signClass).toBe("text-danger");
+    expect(diffLineStyle("added").signClass).toBe("text-primary-text");
+    expect(diffLineStyle("removed").signClass).toBe("text-danger");
   });
 });
 

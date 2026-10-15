@@ -1,6 +1,6 @@
-import { ChevronsDown } from "lucide-react";
+import { ChevronsDown, TriangleAlert } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import type { ComparedFile, Comparison, FileDiff } from "@/api/diff";
+import type { ComparedFile, FileDiff, FileWarning } from "@/api/diff";
 import { Button } from "@/components/button/Button";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
@@ -8,12 +8,19 @@ import { DiffRows } from "./DiffRows";
 import { FileList } from "./FileList";
 import {
   ROW_LIMIT,
-  currentFile,
   fileBody,
   layoutFile,
   listedFiles,
+  shownEntry,
 } from "./layout";
-import { binaryNote, changeNote, lineCounts, moreRowsText } from "./present";
+import {
+  binaryNote,
+  changeNote,
+  lineCounts,
+  moreRowsText,
+  tooLargeNote,
+  warningNote,
+} from "./present";
 import type { DiffSelection, DiffThread } from "./selection";
 
 /** The selected file's hunks as its query holds them. */
@@ -22,8 +29,14 @@ export type FileDiffView =
   | { status: "error"; retry: () => void }
   | { status: "ready"; diff: FileDiff };
 
+/** The part of a comparison the viewer draws: the changed files and the working files that could not be read. */
+export interface DiffFiles {
+  files: readonly ComparedFile[];
+  warnings: readonly FileWarning[];
+}
+
 export interface DiffViewerProps {
-  comparison: Comparison;
+  comparison: DiffFiles;
   selectedPath: string | undefined;
   onSelectFile: (path: string) => void;
   /** The overline above the file list, when the screen draws one. */
@@ -58,6 +71,26 @@ function Hash({ side, hash }: { side: string; hash: string | null }) {
   );
 }
 
+function HashOnly({
+  note,
+  oldHash,
+  newHash,
+}: {
+  note: string;
+  oldHash: string | null;
+  newHash: string | null;
+}) {
+  return (
+    <div className="flex flex-col gap-8 px-14 py-12">
+      <p className="text-bar text-text-muted">{note}</p>
+      <dl className="flex flex-col gap-4">
+        <Hash side="old" hash={oldHash} />
+        <Hash side="new" hash={newHash} />
+      </dl>
+    </div>
+  );
+}
+
 function FileBody({
   file,
   fileDiff,
@@ -70,13 +103,11 @@ function FileBody({
 
   if (body === "binary") {
     return (
-      <div className="flex flex-col gap-8 px-14 py-12">
-        <p className="text-bar text-text-muted">{binaryNote(file.change)}</p>
-        <dl className="flex flex-col gap-4">
-          <Hash side="old" hash={file.old_hash} />
-          <Hash side="new" hash={file.new_hash} />
-        </dl>
-      </div>
+      <HashOnly
+        note={binaryNote(file.change)}
+        oldHash={file.old_hash}
+        newHash={file.new_hash}
+      />
     );
   }
   if (body === "unchanged") {
@@ -98,7 +129,17 @@ function FileBody({
       />
     );
   }
-  const layout = layoutFile(fileDiff.diff.hunks, expanded, limit);
+  const diff = fileDiff.diff;
+  if (diff.binary || diff.too_large) {
+    return (
+      <HashOnly
+        note={diff.binary ? binaryNote(diff.change) : tooLargeNote(diff.change)}
+        oldHash={diff.old_hash}
+        newHash={diff.new_hash}
+      />
+    );
+  }
+  const layout = layoutFile(diff.hunks, expanded, limit);
   if (layout.rows.length === 0) {
     return (
       <p className="px-14 py-12 text-bar text-text-muted">
@@ -142,18 +183,50 @@ export function DiffViewer({
   ...body
 }: DiffViewerProps) {
   const files = listedFiles(comparison.files);
-  const file = currentFile(files, selectedPath);
-  if (!file) return null;
+  const shown = shownEntry(files, comparison.warnings, selectedPath);
+  if (!shown) return null;
+  const list = (
+    <FileList
+      files={files}
+      warnings={comparison.warnings}
+      selectedPath={
+        shown.kind === "file" ? shown.file.path : shown.warning.path
+      }
+      onSelectFile={onSelectFile}
+      title={filesTitle}
+    />
+  );
+  if (shown.kind === "warning") {
+    return (
+      <div className="flex min-w-0 flex-1 items-start gap-20">
+        {list}
+        <section
+          aria-label={shown.warning.path}
+          className="min-w-0 flex-1 overflow-hidden rounded-l border border-border-subtle bg-surface"
+        >
+          <header className="flex items-center gap-10 border-b border-border-subtle bg-bg px-14 py-9">
+            <h2 className="min-w-0 flex-1 truncate font-mono text-code font-semibold text-text">
+              {shown.warning.path}
+            </h2>
+          </header>
+          <p className="flex items-start gap-8 px-14 py-12 text-bar text-text-muted">
+            <TriangleAlert
+              aria-hidden="true"
+              size={14}
+              className="mt-2 shrink-0 text-secondary-text"
+            />
+            {warningNote(shown.warning)}
+          </p>
+        </section>
+      </div>
+    );
+  }
+  const file = shown.file;
   const counts = lineCounts(file);
   const note = changeNote(file);
   return (
     <div className="flex min-w-0 flex-1 items-start gap-20">
-      <FileList
-        files={files}
-        selectedPath={file.path}
-        onSelectFile={onSelectFile}
-        title={filesTitle}
-      />
+      {list}
       <section
         aria-label={file.path}
         className="min-w-0 flex-1 overflow-hidden rounded-l border border-border-subtle bg-surface"

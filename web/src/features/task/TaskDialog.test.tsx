@@ -27,10 +27,11 @@ import {
 import type { Board, BoardCard } from "@/api/board";
 import type { components } from "@/api/schema";
 import type { TaskDetail } from "@/api/tasks";
+import { applyEvent } from "@/live/apply";
 import { liveStatusStore } from "@/live/status";
 import { agent, worker } from "@/test/agents";
 import { daemon, noContent, ok, refuse, type Call } from "@/test/daemon";
-import { boardCard, boardView, taskView } from "@/test/payloads";
+import { boardCard, boardView, liveWorkspace, taskView } from "@/test/payloads";
 import { routeTree } from "@/routeTree.gen";
 import { ThemeProvider } from "@/theme/ThemeProvider";
 import { Markdown } from "./Markdown";
@@ -39,6 +40,23 @@ vi.mock("@/api/client", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/api/client")>();
   const { daemon: fake } = await import("@/test/daemon");
   return { ...real, api: fake.api };
+});
+
+// The event stream stays open and silent; a test that needs live workspace state applies the frame the daemon would send.
+vi.mock("@/api/events", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/api/events")>();
+  return {
+    ...real,
+    openEventStream: () => (_lastSeq: number | null, signal: AbortSignal) =>
+      Promise.resolve({
+        async *[Symbol.asyncIterator]() {
+          await new Promise((resolve) => {
+            signal.addEventListener("abort", resolve);
+          });
+          yield* [];
+        },
+      }),
+  };
 });
 
 // The fixtures answer without the development delay, so the whole app, board included, can be driven test after test.
@@ -414,7 +432,7 @@ const region = (dialog: HTMLElement, name: string) =>
 
 describe("the task dialog route", () => {
   it("opens from a board card with the board's filters and shows the sections the task payload has data for", async () => {
-    const { router } = setup("/p/demo/board?label=ui");
+    const { router, queryClient } = setup("/p/demo/board?label=ui");
     const link = await screen.findByRole("link", { name: TITLE }, WAIT);
     expect(link.getAttribute("href")).toBe("/p/demo/t/T-2?label=ui");
     await userEvent.click(link);
@@ -456,7 +474,22 @@ describe("the task dialog route", () => {
     ).toBeTruthy();
     expect(within(region(dialog, "Workspace")).getByText("ws-2")).toBeTruthy();
 
-    // The development event stream reports the workspace; the task payload names only its id.
+    // The event stream reports the workspace; the task payload names only its id.
+    applyEvent(queryClient, "demo", {
+      kind: "workspace_changed",
+      ...liveWorkspace("ws-2", "T-2", {
+        files: [
+          {
+            path: "src/routes/login.tsx",
+            previous_path: null,
+            change: "modified",
+            added_lines: 3,
+            removed_lines: 1,
+            binary: false,
+          },
+        ],
+      }),
+    });
     const changes = region(dialog, "Working changes");
     const [fileLink] = await within(changes).findAllByRole(
       "link",

@@ -13,8 +13,8 @@ mod wait;
 
 pub use feed::{Feed, FeedItem, REPLAY_PAGE, parse_last_event_id};
 pub use query::{
-    DEFAULT_LIMIT, EventPage, EventQuery, EventService, EventsError, MAX_LIMIT, query,
-    read_since_cursor,
+    DEFAULT_LIMIT, EventPage, EventQuery, EventService, EventsError, HistoryPage, MAX_LIMIT,
+    history, query, read_since_cursor,
 };
 pub use wait::{DEFAULT_TIMEOUT_S, MAX_TIMEOUT_S, TICK, WaitQuery, WaitStep, Waiter};
 

@@ -1,3 +1,4 @@
+import type { ComparedFile, FileDiff, FileWarning } from "./diff";
 import { ApiError } from "./errors";
 import { fromFixture } from "./fixture";
 
@@ -222,6 +223,24 @@ export interface IntegrateRequest {
   version: number;
 }
 
+/** A proposal version compared with its base or with another version. The diff route takes no proposal version, so the proposal screens read this shape; `from` and `to` are the ids the screen named, such as `P-3 v2`. */
+export interface VersionComparison {
+  from: string;
+  to: string;
+  files: ComparedFile[];
+  warnings: FileWarning[];
+}
+
+export interface VersionComparisonFixture {
+  comparison: VersionComparison;
+  diffs: FileDiff[];
+}
+
+/** A version against its base is keyed by the version alone, two versions by `from..to`. */
+export function pairKey(from: string | undefined, to: string): string {
+  return from === undefined ? to : `${from}..${to}`;
+}
+
 const fixture = import.meta.env.DEV
   ? () => import("../../fixtures/proposals")
   : undefined;
@@ -241,6 +260,42 @@ export async function getProposal(
   id: string,
 ): Promise<ProposalDetail | null> {
   return fromFixture(fixture, (m) => m.detail(slug, id), null);
+}
+
+/** Null when there is nothing to compare, such as a version the project does not have. */
+export async function getVersionComparison(
+  slug: string,
+  from: string | undefined,
+  to: string,
+): Promise<VersionComparison | null> {
+  const entry = await fromFixture(
+    fixture,
+    (m) => m.versionComparison(slug, pairKey(from, to)),
+    null,
+  );
+  return entry ? entry.comparison : null;
+}
+
+/** Rejects with `path_not_in_comparison` for a path the comparison does not list. */
+export async function getVersionFileDiff(
+  slug: string,
+  from: string | undefined,
+  to: string,
+  path: string,
+): Promise<FileDiff> {
+  const entry = await fromFixture(
+    fixture,
+    (m) => m.versionComparison(slug, pairKey(from, to)),
+    null,
+  );
+  const diff = entry?.diffs.find((d) => d.path === path);
+  if (!diff) {
+    throw new ApiError(
+      "path_not_in_comparison",
+      `${path} is not in the comparison`,
+    );
+  }
+  return diff;
 }
 
 /** Resolves with the proposal as the daemon holds it after the write; rejects with the daemon's codes, such as `version_superseded`. */

@@ -24,7 +24,7 @@ function DiffRoute() {
   const { slug } = Route.useParams();
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
-  const { data } = useSuspenseQuery(
+  const { data, dataUpdatedAt } = useSuspenseQuery(
     comparisonQuery(slug, search.from, search.to),
   );
   return (
@@ -32,6 +32,7 @@ function DiffRoute() {
       slug={slug}
       search={search}
       comparison={data}
+      readAt={dataUpdatedAt}
       onSelectFile={(path) => {
         void navigate({ search: (old) => ({ ...old, path }), replace: true });
       }}

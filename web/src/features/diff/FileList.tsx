@@ -1,10 +1,13 @@
-import type { ComparedFile } from "@/api/diff";
+import { TriangleAlert } from "lucide-react";
+import type { ComparedFile, FileWarning } from "@/api/diff";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
-import { changeBadge, lineCounts } from "./present";
+import { changeBadge, lineCounts, warningMark } from "./present";
 
 interface FileListProps {
   files: readonly ComparedFile[];
+  /** Working files that could not be read, listed after the changed files. */
+  warnings?: readonly FileWarning[];
   selectedPath: string | null;
   onSelectFile: (path: string) => void;
   /** An overline above the files; the proposal screen draws one, the diff screen does not. */
@@ -13,6 +16,7 @@ interface FileListProps {
 
 export function FileList({
   files,
+  warnings = [],
   selectedPath,
   onSelectFile,
   title,
@@ -32,6 +36,7 @@ export function FileList({
           const badge = changeBadge(file.change);
           const counts = lineCounts(file);
           const current = file.path === selectedPath;
+          const warned = warnings.find((w) => w.path === file.path);
           return (
             <li key={file.path}>
               <button
@@ -58,6 +63,11 @@ export function FileList({
                 <span className="min-w-0 flex-1 truncate font-mono text-label text-text">
                   {file.path}
                 </span>
+                {warned ? (
+                  <span className="font-mono text-meta text-secondary-text">
+                    {warningMark(warned)}
+                  </span>
+                ) : null}
                 {file.binary ? (
                   <span className="font-mono text-meta text-text-muted">
                     bin
@@ -77,6 +87,37 @@ export function FileList({
             </li>
           );
         })}
+        {warnings
+          .filter((warning) => !files.some((f) => f.path === warning.path))
+          .map((warning) => {
+            const current = warning.path === selectedPath;
+            return (
+              <li key={`warning:${warning.path}`}>
+                <button
+                  type="button"
+                  aria-current={current ? "true" : undefined}
+                  onClick={() => {
+                    onSelectFile(warning.path);
+                  }}
+                  className={cn(
+                    "flex w-full items-center gap-10 rounded-s px-8 py-6 text-left hover:bg-sunken",
+                    current && "bg-sunken",
+                    focusRing,
+                  )}
+                >
+                  <span className="flex size-18 shrink-0 items-center justify-center rounded-s bg-secondary-soft text-secondary-text">
+                    <TriangleAlert aria-hidden="true" size={12} />
+                  </span>
+                  <span className="min-w-0 flex-1 truncate font-mono text-label text-text">
+                    {warning.path}
+                  </span>
+                  <span className="font-mono text-meta text-text-muted">
+                    {warningMark(warning)}
+                  </span>
+                </button>
+              </li>
+            );
+          })}
       </ul>
     </nav>
   );

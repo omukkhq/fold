@@ -54,7 +54,7 @@ export function LiveActivityScreen({ slug }: { slug: string }) {
           ) : null}
           {activity.panels.map((panel) => (
             <WorkspacePanel
-              key={panel.entry.workspace}
+              key={panel.entry.id}
               slug={slug}
               panel={panel}
               now={now}

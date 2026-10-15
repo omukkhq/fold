@@ -21,19 +21,19 @@ import { keys } from "../../api/keys";
 import type { WorkspaceEntry } from "../../api/workspaces";
 import { applyEvent } from "../../live/apply";
 import type { LiveWorkspace } from "../../live/envelope";
+import recordedWorkspaces from "../../live/recorded/workspaces.json";
 import { liveStatusStore } from "../../live/status";
+import { workspaceEntry } from "../../test/payloads";
+import {
+  errorReply,
+  stubFetch,
+  type StubReply,
+  type StubRequest,
+} from "../../test/stubFetch";
 import { LiveActivityScreen } from "./LiveActivityScreen";
 
-const listWorkspaces = vi.hoisted(() => vi.fn<() => Promise<unknown>>());
-vi.mock("../../api/workspaces", () => ({ listWorkspaces }));
-vi.mock("../../api/events", () => ({
-  listEvents: () => Promise.resolve([]),
-}));
-vi.mock("../../api/reviews", () => ({
-  listReviewCheckouts: () => Promise.resolve([]),
-}));
-
 const NOW = Date.now();
+const BASE = "/api/v1/projects/demo";
 
 function live(workspace: string, paths: string[], at = NOW): LiveWorkspace {
   return {
@@ -63,24 +63,57 @@ function entry(
   workspace: string,
   patch: Partial<WorkspaceEntry> = {},
 ): WorkspaceEntry {
-  return {
-    workspace,
-    task: "T-1",
-    task_title: `Title ${workspace}`,
-    worker: "frontend/ui",
-    state: "active",
-    base: "r7",
-    main: "r9",
-    behind: 2,
+  return workspaceEntry(workspace, {
     last_activity_at: NOW,
-    attention: [],
-    watch_degraded: false,
-    changesets: [
-      { id: "C-18", message: "Fields", recorded_at: NOW, base: "r7" },
-    ],
     live: live(workspace, ["src/a.ts"]),
     ...patch,
+  });
+}
+
+function revision(id: string, parent: string | null) {
+  return {
+    id,
+    parent,
+    created_at: NOW,
+    tree: "t",
+    origin: "proposal",
+    task: null,
+    proposal: null,
+    title: null,
+    author: null,
+    pull: null,
   };
+}
+
+interface Daemon {
+  /** The body of the workspace list, or a reply such as an error. */
+  list: () => Promise<StubReply> | StubReply;
+}
+
+let daemon: Daemon;
+let calls: StubRequest[];
+
+function answer(workspaces: unknown[]): StubReply {
+  return { body: { workspaces } };
+}
+
+function serve() {
+  calls = stubFetch({
+    [`GET ${BASE}/workspaces`]: () => daemon.list(),
+    [`GET ${BASE}/events/history`]: { body: { events: [], before: null } },
+    [`GET ${BASE}/reviews/checkouts`]: { body: { checkouts: [] } },
+    [`GET ${BASE}/repository`]: {
+      body: {
+        head: "r9",
+        main_path: "main",
+        recent: [
+          revision("r9", "r8"),
+          revision("r8", "r7"),
+          revision("r7", null),
+        ],
+      },
+    },
+  });
 }
 
 let client: QueryClient;
@@ -106,25 +139,26 @@ function mount() {
 beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   liveStatusStore.reset();
+  daemon = { list: () => answer([]) };
+  serve();
 });
 afterEach(() => {
   cleanup();
-  listWorkspaces.mockReset();
+  vi.unstubAllGlobals();
 });
 
 describe("LiveActivityScreen", () => {
   it("shows the loading skeleton, then a panel with three zones", async () => {
-    let resolve: (value: unknown) => void = () => {};
-    listWorkspaces.mockReturnValue(
+    let resolve: (value: StubReply) => void = () => {};
+    daemon.list = () =>
       new Promise((r) => {
         resolve = r;
-      }),
-    );
+      });
     mount();
     expect(
       await screen.findAllByRole("status", { name: "Loading" }),
     ).toHaveLength(2);
-    resolve([entry("ws-1")]);
+    resolve(answer([entry("ws-1")]));
     const panel = await screen.findByRole("region", { name: "Workspace ws-1" });
     expect(
       within(panel).getByRole("heading", { name: /Working changes/ })
@@ -135,12 +169,25 @@ describe("LiveActivityScreen", () => {
     ).toBeTruthy();
     expect(within(panel).getByRole("heading", { name: "Main" })).toBeTruthy();
     expect(
-      within(panel).getByText("Main is at r9; base r7 is 2 revisions behind."),
+      await within(panel).findByText(
+        "Main is at r9; base r7 is 2 revisions behind.",
+      ),
     ).toBeTruthy();
+    expect(
+      await within(panel).findByRole("heading", { name: "Title T-1" }),
+    ).toBeTruthy();
+    expect(within(panel).getByText("frontend/ui")).toBeTruthy();
   });
 
   it("links a working file, a checkpoint, a changeset and the task", async () => {
-    listWorkspaces.mockResolvedValue([entry("ws-1")]);
+    daemon.list = () =>
+      answer([
+        entry("ws-1", {
+          changesets: [
+            { id: "C-18", message: "Fields", recorded_at: NOW, base: "r7" },
+          ],
+        }),
+      ]);
     mount();
     const panel = await screen.findByRole("region", { name: "Workspace ws-1" });
     const hrefs = within(panel)
@@ -153,10 +200,11 @@ describe("LiveActivityScreen", () => {
   });
 
   it("updates the file list from a workspace_changed event and drops a panel on a snapshot", async () => {
-    listWorkspaces.mockResolvedValue([
-      entry("ws-1"),
-      entry("ws-2", { last_activity_at: 1, live: live("ws-2", [], 1) }),
-    ]);
+    daemon.list = () =>
+      answer([
+        entry("ws-1"),
+        entry("ws-2", { last_activity_at: 1, live: live("ws-2", [], 1) }),
+      ]);
     mount();
     const panel = await screen.findByRole("region", { name: "Workspace ws-1" });
     expect(within(panel).getAllByRole("link", { name: /\.ts/ })).toHaveLength(
@@ -206,11 +254,40 @@ describe("LiveActivityScreen", () => {
     ).toBeUndefined();
   });
 
+  it("reads one workspace list and the stream, and a change frame asks the daemon for nothing", async () => {
+    daemon.list = () => answer([entry("ws-1")]);
+    mount();
+    const panel = await screen.findByRole("region", { name: "Workspace ws-1" });
+    await within(panel).findByText(
+      "Main is at r9; base r7 is 2 revisions behind.",
+    );
+    const before = calls.length;
+    act(() => {
+      applyEvent(client, "demo", {
+        kind: "workspace_changed",
+        ...live("ws-1", ["src/a.ts", "src/b.ts"], NOW + 5),
+      });
+    });
+    await waitFor(() => {
+      expect(within(panel).getAllByRole("link", { name: /\.ts/ })).toHaveLength(
+        2,
+      );
+    });
+    expect(calls.slice(before)).toEqual([]);
+    const paths = calls.map((call) => call.path);
+    expect(paths.filter((path) => path.endsWith("/changes"))).toEqual([]);
+    expect(paths.filter((path) => path.includes("/tasks/"))).toEqual([]);
+    expect(paths.filter((path) => path === `${BASE}/workspaces`)).toHaveLength(
+      1,
+    );
+  });
+
   it("keeps a panel where it is while its files change", async () => {
-    listWorkspaces.mockResolvedValue([
-      entry("ws-1", { last_activity_at: 10, live: live("ws-1", [], 10) }),
-      entry("ws-2", { last_activity_at: 20, live: live("ws-2", [], 20) }),
-    ]);
+    daemon.list = () =>
+      answer([
+        entry("ws-1", { last_activity_at: 10, live: live("ws-1", [], 10) }),
+        entry("ws-2", { last_activity_at: 20, live: live("ws-2", [], 20) }),
+      ]);
     mount();
     await screen.findByRole("region", { name: "Workspace ws-1" });
     const order = () =>
@@ -229,10 +306,11 @@ describe("LiveActivityScreen", () => {
   });
 
   it("shows a missing workspace without a file list and a degraded watcher notice", async () => {
-    listWorkspaces.mockResolvedValue([
-      entry("ws-1", { watch_degraded: true }),
-      entry("ws-2", { state: "missing", live: null, last_activity_at: 1 }),
-    ]);
+    daemon.list = () =>
+      answer([
+        entry("ws-1", { watch: "degraded" }),
+        entry("ws-2", { state: "missing", live: null, last_activity_at: 1 }),
+      ]);
     mount();
     const missing = await screen.findByRole("region", {
       name: "Workspace ws-2",
@@ -242,41 +320,30 @@ describe("LiveActivityScreen", () => {
       within(missing).queryByRole("heading", { name: /Working changes/ }),
     ).toBeNull();
     const degraded = screen.getByRole("region", { name: "Workspace ws-1" });
-    expect(within(degraded).getByRole("note").textContent).toContain(
+    expect((await within(degraded).findByRole("note")).textContent).toContain(
       "10 second scan",
     );
   });
 
-  it("shows stalled and stale attention as different badges", async () => {
-    listWorkspaces.mockResolvedValue([
-      entry("ws-1", {
-        attention: [{ kind: "stalled" }],
-        last_activity_at: NOW - 7 * 60_000,
-        live: live("ws-1", ["src/a.ts"], NOW - 7 * 60_000),
-      }),
-      entry("ws-2", {
-        attention: [{ kind: "stale_claim" }],
-        last_activity_at: 1,
-        live: live("ws-2", [], 1),
-      }),
-    ]);
+  it("shows the stalled and stale_claim items of a recorded workspace payload as different badges", async () => {
+    const recorded: unknown = recordedWorkspaces;
+    daemon.list = () => ({ body: recorded });
     mount();
     const stalled = await screen.findByRole("region", {
       name: "Workspace ws-1",
     });
     expect(within(stalled).getByText("Stalled")).toBeTruthy();
-    expect(within(stalled).getByText("no edits for 7 min")).toBeTruthy();
+    expect(within(stalled).getByText(/^no edits for /)).toBeTruthy();
     expect(within(stalled).queryByText("Stale")).toBeNull();
     const stale = screen.getByRole("region", { name: "Workspace ws-2" });
     expect(within(stale).getByText("Stale")).toBeTruthy();
     expect(within(stale).queryByText("Stalled")).toBeNull();
+    expect(within(stale).getByText("backend")).toBeTruthy();
   });
 
   it("collapses long file lists behind Show more", async () => {
     const paths = ["a", "b", "c", "d", "e"].map((p) => `${p}.ts`);
-    listWorkspaces.mockResolvedValue([
-      entry("ws-1", { live: live("ws-1", paths) }),
-    ]);
+    daemon.list = () => answer([entry("ws-1", { live: live("ws-1", paths) })]);
     mount();
     const panel = await screen.findByRole("region", { name: "Workspace ws-1" });
     expect(within(panel).getAllByRole("link", { name: /\.ts/ })).toHaveLength(
@@ -291,7 +358,6 @@ describe("LiveActivityScreen", () => {
   });
 
   it("shows the empty panel when no workspace is active", async () => {
-    listWorkspaces.mockResolvedValue([]);
     mount();
     expect(
       await screen.findByRole("heading", { name: "No active workspaces" }),
@@ -299,8 +365,14 @@ describe("LiveActivityScreen", () => {
   });
 
   it("shows the error banner and Retry loads again", async () => {
-    listWorkspaces.mockRejectedValueOnce(new Error("down"));
-    listWorkspaces.mockResolvedValue([]);
+    let failures = 1;
+    daemon.list = () => {
+      if (failures > 0) {
+        failures -= 1;
+        return errorReply(500, "internal_error");
+      }
+      return answer([]);
+    };
     mount();
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Activity could not load.");
@@ -311,7 +383,6 @@ describe("LiveActivityScreen", () => {
   });
 
   it("shows the reconnecting banner while the stream is down", async () => {
-    listWorkspaces.mockResolvedValue([]);
     liveStatusStore.set({ state: "reconnecting", stateAsOf: NOW - 5000 });
     mount();
     const banner = await screen.findByRole("status");

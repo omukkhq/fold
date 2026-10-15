@@ -1,155 +1,145 @@
 import { QueryClient } from "@tanstack/react-query";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { comparisons } from "../../fixtures/diff";
-import { getComparison, getFileDiff, pairKey } from "./diff";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { comparedFile, comparison, fileDiff } from "@/test/diff";
+import { errorReply, stubFetch, type StubRequest } from "@/test/stubFetch";
+import { getComparison, getFileDiff } from "./diff";
 import { isApiError } from "./errors";
 import { keys } from "./keys";
 import { comparisonQuery, fileDiffQuery } from "./queries";
 
-beforeEach(() => {
-  vi.useFakeTimers();
-});
 afterEach(() => {
-  vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
-async function settle<T>(promise: Promise<T>): Promise<T> {
-  await vi.runAllTimersAsync();
-  return promise;
+const LOGIN = comparedFile("src/login.tsx", "modified");
+const FILES = { view: "files", ...comparison([LOGIN]) };
+const FILE = { view: "file", ...fileDiff(LOGIN, []) };
+
+function query(calls: StubRequest[], path: string) {
+  return calls
+    .filter((c) => c.path === path)
+    .map((c) => Object.fromEntries(c.search));
 }
 
-describe("the diff fixture", () => {
-  const working = comparisons[pairKey("r7", "ws-7")];
-
-  it("holds an added, a modified, a deleted, a renamed and a binary file", () => {
-    const files = working?.comparison.files ?? [];
-    const kinds = new Set(files.map((f) => f.change));
-    expect([...kinds].sort()).toEqual([
-      "added",
-      "deleted",
-      "modified",
-      "renamed",
-    ]);
-    expect(files.some((f) => f.binary)).toBe(true);
-  });
-
-  it("has a diff for every file and its line counts match the hunks", () => {
-    for (const entry of Object.values(comparisons)) {
-      for (const file of entry.comparison.files) {
-        const diff = entry.diffs.find((d) => d.path === file.path);
-        expect(diff, file.path).toBeDefined();
-        const lines = diff?.hunks.flatMap((h) => h.lines) ?? [];
-        expect(lines.filter((l) => l.kind === "add")).toHaveLength(
-          file.added_lines,
-        );
-        expect(lines.filter((l) => l.kind === "remove")).toHaveLength(
-          file.removed_lines,
-        );
-        expect(diff?.binary).toBe(file.binary);
-      }
-    }
-  });
-});
-
 describe("getComparison", () => {
-  it("answers the comparison of two states", async () => {
-    const comparison = await settle(getComparison("demo", "r7", "ws-7"));
-    expect(comparison?.to).toMatchObject({
-      kind: "workspace",
-      id: "ws-7",
-      base: "r7",
+  it("asks the diff route for the two states and answers its file list", async () => {
+    const calls = stubFetch({
+      "GET /api/v1/projects/demo/diff": { body: FILES },
     });
+    const answer = await getComparison("demo", "r7", "ws-7");
+    expect(answer?.files).toEqual([LOGIN]);
+    expect(answer?.source).toBe("working");
+    expect(query(calls, "/api/v1/projects/demo/diff")).toEqual([
+      { from: "r7", to: "ws-7" },
+    ]);
   });
 
-  it("compares to alone with its recorded base, as from and to together do", async () => {
-    const alone = await settle(getComparison("demo", undefined, "ws-7"));
-    const pair = await settle(getComparison("demo", "r7", "ws-7"));
-    expect(alone).toEqual(pair);
+  it("compares a workspace named alone with its base revision", async () => {
+    const calls = stubFetch({
+      "GET /api/v1/projects/demo/workspaces/ws-7": { body: { base: "r5" } },
+      "GET /api/v1/projects/demo/diff": { body: FILES },
+    });
+    await getComparison("demo", undefined, "ws-7");
+    expect(query(calls, "/api/v1/projects/demo/diff")).toEqual([
+      { from: "r5", to: "ws-7" },
+    ]);
   });
 
-  it("answers null for two states it has no comparison of", async () => {
-    await expect(settle(getComparison("demo", "r1", "r2"))).resolves.toBeNull();
+  it("has nothing to compare for any other state named alone and asks nothing", async () => {
+    const calls = stubFetch({});
+    await expect(getComparison("demo", undefined, "C-4")).resolves.toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  it("rejects with the daemon's code", async () => {
+    stubFetch({
+      "GET /api/v1/projects/demo/diff": errorReply(400, "invalid_state_ref"),
+    });
+    await expect(getComparison("demo", "x", "ws-7")).rejects.toSatisfy(
+      (e: unknown) => isApiError(e, "invalid_state_ref"),
+    );
+  });
+
+  it("refuses an answer of the other shape", async () => {
+    stubFetch({ "GET /api/v1/projects/demo/diff": { body: FILE } });
+    await expect(getComparison("demo", "r7", "ws-7")).rejects.toSatisfy(
+      (e: unknown) => isApiError(e, "internal_error"),
+    );
   });
 });
 
 describe("getFileDiff", () => {
-  it("answers the hunks of a file", async () => {
-    const diff = await settle(
-      getFileDiff("demo", "r7", "ws-7", "src/routes/login.tsx"),
-    );
-    expect(diff.hunks.length).toBeGreaterThan(0);
+  it("asks for one path and answers its hunks", async () => {
+    const calls = stubFetch({
+      "GET /api/v1/projects/demo/diff": { body: FILE },
+    });
+    const diff = await getFileDiff("demo", "r7", "ws-7", "src/login.tsx");
+    expect(diff.path).toBe("src/login.tsx");
+    expect(query(calls, "/api/v1/projects/demo/diff")).toEqual([
+      { from: "r7", to: "ws-7", path: "src/login.tsx" },
+    ]);
   });
 
-  it("rejects a path the comparison does not list", async () => {
-    const missing = getFileDiff("demo", "r7", "ws-7", "nope.ts");
-    const check = expect(missing).rejects.toSatisfy((e: unknown) =>
-      isApiError(e, "path_not_in_comparison"),
-    );
-    await vi.runAllTimersAsync();
-    await check;
+  it("reads a workspace named alone against its base", async () => {
+    const calls = stubFetch({
+      "GET /api/v1/projects/demo/workspaces/ws-7": { body: { base: "r5" } },
+      "GET /api/v1/projects/demo/diff": { body: FILE },
+    });
+    await getFileDiff("demo", undefined, "ws-7", "src/login.tsx");
+    expect(query(calls, "/api/v1/projects/demo/diff")[0]?.from).toBe("r5");
   });
 
-  it("rejects a file of a comparison it does not have", async () => {
-    const missing = getFileDiff("demo", "r1", "r2", "a.ts");
-    const check = expect(missing).rejects.toSatisfy((e: unknown) =>
+  it("rejects a state named alone that has no base, and an answer of the other shape", async () => {
+    stubFetch({ "GET /api/v1/projects/demo/diff": { body: FILES } });
+    await expect(
+      getFileDiff("demo", undefined, "ck-3", "a.ts"),
+    ).rejects.toSatisfy((e: unknown) => isApiError(e, "invalid_state_ref"));
+    await expect(getFileDiff("demo", "r7", "ws-7", "a.ts")).rejects.toSatisfy(
+      (e: unknown) => isApiError(e, "internal_error"),
+    );
+  });
+
+  it("rejects a path the comparison does not list with the daemon's code", async () => {
+    stubFetch({
+      "GET /api/v1/projects/demo/diff": errorReply(
+        404,
+        "path_not_in_comparison",
+      ),
+    });
+    await expect(
+      getFileDiff("demo", "r7", "ws-7", "nope.ts"),
+    ).rejects.toSatisfy((e: unknown) =>
       isApiError(e, "path_not_in_comparison"),
     );
-    await vi.runAllTimersAsync();
-    await check;
   });
 });
 
 describe("diff queries", () => {
-  it("key a comparison and a file under the project", async () => {
+  it("key a comparison and a file under the project with `to` at index 3", async () => {
+    stubFetch({
+      "GET /api/v1/projects/demo/diff": (request) => ({
+        body: request.search.has("path") ? FILE : FILES,
+      }),
+    });
     const client = new QueryClient();
-    const comparison = comparisonQuery("demo", "r7", "r8");
-    const file = fileDiffQuery("demo", "r7", "r8", "CHANGELOG.md");
-    expect(comparison.queryKey).toEqual(keys.comparison("demo", "r7", "r8"));
+    const list = comparisonQuery("demo", "r7", "r8");
+    const file = fileDiffQuery("demo", "r7", "r8", "src/login.tsx");
+    expect(list.queryKey).toEqual(keys.comparison("demo", "r7", "r8"));
     expect(comparisonQuery("demo", undefined, "ws-7").queryKey).toEqual([
       "demo",
       "comparison",
       null,
       "ws-7",
     ]);
-    expect(fileDiffQuery("demo", undefined, "ws-7", "a.ts").queryKey).toEqual([
-      "demo",
-      "file-diff",
-      null,
-      "ws-7",
-      "a.ts",
-    ]);
     expect(file.queryKey).toEqual([
       "demo",
       "file-diff",
       "r7",
       "r8",
-      "CHANGELOG.md",
+      "src/login.tsx",
     ]);
-    const loaded = settle(
-      Promise.all([client.query(comparison), client.query(file)]),
-    );
-    const [c, f] = await loaded;
-    expect(c?.files).toHaveLength(2);
-    expect(f.path).toBe("CHANGELOG.md");
-  });
-});
-
-describe("a production build", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-    vi.resetModules();
-  });
-
-  it("has nothing to compare and reads no fixture", async () => {
-    vi.stubEnv("DEV", false);
-    vi.resetModules();
-    const diff = await import("./diff");
-    const errors = await import("./errors");
-    await expect(diff.getComparison("demo", "r7", "ws-7")).resolves.toBeNull();
-    await expect(
-      diff.getFileDiff("demo", "r7", "ws-7", "a.ts"),
-    ).rejects.toSatisfy((e: unknown) =>
-      errors.isApiError(e, "path_not_in_comparison"),
-    );
+    const [c, f] = await Promise.all([client.query(list), client.query(file)]);
+    expect(c?.files).toHaveLength(1);
+    expect(f.path).toBe("src/login.tsx");
   });
 });

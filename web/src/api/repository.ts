@@ -6,9 +6,9 @@ import type { components } from "./schema";
 type Schemas = components["schemas"];
 
 export type Revision = Schemas["RevisionView"];
-export type RepositoryState = Schemas["RepositoryView"];
 export type TreeEntry = Schemas["TreeEntryView"];
 export type FileView = Schemas["FileContentView"];
+export type RepositoryState = Schemas["RepositoryView"];
 
 const PAGE_SIZE = 200;
 

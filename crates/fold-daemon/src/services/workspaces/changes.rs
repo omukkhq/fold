@@ -1,6 +1,9 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use fold_core::{CheckpointId, FoldError, TaskId, WorkspaceId, codes};
+use fold_core::{CheckpointId, FoldError, TaskId, TaskTitle, WorkspaceId, codes};
+use fold_store::StoreError;
+use fold_store::tasks;
 use fold_store::workspaces::{self, WorkspaceKind, WorkspaceState};
 use serde_json::json;
 
@@ -8,10 +11,11 @@ use super::{WorkspaceError, WorkspaceService, WorkspaceView};
 use crate::live::WorkspaceLive;
 use crate::services::tasks::{AttentionItem, attention, stalled_tasks};
 
-/// A workspace as the workspace routes list it: its row, its live state when it is attached, and the attention items of its task.
+/// A workspace as the workspace routes list it: its row, its task's title, its live state when it is attached, and the attention items of its task.
 #[derive(Debug, Clone)]
 pub struct WorkspaceEntry {
     pub workspace: WorkspaceView,
+    pub task_title: TaskTitle,
     /// `None` for a missing or closed workspace, a review checkout, and an active one whose live state did not start.
     pub live: Option<Arc<WorkspaceLive>>,
     pub attention: Vec<AttentionItem>,
@@ -49,17 +53,36 @@ impl WorkspaceService {
         &self,
         views: Vec<WorkspaceView>,
     ) -> Result<Vec<WorkspaceEntry>, WorkspaceError> {
-        let tasks: Vec<TaskId> = views.iter().map(|view| view.task).collect();
+        let task_ids: Vec<TaskId> = views.iter().map(|view| view.task).collect();
         let stalled = stalled_tasks(self.live.as_ref());
-        let items = attention(&self.store, &tasks, &stalled, self.clock.now()).await?;
-        Ok(views
+        let items = attention(&self.store, &task_ids, &stalled, self.clock.now()).await?;
+        let mut read = self
+            .store
+            .read()
+            .acquire()
+            .await
+            .map_err(StoreError::from)?;
+        let titles: BTreeMap<TaskId, TaskTitle> = tasks::task_refs(&mut read, &task_ids)
+            .await?
             .into_iter()
-            .map(|workspace| WorkspaceEntry {
-                live: self.live.as_ref().and_then(|live| live.get(workspace.id)),
-                attention: items.get(&workspace.task).cloned().unwrap_or_default(),
-                workspace,
+            .map(|task| (task.id, task.title))
+            .collect();
+        drop(read);
+        views
+            .into_iter()
+            .map(|workspace| {
+                let task_title = titles
+                    .get(&workspace.task)
+                    .cloned()
+                    .ok_or(StoreError::Corrupt("workspaces.task_id"))?;
+                Ok(WorkspaceEntry {
+                    live: self.live.as_ref().and_then(|live| live.get(workspace.id)),
+                    attention: items.get(&workspace.task).cloned().unwrap_or_default(),
+                    task_title,
+                    workspace,
+                })
             })
-            .collect())
+            .collect()
     }
 
     /// The live state of an active task workspace after a full scan, so a change the watcher has not delivered yet is in it. An unknown id is `workspace_not_found`; a missing or closed workspace, a review checkout, or a service without live state is `workspace_not_active`.

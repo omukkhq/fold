@@ -1,115 +1,86 @@
+import { api } from "./client";
 import { ApiError } from "./errors";
-import { fromFixture } from "./fixture";
+import { unwrap } from "./result";
 import type { components } from "./schema";
+import { getWorkspace } from "./workspaces";
 
-export type ChangeKind = components["schemas"]["ChangeKind"];
+type Schemas = components["schemas"];
 
+export type ChangeKind = Schemas["FileChangeKind"];
 /** A changed file of a comparison. A binary file is compared by hash only; a hash is null on the side where the file does not exist. */
-export type ComparedFile = components["schemas"]["ChangedFile"] & {
-  old_hash: string | null;
-  new_hash: string | null;
-};
-
-export type StateKind =
-  | "revision"
-  | "changeset"
-  | "proposal_version"
-  | "checkpoint"
-  | "workspace";
-
+export type ComparedFile = Schemas["ComparedFile"];
+export type StateKind = Schemas["StateKindView"];
 /** One side of a comparison as the daemon resolved the `from` or `to` reference. */
-export interface ComparedState {
-  kind: StateKind;
-  /** The public id: `r7`, `C-18`, `P-3 v2`, `ck-31` or `ws-7`. */
-  id: string;
-  /** The base revision of a workspace; null for every other kind. */
-  base: string | null;
-  /** The task a workspace or a proposal belongs to. */
-  task: string | null;
-  /** The worker of a workspace. */
-  worker: string | null;
-}
+export type ComparedState = Schemas["ComparedState"];
+export type Comparison = Schemas["ComparisonView"];
+export type FileDiff = Schemas["FileDiffView"];
+export type Hunk = Schemas["HunkView"];
+export type HunkLine = Schemas["DiffLineView"];
+export type HunkLineKind = Schemas["DiffLineKind"];
+/** A working file the daemon could not read; it keeps its base entry, so it never shows as deleted. */
+export type FileWarning = Schemas["FileWarning"];
 
-export interface Comparison {
-  from: ComparedState;
-  to: ComparedState;
-  /** When the daemon read the working files, in UTC milliseconds; null when neither side is a workspace. */
-  read_at: number | null;
-  files: ComparedFile[];
-}
+const WORKSPACE_REF = /^ws-\d+$/;
 
-export type HunkLineKind = "context" | "add" | "remove";
-
-export interface HunkLine {
-  kind: HunkLineKind;
-  text: string;
-}
-
-/** A unified hunk; `section` is the text the daemon shows after the line ranges, such as the enclosing function. */
-export interface Hunk {
-  old_start: number;
-  old_lines: number;
-  new_start: number;
-  new_lines: number;
-  section: string;
-  lines: HunkLine[];
-}
-
-export interface FileDiff {
-  path: string;
-  binary: boolean;
-  hunks: Hunk[];
-}
-
-/** The fixture keys each comparison by `from..to`, or by `to` alone for `to` against its recorded base. */
-export interface ComparisonFixture {
-  comparison: Comparison;
-  diffs: FileDiff[];
-}
-
-const fixture = import.meta.env.DEV
-  ? () => import("../../fixtures/diff")
-  : undefined;
-
-export function pairKey(from: string | undefined, to: string): string {
-  return from === undefined ? to : `${from}..${to}`;
+/** A link that names only `to` compares a workspace with its base revision. Any other reference has no base a route reports, so it has no default. */
+async function resolveFrom(
+  slug: string,
+  from: string | undefined,
+  to: string,
+): Promise<string | null> {
+  if (from !== undefined) {
+    return from;
+  }
+  if (!WORKSPACE_REF.test(to)) {
+    return null;
+  }
+  return (await getWorkspace(slug, to)).base;
 }
 
 /**
- * Without `from` the daemon compares `to` with the base it recorded for it, such as a workspace's base revision or a changeset's parent.
- * Null when there is nothing to compare; a production build holds no fixture and answers null, and the screen shows its empty state.
+ * The changed files of `from` against `to`. Without `from` a workspace is compared with its base revision; any other `to` without `from` has nothing to compare and answers null.
  */
 export async function getComparison(
   slug: string,
   from: string | undefined,
   to: string,
 ): Promise<Comparison | null> {
-  const entry = await fromFixture(
-    fixture,
-    (m) => m.comparisons[pairKey(from, to)] ?? null,
-    null,
+  const resolved = await resolveFrom(slug, from, to);
+  if (resolved === null) {
+    return null;
+  }
+  const view = await unwrap(
+    api.GET("/api/v1/projects/{slug}/diff", {
+      params: { path: { slug }, query: { from: resolved, to } },
+    }),
   );
-  return entry ? entry.comparison : null;
+  if (view.view !== "files") {
+    throw new ApiError("internal_error", "the daemon sent one file");
+  }
+  return view;
 }
 
-/** Rejects with `path_not_in_comparison` for a path the comparison does not list. */
+/** The hunks of one changed file. Rejects with `path_not_in_comparison` for a path the comparison does not list. */
 export async function getFileDiff(
   slug: string,
   from: string | undefined,
   to: string,
   path: string,
 ): Promise<FileDiff> {
-  const entry = await fromFixture(
-    fixture,
-    (m) => m.comparisons[pairKey(from, to)] ?? null,
-    null,
-  );
-  const diff = entry?.diffs.find((d) => d.path === path);
-  if (!diff) {
+  const resolved = await resolveFrom(slug, from, to);
+  if (resolved === null) {
     throw new ApiError(
-      "path_not_in_comparison",
-      `${path} is not in the comparison`,
+      "invalid_state_ref",
+      `${to} needs a state to compare with`,
     );
   }
-  return diff;
+  const view = await unwrap(
+    api.GET("/api/v1/projects/{slug}/diff", {
+      params: { path: { slug }, query: { from: resolved, to, path } },
+    }),
+  );
+  if (view.view !== "file") {
+    throw new ApiError("internal_error", "the daemon sent a file list");
+  }
+  return view;
 }

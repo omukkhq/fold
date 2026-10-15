@@ -49,22 +49,6 @@ describe("fromFixture", () => {
   });
 });
 
-describe("a production build", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-    vi.resetModules();
-  });
-
-  it("lists no event or review checkout and reads no fixture", async () => {
-    vi.stubEnv("DEV", false);
-    vi.resetModules();
-    const events = await import("./events");
-    const reviews = await import("./reviews");
-    await expect(events.listEvents("demo")).resolves.toEqual([]);
-    await expect(reviews.listReviewCheckouts("demo")).resolves.toEqual([]);
-  });
-});
-
 describe("queries", () => {
   it("fetch through the api functions under the key builders", async () => {
     stubFetch({

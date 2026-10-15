@@ -11,9 +11,9 @@ export function mayImportFixtures(path: string): boolean {
 }
 
 const RETIRED_FIXTURE_IMPORT =
-  /(?:from\s*|import\s*\(\s*|import\s+|require\s*\(\s*|import\.meta\.glob(?:<[^>]*>)?\s*\(\s*\[?\s*)["'][^"']*\bfixtures\/(?:board|demoBoard|tasks)["']/;
+  /(?:from\s*|import\s*\(\s*|import\s+|require\s*\(\s*|import\.meta\.glob(?:<[^>]*>)?\s*\(\s*\[?\s*)["'][^"']*\bfixtures\/(?:board|demoBoard|diff|events|reviews|tasks|workspaces)["']/;
 
-/** The board and task screens read the daemon; their fixtures are gone and nothing, tests included, may bring them back. */
+/** The board, task, live activity and diff screens read the daemon; their fixtures are gone and nothing, tests included, may bring them back. */
 export function importsRetiredFixture(source: string): boolean {
   return RETIRED_FIXTURE_IMPORT.test(source);
 }

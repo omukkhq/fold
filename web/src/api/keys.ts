@@ -10,7 +10,7 @@ export const keys = {
   board: (slug: string) => [slug, "board"] as const,
   task: (slug: string, task: string) => [slug, "task", task] as const,
   activity: (slug: string) => [slug, "activity"] as const,
-  /** A comparison without `from` is `to` against its recorded base. */
+  /** A comparison without `from` is a workspace against its base. `to` sits at index 3 of both diff keys, where a workspace change finds the diffs it makes stale. */
   comparison: (slug: string, from: string | undefined, to: string) =>
     [slug, "comparison", from ?? null, to] as const,
   fileDiff: (
@@ -19,6 +19,15 @@ export const keys = {
     to: string,
     path: string,
   ) => [slug, "file-diff", from ?? null, to, path] as const,
+  /** A proposal version never changes, so its diffs never go stale. */
+  versionComparison: (slug: string, from: string | undefined, to: string) =>
+    [slug, "version-comparison", from ?? null, to] as const,
+  versionFileDiff: (
+    slug: string,
+    from: string | undefined,
+    to: string,
+    path: string,
+  ) => [slug, "version-file-diff", from ?? null, to, path] as const,
   proposals: (slug: string) => [slug, "proposals"] as const,
   proposal: (slug: string, proposal: string) =>
     [slug, "proposal", proposal] as const,
@@ -45,4 +54,6 @@ export const keys = {
   reviewCheckouts: (slug: string) =>
     [slug, "workspaces", "review-checkouts"] as const,
   workspaceLiveAll: (slug: string) => [slug, "workspace-live"] as const,
+  /** The workspaces a stored event ended since the last snapshot, written only by the event stream. */
+  endedWorkspaces: (slug: string) => [slug, "ended-workspaces"] as const,
 };

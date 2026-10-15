@@ -1,8 +1,8 @@
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
-import type { WorkspaceEntry } from "../../api/workspaces";
+import type { LiveWorkspace } from "@/api/tasks";
+import { liveWorkspace, workspaceEntry } from "@/test/payloads";
 import { keys } from "../../api/keys";
-import type { LiveWorkspace } from "../../live/envelope";
 import { attentionView, mainLine } from "./attention";
 import { changeKind, fileLabel, visibleFiles } from "./files";
 import {
@@ -12,45 +12,19 @@ import {
   workingFileHref,
 } from "./links";
 import { createLiveStatesStore, shownAsOf } from "./liveStates";
-import { buildPanels, lastActivity, seedLive } from "./panels";
+import { buildPanels, lastActivity, seedLive, workerOf } from "./panels";
 import { recordedItems } from "./recorded";
 
-function live(workspace: string, at = 5): LiveWorkspace {
-  return {
-    workspace,
-    task: "T-1",
-    worker: "frontend",
-    base: "r7",
-    files: [],
-    summary: "0 files, +0 -0",
-    last_activity_at: at,
-    checkpoints: [],
-    proposal: null,
-    stalled: false,
-  };
-}
-
-function entry(
+const live = (
   workspace: string,
-  patch: Partial<WorkspaceEntry> = {},
-): WorkspaceEntry {
-  return {
-    workspace,
-    task: "T-1",
-    task_title: "t",
-    worker: "frontend",
-    state: "active",
-    base: "r7",
-    main: "r9",
-    behind: 2,
-    last_activity_at: 1,
-    attention: [],
-    watch_degraded: false,
-    changesets: [],
-    live: live(workspace),
-    ...patch,
-  };
-}
+  at = 5,
+  over: Partial<LiveWorkspace> = {},
+): LiveWorkspace =>
+  liveWorkspace(workspace, "T-1", { last_activity_at: at, ...over });
+const entry = (
+  id: string,
+  over: Partial<Parameters<typeof workspaceEntry>[1]> = {},
+) => workspaceEntry(id, { live: live(id), ...over });
 
 describe("links", () => {
   it("links a working file from the base to the workspace", () => {
@@ -95,6 +69,13 @@ describe("recordedItems", () => {
       "changeset",
       "checkpoint",
     ]);
+  });
+
+  it("lists only the checkpoints when the read carries no changesets", () => {
+    const items = recordedItems("demo", "r7", [
+      { id: "ck-1", label: null, automatic: true, created_at: 1 },
+    ]);
+    expect(items.map((i) => i.id)).toEqual(["ck-1"]);
   });
 
   it("breaks a time tie by id", () => {
@@ -156,15 +137,29 @@ describe("attention", () => {
   });
 
   it("says how far main is ahead of the base", () => {
-    expect(mainLine({ base: "r9", main: "r9", behind: 0 })).toBe(
-      "Base r9 is current main.",
-    );
-    expect(mainLine({ base: "r8", main: "r9", behind: 1 })).toBe(
+    const repository = {
+      head: "r9",
+      recent: [
+        { id: "r9", parent: "r8" },
+        { id: "r8", parent: "r7" },
+        { id: "r7", parent: null },
+      ],
+    };
+    expect(mainLine("r9", repository)).toBe("Base r9 is current main.");
+    expect(mainLine("r8", repository)).toBe(
       "Main is at r9; base r8 is 1 revision behind.",
     );
-    expect(mainLine({ base: "r7", main: "r9", behind: 2 })).toBe(
+    expect(mainLine("r7", repository)).toBe(
       "Main is at r9; base r7 is 2 revisions behind.",
     );
+    expect(mainLine("r2", repository)).toBe(
+      "Main is at r9; base r2 is at least 3 revisions behind.",
+    );
+  });
+
+  it("names the base alone until main is read", () => {
+    expect(mainLine("r7", undefined)).toBe("Base r7.");
+    expect(mainLine("r7", { head: null, recent: [] })).toBe("Base r7.");
   });
 });
 
@@ -196,22 +191,41 @@ describe("panels", () => {
       entry("ws-3", { state: "missing", live: null }),
     ];
     const panels = buildPanels(entries, [live("ws-1"), undefined, undefined]);
-    expect(panels.map((p) => [p.entry.workspace, p.live === null])).toEqual([
+    expect(panels.map((p) => [p.entry.id, p.live === null])).toEqual([
       ["ws-1", false],
       ["ws-3", true],
     ]);
     expect(
       buildPanels(entries, [{ nope: 1 }, live("ws-2"), null]).map(
-        (p) => p.entry.workspace,
+        (p) => p.entry.id,
       ),
     ).toEqual(["ws-2", "ws-3"]);
   });
 
-  it("reads the activity time from live state first", () => {
+  it("reads the activity time from live state, then the row, then the creation", () => {
     expect(lastActivity({ entry: entry("ws-1"), live: live("ws-1", 50) })).toBe(
       50,
     );
     expect(lastActivity({ entry: entry("ws-1"), live: null })).toBe(1);
+    expect(
+      lastActivity({
+        entry: entry("ws-1", { last_activity_at: null, created_at: 3 }),
+        live: null,
+      }),
+    ).toBe(3);
+  });
+
+  it("names the live worker, else the owner, else nobody", () => {
+    expect(
+      workerOf({
+        entry: entry("ws-1", { owner: "old" }),
+        live: live("ws-1", 5, { worker: "frontend/ui" }),
+      }),
+    ).toBe("frontend/ui");
+    expect(workerOf({ entry: entry("ws-1"), live: null })).toBe("frontend/ui");
+    expect(
+      workerOf({ entry: entry("ws-1", { owner: null }), live: null }),
+    ).toBeNull();
   });
 });
 

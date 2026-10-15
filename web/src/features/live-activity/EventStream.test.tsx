@@ -135,6 +135,8 @@ const checkout = (over: Partial<ReviewCheckout> = {}): ReviewCheckout => ({
   proposal: "P-4",
   version: 2,
   worker: "review/quality",
+  base: "r7",
+  created_at: Date.now(),
   last_command: { result: "ran cargo nextest, 48 passed", at: Date.now() },
   ...over,
 });
@@ -158,18 +160,22 @@ describe("ReviewCheckouts", () => {
       checkout({
         workspace: "ws-13",
         worker: "review/security",
-        last_command: null,
+        last_command: undefined,
       }),
+      checkout({ workspace: "ws-14", worker: null, last_command: undefined }),
     ]);
     wrap(<ReviewCheckouts slug="demo" />);
     await screen.findByText("review/security");
-    expect(screen.getAllByText("Review checkouts")).toHaveLength(2);
+    expect(screen.getAllByText("Review checkouts")).toHaveLength(3);
     expect(
       screen.getByText(
         /P-4 v2 in ws\/review-p-4 · ran cargo nextest, 48 passed · \d+ s ago/,
       ),
     ).toBeTruthy();
-    expect(screen.getByText(/no command yet/)).toBeTruthy();
+    expect(
+      screen.getAllByText("P-4 v2 in ws/review-p-4 · not recordable"),
+    ).toHaveLength(2);
+    expect(screen.getByText("no worker")).toBeTruthy();
   });
 
   it("shows the empty state, the pending state and an error", async () => {
