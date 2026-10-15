@@ -1,7 +1,7 @@
+import { PersonName } from "@/people/PersonName";
 import { ChevronRight, GitCompare, GitPullRequest } from "lucide-react";
 import type { ProposalDetail } from "@/api/proposals";
 import { HrefLink } from "@/app/HrefLink";
-import { Avatar } from "@/components/avatar/Avatar";
 import { TAB_LIST, tabClasses } from "@/components/overlay/tabStyles";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
@@ -84,8 +84,7 @@ export function ProposalHeader({
       </div>
       <div className="flex flex-wrap items-center gap-x-16 gap-y-4 text-bar text-text-muted">
         <span className="flex items-center gap-6 text-text">
-          <Avatar name={summary.author} />
-          <span className="font-mono text-code">{summary.author}</span>
+          <PersonName name={summary.author} className="font-mono text-code" />
         </span>
         <span>
           for{" "}

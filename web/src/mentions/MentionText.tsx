@@ -3,6 +3,7 @@ import { cn } from "@/lib/cn";
 import { MentionLink } from "./MentionLink";
 import { mentionHref, splitMentions, type Known } from "./parse";
 import { mentionTag } from "./remark";
+import { usePeople } from "./usePeople";
 
 interface MentionProps {
   text: string;
@@ -12,7 +13,8 @@ interface MentionProps {
 
 /** The text with its mentions linked, inline in the caller's element; React escapes every string, so markup in the text shows as typed. */
 export function MentionInline({ text, slug, known }: MentionProps) {
-  return splitMentions(text, known).map((segment, index) => (
+  const people = usePeople(slug);
+  return splitMentions(text, known, people).map((segment, index) => (
     <Fragment key={index}>
       {segment.mention ? (
         <MentionLink

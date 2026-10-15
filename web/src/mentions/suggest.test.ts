@@ -4,8 +4,11 @@ import {
   applyPick,
   groupRuns,
   itemSuggestions,
+  optionLook,
+  optionMark,
   pathQuery,
   pathSuggestions,
+  personSuggestions,
   stepIndex,
 } from "./suggest";
 
@@ -179,6 +182,77 @@ describe("stepIndex and groupRuns", () => {
     ).toEqual([
       ["tasks", [0, 1]],
       ["revisions", [2]],
+    ]);
+  });
+});
+
+describe("personSuggestions", () => {
+  const people = {
+    humans: ["tanim", "ana"],
+    agents: ["frontend", "frontend/ui", "backend"],
+  };
+
+  it("lists humans, then agents, by the start of the name", () => {
+    expect(personSuggestions("", people).map((s) => s.insert)).toEqual([
+      "tanim",
+      "ana",
+      "frontend",
+      "frontend/ui",
+      "backend",
+    ]);
+    expect(personSuggestions("FRO", people)).toEqual([
+      {
+        group: "people",
+        insert: "frontend",
+        label: "frontend",
+        detail: "agent",
+        open: false,
+      },
+      {
+        group: "people",
+        insert: "frontend/ui",
+        label: "frontend/ui",
+        detail: "agent",
+        open: false,
+      },
+    ]);
+  });
+
+  it("puts People before Files when the lists are joined", () => {
+    const joined = [
+      ...personSuggestions("a", people),
+      ...pathSuggestions({ workspace: null, dir: "", leaf: "a" }, [
+        { name: "a.ts", path: "a.ts", kind: "file" },
+      ]),
+    ];
+    expect(groupRuns(joined).map((run) => run.group)).toEqual([
+      "people",
+      "files",
+    ]);
+  });
+});
+
+describe("optionLook and optionMark", () => {
+  it("draws a person in the colour of their kind and the rest in the mono face", () => {
+    const [human, agent] = personSuggestions("", {
+      humans: ["tanim"],
+      agents: ["frontend"],
+    });
+    expect(human && optionLook(human)).toBe("human");
+    expect(agent && optionLook(agent)).toBe("agent");
+    expect(
+      optionLook({
+        group: "files",
+        insert: "a.ts",
+        label: "a.ts",
+        detail: "",
+        open: false,
+      }),
+    ).toBe("mono");
+    expect((["people", "files", "tasks"] as const).map(optionMark)).toEqual([
+      "@",
+      "@",
+      "#",
     ]);
   });
 });

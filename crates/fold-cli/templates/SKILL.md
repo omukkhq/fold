@@ -89,7 +89,7 @@ A reviewer reads proposals, asks for changes and integrates the proposals that a
 
 ## Mentions
 
-In all text you write for people, `#` names a fold item and `@` names a file. The text is in messages, review comments, proposal evidence, task descriptions and requests. `#T-12` is a task, `#P-3` a proposal, `#RQ-2` a request, `#r17` a revision, `#ws-9` a workspace, `#ck-88` a checkpoint and `#m-210` a message. `@web/src/board.ts` is a file in `main/` and `@ws-9:web/src/board.ts` a file in a workspace. The web interface shows each mention as a link. fold keeps the text as it is written and checks no mention. Write a mention only for an item or file that exists, and write it with no space after the mark.
+In all text you write for people, `#` names a fold item, `@name` names a person and `@path` names a file. The text is in messages, review comments, proposal evidence, task descriptions and requests. `#T-12` is a task, `#P-3` a proposal, `#RQ-2` a request, `#r17` a revision, `#ws-9` a workspace, `#ck-88` a checkpoint and `#m-210` a message. `@tanim` is a human and `@frontend` or `@frontend/ui` is an agent or a worker: fold reads `@x` as a person when `x` is the name of a known human or agent. `@web/src/board.ts` is a file in `main/` and `@ws-9:web/src/board.ts` a file in a workspace. `@web/src/` with a `/` at the end is a folder. If a file has the same name as a person, write `@./name` for the file. The web interface shows each mention as a link or a name. fold keeps the text as it is written and checks no mention. Write a mention only for an item, person or file that exists, and write it with no space after the mark.
 
 ## Requests
 

@@ -6,6 +6,7 @@ import type {
   Review,
   Verdict,
 } from "@/api/proposals";
+import { bareName, isHumanName } from "@/people/names";
 
 export type PillTone = "danger" | "human" | "approved" | "neutral" | "done";
 
@@ -24,16 +25,10 @@ export interface Pill {
   text: string;
 }
 
-const HUMAN_PREFIX = "human:";
-
-export function isHuman(name: string): boolean {
-  return name.startsWith(HUMAN_PREFIX);
-}
+export const isHuman = isHumanName;
 
 /** A human shows by the name they signed in with, a worker by its full name. */
-export function displayName(name: string): string {
-  return isHuman(name) ? name.slice(HUMAN_PREFIX.length) : name;
-}
+export const displayName = bareName;
 
 function verdictsOn(version: number, reviews: readonly Review[]): Review[] {
   return reviews

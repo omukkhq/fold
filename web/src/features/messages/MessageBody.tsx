@@ -3,13 +3,15 @@ import { HrefLink } from "@/app/HrefLink";
 import { MentionLink } from "@/mentions/MentionLink";
 import { mentionHref, splitMentions } from "@/mentions/parse";
 import { mentionTag } from "@/mentions/remark";
+import { usePeople } from "@/mentions/usePeople";
 import { linkify } from "./linkify";
 
 /** The body as text with linked `#` and `@` mentions and bare ids; React escapes every string, so HTML in a body shows as typed. */
 export function MessageBody({ body, slug }: { body: string; slug: string }) {
+  const people = usePeople(slug);
   return (
     <p className="text-body leading-normal whitespace-pre-wrap text-text">
-      {splitMentions(body).map((part, index) => (
+      {splitMentions(body, undefined, people).map((part, index) => (
         <Fragment key={index}>
           {part.mention ? (
             <MentionLink

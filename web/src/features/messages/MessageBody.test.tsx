@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   RouterProvider,
   createMemoryHistory,
@@ -17,7 +18,11 @@ async function show(body: string) {
   const index = createRoute({
     getParentRoute: () => root,
     path: "/",
-    component: () => <MessageBody body={body} slug="demo" />,
+    component: () => (
+      <QueryClientProvider client={new QueryClient()}>
+        <MessageBody body={body} slug="demo" />
+      </QueryClientProvider>
+    ),
   });
   const router = createRouter({
     routeTree: root.addChildren([index]),

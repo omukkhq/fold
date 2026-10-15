@@ -1,3 +1,4 @@
+import { PersonName } from "@/people/PersonName";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   Check,
@@ -40,7 +41,6 @@ import {
 import { gateText, shownGates, waitingSummary } from "./gates";
 import type { IntegrationView } from "./integration";
 import {
-  displayName,
   evidenceLines,
   listedReviews,
   reviewText,
@@ -445,8 +445,12 @@ export function SidePanel({
               </HrefLink>
             </p>
             <p className="font-mono text-caption text-text-muted">
-              {integration.actor ? `${displayName(integration.actor)} · ` : ""}v
-              {integration.version} · {clock(integration.at)}
+              {integration.actor ? (
+                <>
+                  <PersonName name={integration.actor} chip={false} /> ·{" "}
+                </>
+              ) : null}
+              v{integration.version} · {clock(integration.at)}
             </p>
           </div>
         ) : null}
@@ -494,7 +498,8 @@ export function SidePanel({
                       className="text-bar leading-snug"
                     />
                     <p className="font-mono text-caption text-text-muted">
-                      {displayName(review.reviewer)} · v{review.version}
+                      <PersonName name={review.reviewer} chip={false} /> · v
+                      {review.version}
                       {earlier ? " · earlier version" : ""} ·{" "}
                       {clock(review.created_at)}
                     </p>

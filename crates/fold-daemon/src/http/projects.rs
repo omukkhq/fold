@@ -16,6 +16,7 @@ use fold_vcs::git::Git;
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list, open))
+        .routes(routes!(list_humans))
         .routes(routes!(show))
         .routes(routes!(collect_garbage))
         .routes(routes!(push))
@@ -132,6 +133,30 @@ pub async fn list(State(state): State<AppState>) -> Result<Json<ProjectList>, Ap
         })
         .collect();
     Ok(Json(ProjectList { projects }))
+}
+
+/// The people who use fold on this host.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct HumanList {
+    /// Human names without the `human:` prefix, ordered by name.
+    pub humans: Vec<String>,
+}
+
+/// Every human the host registry knows, so the web interface can tell a person from a file when text mentions `@name`.
+#[utoipa::path(
+    get,
+    path = "/api/v1/humans",
+    operation_id = "list_humans",
+    responses(
+        (status = 200, description = "The known humans", body = HumanList),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn list_humans(State(state): State<AppState>) -> Result<Json<HumanList>, ApiError> {
+    let humans = fold_store::projects::list_humans(state.registry.read()).await?;
+    Ok(Json(HumanList {
+        humans: humans.iter().map(ToString::to_string).collect(),
+    }))
 }
 
 /// One open project.

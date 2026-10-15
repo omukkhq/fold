@@ -21,18 +21,29 @@ import {
 } from "@/api/repositoryQueries";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
+import { usePeople } from "./usePeople";
 import {
   GROUP_LABELS,
   activeMention,
   applyPick,
   groupRuns,
   itemSuggestions,
+  optionLook,
+  optionMark,
   pathQuery,
   pathSuggestions,
+  personSuggestions,
   stepIndex,
   type ActiveMention,
+  type OptionLook,
   type Suggestion,
 } from "./suggest";
+
+const LOOKS: Record<OptionLook, string> = {
+  mono: "font-mono text-code text-primary-text",
+  human: "font-ui text-bar font-medium text-primary-text",
+  agent: "font-ui text-bar font-medium text-secondary-text",
+};
 
 /** Reads the lists a `#` or `@` needs only while one is being typed, from the same cached queries the screens use. */
 function useSuggestions(
@@ -41,6 +52,7 @@ function useSuggestions(
 ): Suggestion[] {
   const items = active?.mark === "#";
   const paths = active?.mark === "@";
+  const people = usePeople(paths ? slug : null);
   const board = useQuery({ ...boardQuery(slug), enabled: items });
   const proposals = useQuery({ ...proposalsQuery(slug), enabled: items });
   const requests = useQuery({ ...requestsQuery(slug), enabled: items });
@@ -74,7 +86,8 @@ function useSuggestions(
     });
   }
   const entries = query?.workspace == null ? tree.data : workspaceTree.data;
-  return query && entries ? pathSuggestions(query, entries) : [];
+  const files = query && entries ? pathSuggestions(query, entries) : [];
+  return [...personSuggestions(active.query, people), ...files];
 }
 
 export type MentionTextareaProps = Omit<
@@ -231,7 +244,7 @@ export const MentionTextarea = forwardRef<
                 <ul role="presentation" className="flex flex-col px-4">
                   {run.items.map(({ suggestion, index: at }) => (
                     <li
-                      key={`${suggestion.group}:${suggestion.insert}`}
+                      key={`${suggestion.group}:${suggestion.detail}:${suggestion.insert}`}
                       id={`${listId}-${String(at)}`}
                       role="option"
                       aria-selected={at === current}
@@ -244,8 +257,8 @@ export const MentionTextarea = forwardRef<
                         pick(suggestion);
                       }}
                     >
-                      <span className="font-mono text-code text-primary-text">
-                        {run.group === "files" ? "@" : "#"}
+                      <span className={LOOKS[optionLook(suggestion)]}>
+                        {optionMark(run.group)}
                         {suggestion.label}
                       </span>
                       <span className="min-w-0 truncate text-bar text-text-muted">

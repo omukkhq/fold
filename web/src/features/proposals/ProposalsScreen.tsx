@@ -1,3 +1,4 @@
+import { PersonName } from "@/people/PersonName";
 import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { Check, GitMerge, GitPullRequest, UserRoundCheck } from "lucide-react";
 import { proposalsQuery } from "@/api/queries";
@@ -201,7 +202,9 @@ export function ProposalsScreen({
                       </span>
                     </td>
                     <td className={cn(CELL, MONO)}>{p.task}</td>
-                    <td className={cn(CELL, MONO)}>{p.author}</td>
+                    <td className={cn(CELL, MONO)}>
+                      <PersonName name={p.author} chip={false} />
+                    </td>
                     <td className={cn(CELL, MONO)}>{versionText(p)}</td>
                     <td className={CELL}>
                       {waiting ? (

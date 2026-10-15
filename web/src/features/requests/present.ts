@@ -11,6 +11,7 @@ import type {
 import type { TaskStatus } from "@/api/board";
 import { formatAsOfMinute, formatSince } from "@/format/time";
 import { displayName } from "@/features/proposals/present";
+import { isHumanName } from "@/people/names";
 
 export { displayName };
 
@@ -210,7 +211,7 @@ export function listSummary(requests: readonly RequestSummary[]): string {
   const n = requests.length;
   const total = `${String(n)} ${n === 1 ? "request" : "requests"}`;
   const waiting = requests.filter(
-    (r) => r.state === "draft_ready" && r.requester.startsWith("human:"),
+    (r) => r.state === "draft_ready" && isHumanName(r.requester),
   ).length;
   return waiting === 0
     ? total

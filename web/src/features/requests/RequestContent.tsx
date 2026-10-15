@@ -1,3 +1,4 @@
+import { PersonName } from "@/people/PersonName";
 import {
   ArrowRight,
   ChevronRight,
@@ -18,7 +19,6 @@ import {
   type RequestMessage,
 } from "@/api/requests";
 import { HrefLink } from "@/app/HrefLink";
-import { Avatar } from "@/components/avatar/Avatar";
 import { Button } from "@/components/button/Button";
 import { recipientNames } from "@/features/messages/delivery";
 import { Markdown } from "@/features/task/Markdown";
@@ -270,10 +270,10 @@ export function DraftView({
         aside={tabs}
       >
         <p className="flex items-center gap-8 text-meta text-text-muted">
-          <Avatar name={draft.author} />
-          <span className="font-mono text-code text-text">
-            {displayName(draft.author)}
-          </span>
+          <PersonName
+            name={draft.author}
+            className="font-mono text-code text-text"
+          />
           {authorLine(draft, now)}
         </p>
         <ol className="flex flex-col gap-10">
@@ -334,10 +334,10 @@ function CommentCard({
   return (
     <li className="flex flex-col gap-6 rounded-m bg-surface px-12 py-10 inset-ring inset-ring-border-subtle">
       <p className="flex items-center gap-8 text-meta text-text-muted">
-        <Avatar name={comment.author} />
-        <span className="font-mono text-code text-text">
-          {displayName(comment.author)}
-        </span>
+        <PersonName
+          name={comment.author}
+          className="font-mono text-code text-text"
+        />
         asked for changes on v{comment.version}
         <span className="ml-auto text-text-faint">
           {formatAsOfMinute(now, comment.created_at)}
@@ -395,8 +395,7 @@ function MessageCard({
   return (
     <li className="flex flex-col gap-6 rounded-m bg-surface px-12 py-10 inset-ring inset-ring-border-subtle">
       <p className="flex items-center gap-8 font-mono text-caption text-text-muted">
-        <Avatar name={message.sender} className="font-ui" />
-        {displayName(message.sender)}
+        <PersonName name={message.sender} avatarClassName="font-ui" />
         <ArrowRight
           aria-label="to"
           role="img"

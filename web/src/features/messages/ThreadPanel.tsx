@@ -1,9 +1,9 @@
+import { PersonList, PersonName } from "@/people/PersonName";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Controller, useForm } from "react-hook-form";
 import { ArrowRight, Send, SquareKanban } from "lucide-react";
 import { HrefLink } from "@/app/HrefLink";
 import type { ThreadView } from "@/api/messages";
-import { Avatar } from "@/components/avatar/Avatar";
 import { Button } from "@/components/button/Button";
 import {
   buttonClasses,
@@ -68,9 +68,7 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
             thread {thread.id}
             {thread.task ? ` · linked to ${thread.task}` : ""}
             {thread.proposal ? ` · ${thread.proposal}` : ""} ·{" "}
-            {thread.participants
-              .map((p) => p.replace(/^human:/, ""))
-              .join(", ")}
+            <PersonList names={thread.participants} />
           </p>
         </div>
         {thread.task ? (
@@ -91,10 +89,7 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
           <li key={message.id} className="flex flex-col gap-4">
             <article className="flex flex-col gap-4 rounded-m bg-surface px-12 py-10 inset-ring inset-ring-border-subtle">
               <p className="flex items-center gap-8 font-mono text-caption text-text-muted">
-                <span className="flex items-center gap-6">
-                  <Avatar name={message.sender} className="font-ui" />
-                  {message.sender.replace(/^human:/, "")}
-                </span>
+                <PersonName name={message.sender} avatarClassName="font-ui" />
                 <ArrowRight
                   aria-label="to"
                   role="img"

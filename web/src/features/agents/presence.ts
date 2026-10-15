@@ -1,6 +1,7 @@
 import type { BadgeTone } from "@/components/badge/badges";
 import { presenceSpec } from "@/components/avatar/presence";
 import { formatAsOf, formatSince } from "@/format/time";
+import { bareName } from "@/people/names";
 import type {
   AgentAttention,
   AgentView,
@@ -174,7 +175,7 @@ export function footLine(agent: AgentView): string {
     .map(([count, noun]) => plural(count, noun));
   const granter = agent.integrator_granted_by;
   if (hasIntegrator(agent) && granter) {
-    parts.push(`integrator granted by ${granter.replace(/^human:/, "")}`);
+    parts.push(`integrator granted by ${bareName(granter)}`);
   }
   return parts.length > 0 ? parts.join(" · ") : "no claims";
 }

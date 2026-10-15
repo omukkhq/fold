@@ -1,4 +1,5 @@
 import type { ThreadView } from "@/api/messages";
+import { isHumanName } from "@/people/names";
 
 export interface ThreadFilter {
   agent?: string;
@@ -6,9 +7,7 @@ export interface ThreadFilter {
   proposal?: string;
 }
 
-export function isHuman(name: string): boolean {
-  return name.startsWith("human:");
-}
+export const isHuman = isHumanName;
 
 /** The threads that match every set field, newest first. An agent matches by taking part in the thread. */
 export function filterThreads(

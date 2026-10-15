@@ -1,3 +1,4 @@
+import { PersonList, PersonName } from "@/people/PersonName";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Send } from "lucide-react";
@@ -14,7 +15,6 @@ import {
   type TaskMessage,
 } from "@/api/tasks";
 import { HrefLink } from "@/app/HrefLink";
-import { Avatar } from "@/components/avatar/Avatar";
 import { Button } from "@/components/button/Button";
 import { controlClasses } from "@/components/form/Field";
 import { MessageBody } from "@/features/messages/MessageBody";
@@ -38,16 +38,15 @@ function Message({ slug, message }: { slug: string; message: TaskMessage }) {
   return (
     <li className="flex flex-col gap-4 rounded-m bg-surface px-12 py-10 inset-ring inset-ring-border-subtle">
       <div className="flex items-center gap-8">
-        <span className="inline-flex items-center gap-6">
-          <Avatar name={message.sender} />
-          <span className="font-mono text-caption text-text-muted">
-            {message.sender}
-          </span>
-        </span>
+        <PersonName
+          name={message.sender}
+          className="font-mono text-caption text-text-muted"
+        />
         <ArrowRight aria-label="to" size={12} className="text-text-faint" />
-        <span className="font-mono text-caption text-text-muted">
-          {message.recipients.map((r) => r.name).join(", ")}
-        </span>
+        <PersonList
+          names={message.recipients.map((r) => r.name)}
+          className="font-mono text-caption text-text-muted"
+        />
         <HrefLink
           href={threadPath(slug, message.thread)}
           aria-label={`Open the thread of ${message.id}, sent ${clockTime(message.sent_at)}`}

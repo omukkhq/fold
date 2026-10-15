@@ -1,4 +1,10 @@
 import { parseId, type IdKind } from "@/format/ids";
+import {
+  NO_PEOPLE,
+  personOf,
+  type People,
+  type PersonKind,
+} from "@/people/names";
 
 /** `#T-12`: a fold item by its public id. */
 export interface ItemMention {
@@ -12,17 +18,37 @@ export interface ItemMention {
   end: number;
 }
 
-/** `@web/src/board.ts` names a file in the main tree; `@ws-9:web/src/board.ts` names one in a workspace. */
+/** `@tanim` or `@frontend/ui`: a human or an agent by a name the daemon knows. */
+export interface PersonMention {
+  mark: "@";
+  person: PersonKind;
+  /** The name without the mark and without `human:`. */
+  name: string;
+  text: string;
+  start: number;
+  end: number;
+}
+
+/** `@web/src/board.ts` names a file in the main tree; `@ws-9:web/src/board.ts` names one in a workspace; a trailing `/` (`@web/src/`) or `@./name` says which of the two it is. */
 export interface PathMention {
   mark: "@";
   workspace: string | null;
+  /** Without a trailing `/`, also for a folder. */
   path: string;
   text: string;
   start: number;
   end: number;
 }
 
-export type Mention = ItemMention | PathMention;
+export type Mention = ItemMention | PersonMention | PathMention;
+
+export function isPerson(mention: Mention): mention is PersonMention {
+  return mention.mark === "@" && "person" in mention;
+}
+
+export function isPath(mention: Mention): mention is PathMention {
+  return mention.mark === "@" && "path" in mention;
+}
 
 export interface Segment {
   text: string;
@@ -68,31 +94,57 @@ function itemMentions(text: string): ItemMention[] {
 }
 
 /**
- * A main-tree path needs a `/` or a `.` (`@web/src`, `@Makefile.am`), so a word after `@` such as `@tanim` stays text; a workspace path always counts.
+ * What follows `@` is a person when it is a name in `people` and does not end with `/`; otherwise a folder when it ends with `/`, otherwise a file. A main-tree file needs a `/` or a `.` (`@web/src`, `@Makefile.am`), so an unknown word such as `@nobody` stays text; `@./Makefile` forces a file and a workspace path always counts.
  */
-function pathMentions(text: string): PathMention[] {
-  const found: PathMention[] = [];
+function atMentions(
+  text: string,
+  people: People,
+): (PersonMention | PathMention)[] {
+  const found: (PersonMention | PathMention)[] = [];
   for (const match of text.matchAll(PATH)) {
     const workspace = match[1] ?? null;
-    const path = trimPath(match[2] ?? "");
+    const raw = trimPath(match[2] ?? "");
+    const forced = workspace === null && raw.startsWith("./");
+    const spelled = forced ? raw.slice(2) : raw;
+    const folder = spelled.endsWith("/");
+    const path = folder ? spelled.slice(0, -1) : spelled;
+    const prefix = workspace === null ? "" : `${workspace}:`;
+    const index = match.index;
+    if (workspace === null && !forced) {
+      const person = personOf(people, raw);
+      if (person !== null) {
+        found.push({
+          mark: "@",
+          person,
+          name: raw,
+          text: `@${raw}`,
+          start: index,
+          end: index + raw.length + 1,
+        });
+        continue;
+      }
+    }
     if (!isCleanPath(path)) continue;
-    if (workspace === null && !/[./]/.test(path)) continue;
-    const written = `@${workspace === null ? "" : `${workspace}:`}${path}`;
+    if (workspace === null && !forced && !/[./]/.test(spelled)) continue;
+    const written = `@${forced ? "./" : prefix}${path}${folder ? "/" : ""}`;
     found.push({
       mark: "@",
       workspace,
       path,
       text: written,
-      start: match.index,
-      end: match.index + written.length,
+      start: index,
+      end: index + written.length,
     });
   }
   return found;
 }
 
 /** Every well-formed mention in `text`, in order. Code spans are the caller's: Markdown hands over text nodes only, and `splitMentions` skips them. */
-export function findMentions(text: string): Mention[] {
-  return [...itemMentions(text), ...pathMentions(text)].sort(
+export function findMentions(
+  text: string,
+  people: People = NO_PEOPLE,
+): Mention[] {
+  return [...itemMentions(text), ...atMentions(text, people)].sort(
     (a, b) => a.start - b.start,
   );
 }
@@ -124,11 +176,15 @@ export function inCode(ranges: readonly [number, number][], at: number) {
 }
 
 /** Splits plain text into text and mentions. A mention inside a code span, or one `known` rejects, stays text. */
-export function splitMentions(text: string, known?: Known): Segment[] {
+export function splitMentions(
+  text: string,
+  known?: Known,
+  people: People = NO_PEOPLE,
+): Segment[] {
   const code = codeRanges(text);
   const segments: Segment[] = [];
   let at = 0;
-  for (const mention of findMentions(text)) {
+  for (const mention of findMentions(text, people)) {
     if (inCode(code, mention.start) || (known && !known(mention))) continue;
     if (mention.start > at)
       segments.push({ text: text.slice(at, mention.start) });
@@ -139,9 +195,14 @@ export function splitMentions(text: string, known?: Known): Segment[] {
   return segments;
 }
 
-/** The screen a mention opens. */
-export function mentionHref(slug: string, mention: Mention): string {
+/** The screen a mention opens; a human has none. */
+export function mentionHref(slug: string, mention: Mention): string | null {
   const base = `/p/${slug}`;
+  if (isPerson(mention)) {
+    return mention.person === "agent"
+      ? `${base}/board?${new URLSearchParams({ agent: mention.name }).toString()}`
+      : null;
+  }
   if (mention.mark === "@") {
     const query = new URLSearchParams(
       mention.workspace === null

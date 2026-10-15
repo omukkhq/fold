@@ -3,6 +3,8 @@ import {
   codeRanges,
   findMentions,
   isCleanPath,
+  isPath,
+  isPerson,
   knownFrom,
   mentionHref,
   splitMentions,
@@ -44,7 +46,7 @@ describe("findMentions", () => {
       "@ws-9:web/src/a.ts",
     ]);
     const ws = found[2];
-    expect(ws?.mark === "@" && [ws.workspace, ws.path]).toEqual([
+    expect(ws !== undefined && isPath(ws) && [ws.workspace, ws.path]).toEqual([
       "ws-9",
       "web/src/a.ts",
     ]);
@@ -52,7 +54,7 @@ describe("findMentions", () => {
 
   it("leaves names, e-mail addresses and unclean paths as text", () => {
     expect(
-      findMentions("@tanim mail a@b.com @/etc/passwd @../x @a//b @./a @"),
+      findMentions("@tanim mail a@b.com @/etc/passwd @../x @a//b @./ @"),
     ).toEqual([]);
   });
 
@@ -153,5 +155,66 @@ describe("knownFrom", () => {
       true,
       true,
     ]);
+  });
+});
+
+describe("person mentions", () => {
+  const people = {
+    humans: ["tanim", "Makefile", "notes.md"],
+    agents: ["frontend", "frontend/ui"],
+  };
+  const shape = (text: string) =>
+    findMentions(text, people).map((m) =>
+      isPerson(m)
+        ? ["person", m.person, m.name]
+        : isPath(m)
+          ? ["path", m.path, m.text]
+          : ["item", m.text],
+    );
+
+  it("names a known human or agent before a file", () => {
+    expect(shape("ask @tanim and @frontend, @frontend/ui too")).toEqual([
+      ["person", "human", "tanim"],
+      ["person", "agent", "frontend"],
+      ["person", "agent", "frontend/ui"],
+    ]);
+  });
+
+  it("leaves an unknown name as text and an unknown dotted name as a file", () => {
+    expect(shape("@nobody @a.ts")).toEqual([["path", "a.ts", "@a.ts"]]);
+  });
+
+  it("reads a trailing slash as a folder, even for a person's name", () => {
+    expect(shape("@frontend/ @web/src/ @tanim/")).toEqual([
+      ["path", "frontend", "@frontend/"],
+      ["path", "web/src", "@web/src/"],
+      ["path", "tanim", "@tanim/"],
+    ]);
+  });
+
+  it("reads @./name as a file, also for a person named like a root file", () => {
+    expect(shape("@Makefile @./Makefile @notes.md @./notes.md")).toEqual([
+      ["person", "human", "Makefile"],
+      ["path", "Makefile", "@./Makefile"],
+      ["person", "human", "notes.md"],
+      ["path", "notes.md", "@./notes.md"],
+    ]);
+  });
+
+  it("drops sentence punctuation after a name", () => {
+    expect(shape("thanks @tanim.")).toEqual([["person", "human", "tanim"]]);
+  });
+
+  it("splits text around a person and links an agent to its board", () => {
+    const [, person] = splitMentions("hi @frontend now", undefined, people);
+    expect(person?.mention && mentionHref("demo", person.mention)).toBe(
+      "/p/demo/board?agent=frontend",
+    );
+    const [, human] = splitMentions("hi @tanim now", undefined, people);
+    expect(human?.mention && mentionHref("demo", human.mention)).toBeNull();
+  });
+
+  it("finds no person without a list of names", () => {
+    expect(findMentions("@tanim")).toEqual([]);
   });
 });

@@ -1,3 +1,4 @@
+import { PersonName } from "@/people/PersonName";
 import { useQuery } from "@tanstack/react-query";
 import { Inbox, Plus, RefreshCw, UserRound } from "lucide-react";
 import { useState, type ReactNode } from "react";
@@ -25,7 +26,6 @@ import { NewRequestDialog } from "./NewRequestDialog";
 import {
   KIND_SPECS,
   STATE_SPECS,
-  displayName,
   headingOf,
   kindOf,
   listSummary,
@@ -301,12 +301,18 @@ export function RequestsScreen({
                       {heading.text}
                     </HrefLink>
                   </td>
-                  <td className={cn(CELL, MONO)}>{displayName(r.requester)}</td>
+                  <td className={cn(CELL, MONO)}>
+                    <PersonName name={r.requester} />
+                  </td>
                   <td className={CELL}>
                     <StatePill state={r.state} />
                   </td>
                   <td className={cn(CELL, MONO)}>
-                    {r.drafter === null ? "unclaimed" : displayName(r.drafter)}
+                    {r.drafter === null ? (
+                      "unclaimed"
+                    ) : (
+                      <PersonName name={r.drafter} />
+                    )}
                   </td>
                   <td
                     className={cn(

@@ -1,3 +1,4 @@
+import type { ComponentProps } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/cn";
@@ -5,6 +6,7 @@ import { focusRing } from "@/lib/focus";
 import { MentionLink } from "@/mentions/MentionLink";
 import type { Known } from "@/mentions/parse";
 import { remarkMentions } from "@/mentions/remark";
+import { usePeople } from "@/mentions/usePeople";
 
 // Every element takes token classes; W03 draws the description as 14 / 400 body text with 600 subheads.
 const COMPONENTS: Components = {
@@ -71,8 +73,8 @@ const COMPONENTS: Components = {
     ) : null,
   a: ({ children, href, node }) => {
     const tag = node?.properties.dataMention;
-    return typeof tag === "string" && href ? (
-      <MentionLink href={href} tag={tag}>
+    return typeof tag === "string" && (href || tag === "human") ? (
+      <MentionLink href={href ?? null} tag={tag}>
         {children}
       </MentionLink>
     ) : (
@@ -131,15 +133,38 @@ export function Markdown({
   children: string;
   mentions?: { slug: string; known?: Known };
 }) {
+  return mentions ? (
+    <WithMentions mentions={mentions}>{children}</WithMentions>
+  ) : (
+    <Body plugins={[remarkGfm]}>{children}</Body>
+  );
+}
+
+function WithMentions({
+  children,
+  mentions,
+}: {
+  children: string;
+  mentions: { slug: string; known?: Known };
+}) {
+  const people = usePeople(mentions.slug);
+  return (
+    <Body plugins={[remarkGfm, remarkMentions({ ...mentions, people })]}>
+      {children}
+    </Body>
+  );
+}
+
+function Body({
+  children,
+  plugins,
+}: {
+  children: string;
+  plugins: NonNullable<ComponentProps<typeof ReactMarkdown>["remarkPlugins"]>;
+}) {
   return (
     <div className="flex flex-col gap-6">
-      <ReactMarkdown
-        remarkPlugins={
-          mentions ? [remarkGfm, remarkMentions(mentions)] : [remarkGfm]
-        }
-        skipHtml
-        components={COMPONENTS}
-      >
+      <ReactMarkdown remarkPlugins={plugins} skipHtml components={COMPONENTS}>
         {children}
       </ReactMarkdown>
     </div>

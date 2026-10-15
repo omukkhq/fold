@@ -1,3 +1,4 @@
+import { PersonName } from "@/people/PersonName";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   Check,
@@ -12,7 +13,6 @@ import type { ReactNode } from "react";
 import { Controller, useForm } from "react-hook-form";
 import type { RequestDetail } from "@/api/requests";
 import { HrefLink } from "@/app/HrefLink";
-import { Avatar } from "@/components/avatar/Avatar";
 import { Button } from "@/components/button/Button";
 import {
   buttonClasses,
@@ -417,10 +417,10 @@ export function DrafterBlock({
       ) : (
         <>
           <p className="flex items-center gap-8">
-            <Avatar name={drafter} />
-            <span className="font-mono text-code text-text">
-              {displayName(drafter)}
-            </span>
+            <PersonName
+              name={drafter}
+              className="font-mono text-code text-text"
+            />
           </p>
           <p className="text-meta text-text-muted">
             {drafterLine(detail.drafts, drafter, now)}
@@ -461,7 +461,7 @@ export function VersionsBlock({
               v{d.version}
             </span>
             <span className="min-w-0 flex-1 truncate text-text-muted">
-              {displayName(d.author)}
+              <PersonName name={d.author} chip={false} />
             </span>
             <span className="font-ui text-meta text-text-muted">
               {d.version === latest ? "current · " : ""}

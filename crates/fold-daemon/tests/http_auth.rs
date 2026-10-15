@@ -895,3 +895,25 @@ async fn off_loopback_an_ip_host_passes_and_a_domain_name_is_refused() {
     .await;
     assert_eq!(answer.code(), "host_not_allowed");
 }
+
+#[tokio::test]
+async fn the_humans_route_lists_the_registered_names_in_order() {
+    let fixture = Fixture::new(false).await;
+    let answer = send(fixture.http(), Method::GET, "/api/v1/humans", None, None).await;
+    assert_eq!(answer.status, StatusCode::OK);
+    assert_eq!(answer.body, json!({"humans": []}));
+
+    for name in ["tanim", "ana"] {
+        let answer = send(
+            fixture.http(),
+            Method::POST,
+            SESSION,
+            None,
+            Some(json!({ "name": name })),
+        )
+        .await;
+        assert_eq!(answer.status, StatusCode::NO_CONTENT);
+    }
+    let answer = send(fixture.http(), Method::GET, "/api/v1/humans", None, None).await;
+    assert_eq!(answer.body, json!({"humans": ["ana", "tanim"]}));
+}

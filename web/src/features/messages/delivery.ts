@@ -1,10 +1,9 @@
 import { formatAsOf } from "@/format/time";
 import type { MessageView, RecipientView } from "@/api/messages";
+import { bareName } from "@/people/names";
 import { isHuman } from "./filters";
 
-function shown(name: string): string {
-  return name.replace(/^human:/, "");
-}
+const shown = bareName;
 
 /** `acknowledged by frontend/ui · 14:09:00`, `read by tanim · 14:12:00` for a human, `delivered to backend · 14:08:05` or `not delivered to review`. */
 export function recipientState(r: RecipientView, now: number): string {

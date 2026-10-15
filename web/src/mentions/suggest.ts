@@ -1,3 +1,4 @@
+import type { People } from "@/people/names";
 import { codeRanges, inCode } from "./parse";
 
 export type Mark = "#" | "@";
@@ -49,9 +50,16 @@ export function applyPick(
   return { text: head + space + after, caret: head.length + 1 };
 }
 
-export type Group = "tasks" | "proposals" | "requests" | "revisions" | "files";
+export type Group =
+  | "people"
+  | "tasks"
+  | "proposals"
+  | "requests"
+  | "revisions"
+  | "files";
 
 export const GROUP_LABELS: Record<Group, string> = {
+  people: "People",
   tasks: "Tasks",
   proposals: "Proposals",
   requests: "Requests",
@@ -63,7 +71,7 @@ export interface Suggestion {
   group: Group;
   /** What the pick writes after the mark. */
   insert: string;
-  /** The id or name the row shows in the mono face. */
+  /** The id, path or name the row shows: in the mono face, except a person's name. */
   label: string;
   /** The title beside it; empty when the item has none. */
   detail: string;
@@ -110,6 +118,36 @@ export function itemSuggestions(
         open: false,
       })),
   );
+}
+
+/** The humans, then the agents and workers, whose name starts with the typed part, at most five per kind. A name is written as it is, without `human:`. */
+export function personSuggestions(query: string, people: People): Suggestion[] {
+  const q = query.toLowerCase();
+  const pick = (names: readonly string[], detail: string) =>
+    names
+      .filter((name) => name.toLowerCase().startsWith(q))
+      .slice(0, PER_GROUP)
+      .map((name) => ({
+        group: "people" as const,
+        insert: name,
+        label: name,
+        detail,
+        open: false,
+      }));
+  return [...pick(people.humans, "human"), ...pick(people.agents, "agent")];
+}
+
+/** How a row shows its label: an id or a path in the mono face, a person as `@name` in Barlow in the colour of their kind. */
+export type OptionLook = "mono" | "human" | "agent";
+
+export function optionLook(suggestion: Suggestion): OptionLook {
+  if (suggestion.group !== "people") return "mono";
+  return suggestion.detail === "human" ? "human" : "agent";
+}
+
+/** The mark a row shows before its label. */
+export function optionMark(group: Group): Mark {
+  return group === "files" || group === "people" ? "@" : "#";
 }
 
 export interface PathQuery {

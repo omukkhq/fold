@@ -6,6 +6,7 @@
 export const keys = {
   projects: () => ["@projects"] as const,
   session: () => ["@session"] as const,
+  humans: () => ["@humans"] as const,
   project: (slug: string) => [slug, "project"] as const,
   board: (slug: string) => [slug, "board"] as const,
   task: (slug: string, task: string) => [slug, "task", task] as const,

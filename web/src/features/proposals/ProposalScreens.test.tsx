@@ -710,7 +710,9 @@ describe("Proposal detail", () => {
     await waitFor(() => {
       expect(within(reviews).getAllByRole("listitem")).toHaveLength(before + 1);
     });
-    expect(within(reviews).getByText(/^tanim · v2/)).toBeTruthy();
+    expect(
+      within(reviews).getByText("tanim").parentElement?.textContent,
+    ).toMatch(/^tanim · v2/);
     expect(within(panel).getByText(/Approved by tanim/)).toBeTruthy();
     expect(
       writes("POST /api/v1/projects/demo/proposals/P-4/reviews")[0]?.body,

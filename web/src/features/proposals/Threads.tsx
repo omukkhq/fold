@@ -1,7 +1,7 @@
+import { PersonName } from "@/people/PersonName";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { MessageSquarePlus, TextSelect } from "lucide-react";
 import { Controller, useForm } from "react-hook-form";
-import { Avatar } from "@/components/avatar/Avatar";
 import { Button } from "@/components/button/Button";
 import type { DiffSelection } from "@/features/diff/selection";
 import { MentionText } from "@/mentions/MentionText";
@@ -9,7 +9,6 @@ import { MentionTextarea } from "@/mentions/MentionTextarea";
 import { formatAsOfMinute } from "@/format/time";
 import { cn } from "@/lib/cn";
 import { commentSchema, type CommentValues } from "./compose";
-import { displayName } from "./present";
 import { commentNote, composerTitle, type CommentThread } from "./threads";
 
 export function ThreadBox({
@@ -36,10 +35,10 @@ export function ThreadBox({
             )}
           >
             <p className="flex items-center gap-8 font-mono text-caption text-text-muted">
-              <span className="flex items-center gap-6">
-                <Avatar name={entry.comment.author} className="font-ui" />
-                {displayName(entry.comment.author)}
-              </span>
+              <PersonName
+                name={entry.comment.author}
+                avatarClassName="font-ui"
+              />
               <span className="min-w-0 truncate">
                 {commentNote(thread, entry)}
               </span>
