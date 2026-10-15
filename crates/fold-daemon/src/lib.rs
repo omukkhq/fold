@@ -6,6 +6,7 @@ pub mod jobs;
 pub mod live;
 pub mod mcp;
 pub mod projects;
+pub mod push;
 pub mod services;
 pub mod socket;
 

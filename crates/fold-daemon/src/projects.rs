@@ -7,6 +7,7 @@ use fold_store::projects::ProjectRow;
 use fold_vcs::platform::Capabilities;
 
 use crate::live::{LiveConfig, LiveState};
+use crate::push::{self, PushTargets, PushTask};
 use crate::services::agents::{AgentService, SeenPresence};
 use crate::services::events::EventBus;
 use crate::services::projects::load_config;
@@ -40,6 +41,9 @@ pub struct ProjectHandle {
     pub capabilities: Arc<OnceLock<Capabilities>>,
     /// The in-memory state of the project's active workspaces.
     pub live: LiveState,
+    /// The Claude Code inbox sockets of the project's agents. They live in memory only, so a restarted daemon has none until the session-start hooks run again.
+    pub push: PushTargets,
+    _push_task: PushTask,
 }
 
 impl std::fmt::Debug for ProjectHandle {
@@ -87,6 +91,8 @@ impl ProjectHandle {
         .with_project_config(paths.clone())
         .with_live(live.clone())
         .with_workspace_locks(workspace_locks.clone());
+        let push = PushTargets::new();
+        let push_task = push::run(store.clone(), &bus, push.clone());
         Ok(Self {
             slug: row.slug.clone(),
             name: row.name.clone(),
@@ -103,14 +109,17 @@ impl ProjectHandle {
             workspace_locks,
             capabilities,
             live,
+            push,
+            _push_task: push_task,
         })
     }
 
-    /// The agent service of this project: its store, bus, clock, configured lease and seen presence.
+    /// The agent service of this project: its store, bus, clock, configured lease, seen presence and push targets.
     pub fn agents(&self) -> AgentService {
         AgentService::new(self.store.clone(), self.bus.clone(), self.clock.clone())
             .with_project_config(self.paths.clone())
             .with_seen_presence(self.presence.clone())
+            .with_push_targets(self.push.clone())
     }
 }
 

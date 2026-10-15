@@ -98,3 +98,4 @@ empty_review
 review_claim_required
 checkout_failed
 invalid_last_event_id
+invalid_push_target

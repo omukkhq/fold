@@ -16,6 +16,7 @@ pub mod object;
 pub mod policy;
 pub mod presence;
 pub mod projects;
+pub mod push;
 pub mod readiness;
 pub mod reviews;
 pub mod revision;

@@ -11,12 +11,14 @@ use fold_store::{Store, StoreError, WriteTx};
 use serde_json::json;
 use thiserror::Error;
 
+use crate::push::PushTargets;
 use crate::services::events::{EventBuffer, EventBus};
 use crate::services::projects::{Lease, ProjectError};
 use crate::services::tasks::renew_leases;
 
 mod overview;
 mod presence;
+mod push;
 
 pub use overview::{
     AgentOverview, ClaimSummary, MAX_OVERVIEW_EVENTS, OverviewFilter, ProposalSummary,
@@ -81,6 +83,7 @@ pub struct AgentService {
     clock: Arc<dyn Clock>,
     lease: Lease,
     seen: SeenPresence,
+    push: PushTargets,
 }
 
 impl std::fmt::Debug for AgentService {
@@ -98,6 +101,7 @@ impl AgentService {
             clock,
             lease: Lease::Minutes(ProjectConfig::default().lease_minutes),
             seen: SeenPresence::new(),
+            push: PushTargets::new(),
         }
     }
 
@@ -117,6 +121,13 @@ impl AgentService {
     #[must_use]
     pub fn with_seen_presence(mut self, seen: SeenPresence) -> Self {
         self.seen = seen;
+        self
+    }
+
+    /// Shares the project's push targets, which [`AgentService::end_session`] clears when an agent's last session ends. Until then the service has targets of its own.
+    #[must_use]
+    pub fn with_push_targets(mut self, push: PushTargets) -> Self {
+        self.push = push;
         self
     }
 
@@ -345,20 +356,21 @@ impl AgentService {
         Ok(())
     }
 
-    /// Ends the session. A second call does nothing. `session.ended` is stored only for a session that was bound.
+    /// Ends the session. A second call does nothing. `session.ended` is stored only for a session that was bound. When it was the agent's last open session, the agent's push targets registered up to its start are dropped after the commit; a target a newer session registered since stays.
     pub async fn end_session(&self, ctx: &SessionContext) -> Result<(), AgentError> {
         let now = self.clock.now();
         let mut buffer = EventBuffer::new();
-        self.store
+        let last = self
+            .store
             .write(async |tx| {
                 let Some(session) = agents::find_session(tx.conn(), ctx.session_id).await? else {
-                    return Ok::<_, AgentError>(());
+                    return Ok::<_, AgentError>(None);
                 };
                 if !agents::end_session(tx.conn(), ctx.session_id, now).await? {
-                    return Ok(());
+                    return Ok(None);
                 }
                 let Some(agent_id) = session.agent_id else {
-                    return Ok(());
+                    return Ok(None);
                 };
                 let name = agents::agent_name(tx.conn(), agent_id)
                     .await?
@@ -366,10 +378,14 @@ impl AgentService {
                 let event = NewEvent::new(types::SESSION_ENDED, main_actor(&name))?
                     .data(json!({"agent": name.as_str()}))?;
                 buffer.append(tx, &event, now).await?;
-                Ok(())
+                let open = agents::open_session_calls(tx.conn(), agent_id).await?;
+                Ok(open.is_empty().then_some((name, session.started_at)))
             })
             .await?;
         self.bus.publish(buffer);
+        if let Some((agent, started_at)) = last {
+            self.push.clear_registered_by(&agent, started_at);
+        }
         Ok(())
     }
 
@@ -400,6 +416,7 @@ impl AgentService {
             })
             .await?;
         self.bus.publish(buffer);
+        self.push.clear_all();
         Ok(ended)
     }
 }

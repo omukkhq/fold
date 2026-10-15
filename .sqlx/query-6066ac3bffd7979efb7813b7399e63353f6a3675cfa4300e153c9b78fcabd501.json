@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT DISTINCT a.name AS \"name!: String\" FROM events e\n           JOIN messages m ON m.number = e.message_id\n           JOIN message_recipients r ON r.message_id = m.id\n           JOIN workers w ON w.id = r.worker_id\n           JOIN agents a ON a.id = w.agent_id\n           WHERE e.seq = ?1\n           ORDER BY a.name",
+  "describe": {
+    "columns": [
+      {
+        "name": "name!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "6066ac3bffd7979efb7813b7399e63353f6a3675cfa4300e153c9b78fcabd501"
+}

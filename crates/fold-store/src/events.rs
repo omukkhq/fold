@@ -266,6 +266,30 @@ pub async fn is_recipient(
     Ok(found)
 }
 
+/// The agents with a worker among the recipients of the message that the event `seq` names in `events.message_id`, in name order. Human recipients are left out.
+pub async fn recipient_agents(
+    executor: impl SqliteExecutor<'_>,
+    seq: u64,
+) -> Result<Vec<AgentName>, StoreError> {
+    let seq = seq_param(seq)?;
+    let names = sqlx::query_scalar!(
+        r#"SELECT DISTINCT a.name AS "name!: String" FROM events e
+           JOIN messages m ON m.number = e.message_id
+           JOIN message_recipients r ON r.message_id = m.id
+           JOIN workers w ON w.id = r.worker_id
+           JOIN agents a ON a.id = w.agent_id
+           WHERE e.seq = ?1
+           ORDER BY a.name"#,
+        seq
+    )
+    .fetch_all(executor)
+    .await?;
+    names
+        .iter()
+        .map(|name| AgentName::parse(name).map_err(|_| StoreError::Corrupt("agents.name")))
+        .collect()
+}
+
 /// The claims, prerequisites and proposals of every worker of the agent. The caller passes one read transaction, so the four reads see one state.
 pub async fn agent_facts(
     conn: &mut SqliteConnection,
