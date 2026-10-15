@@ -404,6 +404,29 @@ impl Harness {
             .unwrap()
     }
 
+    /// `POST /requests` with the multipart form of `parts`, as the human `human` when one is named, the way the web's New request dialog sends it.
+    pub async fn create_request_form(
+        &self,
+        parts: &[FormPart<'_>],
+        human: Option<&str>,
+    ) -> (StatusCode, Value) {
+        let mut request = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/api/v1/projects/{SLUG}/requests"))
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={FORM_BOUNDARY}"),
+            );
+        if let Some(human) = human {
+            request = request.header("cookie", format!("fold_human={human}"));
+        }
+        let request = request.body(Body::from(multipart_form(parts))).unwrap();
+        let response = router(self.state.clone()).oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
     /// A request through the HTTP router as the human `human`, named by the `fold_human` cookie the way the browser sends it.
     pub async fn http(
         &self,
@@ -668,6 +691,33 @@ impl FakeInbox {
             .expect("a post within the wait")
             .unwrap()
     }
+}
+
+/// The boundary of every multipart form a test sends.
+pub const FORM_BOUNDARY: &str = "fold-test-boundary";
+
+/// One part of a multipart form: its name, its file name, its content type and its bytes.
+pub type FormPart<'a> = (&'a str, Option<&'a str>, Option<&'a str>, &'a [u8]);
+
+/// The body of a multipart form of `parts`, delimited by [`FORM_BOUNDARY`].
+pub fn multipart_form(parts: &[FormPart<'_>]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for (name, file, media_type, content) in parts {
+        bytes.extend_from_slice(format!("--{FORM_BOUNDARY}\r\n").as_bytes());
+        let mut disposition = format!("Content-Disposition: form-data; name=\"{name}\"");
+        if let Some(file) = file {
+            disposition.push_str(&format!("; filename=\"{file}\""));
+        }
+        bytes.extend_from_slice(format!("{disposition}\r\n").as_bytes());
+        if let Some(media_type) = media_type {
+            bytes.extend_from_slice(format!("Content-Type: {media_type}\r\n").as_bytes());
+        }
+        bytes.extend_from_slice(b"\r\n");
+        bytes.extend_from_slice(content);
+        bytes.extend_from_slice(b"\r\n");
+    }
+    bytes.extend_from_slice(format!("--{FORM_BOUNDARY}--\r\n").as_bytes());
+    bytes
 }
 
 /// The bytes a session's inbox receives for one notice: the auth line, then the notice in fold's cross-session envelope.

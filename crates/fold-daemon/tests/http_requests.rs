@@ -6,38 +6,10 @@ use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-use crate::common::acceptance::Harness;
+use crate::common::acceptance::{FORM_BOUNDARY, FormPart, Harness};
 
 #[cfg(test)]
 const BASE: &str = "/api/v1/projects/demo";
-#[cfg(test)]
-const BOUNDARY: &str = "fold-test-boundary";
-
-/// One part of a multipart form: its name, its file name, its content type and its bytes.
-#[cfg(test)]
-type Part<'a> = (&'a str, Option<&'a str>, Option<&'a str>, &'a [u8]);
-
-#[cfg(test)]
-fn multipart(parts: &[Part<'_>]) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    for (name, file, media_type, content) in parts {
-        bytes.extend_from_slice(format!("--{BOUNDARY}\r\n").as_bytes());
-        let mut disposition = format!("Content-Disposition: form-data; name=\"{name}\"");
-        if let Some(file) = file {
-            disposition.push_str(&format!("; filename=\"{file}\""));
-        }
-        bytes.extend_from_slice(format!("{disposition}\r\n").as_bytes());
-        if let Some(media_type) = media_type {
-            bytes.extend_from_slice(format!("Content-Type: {media_type}\r\n").as_bytes());
-        }
-        bytes.extend_from_slice(b"\r\n");
-        bytes.extend_from_slice(content);
-        bytes.extend_from_slice(b"\r\n");
-    }
-    bytes.extend_from_slice(format!("--{BOUNDARY}--\r\n").as_bytes());
-    bytes
-}
-
 /// A raw request through the HTTP router, as `human` when one is named.
 #[cfg(test)]
 async fn send(
@@ -68,24 +40,6 @@ async fn json_of(response: axum::response::Response) -> (StatusCode, Value) {
     (status, serde_json::from_slice(&bytes).unwrap())
 }
 
-/// `POST /requests` with the form `parts` as `human`.
-#[cfg(test)]
-async fn create(h: &Harness, parts: &[Part<'_>], human: Option<&str>) -> (StatusCode, Value) {
-    let content_type = format!("multipart/form-data; boundary={BOUNDARY}");
-    json_of(
-        send(
-            h,
-            Method::POST,
-            &format!("{BASE}/requests"),
-            Some(&content_type),
-            multipart(parts),
-            human,
-        )
-        .await,
-    )
-    .await
-}
-
 #[cfg(test)]
 fn draft() -> Value {
     json!([
@@ -110,16 +64,16 @@ async fn submit(h: &Harness, version: u64) {
 async fn a_human_creates_asks_for_changes_edits_and_approves() {
     let h = Harness::start().await;
     let png: &[u8] = b"\x89PNG\r\n\x1a\nfake";
-    let (status, created) = create(
-        &h,
-        &[
-            ("body", None, None, b"Board is slow\nSee #T-1."),
-            ("files", Some("shot.png"), Some("image/png"), png),
-            ("files", Some("r\u{e9} port%.txt"), None, b"steps"),
-        ],
-        Some("ana"),
-    )
-    .await;
+    let (status, created) = h
+        .create_request_form(
+            &[
+                ("body", None, None, b"Board is slow\nSee #T-1."),
+                ("files", Some("shot.png"), Some("image/png"), png),
+                ("files", Some("r\u{e9} port%.txt"), None, b"steps"),
+            ],
+            Some("ana"),
+        )
+        .await;
     assert_eq!(status, StatusCode::CREATED, "{created}");
     assert_eq!(
         created["request"],
@@ -322,10 +276,14 @@ async fn a_human_creates_asks_for_changes_edits_and_approves() {
 #[tokio::test]
 async fn writes_need_a_named_human_who_is_the_requester() {
     let h = Harness::start().await;
-    let (status, refused) = create(&h, &[("body", None, None, b"slow")], None).await;
+    let (status, refused) = h
+        .create_request_form(&[("body", None, None, b"slow")], None)
+        .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(refused["error"]["code"], "human_name_required");
-    let (status, _) = create(&h, &[("body", None, None, b"slow")], Some("ana")).await;
+    let (status, _) = h
+        .create_request_form(&[("body", None, None, b"slow")], Some("ana"))
+        .await;
     assert_eq!(status, StatusCode::CREATED);
 
     let close = |human: Option<&str>| {
@@ -393,26 +351,26 @@ async fn bad_input_is_refused_with_its_code() {
     assert_eq!(filter["error"]["code"], "invalid_request");
 
     let file: &[u8] = b"x";
-    let many: Vec<Part<'_>> = std::iter::once(("body", None, None, &b"slow"[..]))
+    let many: Vec<FormPart<'_>> = std::iter::once(("body", None, None, &b"slow"[..]))
         .chain((0..11).map(|_| ("files", Some("a.txt"), Some("text/plain"), file)))
         .collect();
-    let (status, refused) = create(&h, &many, Some("ana")).await;
+    let (status, refused) = h.create_request_form(&many, Some("ana")).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(
         refused["error"]["details"]["reason"],
         "too_many_attachments"
     );
     let large = vec![b'a'; MAX_ATTACHMENT_BYTES as usize + 1];
-    let (status, refused) = create(
-        &h,
-        &[
-            ("body", None, None, b"slow"),
-            ("files", Some("small.txt"), None, file),
-            ("files", Some("large.bin"), None, &large),
-        ],
-        Some("ana"),
-    )
-    .await;
+    let (status, refused) = h
+        .create_request_form(
+            &[
+                ("body", None, None, b"slow"),
+                ("files", Some("small.txt"), None, file),
+                ("files", Some("large.bin"), None, &large),
+            ],
+            Some("ana"),
+        )
+        .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(
         refused["error"]["details"]["reason"],
@@ -421,7 +379,7 @@ async fn bad_input_is_refused_with_its_code() {
     assert_eq!(refused["error"]["details"]["position"], 2);
     drop(large);
     let mut over = format!(
-        "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"files\"; filename=\"big.bin\"\r\n\r\n"
+        "--{FORM_BOUNDARY}\r\nContent-Disposition: form-data; name=\"files\"; filename=\"big.bin\"\r\n\r\n"
     )
     .into_bytes();
     over.resize(over.len() + 102 * 1024 * 1024, b'a');
@@ -429,16 +387,20 @@ async fn bad_input_is_refused_with_its_code() {
         &h,
         Method::POST,
         &format!("{BASE}/requests"),
-        Some(&format!("multipart/form-data; boundary={BOUNDARY}")),
+        Some(&format!("multipart/form-data; boundary={FORM_BOUNDARY}")),
         over,
         Some("ana"),
     )
     .await;
     assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    let (status, refused) = create(&h, &[("files", Some("a.txt"), None, file)], Some("ana")).await;
+    let (status, refused) = h
+        .create_request_form(&[("files", Some("a.txt"), None, file)], Some("ana"))
+        .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(refused["error"]["code"], "invalid_request");
-    let (status, refused) = create(&h, &[("body", None, None, b"   ")], Some("ana")).await;
+    let (status, refused) = h
+        .create_request_form(&[("body", None, None, b"   ")], Some("ana"))
+        .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(refused["error"]["details"]["reason"], "empty");
     let (status, refused) = json_of(
@@ -456,7 +418,9 @@ async fn bad_input_is_refused_with_its_code() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(refused["error"]["code"], "invalid_request");
 
-    let (status, _) = create(&h, &[("body", None, None, b"slow")], Some("ana")).await;
+    let (status, _) = h
+        .create_request_form(&[("body", None, None, b"slow")], Some("ana"))
+        .await;
     assert_eq!(status, StatusCode::CREATED);
     for (n, code, wanted) in [
         ("1", "not_found", StatusCode::NOT_FOUND),

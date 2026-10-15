@@ -1,55 +1,11 @@
 #![cfg(test)]
 
-use axum::body::Body;
-use axum::http::{Method, Request, StatusCode};
-use fold_daemon::http::router;
-use http_body_util::BodyExt;
+use axum::http::{Method, StatusCode};
 use serde_json::{Value, json};
-use tower::ServiceExt as _;
 
 use crate::common::acceptance::{HUMAN, Harness, TOKEN, message_notice, wire};
 
 const BASE: &str = "/api/v1/projects/demo";
-const BOUNDARY: &str = "fold-acceptance-boundary";
-
-/// `POST /requests` as `human` with a multipart form of the message and one file, the way the web's New request dialog sends it.
-async fn create_through_http(
-    h: &Harness,
-    human: &str,
-    message: &str,
-    file: (&str, &str, &[u8]),
-) -> (StatusCode, Value) {
-    let (name, media_type, content) = file;
-    let mut form = Vec::new();
-    form.extend_from_slice(
-        format!(
-            "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"body\"\r\n\r\n{message}\r\n"
-        )
-        .as_bytes(),
-    );
-    form.extend_from_slice(
-        format!(
-            "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"files\"; filename=\"{name}\"\r\nContent-Type: {media_type}\r\n\r\n"
-        )
-        .as_bytes(),
-    );
-    form.extend_from_slice(content);
-    form.extend_from_slice(format!("\r\n--{BOUNDARY}--\r\n").as_bytes());
-    let request = Request::builder()
-        .method(Method::POST)
-        .uri(format!("{BASE}/requests"))
-        .header("cookie", format!("fold_human={human}"))
-        .header(
-            "content-type",
-            format!("multipart/form-data; boundary={BOUNDARY}"),
-        )
-        .body(Body::from(form))
-        .unwrap();
-    let response = router(h.state.clone()).oneshot(request).await.unwrap();
-    let status = response.status();
-    let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    (status, serde_json::from_slice(&bytes).unwrap())
-}
 
 /// A draft of the board search: `c1` builds the query, `c2` shows it and needs `c1`.
 fn search_draft(id: &str, filter_title: &str) -> Value {
@@ -85,8 +41,15 @@ async fn acceptance_10_a_human_request_becomes_two_tasks_through_a_drafted_and_r
 
     let screenshot: &[u8] = b"\x89PNG\r\n\x1a\nboard";
     let message = "I cannot find cards on a big board.\nThe board of #T-1 needs a search.";
-    let (status, created) =
-        create_through_http(&h, HUMAN, message, ("board.png", "image/png", screenshot)).await;
+    let (status, created) = h
+        .create_request_form(
+            &[
+                ("body", None, None, message.as_bytes()),
+                ("files", Some("board.png"), Some("image/png"), screenshot),
+            ],
+            Some(HUMAN),
+        )
+        .await;
     assert_eq!(status, StatusCode::CREATED, "{created}");
     assert_eq!(created["request"]["id"], "RQ-1");
     assert_eq!(created["request"]["kind"], Value::Null);
