@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::common::acceptance::{AGENTS, Harness, WAIT};
+use crate::common::acceptance::{AGENTS, Harness, WAIT, read_tree};
 use fold_core::WorkspaceId;
 use fold_daemon::http::events::LiveWorkspace;
 use fold_daemon::jobs::spawn_auto_checkpoints;
@@ -25,24 +25,6 @@ const BACKEND_FILES: Files = [
     ("shared/config.txt", "port = 8080\n"),
     ("src/endpoint.txt", "POST /login\n"),
 ];
-
-/// Every file under `dir` by relative path, with its bytes.
-fn read_tree(dir: &Path) -> BTreeMap<String, Vec<u8>> {
-    fn walk(root: &Path, dir: &Path, into: &mut BTreeMap<String, Vec<u8>>) {
-        for entry in fs::read_dir(dir).unwrap() {
-            let path = entry.unwrap().path();
-            if path.is_dir() {
-                walk(root, &path, into);
-            } else {
-                let relative = path.strip_prefix(root).unwrap().to_string_lossy();
-                into.insert(relative.into_owned(), fs::read(&path).unwrap());
-            }
-        }
-    }
-    let mut files = BTreeMap::new();
-    walk(dir, dir, &mut files);
-    files
-}
 
 /// The paths of `files` with the changes `get_workspace_changes` and the live state must both list.
 fn expected(files: &Files) -> Vec<String> {

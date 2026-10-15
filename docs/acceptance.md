@@ -94,3 +94,31 @@ The automated tests are `acceptance_4_change_is_live_and_main_is_untouched` and 
 5. In `frontend`, put the original line back in `README.md`. **Expected:** the screen shows the workspace with no changed files, and the head is still `r1`.
 
 Result: date, fold version, Claude Code version, pass or fail, notes.
+
+## Acceptance 5, 6 and 7: review, dependencies and conflicts
+
+These three scenarios run automated only, with three MCP clients named `frontend`, `backend` and `review` that act through MCP tools alone. `make acceptance` runs them with the other acceptance tests. They have no manual procedure.
+
+### Acceptance 5: review and integration
+
+The automated tests are `acceptance_5_backend_proposal_is_reviewed_and_integrated_with_no_card_moved_by_hand` and `acceptance_5_named_human_integrates_without_a_tag_over_an_earlier_request_changes` in `crates/fold-daemon/tests/acceptance_5_review_and_integrate.rs`.
+
+The first test proves that a task goes from claim to Done through the proposal flow alone. `backend` claims a task, writes a file in its workspace, records it and opens a proposal, and the task moves to Review. `review`, which holds `integrator`, lists the proposal, claims the review, reads a review checkout whose files equal the version, approves and integrates. The task is Done with a completion row, main is `r2` with the file, the `main/` directory shows the file within a timeout, the workspace is archived, every status change has the actor `fold`, and the events `proposal.opened`, `review.submitted`, `integration.succeeded`, `main.advanced`, `proposal.integrated` and `task.status_changed` appear in that order.
+
+The second test proves that a named human integrates without a tag. No agent holds `integrator` in this project. `review` requests changes, so the task is In Progress and nobody approved. The human `ana` integrates through `POST /api/v1/projects/{slug}/proposals/{id}/integrate` with the `fold_human` cookie and the current version. Main moves, the task is Done, and the human's `approve` is the latest verdict on the version. `review` calling `integrate_proposal` on another proposal gets `integrator_required`.
+
+### Acceptance 6: a dependency unblocks
+
+The automated tests are `acceptance_6_frontend_task_moves_from_backlog_to_todo_when_backend_reaches_done` and `acceptance_6_integration_is_refused_while_a_prerequisite_is_open` in `crates/fold-daemon/tests/acceptance_6_dependency_unblocks.rs`.
+
+The first test proves that a frontend task that needs a backend task stays in Backlog until the backend task is Done, then moves to Todo in the integration's commit with no agent acting on it. Its only event after setup is `task.status_changed` from `backlog` to `todo` with the actor `fold`, after `proposal.integrated`, and `get_ready_tasks` then lists it. Nobody holds a claim on it, so the integration message from `fold` goes to `backend`, the author, and names the frontend task as ready; `frontend` gets no message.
+
+The second test proves that an approved proposal on a task whose prerequisite is not Done does not integrate. `integrate_proposal` returns `prerequisites_not_done` with the unfinished task and its status, main stays at `r1`, the proposal stays open and `integration.refused` is recorded.
+
+### Acceptance 7: conflicting proposals
+
+The automated tests are `acceptance_7_second_proposal_is_refused_with_a_conflict_report_and_main_is_intact` and `acceptance_7_conflicted_proposal_integrates_after_sync_and_a_new_version` in `crates/fold-daemon/tests/acceptance_7_conflicting_proposals.rs`.
+
+The first test proves that the second of two proposals that change the same line from `r1` is refused and leaves everything intact. `frontend` and `backend` each change the line of `README.md`, `review` approves both, and the first integrates as `r2`. The second `integrate_proposal` returns `integration_conflicted` naming `README.md` with the kind `text`. Main is still `r2` with the same revision and tree, and `main/` still shows the first change. The second proposal is open, with the turn on its author and a conflict report that names the file, the kind, both conflicting lines and the base, main and version trees. Its task is In Progress with no completion row, and its author has a message from `fold` that names the file.
+
+The second test proves that the conflicted proposal integrates after the author resolves it. `backend` runs `sync_workspace`, which moves the base to `r2` and writes conflict markers into `README.md`. It writes a line that keeps both changes, records the changes and sends `v2` with `update_proposal`. `review` approves `v2` and integrates it with `expected_version` 2, main is `r3` and holds both changes, `main/` shows the resolved line, and the task is Done.

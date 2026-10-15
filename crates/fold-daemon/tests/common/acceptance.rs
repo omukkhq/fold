@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -9,14 +9,16 @@ use fold_core::object::ObjectKind;
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
 use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
-use fold_daemon::http::socket_router;
+use fold_daemon::http::{router, socket_router};
 use fold_daemon::mcp::handshake::{self, Answer, PROTOCOL_VERSION};
 use fold_daemon::projects::{ProjectHandle, Projects};
 use fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME;
 use fold_store::projects::{self, ProjectRow};
 use fold_store::testing::{TestProject, eventually};
-use fold_store::workspaces::{create_initial_revision, initial_revision};
+use fold_store::workspaces::{self, RevisionRow, create_initial_revision, initial_revision};
+use fold_vcs::main_view;
 use fold_vcs::objects::ObjectStore;
+use fold_vcs::platform::Capabilities;
 use fold_vcs::revision_store::{write_initial_tree, write_revision};
 use http_body_util::BodyExt;
 use rmcp::model::{CallToolRequestParams, CallToolResult};
@@ -48,7 +50,7 @@ pub struct Session {
     server: JoinHandle<()>,
 }
 
-/// Project `demo` open in daemon state, with `r1` holding `README.md`, and one adapter session for each of [`AGENTS`], connected over in-memory streams through the same handshake `fold mcp` performs with `FOLD_AGENT` set. `review` holds `integrator`, granted by the human [`HUMAN`] over the socket.
+/// Project `demo` open in daemon state, with `r1` holding `README.md` and `main/` showing it as `fold init` leaves it, and one adapter session for each of [`AGENTS`], connected over in-memory streams through the same handshake `fold mcp` performs with `FOLD_AGENT` set. `review` holds `integrator`, granted by the human [`HUMAN`] over the socket.
 pub struct Harness {
     pub project: TestProject,
     /// Holds the fake inbox sockets.
@@ -62,6 +64,20 @@ pub struct Harness {
 
 impl Harness {
     pub async fn start() -> Self {
+        let harness = Self::start_untagged().await;
+        let (status, answer) = harness
+            .socket(
+                Method::PUT,
+                &format!("/api/v1/projects/{SLUG}/agents/review/tags/integrator"),
+                None,
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{answer}");
+        harness
+    }
+
+    /// The same project and sessions with no tag granted, so no agent may approve or integrate.
+    pub async fn start_untagged() -> Self {
         let project = TestProject::new().await;
         let objects = ObjectStore::open(&project.paths().fold_dir()).unwrap();
         let mut tree = FlatTree::new();
@@ -72,9 +88,20 @@ impl Harness {
                 hash: objects.write(ObjectKind::Blob, b"# demo\n").unwrap(),
             },
         );
-        let revision =
-            initial_revision(write_initial_tree(&objects, tree).unwrap(), project.now()).unwrap();
+        let tree = write_initial_tree(&objects, tree).unwrap();
+        let revision = initial_revision(tree, project.now()).unwrap();
         let stored = write_revision(&objects, &revision).unwrap();
+        let fold_dir = project.paths().fold_dir();
+        main_view::update(
+            &objects,
+            &project.paths().main_dir(),
+            &fold_dir,
+            None,
+            &tree,
+            revision.number,
+            Capabilities::probe(&fold_dir).unwrap(),
+        )
+        .unwrap();
         create_initial_revision(project.store(), &stored, None)
             .await
             .unwrap();
@@ -107,14 +134,6 @@ impl Harness {
         for agent in AGENTS {
             harness.connect(agent).await;
         }
-        let (status, answer) = harness
-            .socket(
-                Method::PUT,
-                &format!("/api/v1/projects/{SLUG}/agents/review/tags/integrator"),
-                None,
-            )
-            .await;
-        assert_eq!(status, StatusCode::OK, "{answer}");
         harness
     }
 
@@ -327,6 +346,202 @@ impl Harness {
             .await
             .unwrap()
     }
+
+    /// A request through the HTTP router as the human `human`, named by the `fold_human` cookie the way the browser sends it.
+    pub async fn http(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<&Value>,
+        human: &str,
+    ) -> (StatusCode, Value) {
+        let request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("cookie", format!("fold_human={human}"));
+        let request = match body {
+            Some(body) => request
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string())),
+            None => request.body(Body::empty()),
+        }
+        .unwrap();
+        let response = router(self.state.clone()).oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    /// Every stored event in commit order, read from the project's read pool.
+    pub async fn events(&self) -> Vec<StoredEvent> {
+        let rows: Vec<EventRow> = sqlx::query_as(
+            "SELECT e.type, e.actor, t.number, p.number, e.data FROM events e \
+             LEFT JOIN tasks t ON t.id = e.task_id \
+             LEFT JOIN proposals p ON p.id = e.proposal_id ORDER BY e.seq",
+        )
+        .fetch_all(self.handle.store.read())
+        .await
+        .unwrap();
+        rows.into_iter()
+            .map(|(kind, actor, task, proposal, data)| StoredEvent {
+                kind,
+                actor,
+                task: task.map(|number| format!("T-{number}")),
+                proposal: proposal.map(|number| format!("P-{number}")),
+                data: serde_json::from_str(&data).unwrap(),
+            })
+            .collect()
+    }
+
+    /// The head of main, read from the project's read pool.
+    pub async fn head(&self) -> RevisionRow {
+        workspaces::head(self.handle.store.read())
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    /// How many completion rows `task` has: one once it is Done, else none.
+    pub async fn completions(&self, task: &str) -> i64 {
+        let number: i64 = task.strip_prefix("T-").unwrap().parse().unwrap();
+        sqlx::query_scalar(
+            "SELECT COUNT(*) FROM completions c JOIN tasks t ON t.id = c.task_id WHERE t.number = ?",
+        )
+        .bind(number)
+        .fetch_one(self.handle.store.read())
+        .await
+        .unwrap()
+    }
+
+    /// `create_task` by `agent`; returns the new task id.
+    pub async fn create_task(&self, agent: &str, title: &str) -> String {
+        let created = self
+            .call(agent, "create_task", json!({"title": title}))
+            .await;
+        created["id"].as_str().unwrap().to_owned()
+    }
+
+    /// `agent` claims `task` and creates its workspace.
+    pub async fn start_work(&self, agent: &str, task: &str) -> Work {
+        let claimed = self.call(agent, "claim_task", json!({"id": task})).await;
+        assert_eq!(claimed["holder"], agent);
+        let created = self
+            .call(agent, "create_workspace", json!({"task": task}))
+            .await;
+        Work {
+            task: task.to_owned(),
+            workspace: created["workspace"].as_str().unwrap().to_owned(),
+            dir: Path::new(self.root()).join(created["path"].as_str().unwrap()),
+        }
+    }
+
+    /// `agent` records the files of `work` and sends them for review; returns the new proposal id.
+    pub async fn propose(&self, agent: &str, work: &Work, title: &str) -> String {
+        let recorded = self
+            .call(
+                agent,
+                "record_changes",
+                json!({"ws": work.workspace, "message": title}),
+            )
+            .await;
+        assert!(recorded["changeset"].as_str().is_some(), "{recorded}");
+        let created = self
+            .call(
+                agent,
+                "create_proposal",
+                json!({"task": work.task, "title": title, "evidence": "tests pass"}),
+            )
+            .await;
+        assert_eq!(created["status"], "review", "{created}");
+        created["id"].as_str().unwrap().to_owned()
+    }
+
+    /// `review` approves the current version of `proposal`.
+    pub async fn approve(&self, proposal: &str) {
+        let submitted = self
+            .call(
+                "review",
+                "submit_review",
+                json!({"id": proposal, "verdict": "approve", "body": "Looks right."}),
+            )
+            .await;
+        assert_eq!(submitted["verdict"], "approve");
+    }
+
+    /// The `error` object of a tool call that must fail.
+    pub async fn refused(&self, agent: &str, tool: &str, arguments: Value) -> Value {
+        let result = self.call_raw(agent, tool, arguments).await;
+        assert_eq!(
+            result.is_error,
+            Some(true),
+            "{agent} {tool} succeeded: {result:?}"
+        );
+        body(&result)["error"].clone()
+    }
+}
+
+/// One task an agent works on: its id, its workspace and the workspace directory.
+pub struct Work {
+    pub task: String,
+    pub workspace: String,
+    pub dir: PathBuf,
+}
+
+impl Work {
+    /// Writes each `(path, content)` into the workspace directory.
+    pub fn write(&self, files: &[(&str, &str)]) {
+        for (path, content) in files {
+            let target = self.dir.join(path);
+            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+            std::fs::write(target, content).unwrap();
+        }
+    }
+}
+
+/// `type`, `actor`, task number, proposal number and `data` of one event.
+type EventRow = (String, String, Option<i64>, Option<i64>, String);
+
+/// One row of the `events` table with public ids.
+#[derive(Debug, Clone)]
+pub struct StoredEvent {
+    pub kind: String,
+    pub actor: String,
+    pub task: Option<String>,
+    pub proposal: Option<String>,
+    pub data: Value,
+}
+
+/// Panics unless the event types `wanted` appear in `events` in this order; other events may come between them.
+pub fn assert_in_order(events: &[StoredEvent], wanted: &[&str]) {
+    let mut rest = events.iter();
+    for kind in wanted {
+        assert!(
+            rest.any(|event| event.kind == *kind),
+            "{kind} is missing or out of order in {:?}",
+            events
+                .iter()
+                .map(|event| event.kind.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+/// Every file under `dir` by relative path, with its bytes.
+pub fn read_tree(dir: &Path) -> BTreeMap<String, Vec<u8>> {
+    fn walk(root: &Path, dir: &Path, into: &mut BTreeMap<String, Vec<u8>>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(root, &path, into);
+            } else {
+                let relative = path.strip_prefix(root).unwrap().to_string_lossy();
+                into.insert(relative.into_owned(), std::fs::read(&path).unwrap());
+            }
+        }
+    }
+    let mut files = BTreeMap::new();
+    walk(dir, dir, &mut files);
+    files
 }
 
 async fn open(project: &TestProject, row: &ProjectRow) -> (AppState, Arc<ProjectHandle>) {
@@ -403,6 +618,11 @@ pub fn wire(token: &str, text: &str) -> String {
     format!(
         "{{\"type\":\"auth\",\"token\":\"{token}\"}}\n{{\"type\":\"user\",\"priority\":\"next\",\"message\":{{\"role\":\"user\",\"content\":\"<cross-session-message from-name=\\\"fold\\\">\\n{text}\\n</cross-session-message>\"}}}}\n"
     )
+}
+
+/// The notice text for a newly opened proposal.
+pub fn proposal_notice(proposal: &str, task: &str) -> String {
+    format!("fold: {proposal} opened for {task}. Call claim_review.")
 }
 
 /// The notice text for a new message.
