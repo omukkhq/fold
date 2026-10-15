@@ -64,6 +64,10 @@ define_codes! {
     CLAIM_NOT_FOUND = "claim_not_found",
     WEB_NOT_BUILT = "web_not_built",
     DATABASE_LOCKED = "database_locked",
+    GIT_NOT_FOUND = "git_not_found",
+    GIT_FAILED = "git_failed",
+    EXPORT_DIVERGED = "export_diverged",
+    GIT_SYNC_MAP_INVALID = "git_sync_map_invalid",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

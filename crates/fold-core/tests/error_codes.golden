@@ -50,3 +50,7 @@ not_claim_holder
 claim_not_found
 web_not_built
 database_locked
+git_not_found
+git_failed
+export_diverged
+git_sync_map_invalid

@@ -101,3 +101,36 @@ pub fn settle(index: &mut fold_vcs::index::StatIndex, path: &std::path::Path) {
         );
     }
 }
+
+/// Runs the real `git` in `dir` with no system or user configuration and a fixed identity, and returns its standard output. Fails the test unless git exits zero.
+pub fn git(dir: &std::path::Path, args: &[&str]) -> String {
+    let output = git_command(dir).args(args).output().unwrap();
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+pub fn git_command(dir: &std::path::Path) -> std::process::Command {
+    let mut command = std::process::Command::new("git");
+    command.arg("-C").arg(dir);
+    for name in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_COMMON_DIR",
+    ] {
+        command.env_remove(name);
+    }
+    command
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.com")
+        .env("GIT_COMMITTER_NAME", "Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.com");
+    command
+}

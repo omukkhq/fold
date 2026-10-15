@@ -12,6 +12,9 @@ use fold_core::{
 use fold_store::projects::{self, ProjectRow};
 use fold_store::workspaces::{create_initial_revision, initial_revision};
 use fold_store::{Store, StoreError};
+use fold_vcs::git::{CommitId, Git};
+use fold_vcs::git_import::{GitImportOptions, archive_tree};
+use fold_vcs::git_sync_map::SyncMap;
 use fold_vcs::ignore::IgnoreRules;
 use fold_vcs::import::{ImportOptions, ImportResult, import_dir};
 use fold_vcs::materialise::{MaterialiseOptions, materialise};
@@ -53,12 +56,20 @@ pub struct InitializedProject {
     pub revision: RevisionId,
     /// What `r1` holds: the empty tree when nothing was imported.
     pub imported: ImportResult,
+    /// The commit a Git import read, which `.fold/git-sync.map` records as `r1`.
+    pub git_commit: Option<CommitId>,
 }
 
 /// An import source that passed the checks: an existing directory, canonical, with a UTF-8 path.
 struct Source {
     path: PathBuf,
     text: String,
+    kind: SourceKind,
+}
+
+enum SourceKind {
+    Directory,
+    Git(Git),
 }
 
 /// [`init_project_from`] with no import source, so `r1` is the empty tree.
@@ -80,13 +91,45 @@ pub async fn init_project_from(
     clock: &dyn Clock,
 ) -> Result<InitializedProject, ProjectError> {
     let source = match source {
-        Some(source) => {
-            let source = check_source(source).await?;
-            check_apart(&source, root).await?;
-            Some(source)
-        }
+        Some(source) => Some(check_source(source, SourceKind::Directory, "--from").await?),
         None => None,
     };
+    init_with(host, root, name, source, clock).await
+}
+
+/// [`init_project_from`] with `r1` holding the committed tree at the `HEAD` of the Git repository whose top is `repo`, free of ignore rules, and `.fold/git-sync.map` starting with `r1 <commit>`, the first sync point. `HEAD` is resolved to its commit first, so the map names exactly the commit whose tree was read.
+pub async fn init_project_from_git(
+    host: &HostPaths,
+    root: &Path,
+    name: Option<&str>,
+    repo: &Path,
+    git: Git,
+    clock: &dyn Clock,
+) -> Result<InitializedProject, ProjectError> {
+    let source = check_source(repo, SourceKind::Git(git.clone()), "--from-git").await?;
+    let path = source.path.clone();
+    let found = blocking(move || Ok(git.repository(&path)?)).await?;
+    if found.is_none() {
+        return Err(FoldError::new(
+            codes::INVALID_REQUEST,
+            format!("{} is not the top of a Git repository", source.text),
+        )
+        .with_hint("pass the top directory of a Git repository to --from-git")
+        .into());
+    }
+    init_with(host, root, name, Some(source), clock).await
+}
+
+async fn init_with(
+    host: &HostPaths,
+    root: &Path,
+    name: Option<&str>,
+    source: Option<Source>,
+    clock: &dyn Clock,
+) -> Result<InitializedProject, ProjectError> {
+    if let Some(source) = &source {
+        check_apart(source, root).await?;
+    }
     let root = prepare_root(root).await?;
     let root_text = root
         .to_str()
@@ -161,7 +204,7 @@ async fn populate_and_register(
     }
     .await;
     let closed = project_store.close().await;
-    let (revision, imported) = first?;
+    let (revision, imported, git_commit) = first?;
     closed?;
     let base = slugify(&name);
     let row = registry
@@ -185,47 +228,67 @@ async fn populate_and_register(
         root: PathBuf::from(row.root),
         revision,
         imported,
+        git_commit,
     })
 }
 
-/// Objects first, then the one transaction that inserts `r1` and creates `main`, then `main/`.
+/// Objects first, then the one transaction that inserts `r1` and creates `main`, then the sync map that names `r1`, then `main/`.
 async fn create_first_revision(
     store: &Store,
     paths: &ProjectPaths,
     source: Option<&Source>,
     max_file_bytes: u64,
     now: Timestamp,
-) -> Result<(RevisionId, ImportResult), ProjectError> {
+) -> Result<(RevisionId, ImportResult, Option<CommitId>), ProjectError> {
     let fold_dir = paths.fold_dir();
     let source_path = source.map(|source| source.path.clone());
-    let (objects, caps, imported, stored) = blocking(move || {
+    let git = match source.map(|source| &source.kind) {
+        Some(SourceKind::Git(git)) => Some(git.clone()),
+        _ => None,
+    };
+    let (objects, caps, imported, stored, git_commit) = blocking(move || {
         let objects = ObjectStore::open(&fold_dir).map_err(FoldError::from)?;
         let caps = Capabilities::probe(&fold_dir).map_err(|error| io_error(&error))?;
-        let imported = match source_path {
-            Some(source) => {
+        let (imported, git_commit) = match (source_path, git) {
+            (Some(repo), Some(git)) => {
+                let commit = git.resolve_commit(&repo, "HEAD")?;
+                let opts = GitImportOptions { max_file_bytes };
+                let imported = archive_tree(&objects, &git, &repo, commit.as_str(), &opts)?;
+                (imported, Some(commit))
+            }
+            (Some(source), None) => {
                 let opts = ImportOptions {
                     max_file_bytes,
                     caps,
                 };
-                import_dir(&objects, &source, &IgnoreRules::new(&source), &opts)?
+                let rules = IgnoreRules::new(&source);
+                (import_dir(&objects, &source, &rules, &opts)?, None)
             }
-            None => ImportResult {
-                tree: write_initial_tree(&objects, FlatTree::new())?,
-                files: 0,
-                bytes: 0,
-                skipped: Vec::new(),
-            },
+            (None, _) => {
+                let empty = ImportResult {
+                    tree: write_initial_tree(&objects, FlatTree::new())?,
+                    files: 0,
+                    bytes: 0,
+                    skipped: Vec::new(),
+                };
+                (empty, None)
+            }
         };
         let revision = initial_revision(imported.tree, now)?;
         let stored = write_revision(&objects, &revision).map_err(FoldError::from)?;
-        Ok((objects, caps, imported, stored))
+        Ok((objects, caps, imported, stored, git_commit))
     })
     .await?;
     let import_source = source.map(|source| source.text.as_str());
     let row = create_initial_revision(store, &stored, import_source).await?;
     let main = paths.main_dir();
     let tree = imported.tree;
+    let fold_dir = paths.fold_dir();
+    let synced = git_commit.clone().map(|commit| (row.number, commit));
     blocking(move || {
+        if let Some(synced) = synced {
+            SyncMap::load(&fold_dir)?.append(&[synced])?;
+        }
         let opts = MaterialiseOptions {
             read_only: true,
             caps,
@@ -234,7 +297,7 @@ async fn create_first_revision(
         Ok(())
     })
     .await?;
-    Ok((row.number, imported))
+    Ok((row.number, imported, git_commit))
 }
 
 async fn blocking<T: Send + 'static>(
@@ -290,7 +353,7 @@ fn planned_path(root: &Path) -> io::Result<PathBuf> {
     Err(io::ErrorKind::NotFound.into())
 }
 
-async fn check_source(source: &Path) -> Result<Source, ProjectError> {
+async fn check_source(source: &Path, kind: SourceKind, flag: &str) -> Result<Source, ProjectError> {
     let given = source.to_owned();
     let found = tokio::task::spawn_blocking(move || {
         let path = std::fs::canonicalize(&given).ok()?;
@@ -304,14 +367,14 @@ async fn check_source(source: &Path) -> Result<Source, ProjectError> {
             codes::INVALID_REQUEST,
             format!("the import source {} {reason}", source.display()),
         )
-        .with_hint("pass an existing directory to --from")
+        .with_hint(format!("pass an existing directory to {flag}"))
     };
     let path = found.ok_or_else(|| refused("is not an existing directory"))?;
     let text = path
         .to_str()
         .ok_or_else(|| refused("is not a valid UTF-8 path"))?
         .to_owned();
-    Ok(Source { path, text })
+    Ok(Source { path, text, kind })
 }
 
 /// The settings of a project, or the defaults when `.fold/config.toml` does not exist.

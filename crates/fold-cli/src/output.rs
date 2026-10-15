@@ -16,6 +16,22 @@ pub fn revision_summary(revision: &impl Display, files: usize, bytes: u64) -> St
     format!("{revision}: {files} {noun}, {bytes} {unit}")
 }
 
+/// `r2..r4`, or `r3` for one revision.
+pub fn revision_range(first: &impl Display, last: &impl Display) -> String {
+    let (first, last) = (first.to_string(), last.to_string());
+    if first == last {
+        first
+    } else {
+        format!("{first}..{last}")
+    }
+}
+
+/// `1 commit`, `3 commits`
+pub fn count(count: usize, one: &str, many: &str) -> String {
+    let noun = if count == 1 { one } else { many };
+    format!("{count} {noun}")
+}
+
 /// `skipped big.iso (too_large)`
 pub fn skipped_line(path: &impl Display, reason: &str) -> String {
     format!("skipped {path} ({reason})")
@@ -50,6 +66,14 @@ mod tests {
             skipped_line(&"dir/big.iso", "too_large"),
             "skipped dir/big.iso (too_large)"
         );
+    }
+
+    #[test]
+    fn ranges_and_counts_read_naturally() {
+        assert_eq!(revision_range(&"r2", &"r4"), "r2..r4");
+        assert_eq!(revision_range(&"r3", &"r3"), "r3");
+        assert_eq!(count(1, "commit", "commits"), "1 commit");
+        assert_eq!(count(0, "commit", "commits"), "0 commits");
     }
 
     #[test]

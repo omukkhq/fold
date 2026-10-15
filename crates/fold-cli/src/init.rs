@@ -6,7 +6,8 @@ use clap::Args;
 use fold_cli::daemon_client::{self, ClientConfig, ClientError, DaemonClient, Response};
 use fold_core::{FoldError, HostPaths, codes};
 use fold_daemon::SystemClock;
-use fold_daemon::services::projects::{ProjectError, init_project_from};
+use fold_daemon::services::projects::{ProjectError, init_project_from, init_project_from_git};
+use fold_vcs::git::Git;
 use hyper::Method;
 use thiserror::Error;
 
@@ -26,6 +27,9 @@ pub struct InitArgs {
     /// A directory whose files become the first revision, honouring its .gitignore and .foldignore files; the directory is only read
     #[arg(long, value_name = "PATH")]
     from: Option<PathBuf>,
+    /// A Git repository whose committed tree at HEAD becomes the first revision, without history or ignore rules; the repository is only read
+    #[arg(long, value_name = "REPO", conflicts_with = "from")]
+    from_git: Option<PathBuf>,
     /// Unix socket of the running daemon; overrides daemon.toml (default $XDG_RUNTIME_DIR/fold/fold.sock)
     #[arg(long)]
     socket: Option<PathBuf>,
@@ -70,13 +74,18 @@ pub fn run(args: &InitArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), Ini
         .enable_all()
         .build()
         .map_err(InitError::Runtime)?;
-    let project = runtime.block_on(init_project_from(
-        &host,
-        &args.dir,
-        args.name.as_deref(),
-        args.from.as_deref(),
-        &SystemClock,
-    ))?;
+    let name = args.name.as_deref();
+    let project = runtime.block_on(async {
+        match &args.from_git {
+            Some(repo) => {
+                init_project_from_git(&host, &args.dir, name, repo, Git::default(), &SystemClock)
+                    .await
+            }
+            None => {
+                init_project_from(&host, &args.dir, name, args.from.as_deref(), &SystemClock).await
+            }
+        }
+    })?;
     let root = project.root.display();
     output::line(
         out,
@@ -92,6 +101,9 @@ pub fn run(args: &InitArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), Ini
             out,
             &output::skipped_line(&skipped.path, skipped.reason.as_str()),
         )?;
+    }
+    if let Some(commit) = &project.git_commit {
+        output::line(out, &format!("{} is Git commit {commit}", project.revision))?;
     }
     let note = match socket {
         Ok(Some(socket)) => match runtime.block_on(register(&client(socket), &project.slug)) {
@@ -201,6 +213,12 @@ mod tests {
         );
         let bare = Wrapper::try_parse_from(["fold", "dir"]).unwrap();
         assert!(bare.args.name.is_none() && bare.args.socket.is_none() && bare.args.from.is_none());
+        assert!(bare.args.from_git.is_none());
+        let git = Wrapper::try_parse_from(["fold", "dir", "--from-git", "../repo"]).unwrap();
+        assert_eq!(git.args.from_git.as_deref(), Some(Path::new("../repo")));
+        assert!(
+            Wrapper::try_parse_from(["fold", "dir", "--from", "a", "--from-git", "b"]).is_err()
+        );
         assert!(Wrapper::try_parse_from(["fold"]).is_err());
     }
 
@@ -276,6 +294,7 @@ mod tests {
             dir: dir.path().join("p"),
             name: None,
             from: None,
+            from_git: None,
             socket: None,
         };
         let mut out = Vec::new();

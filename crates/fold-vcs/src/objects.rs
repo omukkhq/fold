@@ -371,6 +371,11 @@ pub struct BlobReader {
 }
 
 impl BlobReader {
+    /// The content length the object header records, known before any byte is read.
+    pub fn size(&self) -> u64 {
+        self.expected
+    }
+
     fn fail(&mut self, reason: &'static str) -> io::Error {
         self.failure = Some(reason);
         io::Error::new(io::ErrorKind::InvalidData, corrupt(&self.hash, reason))

@@ -670,6 +670,7 @@ dependencies = [
  "fold-core",
  "fold-daemon",
  "fold-store",
+ "fold-vcs",
  "http-body-util",
  "hyper",
  "hyper-util",

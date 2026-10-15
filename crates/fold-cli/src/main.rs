@@ -26,6 +26,8 @@ enum Command {
     Openapi,
     /// Connect a Claude Code session to the daemon over stdio, starting the daemon when needed
     Mcp(mcp::McpArgs),
+    /// Append the main revisions not yet exported to a Git repository as commits
+    ExportGit(commands::export_git::ExportGitArgs),
 }
 
 /// clap prints a parse outcome, including `--help` and `--version`, and exits with its own code; a failed write is a runtime error with exit code 1.
@@ -36,6 +38,7 @@ enum Failure {
     Serve(serve::ServeError),
     Init(init::InitError),
     Mcp(mcp::McpError),
+    ExportGit(commands::export_git::ExportGitError),
 }
 
 fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result<(), Failure> {
@@ -46,6 +49,9 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         Some(Command::Serve(args)) => serve::run(&args).map_err(Failure::Serve),
         Some(Command::Openapi) => commands::openapi::run(out).map_err(Failure::Write),
         Some(Command::Mcp(args)) => mcp::run(&args).map_err(Failure::Mcp),
+        Some(Command::ExportGit(args)) => {
+            commands::export_git::run(&args, out).map_err(Failure::ExportGit)
+        }
         None => output::line(out, &output::version_line()).map_err(Failure::Write),
     }
 }
@@ -68,6 +74,10 @@ fn main() -> anyhow::Result<()> {
             let _ = output::line(&mut io::stderr().lock(), &format!("fold mcp: {error}"));
             std::process::exit(1)
         }
+        Err(Failure::ExportGit(error)) => Err(match error.code() {
+            Some(code) => anyhow::anyhow!("{code}: {error}"),
+            None => error.into(),
+        }),
     }
 }
 
