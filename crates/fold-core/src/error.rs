@@ -112,6 +112,7 @@ define_codes! {
     EMPTY_REVIEW = "empty_review",
     REVIEW_CLAIM_REQUIRED = "review_claim_required",
     CHECKOUT_FAILED = "checkout_failed",
+    INVALID_LAST_EVENT_ID = "invalid_last_event_id",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

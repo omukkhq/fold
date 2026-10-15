@@ -202,6 +202,10 @@ impl RunningDaemon {
     /// Stops accepting, ends open sessions, checkpoints every WAL and removes the socket file.
     pub async fn shutdown(self) {
         let _ = self.stop.send(true);
+        // An open event stream would hold its connection until the drain timeout.
+        for handle in self.state.projects.handles() {
+            handle.bus.close();
+        }
         self.socket.stopped().await;
         let abort = self.http.abort_handle();
         if tokio::time::timeout(DRAIN_TIMEOUT, self.http)

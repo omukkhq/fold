@@ -1,13 +1,122 @@
 use std::borrow::Cow;
+use std::time::Duration;
 
-use fold_core::events::{Event, EventType};
-use fold_core::{CheckpointId, Presence, ProposalId, RevisionId, TaskId, Timestamp, WorkspaceId};
+use axum::http::HeaderMap;
+use axum::response::sse::{self, KeepAlive, Sse};
+use fold_core::events::{Event, EventType, types};
+use fold_core::{
+    CheckpointId, LiveEvent, Presence, ProposalId, RevisionId, TaskId, Timestamp, WorkspaceId,
+};
+use futures_util::Stream;
 use serde::{Deserialize, Serialize};
 use utoipa::openapi::schema::{ObjectBuilder, SchemaType, Type};
 use utoipa::openapi::{RefOr, Schema};
 use utoipa::{PartialSchema, ToSchema};
+use utoipa_axum::router::OpenApiRouter;
+use utoipa_axum::routes;
 
+use super::Project;
 use super::agents::PresenceState;
+use super::error::{ApiError, ErrorEnvelope};
+use crate::daemon::AppState;
+use crate::services::events::{Feed, FeedItem, parse_last_event_id};
+
+/// A comment line this often keeps proxies from closing a quiet stream; the web client counts the stream dead after three missed periods.
+const KEEP_ALIVE: Duration = Duration::from_secs(15);
+
+pub fn routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new().routes(routes!(stream_events))
+}
+
+/// The project's events as Server-Sent Events: every stored event after `Last-Event-ID`, then one `snapshot` of the live workspaces, then each stored and live event as it happens. A stored event's frame carries its `seq` as the SSE `id`; live and snapshot frames carry none, so the browser keeps the last stored `seq`. Live frames a client has not read yet collapse to the newest per workspace and per agent. A client that falls more than the bus capacity behind has its stream ended and reconnects with its last id.
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{slug}/events",
+    operation_id = "stream_events",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("Last-Event-ID" = Option<String>, Header, description = "The `seq` of the last stored event the client applied. Without it the stream starts at the snapshot and sends no older event."),
+    ),
+    responses(
+        (status = 200, description = "The event stream; the `data` of every frame is one `EventEnvelope`", content_type = "text/event-stream", body = EventEnvelope),
+        (status = 400, description = "`invalid_last_event_id`: `Last-Event-ID` is not a number or is above the newest event of the project", body = ErrorEnvelope),
+        (status = 404, description = "`project_not_found`: the slug is not registered", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn stream_events(
+    Project(handle): Project,
+    headers: HeaderMap,
+) -> Result<Sse<impl Stream<Item = Result<sse::Event, axum::Error>>>, ApiError> {
+    let last_event_id = headers
+        .get("last-event-id")
+        .map(|value| parse_last_event_id(value.as_bytes()))
+        .transpose()?;
+    let feed = Feed::open(&handle.store, &handle.bus, &handle.live, last_event_id).await?;
+    let frames = futures_util::stream::unfold(feed, async |mut feed| {
+        loop {
+            match feed.next().await? {
+                Ok(item) => {
+                    if let Some(frame) = frame(item) {
+                        return Some((frame, feed));
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        code = error.code().unwrap_or("store_error"),
+                        "the event stream could not read the events and ends"
+                    );
+                    return None;
+                }
+            }
+        }
+    });
+    Ok(Sse::new(frames).keep_alive(KeepAlive::new().interval(KEEP_ALIVE)))
+}
+
+/// `None` for a live event that has no envelope variant, which this daemon never sends.
+fn frame(item: FeedItem) -> Option<Result<sse::Event, axum::Error>> {
+    match item {
+        FeedItem::Durable(event) => Some(
+            sse::Event::default()
+                .event(event.event_type.as_str())
+                .id(event.seq.to_string())
+                .json_data(EventEnvelope::Event(Event::clone(&event))),
+        ),
+        FeedItem::Snapshot { seq, workspaces } => {
+            let workspaces = workspaces.iter().map(|state| state.view.clone()).collect();
+            Some(
+                sse::Event::default()
+                    .event("snapshot")
+                    .json_data(EventEnvelope::Snapshot(Snapshot { seq, workspaces })),
+            )
+        }
+        FeedItem::Live(event) => live_envelope(&event).map(|envelope| {
+            sse::Event::default()
+                .event(event.event_type.as_str())
+                .json_data(envelope)
+        }),
+    }
+}
+
+fn live_envelope(event: &LiveEvent) -> Option<EventEnvelope> {
+    let envelope = if event.event_type == types::WORKSPACE_CHANGED {
+        serde_json::from_value(event.data.clone()).map(EventEnvelope::WorkspaceChanged)
+    } else if event.event_type == types::AGENT_PRESENCE_CHANGED {
+        serde_json::from_value(event.data.clone()).map(EventEnvelope::AgentPresenceChanged)
+    } else {
+        return None;
+    };
+    envelope
+        .inspect_err(|_| {
+            tracing::error!(
+                event_type = event.event_type.as_str(),
+                "a live event does not match its envelope"
+            );
+        })
+        .ok()
+}
 
 /// One frame of a project's event stream, told apart by `kind`: a stored event, a live workspace change, a live presence change, or the snapshot sent after a replay.
 // The `event` variant serialises as the stored `Event` plus `kind`.

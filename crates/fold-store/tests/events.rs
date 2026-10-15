@@ -81,6 +81,30 @@ async fn append_returns_increasing_seq_and_the_stored_event() {
 }
 
 #[tokio::test]
+async fn after_pages_every_type_in_seq_order() {
+    let project = TestProject::new().await;
+    let batch = vec![
+        new_event(types::TASK_CREATED),
+        new_event(types::TASK_UPDATED).task(task(1)),
+        new_event(types::TASK_STATUS_CHANGED),
+        new_event(types::TASK_CREATED),
+    ];
+    append_all(&project, batch).await;
+    let pool = project.store().read();
+    let seqs = |events: Vec<fold_core::Event>| events.iter().map(|e| e.seq).collect::<Vec<_>>();
+    assert_eq!(seqs(events::after(pool, 0, 2).await.unwrap()), vec![1, 2]);
+    assert_eq!(seqs(events::after(pool, 2, 2).await.unwrap()), vec![3, 4]);
+    assert_eq!(
+        seqs(events::after(pool, 4, 2).await.unwrap()),
+        Vec::<u64>::new()
+    );
+    assert_eq!(
+        seqs(events::after(pool, 1, 10).await.unwrap()),
+        vec![2, 3, 4]
+    );
+}
+
+#[tokio::test]
 async fn events_are_refused_an_update_and_a_delete() {
     let project = TestProject::new().await;
     append_all(&project, vec![new_event(types::TASK_CREATED)]).await;

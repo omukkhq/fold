@@ -12,6 +12,7 @@ use serde_json::{Map, Value};
 use utoipa::ToSchema;
 
 use crate::services::agents::AgentError;
+use crate::services::events::EventsError;
 use crate::services::messages::MessageError;
 use crate::services::projects::ProjectError;
 use crate::services::tasks::TaskError;
@@ -64,7 +65,8 @@ fn status_of(code: &str) -> Option<StatusCode> {
         | codes::INVALID_LABEL_COLOR
         | codes::INVALID_TASK_STATUS
         | codes::INVALID_CHECKLIST_NAME
-        | codes::INVALID_STEP_TEXT => Some(StatusCode::BAD_REQUEST),
+        | codes::INVALID_STEP_TEXT
+        | codes::INVALID_LAST_EVENT_ID => Some(StatusCode::BAD_REQUEST),
         codes::HUMAN_NAME_REQUIRED | codes::AUTH_REQUIRED | codes::INVALID_TOKEN => {
             Some(StatusCode::UNAUTHORIZED)
         }
@@ -127,6 +129,15 @@ impl From<AgentError> for ApiError {
             AgentError::Event(error) => {
                 Self(FoldError::new(codes::INTERNAL_ERROR, error.to_string()))
             }
+        }
+    }
+}
+
+impl From<EventsError> for ApiError {
+    fn from(error: EventsError) -> Self {
+        match error {
+            EventsError::Fold(error) => error.into(),
+            EventsError::Store(error) => error.into(),
         }
     }
 }

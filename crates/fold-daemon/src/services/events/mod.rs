@@ -5,10 +5,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use fold_core::{Event, EventFilter, LiveEvent, NewEvent, Timestamp};
 use fold_store::{Store, StoreError, WriteTx, events};
 use tokio::sync::broadcast::{self, error::RecvError};
+use tokio::sync::watch;
 
+mod feed;
 mod query;
 mod wait;
 
+pub use feed::{Feed, FeedItem, REPLAY_PAGE, parse_last_event_id};
 pub use query::{
     DEFAULT_LIMIT, EventPage, EventQuery, EventService, EventsError, MAX_LIMIT, query,
     read_since_cursor,
@@ -71,6 +74,8 @@ impl EventBuffer {
 pub struct EventBus {
     sender: broadcast::Sender<BusMessage>,
     waiters: Arc<AtomicUsize>,
+    /// Set once at daemon shutdown. Every clone of the project's bus lives as long as the project, so the channel itself never closes.
+    closing: Arc<watch::Sender<bool>>,
 }
 
 impl Default for EventBus {
@@ -90,6 +95,7 @@ impl EventBus {
         Self {
             sender,
             waiters: Arc::new(AtomicUsize::new(0)),
+            closing: Arc::new(watch::Sender::new(false)),
         }
     }
 
@@ -124,6 +130,16 @@ impl EventBus {
 
     pub fn publish_live(&self, event: LiveEvent) {
         let _ = self.sender.send(BusMessage::Live(Arc::new(event)));
+    }
+
+    /// Ends every open event stream of the project; the daemon calls it when it shuts down.
+    pub fn close(&self) {
+        self.closing.send_replace(true);
+    }
+
+    /// Holds `true` once [`EventBus::close`] was called.
+    pub fn closing(&self) -> watch::Receiver<bool> {
+        self.closing.subscribe()
     }
 
     /// Yields every stored event with `seq > after` that matches `filter`, then the events committed later, each exactly once and in `seq` order. It subscribes before it reads the table, so nothing falls between the backlog and the live events.

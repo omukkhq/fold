@@ -34,6 +34,7 @@ pub enum Transport {
 fn guarded_routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .merge(agents::routes())
+        .merge(events::routes())
         .merge(messages::routes())
         .merge(projects::routes())
         .merge(workspaces::routes())

@@ -13,6 +13,7 @@ fail = { version = "0.5.1", optional = true }
 fold-core = { version = "0.1.0", path = "../fold-core" }
 fold-store = { version = "0.1.0", path = "../fold-store" }
 fold-vcs = { version = "0.1.0", path = "../fold-vcs" }
+futures-util = { version = "0.3.34", default-features = false }
 getrandom = "0.4.3"
 hyper = { version = "1.12.0", features = ["server", "http1"] }
 hyper-util = { version = "0.1.21", features = ["tokio", "server", "http1", "service"] }

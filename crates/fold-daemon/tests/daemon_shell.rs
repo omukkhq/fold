@@ -492,6 +492,45 @@ async fn the_tcp_listener_serves_the_api() {
 }
 
 #[tokio::test]
+async fn shutdown_ends_an_open_event_stream_before_the_drain_timeout() {
+    let host = Host::new();
+    let alpha = TestProject::new().await;
+    host.register("alpha", &alpha).await;
+    let daemon = host.start().await;
+    let mut tcp = TcpStream::connect(daemon.http_addr()).await.unwrap();
+    tcp.write_all(
+        b"GET /api/v1/projects/alpha/events HTTP/1.1\r\nhost: 127.0.0.1\r\naccept: text/event-stream\r\n\r\n",
+    )
+    .await
+    .unwrap();
+    let mut received = Vec::new();
+    tokio::time::timeout(WAIT, async {
+        let mut chunk = [0_u8; 4096];
+        while !String::from_utf8_lossy(&received).contains(r#""kind":"snapshot""#) {
+            let read = tcp.read(&mut chunk).await.unwrap();
+            assert_ne!(read, 0, "the stream ended before its snapshot");
+            received.extend_from_slice(&chunk[..read]);
+        }
+    })
+    .await
+    .expect("no snapshot arrived in time");
+
+    // Shorter than the drain timeout, so the open stream must end because the daemon closed it.
+    tokio::time::timeout(Duration::from_secs(4), daemon.shutdown())
+        .await
+        .expect("shutdown waited for the open event stream");
+    tokio::time::timeout(WAIT, tcp.read_to_end(&mut received))
+        .await
+        .unwrap()
+        .unwrap();
+    let text = String::from_utf8_lossy(&received);
+    assert!(
+        text.ends_with("0\r\n\r\n"),
+        "the stream ended with its last chunk: {text:?}"
+    );
+}
+
+#[tokio::test]
 async fn shutdown_ends_sessions_checkpoints_and_removes_the_socket() {
     let host = Host::new();
     let alpha = TestProject::new().await;

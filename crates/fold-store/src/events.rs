@@ -152,6 +152,11 @@ pub async fn read_after(
     rows.into_iter().map(EventRecord::into_event).collect()
 }
 
+/// Every event with `seq > after` in ascending order, at most `limit` (capped at [`MAX_PAGE`]). It is the replay read of the event stream, which sends every type.
+pub async fn after(pool: &SqlitePool, after: u64, limit: usize) -> Result<Vec<Event>, StoreError> {
+    read_after(pool, after, &EventFilter::default(), limit).await
+}
+
 /// Events with `seq > after` that carry one of `tasks` or `proposals`, or have one of `types`, in ascending order. It is the coarse SQL side of the relevance rule; the caller applies the rule itself to what it returns.
 pub async fn touching_after(
     executor: impl SqliteExecutor<'_>,

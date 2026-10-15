@@ -179,6 +179,16 @@ async fn send_with(
     let response = router.oneshot(request.body(body).unwrap()).await.unwrap();
     let status = response.status();
     let headers = response.headers().clone();
+    // An event stream's body never ends, so only its status and headers are read.
+    if headers.get(header::CONTENT_TYPE)
+        == Some(&header::HeaderValue::from_static("text/event-stream"))
+    {
+        return Answer {
+            status,
+            headers,
+            body: Value::Null,
+        };
+    }
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     Answer {
         status,
