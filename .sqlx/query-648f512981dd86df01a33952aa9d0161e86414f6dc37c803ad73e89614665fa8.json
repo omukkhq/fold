@@ -1,0 +1,57 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT bc.number, bc.body, bc.created_at,\n                  (SELECT group_concat(p.number)\n                   FROM review_comments c\n                   JOIN proposal_versions v ON v.id = c.version_id\n                   JOIN proposals p ON p.id = v.proposal_id\n                   WHERE c.batch_comment_id = bc.id) AS \"members?: String\"\n           FROM review_batch_comments bc\n           JOIN review_batches b ON b.id = bc.batch_id\n           WHERE b.number = ?\n           ORDER BY bc.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "number",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_batch_comments",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "body",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "review_batch_comments",
+            "name": "body"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_batch_comments",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "members?: String",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "648f512981dd86df01a33952aa9d0161e86414f6dc37c803ad73e89614665fa8"
+}

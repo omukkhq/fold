@@ -1,7 +1,9 @@
 use fold_core::events::types;
 use fold_core::reviews::{Reviewer, Verdict};
-use fold_core::{Actor, CommentId, FoldError, IdKind, NewEvent, ProposalId, TaskId, codes, policy};
-use fold_store::reviews::{self, NewComment, ProposalRow, ReviewerRef};
+use fold_core::{
+    Actor, CommentId, FoldError, IdKind, NewEvent, ProposalId, ReviewBatchId, TaskId, codes, policy,
+};
+use fold_store::reviews::{self, NewComment, ProposalRow, ReviewerRef, batches};
 use fold_store::{StoreError, WriteTx, counters, workspaces};
 use serde_json::json;
 
@@ -58,40 +60,17 @@ impl ReviewService {
                 if current.version != target.version {
                     return Err(version_changed(proposal, target.version, current.version));
                 }
-                let reviewer = actor.event_actor();
-                let by = match verdict_gate(actor, verdict, &row)? {
-                    Reviewer::Agent(agent) => ReviewerRef::Worker(worker_row(tx, agent).await?.id),
-                    Reviewer::Human(name) => ReviewerRef::Human(name),
+                let record = ReviewRecord {
+                    row: &row,
+                    version_id: current.version_id,
+                    version: current.version,
+                    verdict,
+                    body: &body,
+                    comments: &comments,
+                    batch: None,
+                    batch_comments: &[],
                 };
-                let review_id =
-                    reviews::insert_review(tx, current.version_id, by, verdict, &body, now).await?;
-                let ids = insert_comments(tx, proposal, review_id, by, &comments, now).await?;
-                let submitted = NewEvent::new(types::REVIEW_SUBMITTED, reviewer.clone())?
-                    .task(row.task)
-                    .proposal(proposal)
-                    .data(json!({
-                        "verdict": verdict.as_str(),
-                        "version": current.version,
-                        "comments": ids.len(),
-                    }))?;
-                buffer.append(tx, &submitted, now).await?;
-                for id in &ids {
-                    let added = NewEvent::new(types::REVIEW_COMMENT_ADDED, reviewer.clone())?
-                        .task(row.task)
-                        .proposal(proposal)
-                        .data(json!({"comment": id.to_string(), "version": current.version}))?;
-                    buffer.append(tx, &added, now).await?;
-                }
-                if verdict == Verdict::Reject {
-                    let reason = body.as_str();
-                    let outcome = Retirement::Rejected { reason };
-                    retire_proposal(tx, &mut buffer, &reviewer, proposal, outcome, now).await?;
-                    let closed = NewEvent::new(types::PROPOSAL_CLOSED, reviewer)?
-                        .task(row.task)
-                        .proposal(proposal)
-                        .data(json!({"reason": reason, "verdict": verdict.as_str()}))?;
-                    buffer.append(tx, &closed, now).await?;
-                }
+                let ids = record_review(tx, &mut buffer, actor, &record, now).await?;
                 buffer.extend(recompute(tx, &[row.task], now).await?.events);
                 Ok::<_, ReviewError>((row.task, ids))
             })
@@ -112,6 +91,111 @@ impl ReviewService {
             summary,
         })
     }
+}
+
+/// One review of one proposal version to write inside a command's transaction. `batch` names the review batch it comes with, and `batch_comments` the comments of that batch to put on this member.
+pub(super) struct ReviewRecord<'a> {
+    pub row: &'a ProposalRow,
+    pub version_id: i64,
+    pub version: u32,
+    pub verdict: Verdict,
+    pub body: &'a str,
+    pub comments: &'a [CommentInput],
+    pub batch: Option<ReviewBatchId>,
+    pub batch_comments: &'a [BatchCommentLink],
+}
+
+/// A comment of a review batch about members together: its row id and its number in the batch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct BatchCommentLink {
+    pub row_id: i64,
+    pub number: u32,
+}
+
+/// Writes the review, its comments and their events inside the caller's write, and closes the proposal on a reject. The caller checks the body and the comments first, and runs `recompute` for the task before it commits.
+pub(super) async fn record_review(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    actor: &Actor,
+    record: &ReviewRecord<'_>,
+    now: fold_core::Timestamp,
+) -> Result<Vec<CommentId>, ReviewError> {
+    let (row, verdict, version) = (record.row, record.verdict, record.version);
+    let proposal = row.id;
+    let reviewer = actor.event_actor();
+    let by = match verdict_gate(actor, verdict, row)? {
+        Reviewer::Agent(agent) => ReviewerRef::Worker(worker_row(tx, agent).await?.id),
+        Reviewer::Human(name) => ReviewerRef::Human(name),
+    };
+    let review_id = match record.batch {
+        None => {
+            reviews::insert_review(tx, record.version_id, by, verdict, record.body, now).await?
+        }
+        Some(batch) => {
+            batches::insert_batch_review(
+                tx,
+                batch,
+                record.version_id,
+                by,
+                verdict,
+                record.body,
+                now,
+            )
+            .await?
+        }
+    };
+    let mut ids = insert_comments(tx, proposal, review_id, by, record.comments, now).await?;
+    let mut linked = Vec::with_capacity(record.batch_comments.len());
+    for link in record.batch_comments {
+        linked.push((
+            insert_batch_comment_row(tx, review_id, by, *link, now).await?,
+            link.number,
+        ));
+    }
+    let mut data = json!({
+        "verdict": verdict.as_str(),
+        "version": version,
+        "comments": ids.len() + linked.len(),
+    });
+    if let Some(batch) = record.batch {
+        data["batch"] = json!(batch.to_string());
+    }
+    let submitted = NewEvent::new(types::REVIEW_SUBMITTED, reviewer.clone())?
+        .task(row.task)
+        .proposal(proposal)
+        .data(data)?;
+    buffer.append(tx, &submitted, now).await?;
+    for id in &ids {
+        let added = NewEvent::new(types::REVIEW_COMMENT_ADDED, reviewer.clone())?
+            .task(row.task)
+            .proposal(proposal)
+            .data(json!({"comment": id.to_string(), "version": version}))?;
+        buffer.append(tx, &added, now).await?;
+    }
+    for (id, number) in &linked {
+        let added = NewEvent::new(types::REVIEW_COMMENT_ADDED, reviewer.clone())?
+            .task(row.task)
+            .proposal(proposal)
+            .data(json!({
+                "comment": id.to_string(),
+                "version": version,
+                "batch": record.batch.map(|batch| batch.to_string()),
+                "batch_comment": number,
+            }))?;
+        buffer.append(tx, &added, now).await?;
+    }
+    ids.extend(linked.into_iter().map(|(id, _)| id));
+    if verdict == Verdict::Reject {
+        let reason = record.body;
+        let outcome = Retirement::Rejected { reason };
+        retire_proposal(tx, buffer, &reviewer, proposal, outcome, now).await?;
+        let closed = NewEvent::new(types::PROPOSAL_CLOSED, reviewer)?
+            .task(row.task)
+            .proposal(proposal)
+            .data(json!({"reason": reason, "verdict": verdict.as_str()}))?;
+        buffer.append(tx, &closed, now).await?;
+    }
+    Ok(ids)
 }
 
 /// Inserts the comments of the review `review_id` in order, each with the next comment number. A reply must name a comment of the same proposal.
@@ -152,11 +236,35 @@ async fn insert_comments(
                 .map(|location| location.as_range()),
             reply_to: comment.reply_to,
             body: comment.body.trim(),
+            batch_comment: None,
         };
         reviews::insert_comment(tx, &new, now).await?;
         ids.push(id);
     }
     Ok(ids)
+}
+
+/// Puts the batch comment `link` on the version of the review `review_id` as a whole-version comment whose body stays with the batch comment.
+async fn insert_batch_comment_row(
+    tx: &mut WriteTx,
+    review_id: i64,
+    author: ReviewerRef<'_>,
+    link: BatchCommentLink,
+    now: fold_core::Timestamp,
+) -> Result<CommentId, ReviewError> {
+    let number = counters::allocate(tx, IdKind::Comment).await?;
+    let id = CommentId::from_number(number).ok_or(StoreError::Corrupt("counters.next"))?;
+    let new = NewComment {
+        id,
+        review_id,
+        author,
+        location: None,
+        reply_to: None,
+        body: "",
+        batch_comment: Some(link.row_id),
+    };
+    reviews::insert_comment(tx, &new, now).await?;
+    Ok(id)
 }
 
 /// The trimmed body. A review says something: a body, a comment, or both; a reject's body is the reason the proposal closes.

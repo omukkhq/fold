@@ -80,6 +80,19 @@ function requestOf(event: DurableEvent): string {
   return version === null ? request : `${request} v${String(version)}`;
 }
 
+function batchOf(event: DurableEvent): string {
+  return text(event.data.batch) ?? "a review batch";
+}
+
+function batchCreatedText(event: DurableEvent): string {
+  const members: unknown[] = Array.isArray(event.data.members)
+    ? event.data.members
+    : [];
+  return members.length === 0
+    ? `started ${batchOf(event)}`
+    : `batched ${String(members.length)} proposals for review as ${batchOf(event)}`;
+}
+
 function approvedText(event: DurableEvent): string {
   const list: unknown[] = Array.isArray(event.data.tasks)
     ? event.data.tasks
@@ -353,6 +366,15 @@ const SPECS: Record<EventType, Spec> = {
   "review.comment_added": {
     icon: MessageSquare,
     text: (e) => `commented on ${proposalOf(e)}`,
+  },
+  "review.batch_created": { icon: ListChecks, text: batchCreatedText },
+  "review.batch_submitted": {
+    icon: Check,
+    text: (e) => `reviewed ${batchOf(e)}`,
+  },
+  "review.batch_closed": {
+    icon: X,
+    text: (e) => `closed ${batchOf(e)}`,
   },
   "integration.succeeded": {
     icon: GitMerge,

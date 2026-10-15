@@ -1,0 +1,134 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT m.id AS \"member_id!: i64\", p.number AS \"proposal!: i64\", t.number AS \"task!: i64\",\n                  m.position, v.id AS \"version_id!: i64\", v.version, r.tree_hash AS base_tree,\n                  v.tree_hash, m.released_at, m.release_reason\n           FROM review_batch_members m\n           JOIN review_batches b ON b.id = m.batch_id\n           JOIN proposals p ON p.id = m.proposal_id\n           JOIN tasks t ON t.id = p.task_id\n           JOIN proposal_versions v ON v.id = m.version_id\n           JOIN revisions r ON r.id = v.base_revision_id\n           WHERE b.number = ?\n           ORDER BY m.position",
+  "describe": {
+    "columns": [
+      {
+        "name": "member_id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_batch_members",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "proposal!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "task!: i64",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "position",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_batch_members",
+            "name": "position"
+          }
+        }
+      },
+      {
+        "name": "version_id!: i64",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "version",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "name": "base_tree",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "revisions",
+            "name": "tree_hash"
+          }
+        }
+      },
+      {
+        "name": "tree_hash",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "tree_hash"
+          }
+        }
+      },
+      {
+        "name": "released_at",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_batch_members",
+            "name": "released_at"
+          }
+        }
+      },
+      {
+        "name": "release_reason",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "review_batch_members",
+            "name": "release_reason"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "a5ead57095d941a861f8c8ccabd183510603ea0d167366b53c8fa3a82f1146c2"
+}

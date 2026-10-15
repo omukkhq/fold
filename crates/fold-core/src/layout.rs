@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::{FoldError, codes};
-use crate::ids::{ProposalId, TaskId, WorkspaceId};
+use crate::ids::{ProposalId, ReviewBatchId, TaskId, WorkspaceId};
 
 /// Where the host-wide files live: `<data home>/fold/`. The data home is `XDG_DATA_HOME`, else `<home>/.local/share`. An empty or relative value counts as unset, as the XDG base directory rules require.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,6 +104,15 @@ pub fn review_checkout_path(proposal: ProposalId, earlier: u32) -> String {
     }
 }
 
+/// The directory of a review batch's checkout, relative to the project root: `ws/review-rb-3`, then `ws/review-rb-3-2` when `earlier` checkouts of the batch exist, by the naming rule of a proposal's checkout.
+pub fn review_batch_checkout_path(batch: ReviewBatchId, earlier: u32) -> String {
+    let name = batch.to_string();
+    match earlier {
+        0 => format!("ws/review-{name}"),
+        _ => format!("ws/review-{name}-{}", u64::from(earlier) + 1),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,6 +164,13 @@ mod tests {
             task_workspace_path(task, u32::MAX),
             format!("ws/t-12-{}", u64::from(u32::MAX) + 1)
         );
+    }
+
+    #[test]
+    fn review_batch_checkout_paths_count_the_earlier_checkouts() {
+        let batch = ReviewBatchId::from_number(3).unwrap();
+        assert_eq!(review_batch_checkout_path(batch, 0), "ws/review-rb-3");
+        assert_eq!(review_batch_checkout_path(batch, 1), "ws/review-rb-3-2");
     }
 
     #[test]

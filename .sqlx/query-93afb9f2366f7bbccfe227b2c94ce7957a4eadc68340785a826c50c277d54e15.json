@@ -1,0 +1,86 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT p.number AS \"proposal!: i64\", v.id AS \"version_id!: i64\", v.version,\n                  l.start_line, l.end_line, l.member_start_line\n           FROM review_batch_lines l\n           JOIN workspaces w ON w.id = l.workspace_id\n           JOIN review_batch_members m ON m.id = l.member_id\n           JOIN proposals p ON p.id = m.proposal_id\n           JOIN proposal_versions v ON v.id = m.version_id\n           WHERE w.number = ?1 AND l.path = ?2 AND l.start_line <= ?3 AND l.end_line >= ?3",
+  "describe": {
+    "columns": [
+      {
+        "name": "proposal!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "version_id!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "version",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "name": "start_line",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_batch_lines",
+            "name": "start_line"
+          }
+        }
+      },
+      {
+        "name": "end_line",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_batch_lines",
+            "name": "end_line"
+          }
+        }
+      },
+      {
+        "name": "member_start_line",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_batch_lines",
+            "name": "member_start_line"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "93afb9f2366f7bbccfe227b2c94ce7957a4eadc68340785a826c50c277d54e15"
+}

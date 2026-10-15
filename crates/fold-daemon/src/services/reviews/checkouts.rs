@@ -114,11 +114,11 @@ impl ReviewService {
         let id = match written {
             Ok(Inserted::Created(id)) => id,
             Ok(Inserted::Existing(existing)) => {
-                remove_unnamed(proposal, &path, dir).await;
+                remove_unnamed_dir(&path, dir).await;
                 return self.checkout(existing, proposal, version).await;
             }
             Err(error) => {
-                remove_unnamed(proposal, &path, dir).await;
+                remove_unnamed_dir(&path, dir).await;
                 return Err(error);
             }
         };
@@ -209,9 +209,9 @@ fn checkout_failed(proposal: ProposalId, error: WorkspaceError) -> ReviewError {
 }
 
 /// Removes a checkout directory that no row names.
-async fn remove_unnamed(proposal: ProposalId, path: &str, dir: PathBuf) {
+pub(super) async fn remove_unnamed_dir(path: &str, dir: PathBuf) {
     let removed = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(dir)).await;
     if !matches!(removed, Ok(Ok(()))) {
-        tracing::warn!(proposal = %proposal, path = %path, "a review checkout directory without a row was not removed");
+        tracing::warn!(path = %path, "a review checkout directory without a row was not removed");
     }
 }

@@ -6,10 +6,14 @@ use std::time::Duration;
 
 use fold_core::events::types;
 use fold_core::reviews::Verdict;
-use fold_core::{Actor, AgentName, EventFilter, ProposalId, RevisionId, TaskStatus, codes};
+use fold_core::{
+    Actor, AgentName, EventFilter, ProposalId, RevisionId, TaskDescription, TaskStatus, TaskTitle,
+    codes,
+};
 use fold_daemon::daemon::AppState;
 use fold_daemon::jobs::{Job, spawn_auto_integrate};
-use fold_daemon::services::reviews::IntegrationOutcome;
+use fold_daemon::services::reviews::{BatchVerdict, IntegrationOutcome};
+use fold_daemon::services::tasks::CreateTask;
 use fold_store::events;
 use fold_store::workspaces;
 use tokio::sync::watch;
@@ -393,5 +397,95 @@ async fn with_automatic_off_nothing_integrates_on_its_own() {
         .await
         .unwrap();
     assert_eq!(outcome, IntegrationOutcome::Succeeded { revision: r(2) });
+    job.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_batch_review_integrates_its_approved_members_in_dependency_order() {
+    let fx = Fixture::new().await;
+    fx.handle
+        .tasks
+        .create_task(
+            &human("tanim"),
+            CreateTask {
+                title: TaskTitle::parse("docs").unwrap(),
+                description: TaskDescription::new("what to build"),
+                labels: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    let author = fx.agent("backend").await;
+    let review = integrator(&fx, "review").await;
+    fx.reviews()
+        .require_human_review(&review, t(3), None, "touches the public API")
+        .await
+        .unwrap();
+    propose(&fx, &author, 1, "src/one.rs", "one\n").await;
+    propose(&fx, &author, 2, "src/two.rs", "two\n").await;
+    propose(&fx, &author, 3, "src/three.rs", "three\n").await;
+    fx.handle
+        .tasks
+        .add_dependency(&human("tanim"), t(1), t(2))
+        .await
+        .unwrap();
+    let job = Running::start(&fx.state);
+    job.runs(1).await;
+
+    let batch = fx
+        .reviews()
+        .create_review_batch(&review, vec![p(1), p(2), p(3)])
+        .await
+        .unwrap()
+        .id;
+    let approve_all = [1, 2, 3]
+        .map(|number| BatchVerdict {
+            proposal: p(number),
+            verdict: Verdict::Approve,
+            body: String::new(),
+        })
+        .to_vec();
+    fx.reviews()
+        .submit_batch_review(&review, batch, approve_all, Vec::new())
+        .await
+        .unwrap();
+    tokio::time::timeout(WAIT, async {
+        while integrated_in_order(&fx).await.len() < 2 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the approved members integrate by themselves");
+    assert_eq!(
+        integrated_in_order(&fx).await,
+        [2, 1],
+        "T-1 needs T-2, so P-2 goes first"
+    );
+    assert_eq!(head(&fx).await, r(3));
+    assert_eq!(status(&fx, 1).await, TaskStatus::Done);
+    assert_eq!(status(&fx, 2).await, TaskStatus::Done);
+    let committed = "SELECT COUNT(*) FROM revision_commits c JOIN revisions r ON r.id = c.revision_id WHERE r.number IN (2, 3)";
+    tokio::time::timeout(WAIT, async {
+        while count(&fx, committed).await < 2 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("each integration gets its Git commit");
+    let repository = fx.project.paths().fold_dir().join("git");
+    assert_eq!(git(&repository, &["show", "main:src/one.rs"]), "one\n");
+    assert_eq!(git(&repository, &["show", "main~1:src/two.rs"]), "two\n");
+
+    assert_eq!(state_of(&fx, 3).await, "open", "T-3 waits for the human");
+    assert_eq!(fx.reviews().awaiting_human_review().await.unwrap().len(), 1);
+    approve(&fx, &human("tanim"), 3).await;
+    tokio::time::timeout(WAIT, async {
+        while state_of(&fx, 3).await != "integrated" {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the marked member integrates after the human approves");
+    assert_eq!(integrated_in_order(&fx).await, [2, 1, 3]);
     job.stop().await;
 }

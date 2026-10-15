@@ -18,9 +18,14 @@ INSERT INTO integrations (id, number, kind, proposal_id, version_id, result, act
 INSERT INTO completions (task_id, kind, integration_id, created_at) VALUES (1, 'integration', 1, 0);
 INSERT INTO messages (id, number, thread_id, sender_kind, body, created_at) VALUES (1, 1, 1, 'fold', 'b', 0);
 INSERT INTO events (type, actor, data, created_at) VALUES ('task.created', 'fold', '{}', 0);
+INSERT INTO review_batches (id, number, holder_worker_id, created_at) VALUES (1, 1, 1, 0);
+INSERT INTO review_batch_members (id, batch_id, proposal_id, version_id, position) VALUES (1, 1, 1, 1, 1);
+INSERT INTO workspaces (id, number, task_id, worker_id, kind, path, base_revision_id, review_batch_id, state, created_at) VALUES (2, 2, 1, 1, 'review', 'ws/review-rb-1', 1, 1, 'active', 0);
+INSERT INTO review_batch_lines (workspace_id, member_id, path, start_line, end_line, member_start_line) VALUES (2, 1, 'a.rs', 1, 1, 1);
+INSERT INTO review_batch_comments (id, batch_id, number, body, created_at) VALUES (1, 1, 1, 'b', 0);
 ";
 
-const APPEND_ONLY: [&str; 9] = [
+const APPEND_ONLY: [&str; 11] = [
     "completions",
     "revisions",
     "changesets",
@@ -30,7 +35,12 @@ const APPEND_ONLY: [&str; 9] = [
     "integrations",
     "messages",
     "events",
+    "review_batch_lines",
+    "review_batch_comments",
 ];
+
+/// The append-only tables whose rows are derived in the transaction of a row that carries the time, so they have no `created_at` of their own.
+const WITHOUT_CREATED_AT: [&str; 1] = ["review_batch_lines"];
 
 #[cfg(test)]
 async fn seeded() -> (tempfile::TempDir, Store) {
@@ -81,6 +91,10 @@ async fn baseline_creates_every_table_of_the_data_model() {
         "request_draft_edges",
         "request_drafts",
         "requests",
+        "review_batch_comments",
+        "review_batch_lines",
+        "review_batch_members",
+        "review_batches",
         "review_comments",
         "reviews",
         "revision_commits",
@@ -123,14 +137,11 @@ async fn append_only_tables_have_both_triggers() {
         .fetch_one(store.read())
         .await
         .unwrap();
-        assert_eq!(created_at, 1, "{table}.created_at");
+        let expected_created_at = i64::from(!WITHOUT_CREATED_AT.contains(&table));
+        assert_eq!(created_at, expected_created_at, "{table}.created_at");
 
         let expected = format!("{table} is append-only");
-        let update = refused(
-            &store,
-            &format!("UPDATE {table} SET created_at = created_at"),
-        )
-        .await;
+        let update = refused(&store, &format!("UPDATE {table} SET rowid = rowid")).await;
         assert!(update.to_string().contains(&expected), "{update}");
         let delete = refused(&store, &format!("DELETE FROM {table}")).await;
         assert!(delete.to_string().contains(&expected), "{delete}");

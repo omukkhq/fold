@@ -48,10 +48,11 @@ pub enum IdKind {
     Integration,
     ChecklistItem,
     Request,
+    ReviewBatch,
 }
 
 impl IdKind {
-    pub const ALL: [IdKind; 11] = [
+    pub const ALL: [IdKind; 12] = [
         IdKind::Task,
         IdKind::Proposal,
         IdKind::Changeset,
@@ -63,6 +64,7 @@ impl IdKind {
         IdKind::Integration,
         IdKind::ChecklistItem,
         IdKind::Request,
+        IdKind::ReviewBatch,
     ];
 
     pub const fn prefix(self) -> &'static str {
@@ -78,6 +80,7 @@ impl IdKind {
             IdKind::Integration => "i-",
             IdKind::ChecklistItem => "ci-",
             IdKind::Request => "RQ-",
+            IdKind::ReviewBatch => "rb-",
         }
     }
 
@@ -94,6 +97,7 @@ impl IdKind {
             IdKind::Integration => "integration",
             IdKind::ChecklistItem => "checklist_item",
             IdKind::Request => "request",
+            IdKind::ReviewBatch => "review_batch",
         }
     }
 }
@@ -213,6 +217,11 @@ define_id!(
     IdKind::Request
 );
 define_id!(
+    /// The public id of a review batch; the `review_batch` counter numbers them.
+    ReviewBatchId,
+    IdKind::ReviewBatch
+);
+define_id!(
     @prefixed
     /// The public id of a web sign-in token: `web_tokens.number`, unique across the host registry rather than one project. A revoked token keeps its row and its number, so a number is never handed out twice.
     WebTokenId,
@@ -251,6 +260,7 @@ mod tests {
             round_trip!(IntegrationId, n);
             round_trip!(ChecklistItemId, n);
             round_trip!(RequestId, n);
+            round_trip!(ReviewBatchId, n);
         }
     }
 
@@ -316,6 +326,14 @@ mod tests {
         assert_eq!("rq-4".parse::<RequestId>(), Err(IdParseError::WrongPrefix));
         assert_eq!("RQ-4".parse::<RevisionId>(), Err(IdParseError::WrongPrefix));
         assert_eq!(IdKind::Request.counter_key(), "request");
+        let batch = ReviewBatchId::from_number(3).unwrap();
+        assert_eq!(serde_json::to_string(&batch).unwrap(), "\"rb-3\"");
+        assert_eq!("rb-3".parse::<RevisionId>(), Err(IdParseError::NotANumber));
+        assert_eq!(
+            "rc-3".parse::<ReviewBatchId>(),
+            Err(IdParseError::WrongPrefix)
+        );
+        assert_eq!(IdKind::ReviewBatch.counter_key(), "review_batch");
     }
 
     #[test]
@@ -326,8 +344,8 @@ mod tests {
         prefixes.dedup();
         keys.sort_unstable();
         keys.dedup();
-        assert_eq!(prefixes.len(), 11);
-        assert_eq!(keys.len(), 11);
+        assert_eq!(prefixes.len(), 12);
+        assert_eq!(keys.len(), 12);
     }
 
     #[test]

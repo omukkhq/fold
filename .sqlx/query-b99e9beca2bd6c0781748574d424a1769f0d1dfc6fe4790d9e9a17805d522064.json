@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT b.number AS \"number!: i64\", b.holder_worker_id, w.name AS holder, b.state,\n                  b.created_at, b.submitted_at, b.closed_at\n           FROM review_batches b\n           JOIN workers w ON w.id = b.holder_worker_id\n           WHERE (?1 IS NULL OR b.number = ?1) AND (NOT ?2 OR b.state = 'open')\n           ORDER BY b.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_batches",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "holder_worker_id",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_batches",
+            "name": "holder_worker_id"
+          }
+        }
+      },
+      {
+        "name": "holder",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workers",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "state",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "review_batches",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_batches",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "submitted_at",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_batches",
+            "name": "submitted_at"
+          }
+        }
+      },
+      {
+        "name": "closed_at",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_batches",
+            "name": "closed_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "b99e9beca2bd6c0781748574d424a1769f0d1dfc6fe4790d9e9a17805d522064"
+}

@@ -156,6 +156,7 @@ export function reviewComment(
     body: `comment ${String(id)}`,
     created_at: T0 + id * 1_000,
     outdated: false,
+    batch_comment: null,
     ...fields,
   };
 }

@@ -1,10 +1,12 @@
 mod diff3;
 mod markers;
+mod origin;
 mod report;
 mod tree;
 
 pub use diff3::{ConflictHunk, Merge3, Segment, merge3};
 pub use markers::{contains_marker_line, render_markers};
+pub use origin::{OriginRun, line_origins};
 pub use report::{
     ConflictReport, HunkSide, ReportEntry, ReportEntryKind, ReportFile, ReportHunk, ReportKind,
     ReportTrees,

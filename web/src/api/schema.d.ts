@@ -537,6 +537,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/reviews/batches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The project's review batches with their members, checkout and verdicts. */
+        get: operations["list_review_batches"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/reviews/batches/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One review batch. */
+        get: operations["get_review_batch"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/reviews/checkouts": {
         parameters: {
             query?: never;
@@ -1133,6 +1167,18 @@ export interface components {
             /** @description Why the request is closed. `#` names a fold item and `@` names a file; the daemon parses nothing. */
             reason: string;
         };
+        /** @description The comment of a review batch that a comment puts on its proposal. */
+        CommentBatchLink: {
+            /** @example rb-3 */
+            batch: string;
+            /** @description Every proposal the batch comment is on, this one included, in number order. */
+            members: string[];
+            /**
+             * Format: int32
+             * @description The comment's number in the batch, from 1.
+             */
+            number: number;
+        };
         /** @description One comment: on a run of lines when `path`, `side`, `start_line` and `end_line` are all given, on the whole version when none is. */
         CommentBody: {
             body: string;
@@ -1400,7 +1446,7 @@ export interface components {
             workspace: string | null;
         };
         /** @enum {string} */
-        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed";
+        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed";
         /**
          * @description `needs`: this task needs the other task. `needed_by`: the other task needs this one.
          * @enum {string}
@@ -2119,6 +2165,111 @@ export interface components {
             /** Format: int32 */
             messages: number;
         };
+        /** @description Related proposals one reviewer reviews together, with one verdict per member. */
+        ReviewBatch: {
+            checkout: components["schemas"]["ReviewBatchCheckout"] | null;
+            /**
+             * Format: int64
+             * @description UTC milliseconds; null unless the batch closed without a batch review.
+             */
+            closed_at: number | null;
+            /** @description The comments about members together, in number order. */
+            comments: components["schemas"]["ReviewBatchComment"][];
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            created_at: number;
+            /** @description The worker that holds the batch and the review claims of its members, such as `review/batch`. */
+            holder: string;
+            /** @example rb-3 */
+            id: string;
+            /** @description Every member the batch has had, in merge order. */
+            members: components["schemas"]["ReviewBatchMember"][];
+            state: components["schemas"]["ReviewBatchState"];
+            /**
+             * Format: int64
+             * @description UTC milliseconds; null while the batch is open.
+             */
+            submitted_at: number | null;
+            verdicts: components["schemas"]["ReviewBatchVerdict"][];
+        };
+        /** @description The active checkout of a batch: main with every member merged in order. */
+        ReviewBatchCheckout: {
+            /**
+             * @description The revision of main the members were merged onto.
+             * @example r17
+             */
+            base: string;
+            /** @description Relative to the project root, such as `ws/review-rb-3`. */
+            path: string;
+            /** @example ws-12 */
+            workspace: string;
+        };
+        /** @description A comment of a batch review about members together. Each member it is on has a whole-version comment that links to it. */
+        ReviewBatchComment: {
+            body: string;
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            created_at: number;
+            /**
+             * @description The proposals the comment is on, in number order.
+             * @example [
+             *       "P-3",
+             *       "P-4"
+             *     ]
+             */
+            members: string[];
+            /**
+             * Format: int32
+             * @description The comment's number in the batch, from 1.
+             */
+            number: number;
+        };
+        ReviewBatchList: {
+            /** @description In number order. */
+            batches: components["schemas"]["ReviewBatch"][];
+        };
+        /** @description One member of a batch. */
+        ReviewBatchMember: {
+            /**
+             * Format: int32
+             * @description The proposal's current version. When it is higher than `version`, the batch's verdict leaves this member out.
+             */
+            current_version: number;
+            /** @description False once the member was removed or the batch was submitted. */
+            in_batch: boolean;
+            /**
+             * Format: int32
+             * @description The member's place in merge order, from 1.
+             */
+            position: number;
+            /** @example P-3 */
+            proposal: string;
+            proposal_state: components["schemas"]["ProposalStateView"];
+            /** @example T-12 */
+            task: string;
+            /**
+             * Format: int32
+             * @description The version the batch reviews: the one the proposal had when it joined.
+             */
+            version: number;
+        };
+        /** @enum {string} */
+        ReviewBatchState: "open" | "submitted" | "closed";
+        /** @description A verdict the batch gave. */
+        ReviewBatchVerdict: {
+            /** @example P-3 */
+            proposal: string;
+            verdict: components["schemas"]["ReviewVerdict"];
+            /**
+             * Format: int32
+             * @description The member version the verdict is about.
+             */
+            version: number;
+        };
         /** @description A human verdict on the current version. The web screens offer approve, request changes and comment; the route also takes reject, which closes the proposal. */
         ReviewBody: {
             /** @description May be empty only when the review carries a comment; a reject needs it. */
@@ -2175,6 +2326,7 @@ export interface components {
         ReviewComment: {
             /** @description The worker, or `human:<name>`. */
             author: string;
+            batch_comment: components["schemas"]["CommentBatchLink"] | null;
             body: string;
             /**
              * Format: int64
@@ -5786,6 +5938,165 @@ export interface operations {
                 };
             };
             /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    list_review_batches: {
+        parameters: {
+            query?: {
+                /** @description Only the batches that are not submitted yet. */
+                open?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The review batches */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewBatchList"];
+                };
+            };
+            /** @description `invalid_request`: the query string is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_not_found`: the slug is not registered */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_review_batch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The review batch id, such as rb-3 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The batch */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewBatch"];
+                };
+            };
+            /** @description `invalid_id` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `review_batch_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
             503: {
                 headers: {
                     [name: string]: unknown;

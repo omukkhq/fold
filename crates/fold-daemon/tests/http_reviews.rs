@@ -292,6 +292,7 @@ async fn a_human_comment_is_added_and_listed() {
             "body": "why y",
             "created_at": answer.body["created_at"],
             "outdated": false,
+            "batch_comment": null,
         })
     );
     let answer = send(

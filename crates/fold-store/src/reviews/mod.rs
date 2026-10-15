@@ -2,8 +2,8 @@ use fold_core::object::ObjectHash;
 use fold_core::reviews::{Approver, HumanReviewMark, ReviewFact, Side, Verdict};
 use fold_core::tree::ChangeCounts;
 use fold_core::{
-    ChangesetId, CommentId, EventActor, HumanName, ProposalId, RevisionId, TaskId, Timestamp,
-    WorkerName, WorkspaceId,
+    ChangesetId, CommentId, EventActor, HumanName, ProposalId, ReviewBatchId, RevisionId, TaskId,
+    Timestamp, WorkerName, WorkspaceId,
 };
 use sqlx::SqliteExecutor;
 
@@ -11,6 +11,7 @@ use crate::error::StoreError;
 use crate::store::WriteTx;
 use crate::workspaces::parse_stats;
 
+pub mod batches;
 mod claims;
 mod integrations;
 mod summaries;
@@ -533,6 +534,8 @@ pub struct NewComment<'a> {
     pub location: Option<LineRange<'a>>,
     pub reply_to: Option<CommentId>,
     pub body: &'a str,
+    /// The row id of the batch comment this row puts on its member, whose body the batch comment holds.
+    pub batch_comment: Option<i64>,
 }
 
 /// One stored comment with public ids only. `verdict` is the verdict of the review it came with.
@@ -549,6 +552,16 @@ pub struct CommentRow {
     pub reply_to: Option<CommentId>,
     pub body: String,
     pub created_at: Timestamp,
+    /// The batch comment this comment puts on its proposal, when it is one.
+    pub batch_comment: Option<BatchCommentRef>,
+}
+
+/// A comment of a review batch about members together: `number` counts the batch's comments from 1, and `members` are the proposals it is on, in number order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchCommentRef {
+    pub batch: ReviewBatchId,
+    pub number: u32,
+    pub members: Vec<ProposalId>,
 }
 
 /// The current version of the proposal and its two trees, or `None` for a proposal that does not exist.
@@ -630,8 +643,9 @@ pub async fn insert_comment(
     let now = now.as_millis();
     let inserted = sqlx::query!(
         "INSERT INTO review_comments (number, version_id, review_id, author_worker_id, author_human,
-                                      path, start_line, end_line, side, reply_to, body, created_at)
-         SELECT ?1, r.version_id, r.id, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11
+                                      path, start_line, end_line, side, reply_to, body, created_at,
+                                      batch_comment_id)
+         SELECT ?1, r.version_id, r.id, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12
          FROM reviews r WHERE r.id = ?2",
         number,
         new.review_id,
@@ -643,7 +657,8 @@ pub async fn insert_comment(
         side,
         reply_to,
         new.body,
-        now
+        now,
+        new.batch_comment
     )
     .execute(tx.conn())
     .await?
@@ -736,12 +751,21 @@ pub async fn list_comments(
     let rows = sqlx::query!(
         r#"SELECT c.number AS "number!: i64", v.version, r.verdict,
                   w.name AS "worker?: String", c.author_human,
-                  c.path, c.side, c.start_line, c.end_line, c.reply_to, c.body, c.created_at
+                  c.path, c.side, c.start_line, c.end_line, c.reply_to,
+                  COALESCE(bc.body, c.body) AS "body!: String", c.created_at,
+                  b.number AS "batch?: i64", bc.number AS "batch_comment?: i64",
+                  (SELECT group_concat(mp.number)
+                   FROM review_comments mc
+                   JOIN proposal_versions mv ON mv.id = mc.version_id
+                   JOIN proposals mp ON mp.id = mv.proposal_id
+                   WHERE mc.batch_comment_id = c.batch_comment_id) AS "batch_members?: String"
            FROM review_comments c
            JOIN reviews r ON r.id = c.review_id
            JOIN proposal_versions v ON v.id = c.version_id
            JOIN proposals p ON p.id = v.proposal_id
            LEFT JOIN workers w ON w.id = c.author_worker_id
+           LEFT JOIN review_batch_comments bc ON bc.id = c.batch_comment_id
+           LEFT JOIN review_batches b ON b.id = bc.batch_id
            WHERE p.number = ?1 AND (?2 IS NULL OR v.version = ?2)
            ORDER BY c.number"#,
         number,
@@ -787,9 +811,27 @@ pub async fn list_comments(
                     .transpose()?,
                 body: row.body,
                 created_at: time(row.created_at, "review_comments.created_at")?,
+                batch_comment: batch_comment_ref(row.batch, row.batch_comment, row.batch_members)?,
             })
         })
         .collect()
+}
+
+fn batch_comment_ref(
+    batch: Option<i64>,
+    number: Option<i64>,
+    members: Option<String>,
+) -> Result<Option<BatchCommentRef>, StoreError> {
+    let (Some(batch), Some(number)) = (batch, number) else {
+        return Ok(None);
+    };
+    Ok(Some(BatchCommentRef {
+        batch: ReviewBatchId::try_from_db(batch)
+            .ok_or(StoreError::Corrupt("review_batches.number"))?,
+        number: u32::try_from(number)
+            .map_err(|_| StoreError::Corrupt("review_batch_comments.number"))?,
+        members: batches::proposal_list(members.as_deref())?,
+    }))
 }
 
 /// One stored review with public ids only: the version it reviewed, its writer, and how many comments it carries.

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO review_batch_lines (workspace_id, member_id, path, start_line, end_line, member_start_line)\n             SELECT w.id, m.id, ?4, ?5, ?6, ?7\n             FROM workspaces w, review_batch_members m\n             JOIN review_batches b ON b.id = m.batch_id\n             JOIN proposals p ON p.id = m.proposal_id\n             WHERE w.number = ?1 AND b.number = ?2 AND p.number = ?3 AND m.released_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "32a24dbc43055284dcbc181c9b1d776a3a9492cf0d315bd149c229dc9bd9925e"
+}

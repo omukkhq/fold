@@ -1,7 +1,7 @@
 use fold_core::reviews::{Side, Verdict};
 use fold_core::{Actor, CommentId, EventActor, FoldError, ProposalId, Timestamp, codes};
 use fold_store::StoreError;
-use fold_store::reviews::{self, CommentRow, LineRange, ReviewTarget};
+use fold_store::reviews::{self, BatchCommentRef, CommentRow, LineRange, ReviewTarget};
 use fold_vcs::browse;
 use serde_json::json;
 
@@ -53,6 +53,8 @@ pub struct CommentView {
     pub body: String,
     pub created_at: Timestamp,
     pub outdated: bool,
+    /// The comment of a review batch this comment puts on the proposal, with every member it is on.
+    pub batch_comment: Option<BatchCommentRef>,
 }
 
 impl CommentView {
@@ -77,6 +79,7 @@ impl CommentView {
             reply_to: row.reply_to,
             body: row.body,
             created_at: row.created_at,
+            batch_comment: row.batch_comment,
         })
     }
 }

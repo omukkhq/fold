@@ -24,8 +24,11 @@ use crate::services::reviews::{
     ReviewCheckout, ReviewService, Turn, integration_conflicted,
 };
 
+pub mod batches;
+
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
+        .merge(batches::routes())
         .routes(routes!(set_human_review, clear_human_review))
         .routes(routes!(list_proposals))
         .routes(routes!(get_proposal))
@@ -706,6 +709,20 @@ pub struct ReviewComment {
     pub created_at: i64,
     /// Made on a version before the current one.
     pub outdated: bool,
+    /// Set when the comment is a comment of a review batch about members together.
+    #[schema(required = true)]
+    pub batch_comment: Option<CommentBatchLink>,
+}
+
+/// The comment of a review batch that a comment puts on its proposal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct CommentBatchLink {
+    #[schema(example = "rb-3")]
+    pub batch: String,
+    /// The comment's number in the batch, from 1.
+    pub number: u32,
+    /// Every proposal the batch comment is on, this one included, in number order.
+    pub members: Vec<String>,
 }
 
 impl From<service::CommentView> for ReviewComment {
@@ -724,6 +741,11 @@ impl From<service::CommentView> for ReviewComment {
             body: comment.body,
             created_at: comment.created_at.as_millis(),
             outdated: comment.outdated,
+            batch_comment: comment.batch_comment.map(|link| CommentBatchLink {
+                batch: link.batch.to_string(),
+                number: link.number,
+                members: link.members.iter().map(ToString::to_string).collect(),
+            }),
         }
     }
 }

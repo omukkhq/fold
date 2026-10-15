@@ -38,9 +38,11 @@ pub use events::{
 };
 pub use ids::{
     ChangesetId, ChecklistItemId, CheckpointId, CommentId, IdKind, IdParseError, IntegrationId,
-    MessageId, ProposalId, RequestId, RevisionId, TaskId, WebTokenId, WorkspaceId,
+    MessageId, ProposalId, RequestId, ReviewBatchId, RevisionId, TaskId, WebTokenId, WorkspaceId,
 };
-pub use layout::{HostPaths, ProjectPaths, review_checkout_path, task_workspace_path};
+pub use layout::{
+    HostPaths, ProjectPaths, review_batch_checkout_path, review_checkout_path, task_workspace_path,
+};
 pub use messages::{
     Address, AddressError, AddressedAs, Directory, DirectoryAgent, MessageBody, Recipient,
     ResolveError, Sender, Target,

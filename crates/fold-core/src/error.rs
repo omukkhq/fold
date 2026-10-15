@@ -132,6 +132,12 @@ define_codes! {
     DRAFTER_REQUIRED = "drafter_required",
     ORCHESTRATOR_REQUIRED = "orchestrator_required",
     INVALID_DRAFT = "invalid_draft",
+    REVIEW_BATCH_NOT_FOUND = "review_batch_not_found",
+    REVIEW_BATCH_NOT_OPEN = "review_batch_not_open",
+    ALREADY_IN_BATCH = "already_in_batch",
+    NOT_BATCH_MEMBER = "not_batch_member",
+    BATCH_CONFLICT = "batch_conflict",
+    UNATTRIBUTED_LINES = "unattributed_lines",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

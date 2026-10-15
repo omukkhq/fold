@@ -9,8 +9,9 @@ use fold_core::object::ObjectHash;
 use fold_core::status::ProposalFact;
 use fold_core::{
     Actor, AgentActor, ChangesetId, CheckpointId, EventActor, EventError, FoldError, IdKind,
-    NewEvent, ProposalId, RevisionId, TaskId, TaskStatus, Timestamp, WorkerName, WorkspaceId,
-    codes, policy, review_checkout_path, task_workspace_path,
+    NewEvent, ProposalId, ReviewBatchId, RevisionId, TaskId, TaskStatus, Timestamp, WorkerName,
+    WorkspaceId, codes, policy, review_batch_checkout_path, review_checkout_path,
+    task_workspace_path,
 };
 use fold_store::agents::WorkerRow;
 use fold_store::tasks::claims;
@@ -105,6 +106,12 @@ pub enum ArchiveReason {
     ProposalClosed,
     /// A review checkout whose proposal was rejected.
     ProposalRejected,
+    /// A batch checkout whose batch lost a member, so its files no longer match the batch.
+    BatchChanged,
+    /// A batch checkout whose batch was submitted.
+    BatchSubmitted,
+    /// A batch checkout whose batch closed because no member was left to review.
+    BatchClosed,
 }
 
 impl ArchiveReason {
@@ -114,6 +121,9 @@ impl ArchiveReason {
             ArchiveReason::TaskArchived => "task_archived",
             ArchiveReason::ProposalClosed => "proposal_closed",
             ArchiveReason::ProposalRejected => "proposal_rejected",
+            ArchiveReason::BatchChanged => "batch_changed",
+            ArchiveReason::BatchSubmitted => "batch_submitted",
+            ArchiveReason::BatchClosed => "batch_closed",
         }
     }
 }
@@ -379,6 +389,18 @@ impl WorkspaceService {
         tree: ObjectHash,
     ) -> Result<(String, PathBuf), WorkspaceError> {
         let name = move |earlier| review_checkout_path(proposal, earlier);
+        let placed = self.place_named(name, taken, tree, true).await?;
+        Ok((placed.path, placed.dir))
+    }
+
+    /// Materialises `tree` read-only into the batch's next checkout directory, by the naming rules of a proposal's checkout, and returns the directory relative to the project root with its full path.
+    pub(crate) async fn place_review_batch_checkout(
+        &self,
+        batch: ReviewBatchId,
+        taken: Vec<String>,
+        tree: ObjectHash,
+    ) -> Result<(String, PathBuf), WorkspaceError> {
+        let name = move |earlier| review_batch_checkout_path(batch, earlier);
         let placed = self.place_named(name, taken, tree, true).await?;
         Ok((placed.path, placed.dir))
     }

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE review_batch_members SET released_at = ?2, release_reason = 'submitted'\n         WHERE released_at IS NULL AND batch_id = (SELECT id FROM review_batches WHERE number = ?1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "dcbff763acc7ce29602e81734a62712360b921a8df429234935a06b90559355c"
+}

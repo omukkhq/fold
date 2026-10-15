@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT w.number AS \"number!: i64\"\n           FROM workspaces w JOIN review_batches b ON b.id = w.review_batch_id\n           WHERE b.number = ? AND w.state = 'active'",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "workspaces",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "2bd656773bb5cebfcade18e5491c3395d07d99362d633cd66d3d43b920d66923"
+}

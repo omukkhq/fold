@@ -362,10 +362,11 @@ async fn integrate_project(
     }
 }
 
-/// A verdict, a changed or cleared mark, a removed dependency, a status change, which covers a prerequisite becoming Done, and a granted tag, because an approval counts as an integrator's by the tags its agent holds now.
+/// A verdict, alone or in a batch review, a changed or cleared mark, a removed dependency, a status change, which covers a prerequisite becoming Done, and a granted tag, because an approval counts as an integrator's by the tags its agent holds now.
 fn can_make_ready(event_type: EventType) -> bool {
     [
         types::REVIEW_SUBMITTED,
+        types::REVIEW_BATCH_SUBMITTED,
         types::TASK_HUMAN_REVIEW_SET,
         types::TASK_HUMAN_REVIEW_CLEARED,
         types::AGENT_TAG_ADDED,

@@ -29,6 +29,7 @@ function comment(
     created_at: id,
     verdict: "comment",
     outdated: false,
+    batch_comment: null,
     ...fields,
   };
 }

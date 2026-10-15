@@ -5,10 +5,12 @@ use crate::agents::{Tag, WorkerName};
 use crate::error::{FoldError, codes};
 use crate::reviews::{Reviewer, Verdict};
 
+mod batches;
 mod human_review;
 mod integrate;
 mod requests;
 
+pub use batches::can_review_batch;
 pub use human_review::{MarkChange, can_clear_human_review, can_set_human_review};
 pub use integrate::{
     CallerFacts, Gate, GateRefusal, GateState, GateStatus, IntegrateInput, ProposalFacts,

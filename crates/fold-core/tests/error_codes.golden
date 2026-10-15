@@ -117,3 +117,9 @@ requester_required
 drafter_required
 orchestrator_required
 invalid_draft
+review_batch_not_found
+review_batch_not_open
+already_in_batch
+not_batch_member
+batch_conflict
+unattributed_lines

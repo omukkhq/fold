@@ -6,7 +6,7 @@ use fold_core::{
 use serde_json::json;
 
 /// The event types table of the plan, one string per type, in table order.
-const PLAN: [&str; 54] = [
+const PLAN: [&str; 57] = [
     "agent.registered",
     "worker.registered",
     "session.started",
@@ -53,6 +53,9 @@ const PLAN: [&str; 54] = [
     "proposal.integrated",
     "review.submitted",
     "review.comment_added",
+    "review.batch_created",
+    "review.batch_submitted",
+    "review.batch_closed",
     "integration.succeeded",
     "integration.conflicted",
     "integration.refused",

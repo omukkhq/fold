@@ -10,6 +10,7 @@ use super::projects::ProjectError;
 use super::tasks::TaskError;
 use super::workspaces::{WorkspaceError, WorkspaceService};
 
+mod batches;
 mod checkouts;
 mod claims;
 mod comments;
@@ -21,6 +22,10 @@ mod proposals;
 mod verdicts;
 mod views;
 
+pub use batches::{
+    BatchCheckout, BatchComment, BatchCommentView, BatchLines, BatchMemberView, BatchReviewed,
+    BatchVerdict, BatchVerdictView, LeftOut, LeftOutReason, ReviewBatchView, SubmittedBatch,
+};
 pub use checkouts::ReviewCheckout;
 pub use claims::ReviewClaimView;
 pub use comments::{CommentInput, CommentLocation, CommentView};

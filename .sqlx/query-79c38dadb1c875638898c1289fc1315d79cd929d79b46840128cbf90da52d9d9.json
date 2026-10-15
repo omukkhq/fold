@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT w.path\n         FROM workspaces w JOIN review_batches b ON b.id = w.review_batch_id\n         WHERE b.number = ?\n         ORDER BY w.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "path",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workspaces",
+            "name": "path"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "79c38dadb1c875638898c1289fc1315d79cd929d79b46840128cbf90da52d9d9"
+}

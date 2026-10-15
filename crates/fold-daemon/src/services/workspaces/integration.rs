@@ -1,6 +1,7 @@
 use fold_core::object::ObjectHash;
 use fold_core::revision::{Revision, StoredRevision};
 use fold_core::{FoldError, WorkspaceId, codes};
+use fold_vcs::batch::{BatchMember, BatchMerge, merge_batch};
 use fold_vcs::integrate::{MergeOutcome, merge_onto_head};
 use fold_vcs::revision_store::write_revision;
 use serde_json::json;
@@ -41,6 +42,17 @@ impl WorkspaceService {
         blocking(move || merge_onto_head(&open_objects(&paths)?, &base, &head, &other))
             .await
             .map_err(integration_failed)
+    }
+
+    /// Merges the batch members onto main's tree `main` one after another in the object store, with their line origins. A failure to read or write an object is the store's own error; the caller reports it as its command's.
+    pub(crate) async fn merge_review_batch(
+        &self,
+        _locks: &IntegrationLocks,
+        main: ObjectHash,
+        members: Vec<BatchMember>,
+    ) -> Result<BatchMerge, WorkspaceError> {
+        let paths = self.paths.clone();
+        blocking(move || merge_batch(&open_objects(&paths)?, &main, &members)).await
     }
 
     /// Writes and flushes the revision object before any row names it. A failure is `integration_failed`.

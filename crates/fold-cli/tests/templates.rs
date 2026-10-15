@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 const SKILL: &str = include_str!("../templates/SKILL.md");
 const AGENTS_SECTION: &str = include_str!("../templates/agents_section.md");
 
-const FOLD_TOOLS: [&str; 61] = [
+const FOLD_TOOLS: [&str; 67] = [
     "register_agent",
     "register_worker",
     "list_agents",
@@ -55,6 +55,12 @@ const FOLD_TOOLS: [&str; 61] = [
     "get_review_comments",
     "integrate_proposal",
     "require_human_review",
+    "create_review_batch",
+    "list_review_batches",
+    "get_review_batch",
+    "remove_from_batch",
+    "create_batch_checkout",
+    "submit_batch_review",
     "create_request",
     "list_requests",
     "get_request",
@@ -68,10 +74,17 @@ const FOLD_TOOLS: [&str; 61] = [
 ];
 
 /// The tools of `FOLD_TOOLS` that the MCP server lists and the skill does not teach yet. A tool leaves this list in the change that teaches it.
-const PENDING_TOOLS: [&str; 0] = [];
+const PENDING_TOOLS: [&str; 6] = [
+    "create_review_batch",
+    "list_review_batches",
+    "get_review_batch",
+    "remove_from_batch",
+    "create_batch_checkout",
+    "submit_batch_review",
+];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 114] = [
+const FOLD_ERROR_CODES: [&str; 120] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -186,6 +199,12 @@ const FOLD_ERROR_CODES: [&str; 114] = [
     "drafter_required",
     "orchestrator_required",
     "invalid_draft",
+    "review_batch_not_found",
+    "review_batch_not_open",
+    "already_in_batch",
+    "not_batch_member",
+    "batch_conflict",
+    "unattributed_lines",
 ];
 
 /// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.

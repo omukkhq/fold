@@ -1,3 +1,4 @@
+pub mod batch;
 pub mod browse;
 pub mod compare;
 pub mod diff;

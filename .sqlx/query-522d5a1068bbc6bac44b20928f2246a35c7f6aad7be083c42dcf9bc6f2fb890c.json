@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT b.number AS \"number!: i64\"\n           FROM review_batch_members m\n           JOIN review_batches b ON b.id = m.batch_id\n           JOIN proposals p ON p.id = m.proposal_id\n           WHERE p.number = ? AND m.released_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_batches",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "522d5a1068bbc6bac44b20928f2246a35c7f6aad7be083c42dcf9bc6f2fb890c"
+}

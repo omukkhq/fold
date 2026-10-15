@@ -3,7 +3,9 @@ use fold_core::events::types;
 use fold_core::{
     Actor, EventActor, FoldError, NewEvent, ProposalId, Timestamp, WorkerName, codes, policy,
 };
-use fold_store::reviews::{self, ReviewClaimRow};
+use fold_store::WriteTx;
+use fold_store::agents::WorkerRow;
+use fold_store::reviews::{self, ProposalRow, ReviewClaimRow};
 use serde_json::json;
 
 use super::proposals::{proposal_not_found, require_open};
@@ -53,59 +55,7 @@ impl ReviewService {
                     ])
                 })?;
                 let worker = worker_row(tx, reviewer).await?;
-                match reviews::insert_review_claim(tx, proposal, worker.id, now).await {
-                    Ok(()) => {}
-                    Err(error) if error.unique_violation() => {
-                        let holder = reviews::unreleased_review_claim(tx.conn(), proposal)
-                            .await?
-                            .ok_or(error)?;
-                        if holder.worker_id == worker.id {
-                            renew_leases(tx, &[worker.id], now).await?;
-                            return Ok(ReviewClaimView {
-                                proposal,
-                                holder: holder.worker,
-                                acquired_at: holder.acquired_at,
-                                renewed_at: now,
-                                stale: false,
-                            });
-                        }
-                        if !is_stale(holder.renewed_at, now, lease_minutes) {
-                            return Err(already_claimed(&holder));
-                        }
-                        reviews::release_review_claim(tx, proposal, TAKEN_OVER, now).await?;
-                        reviews::insert_review_claim(tx, proposal, worker.id, now).await?;
-                        let event = NewEvent::new(
-                            types::CLAIM_TAKEN_OVER,
-                            EventActor::worker(&worker.name),
-                        )?
-                        .task(row.task)
-                        .proposal(proposal)
-                        .data(json!({
-                            "kind": "review",
-                            "proposal": proposal.to_string(),
-                            "from": holder.worker.as_str(),
-                            "to": worker.name.as_str(),
-                        }))?;
-                        buffer.append(tx, &event, now).await?;
-                    }
-                    Err(error) => return Err(error.into()),
-                }
-                let event = NewEvent::new(types::CLAIM_ACQUIRED, EventActor::worker(&worker.name))?
-                    .task(row.task)
-                    .proposal(proposal)
-                    .data(json!({
-                        "kind": "review",
-                        "proposal": proposal.to_string(),
-                        "worker": worker.name.as_str(),
-                    }))?;
-                buffer.append(tx, &event, now).await?;
-                Ok::<_, ReviewError>(ReviewClaimView {
-                    proposal,
-                    holder: worker.name.clone(),
-                    acquired_at: now,
-                    renewed_at: now,
-                    stale: false,
-                })
+                take_review_claim(tx, &mut buffer, &row, &worker, lease_minutes, now).await
             })
             .await?;
         self.bus.publish(buffer);
@@ -160,6 +110,68 @@ impl ReviewService {
         self.bus.publish(buffer);
         Ok(())
     }
+}
+
+/// Takes the review claim on the open proposal `row` for `worker` inside the caller's write, by the rules of `claim_review`: the insert decides a race, a repeat by the holder renews the claim without an event, and a stale holder is taken over with `claim.taken_over` before `claim.acquired`.
+pub(super) async fn take_review_claim(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    row: &ProposalRow,
+    worker: &WorkerRow,
+    lease_minutes: u64,
+    now: Timestamp,
+) -> Result<ReviewClaimView, ReviewError> {
+    let proposal = row.id;
+    match reviews::insert_review_claim(tx, proposal, worker.id, now).await {
+        Ok(()) => {}
+        Err(error) if error.unique_violation() => {
+            let holder = reviews::unreleased_review_claim(tx.conn(), proposal)
+                .await?
+                .ok_or(error)?;
+            if holder.worker_id == worker.id {
+                renew_leases(tx, &[worker.id], now).await?;
+                return Ok(ReviewClaimView {
+                    proposal,
+                    holder: holder.worker,
+                    acquired_at: holder.acquired_at,
+                    renewed_at: now,
+                    stale: false,
+                });
+            }
+            if !is_stale(holder.renewed_at, now, lease_minutes) {
+                return Err(already_claimed(&holder));
+            }
+            reviews::release_review_claim(tx, proposal, TAKEN_OVER, now).await?;
+            reviews::insert_review_claim(tx, proposal, worker.id, now).await?;
+            let event = NewEvent::new(types::CLAIM_TAKEN_OVER, EventActor::worker(&worker.name))?
+                .task(row.task)
+                .proposal(proposal)
+                .data(json!({
+                    "kind": "review",
+                    "proposal": proposal.to_string(),
+                    "from": holder.worker.as_str(),
+                    "to": worker.name.as_str(),
+                }))?;
+            buffer.append(tx, &event, now).await?;
+        }
+        Err(error) => return Err(error.into()),
+    }
+    let event = NewEvent::new(types::CLAIM_ACQUIRED, EventActor::worker(&worker.name))?
+        .task(row.task)
+        .proposal(proposal)
+        .data(json!({
+            "kind": "review",
+            "proposal": proposal.to_string(),
+            "worker": worker.name.as_str(),
+        }))?;
+    buffer.append(tx, &event, now).await?;
+    Ok(ReviewClaimView {
+        proposal,
+        holder: worker.name.clone(),
+        acquired_at: now,
+        renewed_at: now,
+        stale: false,
+    })
 }
 
 /// A reason with no visible text is no reason.

@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS (\n               SELECT 1 FROM review_batch_members m\n               JOIN review_batches b ON b.id = m.batch_id\n               JOIN proposals p ON p.id = m.proposal_id\n               WHERE b.number = ? AND m.released_at IS NULL AND p.state = 'open'\n           ) AS \"found!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "found!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "76022f67468a80848d0a8eba13efb8fb05dafb3ff22ecc1d13398a76bae7f17d"
+}

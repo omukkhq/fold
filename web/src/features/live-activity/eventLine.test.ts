@@ -199,6 +199,17 @@ describe("eventLine", () => {
     ).toBe("approved RQ-4 as T-12, T-13");
     expect(line("request.approved")).toBe("approved a request");
     expect(line("request.closed", { request: "RQ-4" })).toBe("closed RQ-4");
+    expect(
+      line("review.batch_created", {
+        batch: "rb-3",
+        members: [{ proposal: "P-3" }, { proposal: "P-4" }],
+      }),
+    ).toBe("batched 2 proposals for review as rb-3");
+    expect(line("review.batch_created")).toBe("started a review batch");
+    expect(line("review.batch_submitted", { batch: "rb-3" })).toBe(
+      "reviewed rb-3",
+    );
+    expect(line("review.batch_closed", { batch: "rb-3" })).toBe("closed rb-3");
     expect(line("proposal.opened", { version: 1 })).toBe(
       "opened P-4 v1 for T-12",
     );

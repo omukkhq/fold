@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE review_batches SET state = 'closed', closed_at = ?2\n         WHERE number = ?1 AND state = 'open'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "9c720c449929e7944f70fcd16c07bdf861fbf57b4d4751bd5634b1ec0be0e7fa"
+}

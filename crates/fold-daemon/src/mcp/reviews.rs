@@ -21,6 +21,8 @@ use crate::services::reviews::{
     ProposalSummary, ProposalView, ReviewService, integration_conflicted,
 };
 
+pub mod batches;
+
 pub const CREATE_PROPOSAL: &str = "create_proposal";
 pub const LIST_PROPOSALS: &str = "list_proposals";
 pub const GET_PROPOSAL: &str = "get_proposal";
@@ -192,7 +194,7 @@ pub struct RequireHumanReviewInput {
 }
 
 pub fn tools() -> Vec<Tool> {
-    vec![
+    let mut tools = vec![
         Tool::new(
             CREATE_PROPOSAL,
             "Send the work in your task workspace for review as a new proposal (v1). You must hold the task's claim. The task moves to Review.",
@@ -253,7 +255,9 @@ pub fn tools() -> Vec<Tool> {
             "Mark a task so its proposal integrates only after a human approves the current version.",
             schema_for_type::<RequireHumanReviewInput>(),
         ),
-    ]
+    ];
+    tools.extend(batches::tools());
+    tools
 }
 
 /// Runs a proposal tool acting as `as_worker`. `None` when `tool` is not a proposal tool or the server has no review service.
@@ -288,7 +292,10 @@ pub async fn call(
         GET_REVIEW_COMMENTS => get_review_comments(reviews, arguments).await?,
         INTEGRATE_PROPOSAL => integrate_proposal(reviews, &actor, arguments).await?,
         REQUIRE_HUMAN_REVIEW => require_human_review(reviews, &actor, arguments).await?,
-        _ => return Ok(None),
+        _ => match batches::run(reviews, tool, &actor, arguments).await? {
+            Some(value) => value,
+            None => return Ok(None),
+        },
     };
     Ok(Some(value))
 }
@@ -468,6 +475,13 @@ fn comment_json(comment: &CommentView) -> Value {
     }
     if let Some(reply) = comment.reply_to {
         line["reply_to"] = json!(reply);
+    }
+    if let Some(link) = &comment.batch_comment {
+        line["batch_comment"] = json!({
+            "batch": link.batch,
+            "number": link.number,
+            "members": link.members,
+        });
     }
     line
 }

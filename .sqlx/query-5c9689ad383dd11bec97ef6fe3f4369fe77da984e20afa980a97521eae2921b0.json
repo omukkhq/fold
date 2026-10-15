@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO reviews (version_id, reviewer_worker_id, reviewer_human, verdict, body, created_at, review_batch_id)\n           SELECT ?1, ?2, ?3, ?4, ?5, ?6, b.id FROM review_batches b WHERE b.number = ?7\n           RETURNING id AS \"id!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "reviews",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "5c9689ad383dd11bec97ef6fe3f4369fe77da984e20afa980a97521eae2921b0"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO review_batch_members (batch_id, proposal_id, version_id, position)\n         SELECT b.id, p.id, v.id, ?4\n         FROM review_batches b, proposals p JOIN proposal_versions v ON v.proposal_id = p.id\n         WHERE b.number = ?1 AND p.number = ?2 AND v.version = ?3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "48f9c3f861650459c1f80dc62ba1435fb713bcfb05aa861134122b72fad979ea"
+}

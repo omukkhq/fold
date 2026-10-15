@@ -18,6 +18,7 @@ use fold_store::{StoreError, WriteTx, counters, tasks};
 use fold_vcs::restore::differs_from_latest;
 use serde_json::json;
 
+use super::batches::close_batch_of;
 use super::{ReviewError, ReviewService};
 use crate::services::events::EventBuffer;
 use crate::services::tasks::{closed_refusal, recompute, task_not_found, worker_row};
@@ -539,6 +540,7 @@ pub async fn retire_proposal(
         archive_in_tx::<ReviewError>(tx, buffer, actor, workspace, outcome.archive_reason(), now)
             .await?;
     }
+    close_batch_of(tx, buffer, actor, proposal, now).await?;
     Ok(row.task)
 }
 
