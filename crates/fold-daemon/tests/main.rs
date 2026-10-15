@@ -29,6 +29,7 @@ mod attention_question;
 mod auto_checkpoints;
 mod checklists_service;
 mod claims_service;
+mod claude_probe;
 mod conflicts;
 #[cfg(feature = "failpoints")]
 mod crash_checkpoint;

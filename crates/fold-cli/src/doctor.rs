@@ -9,6 +9,7 @@ use std::time::Duration;
 use clap::Args;
 use fold_core::{Clock, FoldError, HostPaths, ProjectPaths, Timestamp, codes};
 use fold_daemon::SystemClock;
+use fold_daemon::services::agents::claude::{AuthStatus, ClaudeVersion, MIN_CLAUDE_VERSION};
 use fold_vcs::git::Git;
 use fold_vcs::git_remote::MIRROR_DIR;
 use fold_vcs::git_sync_map::{SYNC_MAP_FILE, SyncMap};
@@ -32,6 +33,9 @@ const SQLITE_MAGIC: &[u8] = b"SQLite format 3\0";
 /// The key in a `workspace.watch_degraded` event's data that names its cause, and the cause a raised inotify limit cures.
 const DEGRADED_REASON_KEY: &str = "reason";
 const WATCH_LIMIT_REASON: &str = "watch_limit";
+/// How long `claude --version` and `claude auth status` may run before doctor stops them.
+const CLAUDE_TIMEOUT: Duration = Duration::from_secs(10);
+const CLAUDE_INSTALL: &str = "install Claude Code: curl -fsSL https://claude.ai/install.sh | bash";
 
 #[derive(Args, Debug)]
 pub struct DoctorArgs {
@@ -244,6 +248,7 @@ fn host_checks(socket_flag: Option<&Path>, file: &FileConfig, host: &Host) -> Ve
         lock_check(lock.as_deref(), answers),
         http_check(listen),
         git_check(host),
+        claude_check(host),
         service_manager_check(host),
         linger_check(host),
         inotify_limit_check(host),
@@ -376,6 +381,106 @@ fn git_check(host: &Host) -> Check {
             "install git",
         )
     }
+}
+
+/// What doctor learned from the installed Claude Code. `version` and `signed_in` are `None` when the command failed or gave no answer it could read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClaudeFacts {
+    Missing,
+    Found {
+        version: Option<ClaudeVersion>,
+        signed_in: Option<bool>,
+    },
+}
+
+pub(crate) fn claude_verdict(facts: ClaudeFacts) -> Check {
+    let ClaudeFacts::Found { version, signed_in } = facts else {
+        return Check::warn(
+            "claude",
+            "claude is not on PATH; fold cannot start Claude Code workers",
+            CLAUDE_INSTALL,
+        );
+    };
+    let version = match version {
+        None => {
+            return Check::warn(
+                "claude",
+                "claude --version gave no version fold can read",
+                "claude update",
+            );
+        }
+        Some(version) if version < MIN_CLAUDE_VERSION => {
+            return Check::warn(
+                "claude",
+                format!(
+                    "claude {version} is older than {MIN_CLAUDE_VERSION}, the oldest version fold drives"
+                ),
+                "claude update",
+            );
+        }
+        Some(version) => version,
+    };
+    match signed_in {
+        Some(true) => Check::ok("claude", format!("claude {version} is signed in")),
+        Some(false) => Check::warn(
+            "claude",
+            format!("claude {version} is not signed in"),
+            "claude auth login",
+        ),
+        None => Check::warn(
+            "claude",
+            format!("claude {version}: claude auth status gave no answer fold can read"),
+            "claude auth login",
+        ),
+    }
+}
+
+/// Doctor asks Claude Code itself; it never reads Claude Code's credential files.
+fn claude_check(host: &Host) -> Check {
+    let facts = match on_path("claude", host.path.as_deref()) {
+        None => ClaudeFacts::Missing,
+        Some(claude) => ClaudeFacts::Found {
+            version: run_briefly(&claude, &["--version"], CLAUDE_TIMEOUT)
+                .as_deref()
+                .and_then(ClaudeVersion::parse),
+            signed_in: run_briefly(&claude, &["auth", "status", "--json"], CLAUDE_TIMEOUT)
+                .as_deref()
+                .and_then(AuthStatus::parse)
+                .map(|status| status.logged_in),
+        },
+    };
+    claude_verdict(facts)
+}
+
+/// The stdout of a command that ends within `timeout`, whatever its exit code, because the answer is read from stdout alone. A command that runs longer is killed.
+pub(crate) fn run_briefly(program: &Path, args: &[&str], timeout: Duration) -> Option<String> {
+    let mut child = std::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        stdout.read_to_string(&mut text).map(|_| text)
+    });
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+    reader.join().ok()?.ok()
 }
 
 fn systemd_available(host: &Host) -> bool {

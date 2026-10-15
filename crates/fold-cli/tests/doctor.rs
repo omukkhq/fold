@@ -71,6 +71,8 @@ fn warnings_alone_exit_0_and_every_project_in_the_registry_is_checked() {
     assert!(text.contains("fix: fold serve"));
     assert!(text.contains("warn git: git is not on PATH"));
     assert!(text.contains("fix: install git"));
+    assert!(text.contains("warn claude: claude is not on PATH"));
+    assert!(text.contains("fix: install Claude Code"));
     assert!(text.contains("ok   database: quick_check is ok and journal_mode is wal"));
     assert!(text.contains("warn claude files: .mcp.json is missing"));
     assert_eq!(text.matches("fix: fold init --refresh").count(), 1);

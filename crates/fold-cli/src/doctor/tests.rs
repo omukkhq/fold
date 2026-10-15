@@ -348,6 +348,112 @@ fn http_is_ok_with_a_listener_and_a_warning_without() {
     );
 }
 
+/// A `claude` on the fixture's `PATH` that prints `version` for `--version` and `auth` for `auth status`, exiting with `code` there.
+fn fake_claude(fixture: &Fixture, version: &str, auth: &str, code: u8) {
+    let script = format!(
+        "#!/bin/sh\ncase \"$1\" in\n  --version) printf '%s\\n' '{version}' ;;\n  auth) printf '%s\\n' '{auth}'; exit {code} ;;\nesac\n"
+    );
+    let path = fixture.path("bin/claude");
+    std::fs::write(&path, script).unwrap();
+    mode(&path, 0o755);
+}
+
+#[test]
+fn the_claude_verdict_names_a_fix_for_each_problem() {
+    let current = Some(MIN_CLAUDE_VERSION);
+    let missing = claude_verdict(ClaudeFacts::Missing);
+    assert_eq!(
+        (missing.status, missing.fix.as_deref()),
+        (Status::Warn, Some(CLAUDE_INSTALL))
+    );
+    let unreadable = claude_verdict(ClaudeFacts::Found {
+        version: None,
+        signed_in: Some(true),
+    });
+    assert_eq!(
+        (unreadable.status, unreadable.fix.as_deref()),
+        (Status::Warn, Some("claude update"))
+    );
+    let old = claude_verdict(ClaudeFacts::Found {
+        version: Some(ClaudeVersion::new(2, 1, 242)),
+        signed_in: Some(true),
+    });
+    assert_eq!(
+        (old.status, old.fix.as_deref()),
+        (Status::Warn, Some("claude update"))
+    );
+    assert!(
+        old.message.contains("2.1.242 is older than"),
+        "{}",
+        old.message
+    );
+    let signed_out = claude_verdict(ClaudeFacts::Found {
+        version: current,
+        signed_in: Some(false),
+    });
+    assert_eq!(
+        (signed_out.status, signed_out.fix.as_deref()),
+        (Status::Warn, Some("claude auth login"))
+    );
+    let unknown = claude_verdict(ClaudeFacts::Found {
+        version: current,
+        signed_in: None,
+    });
+    assert_eq!(
+        (unknown.status, unknown.fix.as_deref()),
+        (Status::Warn, Some("claude auth login"))
+    );
+    let good = claude_verdict(ClaudeFacts::Found {
+        version: Some(ClaudeVersion::new(3, 0, 0)),
+        signed_in: Some(true),
+    });
+    assert_eq!(
+        (good.status, good.message.as_str()),
+        (Status::Ok, "claude 3.0.0 is signed in")
+    );
+}
+
+#[test]
+fn the_claude_row_asks_the_claude_on_path() {
+    let fixture = Fixture::new();
+    let host = fixture.bare_host();
+    assert_eq!(claude_check(&host).fix.as_deref(), Some(CLAUDE_INSTALL));
+    let current = format!("{MIN_CLAUDE_VERSION} (Claude Code)");
+    fake_claude(
+        &fixture,
+        &current,
+        r#"{"loggedIn": true, "authMethod": "claude.ai", "email": "ana@example.com"}"#,
+        0,
+    );
+    let check = find(&host_checks(None, &FileConfig::default(), &host), "claude").clone();
+    assert_eq!(check.status, Status::Ok);
+    assert!(!check.message.contains("ana@example.com"));
+    fake_claude(&fixture, &current, r#"{"loggedIn": false}"#, 1);
+    assert_eq!(
+        claude_check(&host).fix.as_deref(),
+        Some("claude auth login")
+    );
+    fake_claude(&fixture, "2.0.0 (Claude Code)", r#"{"loggedIn": true}"#, 0);
+    let old = claude_check(&host);
+    assert_eq!(old.fix.as_deref(), Some("claude update"));
+    assert!(old.message.contains("2.0.0"));
+}
+
+#[test]
+fn a_command_that_runs_too_long_is_stopped() {
+    let fixture = Fixture::new();
+    let slow = fixture.path("slow");
+    std::fs::write(&slow, "#!/bin/sh\necho early\nexec sleep 30\n").unwrap();
+    mode(&slow, 0o755);
+    let started = std::time::Instant::now();
+    assert_eq!(run_briefly(&slow, &[], Duration::from_millis(200)), None);
+    assert!(started.elapsed() < Duration::from_secs(10));
+    assert_eq!(
+        run_briefly(&fixture.path("absent"), &[], CLAUDE_TIMEOUT),
+        None
+    );
+}
+
 #[test]
 fn git_is_a_warning_when_missing() {
     let fixture = Fixture::new();

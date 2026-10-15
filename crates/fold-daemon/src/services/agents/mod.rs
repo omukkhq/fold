@@ -18,6 +18,8 @@ use crate::services::events::{EventBuffer, EventBus};
 use crate::services::projects::{Lease, ProjectError};
 use crate::services::tasks::{TaskError, renew_leases};
 
+/// Claude Code's headless stream-json protocol as fold reads and writes it, the oldest Claude Code fold drives, and the sign-in answer of `claude auth status`. It is public because `fold doctor` checks the installed Claude Code with the same version and sign-in types.
+pub mod claude;
 mod context;
 mod overview;
 mod presence;
