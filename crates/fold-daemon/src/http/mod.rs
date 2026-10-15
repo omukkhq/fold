@@ -1,3 +1,4 @@
+pub mod assets;
 pub mod error;
 pub mod events;
 pub mod openapi;
@@ -36,16 +37,16 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 pub fn router(state: AppState) -> Router {
     let (routes, _) = api_router().split_for_parts();
     routes
-        .fallback(unmatched)
+        .fallback(assets::serve)
         .method_not_allowed_fallback(unmatched)
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(|request: &Request| {
                     // The route template and never the URI, which can carry a query string.
-                    let route = request
-                        .extensions()
-                        .get::<MatchedPath>()
-                        .map_or("unmatched", MatchedPath::as_str);
+                    let route = request.extensions().get::<MatchedPath>().map_or_else(
+                        || assets::path_class(request.uri().path()),
+                        MatchedPath::as_str,
+                    );
                     tracing::info_span!("request", method = %request.method(), route)
                 })
                 .on_request(())

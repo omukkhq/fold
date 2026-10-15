@@ -78,6 +78,7 @@ async fn start_daemon(sandbox: &Sandbox, data: &str) -> fold_daemon::RunningDaem
         socket: sandbox.path("run").join("fold.sock"),
         data_dir: sandbox.path(data).join("fold"),
         runtime_dir: sandbox.path("run"),
+        web_dir: None,
     };
     Daemon::start(config, Arc::new(ManualClock::new()))
         .await

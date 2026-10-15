@@ -103,6 +103,7 @@ export interface components {
         ErrorBody: {
             /** @description A stable code; branch on it, never on the message. */
             code: string;
+            /** @description The error's named fields. `hint`, when present, names the next step to take. */
             details: {
                 [key: string]: unknown;
             };

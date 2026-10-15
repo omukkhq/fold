@@ -11,6 +11,8 @@ pub struct DaemonConfig {
     pub data_dir: PathBuf,
     /// Holds `daemon.lock`; created with mode `0700`.
     pub runtime_dir: PathBuf,
+    /// Serve the web files from this folder instead of the ones compiled into the binary.
+    pub web_dir: Option<PathBuf>,
 }
 
 impl DaemonConfig {
@@ -43,6 +45,7 @@ mod tests {
             socket: "/run/user/1/fold/fold.sock".into(),
             data_dir: "/data/fold".into(),
             runtime_dir: "/run/user/1/fold".into(),
+            web_dir: None,
         }
     }
 

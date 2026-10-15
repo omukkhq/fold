@@ -46,6 +46,7 @@ impl Host {
             socket: dir.path().join("run").join("fold.sock"),
             data_dir: dir.path().join("data"),
             runtime_dir: dir.path().join("run"),
+            web_dir: None,
         };
         let clock = ManualClock::new();
         let project = TestProject::new().await;

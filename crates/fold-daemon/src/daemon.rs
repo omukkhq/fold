@@ -14,7 +14,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::config::DaemonConfig;
-use crate::http;
+use crate::http::{self, assets::AssetSource};
 use crate::mcp;
 use crate::projects::Projects;
 use crate::services::agents::AgentService;
@@ -28,6 +28,7 @@ pub struct DaemonState {
     pub registry: Store,
     pub projects: Projects,
     pub clock: Arc<dyn Clock>,
+    pub assets: AssetSource,
 }
 
 impl std::fmt::Debug for DaemonState {
@@ -109,6 +110,10 @@ impl Daemon {
             registry,
             projects: Projects::default(),
             clock: clock.clone(),
+            assets: config
+                .web_dir
+                .clone()
+                .map_or(AssetSource::Embedded, AssetSource::Dir),
         });
         for row in fold_store::projects::list_projects(state.registry.read()).await? {
             // A project that fails to open is logged and marked unavailable; the others start.

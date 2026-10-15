@@ -23,6 +23,7 @@ pub struct ErrorBody {
     /// A stable code; branch on it, never on the message.
     pub code: String,
     pub message: String,
+    /// The error's named fields. `hint`, when present, names the next step to take.
     #[schema(value_type = std::collections::BTreeMap<String, serde_json::Value>)]
     pub details: Map<String, Value>,
 }
@@ -30,7 +31,9 @@ pub struct ErrorBody {
 /// The status of each code that has one. Every other code is an internal failure: it answers 500 `internal_error` and the code goes to the log only.
 fn status_of(code: &str) -> Option<StatusCode> {
     match code {
-        codes::NOT_FOUND | codes::PROJECT_NOT_FOUND => Some(StatusCode::NOT_FOUND),
+        codes::NOT_FOUND | codes::PROJECT_NOT_FOUND | codes::WEB_NOT_BUILT => {
+            Some(StatusCode::NOT_FOUND)
+        }
         codes::INVALID_REQUEST => Some(StatusCode::BAD_REQUEST),
         codes::PROJECT_UNAVAILABLE => Some(StatusCode::SERVICE_UNAVAILABLE),
         _ => None,
@@ -79,14 +82,20 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let error = self.0;
         let (status, body) = match status_of(error.code()) {
-            Some(status) => (
-                status,
-                ErrorBody {
-                    code: error.code().to_owned(),
-                    message: error.message().to_owned(),
-                    details: error.details().cloned().unwrap_or_default(),
-                },
-            ),
+            Some(status) => {
+                let mut details = error.details().cloned().unwrap_or_default();
+                if let Some(hint) = error.hint() {
+                    details.insert("hint".to_owned(), Value::from(hint));
+                }
+                (
+                    status,
+                    ErrorBody {
+                        code: error.code().to_owned(),
+                        message: error.message().to_owned(),
+                        details,
+                    },
+                )
+            }
             None => {
                 tracing::error!(code = error.code(), "request failed");
                 (
@@ -135,6 +144,7 @@ mod tests {
         for (code, status) in [
             (codes::NOT_FOUND, StatusCode::NOT_FOUND),
             (codes::PROJECT_NOT_FOUND, StatusCode::NOT_FOUND),
+            (codes::WEB_NOT_BUILT, StatusCode::NOT_FOUND),
             (codes::INVALID_REQUEST, StatusCode::BAD_REQUEST),
             (codes::PROJECT_UNAVAILABLE, StatusCode::SERVICE_UNAVAILABLE),
         ] {
@@ -142,6 +152,32 @@ mod tests {
         }
         assert_eq!(status_of(codes::ALREADY_CLAIMED), None);
         assert_eq!(status_of(codes::INTERNAL_ERROR), None);
+    }
+
+    async fn body_of(error: FoldError) -> Value {
+        let response = ApiError(error).into_response();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_hint_travels_in_the_details_and_never_with_an_internal_error() {
+        let body = body_of(
+            FoldError::new(codes::PROJECT_NOT_FOUND, "absent")
+                .with_hint("call init")
+                .with_details([("project", serde_json::json!("web"))]),
+        )
+        .await;
+        assert_eq!(
+            body["error"]["details"],
+            serde_json::json!({"project": "web", "hint": "call init"})
+        );
+        let body = body_of(FoldError::new(codes::NOT_FOUND, "absent")).await;
+        assert_eq!(body["error"]["details"], serde_json::json!({}));
+        let body = body_of(FoldError::new(codes::ALREADY_CLAIMED, "T-1").with_hint("wait")).await;
+        assert_eq!(body["error"]["details"], serde_json::json!({}));
     }
 
     #[test]

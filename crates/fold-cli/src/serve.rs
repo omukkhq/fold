@@ -18,6 +18,9 @@ pub struct ServeArgs {
     /// Unix socket path; overrides daemon.toml (default $XDG_RUNTIME_DIR/fold/fold.sock)
     #[arg(long)]
     socket: Option<PathBuf>,
+    /// Serve the web files from this folder instead of the ones built into the binary
+    #[arg(long)]
+    web_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Error)]
@@ -146,6 +149,7 @@ fn build_config(
         socket,
         data_dir,
         runtime_dir,
+        web_dir: args.web_dir.clone(),
     })
 }
 
@@ -210,6 +214,7 @@ mod tests {
         ServeArgs {
             listen: listen.map(|text| text.parse().unwrap()),
             socket: socket.map(PathBuf::from),
+            web_dir: None,
         }
     }
 

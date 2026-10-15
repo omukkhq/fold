@@ -62,6 +62,7 @@ define_codes! {
     INVALID_HANDSHAKE = "invalid_handshake",
     NOT_CLAIM_HOLDER = "not_claim_holder",
     CLAIM_NOT_FOUND = "claim_not_found",
+    WEB_NOT_BUILT = "web_not_built",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

@@ -175,6 +175,7 @@ async fn the_socket_flag_reaches_a_daemon_on_a_non_default_path() {
             socket: socket.clone(),
             data_dir: host.data_home().join("fold"),
             runtime_dir: host.dir.path().join("elsewhere"),
+            web_dir: None,
         },
         Arc::new(ManualClock::new()),
     )

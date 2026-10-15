@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help setup build fmt dev dev-daemon dev-web fmt-check-rust fmt-check-web fmt-check check-inner-allow clippy test test-fast test-web coverage check-rust check-web check acceptance clean clean-keep-cargo gen-api check-api
+.PHONY: help setup build fmt dev dev-daemon dev-web fmt-check-rust fmt-check-web fmt-check web-build check-inner-allow clippy test test-fast test-web coverage check-rust check-web check acceptance clean clean-keep-cargo gen-api check-api
 
 help: ## List the targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-18s %s\n", $$1, $$2}'
@@ -33,6 +33,10 @@ dev-daemon: ## Run the daemon on 127.0.0.1:7420, rebuilt on every change; its da
 	chmod 700 $(DEV_DIR)/runtime
 	XDG_DATA_HOME=$(DEV_DIR)/data XDG_CONFIG_HOME=$(DEV_DIR)/config XDG_RUNTIME_DIR=$(DEV_DIR)/runtime \
 		cargo watch -w crates -w Cargo.toml -w Cargo.lock -x 'run -p fold-cli -- serve --listen 127.0.0.1:7420'
+
+web-build: ## Build the web application into web/dist, which the binary embeds
+	cd web && bun install --frozen-lockfile
+	cd web && bun run build
 
 dev-web: ## Run the Vite dev server on :5173
 	cd web && bun run dev
@@ -128,7 +132,7 @@ check-api: ## Fail when web/src/api/schema.d.ts differs from the daemon's OpenAP
 	cd web && bunx openapi-typescript ../$(GEN_DIR)/openapi.json -o ../$(GEN_DIR)/schema.d.ts
 	@cmp -s $(GEN_DIR)/schema.d.ts web/src/api/schema.d.ts || { echo "web/src/api/schema.d.ts is stale: run make gen-api" >&2; exit 1; }
 
-check: check-api check-rust check-web ## Run every check
+check: web-build check-api check-rust check-web ## Run every check, after the web build that the binary embeds
 
 clean: clean-keep-cargo ## Delete build output and dev projects
 	cargo clean

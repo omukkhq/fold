@@ -38,6 +38,7 @@ impl Host {
             socket: dir.path().join("run").join("fold.sock"),
             data_dir: dir.path().join("data"),
             runtime_dir: dir.path().join("run"),
+            web_dir: None,
         };
         Self {
             _dir: dir,
@@ -482,7 +483,7 @@ async fn the_tcp_listener_serves_the_api() {
     let (status, body) = raw_http(tcp, "GET", "/api/v1/projects", "").await;
     assert_eq!((status, body), (200, json!({"projects": []})));
     let tcp = TcpStream::connect(daemon.http_addr()).await.unwrap();
-    let (status, body) = raw_http(tcp, "GET", "/elsewhere?token=secret", "").await;
+    let (status, body) = raw_http(tcp, "GET", "/api/elsewhere?token=secret", "").await;
     assert_eq!((status, code(&body)), (404, "not_found"));
     daemon.shutdown().await;
 }
