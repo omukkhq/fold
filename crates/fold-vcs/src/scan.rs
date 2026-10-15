@@ -15,6 +15,33 @@ pub const DEFAULT_MAX_FILE_BYTES: u64 = 52_428_800;
 const READ_BUFFER: usize = 64 * 1024;
 const READ_TRIES: usize = 3;
 
+#[cfg(test)]
+type ReadHook = Option<Box<dyn FnMut(&Path)>>;
+
+#[cfg(test)]
+thread_local! {
+    /// Runs in [`hash_stable`] between a read and its re-check, so a test can change the file at exactly that point.
+    static AFTER_READ: std::cell::RefCell<ReadHook> = const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `body` while every read of a file named `name` on this thread is followed by a new modification time, so each read of it looks unstable.
+#[cfg(test)]
+pub(crate) fn with_rewrites_during_reads<T>(name: &'static str, body: impl FnOnce() -> T) -> T {
+    let mut tick = 0;
+    AFTER_READ.set(Some(Box::new(move |path: &Path| {
+        if path.ends_with(name) {
+            tick += 1;
+            let file = OpenOptions::new().write(true).open(path).unwrap();
+            let time = std::time::SystemTime::UNIX_EPOCH
+                + std::time::Duration::from_secs(1_000_000 + tick);
+            file.set_modified(time).unwrap();
+        }
+    })));
+    let out = body();
+    AFTER_READ.set(None);
+    out
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ScanOptions<'a> {
     pub rules: &'a IgnoreRules,
@@ -449,6 +476,12 @@ pub(crate) fn hash_stable(path: &Path) -> io::Result<Reading> {
                 Err(error) => return Err(error),
             }
         }
+        #[cfg(test)]
+        AFTER_READ.with_borrow_mut(|hook| {
+            if let Some(hook) = hook {
+                hook(path);
+            }
+        });
         let after = file.metadata()?;
         let end = match fs::symlink_metadata(path) {
             Ok(end) => end,
@@ -461,4 +494,42 @@ pub(crate) fn hash_stable(path: &Path) -> io::Result<Reading> {
         }
     }
     Ok(Reading::Unstable)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const HOST: Capabilities = Capabilities {
+        symlinks: true,
+        exec_bit: true,
+        inodes: true,
+        read_only_bit: true,
+    };
+
+    #[test]
+    fn a_file_rewritten_during_its_read_is_unstable() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("ws");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("moving"), b"moving").unwrap();
+        fs::write(root.join("steady"), b"steady").unwrap();
+        let rules = IgnoreRules::new(&root);
+        let opts = ScanOptions {
+            rules: &rules,
+            max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+            caps: HOST,
+            recorded: None,
+        };
+        let mut index = StatIndex::empty(HOST);
+        let found =
+            with_rewrites_during_reads("moving", || scan(&root, &mut index, &opts)).unwrap();
+        let moving = RepoPath::parse(b"moving").unwrap();
+        assert_eq!(found.unstable, std::slice::from_ref(&moving));
+        assert_eq!(
+            found.entries.keys().cloned().collect::<Vec<_>>(),
+            [b"steady".to_vec()]
+        );
+        assert!(index.lookup(&moving).is_none());
+    }
 }

@@ -134,7 +134,7 @@ fn client(socket: PathBuf) -> DaemonClient {
     DaemonClient::new(config, daemon_client::human_from_env().ok())
 }
 
-fn host_paths(dirs: &Dirs) -> Result<HostPaths, InitError> {
+pub(crate) fn host_paths(dirs: &Dirs) -> Result<HostPaths, InitError> {
     let data_home = utf8(dirs.data_home.as_deref(), "XDG_DATA_HOME")?;
     let home = utf8(dirs.home.as_deref(), "HOME")?;
     HostPaths::new(data_home, home).map_err(InitError::HostPaths)

@@ -74,6 +74,7 @@ define_codes! {
     INVALID_STEP_TEXT = "invalid_step_text",
     CHECKLIST_ITEM_NOT_FOUND = "checklist_item_not_found",
     INVALID_EVENT_FILTER = "invalid_event_filter",
+    GC_IN_PROGRESS = "gc_in_progress",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

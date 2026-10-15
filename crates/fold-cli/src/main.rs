@@ -36,6 +36,8 @@ enum Command {
     Doctor(doctor::DoctorArgs),
     /// Manage the service that starts the daemon at login
     Service(service::ServiceArgs),
+    /// Delete unreferenced objects, prune checkpoints and remove closed workspace directories
+    Gc(commands::gc::GcArgs),
 }
 
 /// clap prints a parse outcome, including `--help` and `--version`, and exits with its own code; a failed write is a runtime error with exit code 1.
@@ -49,6 +51,7 @@ enum Failure {
     ExportGit(commands::export_git::ExportGitError),
     Doctor(doctor::DoctorError),
     Service(service::ServiceError),
+    Gc(commands::gc::GcError),
 }
 
 fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result<(), Failure> {
@@ -64,6 +67,14 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         Some(Command::ExportGit(args)) => {
             commands::export_git::run(&args, out).map_err(Failure::ExportGit)
         }
+        Some(Command::Gc(args)) => commands::gc::run(
+            &args,
+            &serve::Dirs::from_env(),
+            std::env::current_dir(),
+            fold_cli::daemon_client::human_from_env().ok(),
+            out,
+        )
+        .map_err(Failure::Gc),
         None => output::line(out, &output::version_line()).map_err(Failure::Write),
     }
 }
@@ -98,6 +109,10 @@ fn main() -> anyhow::Result<()> {
             (Some(code), Some(hint)) => anyhow::anyhow!("{code}: {error}\nhint: {hint}"),
             (Some(code), None) => anyhow::anyhow!("{code}: {error}"),
             _ => error.into(),
+        }),
+        Err(Failure::Gc(error)) => Err(match error.code() {
+            Some(code) => anyhow::anyhow!("{code}: {error}"),
+            None => error.into(),
         }),
     }
 }

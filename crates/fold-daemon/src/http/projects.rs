@@ -14,6 +14,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list, open))
         .routes(routes!(show))
+        .routes(routes!(collect_garbage))
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -107,5 +108,67 @@ pub async fn open(
     Ok(Json(OpenedProject {
         slug: handle.slug.clone(),
         name: handle.name.clone(),
+    }))
+}
+
+#[derive(Debug, Default, Deserialize, ToSchema)]
+pub struct GcRequest {
+    /// Count what a run would remove and change nothing.
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+/// The counts of one garbage collection run.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct GcCounts {
+    /// True when nothing was changed and the counts are what a run would do.
+    pub dry_run: bool,
+    /// Objects in the store when the sweep listed them.
+    pub examined: u64,
+    /// Unreferenced objects older than the grace period.
+    pub deleted: u64,
+    /// Disk bytes of the deleted objects.
+    pub bytes_freed: u64,
+    /// Abandoned scratch files of the object store.
+    pub tmp_removed: u64,
+    /// Objects a row reaches that the store does not hold.
+    pub missing: u64,
+    /// Directories of archived or abandoned workspaces past their retention.
+    pub workspaces_removed: u64,
+    /// Automatic checkpoints beyond the kept number, and every checkpoint of a removed workspace.
+    pub checkpoints_pruned: u64,
+}
+
+/// Collects the project's garbage: prunes checkpoints, removes closed workspace directories past their retention and deletes unreferenced objects. Socket only; used by `fold gc`.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/gc",
+    operation_id = "run_gc",
+    params(("slug" = String, Path, description = "The project slug")),
+    request_body = GcRequest,
+    responses(
+        (status = 200, description = "The run finished", body = GcCounts),
+        (status = 400, description = "The body is not valid", body = ErrorEnvelope),
+        (status = 404, description = "Not on the socket, or the slug is not registered", body = ErrorEnvelope),
+        (status = 409, description = "A run of this project is in progress (`gc_in_progress`)", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn collect_garbage(
+    _socket: SocketOnly,
+    Project(handle): Project,
+    ApiJson(request): ApiJson<GcRequest>,
+) -> Result<Json<GcCounts>, ApiError> {
+    let report = projects::gc(&handle, request.dry_run).await?;
+    Ok(Json(GcCounts {
+        dry_run: request.dry_run,
+        examined: report.examined,
+        deleted: report.deleted,
+        bytes_freed: report.bytes_freed,
+        tmp_removed: report.tmp_removed,
+        missing: u64::try_from(report.missing.len()).unwrap_or(u64::MAX),
+        workspaces_removed: report.workspaces_removed,
+        checkpoints_pruned: report.checkpoints_pruned,
     }))
 }

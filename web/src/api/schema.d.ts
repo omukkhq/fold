@@ -39,6 +39,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/gc": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Collects the project's garbage: prunes checkpoints, removes closed workspace directories past their retention and deletes unreferenced objects. Socket only; used by `fold gc`. */
+        post: operations["run_gc"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -124,6 +141,50 @@ export interface components {
             /** @enum {string} */
             kind: "snapshot";
         });
+        /** @description The counts of one garbage collection run. */
+        GcCounts: {
+            /**
+             * Format: int64
+             * @description Disk bytes of the deleted objects.
+             */
+            bytes_freed: number;
+            /**
+             * Format: int64
+             * @description Automatic checkpoints beyond the kept number, and every checkpoint of a removed workspace.
+             */
+            checkpoints_pruned: number;
+            /**
+             * Format: int64
+             * @description Unreferenced objects older than the grace period.
+             */
+            deleted: number;
+            /** @description True when nothing was changed and the counts are what a run would do. */
+            dry_run: boolean;
+            /**
+             * Format: int64
+             * @description Objects in the store when the sweep listed them.
+             */
+            examined: number;
+            /**
+             * Format: int64
+             * @description Objects a row reaches that the store does not hold.
+             */
+            missing: number;
+            /**
+             * Format: int64
+             * @description Abandoned scratch files of the object store.
+             */
+            tmp_removed: number;
+            /**
+             * Format: int64
+             * @description Directories of archived or abandoned workspaces past their retention.
+             */
+            workspaces_removed: number;
+        };
+        GcRequest: {
+            /** @description Count what a run would remove and change nothing. */
+            dry_run?: boolean;
+        };
         /** @description What an active workspace holds right now. These are working changes, never history. */
         LiveWorkspace: {
             /**
@@ -299,6 +360,78 @@ export interface operations {
             };
             /** @description The slug is not registered */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    run_gc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GcRequest"];
+            };
+        };
+        responses: {
+            /** @description The run finished */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GcCounts"];
+                };
+            };
+            /** @description The body is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not on the socket, or the slug is not registered */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description A run of this project is in progress (`gc_in_progress`) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

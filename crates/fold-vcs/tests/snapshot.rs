@@ -5,8 +5,6 @@ pub mod common;
 use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::{Duration, Instant, SystemTime};
 
 use fold_core::object::{ObjectHash, ObjectKind};
 use fold_core::tree::{EntryKind, Tree, flatten};
@@ -246,55 +244,6 @@ fn a_skipped_file_keeps_its_base_entry_and_adds_a_warning() {
     );
     assert!(next.entries.contains_key(b"big".as_slice()));
     assert!(!next.entries.contains_key(b"new-big".as_slice()));
-}
-
-#[test]
-fn an_unstable_file_keeps_its_base_entry_and_adds_a_warning() {
-    let mut fx = fixture();
-    write(&fx.root, "moving", b"small");
-    write(&fx.root, "steady", b"s");
-    let first = fx.snap(None);
-
-    fs::File::options()
-        .write(true)
-        .open(fx.root.join("moving"))
-        .unwrap()
-        .set_len(48 * 1024 * 1024)
-        .unwrap();
-    write(&fx.root, "steady", b"edited");
-    let stop = AtomicBool::new(false);
-    let ticks = AtomicU64::new(0);
-    let path = fx.root.join("moving");
-    let next = std::thread::scope(|scope| {
-        scope.spawn(|| {
-            let file = fs::OpenOptions::new().write(true).open(&path).unwrap();
-            while !stop.load(Ordering::Relaxed) {
-                let tick = ticks.fetch_add(1, Ordering::Relaxed) + 1;
-                file.set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000 + tick))
-                    .unwrap();
-            }
-        });
-        // On a loaded host the writer can start after every read is done, and then the file looks stable.
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while ticks.load(Ordering::Relaxed) == 0 {
-            assert!(Instant::now() < deadline, "the writer thread never ran");
-            std::thread::yield_now();
-        }
-        let next = fx.snap_max(Some(first.tree), 64 << 20);
-        stop.store(true, Ordering::Relaxed);
-        next
-    });
-    assert_eq!(next.warnings.len(), 1);
-    assert_eq!(next.warnings[0].path.to_string(), "moving");
-    assert_eq!(next.warnings[0].reason, WarningReason::Unstable);
-    assert_eq!(
-        next.entries[b"moving".as_slice()],
-        first.entries[b"moving".as_slice()]
-    );
-    assert_ne!(
-        next.entries[b"steady".as_slice()],
-        first.entries[b"steady".as_slice()]
-    );
 }
 
 #[test]

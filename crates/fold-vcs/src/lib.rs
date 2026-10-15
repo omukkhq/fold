@@ -1,3 +1,4 @@
+pub mod gc;
 pub mod git;
 pub mod git_export;
 pub mod git_import;

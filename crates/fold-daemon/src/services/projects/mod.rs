@@ -27,6 +27,10 @@ use thiserror::Error;
 use crate::daemon::DaemonState;
 use crate::projects::{ProjectHandle, Slot};
 
+mod gc;
+
+pub use gc::{GcReport, gc};
+
 #[derive(Debug, Error)]
 pub enum ProjectError {
     #[error(transparent)]
@@ -545,4 +549,24 @@ pub async fn open_for_dir(
             )
         })?;
     open(state, &row.slug).await
+}
+
+/// The slug of the registered project whose root holds `cwd`, the nearest one when roots nest, read from the registry without a daemon. `cwd` must be canonical. Commands that run inside a project find their project this way.
+pub async fn slug_for_dir(host: &HostPaths, cwd: &Path) -> Result<String, ProjectError> {
+    let registry = Store::open_registry(&host.registry_db()).await?;
+    let rows = projects::list_projects(registry.read()).await;
+    // The lookup result is what the caller needs; a failed close only delays the WAL checkpoint.
+    let _ = registry.close().await;
+    let rows = rows?;
+    let root = find_root(cwd, rows.iter().map(|row| Path::new(&row.root)));
+    root.and_then(|root| rows.iter().find(|row| Path::new(&row.root) == root))
+        .map(|row| row.slug.clone())
+        .ok_or_else(|| {
+            FoldError::new(
+                codes::PROJECT_NOT_FOUND,
+                "no registered project holds this directory",
+            )
+            .with_hint("run the command inside a project, or run fold init first")
+            .into()
+        })
 }

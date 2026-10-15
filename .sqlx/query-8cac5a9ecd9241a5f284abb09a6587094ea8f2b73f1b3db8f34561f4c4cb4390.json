@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT w.number AS \"number!: i64\"\n           FROM checkpoints c JOIN workspaces w ON w.id = c.workspace_id\n           WHERE c.kind = 'auto' AND c.pruned_at IS NULL\n           GROUP BY w.number\n           HAVING COUNT(*) > ?\n           ORDER BY w.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "workspaces",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "8cac5a9ecd9241a5f284abb09a6587094ea8f2b73f1b3db8f34561f4c4cb4390"
+}

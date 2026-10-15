@@ -36,6 +36,7 @@ fn status_of(code: &str) -> Option<StatusCode> {
         }
         codes::INVALID_REQUEST => Some(StatusCode::BAD_REQUEST),
         codes::PROJECT_UNAVAILABLE => Some(StatusCode::SERVICE_UNAVAILABLE),
+        codes::GC_IN_PROGRESS => Some(StatusCode::CONFLICT),
         _ => None,
     }
 }
@@ -147,6 +148,7 @@ mod tests {
             (codes::WEB_NOT_BUILT, StatusCode::NOT_FOUND),
             (codes::INVALID_REQUEST, StatusCode::BAD_REQUEST),
             (codes::PROJECT_UNAVAILABLE, StatusCode::SERVICE_UNAVAILABLE),
+            (codes::GC_IN_PROGRESS, StatusCode::CONFLICT),
         ] {
             assert_eq!(status_of(code), Some(status));
         }

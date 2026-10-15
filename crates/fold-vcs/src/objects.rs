@@ -103,6 +103,11 @@ impl ObjectStore {
         Ok(Self { objects, scratch })
     }
 
+    /// `objects/tmp/`, where writes are staged before their rename into place.
+    pub fn scratch_dir(&self) -> &Path {
+        &self.scratch
+    }
+
     pub fn path(&self, hash: &ObjectHash) -> PathBuf {
         let text = hash.to_string();
         self.objects.join(&text[..2]).join(&text[2..])
@@ -289,6 +294,11 @@ impl ObjectStore {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
             Err(error) => Err(error.into()),
         }
+    }
+
+    /// Returns whether the object exists. An existing object is being reused, so its modification time is refreshed as a rewrite would refresh it.
+    pub fn refresh(&self, hash: &ObjectHash) -> Result<bool, ObjectError> {
+        self.touch_existing(hash)
     }
 
     /// Refreshes the modification time of an existing object so garbage collection's grace period sees it as recent. The file's bytes are never rewritten.

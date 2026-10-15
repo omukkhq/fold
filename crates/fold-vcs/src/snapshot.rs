@@ -181,7 +181,7 @@ fn store_blob(
     entry: &FlatEntry,
     size: Option<u64>,
 ) -> Result<bool, WorkspaceError> {
-    if objects.contains(&entry.hash)? {
+    if objects.refresh(&entry.hash)? {
         return Ok(true);
     }
     let located = resolve(root, path)?;
@@ -215,4 +215,65 @@ pub(crate) fn load_tree(objects: &ObjectStore, hash: &ObjectHash) -> Result<Tree
         .read_expecting(hash, ObjectKind::Tree)
         .map_err(FoldError::from)?;
     Ok(Tree::decode(&object.payload)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::ignore::IgnoreRules;
+    use crate::platform::Capabilities;
+    use crate::scan::{DEFAULT_MAX_FILE_BYTES, with_rewrites_during_reads};
+
+    use super::*;
+
+    const HOST: Capabilities = Capabilities {
+        symlinks: true,
+        exec_bit: true,
+        inodes: true,
+        read_only_bit: true,
+    };
+
+    #[test]
+    fn an_unstable_file_keeps_its_base_entry_and_adds_a_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let objects = ObjectStore::open(&dir.path().join(".fold")).unwrap();
+        let root = dir.path().join("ws");
+        let index_path = dir.path().join(".fold/ws-index");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("moving"), b"small").unwrap();
+        fs::write(root.join("steady"), b"s").unwrap();
+        let rules = IgnoreRules::new(&root);
+        let opts = ScanOptions {
+            rules: &rules,
+            max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+            caps: HOST,
+            recorded: None,
+        };
+        let mut index = StatIndex::empty(HOST);
+        let first = snapshot(&objects, &root, &mut index, &index_path, None, &opts).unwrap();
+
+        fs::write(root.join("moving"), b"rewritten").unwrap();
+        fs::write(root.join("steady"), b"edited").unwrap();
+        let next = with_rewrites_during_reads("moving", || {
+            snapshot(
+                &objects,
+                &root,
+                &mut index,
+                &index_path,
+                Some(first.tree),
+                &opts,
+            )
+        })
+        .unwrap();
+        assert_eq!(next.warnings.len(), 1);
+        assert_eq!(next.warnings[0].path.to_string(), "moving");
+        assert_eq!(next.warnings[0].reason, WarningReason::Unstable);
+        assert_eq!(
+            next.entries[b"moving".as_slice()],
+            first.entries[b"moving".as_slice()]
+        );
+        assert_ne!(
+            next.entries[b"steady".as_slice()],
+            first.entries[b"steady".as_slice()]
+        );
+    }
 }

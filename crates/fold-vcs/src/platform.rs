@@ -92,6 +92,37 @@ pub fn set_mode(
     fs::set_permissions(path, permissions)
 }
 
+/// Gives the owner what deleting the entry and its contents needs: write access to a file, and list, enter and write access to a directory. A symlink is left alone, because a permission change through it would change its target.
+pub fn clear_read_only(path: &Path) -> io::Result<()> {
+    let meta = fs::symlink_metadata(path)?;
+    if meta.file_type().is_symlink() {
+        return Ok(());
+    }
+    let mut permissions = meta.permissions();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let wanted = if meta.is_dir() { 0o700 } else { 0o200 };
+        let mode = permissions.mode();
+        if mode & wanted == wanted {
+            return Ok(());
+        }
+        permissions.set_mode(mode | wanted);
+    }
+    #[cfg(not(unix))]
+    {
+        if !permissions.readonly() {
+            return Ok(());
+        }
+        #[expect(
+            clippy::permissions_set_readonly_false,
+            reason = "without mode bits the read-only attribute is the only permission"
+        )]
+        permissions.set_readonly(false);
+    }
+    fs::set_permissions(path, permissions)
+}
+
 /// The permission bits the stat index compares. Platforms without mode bits report the read-only attribute alone.
 pub fn file_mode(meta: &Metadata) -> u32 {
     #[cfg(unix)]

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT hash AS \"hash!: String\" FROM revisions\n           UNION SELECT tree_hash FROM revisions\n           UNION SELECT tree_hash FROM changesets\n           UNION SELECT tree_hash FROM proposal_versions\n           UNION SELECT tree_hash FROM checkpoints WHERE pruned_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "hash!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "revisions",
+            "name": "hash"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c69ef473b8fefd9f59c5d7b510d2ef67a8d00b77de9b327f0a5a2c97312db6cd"
+}

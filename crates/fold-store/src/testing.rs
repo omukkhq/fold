@@ -81,6 +81,19 @@ impl TestProject {
     }
 }
 
+/// Runs `sql`, which may hold several statements, in one committed write. Tests use it for rows no store function writes.
+pub async fn execute(store: &Store, sql: &str) {
+    let outcome = store
+        .write(async |tx| {
+            sqlx::raw_sql(AssertSqlSafe(sql)).execute(tx.conn()).await?;
+            Ok::<_, StoreError>(())
+        })
+        .await;
+    if let Err(error) = outcome {
+        panic!("`{sql}` failed: {error}");
+    }
+}
+
 enum Probe {
     Refused(String),
     Accepted,

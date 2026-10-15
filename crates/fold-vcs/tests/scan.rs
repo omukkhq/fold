@@ -6,7 +6,6 @@ use std::fs::{self, File};
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::Path;
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 
 use fold_core::object::{ObjectKind, hash_object};
@@ -188,41 +187,6 @@ fn an_unreadable_file_is_skipped() {
     let found = run(&root, &mut index);
     assert_eq!(flat_paths(&found.entries), ["open"]);
     assert_eq!(found.skipped[0].reason, SkipReason::Unreadable);
-}
-
-/// Keeps changing the modification time of `path` until `stop` is set.
-fn churn(path: std::path::PathBuf, stop: &AtomicBool) {
-    let file = fs::OpenOptions::new().write(true).open(path).unwrap();
-    let mut tick = 0u64;
-    while !stop.load(Ordering::Relaxed) {
-        tick += 1;
-        file.set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000 + tick))
-            .unwrap();
-    }
-}
-
-pub fn big_file(root: &Path, name: &str) {
-    let file = File::create(root.join(name)).unwrap();
-    file.set_len(48 * 1024 * 1024).unwrap();
-}
-
-#[test]
-fn a_file_rewritten_during_its_read_is_unstable() {
-    let (_dir, root) = workspace();
-    big_file(&root, "moving");
-    write(&root, "steady", b"x");
-    let stop = AtomicBool::new(false);
-    let mut index = StatIndex::empty(HOST);
-    let found = std::thread::scope(|scope| {
-        scope.spawn(|| churn(root.join("moving"), &stop));
-        let rules = IgnoreRules::new(&root);
-        let found = scan(&root, &mut index, &options(&rules, HOST, 64 << 20)).unwrap();
-        stop.store(true, Ordering::Relaxed);
-        found
-    });
-    assert_eq!(found.unstable, [rp("moving")]);
-    assert_eq!(flat_paths(&found.entries), ["steady"]);
-    assert!(index.lookup(&rp("moving")).is_none());
 }
 
 fn ignore_fixture() -> (tempfile::TempDir, std::path::PathBuf) {

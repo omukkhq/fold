@@ -15,6 +15,7 @@ use tokio::task::JoinHandle;
 
 use crate::config::DaemonConfig;
 use crate::http::{self, assets::AssetSource};
+use crate::jobs::{self, GcDaily};
 use crate::mcp;
 use crate::projects::Projects;
 use crate::services::agents::AgentService;
@@ -146,6 +147,7 @@ impl Daemon {
         let http_addr = listener
             .local_addr()
             .map_err(DaemonError::io("read the HTTP address"))?;
+        let gc_daily = jobs::spawn_gc_daily(state.clone(), jobs::JOB_TICK, stopped.clone());
         let http = tokio::spawn(serve_http(listener, http::router(state.clone()), stopped));
         tracing::info!(%http_addr, "daemon started");
         Ok(RunningDaemon {
@@ -154,6 +156,7 @@ impl Daemon {
             http_addr,
             socket,
             http,
+            gc_daily,
             stop,
             _lock: lock,
         })
@@ -168,6 +171,7 @@ pub struct RunningDaemon {
     http_addr: SocketAddr,
     socket: SocketServer,
     http: JoinHandle<()>,
+    gc_daily: GcDaily,
     stop: watch::Sender<bool>,
     /// The advisory lock lives as long as this file is open.
     _lock: File,
@@ -201,6 +205,7 @@ impl RunningDaemon {
         {
             abort.abort();
         }
+        self.gc_daily.stopped(DRAIN_TIMEOUT).await;
         for handle in self.state.projects.handles() {
             let agents = AgentService::new(
                 handle.store.clone(),
