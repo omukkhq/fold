@@ -235,7 +235,7 @@ async fn opens_of_a_new_file_at_once_apply_each_migration_once() {
     }
 }
 
-/// Holds the write lock on a new file for longer than the store's five-second busy timeout, the way a first opener's migration transaction does on a loaded host, and checks that `open_registry` waits it out instead of failing with `SQLITE_BUSY`.
+/// Holds the write lock on a new file for longer than the opener's busy timeout, the way a first opener's migration transaction does on a loaded host, and checks that the open waits it out instead of failing with `SQLITE_BUSY`.
 #[cfg(test)]
 async fn open_outlasts_a_long_write_lock(wal: bool) {
     let dir = tempfile::tempdir().unwrap();
@@ -258,11 +258,15 @@ async fn open_outlasts_a_long_write_lock(wal: bool) {
         .await
         .unwrap();
 
+    let busy_timeout = std::time::Duration::from_millis(100);
     let opener = tokio::spawn({
         let path = path.clone();
-        async move { Store::open_registry(&path).await }
+        async move {
+            Store::open_registry_waiting(&path, std::time::Duration::from_secs(30), busy_timeout)
+                .await
+        }
     });
-    tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+    tokio::time::sleep(busy_timeout * 4).await;
     assert!(
         !opener.is_finished(),
         "the opener gave up while the lock was held"
@@ -310,7 +314,7 @@ async fn open_gives_up_with_database_locked_when_the_lock_is_never_released() {
     let wait = std::time::Duration::from_secs(1);
     let error = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        Store::open_registry_waiting(&path, wait),
+        Store::open_registry_waiting(&path, wait, std::time::Duration::from_millis(100)),
     )
     .await
     .unwrap()
@@ -343,7 +347,11 @@ async fn a_migration_that_fails_for_another_reason_fails_at_once() {
     // Far shorter than the wait: a refused migration is not retried.
     let error = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        Store::open_registry_waiting(&path, std::time::Duration::from_secs(600)),
+        Store::open_registry_waiting(
+            &path,
+            std::time::Duration::from_secs(600),
+            std::time::Duration::from_secs(5),
+        ),
     )
     .await
     .unwrap()

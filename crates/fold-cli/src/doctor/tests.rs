@@ -210,7 +210,7 @@ fn a_daemon_that_answers_gives_ok() {
 fn a_socket_with_mode_0644_fails_with_the_chmod_fix() {
     let fixture = Fixture::new();
     let path = socket_in(&fixture);
-    let _listener = bind(&path);
+    drop(bind(&path));
     mode(&path, 0o644);
     let state = inspect_socket(&path, Platform::current());
     assert_eq!(

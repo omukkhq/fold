@@ -76,7 +76,7 @@ test-web: ## Run the web tests
 # The instrumented build lives in the worktree so parallel coverage runs in several worktrees do not rebuild each other's test binaries; ordinary builds keep the shared target directory.
 coverage: export CARGO_LLVM_COV_TARGET_DIR := $(CURDIR)/target/llvm-cov-target
 coverage: ## Run every Rust test and fail under 85% line coverage
-	cargo llvm-cov nextest --workspace --all-features --cargo-profile ci --ignore-filename-regex '/tests/' --fail-under-lines 85
+	cargo llvm-cov nextest --workspace --all-features --ignore-filename-regex '/tests/' --fail-under-lines 85
 
 check-rust: fmt-check-rust sqlx-check clippy coverage ## Run rustfmt, clippy and the Rust tests with coverage
 

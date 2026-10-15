@@ -78,7 +78,7 @@ fn warnings_alone_exit_0_and_every_project_in_the_registry_is_checked() {
 fn a_socket_with_mode_0644_fails_with_exit_1() {
     let sandbox = Sandbox::new().unwrap();
     let socket = sandbox.path("loose.sock");
-    let _listener = UnixListener::bind(&socket).unwrap();
+    drop(UnixListener::bind(&socket).unwrap());
     std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o644)).unwrap();
     let output = sandbox
         .fold(&["doctor", "--socket", socket.to_str().unwrap()])

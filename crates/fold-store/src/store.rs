@@ -44,18 +44,36 @@ impl WriteTx {
 impl Store {
     /// Opens `fold.db`, creating the file when it is absent, and applies the project migrations before returning.
     pub async fn open_project(paths: &ProjectPaths) -> Result<Store, StoreError> {
-        Self::open(&paths.db(), &PROJECT_MIGRATIONS, "project", OPEN_WAIT).await
+        Self::open(
+            &paths.db(),
+            &PROJECT_MIGRATIONS,
+            "project",
+            OPEN_WAIT,
+            BUSY_TIMEOUT,
+        )
+        .await
     }
 
     /// Opens the host registry database and applies the registry migrations before returning.
     pub async fn open_registry(path: &Path) -> Result<Store, StoreError> {
-        Self::open(path, &REGISTRY_MIGRATIONS, "registry", OPEN_WAIT).await
+        Self::open(
+            path,
+            &REGISTRY_MIGRATIONS,
+            "registry",
+            OPEN_WAIT,
+            BUSY_TIMEOUT,
+        )
+        .await
     }
 
-    /// `open_registry` with a shorter wait for the write lock, so a test can see the open give up.
+    /// `open_registry` with a chosen wait for the write lock and a chosen busy timeout, so a test can see the open give up, or outlast a lock held past the busy timeout, in well under a second.
     #[cfg(any(test, feature = "testing"))]
-    pub async fn open_registry_waiting(path: &Path, wait: Duration) -> Result<Store, StoreError> {
-        Self::open(path, &REGISTRY_MIGRATIONS, "registry", wait).await
+    pub async fn open_registry_waiting(
+        path: &Path,
+        wait: Duration,
+        busy_timeout: Duration,
+    ) -> Result<Store, StoreError> {
+        Self::open(path, &REGISTRY_MIGRATIONS, "registry", wait, busy_timeout).await
     }
 
     /// Another opener's WAL switch or migration transaction refuses this one with `SQLITE_BUSY`, and a loaded host can hold the migration transaction past the busy timeout, so the whole open is tried again from a fresh connection until `wait` has passed. The last attempt can run up to the busy timeout past `wait`.
@@ -64,6 +82,7 @@ impl Store {
         migrations: &'static Migrator,
         database: &'static str,
         wait: Duration,
+        busy_timeout: Duration,
     ) -> Result<Store, StoreError> {
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
@@ -72,13 +91,13 @@ impl Store {
         let mut retry = BUSY_RETRY;
         let mut logged = false;
         let writer = loop {
-            match connect_and_migrate(path, migrations).await {
+            match connect_and_migrate(path, migrations, busy_timeout).await {
                 Err(error) if is_busy(&error) => {
                     let waited = started.elapsed();
                     if waited >= wait {
                         return Err(StoreError::Locked { database, waited });
                     }
-                    if waited > BUSY_TIMEOUT && !logged {
+                    if waited > busy_timeout && !logged {
                         tracing::warn!(
                             database,
                             waited_ms = waited.as_millis(),
@@ -94,7 +113,7 @@ impl Store {
         };
         let readers = SqlitePoolOptions::new()
             .max_connections(READ_CONNECTIONS)
-            .connect_lazy_with(connect_options(path).read_only(true));
+            .connect_lazy_with(connect_options(path, busy_timeout).read_only(true));
         Ok(Store { writer, readers })
     }
 
@@ -143,10 +162,14 @@ impl Store {
 }
 
 /// One attempt to open the writer and apply the migrations. Switching a new file to WAL takes the exclusive lock without waiting on the busy timeout, so it fails at once with `SQLITE_BUSY` while another process holds a lock; the migration's `BEGIN IMMEDIATE` waits up to the busy timeout first.
-async fn connect_and_migrate(path: &Path, migrations: &Migrator) -> Result<SqlitePool, StoreError> {
+async fn connect_and_migrate(
+    path: &Path,
+    migrations: &Migrator,
+    busy_timeout: Duration,
+) -> Result<SqlitePool, StoreError> {
     let writer = SqlitePoolOptions::new()
         .max_connections(1)
-        .connect_with(connect_options(path).create_if_missing(true))
+        .connect_with(connect_options(path, busy_timeout).create_if_missing(true))
         .await?;
     if let Err(error) = migrate(&writer, migrations).await {
         writer.close().await;
@@ -177,11 +200,11 @@ async fn migrate(writer: &SqlitePool, migrations: &Migrator) -> Result<(), Store
     Ok(())
 }
 
-fn connect_options(path: &Path) -> SqliteConnectOptions {
+fn connect_options(path: &Path, busy_timeout: Duration) -> SqliteConnectOptions {
     SqliteConnectOptions::new()
         .filename(path)
         .journal_mode(SqliteJournalMode::Wal)
         .synchronous(SqliteSynchronous::Full)
         .foreign_keys(true)
-        .busy_timeout(BUSY_TIMEOUT)
+        .busy_timeout(busy_timeout)
 }
