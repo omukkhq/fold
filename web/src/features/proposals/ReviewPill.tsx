@@ -53,7 +53,7 @@ export function ReviewPill({
     >
       <Icon aria-hidden="true" size={large ? 13 : 12} className="shrink-0" />
       {pill.segments ? (
-        <ActorText segments={pill.segments} personClassName="text-bar" />
+        <ActorText segments={pill.segments} slot="waitingChip" />
       ) : (
         pill.text
       )}
@@ -76,7 +76,7 @@ export function WaitingChip({ waiting }: { waiting: Waiting }) {
       {actor === null ? (
         <span className="font-semibold">a human</span>
       ) : (
-        <PersonName name={actor} className="text-bar" />
+        <PersonName name={actor} slot="waitingChip" />
       )}
     </span>
   );

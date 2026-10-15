@@ -153,6 +153,7 @@ function ConflictBlock({
       <p className="text-code leading-snug text-text-muted">
         <ActorText
           segments={nextStepText(proposal.summary.author, report.version)}
+          slot="waitingLine"
         />
       </p>
     </section>
@@ -425,7 +426,7 @@ export function SidePanel({
                 <span className="min-w-0 flex-1 text-bar leading-snug text-text">
                   <ActorText
                     segments={gateText(gate, proposal, main)}
-                    personClassName="text-body"
+                    slot="gate"
                   />
                 </span>
               </li>
@@ -435,7 +436,7 @@ export function SidePanel({
         {summary ? (
           <p className="flex items-center gap-8 rounded-m bg-sunken px-10 py-8 text-code leading-snug text-text-muted">
             <Hourglass aria-hidden="true" size={14} className="shrink-0" />
-            <ActorText segments={summary} personClassName="text-bar" />
+            <ActorText segments={summary} slot="waitingLine" />
           </p>
         ) : null}
         {integration ? (

@@ -202,7 +202,7 @@ export function ProposalsScreen({
                     </td>
                     <td className={cn(CELL, MONO)}>{p.task}</td>
                     <td className={cn(CELL, MONO)}>
-                      <PersonName name={p.author} className="text-bar" />
+                      <PersonName name={p.author} slot="authorCell" />
                     </td>
                     <td className={cn(CELL, MONO)}>{versionText(p)}</td>
                     <td className={CELL}>

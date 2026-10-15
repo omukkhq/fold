@@ -399,7 +399,7 @@ function MessageCard({
   return (
     <li className="flex flex-col gap-6 rounded-m bg-surface px-12 py-10 inset-ring inset-ring-border-subtle">
       <p className="flex items-center gap-8 font-mono text-caption text-text-muted">
-        <PersonName name={message.sender} className="text-bar" />
+        <PersonName name={message.sender} slot="messageHead" />
         <ArrowRight
           aria-label="to"
           role="img"

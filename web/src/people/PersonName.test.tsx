@@ -44,6 +44,37 @@ describe("PersonName", () => {
   });
 });
 
+describe("PersonName slots", () => {
+  it("sizes a human and an agent by the slot's frame sizes", () => {
+    const { container } = render(
+      <>
+        <PersonName name="human:ana" slot="requester" />
+        <PersonName name="frontend" slot="requester" />
+      </>,
+    );
+    const [human, agent] = container.querySelectorAll("[data-person]");
+    expect(human?.className).toContain("text-body");
+    expect(agent?.className).toContain("text-bar");
+    expect(agent?.className).not.toContain("text-body");
+  });
+
+  it("passes the slot through a list and through actor text", () => {
+    const { container } = render(
+      <>
+        <PersonList names={["human:ana", "backend"]} slot="messageHead" />
+        <ActorText
+          segments={seg`by ${actorSegment("human:ana")}`}
+          slot="gate"
+        />
+      </>,
+    );
+    const names = container.querySelectorAll("[data-person]");
+    expect(names[0]?.className).toContain("text-bar");
+    expect(names[1]?.className).toContain("text-meta");
+    expect(names[2]?.className).toContain("text-body");
+  });
+});
+
 describe("PersonList", () => {
   it("joins the names with commas, each in its own colour and the given size", () => {
     const { container } = render(

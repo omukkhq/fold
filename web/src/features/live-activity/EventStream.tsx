@@ -66,7 +66,7 @@ export function EventStream({ slug }: { slug: string }) {
             <div className="flex min-w-0 flex-1 flex-col gap-2">
               <div className="flex gap-6">
                 <span className="min-w-0 flex-1 truncate font-mono text-label text-text">
-                  <PersonName name={row.actor} className="text-code" />
+                  <PersonName name={row.actor} slot="eventActor" />
                 </span>
                 <time className="font-mono text-caption text-text-faint">
                   {row.time}

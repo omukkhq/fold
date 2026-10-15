@@ -302,7 +302,7 @@ export function RequestsScreen({
                     </HrefLink>
                   </td>
                   <td className={cn(CELL, MONO)}>
-                    <PersonName name={r.requester} className="text-bar" />
+                    <PersonName name={r.requester} slot="requester" />
                   </td>
                   <td className={CELL}>
                     <StatePill state={r.state} />
@@ -311,7 +311,7 @@ export function RequestsScreen({
                     {r.drafter === null ? (
                       "unclaimed"
                     ) : (
-                      <PersonName name={r.drafter} className="text-bar" />
+                      <PersonName name={r.drafter} slot="requester" />
                     )}
                   </td>
                   <td

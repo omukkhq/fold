@@ -243,7 +243,7 @@ export function AgentCard({ slug, agent, now }: AgentCardProps) {
 
       <footer className="flex items-center gap-8 border-t border-border-subtle bg-bg px-16 py-10">
         <p className="min-w-0 flex-1 text-code text-text-muted">
-          <ActorText segments={footLine(agent)} personClassName="text-bar" />
+          <ActorText segments={footLine(agent)} slot="foot" />
         </p>
         <Button
           size="sm"
