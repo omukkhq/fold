@@ -27,7 +27,10 @@ export const keys = {
   agentBar: (slug: string) => [slug, "agents", "bar"] as const,
   /** Under the agents prefix, so the feedback box learns a new agent or tag with the agent list. */
   messageTargets: (slug: string) => [slug, "agents", "targets"] as const,
+  labels: (slug: string) => [slug, "labels"] as const,
   messages: (slug: string) => [slug, "messages"] as const,
+  taskMessages: (slug: string, task: string) =>
+    [slug, "messages", "task", task] as const,
   repository: (slug: string) => [slug, "repository"] as const,
   workspaces: (slug: string) => [slug, "workspaces"] as const,
   workspace: (slug: string, workspace: string) =>

@@ -50,7 +50,7 @@ function isTaskIds(value: unknown): value is string[] {
   );
 }
 
-/** The task ids of a `dependency_cycle` refusal, first task repeated at the end; null for any other error. */
+/** The task ids in `details.path` of a `dependency_cycle` refusal, first task repeated at the end; null for any other error. */
 export function cyclePath(error: unknown): string[] | null {
   if (
     apiErrorCode(error) !== "dependency_cycle" ||
@@ -58,8 +58,8 @@ export function cyclePath(error: unknown): string[] | null {
   ) {
     return null;
   }
-  const cycle = error.details.cycle;
-  return isTaskIds(cycle) ? cycle : null;
+  const { path } = error.details;
+  return isTaskIds(path) ? path : null;
 }
 
 export function cycleText(path: readonly string[]): string {

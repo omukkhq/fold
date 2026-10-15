@@ -46,6 +46,12 @@ export const COLUMNS: readonly ColumnSpec[] = [
 
 export interface ColumnView extends ColumnSpec {
   cards: BoardCard[];
+  /** The number beside the column name: every task of the status, or the cards left by the filters while any is set. */
+  count: number;
+  /** Tasks of the status that the board payload does not carry; only the Done column holds a latest few. */
+  hidden: number;
+  /** How many cards of the status the board payload carries. */
+  loaded: number;
 }
 
 /** The number of a task id; anything else sorts last. */
@@ -69,15 +75,51 @@ export function boardCards(board: Board): BoardCard[] {
   return cards;
 }
 
+function byNumber(a: BoardCard, b: BoardCard): number {
+  return taskNumber(a.task) - taskNumber(b.task);
+}
+
+/** The Done column holds the most recently completed tasks, newest first. */
+function byCompletion(a: BoardCard, b: BoardCard): number {
+  return (b.completed_at ?? 0) - (a.completed_at ?? 0) || byNumber(a, b);
+}
+
 /**
- * Always the five columns, each card in the column of its own `status` and each column sorted by task number.
- * The live layer appends a moved card to the end of its new column, so the order is restored here.
+ * Always the five columns, each card in the column of its own `status`. Backlog to Review are sorted by task number
+ * and Done by completion time; the live layer appends a moved card to the end of its new column, so the order is
+ * restored here. `board` supplies the column totals.
  */
-export function groupColumns(cards: readonly BoardCard[]): ColumnView[] {
-  return COLUMNS.map((spec) => ({
-    ...spec,
-    cards: cards
+export function groupColumns(
+  cards: readonly BoardCard[],
+  board?: Board,
+  filtered = false,
+): ColumnView[] {
+  return COLUMNS.map((spec) => {
+    const mine = cards
       .filter((card) => card.status === spec.status)
-      .sort((a, b) => taskNumber(a.task) - taskNumber(b.task)),
-  }));
+      .sort(spec.status === "done" ? byCompletion : byNumber);
+    const source = board?.columns.find((c) => c.status === spec.status);
+    const total = source?.total ?? mine.length;
+    return {
+      ...spec,
+      cards: mine,
+      count: filtered ? mine.length : total,
+      hidden: Math.max(0, total - (source?.cards.length ?? total)),
+      loaded: source?.cards.length ?? mine.length,
+    };
+  });
+}
+
+/** The line under the column name; a column that holds only the latest tasks says how many. */
+export function hintText(column: ColumnView): string {
+  return column.hidden > 0
+    ? `${column.hint} · latest ${String(column.loaded)}`
+    : column.hint;
+}
+
+/** The link text for the tasks the payload leaves out, or null when it left none. */
+export function moreText(column: ColumnView): string | null {
+  return column.hidden > 0
+    ? `${String(column.hidden)} more in Repository`
+    : null;
 }

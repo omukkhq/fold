@@ -1,11 +1,13 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Send } from "lucide-react";
 import { useId } from "react";
 import { useForm, useWatch } from "react-hook-form";
+import { keys } from "@/api/keys";
 import {
   messageTargetsQuery,
   sendFeedback,
+  taskMessagesQuery,
   type FeedbackRecipient,
   type TaskDetail,
   type TaskMessage,
@@ -34,24 +36,24 @@ function Message({ slug, message }: { slug: string; message: TaskMessage }) {
     <li className="flex flex-col gap-4 rounded-m bg-surface px-12 py-10 inset-ring inset-ring-border-subtle">
       <div className="flex items-center gap-8">
         <span className="inline-flex items-center gap-6">
-          <Avatar name={message.from} />
+          <Avatar name={message.sender} />
           <span className="font-mono text-caption text-text-muted">
-            {message.from}
+            {message.sender}
           </span>
         </span>
         <ArrowRight aria-label="to" size={12} className="text-text-faint" />
         <span className="font-mono text-caption text-text-muted">
-          {message.to}
+          {message.recipients.map((r) => r.name).join(", ")}
         </span>
         <HrefLink
           href={threadPath(slug, message.thread)}
-          aria-label={`Open the thread of ${message.id}, sent ${clockTime(message.at)}`}
+          aria-label={`Open the thread of ${message.id}, sent ${clockTime(message.sent_at)}`}
           className={cn(
             "ml-auto rounded-s text-meta text-text-faint hover:underline",
             focusRing,
           )}
         >
-          {clockTime(message.at)}
+          {clockTime(message.sent_at)}
         </HrefLink>
       </div>
       <p className="text-body leading-normal whitespace-pre-wrap text-text">
@@ -71,12 +73,18 @@ function FeedbackBox({
   holder: string | null;
 }) {
   const id = useId();
+  const queryClient = useQueryClient();
   const targets = useQuery(messageTargetsQuery(slug));
+  // The sent message joins the list before the box clears, so the write stays pending until the list is read again.
   const write = useTaskWrite(
     slug,
     task,
-    (feedback: { body: string; to: FeedbackRecipient }) =>
-      sendFeedback(slug, task, feedback),
+    async (feedback: { body: string; to: FeedbackRecipient }) => {
+      await sendFeedback(slug, task, feedback);
+      await queryClient.invalidateQueries({
+        queryKey: keys.taskMessages(slug, task),
+      });
+    },
   );
   const fallback = defaultRecipient(holder);
   const form = useForm<FeedbackForm>({
@@ -164,7 +172,7 @@ function FeedbackBox({
   );
 }
 
-/** Messages linked to the task, and the feedback box that adds one from the signed-in human. */
+/** Messages linked to the task, and the feedback box that adds one from the signed-in human. The count shows once the messages are read. */
 export function MessagesSection({
   slug,
   task,
@@ -172,18 +180,23 @@ export function MessagesSection({
   slug: string;
   task: TaskDetail;
 }) {
-  const holder =
-    task.claims.find((c) => c.kind === "implementation")?.holder ?? null;
+  // Every claim of a task read is its implementation claim.
+  const holder = task.claims[0]?.holder ?? null;
+  const query = useQuery(taskMessagesQuery(slug, task.task));
+  const messages = query.data ?? [];
   return (
     <section aria-label="Messages" className="flex flex-col gap-10">
       <SectionHead title="Messages">
-        <span className="text-bar text-text-muted">
-          {messageCountText(task.messages.length, task.task)}
-        </span>
+        {query.isSuccess ? (
+          <span className="text-bar text-text-muted">
+            {messageCountText(messages.length, task.task)}
+          </span>
+        ) : null}
       </SectionHead>
-      {task.messages.length > 0 ? (
+      <WriteError error={query.error} />
+      {messages.length > 0 ? (
         <ul className="flex flex-col gap-10">
-          {task.messages.map((message) => (
+          {messages.map((message) => (
             <Message key={message.id} slug={slug} message={message} />
           ))}
         </ul>

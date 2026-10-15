@@ -7,6 +7,7 @@ import {
   invalidateProject,
   patchBoard,
   patchPresence,
+  patchNamedStatus,
 } from "./apply";
 import {
   isEventEnvelope,
@@ -121,7 +122,7 @@ describe("patch rules", () => {
       slug,
       ev("task.status_changed", {
         task: "T-1",
-        data: { status: "in_progress" },
+        data: { from: "todo", to: "in_progress" },
       }),
     );
     const next = client.getQueryData<ReturnType<typeof board>>(
@@ -143,7 +144,10 @@ describe("patch rules", () => {
     applyEvent(
       client,
       slug,
-      ev("task.blocked_changed", { task: "T-1", data: { blocked: true } }),
+      ev("task.blocked_changed", {
+        task: "T-1",
+        data: { blocked: true, blocked_by: [] },
+      }),
     );
     expect(client.getQueryData(keys.task(slug, "T-1"))).toEqual({
       task: "T-1",
@@ -161,7 +165,10 @@ describe("patch rules", () => {
     applyEvent(
       client,
       slug,
-      ev("task.status_changed", { task: "T-1", data: { status: "done" } }),
+      ev("task.status_changed", {
+        task: "T-1",
+        data: { from: "todo", to: "done" },
+      }),
     );
     expect(client.getQueryData(keys.task(slug, "T-1"))).toBeUndefined();
     expect(client.getQueryData(keys.board(slug))).toBeUndefined();
@@ -173,14 +180,20 @@ describe("patch rules", () => {
     applyEvent(
       client,
       slug,
-      ev("task.status_changed", { task: "T-9", data: { status: "done" } }),
+      ev("task.status_changed", {
+        task: "T-9",
+        data: { from: "todo", to: "done" },
+      }),
     );
     expect(hit(keys.board(slug))).toBe(true);
     invalidated = [];
     applyEvent(
       client,
       slug,
-      ev("task.status_changed", { task: "T-1", data: { status: "archived" } }),
+      ev("task.status_changed", {
+        task: "T-1",
+        data: { from: "todo", to: "archived" },
+      }),
     );
     expect(hit(keys.board(slug))).toBe(true);
     invalidated = [];
@@ -188,7 +201,10 @@ describe("patch rules", () => {
     applyEvent(
       client,
       slug,
-      ev("task.status_changed", { task: "T-1", data: { status: "done" } }),
+      ev("task.status_changed", {
+        task: "T-1",
+        data: { from: "todo", to: "done" },
+      }),
     );
     expect(hit(keys.board(slug))).toBe(true);
   });
@@ -198,7 +214,10 @@ describe("patch rules", () => {
     applyEvent(
       client,
       slug,
-      ev("task.blocked_changed", { task: "T-1", data: { blocked: true } }),
+      ev("task.blocked_changed", {
+        task: "T-1",
+        data: { blocked: true, blocked_by: [] },
+      }),
     );
     expect(client.getQueryData(keys.task(slug, "T-1"))).toBe("odd");
   });
@@ -207,7 +226,7 @@ describe("patch rules", () => {
     applyEvent(
       client,
       slug,
-      ev("task.status_changed", { task: "T-1", data: { status: 3 } }),
+      ev("task.status_changed", { task: "T-1", data: { from: "todo", to: 3 } }),
     );
     expect(hit(keys.board(slug))).toBe(true);
     invalidated = [];
@@ -218,7 +237,7 @@ describe("patch rules", () => {
     applyEvent(
       client,
       slug,
-      ev("task.status_changed", { data: { status: "done" } }),
+      ev("task.status_changed", { data: { from: "todo", to: "done" } }),
     );
     expect(client.getQueryData(keys.board(slug))).toEqual(board());
   });
@@ -428,6 +447,8 @@ describe("invalidation rules", () => {
       ["dependency.added", keys.board(slug)],
       ["checklist.item_done", keys.board(slug)],
       ["workspace.created", keys.workspaces(slug)],
+      ["workspace.created", keys.board(slug)],
+      ["workspace.abandoned", keys.board(slug)],
       ["checkpoint.recorded", keys.workspaces(slug)],
       ["changeset.recorded", keys.workspaces(slug)],
     ];
@@ -534,6 +555,17 @@ describe("patchBoard", () => {
       task: "T-1",
       status: "ready",
       blocked: true,
+    });
+  });
+});
+
+describe("patchNamedStatus", () => {
+  it("leaves a value that names no task as it was", () => {
+    const read = { dependencies: [{ task: "T-1" }], checklists: [null] };
+    expect(patchNamedStatus(read, "T-9", "done")).toBe(read);
+    expect(patchNamedStatus(null, "T-9", "done")).toBeNull();
+    expect(patchNamedStatus({ dependencies: "x" }, "T-9", "done")).toEqual({
+      dependencies: "x",
     });
   });
 });

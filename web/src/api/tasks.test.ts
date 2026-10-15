@@ -1,15 +1,26 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetTasks } from "../../fixtures/tasks";
-import { ApiError } from "./errors";
+import { QueryClient } from "@tanstack/react-query";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { daemon, noContent, ok, refuse } from "@/test/daemon";
+import { taskView } from "@/test/payloads";
+import { apiErrorCode } from "./errors";
 import { keys } from "./keys";
+import type { components } from "./schema";
 import {
   addChecklistItem,
-  createTask,
   addDependency,
-  addLabel,
+  archiveTask,
+  attachLabel,
   clearHumanReview,
+  setHumanReview,
+  createLabel,
+  createLabelOn,
+  createTask,
+  feedbackTo,
   getMessageTargets,
   getTask,
+  getTaskMessages,
+  labelsQuery,
+  listLabels,
   messageTargetsQuery,
   moveChecklistItem,
   removeChecklistItem,
@@ -18,323 +29,335 @@ import {
   renameChecklistItem,
   sendFeedback,
   setDescription,
-  setHumanReview,
   setTitle,
+  taskMessagesQuery,
   taskQuery,
   tickChecklistItem,
-  type TaskDetail,
 } from "./tasks";
 
+vi.mock("@/api/client", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/api/client")>();
+  const { daemon: fake } = await import("@/test/daemon");
+  return { ...real, api: fake.api };
+});
+
+type MessageView = components["schemas"]["MessageView"];
+
+const P = "/api/v1/projects/demo";
+const ui = { name: "ui", color: "sage" };
+const data = { name: "data", color: "gold" };
+
 beforeEach(() => {
-  vi.useFakeTimers();
-  resetTasks();
-});
-afterEach(() => {
-  vi.useRealTimers();
+  daemon.reset();
 });
 
-async function settle<T>(promise: Promise<T>): Promise<T> {
-  const settled = promise.then(
-    (value) => ({ ok: true as const, value }),
-    (error: unknown) => ({ ok: false as const, error }),
-  );
-  await vi.runAllTimersAsync();
-  const result = await settled;
-  if (!result.ok) {
-    throw result.error;
-  }
-  return result.value;
-}
+const bodyOf = (route: string) => daemon.made(route)[0]?.body;
 
-async function refused(promise: Promise<unknown>): Promise<ApiError> {
-  try {
-    await settle(promise);
-  } catch (error) {
-    if (error instanceof ApiError) {
-      return error;
-    }
-    throw error;
-  }
-  throw new Error("the write was not refused");
-}
-
-function read(task = "T-2"): Promise<TaskDetail> {
-  return settle(getTask("demo", task));
-}
-
-describe("the task fixture", () => {
-  it("gives T-2 every section of W03", async () => {
-    const task = await read();
-    expect(task.title).toBe("Build the login form with validation");
-    expect(task.status).toBe("in_progress");
-    expect(task.labels.length).toBeGreaterThan(0);
-    expect(task.checklists[0]?.name).toBe("Subtasks");
-    const kinds = task.checklists[0]?.items.map((i) => i.kind);
-    expect(kinds).toContain("step");
-    expect(kinds).toContain("linked");
-    expect(task.dependencies.map((d) => d.direction).sort()).toEqual([
-      "needed_by",
-      "needs",
-    ]);
-    expect(task.claims[0]?.kind).toBe("implementation");
-    expect(task.workspace?.live?.files.length).toBe(4);
-    expect(task.checkpoints.length).toBeGreaterThan(1);
-    expect(task.changesets.length).toBeGreaterThan(0);
-    expect(task.messages.length).toBe(2);
-    expect(task.history.length).toBeGreaterThan(2);
-    expect(task.description).toContain("| Code | Message |");
-    expect(task.description).toContain("- [x]");
+describe("reads", () => {
+  it("reads one task", async () => {
+    daemon.on(`GET ${P}/tasks/T-2`, ok(taskView("T-2")));
+    expect((await getTask("demo", "T-2")).task).toBe("T-2");
   });
 
-  it("opens every card on the board, with the proposal, integration and human review it shows", async () => {
-    const done = await read("T-13");
-    expect(done.proposal?.state).toBe("integrated");
-    expect(done.integration?.revision).toBe("r8");
-    const marked = await read("T-3");
-    expect(marked.human_review?.reviewer).toBe("tanim");
-    const blocked = await read("T-10");
-    expect(blocked.blocked).toBe(true);
-  });
-
-  it("refuses an unknown task and every task of another project with task_not_found", async () => {
-    expect((await refused(getTask("demo", "T-999"))).code).toBe(
-      "task_not_found",
-    );
-    expect((await refused(getTask("ledger", "T-2"))).code).toBe(
-      "task_not_found",
+  it("throws task_not_found for a task the project does not have", async () => {
+    daemon.on(`GET ${P}/tasks/T-9`, refuse(404, "task_not_found"));
+    await expect(getTask("demo", "T-9")).rejects.toSatisfy(
+      (e: unknown) => apiErrorCode(e) === "task_not_found",
     );
   });
 
-  it("lists agents and tags for the feedback box, and none for an empty project", async () => {
-    expect((await settle(getMessageTargets("demo"))).agents).toContain(
-      "frontend",
+  it("lists the labels of the project", async () => {
+    daemon.on(`GET ${P}/labels`, ok({ labels: [data, ui] }));
+    expect(await listLabels("demo")).toEqual([data, ui]);
+  });
+
+  it("derives the message targets from the agents: main agents, child workers and every tag once", async () => {
+    daemon.on(
+      `GET ${P}/agents`,
+      ok({
+        agents: [
+          {
+            name: "frontend",
+            tags: ["ui", "integrator"],
+            workers: [
+              { name: "frontend", parent: null },
+              { name: "frontend/ui", parent: "frontend" },
+            ],
+          },
+          { name: "backend", tags: ["ui"], workers: [] },
+        ],
+      }),
     );
-    expect(await settle(getMessageTargets("ledger"))).toEqual({
-      agents: [],
-      tags: [],
+    expect(await getMessageTargets("demo")).toEqual({
+      agents: ["frontend", "frontend/ui", "backend"],
+      tags: ["integrator", "ui"],
     });
   });
 
-  it("keys the queries by slug and public id", () => {
+  it("keeps the queries under their keys", async () => {
     expect(taskQuery("demo", "T-2").queryKey).toEqual(keys.task("demo", "T-2"));
+    expect(taskQuery("demo", "T-2").staleTime).toBe(Infinity);
     expect(messageTargetsQuery("demo").queryKey).toEqual(
       keys.messageTargets("demo"),
     );
+    daemon.on(`GET ${P}/labels`, ok({ labels: [ui] }));
+    const client = new QueryClient();
+    expect(await client.query(labelsQuery("demo"))).toEqual([ui]);
+    expect(client.getQueryData(keys.labels("demo"))).toEqual([ui]);
   });
 });
 
-describe("creating a task", () => {
-  it("numbers it after the project's tasks and calculates Todo", async () => {
-    const id = await settle(
-      createTask("demo", { title: "Password reset", description: "" }),
+describe("writes to a task", () => {
+  it("creates a task and answers its id", async () => {
+    daemon.on(`POST ${P}/tasks`, ok(taskView("T-17"), 201));
+    expect(await createTask("demo", { title: "Reset", description: "d" })).toBe(
+      "T-17",
     );
-    expect(id).toBe("T-17");
-    const task = await read(id);
-    expect(task).toMatchObject({
-      title: "Password reset",
-      status: "todo",
-      dependencies: [],
+    expect(bodyOf(`POST ${P}/tasks`)).toEqual({
+      title: "Reset",
+      description: "d",
     });
-    expect(task.history[0]?.actor).toBe("human:tanim");
   });
 
-  it("starts an empty project at T-1 and puts the task on its board", async () => {
+  it("changes the title and the description with one patch each", async () => {
+    daemon.on(`PATCH ${P}/tasks/T-2`, ok(taskView("T-2")));
+    await setTitle("demo", "T-2", "New");
+    await setDescription("demo", "T-2", "Text");
+    expect(daemon.made(`PATCH ${P}/tasks/T-2`).map((c) => c.body)).toEqual([
+      { title: "New" },
+      { description: "Text" },
+    ]);
+  });
+
+  it("refuses a write to a closed task with the daemon's code", async () => {
+    daemon.on(
+      `PATCH ${P}/tasks/T-2`,
+      refuse(409, "task_closed", { reason: "archived" }),
+    );
+    await expect(setTitle("demo", "T-2", "x")).rejects.toSatisfy(
+      (e: unknown) => apiErrorCode(e) === "task_closed",
+    );
+  });
+
+  it("archives a task and shows the open proposal refusal by its reason", async () => {
+    daemon.on(`POST ${P}/tasks/T-2/archive`, noContent());
+    await archiveTask("demo", "T-2");
+    daemon.on(
+      `POST ${P}/tasks/T-3/archive`,
+      refuse(400, "invalid_request", { reason: "proposal_open" }),
+    );
+    await expect(archiveTask("demo", "T-3")).rejects.toMatchObject({
+      code: "invalid_request",
+      details: { reason: "proposal_open" },
+    });
+  });
+});
+
+describe("labels", () => {
+  it("creates a label", async () => {
+    daemon.on(`POST ${P}/labels`, ok(ui, 201));
+    expect(await createLabel("demo", ui)).toEqual(ui);
+  });
+
+  it("attaches a label by sending the whole set read just before", async () => {
+    daemon.on(`GET ${P}/tasks/T-2`, ok(taskView("T-2", { labels: [ui] })));
+    daemon.on(`PATCH ${P}/tasks/T-2`, ok(taskView("T-2")));
+    await attachLabel("demo", "T-2", "data");
+    expect(bodyOf(`PATCH ${P}/tasks/T-2`)).toEqual({ labels: ["ui", "data"] });
+  });
+
+  it("keeps the set as it is when the label is on the task already", async () => {
+    daemon.on(`GET ${P}/tasks/T-2`, ok(taskView("T-2", { labels: [ui] })));
+    daemon.on(`PATCH ${P}/tasks/T-2`, ok(taskView("T-2")));
+    await attachLabel("demo", "T-2", "ui");
+    expect(bodyOf(`PATCH ${P}/tasks/T-2`)).toEqual({ labels: ["ui"] });
+  });
+
+  it("removes a label from the set", async () => {
+    daemon.on(
+      `GET ${P}/tasks/T-2`,
+      ok(taskView("T-2", { labels: [ui, data] })),
+    );
+    daemon.on(`PATCH ${P}/tasks/T-2`, ok(taskView("T-2")));
+    await removeLabel("demo", "T-2", "ui");
+    expect(bodyOf(`PATCH ${P}/tasks/T-2`)).toEqual({ labels: ["data"] });
+  });
+
+  it("creates a label and puts it on the task, or leaves the task alone when creation is refused", async () => {
+    daemon.on(`POST ${P}/labels`, ok(ui, 201));
+    daemon.on(`GET ${P}/tasks/T-2`, ok(taskView("T-2")));
+    daemon.on(`PATCH ${P}/tasks/T-2`, ok(taskView("T-2")));
+    await createLabelOn("demo", "T-2", ui);
+    expect(bodyOf(`PATCH ${P}/tasks/T-2`)).toEqual({ labels: ["ui"] });
+    daemon.reset();
+    daemon.on(`POST ${P}/labels`, refuse(409, "label_exists"));
+    await expect(createLabelOn("demo", "T-2", ui)).rejects.toSatisfy(
+      (e: unknown) => apiErrorCode(e) === "label_exists",
+    );
+    expect(daemon.made(`PATCH ${P}/tasks/T-2`)).toHaveLength(0);
+  });
+});
+
+describe("checklist items", () => {
+  it("adds a plain step or a linked task to a named checklist", async () => {
+    daemon.on(`POST ${P}/tasks/T-2/checklist-items`, ok({}, 201));
+    await addChecklistItem("demo", "T-2", "Subtasks", {
+      kind: "step",
+      text: "Copy",
+    });
+    await addChecklistItem("demo", "T-2", "Subtasks", {
+      kind: "linked",
+      task: "T-5",
+    });
     expect(
-      await settle(createTask("ledger", { title: "First", description: "x" })),
-    ).toBe("T-1");
-    const { board } = await import("../../fixtures/board");
-    const cards = board("ledger").columns.flatMap((c) => c.cards);
-    expect(cards.map((c) => [c.task, c.title, c.status])).toEqual([
-      ["T-1", "First", "todo"],
+      daemon.made(`POST ${P}/tasks/T-2/checklist-items`).map((c) => c.body),
+    ).toEqual([
+      { checklist: "Subtasks", text: "Copy" },
+      { checklist: "Subtasks", linked_task: "T-5" },
+    ]);
+  });
+
+  it("renames, ticks and moves through the item route, and removes it", async () => {
+    daemon.on(`PATCH ${P}/checklist-items/ci-4`, ok({}));
+    daemon.on(`DELETE ${P}/checklist-items/ci-4`, noContent());
+    await renameChecklistItem("demo", "ci-4", "Text");
+    await tickChecklistItem("demo", "ci-4", true);
+    await moveChecklistItem("demo", "ci-4", 0);
+    await removeChecklistItem("demo", "ci-4");
+    expect(
+      daemon.made(`PATCH ${P}/checklist-items/ci-4`).map((c) => c.body),
+    ).toEqual([{ text: "Text" }, { done: true }, { position: 0 }]);
+    expect(daemon.made(`DELETE ${P}/checklist-items/ci-4`)).toHaveLength(1);
+  });
+
+  it("refuses a hand tick of a linked item with its reason", async () => {
+    daemon.on(
+      `PATCH ${P}/checklist-items/ci-5`,
+      refuse(400, "invalid_request", { reason: "linked_item" }),
+    );
+    await expect(tickChecklistItem("demo", "ci-5", true)).rejects.toMatchObject(
+      {
+        details: { reason: "linked_item" },
+      },
+    );
+  });
+});
+
+describe("dependencies", () => {
+  it("adds and removes an edge", async () => {
+    daemon.on(`POST ${P}/tasks/T-2/dependencies`, noContent());
+    daemon.on(`DELETE ${P}/tasks/T-2/dependencies/T-1`, noContent());
+    await addDependency("demo", "T-2", "T-1");
+    await removeDependency("demo", "T-2", "T-1");
+    expect(bodyOf(`POST ${P}/tasks/T-2/dependencies`)).toEqual({
+      needs: "T-1",
+    });
+    expect(daemon.made(`DELETE ${P}/tasks/T-2/dependencies/T-1`)).toHaveLength(
+      1,
+    );
+  });
+
+  it("carries the cycle of a refused edge", async () => {
+    daemon.on(
+      `POST ${P}/tasks/T-1/dependencies`,
+      refuse(409, "dependency_cycle", { path: ["T-1", "T-2", "T-1"] }),
+    );
+    await expect(addDependency("demo", "T-1", "T-2")).rejects.toMatchObject({
+      code: "dependency_cycle",
+      details: { path: ["T-1", "T-2", "T-1"] },
+    });
+  });
+});
+
+describe("feedback", () => {
+  it("maps each recipient to the daemon's grammar", () => {
+    expect(feedbackTo({ kind: "holder" })).toBeUndefined();
+    expect(feedbackTo({ kind: "agent", name: "frontend/ui" })).toEqual([
+      "frontend/ui",
+    ]);
+    expect(feedbackTo({ kind: "tag", name: "ui" })).toEqual(["tag:ui"]);
+  });
+
+  it("posts the task, the body and the recipients", async () => {
+    daemon.on(`POST ${P}/feedback`, ok({}, 201));
+    await sendFeedback("demo", "T-2", {
+      body: "Hi",
+      to: { kind: "tag", name: "ui" },
+    });
+    await sendFeedback("demo", "T-2", { body: "Hi", to: { kind: "holder" } });
+    expect(daemon.made(`POST ${P}/feedback`).map((c) => c.body)).toEqual([
+      { task: "T-2", body: "Hi", to: ["tag:ui"] },
+      { task: "T-2", body: "Hi" },
     ]);
   });
 });
 
-describe("the writes", () => {
-  it("change the title and the description and record the edit", async () => {
-    await settle(setTitle("demo", "T-2", "Sign-in form"));
-    await settle(setDescription("demo", "T-2", "New text"));
-    const task = await read();
-    expect(task.title).toBe("Sign-in form");
-    expect(task.description).toBe("New text");
-    expect(task.history[0]).toMatchObject({
-      type: "task.updated",
-      actor: "human:tanim",
-    });
+describe("the human-review writes", () => {
+  it("refuse with not_found and send no request, as the daemon serves no such route", async () => {
+    await expect(
+      setHumanReview("demo", "T-2", { reviewer: null, reason: "x" }),
+    ).rejects.toSatisfy((e: unknown) => apiErrorCode(e) === "not_found");
+    await expect(clearHumanReview("demo", "T-2")).rejects.toSatisfy(
+      (e: unknown) => apiErrorCode(e) === "not_found",
+    );
+    expect(daemon.calls).toHaveLength(0);
+  });
+});
+
+describe("the task's messages", () => {
+  const message = (
+    n: number,
+    over: Partial<MessageView> = {},
+  ): MessageView => ({
+    id: `m-${String(n)}`,
+    thread: "m-1",
+    sender: "frontend/ui",
+    recipients: [],
+    body: "b",
+    proposal: null,
+    reply_to: null,
+    task: "T-2",
+    sent_at: 1_000,
+    ...over,
+  });
+  const thread = (messages: MessageView[]) => ({
+    id: messages[0]?.thread ?? "m-1",
+    awaiting_human: false,
+    last_at: 0,
+    messages,
+    participants: [],
+    proposal: null,
+    task: "T-2",
   });
 
-  it("add a label with the project's colour for a known name, and remove it", async () => {
-    await settle(addLabel("demo", "T-9", { name: "ui", color: "plum" }));
-    await settle(addLabel("demo", "T-9", { name: "fresh", color: "gold" }));
-    await settle(addLabel("demo", "T-9", { name: "fresh", color: "teal" }));
-    let labels = (await read("T-9")).labels;
-    expect(labels).toContainEqual({ name: "ui", color: "sage" });
-    expect(labels.filter((l) => l.name === "fresh")).toEqual([
-      { name: "fresh", color: "gold" },
-    ]);
-    await settle(removeLabel("demo", "T-9", "fresh"));
-    labels = (await read("T-9")).labels;
-    expect(labels.map((l) => l.name)).not.toContain("fresh");
-  });
-
-  it("add, rename, tick, move and remove a plain step", async () => {
-    await settle(
-      addChecklistItem("demo", "T-2", "Subtasks", {
-        kind: "step",
-        text: "Write the copy",
+  it("reads the threads of the task and keeps its messages, oldest first", async () => {
+    daemon.on(
+      `GET ${P}/messages`,
+      ok({
+        items: [
+          thread([message(10, { sent_at: 3_000, thread: "m-10" })]),
+          thread([
+            message(1),
+            message(2, { task: "T-5" }),
+            message(9, { sent_at: 2_000 }),
+            message(3, { sent_at: 2_000 }),
+          ]),
+        ],
+        next: null,
       }),
     );
-    let items = (await read()).checklists[0]?.items ?? [];
-    const added = items.at(-1);
-    expect(added).toMatchObject({ kind: "step", text: "Write the copy" });
-    const id = added?.id ?? "";
-    await settle(
-      renameChecklistItem("demo", "T-2", id, "Write the error copy"),
-    );
-    await settle(tickChecklistItem("demo", "T-2", id, true));
-    await settle(moveChecklistItem("demo", "T-2", id, 0));
-    items = (await read()).checklists[0]?.items ?? [];
-    expect(items[0]).toMatchObject({
-      id,
-      text: "Write the error copy",
-      done: true,
-    });
-    await settle(removeChecklistItem("demo", "T-2", id));
-    items = (await read()).checklists[0]?.items ?? [];
-    expect(items.map((i) => i.id)).not.toContain(id);
+    const query = taskMessagesQuery("demo", "T-2");
+    expect(query.queryKey).toEqual(["demo", "messages", "task", "T-2"]);
+    expect(query.staleTime).toBe(Infinity);
+    const read = await getTaskMessages("demo", "T-2");
+    expect(read.map((m) => m.id)).toEqual(["m-1", "m-3", "m-9", "m-10"]);
+    expect(daemon.calls[0]?.path).toBe(`${P}/messages?task=T-2&limit=200`);
   });
 
-  it("start a new checklist for a name the task does not have", async () => {
-    await settle(
-      addChecklistItem("demo", "T-13", "Follow-ups", {
-        kind: "step",
-        text: "Docs",
-      }),
-    );
-    const lists = (await read("T-13")).checklists;
-    expect(lists.map((c) => c.name)).toEqual(["Follow-ups"]);
-  });
-
-  it("add the edge with a linked item and remove the edge with it", async () => {
-    await settle(
-      addChecklistItem("demo", "T-9", "Subtasks", {
-        kind: "linked",
-        task: "T-14",
-      }),
-    );
-    let task = await read("T-9");
-    const linked = task.checklists[0]?.items.at(-1);
-    expect(linked).toMatchObject({ kind: "linked", task: "T-14", done: true });
-    expect(task.dependencies).toContainEqual(
-      expect.objectContaining({
-        task: "T-14",
-        direction: "needs",
-        origin: "checklist",
-      }),
-    );
-    await settle(removeChecklistItem("demo", "T-9", linked?.id ?? ""));
-    task = await read("T-9");
-    expect(task.dependencies.map((d) => d.task)).not.toContain("T-14");
-  });
-
-  it("refuse a hand tick or a rename on a linked item", async () => {
-    const tick = await refused(tickChecklistItem("demo", "T-2", "T-2-5", true));
-    expect(tick.code).toBe("invalid_request");
-    expect(tick.details.reason).toBe("linked_item");
-    const rename = await refused(
-      renameChecklistItem("demo", "T-2", "T-2-5", "x"),
-    );
-    expect(rename.details.reason).toBe("linked_item");
-    expect(
-      (await refused(tickChecklistItem("demo", "T-2", "nope", true))).code,
-    ).toBe("not_found");
-  });
-
-  it("add and remove a direct dependency", async () => {
-    await settle(addDependency("demo", "T-9", "T-16"));
-    expect((await read("T-9")).dependencies).toContainEqual(
-      expect.objectContaining({ task: "T-16", origin: "direct" }),
-    );
-    expect((await read("T-16")).dependencies).toContainEqual(
-      expect.objectContaining({ task: "T-9", direction: "needed_by" }),
-    );
-    await settle(removeDependency("demo", "T-9", "T-16"));
-    expect((await read("T-9")).dependencies).toEqual([]);
-  });
-
-  it("refuse a cycle with its path and leave the edges as they were", async () => {
-    const before = (await read()).dependencies;
-    const error = await refused(addDependency("demo", "T-2", "T-5"));
-    expect(error.code).toBe("dependency_cycle");
-    expect(error.details.cycle).toEqual(["T-2", "T-5", "T-2"]);
-    expect((await read()).dependencies).toEqual(before);
-  });
-
-  it("refuse a self edge, an unknown task, a duplicate, a Done task and a linked item's edge", async () => {
-    expect(
-      (await refused(addDependency("demo", "T-2", "T-2"))).details.reason,
-    ).toBe("self_dependency");
-    expect((await refused(addDependency("demo", "T-2", "T-99"))).code).toBe(
-      "task_not_found",
-    );
-    expect((await refused(addDependency("demo", "T-5", "T-2"))).code).toBe(
-      "dependency_exists",
-    );
-    expect((await refused(addDependency("demo", "T-13", "T-9"))).code).toBe(
-      "task_closed",
-    );
-    expect(
-      (await refused(removeDependency("demo", "T-2", "T-13"))).details.reason,
-    ).toBe("checklist_origin");
-    expect((await refused(removeDependency("demo", "T-2", "T-9"))).code).toBe(
-      "dependency_not_found",
-    );
-  });
-
-  it("turn human review on with a reviewer and a reason, and off", async () => {
-    await settle(
-      setHumanReview("demo", "T-2", { reviewer: "tanim", reason: "Auth work" }),
-    );
-    expect((await read()).human_review).toMatchObject({
-      reviewer: "tanim",
-      reason: "Auth work",
-      set_by: "human:tanim",
-    });
-    await settle(clearHumanReview("demo", "T-2"));
-    expect((await read()).human_review).toBeNull();
-  });
-
-  it("send feedback to the claim holder, an agent or a tag, from the signed-in human", async () => {
-    await settle(
-      sendFeedback("demo", "T-2", { body: "One", to: { kind: "holder" } }),
-    );
-    await settle(
-      sendFeedback("demo", "T-2", {
-        body: "Two",
-        to: { kind: "agent", name: "review" },
-      }),
-    );
-    await settle(
-      sendFeedback("demo", "T-2", {
-        body: "Three",
-        to: { kind: "tag", name: "frontend" },
-      }),
-    );
-    const sent = (await read()).messages.slice(-3);
-    expect(sent.map((m) => [m.from, m.to, m.body])).toEqual([
-      ["human:tanim", "frontend/ui", "One"],
-      ["human:tanim", "review", "Two"],
-      ["human:tanim", "tag:frontend", "Three"],
-    ]);
-    const holderless = await refused(
-      sendFeedback("demo", "T-9", { body: "x", to: { kind: "holder" } }),
-    );
-    expect(holderless.code).toBe("invalid_request");
-  });
-
-  it("refuse every write to a task the project does not have", async () => {
-    expect((await refused(setTitle("demo", "T-99", "x"))).code).toBe(
-      "task_not_found",
+  it("throws the refusal code", async () => {
+    daemon.on(`GET ${P}/messages`, refuse(404, "project_not_found"));
+    await expect(getTaskMessages("demo", "T-2")).rejects.toSatisfy(
+      (e: unknown) => apiErrorCode(e) === "project_not_found",
     );
   });
 });

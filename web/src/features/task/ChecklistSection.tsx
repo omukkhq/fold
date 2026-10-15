@@ -58,10 +58,10 @@ interface RowProps {
 
 function useRowWrites(slug: string, task: string, item: string) {
   const move = useTaskWrite(slug, task, (position: number) =>
-    moveChecklistItem(slug, task, item, position),
+    moveChecklistItem(slug, item, position),
   );
   const remove = useTaskWrite(slug, task, () =>
-    removeChecklistItem(slug, task, item),
+    removeChecklistItem(slug, item),
   );
   return { move, remove };
 }
@@ -144,7 +144,7 @@ function RenameForm({
   onDone: () => void;
 }) {
   const write = useTaskWrite(slug, task, (text: string) =>
-    renameChecklistItem(slug, task, item.id, text),
+    renameChecklistItem(slug, item.id, text),
   );
   const form = useForm<RenameItemForm>({
     resolver: zodResolver(renameItemSchema),
@@ -200,7 +200,7 @@ function StepRow({
 }: RowProps & { item: StepItem }) {
   const [renaming, setRenaming] = useState(false);
   const tick = useTaskWrite(slug, task, (done: boolean) =>
-    tickChecklistItem(slug, task, item.id, done),
+    tickChecklistItem(slug, item.id, done),
   );
   const { move, remove } = useRowWrites(slug, task, item.id);
   if (renaming) {

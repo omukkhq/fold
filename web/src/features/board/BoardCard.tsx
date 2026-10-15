@@ -6,6 +6,7 @@ import {
   GitPullRequest,
   Hourglass,
   ListChecks,
+  MessageSquare,
   type LucideIcon,
 } from "lucide-react";
 import type { BoardCard as BoardCardData, BoardProposal } from "@/api/board";
@@ -27,6 +28,7 @@ import {
   blocksText,
   checklistText,
   humanReviewText,
+  messagesText,
   needsText,
   proposalLook,
   proposalText,
@@ -41,11 +43,21 @@ const PROPOSAL_ICON: Record<ProposalLook, { icon: LucideIcon; color: string }> =
     merged: { icon: GitMerge, color: "text-text-muted" },
   };
 
-function Meta({ icon: Icon, text }: { icon: LucideIcon; text: string }) {
+function Meta({
+  icon: Icon,
+  text,
+  label,
+}: {
+  icon: LucideIcon;
+  text: string;
+  /** Names a bare number for a screen reader. */
+  label?: string;
+}) {
   return (
     <span className="inline-flex items-center gap-4 text-meta text-text-muted">
       <Icon aria-hidden="true" size={13} />
       {text}
+      {label ? <span className="sr-only">{label}</span> : null}
     </span>
   );
 }
@@ -114,6 +126,7 @@ export function BoardCard({
   const mark = attentionMark(card.attention);
   const checklist = checklistText(card);
   const blocks = blocksText(card);
+  const messages = messagesText(card);
   const needs = needsText(card);
   const blocked = blockedText(card);
   const stalled = hasKind(card.attention, "stalled");
@@ -165,6 +178,9 @@ export function BoardCard({
         {checklist ? <Meta icon={ListChecks} text={checklist} /> : null}
         {blocks ? <Meta icon={GitFork} text={blocks} /> : null}
         {needs ? <Meta icon={Hourglass} text={needs} /> : null}
+        {messages ? (
+          <Meta icon={MessageSquare} text={messages} label="messages" />
+        ) : null}
       </div>
       {card.human_review ? (
         <Badge tone="human-review" className="self-start">

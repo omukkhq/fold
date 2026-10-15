@@ -9,18 +9,26 @@ import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { BoardCard } from "./BoardCard";
 import { newTaskPath } from "./card";
-import { COLUMNS, type ColumnSpec, type ColumnView } from "./columns";
+import {
+  COLUMNS,
+  hintText,
+  moreText,
+  type ColumnSpec,
+  type ColumnView,
+} from "./columns";
 
 const LOADING_CARDS = [0, 1, 2];
 
 function Column({
   spec,
   count,
+  hint = spec.hint,
   children,
 }: {
   spec: ColumnSpec;
   /** The count beside the name; `–` while the board loads. */
   count: string;
+  hint?: string;
   children?: ReactNode;
 }) {
   return (
@@ -40,7 +48,7 @@ function Column({
           </h2>
           <span className="text-body font-medium text-text-faint">{count}</span>
         </div>
-        <p className="text-meta leading-snug text-text-faint">{spec.hint}</p>
+        <p className="text-meta leading-snug text-text-faint">{hint}</p>
       </header>
       <div className="flex flex-col gap-10 pt-2">{children}</div>
     </section>
@@ -66,7 +74,8 @@ export function BoardColumns({
         <Column
           key={column.status}
           spec={column}
-          count={String(column.cards.length)}
+          count={String(column.count)}
+          hint={hintText(column)}
         >
           {column.cards.length > 0 ? (
             <ol className="flex flex-col gap-10">
@@ -77,9 +86,27 @@ export function BoardColumns({
               ))}
             </ol>
           ) : null}
+          <MoreLink slug={slug} text={moreText(column)} />
         </Column>
       ))}
     </Row>
+  );
+}
+
+function MoreLink({ slug, text }: { slug: string; text: string | null }) {
+  if (text === null) {
+    return null;
+  }
+  return (
+    <HrefLink
+      href={`/p/${encodeURIComponent(slug)}/repository`}
+      className={cn(
+        "self-start rounded-s text-meta font-medium text-primary-text hover:underline",
+        focusRing,
+      )}
+    >
+      {text}
+    </HrefLink>
   );
 }
 

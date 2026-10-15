@@ -11,10 +11,11 @@ import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
 import { useLiveStatus } from "@/live/status";
 import { useDataClock } from "@/live/useDataClock";
+import { ArchiveMenu } from "./ArchiveMenu";
 import { ChecklistSection } from "./ChecklistSection";
 import { DescriptionSection } from "./DescriptionSection";
 import { DialogFrame } from "./DialogFrame";
-import { currentLive, liveStrip } from "./liveStrip";
+import { liveStrip } from "./liveStrip";
 import { MessagesSection } from "./MessagesSection";
 import { TaskSide } from "./TaskSide";
 import { TitleBlock } from "./TitleBlock";
@@ -60,7 +61,7 @@ function Loaded({
 }) {
   // Live workspace state is written only by the event stream, so this query observes the cache and never fetches.
   const { data: streamed } = useQuery<LiveWorkspace>({
-    queryKey: keys.workspaceLive(slug, task.workspace?.id ?? ""),
+    queryKey: keys.workspaceLive(slug, task.workspace ?? ""),
     queryFn: skipToken,
   });
   const status = useLiveStatus();
@@ -69,7 +70,7 @@ function Loaded({
     status.lastEventAt,
     streamed?.last_activity_at,
   ]);
-  const live = currentLive(task.workspace, streamed);
+  const live = task.workspace === null ? null : (streamed ?? null);
   return (
     <div className="flex flex-col gap-28 px-24 pt-22 pb-24 md:flex-row">
       <div className="flex min-w-0 flex-1 flex-col gap-24">
@@ -83,12 +84,13 @@ function Loaded({
         <WorkingChanges
           slug={slug}
           workspace={task.workspace}
+          info={task.workspace_info}
           live={live}
           now={now}
         />
         <MessagesSection slug={slug} task={task} />
       </div>
-      <TaskSide slug={slug} task={task} now={now} />
+      <TaskSide slug={slug} task={task} live={live} now={now} />
     </div>
   );
 }
@@ -149,8 +151,17 @@ export function TaskDialog({ slug, task, onClose }: TaskDialogProps) {
     <DialogFrame
       crumb={task}
       crumbIsId
-      actions={query.isError ? undefined : <CopyLink />}
-      described={query.isSuccess}
+      actions={
+        query.isError ? undefined : (
+          <>
+            <CopyLink />
+            {query.isSuccess ? (
+              <ArchiveMenu slug={slug} task={task} onArchived={onClose} />
+            ) : null}
+          </>
+        )
+      }
+      described={query.isSuccess && Boolean(query.data.status_reason)}
       onClose={onClose}
     >
       {body}

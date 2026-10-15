@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { importsFixtures, mayImportFixtures } from "../lib/fixtureGuard";
+import {
+  importsFixtures,
+  importsRetiredFixture,
+  mayImportFixtures,
+} from "../lib/fixtureGuard";
 
 const sources = import.meta.glob<string>("/src/**/*.{ts,tsx}", {
   query: "?raw",
@@ -16,6 +20,17 @@ describe("fixture boundary", () => {
     const offenders = Object.entries(sources)
       .filter(
         ([path, source]) => !mayImportFixtures(path) && importsFixtures(source),
+      )
+      .map(([path]) => path);
+    expect(offenders).toEqual([]);
+  });
+
+  it("keeps the retired board and task fixtures out of every source, tests included", () => {
+    const offenders = Object.entries(sources)
+      .filter(
+        ([path, source]) =>
+          !path.endsWith("/lib/fixtureGuard.test.ts") &&
+          importsRetiredFixture(source),
       )
       .map(([path]) => path);
     expect(offenders).toEqual([]);

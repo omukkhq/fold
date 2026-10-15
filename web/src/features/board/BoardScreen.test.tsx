@@ -18,16 +18,23 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { agents } from "../../../fixtures/agentBar";
-import { board } from "../../../fixtures/board";
-import { fixtureEventTransport } from "../../../fixtures/events";
 import type { Board } from "@/api/board";
 import { keys } from "@/api/keys";
 import { formatAsOf } from "@/format/time";
-import { connectProject } from "@/live/connect";
+import { applyEvent } from "@/live/apply";
+import { isEventEnvelope } from "@/live/envelope";
 import { LiveRetryContext } from "@/live/retry";
 import { liveStatusStore } from "@/live/status";
+import { daemon, ok } from "@/test/daemon";
+import { boardCard, boardView } from "@/test/payloads";
 import { BoardScreen } from "./BoardScreen";
 import { boardSearchSchema, cleanSearch } from "./search";
+
+vi.mock("@/api/client", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/api/client")>();
+  const { daemon: fake } = await import("@/test/daemon");
+  return { ...real, api: fake.api };
+});
 
 beforeAll(() => {
   globalThis.ResizeObserver = class {
@@ -42,12 +49,78 @@ beforeAll(() => {
 });
 
 afterEach(() => {
+  daemon.reset();
   cleanup();
   liveStatusStore.reset();
 });
 
+const ui = { name: "ui", color: "sage" };
+const auth = { name: "auth", color: "slate" };
+
+/** A board as the daemon sends it: the Done column holds three of five completed tasks. */
+function demoBoard(): Board {
+  return boardView(
+    [
+      boardCard("T-1", {
+        title: "Add the session cookie and sign-out",
+        labels: [auth],
+        worker: "frontend/ui",
+        workspace: "ws-1",
+      }),
+      boardCard("T-2", {
+        title: "Build the login form",
+        status: "in_progress",
+        labels: [ui],
+        worker: "frontend/ui",
+        messages: 2,
+        checklist: {
+          steps_done: 1,
+          steps_total: 3,
+          linked_done: 0,
+          linked_total: 1,
+        },
+      }),
+      boardCard("T-3", {
+        title: "Review the gate",
+        status: "review",
+        worker: "backend",
+        attention: [{ kind: "question" }],
+      }),
+      boardCard("T-4", {
+        title: "Needs two others",
+        status: "backlog",
+        needs: ["T-2", "T-5"],
+        blocked_by: ["T-2"],
+      }),
+      boardCard("T-5", {
+        title: "Waits for the gate",
+        status: "backlog",
+        blocked: true,
+        needs: ["T-3"],
+        blocked_by: ["T-3"],
+      }),
+      boardCard("T-6", {
+        title: "Needs a person",
+        labels: [auth, ui],
+        human_review: { reviewer: "tanim" },
+        attention: [{ kind: "human_review" }],
+      }),
+      boardCard("T-7", {
+        title: "Quiet worker",
+        status: "in_progress",
+        worker: "backend/db",
+        attention: [{ kind: "stalled" }, { kind: "stale_claim" }],
+      }),
+      boardCard("T-8", { status: "done", title: "Older", completed_at: 10 }),
+      boardCard("T-9", { status: "done", title: "Newest", completed_at: 30 }),
+      boardCard("T-10", { status: "done", title: "Middle", completed_at: 20 }),
+    ],
+    { done: 5 },
+  );
+}
+
 function setup(
-  data: Board | null = board("demo"),
+  data: Board | null = demoBoard(),
   path = "/p/demo/board",
   retry: () => void = () => undefined,
 ): { client: QueryClient; router: ReturnType<typeof makeRouter> } {
@@ -105,7 +178,8 @@ const column = (name: string) => screen.getByRole("region", { name });
 const tasksIn = (name: string) =>
   within(column(name))
     .queryAllByRole("link")
-    .map((link) => link.closest("[data-task]")?.getAttribute("data-task"));
+    .map((link) => link.closest("[data-task]")?.getAttribute("data-task"))
+    .filter((task) => task !== undefined);
 
 describe("BoardScreen", () => {
   it("shows the five columns from Backlog to Done with their cards", async () => {
@@ -121,29 +195,79 @@ describe("BoardScreen", () => {
       "Review",
       "Done",
     ]);
-    expect(tasksIn("Todo")).toEqual(["T-1", "T-8", "T-9"]);
-    expect(screen.getByText("16 tasks · 3 ready")).toBeTruthy();
+    expect(tasksIn("Todo")).toEqual(["T-1", "T-6"]);
+    expect(screen.getByText("12 tasks · 2 ready")).toBeTruthy();
   });
 
-  it("shows every card mark from the fixture", async () => {
+  it("lists the Done column newest first with its total, its limit hint and the link to the Repository", async () => {
+    setup();
+    await screen.findByRole("region", { name: "Done" });
+    expect(tasksIn("Done")).toEqual(["T-9", "T-10", "T-8"]);
+    expect(
+      within(column("Done")).getByText("Integrated into main · latest 3"),
+    ).toBeTruthy();
+    const more = within(column("Done")).getByRole("link", {
+      name: "2 more in Repository",
+    });
+    expect(more.getAttribute("href")).toBe("/p/demo/repository");
+    expect(within(column("Done")).getByText("5")).toBeTruthy();
+    expect(
+      within(column("Todo")).queryByRole("link", {
+        name: /more in Repository/,
+      }),
+    ).toBeNull();
+  });
+
+  it("draws the proposal pill and the activity line once the payload carries them", async () => {
+    const data = demoBoard();
+    const todo = data.columns.find((c) => c.status === "todo");
+    const first = todo?.cards[0];
+    if (first) {
+      first.proposal = {
+        id: "P-3",
+        state: "changes_requested",
+        revision: null,
+      };
+      first.activity = { path: "src/routes/login.tsx", at: Date.now() };
+    }
+    setup(data);
+    await screen.findByRole("region", { name: "Backlog" });
+    expect(screen.getByText("P-3 · changes requested")).toBeTruthy();
+    expect(screen.getByText("Editing src/routes/login.tsx")).toBeTruthy();
+  });
+
+  it("draws no proposal pill while the payload has none", async () => {
     setup();
     await screen.findByRole("region", { name: "Backlog" });
-    expect(screen.getByText("Blocked by T-3")).toBeTruthy();
+    expect(screen.queryByText(/^P-\d+ ·/)).toBeNull();
+  });
+
+  it("shows the message count on a card", async () => {
+    setup();
+    await screen.findByRole("region", { name: "Backlog" });
+    const card = column("In Progress").querySelector('[data-task="T-2"]');
+    expect(card?.textContent).toContain("2messages");
+  });
+
+  it("renders every attention kind of the payload and nothing else", async () => {
+    setup();
+    await screen.findByRole("region", { name: "Backlog" });
     expect(screen.getByText("Question for you")).toBeTruthy();
     expect(screen.getByText("Your review")).toBeTruthy();
     expect(screen.getByText("Stalled · needs you")).toBeTruthy();
-    expect(screen.getByText("Stale claim · needs you")).toBeTruthy();
-    expect(screen.getByText("P-3 · changes requested")).toBeTruthy();
-    expect(screen.getByText("P-6 · conflict")).toBeTruthy();
-    expect(screen.getAllByText("Human review · tanim")).toHaveLength(2);
-    expect(screen.getByText("needs T-2, T-4")).toBeTruthy();
-    expect(screen.getByText("Editing src/routes/login.tsx")).toBeTruthy();
-    expect(screen.getByText(/^No edits for \d+ min · blocked$/)).toBeTruthy();
+    expect(screen.getByText("Human review · tanim")).toBeTruthy();
+    expect(screen.getByText("Blocked by T-3")).toBeTruthy();
+    expect(screen.getByText("needs T-2")).toBeTruthy();
     expect(
       screen.getByLabelText(
-        "Needs you: Stalled: its worker made no edits for a while",
+        "Needs you: Stalled: its worker made no edits for a while · Stale claim: the worker's lease ran out",
       ),
     ).toBeTruthy();
+    expect(screen.getAllByLabelText(/^Needs you:/)).toHaveLength(3);
+    // A card without an item has no mark, however quiet its worker is.
+    expect(
+      column("Todo").querySelector('[data-task="T-1"]')?.textContent,
+    ).not.toContain("needs you");
   });
 
   it("has nothing to drag and no control that moves a card", async () => {
@@ -172,38 +296,32 @@ describe("BoardScreen", () => {
     expect(router.state.location.pathname).toBe("/p/demo/t/T-1");
   });
 
-  it("moves a card when the fixture stream sends a status event, with no reload", async () => {
+  it("moves a card when the recorded status event arrives, with no reload", async () => {
     const { client } = setup();
     await screen.findByRole("region", { name: "Backlog" });
     expect(tasksIn("Todo")).toContain("T-1");
-    const stream = connectProject(
-      client,
-      "demo",
-      fixtureEventTransport("demo", 300, 60_000),
-      liveStatusStore,
-    );
-    try {
-      await waitFor(
-        () => {
-          expect(tasksIn("In Progress")[0]).toBe("T-1");
-        },
-        { timeout: 10_000 },
-      );
-      expect(tasksIn("Todo")).not.toContain("T-1");
-      await waitFor(
-        () => {
-          expect(tasksIn("Review")).toEqual(["T-1", "T-3"]);
-        },
-        { timeout: 10_000 },
-      );
-      expect(tasksIn("In Progress")).not.toContain("T-1");
-      // The status was patched into the cache; an unknown status would have invalidated and refetched the board.
-      expect(client.getQueryState(keys.board("demo"))?.isInvalidated).toBe(
-        false,
-      );
-    } finally {
-      stream.stop();
-    }
+    const frame = {
+      kind: "event",
+      seq: 9,
+      type: "task.status_changed",
+      actor: "fold",
+      task: "T-1",
+      proposal: null,
+      workspace: null,
+      revision: null,
+      data: { from: "todo", to: "in_progress" },
+      created_at: 1,
+    };
+    if (!isEventEnvelope(frame)) throw new Error("not a frame");
+    act(() => {
+      applyEvent(client, "demo", frame);
+    });
+    await waitFor(() => {
+      expect(tasksIn("In Progress")).toContain("T-1");
+    });
+    expect(tasksIn("Todo")).not.toContain("T-1");
+    // The status was patched into the cache; an unknown status would have invalidated and refetched the board.
+    expect(client.getQueryState(keys.board("demo"))?.isInvalidated).toBe(false);
   });
 
   it("filters by blocked and Needs you, and the URL carries the filter", async () => {
@@ -212,14 +330,16 @@ describe("BoardScreen", () => {
     await userEvent.click(screen.getByRole("button", { name: "Blocked only" }));
     expect(router.state.location.search).toEqual({ blocked: true });
     expect(router.state.location.href).toContain("blocked=true");
-    expect(tasksIn("In Progress")).toEqual(["T-10"]);
+    expect(tasksIn("Backlog")).toEqual(["T-5"]);
+    expect(tasksIn("In Progress")).toEqual([]);
     await userEvent.click(screen.getByRole("button", { name: "Blocked only" }));
     expect(router.state.location.search).toEqual({});
 
     await userEvent.click(screen.getByRole("button", { name: /^Needs you/ }));
     expect(router.state.location.search).toEqual({ needs: true });
-    expect(tasksIn("Backlog")).toEqual(["T-6"]);
+    expect(tasksIn("Todo")).toEqual(["T-6"]);
     expect(tasksIn("Review")).toEqual(["T-3"]);
+    expect(tasksIn("In Progress")).toEqual(["T-7"]);
   });
 
   it("filters by an agent from the Agent menu, and the toolbar draws no agent pills", async () => {
@@ -236,6 +356,7 @@ describe("BoardScreen", () => {
     await userEvent.click(screen.getByRole("menuitem", { name: "frontend" }));
     expect(router.state.location.search).toEqual({ agent: "frontend" });
     expect(tasksIn("Review")).toEqual([]);
+    expect(tasksIn("In Progress")).toEqual(["T-2"]);
     screen.getByRole("button", { name: "Agent: frontend" }).focus();
     await userEvent.keyboard("{Enter}");
     await userEvent.click(screen.getByRole("menuitem", { name: "Any agent" }));
@@ -249,29 +370,29 @@ describe("BoardScreen", () => {
     await userEvent.keyboard("{Enter}");
     await userEvent.click(screen.getByRole("menuitem", { name: "auth" }));
     expect(router.state.location.search).toEqual({ label: "auth" });
-    expect(tasksIn("Todo")).toEqual(["T-1", "T-9"]);
+    expect(tasksIn("Todo")).toEqual(["T-1", "T-6"]);
     expect(tasksIn("Backlog")).toEqual([]);
   });
 
   it("reads the filters from a shared link and searches", async () => {
     const { router } = setup(
-      board("demo"),
+      demoBoard(),
       "/p/demo/board?label=ui&agent=frontend",
     );
     await screen.findByRole("region", { name: "Backlog" });
-    // T-8 carries both labels but nobody is responsible for it.
+    // T-6 carries the label but nobody is responsible for it.
     expect(tasksIn("Todo")).toEqual([]);
-    expect(tasksIn("In Progress")).toEqual(["T-2", "T-11"]);
+    expect(tasksIn("In Progress")).toEqual(["T-2"]);
     await userEvent.type(
       screen.getByRole("searchbox", { name: "Search tasks" }),
-      "theme",
+      "nothing",
     );
-    expect(router.state.location.search).toMatchObject({ q: "theme" });
-    expect(tasksIn("In Progress")).toEqual(["T-11"]);
+    expect(router.state.location.search).toMatchObject({ q: "nothing" });
+    expect(tasksIn("In Progress")).toEqual([]);
   });
 
   it("shows the empty state with the next step for an empty project", async () => {
-    setup({ columns: [] });
+    setup(boardView([]));
     const panel = await screen.findByRole("region", { name: "No tasks yet" });
     expect(within(column("Todo")).getByText("No tasks yet")).toBeTruthy();
     expect(panel.textContent).toContain("claude --name frontend");
@@ -310,18 +431,19 @@ describe("BoardScreen", () => {
         <RouterProvider router={makeRouter("/p/demo/board")} />
       </QueryClientProvider>,
     );
+    daemon.on("GET /api/v1/projects/demo/board", () => ok(demoBoard()));
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("The board could not load.");
     await userEvent.click(within(alert).getByRole("button", { name: "Retry" }));
     expect(
-      await screen.findByRole("link", { name: "Login flow" }),
+      await screen.findByRole("link", { name: "Build the login form" }),
     ).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("shows the reconnecting banner with the countdown, Retry and the time of the board shown", async () => {
     const retry = vi.fn();
-    setup(board("demo"), "/p/demo/board", retry);
+    setup(demoBoard(), "/p/demo/board", retry);
     await screen.findByRole("region", { name: "Backlog" });
     const asOf = Date.now();
     act(() => {

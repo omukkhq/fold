@@ -10,7 +10,7 @@ import {
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
-import { cycleText, cyclePath } from "./dependencies";
+import { describeError } from "./errors";
 import { statusLook } from "./text";
 
 /** react-hook-form's submit handler returns a promise that a form event cannot take; validation errors land in the form state. */
@@ -137,16 +137,19 @@ export function SmallAction({
   );
 }
 
-/** A refused write: a cycle names its tasks; any other refusal shows the daemon's message. */
+/** A refused write: a mapped refusal names its cause, any other shows the daemon's message. A refusal that belongs to a form field is shown by the field. */
 export function WriteError({ error }: { error: Error | null }) {
   if (error === null) {
     return null;
   }
-  const cycle = cyclePath(error);
-  if (cycle) {
+  const view = describeError(error);
+  if (view?.field) {
+    return null;
+  }
+  if (view) {
     return (
       <p role="alert" className="text-meta font-medium text-danger">
-        {cycleText(cycle)}
+        {view.text}
       </p>
     );
   }

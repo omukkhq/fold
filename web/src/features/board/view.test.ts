@@ -1,32 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { BoardCard, TaskStatus } from "@/api/board";
+import type { TaskStatus } from "@/api/board";
+import { boardCard } from "@/test/payloads";
 import { INITIAL_STATUS } from "@/live/status";
 import { groupColumns } from "./columns";
 import { cardCount, needsYouLook, reconnectAsOf, summaryText } from "./view";
 
-function make(task: string, status: TaskStatus): BoardCard {
-  return {
-    task,
-    title: task,
-    status,
-    blocked: false,
-    labels: [],
-    checklist: {
-      steps_done: 0,
-      steps_total: 0,
-      linked_done: 0,
-      linked_total: 0,
-    },
-    needs: [],
-    blocks: 0,
-    worker: null,
-    workspace: null,
-    activity: null,
-    proposal: null,
-    human_review: null,
-    attention: [],
-  };
-}
+const make = (task: string, status: TaskStatus) => boardCard(task, { status });
 
 describe("summaryText", () => {
   it("counts the tasks and the ready ones", () => {

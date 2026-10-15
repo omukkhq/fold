@@ -1,34 +1,17 @@
 import { queryOptions } from "@tanstack/react-query";
-import { fromFixture } from "./fixture";
+import { api } from "./client";
 import { keys } from "./keys";
+import { unwrap } from "./result";
+import type { components } from "./schema";
 
-/** The daemon's status strings, which are also the board's column keys. */
-export type TaskStatus = "backlog" | "todo" | "in_progress" | "review" | "done";
+type Schemas = components["schemas"];
 
-/** The daemon computes every kind; the web derives none of them. */
-export type AttentionKind =
-  | "question"
-  | "human_review"
-  | "stalled"
-  | "stale_claim";
-
-export interface AttentionItem {
-  kind: AttentionKind;
-}
-
-export interface BoardLabel {
-  name: string;
-  /** One of the eight label colour names. */
-  color: string;
-}
-
-/** Plain steps and linked items are counted apart, so the card can show both together. */
-export interface ChecklistCounts {
-  steps_done: number;
-  steps_total: number;
-  linked_done: number;
-  linked_total: number;
-}
+export type BoardLabel = Schemas["Label"];
+export type TaskStatus = Schemas["TaskStatus"];
+export type AttentionItem = Schemas["AttentionItem"];
+export type AttentionKind = Schemas["AttentionKind"];
+export type ChecklistCounts = Schemas["ChecklistCounts"];
+export type HumanReviewMark = Schemas["HumanReviewMark"];
 
 export type ProposalState =
   | "open"
@@ -45,11 +28,6 @@ export interface BoardProposal {
   revision: string | null;
 }
 
-export interface HumanReviewMark {
-  /** The named human whose approval integration waits for; null when any human may approve. */
-  reviewer: string | null;
-}
-
 /** The last tracked edit in the task's workspace. */
 export interface BoardActivity {
   /** Relative to the workspace root; null when the daemon cannot name one file. */
@@ -58,45 +36,35 @@ export interface BoardActivity {
   at: number;
 }
 
-export interface BoardCard {
-  /** @example T-12 */
-  task: string;
-  title: string;
-  status: TaskStatus;
-  blocked: boolean;
-  labels: BoardLabel[];
-  checklist: ChecklistCounts;
-  /** The unfinished prerequisites, as public task ids. */
-  needs: string[];
-  /** How many open tasks wait for this one. */
-  blocks: number;
-  /** The worker holding the implementation claim, `agent` or `agent/worker`. */
-  worker: string | null;
-  /** @example ws-9 */
-  workspace: string | null;
-  activity: BoardActivity | null;
-  proposal: BoardProposal | null;
-  human_review: HumanReviewMark | null;
-  attention: AttentionItem[];
-}
+/**
+ * The generated card plus fields the card can draw that the board payload does not carry. Each is optional; an absent
+ * field draws no proposal pill and no payload activity line.
+ */
+export type BoardCard = Schemas["BoardCard"] & {
+  proposal?: BoardProposal | null;
+  activity?: BoardActivity | null;
+};
 
-export interface BoardColumn {
-  status: TaskStatus;
+export type BoardColumn = Omit<Schemas["BoardColumn"], "cards"> & {
   cards: BoardCard[];
-}
+};
 
-/** Column-shaped because the live layer moves a card between columns by its `task` and the column `status`. */
-export interface Board {
+export type Board = Omit<Schemas["BoardView"], "columns"> & {
   columns: BoardColumn[];
+};
+
+export function getBoard(slug: string): Promise<Board> {
+  return unwrap(
+    api.GET("/api/v1/projects/{slug}/board", {
+      params: { path: { slug } },
+    }),
+  );
 }
 
-const fixture = import.meta.env.DEV
-  ? () => import("../../fixtures/board")
-  : undefined;
-
-export async function getBoard(slug: string): Promise<Board> {
-  return fromFixture(fixture, (m) => m.board(slug), { columns: [] });
-}
-
+/** The event stream keeps the board fresh, so a cached answer never goes stale by time. */
 export const boardQuery = (slug: string) =>
-  queryOptions({ queryKey: keys.board(slug), queryFn: () => getBoard(slug) });
+  queryOptions({
+    queryKey: keys.board(slug),
+    queryFn: () => getBoard(slug),
+    staleTime: Infinity,
+  });

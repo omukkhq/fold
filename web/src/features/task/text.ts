@@ -1,11 +1,11 @@
-import type { ProposalState, TaskStatus } from "@/api/board";
+import type { HumanReviewMark, ProposalState, TaskStatus } from "@/api/board";
 import type {
   CheckpointSummary,
   FeedbackRecipient,
   ReviewVerdict,
   TaskClaim,
   TaskEvent,
-  TaskHumanReview,
+  TaskHumanReviewNote,
   TaskIntegration,
 } from "@/api/tasks";
 import { formatSince } from "@/format/time";
@@ -85,7 +85,7 @@ const EVENT_VERBS: Partial<Record<TaskEvent["type"], string>> = {
 /** `Claimed by frontend/ui · 13:40`; a type without a sentence shows its name. */
 export function historyText(event: TaskEvent): string {
   const verb = EVENT_VERBS[event.type] ?? `${event.type} by`;
-  return `${verb} ${event.actor} · ${clockTime(event.at)}`;
+  return `${verb} ${event.actor} · ${clockTime(event.created_at)}`;
 }
 
 export interface Collapsed<T> {
@@ -117,17 +117,17 @@ export function checkpointText(ck: CheckpointSummary): string {
   return ck.label ?? "checkpoint";
 }
 
-/** The human-review mark: who must approve, who set it and why. */
-export function humanReviewLines(mark: TaskHumanReview): {
-  title: string;
-  setBy: string;
-} {
+/** The human-review mark: who must approve, and who set it when the daemon says. */
+export function humanReviewLines(
+  mark: HumanReviewMark,
+  note?: TaskHumanReviewNote,
+): { title: string; setBy: string | null } {
   return {
     title:
       mark.reviewer === null
         ? "Required · any human"
         : `Required · ${mark.reviewer}`,
-    setBy: `Set by ${mark.set_by} · ${clockTime(mark.set_at)}`,
+    setBy: note ? `Set by ${note.set_by} · ${clockTime(note.set_at)}` : null,
   };
 }
 

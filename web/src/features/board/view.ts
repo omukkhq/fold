@@ -2,7 +2,7 @@ import type { LiveStatus } from "@/live/status";
 import type { ColumnView } from "./columns";
 
 export function cardCount(columns: readonly ColumnView[]): number {
-  return columns.reduce((sum, column) => sum + column.cards.length, 0);
+  return columns.reduce((sum, column) => sum + column.count, 0);
 }
 
 /** `17 tasks · 3 ready`, where ready is the Todo column; an empty board says `0 tasks`. */
@@ -11,7 +11,7 @@ export function summaryText(columns: readonly ColumnView[]): string {
   if (total === 0) {
     return "0 tasks";
   }
-  const ready = columns.find((c) => c.status === "todo")?.cards.length ?? 0;
+  const ready = columns.find((c) => c.status === "todo")?.count ?? 0;
   const noun = total === 1 ? "task" : "tasks";
   return `${String(total)} ${noun} · ${String(ready)} ready`;
 }

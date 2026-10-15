@@ -9,3 +9,11 @@ export function importsFixtures(source: string): boolean {
 export function mayImportFixtures(path: string): boolean {
   return path.includes("/src/api/") || /\.test\.tsx?$/.test(path);
 }
+
+const RETIRED_FIXTURE_IMPORT =
+  /(?:from\s*|import\s*\(\s*|import\s+|require\s*\(\s*|import\.meta\.glob(?:<[^>]*>)?\s*\(\s*\[?\s*)["'][^"']*\bfixtures\/(?:board|demoBoard|tasks)["']/;
+
+/** The board and task screens read the daemon; their fixtures are gone and nothing, tests included, may bring them back. */
+export function importsRetiredFixture(source: string): boolean {
+  return RETIRED_FIXTURE_IMPORT.test(source);
+}

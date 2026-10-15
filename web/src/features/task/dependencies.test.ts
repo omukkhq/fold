@@ -86,7 +86,7 @@ describe("canEditDependencies", () => {
 describe("cyclePath", () => {
   it("reads the task ids of a dependency_cycle refusal", () => {
     const error = new ApiError("dependency_cycle", "cycle", {
-      cycle: ["T-2", "T-5", "T-2"],
+      path: ["T-2", "T-5", "T-2"],
     });
     expect(cyclePath(error)).toEqual(["T-2", "T-5", "T-2"]);
     expect(cycleText(["T-2", "T-5", "T-2"])).toBe(
@@ -97,15 +97,15 @@ describe("cyclePath", () => {
   it("is null for another code, a malformed path or a plain error", () => {
     expect(cyclePath(new ApiError("task_not_found", "x"))).toBeNull();
     expect(
-      cyclePath(new ApiError("dependency_cycle", "x", { cycle: [] })),
+      cyclePath(new ApiError("dependency_cycle", "x", { path: [] })),
     ).toBeNull();
     expect(
-      cyclePath(new ApiError("dependency_cycle", "x", { cycle: [1, 2] })),
+      cyclePath(new ApiError("dependency_cycle", "x", { path: [1, 2] })),
     ).toBeNull();
     expect(cyclePath(new ApiError("dependency_cycle", "x"))).toBeNull();
     expect(cyclePath(new Error("x"))).toBeNull();
     expect(
-      cyclePath({ error: { code: "dependency_cycle", cycle: ["T-1"] } }),
+      cyclePath({ error: { code: "dependency_cycle", path: ["T-1"] } }),
     ).toBeNull();
   });
 });

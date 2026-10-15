@@ -1,31 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { AttentionKind, BoardCard } from "@/api/board";
+import { boardCard } from "@/test/payloads";
 import { agentOf, applyFilters, labelOptions, needsYouCount } from "./filters";
 
-function make(task: string, extra: Partial<BoardCard> = {}): BoardCard {
-  return {
-    task,
-    title: `Task ${task}`,
-    status: "todo",
-    blocked: false,
-    labels: [],
-    checklist: {
-      steps_done: 0,
-      steps_total: 0,
-      linked_done: 0,
-      linked_total: 0,
-    },
-    needs: [],
-    blocks: 0,
-    worker: null,
-    workspace: null,
-    activity: null,
-    proposal: null,
-    human_review: null,
-    attention: [],
-    ...extra,
-  };
-}
+const make = boardCard;
 
 const ui = { name: "ui", color: "sage" };
 const data = { name: "data", color: "gold" };

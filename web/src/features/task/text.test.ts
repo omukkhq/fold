@@ -60,17 +60,32 @@ describe("times and claims", () => {
 describe("historyText", () => {
   it("says who did what and when", () => {
     expect(
-      historyText({ type: "claim.acquired", actor: "frontend/ui", at: AT }),
+      historyText({
+        type: "claim.acquired",
+        actor: "frontend/ui",
+        created_at: AT,
+        seq: 1,
+      }),
     ).toBe("Claimed by frontend/ui · 13:40");
     expect(
-      historyText({ type: "task.created", actor: "human:tanim", at: AT }),
+      historyText({
+        type: "task.created",
+        actor: "human:tanim",
+        created_at: AT,
+        seq: 1,
+      }),
     ).toBe("Created by human:tanim · 13:40");
   });
 
   it("names a type that has no sentence", () => {
-    expect(historyText({ type: "remote.pushed", actor: "fold", at: AT })).toBe(
-      "remote.pushed by fold · 13:40",
-    );
+    expect(
+      historyText({
+        type: "remote.pushed",
+        actor: "fold",
+        created_at: AT,
+        seq: 1,
+      }),
+    ).toBe("remote.pushed by fold · 13:40");
   });
 });
 
@@ -111,20 +126,16 @@ describe("checkpointText", () => {
 });
 
 describe("humanReviewLines", () => {
-  it("names the reviewer, or any human, and who set the mark", () => {
-    const mark = {
-      reviewer: "tanim",
-      reason: "auth",
-      set_by: "planner",
-      set_at: AT,
-    };
-    expect(humanReviewLines(mark)).toEqual({
+  it("names the reviewer, or any human, and who set the mark when the daemon says", () => {
+    const note = { reason: "auth", set_by: "planner", set_at: AT };
+    expect(humanReviewLines({ reviewer: "tanim" }, note)).toEqual({
       title: "Required · tanim",
       setBy: "Set by planner · 13:40",
     });
-    expect(humanReviewLines({ ...mark, reviewer: null }).title).toBe(
-      "Required · any human",
-    );
+    expect(humanReviewLines({ reviewer: null })).toEqual({
+      title: "Required · any human",
+      setBy: null,
+    });
   });
 });
 

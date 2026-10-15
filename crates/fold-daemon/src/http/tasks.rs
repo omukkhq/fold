@@ -795,7 +795,7 @@ pub async fn archive_task(
         (status = 400, description = "`invalid_request` with `details.reason` `self_dependency`, `invalid_id` or `invalid_name`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 404, description = "`task_not_found` or `project_not_found`", body = ErrorEnvelope),
-        (status = 409, description = "`dependency_cycle` with the cycle in `details.cycle`, `dependency_exists` or `task_closed`", body = ErrorEnvelope),
+        (status = 409, description = "`dependency_cycle` with the cycle in `details.path`, `dependency_exists` or `task_closed`", body = ErrorEnvelope),
         (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )

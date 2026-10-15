@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { importsFixtures, mayImportFixtures } from "./fixtureGuard";
+import {
+  importsFixtures,
+  importsRetiredFixture,
+  mayImportFixtures,
+} from "./fixtureGuard";
 
 describe("importsFixtures", () => {
   it.each([
@@ -28,5 +32,23 @@ describe("mayImportFixtures", () => {
     expect(mayImportFixtures("/src/app/Shell.test.ts")).toBe(true);
     expect(mayImportFixtures("/src/app/Shell.tsx")).toBe(false);
     expect(mayImportFixtures("/src/routes/p.$slug.tsx")).toBe(false);
+  });
+});
+
+describe("importsRetiredFixture", () => {
+  it.each([
+    'import { board } from "../../fixtures/board";',
+    "import {x} from '../fixtures/tasks'",
+    'const m = await import("../../fixtures/demoBoard");',
+  ])("flags %s", (source) => {
+    expect(importsRetiredFixture(source)).toBe(true);
+  });
+
+  it.each([
+    'import { agents } from "../../fixtures/agents";',
+    'import { projects } from "../../fixtures/projects";',
+    'import { tasks } from "./tasks";',
+  ])("passes %s", (source) => {
+    expect(importsRetiredFixture(source)).toBe(false);
   });
 });

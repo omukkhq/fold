@@ -1,77 +1,29 @@
 import { queryOptions } from "@tanstack/react-query";
-import type {
-  AttentionItem,
-  BoardActivity,
-  BoardLabel,
-  ProposalState,
-  TaskStatus,
-} from "./board";
+import type { BoardActivity, BoardLabel, ProposalState } from "./board";
+import { api } from "./client";
 import { ApiError } from "./errors";
-import { fromFixture } from "./fixture";
 import { keys } from "./keys";
+import { expectOk, unwrap } from "./result";
 import type { components } from "./schema";
 
-export type CheckpointSummary = components["schemas"]["CheckpointSummary"];
-export type LiveWorkspace = components["schemas"]["LiveWorkspace"];
-export type DurableEventType = components["schemas"]["DurableEventType"];
+type Schemas = components["schemas"];
 
-export interface StepItem {
-  /** The daemon's id for the item; the web only passes it back. */
-  id: string;
-  kind: "step";
-  text: string;
-  done: boolean;
-}
+export type CheckpointSummary = Schemas["CheckpointSummary"];
+export type LiveWorkspace = Schemas["LiveWorkspace"];
 
-/** A linked item names its child; fold ticks it when the child reaches Done, so `done` is never set by hand. */
-export interface LinkedItem {
-  id: string;
-  kind: "linked";
-  /** @example T-13 */
-  task: string;
-  title: string;
-  status: TaskStatus;
-  done: boolean;
-}
+export type Checklist = Schemas["Checklist"];
+export type ChecklistItem = Schemas["ChecklistItem"];
+export type StepItem = Extract<ChecklistItem, { kind: "step" }>;
+export type LinkedItem = Extract<ChecklistItem, { kind: "linked" }>;
+export type TaskEdge = Schemas["TaskEdge"];
+export type TaskClaim = Schemas["TaskClaim"];
+export type EdgeDirection = Schemas["EdgeDirection"];
+export type EdgeOrigin = Schemas["EdgeOrigin"];
 
-export type ChecklistItem = StepItem | LinkedItem;
+export type DurableEventType = Schemas["DurableEventType"];
+export type TaskMessage = Schemas["MessageView"];
 
-export interface Checklist {
-  /** The first checklist is `Subtasks`. */
-  name: string;
-  items: ChecklistItem[];
-}
-
-/** `needs`: this task needs `task`. `needed_by`: `task` needs this task. */
-export type EdgeDirection = "needs" | "needed_by";
-
-/** An edge added through a linked checklist item has the origin `checklist` and goes away only with the item. */
-export type EdgeOrigin = "direct" | "checklist";
-
-export interface TaskEdge {
-  /** The task at the other end of the edge. */
-  task: string;
-  title: string;
-  status: TaskStatus;
-  direction: EdgeDirection;
-  origin: EdgeOrigin;
-}
-
-export interface TaskClaim {
-  kind: "implementation" | "review";
-  /** The worker, `agent` or `agent/worker`. */
-  holder: string;
-  /** UTC milliseconds. */
-  claimed_at: number;
-  /** UTC milliseconds of the last lease renewal. */
-  renewed_at: number;
-  /** The daemon marks a claim stale when its lease was not renewed in time. */
-  stale: boolean;
-}
-
-export interface TaskWorkspace {
-  /** @example ws-9 */
-  id: string;
+export interface TaskWorkspaceInfo {
   /** Relative to the project root. */
   directory: string;
   /** The revision the workspace is based on, such as `r7`. */
@@ -80,8 +32,6 @@ export interface TaskWorkspace {
   main: string;
   /** How many revisions main moved since `base`. */
   behind: number;
-  /** The live state when the task was read; a newer frame from the event stream replaces it. */
-  live: LiveWorkspace | null;
 }
 
 export interface TaskChangeset {
@@ -111,7 +61,6 @@ export interface TaskProposal {
   /** @example P-3 */
   id: string;
   state: ProposalState;
-  /** The current version number. */
   version: number;
   reviews: TaskReview[];
 }
@@ -120,27 +69,12 @@ export interface TaskIntegration {
   /** The revision the integration published, such as `r8`. */
   revision: string;
   proposal: string;
-  /** The integrating worker or human. */
   by: string;
   /** UTC milliseconds. */
   at: number;
 }
 
-export interface TaskMessage {
-  /** @example m-210 */
-  id: string;
-  /** The id of the first message of the thread. */
-  thread: string;
-  from: string;
-  to: string;
-  body: string;
-  /** UTC milliseconds. */
-  at: number;
-}
-
-export interface TaskHumanReview {
-  /** The named human whose approval integration waits for; null when any human may approve. */
-  reviewer: string | null;
+export interface TaskHumanReviewNote {
   reason: string;
   /** The worker or human that turned the mark on. */
   set_by: string;
@@ -148,45 +82,35 @@ export interface TaskHumanReview {
   set_at: number;
 }
 
-export interface TaskEvent {
-  type: DurableEventType;
-  actor: string;
-  /** UTC milliseconds. */
-  at: number;
-}
+/** A row of the task's history: a stored event as the event stream and the activity list carry it. */
+export type TaskEvent = Pick<
+  Schemas["DurableEvent"],
+  "seq" | "type" | "actor" | "created_at"
+>;
 
-export interface TaskDetail {
-  /** @example T-12 */
-  task: string;
-  title: string;
-  /** Markdown. */
-  description: string;
-  status: TaskStatus;
+/**
+ * Fields the dialog can draw that the task read does not carry. Each one is optional: an absent field draws the
+ * section's empty state, or leaves the section out where its frame has none.
+ */
+export interface TaskExtras {
   /** The daemon's explanation of the calculated status. */
   status_reason: string;
-  blocked: boolean;
-  labels: BoardLabel[];
-  checklists: Checklist[];
-  /** Prerequisites and dependents together; `direction` tells them apart. */
-  dependencies: TaskEdge[];
-  claims: TaskClaim[];
   activity: BoardActivity | null;
-  attention: AttentionItem[];
-  workspace: TaskWorkspace | null;
+  workspace_info: TaskWorkspaceInfo;
   /** Newest first. */
   checkpoints: CheckpointSummary[];
   /** Newest first. */
   changesets: TaskChangeset[];
   proposal: TaskProposal | null;
   integration: TaskIntegration | null;
-  /** Oldest first. */
-  messages: TaskMessage[];
-  human_review: TaskHumanReview | null;
+  human_review_note: TaskHumanReviewNote;
   /** Whether the viewer may turn human review on or off; the daemon decides. */
   can_change_human_review: boolean;
   /** Newest first. */
   history: TaskEvent[];
 }
+
+export type TaskDetail = Schemas["TaskView"] & Partial<TaskExtras>;
 
 /** Whom the feedback box can address besides the claim holder. */
 export interface MessageTargets {
@@ -203,48 +127,41 @@ export type NewChecklistItem =
   | { kind: "step"; text: string }
   | { kind: "linked"; task: string };
 
-const fixture = import.meta.env.DEV
-  ? () => import("../../fixtures/tasks")
-  : undefined;
-
-type FixtureModule = typeof import("../../fixtures/tasks");
-
-function taskNotFound(task: string): ApiError {
-  return new ApiError("task_not_found", `task ${task} does not exist`);
-}
-
-/** Rejects with `task_not_found` for a task the project does not have. */
-export async function getTask(slug: string, task: string): Promise<TaskDetail> {
-  const found = await fromFixture(fixture, (m) => m.task(slug, task), null);
-  if (found === null) {
-    throw taskNotFound(task);
+/** The `to` list of a feedback request. Leaving it out sends the feedback to the task's claim holder. */
+export function feedbackTo(to: FeedbackRecipient): string[] | undefined {
+  switch (to.kind) {
+    case "holder":
+      return undefined;
+    case "agent":
+      return [to.name];
+    case "tag":
+      return [`tag:${to.name}`];
   }
-  return found;
 }
 
-export async function getMessageTargets(slug: string): Promise<MessageTargets> {
-  return fromFixture(fixture, (m) => m.messageTargets(slug), {
-    agents: [],
-    tags: [],
-  });
-}
-
-/** A production build has no fixture and no task, so every write is refused the way a missing task is. */
-async function write(
-  task: string,
-  apply: (m: FixtureModule) => void,
-): Promise<void> {
-  if (!fixture) {
-    throw taskNotFound(task);
-  }
-  await fromFixture(
-    fixture,
-    (m) => {
-      apply(m);
-      return null;
-    },
-    null,
+export function getTask(slug: string, task: string): Promise<TaskDetail> {
+  return unwrap(
+    api.GET("/api/v1/projects/{slug}/tasks/{id}", {
+      params: { path: { slug, id: task } },
+    }),
   );
+}
+
+/** The agents and workers a human can write to, and every tag in use. */
+export async function getMessageTargets(slug: string): Promise<MessageTargets> {
+  const { agents } = await unwrap(
+    api.GET("/api/v1/projects/{slug}/agents", {
+      params: { path: { slug } },
+    }),
+  );
+  const names = agents.flatMap((agent) => [
+    agent.name,
+    ...agent.workers
+      .filter((worker) => worker.parent !== null)
+      .map((worker) => worker.name),
+  ]);
+  const tags = [...new Set(agents.flatMap((agent) => agent.tags))].sort();
+  return { agents: names, tags };
 }
 
 /** Answers the new task's public id. */
@@ -252,16 +169,30 @@ export async function createTask(
   slug: string,
   input: { title: string; description: string },
 ): Promise<string> {
-  if (!fixture) {
-    throw new ApiError("project_unavailable", `project ${slug} is unavailable`);
-  }
-  return fromFixture(fixture, (m) => m.createTask(slug, input), "");
+  const created = await unwrap(
+    api.POST("/api/v1/projects/{slug}/tasks", {
+      params: { path: { slug } },
+      body: input,
+    }),
+  );
+  return created.task;
+}
+
+async function update(
+  slug: string,
+  task: string,
+  body: Schemas["UpdateTaskBody"],
+): Promise<void> {
+  await unwrap(
+    api.PATCH("/api/v1/projects/{slug}/tasks/{id}", {
+      params: { path: { slug, id: task } },
+      body,
+    }),
+  );
 }
 
 export function setTitle(slug: string, task: string, title: string) {
-  return write(task, (m) => {
-    m.setTitle(slug, task, title);
-  });
+  return update(slug, task, { title });
 }
 
 export function setDescription(
@@ -269,120 +200,227 @@ export function setDescription(
   task: string,
   description: string,
 ) {
-  return write(task, (m) => {
-    m.setDescription(slug, task, description);
-  });
+  return update(slug, task, { description });
 }
 
-export function addLabel(slug: string, task: string, label: BoardLabel) {
-  return write(task, (m) => {
-    m.addLabel(slug, task, label);
-  });
+export async function listLabels(slug: string): Promise<BoardLabel[]> {
+  const { labels } = await unwrap(
+    api.GET("/api/v1/projects/{slug}/labels", {
+      params: { path: { slug } },
+    }),
+  );
+  return labels;
+}
+
+export function createLabel(
+  slug: string,
+  label: BoardLabel,
+): Promise<BoardLabel> {
+  return unwrap(
+    api.POST("/api/v1/projects/{slug}/labels", {
+      params: { path: { slug } },
+      body: label,
+    }),
+  );
+}
+
+/** Creates the label and puts it on the task. A refused creation, such as `label_exists`, leaves the task as it was. */
+export async function createLabelOn(
+  slug: string,
+  task: string,
+  label: BoardLabel,
+): Promise<void> {
+  await createLabel(slug, label);
+  await attachLabel(slug, task, label.name);
+}
+
+/** The route takes the whole label set, so the set is read again first: a label another writer added meanwhile stays. */
+async function changeLabels(
+  slug: string,
+  task: string,
+  change: (names: string[]) => string[],
+): Promise<void> {
+  const current = await getTask(slug, task);
+  const names = current.labels.map((label) => label.name);
+  await update(slug, task, { labels: change(names) });
+}
+
+export function attachLabel(slug: string, task: string, name: string) {
+  return changeLabels(slug, task, (names) =>
+    names.includes(name) ? names : [...names, name],
+  );
 }
 
 export function removeLabel(slug: string, task: string, name: string) {
-  return write(task, (m) => {
-    m.removeLabel(slug, task, name);
-  });
+  return changeLabels(slug, task, (names) => names.filter((n) => n !== name));
 }
 
 /** A linked item also adds the edge "this task needs the child", so it can be refused with `dependency_cycle`. */
-export function addChecklistItem(
+export async function addChecklistItem(
   slug: string,
   task: string,
   checklist: string,
   item: NewChecklistItem,
-) {
-  return write(task, (m) => {
-    m.addChecklistItem(slug, task, checklist, item);
-  });
+): Promise<void> {
+  await unwrap(
+    api.POST("/api/v1/projects/{slug}/tasks/{id}/checklist-items", {
+      params: { path: { slug, id: task } },
+      body:
+        item.kind === "step"
+          ? { checklist, text: item.text }
+          : { checklist, linked_task: item.task },
+    }),
+  );
 }
 
-export function renameChecklistItem(
+async function patchItem(
   slug: string,
-  task: string,
   item: string,
-  text: string,
-) {
-  return write(task, (m) => {
-    m.renameChecklistItem(slug, task, item, text);
-  });
+  body: Schemas["ChecklistItemPatchBody"],
+): Promise<void> {
+  await unwrap(
+    api.PATCH("/api/v1/projects/{slug}/checklist-items/{id}", {
+      params: { path: { slug, id: item } },
+      body,
+    }),
+  );
+}
+
+export function renameChecklistItem(slug: string, item: string, text: string) {
+  return patchItem(slug, item, { text });
 }
 
 /** Moves the item to `position`, counted from 0 in its checklist. */
 export function moveChecklistItem(
   slug: string,
-  task: string,
   item: string,
   position: number,
 ) {
-  return write(task, (m) => {
-    m.moveChecklistItem(slug, task, item, position);
-  });
+  return patchItem(slug, item, { position });
+}
+
+export function tickChecklistItem(slug: string, item: string, done: boolean) {
+  return patchItem(slug, item, { done });
 }
 
 /** Removing a linked item also removes its edge. */
-export function removeChecklistItem(slug: string, task: string, item: string) {
-  return write(task, (m) => {
-    m.removeChecklistItem(slug, task, item);
-  });
+export function removeChecklistItem(slug: string, item: string) {
+  return expectOk(
+    api.DELETE("/api/v1/projects/{slug}/checklist-items/{id}", {
+      params: { path: { slug, id: item } },
+    }),
+  );
 }
 
-export function tickChecklistItem(
-  slug: string,
-  task: string,
-  item: string,
-  done: boolean,
-) {
-  return write(task, (m) => {
-    m.tickChecklistItem(slug, task, item, done);
-  });
-}
-
-/** Refused with `dependency_cycle` and the cycle in `details.cycle` when the edge would close a cycle. */
+/** Refused with `dependency_cycle` and the cycle in `details.path` when the edge would close a cycle. */
 export function addDependency(slug: string, task: string, needs: string) {
-  return write(task, (m) => {
-    m.addDependency(slug, task, needs);
-  });
+  return expectOk(
+    api.POST("/api/v1/projects/{slug}/tasks/{id}/dependencies", {
+      params: { path: { slug, id: task } },
+      body: { needs },
+    }),
+  );
 }
 
 export function removeDependency(slug: string, task: string, needs: string) {
-  return write(task, (m) => {
-    m.removeDependency(slug, task, needs);
-  });
+  return expectOk(
+    api.DELETE("/api/v1/projects/{slug}/tasks/{id}/dependencies/{needs}", {
+      params: { path: { slug, id: task, needs } },
+    }),
+  );
 }
 
+/** The daemon serves no route that sets or clears the mark, so these refuse without a request. The controls that call them mount only when the task read allows the change, which it does not. */
 export function setHumanReview(
   slug: string,
   task: string,
   mark: { reviewer: string | null; reason: string },
-) {
-  return write(task, (m) => {
-    m.setHumanReview(slug, task, mark);
+): Promise<void> {
+  return Promise.reject(
+    humanReviewUnavailable(slug, task, { reviewer: mark.reviewer }),
+  );
+}
+
+export function clearHumanReview(slug: string, task: string): Promise<void> {
+  return Promise.reject(humanReviewUnavailable(slug, task, {}));
+}
+
+function humanReviewUnavailable(
+  slug: string,
+  task: string,
+  more: Record<string, unknown>,
+): ApiError {
+  return new ApiError("not_found", "the daemon serves no human-review route", {
+    project: slug,
+    task,
+    ...more,
   });
 }
 
-export function clearHumanReview(slug: string, task: string) {
-  return write(task, (m) => {
-    m.clearHumanReview(slug, task);
-  });
+/** Refused with `invalid_request` and `details.reason` `proposal_open` while a proposal is open. */
+export function archiveTask(slug: string, task: string) {
+  return expectOk(
+    api.POST("/api/v1/projects/{slug}/tasks/{id}/archive", {
+      params: { path: { slug, id: task } },
+    }),
+  );
+}
+
+function idNumber(id: string): number {
+  return Number(id.slice(id.indexOf("-") + 1));
+}
+
+/** The messages linked to the task, oldest first: every message of the threads the daemon finds for it that names the task. */
+export async function getTaskMessages(
+  slug: string,
+  task: string,
+): Promise<TaskMessage[]> {
+  const { items } = await unwrap(
+    api.GET("/api/v1/projects/{slug}/messages", {
+      params: { path: { slug }, query: { task, limit: 200 } },
+    }),
+  );
+  return items
+    .flatMap((thread) => thread.messages)
+    .filter((message) => message.task === task)
+    .sort((a, b) => a.sent_at - b.sent_at || idNumber(a.id) - idNumber(b.id));
 }
 
 /** The message is from the signed-in human and linked to the task. */
-export function sendFeedback(
+export async function sendFeedback(
   slug: string,
   task: string,
   feedback: { body: string; to: FeedbackRecipient },
-) {
-  return write(task, (m) => {
-    m.sendFeedback(slug, task, feedback);
-  });
+): Promise<void> {
+  await unwrap(
+    api.POST("/api/v1/projects/{slug}/feedback", {
+      params: { path: { slug } },
+      body: { task, body: feedback.body, to: feedbackTo(feedback.to) },
+    }),
+  );
 }
 
+/** The event stream keeps the task fresh, so a cached answer never goes stale by time. */
 export const taskQuery = (slug: string, task: string) =>
   queryOptions({
     queryKey: keys.task(slug, task),
     queryFn: () => getTask(slug, task),
+    staleTime: Infinity,
+  });
+
+/** Under the messages prefix, so every message event refreshes it. */
+export const taskMessagesQuery = (slug: string, task: string) =>
+  queryOptions({
+    queryKey: keys.taskMessages(slug, task),
+    queryFn: () => getTaskMessages(slug, task),
+    staleTime: Infinity,
+  });
+
+export const labelsQuery = (slug: string) =>
+  queryOptions({
+    queryKey: keys.labels(slug),
+    queryFn: () => listLabels(slug),
+    staleTime: Infinity,
   });
 
 export const messageTargetsQuery = (slug: string) =>

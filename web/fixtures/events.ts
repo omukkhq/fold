@@ -69,7 +69,10 @@ const script: { after: number; frame: EventEnvelope }[] = [
   },
   {
     after: 1,
-    frame: stored(1, "task.status_changed", "T-1", { status: "in_progress" }),
+    frame: stored(1, "task.status_changed", "T-1", {
+      from: "todo",
+      to: "in_progress",
+    }),
   },
   {
     after: 1,
@@ -80,7 +83,10 @@ const script: { after: number; frame: EventEnvelope }[] = [
   },
   {
     after: 2,
-    frame: stored(2, "task.status_changed", "T-1", { status: "review" }),
+    frame: stored(2, "task.status_changed", "T-1", {
+      from: "in_progress",
+      to: "review",
+    }),
   },
 ];
 

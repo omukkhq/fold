@@ -1,5 +1,5 @@
 import { FileDiff, GitCompare } from "lucide-react";
-import type { LiveWorkspace, TaskWorkspace } from "@/api/tasks";
+import type { LiveWorkspace, TaskWorkspaceInfo } from "@/api/tasks";
 import { HrefLink } from "@/app/HrefLink";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
@@ -73,11 +73,15 @@ function FileRow({
 export function WorkingChanges({
   slug,
   workspace,
+  info,
   live,
   now,
 }: {
   slug: string;
-  workspace: TaskWorkspace | null;
+  /** The workspace id, `ws-9`. */
+  workspace: string | null;
+  /** The workspace details with the main head; absent from the task read, which hides "Compare with main". */
+  info?: TaskWorkspaceInfo;
   live: LiveWorkspace | null;
   now: number;
 }) {
@@ -94,7 +98,7 @@ export function WorkingChanges({
               {liveChipText(live, now)}
             </span>
             <span className="text-bar text-text-muted">
-              {changesNote(live, workspace)}
+              {changesNote(live, info)}
             </span>
           </>
         ) : null}
@@ -105,7 +109,7 @@ export function WorkingChanges({
         </p>
       ) : live === null || live.files.length === 0 ? (
         <p className="text-bar text-text-muted">
-          No working changes in {workspace.id}.
+          No working changes in {workspace}.
         </p>
       ) : (
         <ul className="flex flex-col rounded-m bg-sunken p-6">
@@ -113,7 +117,7 @@ export function WorkingChanges({
             <FileRow
               key={file.path}
               slug={slug}
-              workspace={workspace.id}
+              workspace={workspace}
               file={file}
             />
           ))}
@@ -121,19 +125,18 @@ export function WorkingChanges({
       )}
       {workspace ? (
         <div className="flex gap-8">
-          <LinkButton
-            href={diffPath(slug, { to: workspace.id })}
-            icon={FileDiff}
-          >
+          <LinkButton href={diffPath(slug, { to: workspace })} icon={FileDiff}>
             Open diff
           </LinkButton>
-          <LinkButton
-            href={diffPath(slug, { from: workspace.main, to: workspace.id })}
-            variant="ghost"
-            icon={GitCompare}
-          >
-            Compare with main
-          </LinkButton>
+          {info ? (
+            <LinkButton
+              href={diffPath(slug, { from: info.main, to: workspace })}
+              variant="ghost"
+              icon={GitCompare}
+            >
+              Compare with main
+            </LinkButton>
+          ) : null}
         </div>
       ) : null}
     </section>

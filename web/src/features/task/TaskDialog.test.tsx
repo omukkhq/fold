@@ -24,12 +24,21 @@ import {
   it,
   vi,
 } from "vitest";
-import { resetTasks, task as fixtureTask } from "../../../fixtures/tasks";
+import type { Board, BoardCard } from "@/api/board";
+import type { components } from "@/api/schema";
+import type { TaskDetail } from "@/api/tasks";
 import { liveStatusStore } from "@/live/status";
+import { daemon, noContent, ok, refuse, type Call } from "@/test/daemon";
+import { boardCard, boardView, taskView } from "@/test/payloads";
 import { routeTree } from "@/routeTree.gen";
 import { ThemeProvider } from "@/theme/ThemeProvider";
-import { threadPath } from "./links";
 import { Markdown } from "./Markdown";
+
+vi.mock("@/api/client", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/api/client")>();
+  const { daemon: fake } = await import("@/test/daemon");
+  return { ...real, api: fake.api };
+});
 
 // The fixtures answer without the development delay, so the whole app, board included, can be driven test after test.
 vi.mock("@/api/fixture", async (importOriginal) => {
@@ -44,8 +53,14 @@ vi.mock("@/api/fixture", async (importOriginal) => {
   };
 });
 
+type MessageView = components["schemas"]["MessageView"];
+
+/** A message id written out reads as a spacing utility to the token guard. */
+const messageId = (n: number) => `m-${String(n)}`;
+
 const WAIT = { timeout: 4_000 };
 const TITLE = "Build the login form with validation";
+const P = "/api/v1/projects";
 
 // The board stays mounted beneath the dialog, and the visibility check of every role query over it is slow in jsdom.
 beforeAll(() => {
@@ -67,12 +82,303 @@ beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
 });
 
+const ui = { name: "ui", color: "sage" };
+const auth = { name: "auth", color: "slate" };
+const STEP = "Map invalid_credentials and rate_limited to messages";
+
+/** The tasks of the project, kept by the fake daemon between requests. */
+let tasks: Map<string, TaskDetail>;
+let labels: { name: string; color: string }[];
+let nextTask: number;
+let archiveRefusal = false;
+/** The messages linked to T-2, as the message route answers them. */
+let linked: MessageView[];
+
+function seed(): void {
+  nextTask = 17;
+  linked = [];
+  labels = [ui, auth];
+  tasks = new Map([
+    [
+      "T-2",
+      taskView("T-2", {
+        title: TITLE,
+        status: "in_progress",
+        description: "Build the form.",
+        labels: [ui],
+        workspace: "ws-2",
+        claims: [
+          {
+            kind: "implementation",
+            holder: "frontend/ui",
+            claimed_at: 1_000,
+            renewed_at: 2_000,
+            stale: false,
+          },
+        ],
+        checklists: [
+          {
+            name: "Subtasks",
+            items: [
+              { id: "ci-1", kind: "step", text: STEP, done: false },
+              { id: "ci-2", kind: "step", text: "Wire the form", done: true },
+              {
+                id: "ci-5",
+                kind: "linked",
+                task: "T-13",
+                title: "Form field components",
+                status: "done",
+                done: true,
+              },
+            ],
+          },
+        ],
+        dependencies: [
+          {
+            task: "T-13",
+            title: "Form field components",
+            status: "done",
+            direction: "needs",
+            origin: "checklist",
+          },
+          {
+            task: "T-1",
+            title: "Session cookie",
+            status: "todo",
+            direction: "needs",
+            origin: "direct",
+          },
+          {
+            task: "T-5",
+            title: "Login flow",
+            status: "backlog",
+            direction: "needed_by",
+            origin: "direct",
+          },
+        ],
+        human_review: null,
+      }),
+    ],
+    ["T-1", taskView("T-1", { title: "Session cookie" })],
+    ["T-5", taskView("T-5", { title: "Login flow", status: "backlog" })],
+    [
+      "T-13",
+      taskView("T-13", { title: "Form field components", status: "done" }),
+    ],
+    ["T-16", taskView("T-16", { title: "Scaffold the web app" })],
+  ]);
+}
+
+function cardOf(task: TaskDetail): BoardCard {
+  return boardCard(task.task, {
+    title: task.title,
+    status: task.status,
+    blocked: task.blocked,
+    labels: task.labels,
+    worker: task.claims[0]?.holder ?? null,
+    workspace: task.workspace,
+  });
+}
+
+function board(): Board {
+  const all = [...tasks.values()].map(cardOf);
+  return boardView(all);
+}
+
+function view(task: string): TaskDetail {
+  const found = tasks.get(task);
+  if (!found) throw new Error(`no task ${task}`);
+  return found;
+}
+
+function patch(task: string, change: Partial<TaskDetail>): TaskDetail {
+  const next = { ...view(task), ...change };
+  tasks.set(task, next);
+  return next;
+}
+
+function items(task: string) {
+  return view(task).checklists[0]?.items ?? [];
+}
+
+function setItems(task: string, next: ReturnType<typeof items>) {
+  patch(task, { checklists: [{ name: "Subtasks", items: next }] });
+}
+
+function registerDaemon(): void {
+  daemon.latency = 30;
+  const known = (call: Call) => tasks.has(call.params.id ?? "");
+  const missing = refuse(404, "task_not_found");
+  daemon.on(`GET ${P}/:slug/board`, () => ok(board()));
+  daemon.on(`GET ${P}/:slug/tasks/:id`, (call) =>
+    known(call) ? ok(view(call.params.id ?? "")) : missing,
+  );
+  daemon.on(`POST ${P}/:slug/tasks`, (call) => {
+    const body = call.body as { title: string; description?: string };
+    const id = `T-${String(nextTask++)}`;
+    tasks.set(
+      id,
+      taskView(id, { title: body.title, description: body.description ?? "" }),
+    );
+    return ok(view(id), 201);
+  });
+  daemon.on(`PATCH ${P}/:slug/tasks/:id`, (call) => {
+    const body = call.body as {
+      title?: string;
+      description?: string;
+      labels?: string[];
+    };
+    const id = call.params.id ?? "";
+    const change: Partial<TaskDetail> = {};
+    if (body.title !== undefined) change.title = body.title;
+    if (body.description !== undefined) change.description = body.description;
+    if (body.labels !== undefined) {
+      change.labels = body.labels.flatMap((name) => {
+        const found = labels.find((l) => l.name === name);
+        return found ? [found] : [];
+      });
+    }
+    return ok(patch(id, change));
+  });
+  daemon.on(`GET ${P}/:slug/labels`, () => ok({ labels }));
+  daemon.on(`POST ${P}/:slug/labels`, (call) => {
+    const body = call.body as { name: string; color: string };
+    if (labels.some((l) => l.name === body.name)) {
+      return refuse(409, "label_exists");
+    }
+    labels = [...labels, body];
+    return ok(body, 201);
+  });
+  daemon.on(`POST ${P}/:slug/tasks/:id/dependencies`, (call) => {
+    const id = call.params.id ?? "";
+    const { needs } = call.body as { needs: string };
+    const task = view(id);
+    if (!tasks.has(needs)) return refuse(404, "task_not_found");
+    if (
+      task.dependencies.some(
+        (d) => d.task === needs && d.direction === "needed_by",
+      )
+    ) {
+      return refuse(409, "dependency_cycle", { path: [id, needs, id] });
+    }
+    const other = view(needs);
+    patch(id, {
+      dependencies: [
+        ...task.dependencies,
+        {
+          task: needs,
+          title: other.title,
+          status: other.status,
+          direction: "needs",
+          origin: "direct",
+        },
+      ],
+    });
+    return noContent();
+  });
+  daemon.on(`DELETE ${P}/:slug/tasks/:id/dependencies/:needs`, (call) => {
+    const id = call.params.id ?? "";
+    patch(id, {
+      dependencies: view(id).dependencies.filter(
+        (d) => d.task !== call.params.needs,
+      ),
+    });
+    return noContent();
+  });
+  daemon.on(`POST ${P}/:slug/tasks/:id/checklist-items`, (call) => {
+    const id = call.params.id ?? "";
+    const body = call.body as { text?: string };
+    setItems(id, [
+      ...items(id),
+      { id: "ci-9", kind: "step", text: body.text ?? "", done: false },
+    ]);
+    return ok({}, 201);
+  });
+  daemon.on(`PATCH ${P}/:slug/checklist-items/:id`, (call) => {
+    const body = call.body as { done?: boolean };
+    setItems(
+      "T-2",
+      items("T-2").map((item) =>
+        item.id === call.params.id && body.done !== undefined
+          ? { ...item, done: body.done }
+          : item,
+      ),
+    );
+    return ok({});
+  });
+  daemon.on(`DELETE ${P}/:slug/checklist-items/:id`, (call) => {
+    setItems(
+      "T-2",
+      items("T-2").filter((item) => item.id !== call.params.id),
+    );
+    patch("T-2", {
+      dependencies: view("T-2").dependencies.filter((d) => d.task !== "T-13"),
+    });
+    return noContent();
+  });
+  daemon.on(`GET ${P}/:slug/agents`, () =>
+    ok({
+      agents: [
+        {
+          name: "frontend",
+          tags: [],
+          workers: [{ name: "frontend/ui", parent: "frontend" }],
+        },
+      ],
+    }),
+  );
+  daemon.on(`GET ${P}/:slug/messages`, (call) =>
+    ok({
+      items: call.path.includes("task=T-2")
+        ? linked.map((message) => ({
+            id: message.thread,
+            awaiting_human: false,
+            last_at: message.sent_at,
+            messages: [message],
+            participants: [message.sender],
+            proposal: null,
+            task: "T-2",
+          }))
+        : [],
+      next: null,
+    }),
+  );
+  daemon.on(`POST ${P}/:slug/feedback`, (call) => {
+    const body = call.body as { body: string };
+    linked = [
+      ...linked,
+      {
+        id: messageId(90 + linked.length),
+        thread: messageId(90 + linked.length),
+        sender: "human:tanim",
+        recipients: [],
+        body: body.body,
+        proposal: null,
+        reply_to: null,
+        task: "T-2",
+        sent_at: 5_000,
+      },
+    ];
+    return ok({}, 201);
+  });
+  daemon.on(`POST ${P}/:slug/tasks/:id/archive`, (call) => {
+    if (archiveRefusal) {
+      return refuse(400, "invalid_request", { reason: "proposal_open" });
+    }
+    tasks.delete(call.params.id ?? "");
+    return noContent();
+  });
+}
+
 beforeEach(() => {
-  resetTasks();
+  seed();
+  archiveRefusal = false;
+  registerDaemon();
 });
 
 afterEach(() => {
   cleanup();
+  daemon.reset();
   liveStatusStore.reset();
 });
 
@@ -92,27 +398,22 @@ function setup(path: string) {
       </QueryClientProvider>
     </ThemeProvider>,
   );
-  return router;
+  return { router, queryClient };
 }
 
 async function openTask(task = "T-2", title = TITLE) {
-  const router = setup(`/p/demo/t/${task}`);
+  const { router, queryClient } = setup(`/p/demo/t/${task}`);
   const dialog = await screen.findByRole("dialog", {}, WAIT);
   await within(dialog).findByRole("heading", { name: title }, WAIT);
-  return { router, dialog };
-}
-
-/** The fixture's first thread; a message id written out reads as a spacing utility to the token guard. */
-function firstThread(): string {
-  return fixtureTask("demo", "T-2")?.messages[0]?.thread ?? "";
+  return { router, queryClient, dialog };
 }
 
 const region = (dialog: HTMLElement, name: string) =>
   within(dialog).getByRole("region", { name });
 
 describe("the task dialog route", () => {
-  it("opens from a board card with the board's filters and shows every W03 section", async () => {
-    const router = setup("/p/demo/board?label=ui");
+  it("opens from a board card with the board's filters and shows the sections the task payload has data for", async () => {
+    const { router } = setup("/p/demo/board?label=ui");
     const link = await screen.findByRole("link", { name: TITLE }, WAIT);
     expect(link.getAttribute("href")).toBe("/p/demo/t/T-2?label=ui");
     await userEvent.click(link);
@@ -122,17 +423,6 @@ describe("the task dialog route", () => {
     expect(router.state.location.search).toEqual({ label: "ui" });
 
     expect(within(dialog).getByText("In Progress")).toBeTruthy();
-    expect(
-      within(dialog).getByText(
-        "Calculated: workspace ws-2 is open, no proposal yet",
-      ),
-    ).toBeTruthy();
-    expect(within(dialog).getByText("is editing")).toBeTruthy();
-    expect(
-      within(dialog).getByText(
-        /4 files · ck-31 3 min ago · base r7 \(main r8\)/,
-      ),
-    ).toBeTruthy();
     for (const name of [
       "Description",
       "Subtasks",
@@ -141,44 +431,189 @@ describe("the task dialog route", () => {
       "Responsible",
       "Workspace",
       "Checkpoints",
-      "Changesets",
-      "Proposal",
       "Human review",
       "Dependencies",
-      "History",
     ]) {
       expect(region(dialog, name), name).toBeTruthy();
     }
-    const changes = region(dialog, "Working changes");
+    // The task read carries no changesets or proposal yet, so these draw their empty states; History has none and is left out.
     expect(
-      within(changes)
-        .getByRole("link", { name: /src\/routes\/login\.tsx/ })
-        .getAttribute("href"),
-    ).toBe("/p/demo/diff?to=ws-2&path=src%2Froutes%2Flogin.tsx");
+      within(region(dialog, "Changesets")).getByText("No changesets yet."),
+    ).toBeTruthy();
+    expect(
+      within(region(dialog, "Proposal")).getByText(/None yet\. It opens when/),
+    ).toBeTruthy();
+    expect(
+      within(dialog).queryByRole("region", { name: "History" }),
+    ).toBeNull();
+    expect(
+      await within(region(dialog, "Messages")).findByText(
+        "0 linked to T-2",
+        {},
+        WAIT,
+      ),
+    ).toBeTruthy();
+    expect(within(region(dialog, "Workspace")).getByText("ws-2")).toBeTruthy();
+
+    // The development event stream reports the workspace; the task payload names only its id.
+    const changes = region(dialog, "Working changes");
+    const [fileLink] = await within(changes).findAllByRole(
+      "link",
+      { name: /\.ts/ },
+      WAIT,
+    );
+    expect(fileLink?.getAttribute("href")).toMatch(
+      /^\/p\/demo\/diff\?to=ws-2&path=/,
+    );
     expect(
       within(changes)
         .getByRole("link", { name: "Open diff" })
         .getAttribute("href"),
     ).toBe("/p/demo/diff?to=ws-2");
+    // Without the workspace details there is no main head to compare with.
     expect(
-      within(changes)
-        .getByRole("link", { name: "Compare with main" })
-        .getAttribute("href"),
-    ).toBe("/p/demo/diff?from=r8&to=ws-2");
-    const messages = region(dialog, "Messages");
-    expect(within(messages).getByText("2 linked to T-2")).toBeTruthy();
-    expect(
-      within(messages)
-        .getAllByRole("link", { name: /Open the thread of/ })[0]
-        ?.getAttribute("href"),
-    ).toBe(threadPath("demo", firstThread()));
+      within(changes).queryByRole("link", { name: "Compare with main" }),
+    ).toBeNull();
+    expect(within(dialog).getByText("is editing")).toBeTruthy();
     const deps = region(dialog, "Dependencies");
     expect(within(deps).getByText("Form field components")).toBeTruthy();
     expect(within(deps).getByText("Login flow")).toBeTruthy();
   }, 15_000);
 
+  it("draws every section the task read carries once the daemon sends them", async () => {
+    const at = new Date(2026, 9, 15, 13, 40).getTime();
+    linked = [
+      {
+        id: messageId(31),
+        thread: messageId(30),
+        sender: "frontend/ui",
+        recipients: [
+          {
+            name: "review",
+            addressed_as: "agent",
+            delivered_at: null,
+            acknowledged_at: null,
+          },
+        ],
+        body: "Ready for review",
+        proposal: null,
+        reply_to: null,
+        task: "T-2",
+        sent_at: at,
+      },
+    ];
+    patch("T-2", {
+      status_reason: "Calculated: workspace ws-2 is open, no proposal yet",
+      workspace_info: {
+        directory: "ws/T-2",
+        base: "r7",
+        main: "r8",
+        behind: 1,
+      },
+      checkpoints: [
+        // Newer than any checkpoint the development stream reports, so it leads the list.
+        {
+          id: "ck-31",
+          label: null,
+          automatic: true,
+          created_at: Date.now() + 3_600_000,
+        },
+      ],
+      changesets: [{ id: "C-18", message: "Add the form", created_at: at }],
+      proposal: {
+        id: "P-3",
+        state: "open",
+        version: 2,
+        reviews: [{ reviewer: "review", verdict: "approve", version: 2, at }],
+      },
+      integration: { revision: "r9", proposal: "P-2", by: "backend", at },
+      history: [
+        {
+          seq: 3,
+          type: "claim.acquired",
+          actor: "frontend/ui",
+          created_at: at,
+        },
+        { seq: 2, type: "task.created", actor: "human:tanim", created_at: at },
+        { seq: 1, type: "task.updated", actor: "human:tanim", created_at: at },
+      ],
+      human_review_note: { reason: "Auth work", set_by: "planner", set_at: at },
+      human_review: { reviewer: "tanim" },
+    });
+    const { dialog } = await openTask();
+    expect(
+      within(dialog).getByText(
+        "Calculated: workspace ws-2 is open, no proposal yet",
+      ),
+    ).toBeTruthy();
+    const ws = region(dialog, "Workspace");
+    expect(within(ws).getByText("ws/T-2")).toBeTruthy();
+    expect(within(ws).getByText("r7 (main is r8)")).toBeTruthy();
+    expect(within(ws).getByText(/Main moved 1 revision/)).toBeTruthy();
+    expect(
+      within(region(dialog, "Working changes"))
+        .getByRole("link", { name: "Compare with main" })
+        .getAttribute("href"),
+    ).toBe("/p/demo/diff?from=r8&to=ws-2");
+    expect(
+      within(region(dialog, "Checkpoints")).getByText("ck-31"),
+    ).toBeTruthy();
+    expect(within(region(dialog, "Changesets")).getByText("C-18")).toBeTruthy();
+    const proposal = region(dialog, "Proposal");
+    expect(
+      within(proposal).getByRole("link", { name: "P-3" }).getAttribute("href"),
+    ).toBe("/p/demo/proposals/P-3");
+    expect(within(proposal).getByText("review approved on v2")).toBeTruthy();
+    expect(
+      within(proposal).getByRole("link", { name: "r9" }).getAttribute("href"),
+    ).toBe("/p/demo/repository?revision=r9");
+    const messages = region(dialog, "Messages");
+    expect(
+      await within(messages).findByText("1 linked to T-2", {}, WAIT),
+    ).toBeTruthy();
+    expect(within(messages).getByText("Ready for review")).toBeTruthy();
+    expect(
+      within(messages)
+        .getByRole("link", {
+          name: new RegExp(`Open the thread of ${messageId(31)}`),
+        })
+        .getAttribute("href"),
+    ).toBe(`/p/demo/messages?thread=${messageId(30)}`);
+    const history = region(dialog, "History");
+    expect(within(history).getByText(/Claimed by frontend\/ui/)).toBeTruthy();
+    expect(within(history).queryByText(/Edited by/)).toBeNull();
+    await userEvent.click(
+      within(history).getByRole("button", { name: "Show 1 more" }),
+    );
+    expect(within(history).getByText(/Edited by human:tanim/)).toBeTruthy();
+    const review = region(dialog, "Human review");
+    expect(within(review).getByText("Required · tanim")).toBeTruthy();
+    expect(within(review).getByText(/Set by planner/)).toBeTruthy();
+    expect(within(review).getByText("Auth work")).toBeTruthy();
+  }, 20_000);
+
+  it("shows the review claim when the daemon sends one", async () => {
+    patch("T-2", {
+      claims: [
+        ...view("T-2").claims,
+        // The generated claim kind names the implementation claim only.
+        {
+          kind: "review" as never,
+          holder: "review",
+          claimed_at: 1_000,
+          renewed_at: 2_000,
+          stale: false,
+        },
+      ],
+    });
+    const { dialog } = await openTask();
+    expect(
+      within(region(dialog, "Responsible")).getByText(/Review claim:/),
+    ).toBeTruthy();
+  }, 15_000);
+
   it("closes back to the board with its filters", async () => {
-    const router = setup("/p/demo/t/T-2?label=ui");
+    const router = setup("/p/demo/t/T-2?label=ui").router;
     const dialog = await screen.findByRole("dialog", {}, WAIT);
     await within(dialog).findByRole("heading", { name: TITLE }, WAIT);
     // A linked item and a dependency open their task over the same filtered board.
@@ -220,7 +655,7 @@ describe("the task dialog route", () => {
 
 describe("creating a task", () => {
   it("opens the create form from the tab row and opens the created task", async () => {
-    const router = setup("/p/demo/board?label=ui");
+    const { router } = setup("/p/demo/board?label=ui");
     const nav = await screen.findByRole(
       "navigation",
       { name: "Project" },
@@ -249,23 +684,15 @@ describe("creating a task", () => {
         .getByRole("button", { name: "Create task" })
         .getAttribute("aria-busy"),
     ).toBe("true");
-    const opened = await screen.findByRole(
-      "heading",
-      { name: "Password reset" },
-      WAIT,
-    );
-    expect(opened).toBeTruthy();
-    expect(router.state.location.pathname).toBe("/p/demo/t/T-17");
-    const shown = screen.getByRole("dialog");
     expect(
-      within(shown).getByText(
-        "Calculated: every prerequisite is done, nobody has started",
-      ),
+      await screen.findByRole("heading", { name: "Password reset" }, WAIT),
     ).toBeTruthy();
+    expect(router.state.location.pathname).toBe("/p/demo/t/T-17");
   }, 15_000);
 
   it("offers New task on the empty board and adds the task to it", async () => {
-    const router = setup("/p/ledger/board");
+    tasks.clear();
+    const router = setup("/p/ledger/board").router;
     const panel = await screen.findByRole(
       "region",
       { name: "No tasks yet" },
@@ -286,7 +713,7 @@ describe("creating a task", () => {
       within(dialog).getByRole("button", { name: "Create task" }),
     );
     await screen.findByRole("heading", { name: "First task" }, WAIT);
-    expect(router.state.location.pathname).toBe("/p/ledger/t/T-1");
+    expect(router.state.location.pathname).toBe("/p/ledger/t/T-17");
     await userEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(
       await screen.findByRole("link", { name: "First task" }, WAIT),
@@ -294,7 +721,7 @@ describe("creating a task", () => {
   }, 15_000);
 
   it("closes the create form back to the board", async () => {
-    const router = setup("/p/demo/t/new?blocked=true");
+    const { router } = setup("/p/demo/t/new?blocked=true");
     const dialog = await screen.findByRole("dialog", {}, WAIT);
     await userEvent.click(
       within(dialog).getByRole("button", { name: "Cancel" }),
@@ -347,6 +774,7 @@ describe("the human edits", () => {
       within(dialog).getByRole("button", { name: "Save title" }),
     );
     expect(await within(dialog).findByText("Write a title.")).toBeTruthy();
+    expect(daemon.made(`PATCH ${P}/demo/tasks/T-2`)).toHaveLength(0);
   }, 15_000);
 
   it("shows the pending state for a description edit, then the rendered Markdown", async () => {
@@ -369,10 +797,9 @@ describe("the human edits", () => {
     expect(
       await within(section).findByText("this", { selector: "strong" }, WAIT),
     ).toBeTruthy();
-    expect(within(section).queryByRole("table")).toBeNull();
   }, 15_000);
 
-  it("adds a label with a pending state and shows it once confirmed", async () => {
+  it("puts an existing label on the task, takes it off, and creates a new one", async () => {
     const { dialog } = await openTask();
     await userEvent.click(
       within(dialog).getByRole("button", { name: "Label" }),
@@ -381,8 +808,31 @@ describe("the human edits", () => {
       expect(screen.getAllByRole("dialog")).toHaveLength(2);
     });
     const popover = screen.getAllByRole("dialog")[1] as HTMLElement;
+    await userEvent.click(
+      await within(popover).findByRole(
+        "button",
+        { name: "Add label auth" },
+        WAIT,
+      ),
+    );
+    expect(
+      await within(popover).findByRole(
+        "button",
+        { name: "Remove label auth" },
+        WAIT,
+      ),
+    ).toBeTruthy();
+    await userEvent.click(
+      within(popover).getByRole("button", { name: "Remove label auth" }),
+    );
+    await waitFor(() => {
+      expect(
+        within(popover).queryByRole("button", { name: "Remove label auth" }),
+      ).toBeNull();
+    }, WAIT);
+
     await userEvent.type(
-      within(popover).getByRole("textbox", { name: "Label name" }),
+      within(popover).getByRole("textbox", { name: "New label name" }),
       "copy",
     );
     await userEvent.selectOptions(
@@ -390,11 +840,11 @@ describe("the human edits", () => {
       "gold",
     );
     await userEvent.click(
-      within(popover).getByRole("button", { name: "Add label" }),
+      within(popover).getByRole("button", { name: "Create label" }),
     );
     expect(
       within(popover)
-        .getByRole("button", { name: "Add label" })
+        .getByRole("button", { name: "Create label" })
         .getAttribute("aria-busy"),
     ).toBe("true");
     expect(
@@ -404,22 +854,38 @@ describe("the human edits", () => {
         WAIT,
       ),
     ).toBeTruthy();
+    expect(labels.map((l) => l.name)).toContain("copy");
+  }, 20_000);
+
+  it("shows an existing label name on the name field", async () => {
+    const { dialog } = await openTask();
     await userEvent.click(
-      within(popover).getByRole("button", { name: "Remove label copy" }),
+      within(dialog).getByRole("button", { name: "Label" }),
     );
     await waitFor(() => {
-      expect(
-        within(popover).queryByRole("button", { name: "Remove label copy" }),
-      ).toBeNull();
-    }, WAIT);
+      expect(screen.getAllByRole("dialog")).toHaveLength(2);
+    });
+    const popover = screen.getAllByRole("dialog")[1] as HTMLElement;
+    await userEvent.type(
+      within(popover).getByRole("textbox", { name: "New label name" }),
+      "auth",
+    );
+    await userEvent.click(
+      within(popover).getByRole("button", { name: "Create label" }),
+    );
+    expect(
+      await within(popover).findByText(
+        "A label with this name exists.",
+        {},
+        WAIT,
+      ),
+    ).toBeTruthy();
   }, 15_000);
 
   it("ticks a plain step only after the daemon confirms it", async () => {
     const { dialog } = await openTask();
     const subtasks = region(dialog, "Subtasks");
-    const box = within(subtasks).getByRole("checkbox", {
-      name: "Map invalid_credentials and rate_limited to messages",
-    });
+    const box = within(subtasks).getByRole("checkbox", { name: STEP });
     expect(box.getAttribute("aria-checked")).toBe("false");
     await userEvent.click(box);
     expect(within(subtasks).getByText("Saving…")).toBeTruthy();
@@ -427,20 +893,21 @@ describe("the human edits", () => {
     await waitFor(() => {
       expect(
         within(subtasks)
-          .getByRole("checkbox", {
-            name: "Map invalid_credentials and rate_limited to messages",
-          })
+          .getByRole("checkbox", { name: STEP })
           .getAttribute("aria-checked"),
       ).toBe("true");
     }, WAIT);
-    expect(within(subtasks).getByText("5/5")).toBeTruthy();
+    expect(
+      daemon.made(`PATCH ${P}/demo/checklist-items/ci-1`)[0]?.body,
+    ).toEqual({ done: true });
+    expect(within(subtasks).getByText("3/3")).toBeTruthy();
   }, 15_000);
 
   it("gives a linked item no checkbox and a plain step one", async () => {
     const { dialog } = await openTask();
     const subtasks = region(dialog, "Subtasks");
-    expect(within(subtasks).getAllByRole("checkbox")).toHaveLength(4);
-    const linked = subtasks.querySelector('[data-item="T-2-5"]');
+    expect(within(subtasks).getAllByRole("checkbox")).toHaveLength(2);
+    const linked = subtasks.querySelector('[data-item="ci-5"]');
     expect(linked).not.toBeNull();
     expect(within(linked as HTMLElement).queryByRole("checkbox")).toBeNull();
     expect(
@@ -451,10 +918,6 @@ describe("the human edits", () => {
         .getByRole("link", { name: /T-13/ })
         .getAttribute("href"),
     ).toBe("/p/demo/t/T-13");
-    const step = subtasks.querySelector('[data-item="T-2-1"]');
-    expect(within(step as HTMLElement).getAllByRole("checkbox")).toHaveLength(
-      1,
-    );
   }, 15_000);
 
   it("adds a plain step with a pending state", async () => {
@@ -523,7 +986,7 @@ describe("the human edits", () => {
       within(confirm).getByRole("button", { name: "Remove link" }),
     );
     await waitFor(() => {
-      expect(subtasks.querySelector('[data-item="T-2-5"]')).toBeNull();
+      expect(subtasks.querySelector('[data-item="ci-5"]')).toBeNull();
     }, WAIT);
     const needs = within(region(dialog, "Dependencies")).getByRole("list", {
       name: "Needs",
@@ -607,7 +1070,7 @@ describe("the human edits", () => {
     );
     const alert = await within(deps).findByRole("alert", {}, WAIT);
     expect(alert.textContent).toContain("The change was refused.");
-    expect(alert.textContent).toContain("task T-99 does not exist");
+    expect(alert.textContent).toContain("refused: task_not_found");
   }, 15_000);
 
   it("shows no dependency editor on a Done task", async () => {
@@ -616,47 +1079,25 @@ describe("the human edits", () => {
     expect(
       within(deps).queryByRole("button", { name: "Add dependency" }),
     ).toBeNull();
-    expect(
-      within(deps).queryByRole("button", { name: /Remove the dependency/ }),
-    ).toBeNull();
     expect(within(dialog).getByText("Done", { selector: "span" })).toBeTruthy();
   }, 15_000);
 
-  it("turns human review on with a reviewer and a reason, and off", async () => {
+  it("shows the human-review mark and offers no control for it", async () => {
+    patch("T-2", { human_review: { reviewer: "tanim" } });
+    const { dialog } = await openTask();
+    const review = region(dialog, "Human review");
+    expect(within(review).getByText("Required · tanim")).toBeTruthy();
+    expect(within(review).queryAllByRole("button")).toHaveLength(0);
+  }, 15_000);
+
+  it("says human review is not required when the task has no mark", async () => {
     const { dialog } = await openTask();
     const review = region(dialog, "Human review");
     expect(within(review).getByText("Not required")).toBeTruthy();
-    await userEvent.click(
-      within(review).getByRole("button", { name: "Require my review" }),
-    );
-    await waitFor(() => {
-      expect(
-        within(review).getByRole<HTMLInputElement>("textbox", {
-          name: "Reviewer",
-        }).value,
-      ).toBe("tanim");
-    }, WAIT);
-    await userEvent.type(
-      within(review).getByRole("textbox", { name: "Reason" }),
-      "Auth work",
-    );
-    await userEvent.click(
-      within(review).getByRole("button", { name: "Require review" }),
-    );
-    expect(
-      await within(review).findByText("Required · tanim", {}, WAIT),
-    ).toBeTruthy();
-    expect(within(review).getByText("Auth work")).toBeTruthy();
-    expect(within(review).getByText(/Set by human:tanim/)).toBeTruthy();
-    await userEvent.click(
-      within(review).getByRole("button", { name: "Turn off human review" }),
-    );
-    expect(
-      await within(review).findByText("Not required", {}, WAIT),
-    ).toBeTruthy();
+    expect(within(review).queryAllByRole("button")).toHaveLength(0);
   }, 15_000);
 
-  it("sends feedback to the claim holder and shows it once confirmed", async () => {
+  it("sends feedback to the claim holder with a pending state", async () => {
     const { dialog } = await openTask();
     const messages = region(dialog, "Messages");
     const box = within(messages).getByRole("textbox", { name: "Feedback" });
@@ -672,10 +1113,82 @@ describe("the human edits", () => {
         .getByRole("button", { name: "Send" })
         .getAttribute("aria-busy"),
     ).toBe("true");
+    await waitFor(() => {
+      expect(daemon.made(`POST ${P}/demo/feedback`)).toHaveLength(1);
+    }, WAIT);
+    expect(daemon.made(`POST ${P}/demo/feedback`)[0]?.body).toEqual({
+      task: "T-2",
+      body: "Use the shorter copy",
+    });
+    // The write ends once the message list has been read again, so the sent message is in it.
+    await waitFor(() => {
+      expect(within(messages).getByText("1 linked to T-2")).toBeTruthy();
+    }, WAIT);
+    expect(within(messages).getByText("Use the shorter copy")).toBeTruthy();
+  }, 15_000);
+
+  it("lets the feedback box address an agent from the agent list", async () => {
+    const { dialog } = await openTask();
+    const messages = region(dialog, "Messages");
+    await waitFor(() => {
+      expect(
+        within(messages).getByRole("option", { name: "frontend/ui" }),
+      ).toBeTruthy();
+    }, WAIT);
+  }, 15_000);
+});
+
+describe("archiving from the dialog head", () => {
+  async function confirmArchive() {
+    const { dialog, router } = await openTask();
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "More actions" }),
+    );
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "Archive" }),
+    );
+    const confirm = await screen.findByRole("dialog", { name: "Archive T-2?" });
+    return { confirm, router };
+  }
+
+  it("asks first, stays pending, then closes onto the board", async () => {
+    const { confirm, router } = await confirmArchive();
+    expect(daemon.made(`POST ${P}/demo/tasks/T-2/archive`)).toHaveLength(0);
+    await userEvent.click(
+      within(confirm).getByRole("button", { name: "Archive task" }),
+    );
     expect(
-      await within(messages).findByText("Use the shorter copy", {}, WAIT),
-    ).toBeTruthy();
-    expect(within(messages).getByText("3 linked to T-2")).toBeTruthy();
+      within(confirm)
+        .getByRole("button", { name: "Archive task" })
+        .getAttribute("aria-busy"),
+    ).toBe("true");
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/p/demo/board");
+    }, WAIT);
+    expect(daemon.made(`POST ${P}/demo/tasks/T-2/archive`)).toHaveLength(1);
+  }, 15_000);
+
+  it("shows the open-proposal refusal by its reason", async () => {
+    archiveRefusal = true;
+    const { confirm } = await confirmArchive();
+    await userEvent.click(
+      within(confirm).getByRole("button", { name: "Archive task" }),
+    );
+    const alert = await within(confirm).findByRole("alert", {}, WAIT);
+    expect(alert.textContent).toBe(
+      "A proposal is open for this task. Close it before you archive the task.",
+    );
+  }, 15_000);
+
+  it("leaves the task alone when the human cancels", async () => {
+    const { confirm } = await confirmArchive();
+    await userEvent.click(
+      within(confirm).getByRole("button", { name: "Cancel" }),
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Archive T-2?" })).toBeNull();
+    });
+    expect(daemon.made(`POST ${P}/demo/tasks/T-2/archive`)).toHaveLength(0);
   }, 15_000);
 });
 

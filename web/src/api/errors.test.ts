@@ -78,10 +78,10 @@ describe("details", () => {
       error: {
         code: "dependency_cycle",
         message: "cycle",
-        details: { cycle: ["T-2", "T-5", "T-2"] },
+        details: { path: ["T-2", "T-5", "T-2"] },
       },
     });
-    expect(error?.details).toEqual({ cycle: ["T-2", "T-5", "T-2"] });
+    expect(error?.details).toEqual({ path: ["T-2", "T-5", "T-2"] });
     expect(toApiError({ error: { code: "x" } })?.details).toEqual({});
     expect(new ApiError("x", "m").details).toEqual({});
   });

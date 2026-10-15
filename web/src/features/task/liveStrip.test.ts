@@ -3,14 +3,14 @@ import type {
   CheckpointSummary,
   LiveWorkspace,
   TaskDetail,
-  TaskWorkspace,
+  TaskWorkspaceInfo,
 } from "@/api/tasks";
 import {
   baseText,
   changeLetter,
   changesNote,
   changeTone,
-  currentLive,
+  recordedCheckpoints,
   latestCheckpoint,
   lineCounts,
   liveChipText,
@@ -45,14 +45,12 @@ function live(extra: Partial<LiveWorkspace> = {}): LiveWorkspace {
   };
 }
 
-function workspace(extra: Partial<TaskWorkspace> = {}): TaskWorkspace {
+function workspace(extra: Partial<TaskWorkspaceInfo> = {}): TaskWorkspaceInfo {
   return {
-    id: "ws-2",
     directory: "ws/T-2",
     base: "r7",
     main: "r8",
     behind: 1,
-    live: null,
     ...extra,
   };
 }
@@ -66,7 +64,12 @@ const ck = (id: string, ago: number): CheckpointSummary => ({
 
 type StripTask = Pick<
   TaskDetail,
-  "activity" | "attention" | "claims" | "checkpoints" | "workspace"
+  | "activity"
+  | "attention"
+  | "claims"
+  | "checkpoints"
+  | "workspace"
+  | "workspace_info"
 >;
 
 function task(extra: Partial<StripTask> = {}): StripTask {
@@ -83,34 +86,11 @@ function task(extra: Partial<StripTask> = {}): StripTask {
       },
     ],
     checkpoints: [ck("ck-31", 3 * MINUTE)],
-    workspace: workspace(),
+    workspace: "ws-2",
+    workspace_info: workspace(),
     ...extra,
   };
 }
-
-describe("currentLive", () => {
-  it("is null without a workspace", () => {
-    expect(currentLive(null, live())).toBeNull();
-  });
-
-  it("keeps the payload when the stream has nothing for the workspace", () => {
-    const fromTask = live();
-    expect(currentLive(workspace({ live: fromTask }), undefined)).toBe(
-      fromTask,
-    );
-    expect(
-      currentLive(workspace({ live: fromTask }), live({ workspace: "ws-9" })),
-    ).toBe(fromTask);
-  });
-
-  it("takes the later of the payload and the stream", () => {
-    const old = live({ last_activity_at: NOW - MINUTE });
-    const fresh = live({ last_activity_at: NOW - SECOND });
-    expect(currentLive(workspace({ live: old }), fresh)).toBe(fresh);
-    expect(currentLive(workspace({ live: fresh }), old)).toBe(fresh);
-    expect(currentLive(workspace(), old)).toBe(old);
-  });
-});
 
 describe("liveStrip", () => {
   it("says who edits which file, the files, the latest checkpoint and the base against main", () => {
@@ -126,7 +106,7 @@ describe("liveStrip", () => {
   it("counts files in the plural and marks a base on the main head", () => {
     const two = live({ files: [...live().files, ...live().files] });
     const strip = liveStrip(
-      task({ workspace: workspace({ base: "r8" }), checkpoints: [] }),
+      task({ workspace_info: workspace({ base: "r8" }), checkpoints: [] }),
       two,
       NOW,
     );
@@ -170,6 +150,35 @@ describe("liveStrip", () => {
   });
 });
 
+describe("recordedCheckpoints", () => {
+  it("lists the checkpoints of the task and the frame newest first, each once", () => {
+    const frame = live({
+      checkpoints: [ck("ck-40", SECOND), ck("ck-31", MINUTE)],
+    });
+    expect(
+      recordedCheckpoints(
+        [ck("ck-31", MINUTE), ck("ck-30", 2 * MINUTE)],
+        frame,
+      ).map((c) => c.id),
+    ).toEqual(["ck-40", "ck-31", "ck-30"]);
+    expect(recordedCheckpoints([], null)).toEqual([]);
+  });
+});
+
+describe("liveStrip without the task details", () => {
+  it("shows what the frame reports when the payload has no workspace details, activity or checkpoints", () => {
+    const bare = { attention: [], claims: task().claims, workspace: "ws-2" };
+    expect(liveStrip(bare, live(), NOW)).toEqual({
+      worker: "frontend/ui",
+      verb: "is editing",
+      file: "a.ts",
+      rest: "· 1 file · base r7",
+      stalled: false,
+    });
+    expect(liveStrip(bare, null, NOW)?.rest).toBe("");
+  });
+});
+
 describe("latestCheckpoint", () => {
   it("takes the newest of the task and the live frame", () => {
     const frame = live({ checkpoints: [ck("ck-40", SECOND)] });
@@ -189,6 +198,7 @@ describe("the working-changes texts", () => {
       "1 file against base r7 · not in main",
     );
     expect(baseText({ base: "r7", main: "r9" })).toBe("base r7 (main r9)");
+    expect(baseText({ base: "r7" })).toBe("base r7");
   });
 
   it("letter and colour each change kind", () => {

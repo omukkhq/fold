@@ -5,6 +5,7 @@ import {
   blocksText,
   checklistText,
   humanReviewText,
+  messagesText,
   needsText,
   proposalLook,
   proposalText,
@@ -56,19 +57,23 @@ describe("checklistText", () => {
 describe("needsText", () => {
   it("lists the unfinished prerequisites in Backlog", () => {
     expect(
-      needsText({ status: "backlog", blocked: false, needs: ["T-3", "T-9"] }),
+      needsText({
+        status: "backlog",
+        blocked: false,
+        blocked_by: ["T-3", "T-9"],
+      }),
     ).toBe("needs T-3, T-9");
   });
 
   it("is null outside Backlog, for a blocked task, or with no prerequisite", () => {
     expect(
-      needsText({ status: "todo", blocked: false, needs: ["T-3"] }),
+      needsText({ status: "todo", blocked: false, blocked_by: ["T-3"] }),
     ).toBeNull();
     expect(
-      needsText({ status: "backlog", blocked: true, needs: ["T-3"] }),
+      needsText({ status: "backlog", blocked: true, blocked_by: ["T-3"] }),
     ).toBeNull();
     expect(
-      needsText({ status: "backlog", blocked: false, needs: [] }),
+      needsText({ status: "backlog", blocked: false, blocked_by: [] }),
     ).toBeNull();
   });
 });
@@ -82,11 +87,18 @@ describe("blocksText", () => {
 
 describe("blockedText", () => {
   it("lists the unfinished prerequisites of a blocked task", () => {
-    expect(blockedText({ blocked: true, needs: ["T-3", "T-9"] })).toBe(
+    expect(blockedText({ blocked: true, blocked_by: ["T-3", "T-9"] })).toBe(
       "Blocked by T-3, T-9",
     );
-    expect(blockedText({ blocked: true, needs: [] })).toBe("Blocked");
-    expect(blockedText({ blocked: false, needs: ["T-3"] })).toBeNull();
+    expect(blockedText({ blocked: true, blocked_by: [] })).toBe("Blocked");
+    expect(blockedText({ blocked: false, blocked_by: ["T-3"] })).toBeNull();
+  });
+});
+
+describe("messagesText", () => {
+  it("counts the messages that name the task", () => {
+    expect(messagesText({ messages: 3 })).toBe("3");
+    expect(messagesText({ messages: 0 })).toBeNull();
   });
 });
 

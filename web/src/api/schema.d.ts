@@ -3491,7 +3491,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `dependency_cycle` with the cycle in `details.cycle`, `dependency_exists` or `task_closed` */
+            /** @description `dependency_cycle` with the cycle in `details.path`, `dependency_exists` or `task_closed` */
             409: {
                 headers: {
                     [name: string]: unknown;

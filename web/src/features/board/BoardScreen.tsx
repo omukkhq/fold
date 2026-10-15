@@ -16,7 +16,7 @@ import {
 import { BoardToolbar } from "./BoardToolbar";
 import { boardCards, groupColumns } from "./columns";
 import { applyFilters, labelOptions, needsYouCount } from "./filters";
-import type { BoardSearch } from "./search";
+import { isFiltered, type BoardSearch } from "./search";
 import { reconnectAsOf, summaryText } from "./view";
 
 export interface BoardScreenProps {
@@ -40,7 +40,11 @@ export function BoardScreen({ slug, search, onSearch }: BoardScreenProps) {
     [status.retryAt],
   );
   const all = board.data ? boardCards(board.data) : [];
-  const columns = groupColumns(applyFilters(all, search));
+  const columns = groupColumns(
+    applyFilters(all, search),
+    board.data,
+    isFiltered(search),
+  );
   const asOf = reconnectAsOf(status, board.dataUpdatedAt);
 
   let body;

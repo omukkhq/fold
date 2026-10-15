@@ -14,15 +14,15 @@ export interface ActivityLine {
 }
 
 /**
- * The card's live line. The board payload names the file and the time of the last edit; a live frame of the same
- * workspace that arrived later moves the time forward. `stalled` comes only from the daemon's `attention` list.
+ * The card's live line. A board payload that carries `activity` names the file and the time of the last edit; a live frame
+ * of the same workspace that arrived later moves the time forward, and names the file when exactly one changed. `stalled` comes only from the daemon's `attention` list.
  */
 export function activityLine(
   card: Pick<BoardCard, "activity" | "attention" | "blocked">,
   live: LiveWorkspace | undefined,
   now: number,
 ): ActivityLine | null {
-  const { activity } = card;
+  const activity = card.activity ?? null;
   if (activity === null && live === undefined) {
     return null;
   }
@@ -31,7 +31,10 @@ export function activityLine(
     live?.last_activity_at ?? Number.NEGATIVE_INFINITY,
   );
   const stalled = hasKind(card.attention, "stalled");
-  const path = activity?.path ?? null;
+  const [only, ...rest] = live?.files ?? [];
+  const path =
+    activity?.path ??
+    (only !== undefined && rest.length === 0 ? only.path : null);
   let text: string;
   if (stalled) {
     const quiet = formatQuiet(now, at);

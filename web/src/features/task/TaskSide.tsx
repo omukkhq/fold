@@ -19,6 +19,7 @@ import {
   clearHumanReview,
   removeDependency,
   setHumanReview,
+  type LiveWorkspace,
   type TaskDetail,
 } from "@/api/tasks";
 import { HrefLink } from "@/app/HrefLink";
@@ -36,6 +37,7 @@ import {
   needsTitle,
   type DependencyRow,
 } from "./dependencies";
+import { recordedCheckpoints } from "./liveStrip";
 import { proposalPath, revisionPath } from "./links";
 import {
   KeyValue,
@@ -67,6 +69,8 @@ import { useTaskWrite } from "./useTaskWrite";
 interface Props {
   slug: string;
   task: TaskDetail;
+  /** The workspace frame from the event stream. */
+  live: LiveWorkspace | null;
   now: number;
 }
 
@@ -99,8 +103,10 @@ function Note({ children }: { children: string }) {
 }
 
 function Responsible({ task, now }: { task: TaskDetail; now: number }) {
-  const implementation = task.claims.find((c) => c.kind === "implementation");
-  const review = task.claims.find((c) => c.kind === "review");
+  // Every claim of a task read is its implementation claim.
+  const implementation = task.claims[0];
+  // The task read lists implementation claims only, so the review row draws for no task.
+  const review = task.claims.find((c) => (c.kind as string) === "review");
   return (
     <SideGroup title="Responsible">
       {implementation ? (
@@ -132,13 +138,26 @@ function Responsible({ task, now }: { task: TaskDetail; now: number }) {
   );
 }
 
-function Workspace({ task }: { task: TaskDetail }) {
-  const ws = task.workspace;
+function Workspace({
+  task,
+  live,
+}: {
+  task: TaskDetail;
+  live: LiveWorkspace | null;
+}) {
+  const ws = task.workspace_info;
+  if (task.workspace === null) {
+    return (
+      <SideGroup title="Workspace">
+        <Note>No workspace yet.</Note>
+      </SideGroup>
+    );
+  }
   return (
     <SideGroup title="Workspace">
+      <KeyValue name="Id" value={task.workspace} />
       {ws ? (
         <>
-          <KeyValue name="Id" value={ws.id} />
           <KeyValue name="Directory" value={ws.directory} />
           <KeyValue
             name="Base"
@@ -156,19 +175,20 @@ function Workspace({ task }: { task: TaskDetail }) {
             </p>
           ) : null}
         </>
-      ) : (
-        <Note>No workspace yet.</Note>
-      )}
+      ) : live ? (
+        <KeyValue name="Base" value={live.base} />
+      ) : null}
     </SideGroup>
   );
 }
 
-function Checkpoints({ task, now }: Props) {
+function Checkpoints({ task, live, now }: Props) {
   const [open, setOpen] = useState(false);
-  const list = collapse(task.checkpoints, 1, open);
+  const all = recordedCheckpoints(task.checkpoints ?? [], live);
+  const list = collapse(all, 1, open);
   return (
     <SideGroup title="Checkpoints">
-      {task.checkpoints.length === 0 ? <Note>No checkpoints yet.</Note> : null}
+      {all.length === 0 ? <Note>No checkpoints yet.</Note> : null}
       <ul className="flex flex-col gap-8">
         {list.shown.map((ck) => (
           <li key={ck.id} className="flex items-center gap-8">
@@ -199,11 +219,12 @@ function Checkpoints({ task, now }: Props) {
 }
 
 function Changesets({ task, now }: Props) {
+  const changesets = task.changesets ?? [];
   return (
     <SideGroup title="Changesets">
-      {task.changesets.length === 0 ? <Note>No changesets yet.</Note> : null}
+      {changesets.length === 0 ? <Note>No changesets yet.</Note> : null}
       <ul className="flex flex-col gap-8">
-        {task.changesets.map((cs) => (
+        {changesets.map((cs) => (
           <li key={cs.id} className="flex items-center gap-8">
             <GitCommitHorizontal
               aria-hidden="true"
@@ -225,7 +246,8 @@ function Changesets({ task, now }: Props) {
 }
 
 function Proposal({ slug, task }: { slug: string; task: TaskDetail }) {
-  const { proposal, integration } = task;
+  const proposal = task.proposal ?? null;
+  const integration = task.integration ?? null;
   return (
     <SideGroup title="Proposal">
       {proposal ? (
@@ -346,7 +368,8 @@ function HumanReview({ slug, task }: { slug: string; task: TaskDetail }) {
     clearHumanReview(slug, task.task),
   );
   const mark = task.human_review;
-  const editable = task.can_change_human_review;
+  // The task read carries no `can_change_human_review`, so the controls stay unmounted.
+  const editable = task.can_change_human_review === true;
   if (mark === null) {
     return (
       <SideGroup title="Human review">
@@ -378,15 +401,21 @@ function HumanReview({ slug, task }: { slug: string; task: TaskDetail }) {
       </SideGroup>
     );
   }
-  const lines = humanReviewLines(mark);
+  const lines = humanReviewLines(mark, task.human_review_note);
   return (
     <SideGroup title="Human review">
       <p className="flex items-center gap-6 text-bar font-medium text-secondary-text">
         <UserCheck aria-hidden="true" size={13} />
         {lines.title}
       </p>
-      <p className="text-meta text-text-muted">{lines.setBy}</p>
-      <p className="text-bar leading-normal text-text">{mark.reason}</p>
+      {lines.setBy ? (
+        <p className="text-meta text-text-muted">{lines.setBy}</p>
+      ) : null}
+      {task.human_review_note ? (
+        <p className="text-bar leading-normal text-text">
+          {task.human_review_note.reason}
+        </p>
+      ) : null}
       {editable ? (
         <Button
           variant="ghost"
@@ -585,13 +614,13 @@ function Dependencies({ slug, task }: { slug: string; task: TaskDetail }) {
 
 function History({ task }: { task: TaskDetail }) {
   const [open, setOpen] = useState(false);
-  const list = collapse(task.history, 2, open);
+  const list = collapse(task.history ?? [], 2, open);
   return (
     <SideGroup title="History">
       <ul className="flex flex-col gap-8">
         {list.shown.map((event) => (
           <li
-            key={`${event.type}-${String(event.at)}`}
+            key={event.seq}
             className="text-meta leading-normal text-text-muted"
           >
             {historyText(event)}
@@ -610,17 +639,18 @@ function History({ task }: { task: TaskDetail }) {
 }
 
 /** W03's side column, top to bottom as the frame orders it. */
-export function TaskSide({ slug, task, now }: Props) {
+export function TaskSide({ slug, task, live, now }: Props) {
   return (
     <aside className="flex w-full shrink-0 flex-col gap-20 border-border-subtle md:w-side-panel md:border-l md:pt-2 md:pl-20">
       <Responsible task={task} now={now} />
-      <Workspace task={task} />
-      <Checkpoints slug={slug} task={task} now={now} />
-      <Changesets slug={slug} task={task} now={now} />
+      <Workspace task={task} live={live} />
+      <Checkpoints slug={slug} task={task} live={live} now={now} />
+      <Changesets slug={slug} task={task} live={live} now={now} />
       <Proposal slug={slug} task={task} />
       <HumanReview slug={slug} task={task} />
       <Dependencies slug={slug} task={task} />
-      <History task={task} />
+      {/* W03 draws no empty History, so the group is left out for a task read without events. */}
+      {task.history && task.history.length > 0 ? <History task={task} /> : null}
     </aside>
   );
 }

@@ -125,6 +125,19 @@ describe("activityLine", () => {
     expect(line?.since).toBe("2 s ago");
   });
 
+  it("names the one changed file of a live frame when the payload has no activity", () => {
+    expect(activityLine(card(null), live(NOW - 3 * SECOND, 1), NOW)?.text).toBe(
+      "Editing f0.ts",
+    );
+    expect(activityLine(card(null), live(NOW, 3), NOW)?.text).toBe("Editing");
+  });
+
+  it("works from a card whose payload has no activity field at all", () => {
+    const bare = { attention: [], blocked: false };
+    expect(activityLine(bare, undefined, NOW)).toBeNull();
+    expect(activityLine(bare, live(NOW, 0), NOW)?.text).toBe("Editing");
+  });
+
   it("shows a live workspace that the payload has no activity for", () => {
     expect(activityLine(card(null), live(NOW - MINUTE, 2), NOW)).toEqual({
       text: "Editing",

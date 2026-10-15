@@ -41,11 +41,17 @@ export function domainOf(type: string): string | null {
 interface CardPatch {
   status?: string;
   blocked?: boolean;
+  /** The unfinished prerequisites at the moment the flag changed. */
+  blocked_by?: string[];
 }
 
-/** The part of the board cache the patch rules read: columns by `status`, each with its cards. */
+/** The part of the board cache the patch rules read: columns by `status`, each with its cards and the count of every task of the status. */
 interface BoardShape {
-  columns: { status: string; cards: Record<string, unknown>[] }[];
+  columns: {
+    status: string;
+    cards: Record<string, unknown>[];
+    total?: number;
+  }[];
 }
 
 function isBoard(value: unknown): value is BoardShape {
@@ -86,19 +92,102 @@ export function patchBoard(
     return null;
   }
   const patched = { ...card, ...patch };
+  const moved = target !== source;
   return {
     ...board,
     columns: board.columns.map((column) => {
       const cards = column.cards.filter((c) => c.task !== task);
-      return column === target
-        ? { ...column, cards: [...cards, patched] }
-        : { ...column, cards };
+      const next =
+        column === target
+          ? { ...column, cards: [...cards, patched] }
+          : { ...column, cards };
+      if (moved && typeof column.total === "number") {
+        if (column === source) {
+          return { ...next, total: column.total - 1 };
+        }
+        if (column === target) {
+          return { ...next, total: column.total + 1 };
+        }
+      }
+      return next;
     }),
   };
 }
 
+function isTaskIds(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((v) => typeof v === "string");
+}
+
 function patchRecord(value: unknown, patch: CardPatch): unknown {
   return isRecord(value) ? { ...value, ...patch } : value;
+}
+
+/** Each record of `list` that names `task` takes the new status; null when none does. */
+function withStatus(
+  list: unknown,
+  task: string,
+  status: string,
+): unknown[] | null {
+  if (!Array.isArray(list)) {
+    return null;
+  }
+  const records: unknown[] = list;
+  const names = (v: unknown) => isRecord(v) && v.task === task;
+  if (!records.some(names)) {
+    return null;
+  }
+  return records.map((v) => (isRecord(v) && names(v) ? { ...v, status } : v));
+}
+
+/** Another task read names the task in its dependency edges and linked checklist items, each with the task's status. */
+export function patchNamedStatus(
+  read: unknown,
+  task: string,
+  status: string,
+): unknown {
+  if (!isRecord(read)) {
+    return read;
+  }
+  const next: Record<string, unknown> = { ...read };
+  let changed = false;
+  const dependencies = withStatus(read.dependencies, task, status);
+  if (dependencies !== null) {
+    next.dependencies = dependencies;
+    changed = true;
+  }
+  if (Array.isArray(read.checklists)) {
+    next.checklists = read.checklists.map((checklist: unknown) => {
+      if (!isRecord(checklist)) {
+        return checklist;
+      }
+      const items = withStatus(checklist.items, task, status);
+      if (items === null) {
+        return checklist;
+      }
+      changed = true;
+      return { ...checklist, items };
+    });
+  }
+  return changed ? next : read;
+}
+
+function patchOtherReads(
+  queryClient: QueryClient,
+  slug: string,
+  task: string,
+  status: string,
+): void {
+  for (const query of queryClient
+    .getQueryCache()
+    .findAll({ queryKey: [slug, "task"] })) {
+    if (query.queryKey[2] === task || query.state.data === undefined) {
+      continue;
+    }
+    const next = patchNamedStatus(query.state.data, task, status);
+    if (next !== query.state.data) {
+      queryClient.setQueryData(query.queryKey, next);
+    }
+  }
 }
 
 function patchTask(
@@ -119,9 +208,16 @@ function patchTask(
       void queryClient.invalidateQueries({ queryKey: keys.board(slug) });
     }
   }
+  // A task read has no `blocked_by`: it lists the edges with their statuses.
+  const taskPatch: CardPatch = {};
+  if (patch.status !== undefined) taskPatch.status = patch.status;
+  if (patch.blocked !== undefined) taskPatch.blocked = patch.blocked;
   queryClient.setQueryData(keys.task(slug, event.task), (old: unknown) =>
-    patchRecord(old, patch),
+    patchRecord(old, taskPatch),
   );
+  if (patch.status !== undefined) {
+    patchOtherReads(queryClient, slug, event.task, patch.status);
+  }
 }
 
 function applySnapshot(
@@ -165,8 +261,9 @@ function invalidationKeys(
     case "worker":
     case "session":
       return [keys.agents(slug)];
-    case "task":
     case "label":
+      return [board, keys.labels(slug), ...taskKey];
+    case "task":
     case "dependency":
     case "checklist":
       return [board, ...taskKey];
@@ -179,6 +276,8 @@ function invalidationKeys(
         ...workspaceKey,
       ];
     case "workspace":
+      // A card names its task's live workspace, which opens, closes and moves with these events.
+      return [keys.workspaces(slug), ...workspaceKey, ...taskKey, board];
     case "checkpoint":
     case "changeset":
       return [keys.workspaces(slug), ...workspaceKey, ...taskKey];
@@ -264,16 +363,19 @@ function applyStored(
   event: StoredEvent,
 ): void {
   if (event.type === "task.status_changed") {
-    const status = event.data.status;
+    const status = event.data.to;
     if (typeof status === "string") {
       patchTask(queryClient, slug, event, { status });
       return;
     }
   }
   if (event.type === "task.blocked_changed") {
-    const blocked = event.data.blocked;
-    if (typeof blocked === "boolean") {
-      patchTask(queryClient, slug, event, { blocked });
+    const { blocked, blocked_by: blockedBy } = event.data;
+    if (typeof blocked === "boolean" && isTaskIds(blockedBy)) {
+      patchTask(queryClient, slug, event, {
+        blocked,
+        blocked_by: blockedBy,
+      });
       return;
     }
   }

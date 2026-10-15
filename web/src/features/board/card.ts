@@ -30,14 +30,18 @@ export function checklistText(
   return `${String(c.steps_done + c.linked_done)}/${String(total)}`;
 }
 
-/** `needs T-3, T-9` while the task waits in Backlog; a blocked task names them in its Blocked badge. */
+/** `needs T-3, T-9` while the task waits in Backlog, naming the prerequisites that are not Done; a blocked task names them in its Blocked badge. */
 export function needsText(
-  card: Pick<BoardCard, "status" | "blocked" | "needs">,
+  card: Pick<BoardCard, "status" | "blocked" | "blocked_by">,
 ): string | null {
-  if (card.needs.length === 0 || card.blocked || card.status !== "backlog") {
+  if (
+    card.blocked_by.length === 0 ||
+    card.blocked ||
+    card.status !== "backlog"
+  ) {
     return null;
   }
-  return `needs ${card.needs.join(", ")}`;
+  return `needs ${card.blocked_by.join(", ")}`;
 }
 
 export function blocksText(card: Pick<BoardCard, "blocks">): string | null {
@@ -46,14 +50,19 @@ export function blocksText(card: Pick<BoardCard, "blocks">): string | null {
 
 /** The blocked indicator, listing the unfinished prerequisites. */
 export function blockedText(
-  card: Pick<BoardCard, "blocked" | "needs">,
+  card: Pick<BoardCard, "blocked" | "blocked_by">,
 ): string | null {
   if (!card.blocked) {
     return null;
   }
-  return card.needs.length > 0
-    ? `Blocked by ${card.needs.join(", ")}`
+  return card.blocked_by.length > 0
+    ? `Blocked by ${card.blocked_by.join(", ")}`
     : "Blocked";
+}
+
+/** The message-square count on a card; null when no message names the task. */
+export function messagesText(card: Pick<BoardCard, "messages">): string | null {
+  return card.messages > 0 ? String(card.messages) : null;
 }
 
 const PROPOSAL_TEXT: Record<ProposalState, string> = {
