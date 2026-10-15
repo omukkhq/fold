@@ -452,7 +452,36 @@ pub(crate) fn open_regular(path: &Path) -> io::Result<Option<(File, Metadata)>> 
 
 /// Hashes the file as a blob. The read counts only when the size and modification time are the same before and after it, and the path is still a regular file; otherwise it is read again, up to three times in all.
 pub(crate) fn hash_stable(path: &Path) -> io::Result<Reading> {
+    read_stable_into(path, None)
+}
+
+/// What a stable read of one workspace file found.
+#[derive(Debug, PartialEq, Eq)]
+pub enum StableRead {
+    /// The content and its blob hash.
+    Read(Vec<u8>, ObjectHash),
+    /// The file kept changing over three reads.
+    Unstable,
+    Gone,
+    Denied,
+}
+
+/// Reads the whole file with the scanner's stable read: a read counts only when the file did not change while it was read, and a changed file is read again, three tries at most. A symlink in the file's place is not followed.
+pub fn read_stable(path: &Path) -> io::Result<StableRead> {
+    let mut content = Vec::new();
+    Ok(match read_stable_into(path, Some(&mut content))? {
+        Reading::Hashed(hash, _) => StableRead::Read(content, hash),
+        Reading::Unstable => StableRead::Unstable,
+        Reading::Gone => StableRead::Gone,
+        Reading::Denied => StableRead::Denied,
+    })
+}
+
+fn read_stable_into(path: &Path, mut content: Option<&mut Vec<u8>>) -> io::Result<Reading> {
     for _ in 0..READ_TRIES {
+        if let Some(content) = content.as_deref_mut() {
+            content.clear();
+        }
         let (mut file, before) = match open_regular(path) {
             Ok(Some(opened)) => opened,
             Ok(None) => continue,
@@ -470,6 +499,9 @@ pub(crate) fn hash_stable(path: &Path) -> io::Result<Reading> {
                 Ok(0) => break,
                 Ok(read) => {
                     hasher.update(&buffer[..read]);
+                    if let Some(content) = content.as_deref_mut() {
+                        content.extend_from_slice(&buffer[..read]);
+                    }
                     total += read as u64;
                 }
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}

@@ -82,6 +82,8 @@ define_codes! {
     WORKSPACE_NOT_FOUND = "workspace_not_found",
     WORKSPACE_NOT_ACTIVE = "workspace_not_active",
     NOT_WORKSPACE_OWNER = "not_workspace_owner",
+    INVALID_STATE_REF = "invalid_state_ref",
+    PATH_NOT_IN_COMPARISON = "path_not_in_comparison",
     // Only a fired failpoint of the `failpoints` test feature returns it; a release build never does.
     FAILPOINT = "failpoint",
     MESSAGE_NOT_FOUND = "message_not_found",

@@ -68,6 +68,8 @@ workspace_exists
 workspace_not_found
 workspace_not_active
 not_workspace_owner
+invalid_state_ref
+path_not_in_comparison
 failpoint
 message_not_found
 recipient_not_found

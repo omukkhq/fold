@@ -771,6 +771,7 @@ dependencies = [
  "notify",
  "proptest",
  "serde_json",
+ "similar",
  "tempfile",
  "thiserror",
  "tracing",

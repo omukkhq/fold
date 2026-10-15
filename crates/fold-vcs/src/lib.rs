@@ -1,3 +1,6 @@
+pub mod browse;
+pub mod compare;
+pub mod diff;
 pub mod gc;
 pub mod git;
 pub mod git_export;

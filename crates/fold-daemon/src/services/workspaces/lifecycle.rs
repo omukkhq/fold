@@ -21,10 +21,10 @@ use fold_vcs::index::StatIndex;
 use fold_vcs::materialise::{MaterialiseOptions, materialise};
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::paths::WorkspaceError as VcsError;
-use fold_vcs::platform::{Capabilities, sync_dir};
+use fold_vcs::platform::sync_dir;
 use serde_json::json;
 
-use super::{WorkspaceError, WorkspaceService, blocking};
+use super::{WorkspaceError, WorkspaceService, blocking, capabilities};
 use crate::services::events::EventBuffer;
 use crate::services::tasks::{
     already_claimed, claim_in_tx, closed_refusal, recompute, task_not_found, worker_row,
@@ -254,20 +254,14 @@ impl WorkspaceService {
         taken: Vec<String>,
         tree: ObjectHash,
     ) -> Result<Placed, WorkspaceError> {
-        let fold_dir = self.paths.fold_dir();
+        let paths = self.paths.clone();
         let ws_dir = self.paths.ws_dir();
         let root = self.paths.root().to_path_buf();
         let probed = Arc::clone(&self.caps);
         blocking(move || {
             fs::create_dir_all(&ws_dir).map_err(io_error)?;
-            let objects = ObjectStore::open(&fold_dir).map_err(FoldError::from)?;
-            let caps = match probed.get() {
-                Some(caps) => *caps,
-                None => {
-                    let caps = Capabilities::probe(&fold_dir).map_err(io_error)?;
-                    *probed.get_or_init(|| caps)
-                }
-            };
+            let objects = ObjectStore::open(&paths.fold_dir()).map_err(FoldError::from)?;
+            let caps = capabilities(&probed, &paths)?;
             let staging = staging_dir(&ws_dir)?;
             let opts = MaterialiseOptions {
                 read_only: false,

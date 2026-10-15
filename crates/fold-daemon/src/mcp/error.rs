@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use crate::services::agents::AgentError;
 use crate::services::events::EventsError;
 use crate::services::projects::ProjectError;
+use crate::services::tasks::TaskError;
+use crate::services::workspaces::WorkspaceError;
 
 /// The next step for the codes an agent can fix itself. A code in this table always gets this hint, whatever the error carried, so every transport names the same next step.
 const HINTS: &[(&str, &str)] = &[
@@ -15,6 +17,14 @@ const HINTS: &[(&str, &str)] = &[
     (
         codes::PROJECT_NOT_FOUND,
         "run fold init in the project root",
+    ),
+    (
+        codes::REVISION_NOT_FOUND,
+        "call get_repository_state for the head and the recent revisions",
+    ),
+    (
+        codes::PATH_NOT_IN_COMPARISON,
+        "call compare_revisions without path to list the changed files",
     ),
 ];
 
@@ -69,6 +79,19 @@ pub fn from_events(error: EventsError) -> FoldError {
     match error {
         EventsError::Fold(error) => error,
         EventsError::Store(error) => from_store(error),
+    }
+}
+
+pub fn from_workspace(error: WorkspaceError) -> FoldError {
+    match error {
+        WorkspaceError::Fold(error) => error,
+        WorkspaceError::Store(error) => from_store(error),
+        WorkspaceError::Task(TaskError::Fold(error)) => error,
+        WorkspaceError::Task(TaskError::Store(error)) => from_store(error),
+        WorkspaceError::Task(TaskError::Event(error)) | WorkspaceError::Event(error) => {
+            tracing::error!(%error, "tool call failed to build an event");
+            FoldError::new(codes::INTERNAL_ERROR, "internal error")
+        }
     }
 }
 

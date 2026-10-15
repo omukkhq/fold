@@ -1,7 +1,8 @@
 use axum::Json;
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{FromRequest, Request};
+use axum::extract::{FromRequest, FromRequestParts, Query, Request};
 use axum::http::StatusCode;
+use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
 use fold_core::{FoldError, codes};
 use fold_store::StoreError;
@@ -12,6 +13,8 @@ use utoipa::ToSchema;
 
 use crate::services::agents::AgentError;
 use crate::services::projects::ProjectError;
+use crate::services::tasks::TaskError;
+use crate::services::workspaces::WorkspaceError;
 
 /// The one error body of every route.
 #[derive(Debug, Serialize, ToSchema)]
@@ -35,8 +38,15 @@ fn status_of(code: &str) -> Option<StatusCode> {
         codes::NOT_FOUND
         | codes::PROJECT_NOT_FOUND
         | codes::WEB_NOT_BUILT
-        | codes::AGENT_NOT_FOUND => Some(StatusCode::NOT_FOUND),
-        codes::INVALID_REQUEST | codes::INVALID_NAME => Some(StatusCode::BAD_REQUEST),
+        | codes::AGENT_NOT_FOUND
+        | codes::REVISION_NOT_FOUND
+        | codes::WORKSPACE_NOT_FOUND
+        | codes::PATH_NOT_IN_COMPARISON => Some(StatusCode::NOT_FOUND),
+        codes::INVALID_REQUEST
+        | codes::INVALID_NAME
+        | codes::INVALID_ID
+        | codes::INVALID_PATH
+        | codes::INVALID_STATE_REF => Some(StatusCode::BAD_REQUEST),
         codes::HUMAN_NAME_REQUIRED | codes::AUTH_REQUIRED | codes::INVALID_TOKEN => {
             Some(StatusCode::UNAUTHORIZED)
         }
@@ -83,6 +93,31 @@ impl From<AgentError> for ApiError {
             AgentError::Fold(error) => error.into(),
             AgentError::Store(error) => error.into(),
             AgentError::Event(error) => {
+                Self(FoldError::new(codes::INTERNAL_ERROR, error.to_string()))
+            }
+        }
+    }
+}
+
+impl From<TaskError> for ApiError {
+    fn from(error: TaskError) -> Self {
+        match error {
+            TaskError::Fold(error) => error.into(),
+            TaskError::Store(error) => error.into(),
+            TaskError::Event(error) => {
+                Self(FoldError::new(codes::INTERNAL_ERROR, error.to_string()))
+            }
+        }
+    }
+}
+
+impl From<WorkspaceError> for ApiError {
+    fn from(error: WorkspaceError) -> Self {
+        match error {
+            WorkspaceError::Fold(error) => error.into(),
+            WorkspaceError::Store(error) => error.into(),
+            WorkspaceError::Task(error) => error.into(),
+            WorkspaceError::Event(error) => {
                 Self(FoldError::new(codes::INTERNAL_ERROR, error.to_string()))
             }
         }
@@ -156,6 +191,24 @@ where
     }
 }
 
+/// `Query` with the rejection mapped to the envelope. The message never repeats the query string.
+pub struct ApiQuery<T>(pub T);
+
+impl<S, T> FromRequestParts<S> for ApiQuery<T>
+where
+    S: Send + Sync,
+    T: DeserializeOwned,
+{
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, ApiError> {
+        Query::<T>::from_request_parts(parts, state)
+            .await
+            .map(|Query(value)| Self(value))
+            .map_err(|_| ApiError::invalid_request("the query string is not valid for this route"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,6 +220,12 @@ mod tests {
             (codes::PROJECT_NOT_FOUND, StatusCode::NOT_FOUND),
             (codes::WEB_NOT_BUILT, StatusCode::NOT_FOUND),
             (codes::INVALID_REQUEST, StatusCode::BAD_REQUEST),
+            (codes::REVISION_NOT_FOUND, StatusCode::NOT_FOUND),
+            (codes::WORKSPACE_NOT_FOUND, StatusCode::NOT_FOUND),
+            (codes::PATH_NOT_IN_COMPARISON, StatusCode::NOT_FOUND),
+            (codes::INVALID_ID, StatusCode::BAD_REQUEST),
+            (codes::INVALID_PATH, StatusCode::BAD_REQUEST),
+            (codes::INVALID_STATE_REF, StatusCode::BAD_REQUEST),
             (codes::PROJECT_UNAVAILABLE, StatusCode::SERVICE_UNAVAILABLE),
             (codes::GC_IN_PROGRESS, StatusCode::CONFLICT),
             (codes::AGENT_NOT_FOUND, StatusCode::NOT_FOUND),
@@ -226,6 +285,23 @@ mod tests {
         let ApiError(error) = AgentError::Store(StoreError::SchemaTooNew { version: 9 }).into();
         assert_eq!(error.code(), codes::SCHEMA_TOO_NEW);
         let ApiError(error) = AgentError::Event(fold_core::EventError::UnknownType).into();
+        assert_eq!(error.code(), codes::INTERNAL_ERROR);
+    }
+
+    #[test]
+    fn workspace_errors_keep_their_code() {
+        let ApiError(error) = WorkspaceError::Store(StoreError::Corrupt("revisions.hash")).into();
+        assert_eq!(error.code(), codes::INTERNAL_ERROR);
+        let ApiError(error) =
+            WorkspaceError::Fold(FoldError::new(codes::INVALID_PATH, "bad")).into();
+        assert_eq!(error.code(), codes::INVALID_PATH);
+        let ApiError(error) = WorkspaceError::Task(TaskError::Fold(FoldError::new(
+            codes::ALREADY_CLAIMED,
+            "T-1",
+        )))
+        .into();
+        assert_eq!(error.code(), codes::ALREADY_CLAIMED);
+        let ApiError(error) = WorkspaceError::Event(fold_core::EventError::UnknownType).into();
         assert_eq!(error.code(), codes::INTERNAL_ERROR);
     }
 

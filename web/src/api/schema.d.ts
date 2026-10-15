@@ -74,6 +74,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/repository": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The head of main, the main directory and the newest 10 revisions. */
+        get: operations["get_repository_state"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Main revisions, newest first, one page at a time. */
+        get: operations["list_revisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/revisions/{r}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One revision and the files it changed against its parent, without hunks. */
+        get: operations["get_revision"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/revisions/{r}/file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One file of a revision. A symlink gives its target text and is never followed. */
+        get: operations["read_revision_file"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/revisions/{r}/tree": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The entries of one directory of a revision. */
+        get: operations["read_revision_tree"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/session": {
         parameters: {
             query?: never;
@@ -129,6 +214,28 @@ export interface components {
             id: string;
             label: string | null;
         };
+        /** @description One changed file of a comparison. A binary file is compared by hash only, so its line counts are 0; a hash is null on the side where the file does not exist. */
+        ComparedFile: {
+            /** Format: int32 */
+            added_lines: number;
+            binary: boolean;
+            change: components["schemas"]["FileChangeKind"];
+            new_hash: string | null;
+            old_hash: string | null;
+            path: string;
+            /** @description The path before a rename; null for every other change. */
+            previous_path: string | null;
+            /** Format: int32 */
+            removed_lines: number;
+        };
+        ComparisonTotals: {
+            /** Format: int32 */
+            added_lines: number;
+            /** Format: int32 */
+            files: number;
+            /** Format: int32 */
+            removed_lines: number;
+        };
         /** @description A stored event. The related ids are public ids. */
         DurableEvent: {
             /** @description A worker (`frontend`, `frontend/ui`), a human (`human:ana`) or `fold`. */
@@ -183,6 +290,21 @@ export interface components {
             /** @enum {string} */
             kind: "snapshot";
         });
+        /** @enum {string} */
+        FileChangeKind: "added" | "modified" | "deleted" | "renamed" | "mode_changed";
+        FileContentView: {
+            binary: boolean;
+            /** @description The blob hash; the repository screen shows it for a binary file. */
+            hash: string;
+            kind: components["schemas"]["TreeEntryKind"];
+            path: string;
+            /** Format: int64 */
+            size: number;
+            /** @description The content as UTF-8, or a symlink's target text. Absent for a binary or too-large file. */
+            text?: string | null;
+            /** @description The file is larger than 1 MiB, so only its size and hash are given; it is not checked for binary content. */
+            too_large: boolean;
+        };
         /** @description The counts of one garbage collection run. */
         GcCounts: {
             /**
@@ -276,6 +398,58 @@ export interface components {
             name: string;
             slug: string;
         };
+        RepositoryView: {
+            /**
+             * @description The revision `main` names; null only before `r1` exists.
+             * @example r17
+             */
+            head: string | null;
+            /** @description The project's read-only copy of main. */
+            main_path: string;
+            /** @description The newest 10 revisions, newest first. */
+            recent: components["schemas"]["RevisionView"][];
+        };
+        RevisionDetailView: {
+            /** @description The files changed against the parent, or every file as added for `r1`. */
+            files: components["schemas"]["ComparedFile"][];
+            revision: components["schemas"]["RevisionView"];
+            totals: components["schemas"]["ComparisonTotals"];
+        };
+        /** @enum {string} */
+        RevisionOriginView: "initial" | "proposal" | "pull";
+        RevisionPageView: {
+            /**
+             * @description Pass it as `before` for the next page; null once the page reaches `r1`.
+             * @example r40
+             */
+            before: string | null;
+            /** @description Newest first. */
+            revisions: components["schemas"]["RevisionView"][];
+        };
+        RevisionView: {
+            /** @description The agent whose proposal was integrated, or the human who pulled. */
+            author: string | null;
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            created_at: number;
+            /** @example r17 */
+            id: string;
+            origin: components["schemas"]["RevisionOriginView"];
+            /** @example r16 */
+            parent: string | null;
+            /** @example P-3 */
+            proposal: string | null;
+            /** @description The remote commit a pull brought in. */
+            pull: string | null;
+            /** @example T-12 */
+            task: string | null;
+            /** @description The title of the integrated proposal. */
+            title: string | null;
+            /** @description The hash of the revision's root tree. */
+            tree: string;
+        };
         /** @description A token off loopback, a name on loopback. */
         SessionRequest: components["schemas"]["TokenSignIn"] | components["schemas"]["NameSignIn"];
         /** @description What the sign-in screen needs to know. */
@@ -297,6 +471,26 @@ export interface components {
         /** @description Off loopback, a web token from `fold token create`. */
         TokenSignIn: {
             token: string;
+        };
+        /** @enum {string} */
+        TreeEntryKind: "directory" | "file" | "executable" | "symlink";
+        TreeEntryView: {
+            hash: string;
+            kind: components["schemas"]["TreeEntryKind"];
+            name: string;
+            /** @description Relative to the revision's root. */
+            path: string;
+            /**
+             * Format: int64
+             * @description Bytes of a file, or of a symlink's target text; null for a directory.
+             */
+            size: number | null;
+        };
+        TreeView: {
+            /** @description In name order. */
+            entries: components["schemas"]["TreeEntryView"][];
+            /** @description The directory listed; empty for the root. */
+            path: string;
         };
     };
     responses: never;
@@ -712,6 +906,399 @@ export interface operations {
             };
             /** @description A run of this project is in progress (`gc_in_progress`) */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_repository_state: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The repository state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepositoryView"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie; `invalid_token`: the cookie holds a token the registry does not have */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The slug is not registered */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    list_revisions: {
+        parameters: {
+            query?: {
+                /** @description At most this many revisions; 50 when absent, at least 1 and at most 1000. */
+                limit?: number;
+                /** @description Only revisions numbered below this one, such as `r40`. */
+                before?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of revisions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionPageView"];
+                };
+            };
+            /** @description The query is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie; `invalid_token`: the cookie holds a token the registry does not have */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The slug is not registered */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_revision: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The revision, such as r17 */
+                r: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The revision */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionDetailView"];
+                };
+            };
+            /** @description The revision id is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie; `invalid_token`: the cookie holds a token the registry does not have */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The revision or the slug does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    read_revision_file: {
+        parameters: {
+            query?: {
+                /** @description A path relative to the revision's root, such as `src/lib.rs`; empty or absent for the root. */
+                path?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The revision, such as r17 */
+                r: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileContentView"];
+                };
+            };
+            /** @description The revision id or the path is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie; `invalid_token`: the cookie holds a token the registry does not have */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The revision, the file or the slug does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    read_revision_tree: {
+        parameters: {
+            query?: {
+                /** @description A path relative to the revision's root, such as `src/lib.rs`; empty or absent for the root. */
+                path?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The revision, such as r17 */
+                r: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The directory's entries */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TreeView"];
+                };
+            };
+            /** @description The revision id or the path is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie; `invalid_token`: the cookie holds a token the registry does not have */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The revision, the directory or the slug does not exist */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

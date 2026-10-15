@@ -217,6 +217,22 @@ impl ObjectStore {
         })
     }
 
+    /// The length of a blob's content, from its header alone, so a directory listing never reads whole files.
+    pub fn blob_size(&self, hash: &ObjectHash) -> Result<u64, ObjectError> {
+        let file = match File::open(self.path(hash)) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Err(ObjectError::Missing(*hash));
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let header = read_header(hash, &mut BufReader::new(file))?;
+        if header.kind != ObjectKind::Blob {
+            return Err(corrupt(hash, "kind differs from the one asked for"));
+        }
+        Ok(header.raw_len)
+    }
+
     /// Streams a blob, decompressing on the fly. A hash mismatch surfaces on the read that delivers the last byte, and a length mismatch at the end of the stream, each as an `InvalidData` error that carries an [`ObjectError`]; `ObjectError::from` recovers it.
     pub fn open_blob(&self, hash: &ObjectHash) -> Result<BlobReader, ObjectError> {
         let (header, inner) = self.open_stream(hash, Some(ObjectKind::Blob))?;

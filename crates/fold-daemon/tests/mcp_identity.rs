@@ -6,8 +6,10 @@ use fold_core::WorkerName;
 use fold_daemon::mcp::{FoldServer, FooterPart, FooterSource, INSTRUCTIONS};
 use fold_daemon::services::agents::{AgentService, SessionContext};
 use fold_daemon::services::events::{EventBus, EventService};
+use fold_daemon::services::workspaces::WorkspaceService;
 use fold_store::agents;
 use fold_store::testing::TestProject;
+use fold_vcs::git::Git;
 use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::service::RunningService;
 use rmcp::{RoleClient, ServiceExt};
@@ -50,7 +52,15 @@ async fn connect_with(
     let agents = service(project);
     let events = EventService::new(project.store().clone(), EventBus::new());
     let session = agents.start_session(7).await.unwrap();
-    let mut server = FoldServer::new(agents, events, session.clone());
+    let workspaces = WorkspaceService::new(
+        project.store().clone(),
+        EventBus::new(),
+        Arc::new(project.clock().clone()),
+        project.paths().clone(),
+        Git::default(),
+        30,
+    );
+    let mut server = FoldServer::new(agents, events, workspaces, session.clone());
     for source in sources {
         server = server.with_footer_source(source);
     }
@@ -380,7 +390,10 @@ async fn the_server_lists_described_tools_and_sends_the_workflow() {
             "register_worker",
             "list_agents",
             "get_events",
-            "wait_for_events"
+            "wait_for_events",
+            "get_repository_state",
+            "get_revision",
+            "compare_revisions",
         ]
     );
     for tool in &tools {

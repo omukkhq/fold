@@ -3,6 +3,7 @@ pub mod events;
 pub mod footer;
 pub mod handshake;
 pub mod identity;
+pub mod workspaces;
 
 use std::sync::Arc;
 
@@ -19,6 +20,7 @@ use tokio::sync::Mutex;
 
 use crate::services::agents::{AgentService, SessionContext};
 use crate::services::events::EventService;
+use crate::services::workspaces::WorkspaceService;
 use error::{from_agent, tool_error};
 pub use footer::{FooterCounts, FooterPart, FooterSource, footer};
 
@@ -29,6 +31,7 @@ pub const INSTRUCTIONS: &str = "fold coordinates the agents of one project. Work
 pub struct FoldServer {
     agents: AgentService,
     events: EventService,
+    workspaces: WorkspaceService,
     /// Held across the `register_agent` command, which binds the session.
     session: Mutex<SessionContext>,
     footer: Vec<Arc<dyn FooterSource>>,
@@ -42,12 +45,18 @@ impl std::fmt::Debug for FoldServer {
 
 impl FoldServer {
     /// Every server counts the new events of its agent in the footer.
-    pub fn new(agents: AgentService, events: EventService, session: SessionContext) -> Self {
+    pub fn new(
+        agents: AgentService,
+        events: EventService,
+        workspaces: WorkspaceService,
+        session: SessionContext,
+    ) -> Self {
         let new_events: Arc<dyn FooterSource> =
             Arc::new(events::NewEventsFooter::new(agents.clone(), events.clone()));
         Self {
             agents,
             events,
+            workspaces,
             session: Mutex::new(session),
             footer: vec![new_events],
         }
@@ -96,6 +105,13 @@ impl FoldServer {
             }
             (events::WAIT_FOR_EVENTS, Some(worker)) => {
                 events::wait_for_events(self, worker, &arguments, context).await?
+            }
+            (workspaces::GET_REPOSITORY_STATE, _) => {
+                workspaces::get_repository_state(self, &arguments).await?
+            }
+            (workspaces::GET_REVISION, _) => workspaces::get_revision(self, &arguments).await?,
+            (workspaces::COMPARE_REVISIONS, _) => {
+                workspaces::compare_revisions(self, &arguments).await?
             }
             _ => return Ok(None),
         };
@@ -163,6 +179,7 @@ impl ServerHandler for FoldServer {
     ) -> Result<ListToolsResult, ErrorData> {
         let mut tools = identity::tools();
         tools.extend(events::tools());
+        tools.extend(workspaces::tools());
         Ok(ListToolsResult::with_all_items(tools))
     }
 

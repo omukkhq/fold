@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fold_core::{AgentName, FoldError, codes};
+use fold_vcs::git::Git;
 use rmcp::ServiceExt;
 use rmcp::service::ServerInitializeError;
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,7 @@ use crate::daemon::AppState;
 use crate::services::agents::{AgentService, SessionContext};
 use crate::services::events::EventService;
 use crate::services::projects;
+use crate::services::workspaces::WorkspaceService;
 use crate::socket::HandshakeHandler;
 
 /// The value of `fold` in the adapter's line. A daemon answers any other value with `protocol_version_unsupported`.
@@ -89,7 +91,7 @@ where
         Ok(Err(error)) => Err(error),
         Err(_) => Err(invalid("no handshake line arrived within 5 seconds")),
     };
-    let ((agents, events, session, project), rest) = match opened {
+    let ((agents, events, workspaces, session, project), rest) = match opened {
         Ok(opened) => opened,
         Err(error) => {
             if write
@@ -107,7 +109,7 @@ where
         .await
         .is_ok()
     {
-        let server = FoldServer::new(agents.clone(), events, session.clone());
+        let server = FoldServer::new(agents.clone(), events, workspaces, session.clone());
         // Bytes the client sent after its line belong to MCP.
         let read = Cursor::new(rest).chain(read);
         match server.serve((read, write)).await {
@@ -204,7 +206,16 @@ pub fn parse_hello(line: &[u8]) -> Result<Hello, FoldError> {
 async fn open(
     state: &AppState,
     line: &[u8],
-) -> Result<(AgentService, EventService, SessionContext, String), FoldError> {
+) -> Result<
+    (
+        AgentService,
+        EventService,
+        WorkspaceService,
+        SessionContext,
+        String,
+    ),
+    FoldError,
+> {
     let hello = parse_hello(line)?;
     let agent = hello.agent.as_deref().map(AgentName::parse).transpose()?;
     let handle = projects::open_for_dir(state, &hello.cwd)
@@ -216,6 +227,17 @@ async fn open(
         handle.clock.clone(),
     );
     let events = EventService::new(handle.store.clone(), handle.bus.clone());
+    let config = projects::load_config(&handle.paths)
+        .await
+        .map_err(from_project)?;
+    let workspaces = WorkspaceService::new(
+        handle.store.clone(),
+        handle.bus.clone(),
+        handle.clock.clone(),
+        handle.paths.clone(),
+        Git::default(),
+        config.lease_minutes,
+    );
     let mut session = agents.start_session(hello.pid).await.map_err(from_agent)?;
     if let Some(agent) = agent
         && let Err(error) = agents.register_agent(&mut session, &agent, &[]).await
@@ -223,7 +245,7 @@ async fn open(
         let _ = agents.end_session(&session).await;
         return Err(from_agent(error));
     }
-    Ok((agents, events, session, handle.slug.clone()))
+    Ok((agents, events, workspaces, session, handle.slug.clone()))
 }
 
 fn invalid(message: &str) -> FoldError {

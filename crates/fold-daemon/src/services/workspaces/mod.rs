@@ -3,6 +3,7 @@ use std::sync::{Arc, OnceLock};
 use fold_core::{Clock, EventError, FoldError, ProjectPaths, codes};
 use fold_store::{Store, StoreError};
 use fold_vcs::git::Git;
+use fold_vcs::objects::ObjectStore;
 use fold_vcs::platform::Capabilities;
 use thiserror::Error;
 
@@ -10,11 +11,18 @@ use super::events::EventBus;
 use super::projects::{ProjectError, load_config};
 use super::tasks::TaskError;
 
+mod compare;
 mod git;
 mod lifecycle;
+mod repository;
 
+pub use compare::{ResolvedState, StateComparison, StateKind, StateRef, StateSummary};
 pub use git::{GitExport, MAIN_REF, commit_message};
 pub use lifecycle::{ArchiveReason, WorkspaceRef, WorkspaceView, archive_in_tx};
+pub use repository::{
+    DEFAULT_REVISION_PAGE, RECENT_REVISIONS, RepositoryState, RevisionDetail, RevisionOrigin,
+    RevisionPage, RevisionSummary,
+};
 
 #[derive(Debug, Error)]
 pub enum WorkspaceError {
@@ -60,7 +68,7 @@ pub struct WorkspaceService {
     paths: ProjectPaths,
     git: Git,
     lease_minutes: u64,
-    /// Probed by the first create and shared by every clone of the service.
+    /// Probed by the first create or working-files read and shared by every clone of the service.
     caps: Arc<OnceLock<Capabilities>>,
 }
 
@@ -127,6 +135,24 @@ impl WorkspaceService {
     pub async fn close(self) {
         let _ = self.store.close().await;
     }
+}
+
+/// The platform capabilities, probed in `.fold` on first use and shared by every clone of the service. Blocking work only.
+fn capabilities(
+    probed: &OnceLock<Capabilities>,
+    paths: &ProjectPaths,
+) -> Result<Capabilities, FoldError> {
+    if let Some(caps) = probed.get() {
+        return Ok(*caps);
+    }
+    let caps = Capabilities::probe(&paths.fold_dir())
+        .map_err(|error| FoldError::from(fold_vcs::paths::WorkspaceError::from(error)))?;
+    Ok(*probed.get_or_init(|| caps))
+}
+
+/// Opening creates the store's directories, so it runs inside the blocking work.
+fn open_objects(paths: &ProjectPaths) -> Result<ObjectStore, FoldError> {
+    ObjectStore::open(&paths.fold_dir()).map_err(FoldError::from)
 }
 
 async fn blocking<T: Send + 'static>(

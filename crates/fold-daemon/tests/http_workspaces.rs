@@ -1,0 +1,217 @@
+#![cfg(test)]
+
+pub mod workspaces_support;
+
+use std::sync::Arc;
+
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
+use fold_core::{Clock, ManualClock};
+use fold_daemon::http::router;
+use fold_daemon::{Daemon, DaemonConfig, RunningDaemon};
+use fold_store::projects::{self, ProjectRow};
+use fold_store::testing::TestProject;
+use fold_store::{Store, StoreError};
+use http_body_util::BodyExt;
+use serde_json::{Value, json};
+use tempfile::TempDir;
+use tower::ServiceExt;
+use workspaces_support::three_revisions;
+
+struct Host {
+    _dir: TempDir,
+    daemon: RunningDaemon,
+}
+
+/// A daemon whose registry lists `project` as `alpha`.
+async fn host(project: &TestProject) -> Host {
+    let dir = TempDir::new().unwrap();
+    let config = DaemonConfig {
+        listen: "127.0.0.1:0".parse().unwrap(),
+        socket: dir.path().join("run").join("fold.sock"),
+        data_dir: dir.path().join("data"),
+        runtime_dir: dir.path().join("run"),
+        web_dir: None,
+    };
+    let clock = ManualClock::new();
+    let registry = Store::open_registry(&config.registry_path()).await.unwrap();
+    let row = ProjectRow {
+        slug: "alpha".to_owned(),
+        name: "Alpha".to_owned(),
+        root: project.paths().root().to_string_lossy().into_owned(),
+    };
+    let now = clock.now();
+    registry
+        .write(async |tx| {
+            projects::insert_project(tx, &row, now).await?;
+            Ok::<_, StoreError>(())
+        })
+        .await
+        .unwrap();
+    registry.close().await.unwrap();
+    let daemon = Daemon::start(config, Arc::new(clock)).await.unwrap();
+    Host { _dir: dir, daemon }
+}
+
+impl Host {
+    async fn get(&self, path: &str) -> (StatusCode, Value) {
+        let request = Request::builder()
+            .uri(format!("/api/v1/projects/alpha{path}"))
+            .body(Body::empty())
+            .unwrap();
+        let response = router(self.daemon.state().clone())
+            .oneshot(request)
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+}
+
+fn code(body: &Value) -> &str {
+    body["error"]["code"].as_str().unwrap()
+}
+
+#[tokio::test]
+async fn the_five_repository_routes_answer_for_a_known_revision() {
+    let project = TestProject::new().await;
+    three_revisions(&project).await;
+    let host = host(&project).await;
+
+    let (status, state) = host.get("/repository").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(state["head"], "r3");
+    assert_eq!(
+        state["main_path"],
+        project.paths().main_dir().to_string_lossy().as_ref()
+    );
+    let ids: Vec<&str> = state["recent"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|revision| revision["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["r3", "r2", "r1"]);
+    let r2 = &state["recent"][1];
+    assert_eq!(r2["origin"], "proposal");
+    assert_eq!(r2["author"], "backend");
+    assert_eq!(r2["task"], "T-3");
+    assert_eq!(r2["proposal"], "P-5");
+    assert_eq!(r2["title"], "Add the guide");
+    assert_eq!(r2["parent"], "r1");
+    assert_eq!(r2["created_at"], 1002);
+    assert_eq!(state["recent"][0]["pull"], "abc123");
+    assert_eq!(state["recent"][2]["origin"], "initial");
+
+    let (status, page) = host.get("/revisions?limit=2").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page["revisions"].as_array().unwrap().len(), 2);
+    assert_eq!(page["before"], "r2");
+    let (_, page) = host.get("/revisions?limit=2&before=r2").await;
+    assert_eq!(page["revisions"][0]["id"], "r1");
+    assert_eq!(page["before"], Value::Null);
+
+    let (status, detail) = host.get("/revisions/r3").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(detail["revision"]["id"], "r3");
+    assert_eq!(detail["files"][0]["path"], "README.md");
+    assert_eq!(detail["files"][0]["change"], "deleted");
+    assert_eq!(detail["files"][0]["previous_path"], Value::Null);
+    assert_eq!(detail["files"][0]["new_hash"], Value::Null);
+    assert!(detail["files"][0]["old_hash"].is_string());
+    assert_eq!(
+        detail["totals"],
+        json!({"files": 2, "added_lines": 1, "removed_lines": 1})
+    );
+
+    let (status, tree) = host.get("/revisions/r3/tree?path=src").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(tree["path"], "src");
+    assert_eq!(tree["entries"][1]["name"], "main.rs");
+    assert_eq!(tree["entries"][1]["path"], "src/main.rs");
+    assert_eq!(tree["entries"][1]["kind"], "file");
+    assert_eq!(tree["entries"][1]["size"], 13);
+    let (_, root) = host.get("/revisions/r3/tree").await;
+    assert_eq!(root["entries"][0]["name"], "docs");
+    assert_eq!(root["entries"][0]["kind"], "directory");
+    assert_eq!(root["entries"][0]["size"], Value::Null);
+
+    let (status, file) = host.get("/revisions/r1/file?path=README.md").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(file["path"], "README.md");
+    assert_eq!(file["text"], "hello\n");
+    assert_eq!(file["binary"], false);
+    assert_eq!(file["too_large"], false);
+    assert_eq!(file["size"], 6);
+    assert_eq!(file["kind"], "file");
+    let (_, binary) = host.get("/revisions/r1/file?path=logo.png").await;
+    assert_eq!(binary["binary"], true);
+    assert!(binary.get("text").is_none());
+    assert_eq!(binary["hash"].as_str().unwrap().len(), 64);
+    host.daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn unknown_revisions_and_bad_input_use_the_envelope() {
+    let project = TestProject::new().await;
+    three_revisions(&project).await;
+    let host = host(&project).await;
+    for path in [
+        "/revisions/r9",
+        "/revisions/r9/tree",
+        "/revisions/r9/file?path=README.md",
+    ] {
+        let (status, body) = host.get(path).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+        assert_eq!(code(&body), "revision_not_found", "{path}");
+    }
+    for (path, status, expected) in [
+        ("/revisions/T-1", StatusCode::BAD_REQUEST, "invalid_id"),
+        (
+            "/revisions?before=nine",
+            StatusCode::BAD_REQUEST,
+            "invalid_id",
+        ),
+        (
+            "/revisions?limit=many",
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+        ),
+        (
+            "/revisions/r1/tree?path=../x",
+            StatusCode::BAD_REQUEST,
+            "invalid_path",
+        ),
+        (
+            "/revisions/r1/file",
+            StatusCode::BAD_REQUEST,
+            "invalid_path",
+        ),
+        (
+            "/revisions/r1/file?path=nowhere",
+            StatusCode::NOT_FOUND,
+            "not_found",
+        ),
+        (
+            "/revisions/r1/tree?path=README.md",
+            StatusCode::NOT_FOUND,
+            "not_found",
+        ),
+    ] {
+        let (got, body) = host.get(path).await;
+        assert_eq!((got, code(&body)), (status, expected), "{path}");
+    }
+    host.daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_empty_project_has_a_null_head() {
+    let project = TestProject::new().await;
+    let host = host(&project).await;
+    let (status, state) = host.get("/repository").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(state["head"], Value::Null);
+    assert_eq!(state["recent"], json!([]));
+    host.daemon.shutdown().await;
+}

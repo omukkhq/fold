@@ -13,9 +13,11 @@ use fold_daemon::services::agents::{AgentService, SessionContext};
 use fold_daemon::services::events::{EventBuffer, EventBus, EventService, WaitQuery, WaitStep};
 use fold_daemon::services::messages::{MessageService, SendMessage};
 use fold_daemon::services::tasks::{CreateTask, TaskService};
+use fold_daemon::services::workspaces::WorkspaceService;
 use fold_store::agents::WorkerRow;
 use fold_store::testing::{TestProject, eventually};
 use fold_store::{Store, StoreError, events};
+use fold_vcs::git::Git;
 use rmcp::model::{
     CallToolRequest, CallToolRequestParams, CallToolResult, ClientRequest,
     ProgressNotificationParam,
@@ -84,11 +86,27 @@ impl Fixture {
         self.project.store()
     }
 
+    fn workspaces(&self) -> WorkspaceService {
+        WorkspaceService::new(
+            self.store().clone(),
+            self.bus.clone(),
+            Arc::new(self.project.clock().clone()),
+            self.project.paths().clone(),
+            Git::default(),
+            30,
+        )
+    }
+
     /// An adapter session of agent `name` over an in-memory stream, already registered and caught up with every stored event.
     async fn connect(&self, name: &str) -> Session {
         let events = EventService::new(self.store().clone(), self.bus.clone());
         let context = self.agents.start_session(7).await.unwrap();
-        let server = FoldServer::new(self.agents.clone(), events, context.clone());
+        let server = FoldServer::new(
+            self.agents.clone(),
+            events,
+            self.workspaces(),
+            context.clone(),
+        );
         let (client_end, server_end) = tokio::io::duplex(256 * 1024);
         tokio::spawn(async move {
             if let Ok(running) = server.serve(server_end).await {
@@ -529,7 +547,7 @@ async fn the_event_tools_need_a_registered_agent() {
     let fx = Fixture::new().await;
     let events = EventService::new(fx.store().clone(), fx.bus.clone());
     let context = fx.agents.start_session(9).await.unwrap();
-    let server = FoldServer::new(fx.agents.clone(), events, context);
+    let server = FoldServer::new(fx.agents.clone(), events, fx.workspaces(), context);
     let (client_end, server_end) = tokio::io::duplex(64 * 1024);
     tokio::spawn(async move {
         if let Ok(running) = server.serve(server_end).await {
