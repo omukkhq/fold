@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { agentBarQuery } from "@/api/agentBar";
 import { boardCards, boardQuery } from "@/api/board";
@@ -26,7 +27,7 @@ export interface BoardScreenProps {
 }
 
 /**
- * W02. The board is read-only: cards move only because the event stream changed `status` in the Query cache.
+ * The board is read-only: cards move only because the event stream changed `status` in the Query cache.
  * The task dialog route renders this screen beneath itself, so it takes the filters as props instead of reading the route.
  */
 export function BoardScreen({ slug, search, onSearch }: BoardScreenProps) {
@@ -39,12 +40,17 @@ export function BoardScreen({ slug, search, onSearch }: BoardScreenProps) {
     [board.dataUpdatedAt, status.lastEventAt],
     [status.retryAt],
   );
-  const all = board.data ? boardCards(board.data) : [];
-  const columns = groupColumns(
-    applyFilters(all, search),
-    board.data,
-    isFiltered(search),
-  );
+  const { all, columns } = useMemo(() => {
+    const cards = board.data ? boardCards(board.data) : [];
+    return {
+      all: cards,
+      columns: groupColumns(
+        applyFilters(cards, search),
+        board.data,
+        isFiltered(search),
+      ),
+    };
+  }, [board.data, search]);
   const asOf = reconnectAsOf(status, board.dataUpdatedAt);
 
   let body;
@@ -84,7 +90,7 @@ export function BoardScreen({ slug, search, onSearch }: BoardScreenProps) {
         needsYou={board.isPending ? null : needsYouCount(all)}
         summary={board.isPending ? "Loading the board…" : summaryText(columns)}
       />
-      {/* W02 dims the columns while they show the board as of an earlier time. */}
+      {/* The columns dim while they show the board as of an earlier time. */}
       <div
         className={cn("flex flex-1 flex-col", asOf !== null && "opacity-55")}
       >

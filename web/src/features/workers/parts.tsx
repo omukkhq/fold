@@ -42,7 +42,7 @@ export function StepText({ step }: { step: Step }) {
   );
 }
 
-/** A refused write: the sentence for its code and the code itself, as the error frames draw it. */
+/** A refused write: the sentence for its code and the code itself. */
 export function ErrorNote({
   failure,
   className,

@@ -81,12 +81,7 @@ export function WorkspacePanel({ slug, panel, now }: WorkspacePanelProps) {
           <WorkingZone slug={slug} entry={entry} live={live} />
           <RecordedZone
             entry={entry}
-            items={recordedItems(
-              slug,
-              live.base,
-              live.checkpoints,
-              entry.changesets,
-            )}
+            items={recordedItems(slug, live.base, live.checkpoints)}
             now={now}
           />
         </div>

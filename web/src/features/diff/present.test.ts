@@ -263,7 +263,7 @@ describe("compareOptions", () => {
     { id: "ck-31", label: "before refactor", automatic: false, created_at: 2 },
   ];
 
-  it("offers the base, main ahead of it and the checkpoints, newest first, as W06 lists them", () => {
+  it("offers the base, main ahead of it and the checkpoints, newest first", () => {
     const options = compareOptions("demo", working, {
       base: "r7",
       main: { head: "r8", recent },

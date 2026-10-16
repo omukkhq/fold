@@ -1,3 +1,4 @@
+import type { Hunk } from "@/api/diff";
 import type { ReviewComment } from "@/api/proposals";
 import type { DiffSelection, DiffThread } from "@/features/diff/selection";
 
@@ -197,17 +198,39 @@ export interface PlacedThreads {
   unplaced: CommentThread[];
 }
 
-/** Places threads on a diff of `listedPaths`. Without the old side, as on a change since an earlier version whose old lines no comment reads, a thread on the old side joins the threads the diff cannot place. */
+/** The lines a file's hunks hold, as `side:line` keys. A context line holds both its old and its new number. */
+export function heldLines(hunks: readonly Hunk[]): Set<string> {
+  const held = new Set<string>();
+  for (const hunk of hunks) {
+    for (const line of hunk.lines) {
+      if (line.old_no !== null) held.add(`old:${String(line.old_no)}`);
+      if (line.new_no !== null) held.add(`new:${String(line.new_no)}`);
+    }
+  }
+  return held;
+}
+
+/**
+ * Places threads on a diff of `listedPaths`. Without the old side, as on a change since an earlier version whose old lines no comment reads, a thread on the old side joins the threads the diff cannot place.
+ * `held` names the lines the hunks of the files already read hold: a thread whose end is on no such line has no row to sit under and joins the threads the diff cannot place. A listed file with no entry in `held` has not been read, so its threads stay with the diff.
+ */
 export function placeThreads(
   threads: readonly CommentThread[],
   listedPaths: readonly string[],
   oldSide: boolean,
+  held: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
 ): PlacedThreads {
   const listed = new Set(listedPaths);
-  const onDiff = (t: CommentThread) =>
-    t.range !== null &&
-    listed.has(t.range.path) &&
-    (oldSide || t.range.side === "new");
+  const onDiff = (t: CommentThread) => {
+    const range = t.range;
+    if (range === null || !listed.has(range.path)) return false;
+    if (!oldSide && range.side !== "new") return false;
+    const lines = held.get(range.path);
+    return (
+      lines === undefined ||
+      lines.has(`${range.side}:${String(range.end_line)}`)
+    );
+  };
   return {
     placed: diffThreads(threads.filter(onDiff)),
     unplaced: threads.filter((t) => !onDiff(t)),

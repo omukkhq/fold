@@ -7,7 +7,7 @@ import { useReviewCheckouts } from "./useEventStream";
 
 const ROW = "flex flex-wrap items-center gap-12 px-16 py-12";
 
-/** Every row of W05's strip starts with the title; a later row keeps its width invisibly so the workers line up. */
+/** Every row of the strip starts with the title; a later row keeps its width invisibly so the workers line up. */
 function Title({ hidden }: { hidden: boolean }) {
   return (
     <>

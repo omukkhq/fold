@@ -47,7 +47,7 @@ import { integrationOf, mainHead } from "./integration";
 import { ProposalHeader } from "./ProposalHeader";
 import { SidePanel } from "./SidePanel";
 import { CommentComposer, ThreadBox } from "./Threads";
-import { buildThreads, placeThreads } from "./threads";
+import { buildThreads, heldLines, placeThreads } from "./threads";
 import {
   OLD_SIDE_NOTE,
   commentsOnSide,
@@ -134,10 +134,18 @@ function DiffArea({
   const version = shownVersion(view);
   const threads = buildThreads(comments, version);
   const byId = new Map(threads.map((t) => [t.id, t]));
+  // Only the file on screen has its hunks read; a file whose text is not shown holds no line.
+  const held = new Map<string, ReadonlySet<string>>();
+  if (file !== null && fileBody(file) !== "text") {
+    held.set(file.path, new Set());
+  } else if (file !== null && fileDiff.status === "ready") {
+    held.set(file.path, heldLines(fileDiff.diff.hunks));
+  }
   const { placed, unplaced } = placeThreads(
     threads,
     files.map((f) => f.path),
     view.kind === "version",
+    held,
   );
   const composer = human !== null && canComment(proposal, human, version);
 

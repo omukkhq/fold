@@ -10,7 +10,7 @@ describe("isChecked", () => {
 });
 
 describe("checkboxClasses", () => {
-  it("draws the W00 box from tokens", () => {
+  it("draws the box from tokens", () => {
     const classes = checkboxClasses.split(" ");
     expect(classes).toContain("size-16");
     expect(classes).toContain("rounded-s");

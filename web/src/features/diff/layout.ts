@@ -25,7 +25,7 @@ export type ExpanderRow = { type: "expander"; key: string; hidden: number };
 
 export type DiffRow = HunkRow | LineRow | ExpanderRow;
 
-/** The header of a hunk as W06 draws it, with U+2212 before the old range. */
+/** The header of a hunk, with U+2212 before the old range. */
 export function hunkHeader(hunk: Hunk): string {
   return `@@ −${String(hunk.old_start)},${String(hunk.old_lines)} +${String(hunk.new_start)},${String(hunk.new_lines)} @@`;
 }
@@ -58,11 +58,34 @@ export function hunkRows(hunks: readonly Hunk[]): (HunkRow | LineRow)[] {
 interface CollapseOptions {
   threshold?: number;
   edge?: number;
+  /** The lines, as `side:line` keys, that end a review thread: a run that holds one stays open, so the thread is drawn under its line. */
+  keep?: ReadonlySet<string>;
+}
+
+/** The `side:line` keys of the lines that end a thread on `path`. */
+export function threadEnds(
+  threads: readonly {
+    range: { path: string; side: string; end_line: number };
+  }[],
+  path: string,
+): Set<string> {
+  return new Set(
+    threads
+      .filter((t) => t.range.path === path)
+      .map((t) => `${t.range.side}:${String(t.range.end_line)}`),
+  );
+}
+
+function holds(row: LineRow, keep: ReadonlySet<string>): boolean {
+  return (
+    (row.oldNo !== null && keep.has(`old:${String(row.oldNo)}`)) ||
+    (row.newNo !== null && keep.has(`new:${String(row.newNo)}`))
+  );
 }
 
 /**
  * Collapses each unchanged run longer than the threshold. A run keeps `edge` lines next to each change; a run at the start or the end of a hunk
- * keeps lines only on its changed side. An expander's key is in `expanded` once the reader opened it.
+ * keeps lines only on its changed side. An expander's key is in `expanded` once the reader opened it; a run that ends a thread never collapses.
  */
 export function collapseRuns(
   rows: readonly (HunkRow | LineRow)[],
@@ -70,6 +93,7 @@ export function collapseRuns(
   {
     threshold = COLLAPSE_THRESHOLD,
     edge = COLLAPSE_EDGE,
+    keep = new Set<string>(),
   }: CollapseOptions = {},
 ): DiffRow[] {
   const out: DiffRow[] = [];
@@ -95,7 +119,8 @@ export function collapseRuns(
     const keepEnd = atEnd ? 0 : edge;
     const hidden = run.length - keepStart - keepEnd;
     const first = run[keepStart];
-    if (run.length > threshold && hidden > 0 && first) {
+    const open = run.some((r) => r.type === "line" && holds(r, keep));
+    if (run.length > threshold && hidden > 0 && first && !open) {
       const key = `x-${first.key}`;
       if (expanded.has(key)) {
         out.push(...run);

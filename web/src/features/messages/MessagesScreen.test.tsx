@@ -19,7 +19,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { keys } from "@/api/keys";
 import type { ThreadView } from "@/api/messages";
 import { message, recipient, thread } from "@/test/messages";
-import { stubFetch } from "@/test/stubFetch";
+import { errorReply, stubFetch } from "@/test/stubFetch";
 import { MessagesScreen } from "./MessagesScreen";
 import type { MessagesSearch } from "./search";
 
@@ -64,6 +64,7 @@ const FEEDBACK_ROUTE = "/api/v1/projects/demo/feedback";
 
 // An id such as m-31 looks like a margin utility to the token guard, so the test builds it.
 const FIRST = `m-${String(31)}`;
+const MISSING = `m-${String(99)}`;
 const SECOND = `m-${String(32)}`;
 
 const question = thread(FIRST, {
@@ -111,6 +112,29 @@ describe("MessagesScreen", () => {
     expect(
       within(list).getByText("Question waiting for a human answer."),
     ).toBeTruthy();
+  });
+
+  it("reads a requested thread the list did not reach, and says when it does not exist", async () => {
+    const old = thread(`m-${String(7)}`, {
+      participants: ["human:tanim", "backend"],
+      messages: [message(`m-${String(7)}`, { body: "An old question." })],
+    });
+    stubFetch({
+      [`GET /api/v1/projects/demo/threads/${old.id}`]: {
+        body: old,
+      },
+      [`GET /api/v1/projects/demo/threads/${MISSING}`]: errorReply(
+        404,
+        "message_not_found",
+      ),
+    });
+    await setup({ thread: old.id }, [question], true);
+    expect(
+      (await screen.findAllByText("An old question.")).length,
+    ).toBeGreaterThan(0);
+    cleanup();
+    await setup({ thread: MISSING }, [question], true);
+    expect(await screen.findByText(`${MISSING} does not exist`)).toBeTruthy();
   });
 
   it("shows a reply as pending, then in the thread once the daemon answers", async () => {

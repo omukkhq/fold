@@ -1,4 +1,4 @@
-import type { ComponentProps } from "react";
+import { memo, useMemo, type ComponentProps } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/cn";
@@ -8,7 +8,7 @@ import type { Known } from "@/mentions/parse";
 import { remarkMentions } from "@/mentions/remark";
 import { usePeople } from "@/mentions/usePeople";
 
-// Every element takes token classes; W03 draws the description as 14 / 400 body text with 600 subheads.
+// Every element takes token classes; the description is 14 / 400 body text with 600 subheads.
 const COMPONENTS: Components = {
   p: ({ children }) => (
     <p className="text-body leading-normal text-text">{children}</p>
@@ -136,9 +136,11 @@ export function Markdown({
   return mentions ? (
     <WithMentions mentions={mentions}>{children}</WithMentions>
   ) : (
-    <Body plugins={[remarkGfm]}>{children}</Body>
+    <Body plugins={GFM}>{children}</Body>
   );
 }
+
+const GFM = [remarkGfm];
 
 function WithMentions({
   children,
@@ -148,14 +150,16 @@ function WithMentions({
   mentions: { slug: string; known?: Known };
 }) {
   const people = usePeople(mentions.slug);
-  return (
-    <Body plugins={[remarkGfm, remarkMentions({ ...mentions, people })]}>
-      {children}
-    </Body>
+  const { slug, known } = mentions;
+  const plugins = useMemo(
+    () => [remarkGfm, remarkMentions({ slug, known, people })],
+    [slug, known, people],
   );
+  return <Body plugins={plugins}>{children}</Body>;
 }
 
-function Body({
+/** Re-parses only when the text or the plugins change, so a live frame that leaves the description alone costs nothing. */
+const Body = memo(function Body({
   children,
   plugins,
 }: {
@@ -169,4 +173,4 @@ function Body({
       </ReactMarkdown>
     </div>
   );
-}
+});

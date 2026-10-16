@@ -2,7 +2,7 @@ import { CircleAlert } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/cn";
 
-/** A failure with its sentence and the daemon's code, as W13 and W14 draw a load or write error. */
+/** A failure with its sentence and the daemon's code, for a load or write error. */
 export function FailurePanel({
   title,
   text,

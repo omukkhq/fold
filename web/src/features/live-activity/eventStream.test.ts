@@ -104,76 +104,43 @@ describe("liveDot", () => {
 });
 
 describe("checkoutRows", () => {
-  it("joins the proposal, version, checkout path and last command result", () => {
-    const rows = checkoutRows(
-      [
-        {
-          workspace: "ws-12",
-          path: "ws/review-p-4",
-          proposal: "P-4",
-          version: 2,
-          worker: "review/quality",
-          base: "r7",
-          created_at: NOW,
-          last_command: {
-            result: "ran cargo nextest, 48 passed",
-            at: NOW - 120_000,
-          },
-        },
-        {
-          workspace: "ws-13",
-          path: "ws/review-p-5",
-          proposal: "P-5",
-          version: 1,
-          worker: null,
-          base: "r7",
-          created_at: NOW,
-        },
-      ],
-      NOW,
-    );
+  it("joins the proposal, version and checkout path", () => {
+    const rows = checkoutRows([
+      {
+        workspace: "ws-12",
+        path: "ws/review-p-4",
+        proposal: "P-4",
+        version: 2,
+        worker: "review/quality",
+        base: "r7",
+        created_at: NOW,
+      },
+      {
+        workspace: "ws-13",
+        path: "ws/review-p-5",
+        proposal: "P-5",
+        version: 1,
+        worker: null,
+        base: "r7",
+        created_at: NOW,
+      },
+    ]);
     expect(rows[0]).toEqual({
       workspace: "ws-12",
       worker: "review/quality",
       where: "P-4 v2 in ws/review-p-4",
-      last: "ran cargo nextest, 48 passed · 2 min ago",
     });
-    expect(rows[1]).toMatchObject({ worker: null, last: null });
-    const [none] = checkoutRows(
-      [
-        {
-          workspace: "ws-14",
-          path: "ws/review-p-6",
-          proposal: "P-6",
-          version: 1,
-          worker: "review",
-          base: "r7",
-          created_at: NOW,
-          last_command: null,
-        },
-      ],
-      NOW,
-    );
-    expect(none?.last).toBe("no command yet");
+    expect(rows[1]).toMatchObject({ worker: null });
   });
 
-  it("leaves out an unknown last command, as the daemon records none", () => {
+  it("marks the checkout as not recordable", () => {
     expect(
       checkoutText({
         workspace: "ws-13",
         worker: "review",
         where: "P-5 v1 in ws/review-p-5",
-        last: null,
       }),
     ).toBe("P-5 v1 in ws/review-p-5 · not recordable");
-    expect(
-      checkoutText({
-        workspace: "ws-12",
-        worker: "review",
-        where: "P-4 v2 in ws/review-p-4",
-        last: "ran tests · 2 min ago",
-      }),
-    ).toBe("P-4 v2 in ws/review-p-4 · ran tests · 2 min ago · not recordable");
   });
 });
 

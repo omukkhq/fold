@@ -59,7 +59,7 @@ function input(fields: Partial<TeamInput> = {}): TeamInput {
 }
 
 describe("numbers", () => {
-  it("words cost and context as the frame does", () => {
+  it("words cost to the cent and context in thousands", () => {
     expect(costText(5_870_000)).toBe("$5.87");
     expect(costText(0)).toBe("$0.00");
     expect(contextText(164_000)).toBe("164k");

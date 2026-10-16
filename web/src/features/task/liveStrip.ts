@@ -51,7 +51,7 @@ export function baseText(workspace: { base: string; main?: string }): string {
 
 /**
  * Who is editing what, the files changed, the latest checkpoint and the base. The task payload names the workspace,
- * and its details, activity and checkpoints where it carries them; the event stream's frame fills in the rest.
+ * and its details, activity and checkpoints; the event stream's frame fills in the rest.
  * Null without a workspace.
  */
 export function liveStrip(
@@ -85,7 +85,7 @@ export function liveStrip(
   if (live) {
     parts.push(files(live.files.length));
   }
-  const checkpoint = latestCheckpoint(task.checkpoints ?? [], live);
+  const checkpoint = latestCheckpoint(task.checkpoints, live);
   if (checkpoint) {
     parts.push(`${checkpoint.id} ${formatSince(now, checkpoint.created_at)}`);
   }
@@ -133,7 +133,7 @@ export function changeLetter(change: ChangeKind): string {
 
 export type ChangeTone = "added" | "deleted" | "other";
 
-/** Added files take the primary soft fill and deleted files the danger soft fill, as W03 draws them. */
+/** Added files take the primary soft fill and deleted files the danger soft fill. */
 export function changeTone(change: ChangeKind): ChangeTone {
   if (change === "added") {
     return "added";

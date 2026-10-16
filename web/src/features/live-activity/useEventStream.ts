@@ -46,20 +46,18 @@ export function useEventStream(slug: string): EventStreamView {
 }
 
 export function useReviewCheckouts(slug: string): CheckoutsView {
-  const live = useLiveStatus();
   const list = useQuery({
     queryKey: keys.reviewCheckouts(slug),
     queryFn: () => listReviewCheckouts(slug),
     staleTime: Infinity,
   });
-  const now = useDataClock([list.dataUpdatedAt, live.lastEventAt]);
   return {
     status: list.isError
       ? "error"
       : list.data === undefined
         ? "pending"
         : "ready",
-    rows: checkoutRows(list.data ?? [], now),
+    rows: checkoutRows(list.data ?? []),
     retry: () => void list.refetch(),
   };
 }

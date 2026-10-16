@@ -13,7 +13,7 @@ use fold_store::reviews::{self, ProposalSummary, ReviewEntry};
 use fold_store::tasks::checklists::{self, ItemContent};
 use fold_store::tasks::claims;
 use fold_store::tasks::{self, BoardSnapshot};
-use fold_store::workspaces;
+use fold_store::workspaces::{self, Checkpoint};
 use fold_store::{StoreError, events};
 
 pub use fold_store::tasks::{ChecklistCounts, TaskRef};
@@ -128,6 +128,8 @@ pub struct TaskDetail {
     pub activity: Option<Activity>,
     /// Of the live workspace, or of the latest one when none is live; newest first.
     pub changesets: Vec<ChangesetSummary>,
+    /// Of the live workspace, or of the latest one when none is live; pruned ones left out, newest first.
+    pub checkpoints: Vec<Checkpoint>,
     pub proposal: Option<TaskProposal>,
     pub integration: Option<TaskIntegration>,
     /// The task's newest [`HISTORY_LIMIT`] events, newest first.
@@ -260,6 +262,14 @@ impl TaskService {
                 .collect(),
             None => Vec::new(),
         };
+        let checkpoints = match live.as_ref().or(latest.as_ref()) {
+            Some(row) => {
+                let mut checkpoints = workspaces::list_checkpoints(&mut *tx, row.id, false).await?;
+                checkpoints.reverse();
+                checkpoints
+            }
+            None => Vec::new(),
+        };
         let summary = reviews::proposal_summaries(&mut tx, Some(id)).await?.pop();
         let integration = summary.as_ref().and_then(|summary| {
             summary.integration.as_ref().map(|record| TaskIntegration {
@@ -377,6 +387,7 @@ impl TaskService {
             workspace_info: info,
             activity,
             changesets,
+            checkpoints,
             proposal,
             integration,
             history,

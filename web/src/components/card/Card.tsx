@@ -33,7 +33,7 @@ export function Card({
     >
       {header}
       {children}
-      {/* The top padding gives its first pixel to the border, as the frame's inner stroke does. */}
+      {/* The top padding gives one pixel to the 1px border, so the border does not change the footer's height. */}
       {footer ? (
         <div className="flex items-center justify-between gap-8 border-t border-border-subtle pt-7">
           {footer}

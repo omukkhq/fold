@@ -234,7 +234,7 @@ function Strip({ strip }: { strip: LiveStrip }) {
   );
 }
 
-/** W03's title block: the title, the calculated status, the live strip and the labels. */
+/** The title block: the title, the calculated status, the live strip and the labels. */
 export function TitleBlock({ slug, task, strip }: Props) {
   const [editing, setEditing] = useState(false);
   const look = statusLook(task.status);
@@ -284,7 +284,7 @@ export function TitleBlock({ slug, task, strip }: Props) {
         {task.blocked ? (
           <span className="text-bar font-medium text-danger">Blocked</span>
         ) : null}
-        {/* W03 draws no empty reason, so the line is left out for a task read without one. */}
+        {/* An empty reason draws nothing, so the line is left out for a task read without one. */}
         {task.status_reason ? (
           <RadixDialog.Description className="text-bar text-text-muted">
             {task.status_reason}

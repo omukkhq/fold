@@ -1,6 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import type { ReviewCheckout } from "../../api/reviews";
-import { formatAsOf, formatSince } from "../../format/time";
+import { formatAsOf } from "../../format/time";
 import { EVENT_LIMIT } from "../../live/eventList";
 import type { ConnectionState } from "../../live/status";
 import { eventLine, type AnyEvent } from "./eventLine";
@@ -89,30 +89,19 @@ export interface CheckoutRow {
   worker: string | null;
   /** `P-4 v2 in ws/review-p-4`. */
   where: string;
-  /** `ran cargo nextest, 48 passed · 2 min ago`, or `no command yet`; null when the read carries no command field, as the daemon records none. */
-  last: string | null;
 }
 
 export function checkoutRows(
   checkouts: readonly ReviewCheckout[],
-  now: number,
 ): CheckoutRow[] {
   return checkouts.map((checkout) => ({
     workspace: checkout.workspace,
     worker: checkout.worker,
     where: `${checkout.proposal} v${String(checkout.version)} in ${checkout.path}`,
-    last:
-      checkout.last_command === undefined
-        ? null
-        : checkout.last_command === null
-          ? "no command yet"
-          : `${checkout.last_command.result} · ${formatSince(now, checkout.last_command.at)}`,
   }));
 }
 
-/** The text after the worker: where the checkout is, the last command when known, and that nothing in it is recorded. */
+/** The text after the worker: where the checkout is, and that nothing in it is recorded. */
 export function checkoutText(row: CheckoutRow): string {
-  return [row.where, row.last, "not recordable"]
-    .filter((part): part is string => part !== null)
-    .join(" · ");
+  return `${row.where} · not recordable`;
 }

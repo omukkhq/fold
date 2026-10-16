@@ -272,6 +272,9 @@ function applyWorkspaceChanged(
   }
   queryClient.setQueryData(keys.workspaceLive(slug, live.workspace), live);
   invalidateWorkspaceDiffs(queryClient, slug, live.workspace);
+  void queryClient.invalidateQueries({
+    queryKey: keys.workspaceTrees(slug, live.workspace),
+  });
 }
 
 /** The snapshot replaces every live state, so a workspace that ended while the client was away disappears, and the diffs of each live workspace are read again for the changes the client missed. */
@@ -299,6 +302,9 @@ function applySnapshot(
       workspace,
     );
     invalidateWorkspaceDiffs(queryClient, slug, workspace.workspace);
+    void queryClient.invalidateQueries({
+      queryKey: keys.workspaceTrees(slug, workspace.workspace),
+    });
   }
 }
 
@@ -463,9 +469,11 @@ const STREAM_ONLY = new Set<unknown>([
   keys.workspaceLiveAll("")[1],
   keys.endedWorkspaces("")[1],
   keys.workerSteps("")[1],
+  keys.revisionTree("", "", "")[1],
+  keys.revisionFile("", "", "")[1],
 ]);
 
-/** Refetches every observed query of the project after stored events went missing. Live workspace state and worker steps come only from the stream, so they are left for the next frames. */
+/** Refetches every observed query of the project after stored events went missing. Live workspace state and worker steps come only from the stream, so they are left for the next frames; a revision's trees and files never change. */
 export function invalidateProject(
   queryClient: QueryClient,
   slug: string,

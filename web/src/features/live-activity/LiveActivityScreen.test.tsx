@@ -179,15 +179,8 @@ describe("LiveActivityScreen", () => {
     expect(within(panel).getByText("@frontend/ui")).toBeTruthy();
   });
 
-  it("links a working file, a checkpoint, a changeset and the task", async () => {
-    daemon.list = () =>
-      answer([
-        entry("ws-1", {
-          changesets: [
-            { id: "C-18", message: "Fields", recorded_at: NOW, base: "r7" },
-          ],
-        }),
-      ]);
+  it("links a working file, a checkpoint and the task", async () => {
+    daemon.list = () => answer([entry("ws-1")]);
     mount();
     const panel = await screen.findByRole("region", { name: "Workspace ws-1" });
     const hrefs = within(panel)
@@ -196,7 +189,6 @@ describe("LiveActivityScreen", () => {
     expect(hrefs).toContain("/p/demo/t/T-1");
     expect(hrefs).toContain("/p/demo/diff?from=r7&to=ws-1&path=src%2Fa.ts");
     expect(hrefs).toContain("/p/demo/diff?from=r7&to=ck-1");
-    expect(hrefs).toContain("/p/demo/diff?from=r7&to=C-18");
   });
 
   it("updates the file list from a workspace_changed event and drops a panel on a snapshot", async () => {

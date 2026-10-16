@@ -1,4 +1,4 @@
-/** A row of segments on a sunken track, as the change switch of W08 and W15 draws it. */
+/** A row of segments on a sunken track, as the diff change switch draws it. */
 export const SEGMENT_LIST = "flex flex-wrap gap-2 rounded-m bg-sunken p-3";
 
 export function segmentClasses(current: boolean): string {

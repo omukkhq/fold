@@ -58,6 +58,16 @@ export function pointOf(row: DiffRow): LinePoint | null {
   return row.oldNo === null ? null : { side: "old", line: row.oldNo };
 }
 
+/** Every line a row stands for: a context line is both its new and its old line, so a thread on either is drawn on it. */
+export function threadPointsOf(row: DiffRow): LinePoint[] {
+  const point = pointOf(row);
+  if (!point) return [];
+  if (row.type === "line" && row.newNo !== null && row.oldNo !== null) {
+    return [point, { side: "old", line: row.oldNo }];
+  }
+  return [point];
+}
+
 export function pointsOf(rows: readonly DiffRow[]): LinePoint[] {
   return rows.flatMap((row) => {
     const point = pointOf(row);

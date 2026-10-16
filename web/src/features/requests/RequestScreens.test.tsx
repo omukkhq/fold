@@ -667,6 +667,26 @@ describe("Request detail", () => {
     expect(within(thread).getByText(/Archived tasks too\?/)).toBeTruthy();
   });
 
+  it("offers no approval, change request or edit while an older draft is shown", async () => {
+    renderAt("/p/demo/requests/RQ-4");
+    const panel = await screen.findByRole("complementary", {
+      name: "Request actions",
+    });
+    expect(
+      await within(panel).findByRole("button", { name: /^Approve v2/ }),
+    ).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "v1" }));
+    expect(
+      within(panel).queryByRole("button", { name: /^Approve/ }),
+    ).toBeNull();
+    expect(
+      within(panel).queryByRole("button", { name: "Request changes" }),
+    ).toBeNull();
+    expect(within(panel).queryByRole("button", { name: "Edit" })).toBeNull();
+    expect(within(panel).getByText(/older draft/)).toBeTruthy();
+    expect(within(panel).getByRole("button", { name: "Close" })).toBeTruthy();
+  });
+
   it("approves the version on screen, pending until fold answers, then lists the created tasks in their columns", async () => {
     renderAt("/p/demo/requests/RQ-4");
     const panel = await screen.findByRole("complementary", {

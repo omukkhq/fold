@@ -356,7 +356,7 @@ pub enum ChangeKind {
     Renamed,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct CheckpointSummary {
     #[schema(value_type = String, example = "ck-88")]
     pub id: CheckpointId,

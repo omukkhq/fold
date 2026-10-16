@@ -17,7 +17,7 @@ interface Props {
   children: ReactNode;
 }
 
-/** W03's dialog over the board: the crumb head (the project is in the top bar already) with its actions, and a body that scrolls with the page. */
+/** The dialog over the board: the crumb head (the project is in the top bar already) with its actions, and a body that scrolls with the page. */
 export function DialogFrame({
   crumb,
   crumbIsId,

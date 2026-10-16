@@ -9,7 +9,7 @@ export interface DiffLineStyle {
   description: string;
   row: string;
   signClass: string;
-  /** A hunk header spans the row without number and sign columns, as W06 draws it. */
+  /** A hunk header spans the row without number and sign columns. */
   header: boolean;
 }
 
@@ -22,7 +22,7 @@ const STYLES: Record<DiffLineKind, DiffLineStyle> = {
     header: false,
   },
   removed: {
-    // W06 signs a removal with the minus sign, U+2212, not a hyphen.
+    // A removal is signed with the minus sign, U+2212, not a hyphen.
     sign: "\u2212",
     description: "Removed line",
     row: "bg-diff-del",
@@ -50,8 +50,8 @@ export function diffLineStyle(kind: DiffLineKind): DiffLineStyle {
 }
 
 /**
- * W08 marks a selected row with a 3px primary edge on its left, drawn inside the row like the frame's inner stroke so the number columns
- * keep their place.
+ * A selected row has a 3px primary edge on its left, drawn inside the row as an inner stroke so the number columns keep
+ * their place.
  */
 const SELECTED_ROW =
   "relative bg-diff-selected before:absolute before:inset-y-0 before:left-0 before:w-3 before:bg-primary";
@@ -61,7 +61,7 @@ export function diffRowClass(kind: DiffLineKind, selected: boolean): string {
   return selected ? SELECTED_ROW : STYLES[kind].row;
 }
 
-/** A selected row's line numbers are in primary text and semibold, as W08 draws them. */
+/** A selected row's line numbers are in primary text and semibold. */
 export function diffNumberClass(selected: boolean): string {
   return selected ? "font-semibold text-primary-text" : "text-text-muted";
 }

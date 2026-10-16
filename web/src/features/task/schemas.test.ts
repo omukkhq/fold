@@ -56,6 +56,16 @@ describe("labelSchema", () => {
       firstMessage(labelSchema.safeParse({ name: "", color: "sage" })),
     ).toBe("Write a label name.");
   });
+
+  it("refuses the names . and .. and keeps other dotted names", () => {
+    for (const name of [".", " .. "]) {
+      expect(firstMessage(labelSchema.safeParse({ name, color: "sage" }))).toBe(
+        "A label name cannot be . or ..",
+      );
+    }
+    expect(labelSchema.parse({ name: "...", color: "sage" }).name).toBe("...");
+    expect(labelSchema.parse({ name: "a.b", color: "sage" }).name).toBe("a.b");
+  });
 });
 
 describe("checklistItemSchema", () => {

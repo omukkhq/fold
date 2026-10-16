@@ -88,6 +88,7 @@ export function taskView(
     workspace_info: null,
     activity: null,
     changesets: [],
+    checkpoints: [],
     proposal: null,
     integration: null,
     history: [],

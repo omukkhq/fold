@@ -137,44 +137,33 @@ const checkout = (over: Partial<ReviewCheckout> = {}): ReviewCheckout => ({
   worker: "review/quality",
   base: "r7",
   created_at: Date.now(),
-  last_command: { result: "ran cargo nextest, 48 passed", at: Date.now() },
   ...over,
 });
 
 describe("ReviewCheckouts", () => {
-  it("shows the worker, the checkout, the last result and the not recordable mark", async () => {
+  it("shows the worker, the checkout and the not recordable mark", async () => {
     listReviewCheckouts.mockResolvedValue([checkout()]);
     wrap(<ReviewCheckouts slug="demo" />);
     await screen.findByText("@review/quality");
     const row = screen.getByRole("region", { name: "Review checkouts" });
     expect(within(row).getByText("@review/quality")).toBeTruthy();
     expect(row.textContent).toContain(
-      "P-4 v2 in ws/review-p-4 · ran cargo nextest, 48 passed",
+      "P-4 v2 in ws/review-p-4 · not recordable",
     );
-    expect(row.textContent).toContain("not recordable");
   });
 
   it("keeps one title for several checkouts", async () => {
     listReviewCheckouts.mockResolvedValue([
       checkout(),
-      checkout({
-        workspace: "ws-13",
-        worker: "review/security",
-        last_command: undefined,
-      }),
-      checkout({ workspace: "ws-14", worker: null, last_command: undefined }),
+      checkout({ workspace: "ws-13", worker: "review/security" }),
+      checkout({ workspace: "ws-14", worker: null }),
     ]);
     wrap(<ReviewCheckouts slug="demo" />);
     await screen.findByText("@review/security");
     expect(screen.getAllByText("Review checkouts")).toHaveLength(3);
     expect(
-      screen.getByText(
-        /P-4 v2 in ws\/review-p-4 · ran cargo nextest, 48 passed · \d+ s ago/,
-      ),
-    ).toBeTruthy();
-    expect(
       screen.getAllByText("P-4 v2 in ws/review-p-4 · not recordable"),
-    ).toHaveLength(2);
+    ).toHaveLength(3);
     expect(screen.getByText("no worker")).toBeTruthy();
   });
 

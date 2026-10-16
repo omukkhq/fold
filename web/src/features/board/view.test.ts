@@ -28,7 +28,7 @@ describe("summaryText", () => {
     expect(summaryText([])).toBe("0 tasks");
   });
 
-  it("says only 0 tasks for an empty board, as the empty frame does", () => {
+  it("says only 0 tasks for an empty board", () => {
     expect(summaryText(groupColumns([]))).toBe("0 tasks");
   });
 

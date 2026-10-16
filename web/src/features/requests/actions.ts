@@ -34,6 +34,23 @@ export function visibleActions(
   return isRequester(request, human) ? BY_STATE[request.state] : [];
 }
 
+export function isOlderDraft(shown: number | null, latest: number | null) {
+  return shown !== null && latest !== null && shown !== latest;
+}
+
+/** An approval, a request for changes and an edit all name the latest draft, so an older draft tab leaves only the action that names no version. */
+export function actionsOnDraft(
+  actions: readonly RequestAction[],
+  shown: number | null,
+  latest: number | null,
+): readonly RequestAction[] {
+  if (!isOlderDraft(shown, latest)) return actions;
+  return actions.filter((a) => a === "close");
+}
+
+export const OLDER_DRAFT_NOTE =
+  "You are reading an older draft. Open the latest draft to approve it, ask for changes or edit it.";
+
 const PHRASES: Record<RequestAction, string> = {
   approve: "approve it",
   request_changes: "ask for changes",

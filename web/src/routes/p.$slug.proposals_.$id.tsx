@@ -32,6 +32,7 @@ function ProposalDetailRoute() {
   const session = useQuery(sessionQuery());
   return (
     <ProposalDetailScreen
+      key={id}
       slug={slug}
       id={id}
       search={search}

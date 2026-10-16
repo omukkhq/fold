@@ -20,7 +20,7 @@ const FRAMES: [PersonSlot, string, string][] = [
 
 describe("slotSize", () => {
   it.each(FRAMES)(
-    "%s draws an agent and a human at their frame sizes",
+    "%s draws an agent and a human at their slot sizes",
     (slot, agent, human) => {
       expect(slotSize(slot, "agent")).toBe(agent);
       expect(slotSize(slot, "human")).toBe(human);

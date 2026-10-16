@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { Hunk } from "@/api/diff";
 import type { ReviewComment } from "@/api/proposals";
 import { reviewComment } from "@/test/proposals";
 import {
@@ -7,6 +8,7 @@ import {
   composerTitle,
   diffThreads,
   groupByFile,
+  heldLines,
   linesText,
   placeThreads,
   unplacedThreads,
@@ -196,6 +198,66 @@ describe("placing threads", () => {
     expect(
       placeThreads(threads, ["a.sql"], true).unplaced.map((t) => t.id),
     ).toEqual(["rc-1", "rc-2", "rc-5", "rc-4"]);
+  });
+});
+
+describe("threads beyond the hunks", () => {
+  const hunks: Hunk[] = [
+    {
+      old_start: 4,
+      old_lines: 2,
+      new_start: 4,
+      new_lines: 2,
+      lines: [
+        {
+          kind: "context",
+          old_no: 4,
+          new_no: 4,
+          text: "a\n",
+          no_newline: false,
+        },
+        {
+          kind: "removed",
+          old_no: 5,
+          new_no: null,
+          text: "b\n",
+          no_newline: false,
+        },
+        {
+          kind: "added",
+          old_no: null,
+          new_no: 5,
+          text: "c\n",
+          no_newline: false,
+        },
+      ],
+    },
+  ];
+
+  it("holds a context line on both sides and a changed line on its own side", () => {
+    expect([...heldLines(hunks)].sort()).toEqual([
+      "new:4",
+      "new:5",
+      "old:4",
+      "old:5",
+    ]);
+  });
+
+  it("lists a thread whose end is on no line of the hunks under the other comments", () => {
+    const threads = buildThreads(
+      [
+        comment(1, 1, { start_line: 5, end_line: 5 }),
+        comment(2, 1, { start_line: 40, end_line: 40 }),
+        comment(3, 1, { side: "old", start_line: 4, end_line: 4 }),
+        comment(4, 1, { side: "old", start_line: 30, end_line: 30 }),
+      ],
+      1,
+    );
+    const held = new Map([["a.sql", heldLines(hunks)]]);
+    const out = placeThreads(threads, ["a.sql"], true, held);
+    expect(out.placed.map((t) => t.id)).toEqual(["rc-3", "rc-1"]);
+    expect(out.unplaced.map((t) => t.id)).toEqual(["rc-2", "rc-4"]);
+    expect(placeThreads(threads, ["a.sql"], true).unplaced).toEqual([]);
   });
 });
 

@@ -17,7 +17,7 @@ export function ErrorBanner({
   className,
 }: ErrorBannerProps) {
   return (
-    // The bottom padding gives its last pixel to the border, as the frame's inner stroke does.
+    // The bottom padding is 1px less than the top, so the 1px border stays inside the banner's height like an inner stroke.
     <div
       role="alert"
       className={cn(

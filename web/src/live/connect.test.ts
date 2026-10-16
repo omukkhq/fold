@@ -108,6 +108,56 @@ describe("connectProject", () => {
     handle.stop();
   });
 
+  it("keeps no clock tick for a worker step", async () => {
+    const status = createLiveStatusStore();
+    const handle = connectProject(
+      new QueryClient(),
+      "demo",
+      () =>
+        Promise.resolve(
+          (async function* () {
+            await Promise.resolve();
+            yield `data: ${JSON.stringify({ kind: "worker_output", agent: "web-coder", step: "tool_use", tool: "Edit", text_length: null })}\n\n`;
+            await new Promise<void>(() => undefined);
+          })(),
+        ),
+      status,
+      () => 42,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(status.getSnapshot()).toMatchObject({
+      state: "live",
+      lastEventAt: null,
+    });
+    handle.stop();
+  });
+
+  it("resumes after the last stored event when the project opens again", async () => {
+    const client = new QueryClient();
+    const cursors: (number | null)[] = [];
+    const transport: Transport = (lastSeq) => {
+      cursors.push(lastSeq);
+      return Promise.resolve(
+        (async function* () {
+          await Promise.resolve();
+          yield stored(5, "task.created") + stored(6, "task.created");
+          await new Promise<void>(() => undefined);
+        })(),
+      );
+    };
+    for (const slug of ["demo", "other", "demo"]) {
+      const handle = connectProject(
+        client,
+        slug,
+        transport,
+        createLiveStatusStore(),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      handle.stop();
+    }
+    expect(cursors).toEqual([null, null, 6]);
+  });
+
   it("refetches the project when a stored event is skipped", async () => {
     const client = new QueryClient();
     const prefixes: unknown[] = [];

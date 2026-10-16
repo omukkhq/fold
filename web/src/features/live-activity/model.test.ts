@@ -5,12 +5,7 @@ import { liveWorkspace, workspaceEntry } from "@/test/payloads";
 import { keys } from "../../api/keys";
 import { attentionView, mainLine } from "./attention";
 import { changeKind, fileLabel, visibleFiles } from "./files";
-import {
-  changesetHref,
-  checkpointHref,
-  taskHref,
-  workingFileHref,
-} from "./links";
+import { checkpointHref, taskHref, workingFileHref } from "./links";
 import { createLiveStatesStore, shownAsOf } from "./liveStates";
 import { buildPanels, lastActivity, seedLive, workerOf } from "./panels";
 import { recordedItems } from "./recorded";
@@ -33,59 +28,36 @@ describe("links", () => {
     );
   });
 
-  it("links a checkpoint and a changeset to their comparisons", () => {
+  it("links a checkpoint to its comparison", () => {
     expect(checkpointHref("demo", "r7", "ck-3")).toBe(
       "/p/demo/diff?from=r7&to=ck-3",
-    );
-    expect(changesetHref("demo", "r6", "C-4")).toBe(
-      "/p/demo/diff?from=r6&to=C-4",
     );
     expect(taskHref("demo", "T-12")).toBe("/p/demo/t/T-12");
   });
 });
 
 describe("recordedItems", () => {
-  it("merges checkpoints and changesets newest first", () => {
-    const items = recordedItems(
-      "demo",
-      "r7",
-      [
-        { id: "ck-1", label: null, automatic: false, created_at: 10 },
-        { id: "ck-2", label: "quiet 2 min", automatic: true, created_at: 30 },
-      ],
-      [{ id: "C-1", message: "Fields", recorded_at: 20, base: "r6" }],
-    );
+  it("lists the checkpoints newest first, each with its comparison", () => {
+    const items = recordedItems("demo", "r7", [
+      { id: "ck-1", label: null, automatic: false, created_at: 10 },
+      { id: "ck-2", label: "quiet 2 min", automatic: true, created_at: 30 },
+    ]);
     expect(items.map((i) => [i.id, i.text, i.href])).toEqual([
       [
         "ck-2",
         "checkpoint · automatic · quiet 2 min",
         "/p/demo/diff?from=r7&to=ck-2",
       ],
-      ["C-1", "Fields", "/p/demo/diff?from=r6&to=C-1"],
       ["ck-1", "checkpoint · explicit", "/p/demo/diff?from=r7&to=ck-1"],
     ]);
-    expect(items.map((i) => i.kind)).toEqual([
-      "checkpoint",
-      "changeset",
-      "checkpoint",
-    ]);
-  });
-
-  it("lists only the checkpoints when the read carries no changesets", () => {
-    const items = recordedItems("demo", "r7", [
-      { id: "ck-1", label: null, automatic: true, created_at: 1 },
-    ]);
-    expect(items.map((i) => i.id)).toEqual(["ck-1"]);
   });
 
   it("breaks a time tie by id", () => {
-    const items = recordedItems(
-      "demo",
-      "r7",
-      [{ id: "ck-2", label: null, automatic: true, created_at: 1 }],
-      [{ id: "C-1", message: "m", recorded_at: 1, base: "r7" }],
-    );
-    expect(items.map((i) => i.id)).toEqual(["C-1", "ck-2"]);
+    const items = recordedItems("demo", "r7", [
+      { id: "ck-2", label: null, automatic: true, created_at: 1 },
+      { id: "ck-1", label: null, automatic: true, created_at: 1 },
+    ]);
+    expect(items.map((i) => i.id)).toEqual(["ck-1", "ck-2"]);
   });
 });
 

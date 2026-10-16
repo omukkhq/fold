@@ -108,7 +108,7 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
   }
 }
 
-/** The list in the order the frame draws its groups; a group without items is left out. */
+/** The list in group order: questions, permissions, reviews, request drafts; a group without items is left out. */
 export function needsYouGroups(
   slug: string,
   items: readonly NeedsYouItem[],

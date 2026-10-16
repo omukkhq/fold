@@ -12,7 +12,7 @@ fold: a local-first platform where independent AI coding agents plan, build, rev
 6. **Ask instead of leaving questions in deliverables.** No TBDs, open questions or "this doesn't match X" in code, docs, Pencil annotations or commit messages.
 7. **Comment only what the code can't say.** A comment states a non-obvious, project-specific fact; it never narrates the code. Doc comments explain why something has its shape. No module-level `//!` narration.
    **Describe what is, not what was.** Docs and comments state how the code behaves today. No "no longer", "as before" or "now does X instead of Y"; what changed and why belongs in the commit message.
-8. **Never cite planning documents in code or commits.** They change; state the rule or the reason itself.
+8. **Never refer to specific documents or Pencil designs in code or commits.** Planning documents, docs and frames such as `W02` change at any time; state the rule or the reason itself.
 9. **Don't hard-wrap prose.** One paragraph is one line in Markdown and commit messages. Code width is the formatter's job.
 10. **When the code and a settled product decision disagree, stop and ask.** Never resolve the conflict silently in either direction.
 11. **No mock or hard-coded demo data in app code.** An empty project renders empty states. Demo data comes from `make seed-dev`, which builds a throwaway project through the real commands.

@@ -159,42 +159,42 @@ describe("labels", () => {
     expect(await createLabel("demo", ui)).toEqual(ui);
   });
 
-  it("attaches a label by sending the whole set read just before", async () => {
-    daemon.on(`GET ${P}/tasks/T-2`, ok(taskView("T-2", { labels: [ui] })));
-    daemon.on(`PATCH ${P}/tasks/T-2`, ok(taskView("T-2")));
+  it("attaches one label with its own route, never sending the label set", async () => {
+    daemon.on(`PUT ${P}/tasks/T-2/labels/:name`, ok(taskView("T-2")));
     await attachLabel("demo", "T-2", "data");
-    expect(bodyOf(`PATCH ${P}/tasks/T-2`)).toEqual({ labels: ["ui", "data"] });
+    expect(daemon.made(`PUT ${P}/tasks/T-2/labels/data`)).toHaveLength(1);
+    expect(daemon.made(`PATCH ${P}/tasks/T-2`)).toHaveLength(0);
+    expect(daemon.made(`GET ${P}/tasks/T-2`)).toHaveLength(0);
   });
 
-  it("keeps the set as it is when the label is on the task already", async () => {
-    daemon.on(`GET ${P}/tasks/T-2`, ok(taskView("T-2", { labels: [ui] })));
-    daemon.on(`PATCH ${P}/tasks/T-2`, ok(taskView("T-2")));
-    await attachLabel("demo", "T-2", "ui");
-    expect(bodyOf(`PATCH ${P}/tasks/T-2`)).toEqual({ labels: ["ui"] });
-  });
-
-  it("removes a label from the set", async () => {
-    daemon.on(
-      `GET ${P}/tasks/T-2`,
-      ok(taskView("T-2", { labels: [ui, data] })),
-    );
-    daemon.on(`PATCH ${P}/tasks/T-2`, ok(taskView("T-2")));
+  it("removes one label with its own route", async () => {
+    daemon.on(`DELETE ${P}/tasks/T-2/labels/:name`, ok(taskView("T-2")));
     await removeLabel("demo", "T-2", "ui");
-    expect(bodyOf(`PATCH ${P}/tasks/T-2`)).toEqual({ labels: ["data"] });
+    expect(daemon.made(`DELETE ${P}/tasks/T-2/labels/ui`)).toHaveLength(1);
+  });
+
+  it("sends concurrent label changes as separate single-label writes", async () => {
+    daemon.on(`PUT ${P}/tasks/T-2/labels/:name`, ok(taskView("T-2")));
+    daemon.on(`DELETE ${P}/tasks/T-2/labels/:name`, ok(taskView("T-2")));
+    await Promise.all([
+      attachLabel("demo", "T-2", "data"),
+      removeLabel("demo", "T-2", "ui"),
+    ]);
+    expect(daemon.made(`PUT ${P}/tasks/T-2/labels/data`)).toHaveLength(1);
+    expect(daemon.made(`DELETE ${P}/tasks/T-2/labels/ui`)).toHaveLength(1);
   });
 
   it("creates a label and puts it on the task, or leaves the task alone when creation is refused", async () => {
     daemon.on(`POST ${P}/labels`, ok(ui, 201));
-    daemon.on(`GET ${P}/tasks/T-2`, ok(taskView("T-2")));
-    daemon.on(`PATCH ${P}/tasks/T-2`, ok(taskView("T-2")));
+    daemon.on(`PUT ${P}/tasks/T-2/labels/:name`, ok(taskView("T-2")));
     await createLabelOn("demo", "T-2", ui);
-    expect(bodyOf(`PATCH ${P}/tasks/T-2`)).toEqual({ labels: ["ui"] });
+    expect(daemon.made(`PUT ${P}/tasks/T-2/labels/ui`)).toHaveLength(1);
     daemon.reset();
     daemon.on(`POST ${P}/labels`, refuse(409, "label_exists"));
     await expect(createLabelOn("demo", "T-2", ui)).rejects.toSatisfy(
       (e: unknown) => apiErrorCode(e) === "label_exists",
     );
-    expect(daemon.made(`PATCH ${P}/tasks/T-2`)).toHaveLength(0);
+    expect(daemon.made(`PUT ${P}/tasks/T-2/labels/ui`)).toHaveLength(0);
   });
 });
 

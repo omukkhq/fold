@@ -278,6 +278,41 @@ impl TaskService {
         self.get(id).await
     }
 
+    /// Puts one label on the task, or takes it off, keeping every other label the task has when the write runs. The set is read inside the write, so two label changes never undo each other.
+    pub async fn change_label(
+        &self,
+        actor: &Actor,
+        id: TaskId,
+        name: LabelName,
+        attach: bool,
+    ) -> Result<TaskView, TaskError> {
+        let now = self.clock.now();
+        let mut buffer = EventBuffer::new();
+        self.store
+            .write(async |tx| {
+                let mut names: Vec<LabelName> = tasks::labels_for_conn(tx.conn(), id)
+                    .await?
+                    .into_iter()
+                    .map(|label| label.name)
+                    .collect();
+                if attach {
+                    if !names.contains(&name) {
+                        names.push(name.clone());
+                    }
+                } else {
+                    names.retain(|existing| *existing != name);
+                }
+                let patch = TaskPatch {
+                    labels: Some(names),
+                    ..TaskPatch::default()
+                };
+                update_in_tx(tx, &mut buffer, actor, id, &patch, now).await
+            })
+            .await?;
+        self.bus.publish(buffer);
+        self.get(id).await
+    }
+
     pub async fn create_label(
         &self,
         actor: &Actor,

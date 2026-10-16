@@ -29,6 +29,7 @@ function TaskRoute() {
         }}
       />
       <TaskDialog
+        key={task}
         slug={slug}
         task={task}
         onClose={() => {

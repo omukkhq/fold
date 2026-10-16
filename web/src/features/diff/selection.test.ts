@@ -12,6 +12,7 @@ import {
   sameSelection,
   samePoint,
   tabStop,
+  threadPointsOf,
   threadsCovering,
   threadsEndingAt,
   type DiffSelection,
@@ -137,6 +138,17 @@ describe("sides", () => {
       n(40),
       n(41),
     ]);
+  });
+});
+
+describe("thread points", () => {
+  it("stands a context line for its new and its old line, and a changed line for its own", () => {
+    expect(threadPointsOf(row(10, 10))).toEqual([n(10), o(10)]);
+    expect(threadPointsOf(row(11, null))).toEqual([o(11)]);
+    expect(threadPointsOf(row(null, 11))).toEqual([n(11)]);
+    expect(threadPointsOf({ type: "hunk", key: "h", header: "@@" })).toEqual(
+      [],
+    );
   });
 });
 

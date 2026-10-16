@@ -547,6 +547,23 @@ describe("Proposal detail", () => {
     expect(screen.queryByRole("navigation", { name: "Change" })).toBeNull();
   });
 
+  it("lists a comment on a line outside the shown hunks under Other comments", async () => {
+    comments.set("P-4", [
+      reviewComment(1, 2, {
+        author: "review/security",
+        path: SCHEMA,
+        start_line: 40,
+        end_line: 40,
+        body: "This line is not in the diff.",
+      }),
+    ]);
+    renderAt("/p/demo/proposals/P-4");
+    const other = await screen.findByRole("region", { name: "Other comments" });
+    expect(
+      within(other).getByText("This line is not in the diff."),
+    ).toBeTruthy();
+  });
+
   it("switches to the change since the version the review asked changes on, where a new-side comment lands on the current version", async () => {
     const user = userEvent.setup();
     const { container } = renderAt("/p/demo/proposals/P-4");
@@ -792,6 +809,26 @@ describe("Proposal detail", () => {
     expect(
       screen.getByText("Changes requested · back with the author"),
     ).toBeTruthy();
+  });
+
+  it("closes the Request-changes form when the router moves to another proposal", async () => {
+    const user = userEvent.setup();
+    const { router } = renderAt("/p/demo/proposals/P-4");
+    const panel = await integration();
+    await user.click(
+      within(panel).getByRole("button", { name: "Request changes" }),
+    );
+    expect(
+      within(panel).getByRole("form", { name: "Request changes" }),
+    ).toBeTruthy();
+    await act(async () => {
+      await router.navigate({
+        to: "/p/$slug/proposals/$id",
+        params: { slug: "demo", id: "P-3" },
+      });
+    });
+    await screen.findByText("Login form styles");
+    expect(screen.queryByRole("form", { name: "Request changes" })).toBeNull();
   });
 
   it("integrates a proposal whose version had a request for changes: pending, then the result and the new revision, and no Reject", async () => {

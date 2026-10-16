@@ -6,6 +6,7 @@ import { isApiError } from "@/api/errors";
 import { keys } from "@/api/keys";
 import { taskQuery, type LiveWorkspace, type TaskDetail } from "@/api/tasks";
 import { Button } from "@/components/button/Button";
+import { copyOutcome, type CopyState } from "@/components/mono/commitCopy";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
@@ -28,7 +29,8 @@ export interface TaskDialogProps {
 }
 
 function CopyLink() {
-  const [copied, setCopied] = useState(false);
+  const [state, setState] = useState<CopyState>("idle");
+  const copied = state === "copied";
   return (
     <Button
       variant="ghost"
@@ -40,12 +42,13 @@ function CopyLink() {
         )
       }
       onClick={() => {
-        void navigator.clipboard.writeText(location.href).then(() => {
-          setCopied(true);
-        });
+        void copyOutcome(location.href, navigator.clipboard).then(setState);
+      }}
+      onBlur={() => {
+        setState("idle");
       }}
     >
-      {copied ? "Link copied" : "Copy link"}
+      {copied ? "Link copied" : state === "failed" ? "Not copied" : "Copy link"}
     </Button>
   );
 }
@@ -109,7 +112,7 @@ function Loading() {
 }
 
 /**
- * W03. The task opens over the board, which stays mounted beneath it. Every value on screen is the daemon's: a write
+ * The task opens over the board, which stays mounted beneath it. Every value on screen is the daemon's: a write
  * shows its pending state until the task has been read again.
  */
 export function TaskDialog({ slug, task, onClose }: TaskDialogProps) {

@@ -39,7 +39,11 @@ export const labelSchema = z.object({
     .string()
     .trim()
     .min(1, "Write a label name.")
-    .max(40, "Keep the name to 40 characters."),
+    .max(40, "Keep the name to 40 characters.")
+    .refine(
+      (value) => value !== "." && value !== "..",
+      "A label name cannot be . or ..",
+    ),
   color: z.enum(LABEL_NAMES, { message: "Choose one of the eight colours." }),
 });
 export type LabelForm = z.infer<typeof labelSchema>;

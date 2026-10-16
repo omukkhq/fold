@@ -100,7 +100,7 @@ function rowMenu(
   return items;
 }
 
-// W03 draws a row as its text alone, 27 high: the menu overlaps the row padding, and where a pointer can hover it
+// A row is its text alone, 27 high: the menu overlaps the row padding, and where a pointer can hover it
 // shows only on hover, on focus, while open or while its write is pending.
 const ROW_MENU =
   "-my-4 pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:group-focus-within:opacity-100 pointer-fine:aria-busy:opacity-100 pointer-fine:data-[state=open]:opacity-100";
@@ -467,7 +467,7 @@ function ChecklistBlock({
           />
         </div>
       </SectionHead>
-      {/* W03 draws the add row as the last row of the list, with no gap above it. */}
+      {/* The add row is the last row of the list, with no gap above it. */}
       <div className="flex flex-col">
         <ul className="flex flex-col">
           {checklist.items.map((item, index) =>

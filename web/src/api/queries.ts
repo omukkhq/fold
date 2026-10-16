@@ -76,6 +76,14 @@ export const messagesQuery = (slug: string) =>
     staleTime: Infinity,
   });
 
+/** A thread the listing did not reach, read by the id of any of its messages. */
+export const threadQuery = (slug: string, thread: string) =>
+  queryOptions({
+    queryKey: keys.messagesThread(slug, thread),
+    queryFn: () => getThread(slug, thread),
+    staleTime: Infinity,
+  });
+
 export const awaitingHumanQuery = (slug: string) =>
   queryOptions({
     queryKey: keys.messagesAwaiting(slug),

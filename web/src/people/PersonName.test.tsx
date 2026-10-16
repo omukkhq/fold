@@ -45,7 +45,7 @@ describe("PersonName", () => {
 });
 
 describe("PersonName slots", () => {
-  it("sizes a human and an agent by the slot's frame sizes", () => {
+  it("sizes a human and an agent by the slot's sizes", () => {
     const { container } = render(
       <>
         <PersonName name="human:ana" slot="requester" />

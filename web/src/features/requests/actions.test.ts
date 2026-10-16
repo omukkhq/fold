@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { RequestState } from "@/api/requests";
 import { requestSummary } from "@/test/requests";
 import {
+  OLDER_DRAFT_NOTE,
+  actionsOnDraft,
+  isOlderDraft,
   decisionText,
   isFinal,
   isRequester,
@@ -143,5 +146,22 @@ describe("panelKind", () => {
     expect(panelKind(r("draft_ready"), "ana", false)).toBe("viewer");
     expect(panelKind(r("draft_ready"), "tanim", true)).toBe("editing");
     expect(panelKind(r("draft_ready"), "tanim", false)).toBe("decide");
+  });
+});
+
+describe("actionsOnDraft", () => {
+  const all = ["approve", "request_changes", "edit", "close"] as const;
+
+  it("keeps every action on the latest draft", () => {
+    expect(actionsOnDraft(all, 2, 2)).toEqual(all);
+    expect(actionsOnDraft(all, null, 2)).toEqual(all);
+    expect(actionsOnDraft(all, 1, null)).toEqual(all);
+  });
+
+  it("leaves only close on an older draft", () => {
+    expect(actionsOnDraft(all, 1, 2)).toEqual(["close"]);
+    expect(actionsOnDraft([], 1, 2)).toEqual([]);
+    expect(isOlderDraft(1, 2)).toBe(true);
+    expect(OLDER_DRAFT_NOTE).toContain("older draft");
   });
 });

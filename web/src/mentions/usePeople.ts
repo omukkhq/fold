@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { agentBarQuery } from "@/api/agentBar";
 import { humansQuery } from "@/api/humans";
@@ -10,9 +11,15 @@ export function usePeople(slug: string | null): People {
     enabled: slug !== null,
   });
   const humans = useQuery({ ...humansQuery(), enabled: slug !== null });
-  if (slug === null) return NO_PEOPLE;
-  return {
-    humans: humans.data ?? [],
-    agents: agents.data ? agentNames(agents.data) : [],
-  };
+  const humanList = humans.data;
+  const agentList = agents.data;
+  // One object per change of the lists, so a Markdown body keyed on it parses again only then.
+  const people = useMemo(
+    () => ({
+      humans: humanList ?? [],
+      agents: agentList ? agentNames(agentList) : [],
+    }),
+    [humanList, agentList],
+  );
+  return slug === null ? NO_PEOPLE : people;
 }

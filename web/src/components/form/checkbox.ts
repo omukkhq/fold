@@ -1,6 +1,6 @@
 import type { CheckedState } from "@radix-ui/react-checkbox";
 
-/** W00's check box: 16px, radius-s, a stroke while empty and the primary fill with an on-primary tick once checked. */
+/** The check box: 16px, radius-s, a stroke while empty and the primary fill with an on-primary tick once checked. */
 export const checkboxClasses =
   "inline-flex size-16 shrink-0 items-center justify-center rounded-s bg-surface text-on-primary inset-ring inset-ring-border disabled:cursor-not-allowed disabled:opacity-60 data-[state=checked]:bg-primary data-[state=checked]:inset-ring-primary";
 

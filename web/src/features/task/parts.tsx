@@ -111,7 +111,7 @@ export function LinkButton({
   );
 }
 
-/** A small ghost action, W03's `+ Label` and `Edit`. */
+/** A small ghost action, the `+ Label` and `Edit`. */
 export function SmallAction({
   icon: Icon,
   children,

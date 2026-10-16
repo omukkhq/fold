@@ -23,7 +23,7 @@ const CHECKOUT = {
 };
 
 describe("listReviewCheckouts", () => {
-  it("lists the active checkouts the daemon answers, with no last command", async () => {
+  it("lists the active checkouts the daemon answers", async () => {
     stubFetch({
       "GET /api/v1/projects/demo/reviews/checkouts": {
         body: { checkouts: [CHECKOUT] },
@@ -31,7 +31,6 @@ describe("listReviewCheckouts", () => {
     });
     const rows = await listReviewCheckouts("demo");
     expect(rows).toEqual([CHECKOUT]);
-    expect(rows[0]?.last_command).toBeUndefined();
   });
 
   it("rejects with the daemon's code", async () => {

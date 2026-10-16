@@ -378,6 +378,22 @@ async fn every_write_route_records_the_human() {
             vec!["task.updated"],
         ),
         (
+            Method::DELETE,
+            "/tasks/T-1/labels/api",
+            "/tasks/{id}/labels/{name}",
+            None,
+            StatusCode::OK,
+            vec!["task.updated"],
+        ),
+        (
+            Method::PUT,
+            "/tasks/T-1/labels/api",
+            "/tasks/{id}/labels/{name}",
+            None,
+            StatusCode::OK,
+            vec!["task.updated"],
+        ),
+        (
             Method::POST,
             "/tasks/T-3/dependencies",
             "/tasks/{id}/dependencies",
@@ -805,6 +821,8 @@ fn every_task_route_is_declared_with_a_unique_operation() {
         ("/tasks/{id}", "get", "get_task"),
         ("/tasks/{id}", "patch", "update_task"),
         ("/tasks/{id}", "delete", "delete_task"),
+        ("/tasks/{id}/labels/{name}", "put", "attach_label"),
+        ("/tasks/{id}/labels/{name}", "delete", "detach_label"),
         ("/tasks/{id}/archive", "post", "archive_task"),
         ("/tasks/{id}/dependencies", "post", "add_dependency"),
         (
@@ -902,4 +920,100 @@ async fn an_invalid_configuration_fails_only_what_needs_the_lease() {
     assert_eq!(body["error"]["code"], codes::INVALID_CONFIG);
     assert_declared("get", "/tasks/{id}", status, &body);
     fx.ok(Method::GET, "/board", None).await;
+}
+
+#[tokio::test]
+async fn labels_attach_and_detach_one_at_a_time_without_undoing_each_other() {
+    let fx = Fixture::new().await;
+    for (name, color) in [("api", "teal"), ("ui", "sage")] {
+        fx.ok(
+            Method::POST,
+            "/labels",
+            Some(json!({"name": name, "color": color})),
+        )
+        .await;
+    }
+    fx.ok(Method::POST, "/tasks", Some(json!({"title": "Work"})))
+        .await;
+
+    let (status, view) = fx.send(Method::PUT, "/tasks/T-1/labels/api", None).await;
+    assert_declared("put", "/tasks/{id}/labels/{name}", status, &view);
+    assert_eq!(status, StatusCode::OK);
+    let (status, view) = fx.send(Method::PUT, "/tasks/T-1/labels/ui", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let names: Vec<&str> = view["labels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|label| label["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names.len(), 2);
+    assert!(names.contains(&"api") && names.contains(&"ui"));
+
+    let after = fx.head().await;
+    let (status, view) = fx.send(Method::PUT, "/tasks/T-1/labels/ui", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(view["labels"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        fx.head().await,
+        after,
+        "a label already there writes no event"
+    );
+
+    let (status, view) = fx.send(Method::DELETE, "/tasks/T-1/labels/api", None).await;
+    assert_declared("delete", "/tasks/{id}/labels/{name}", status, &view);
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(view["labels"], json!([{"name": "ui", "color": "sage"}]));
+    let (status, view) = fx.send(Method::DELETE, "/tasks/T-1/labels/api", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(view["labels"], json!([{"name": "ui", "color": "sage"}]));
+}
+
+#[tokio::test]
+async fn attaching_a_label_refuses_an_unknown_label_task_and_archived_task() {
+    let fx = Fixture::new().await;
+    fx.ok(
+        Method::POST,
+        "/labels",
+        Some(json!({"name": "api", "color": "teal"})),
+    )
+    .await;
+    fx.ok(Method::POST, "/tasks", Some(json!({"title": "Work"})))
+        .await;
+    let (status, error) = fx.send(Method::PUT, "/tasks/T-1/labels/nope", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["error"]["code"], "label_not_found");
+    let (status, error) = fx.send(Method::PUT, "/tasks/T-9/labels/api", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["error"]["code"], "task_not_found");
+    fx.ok(Method::POST, "/tasks/T-1/archive", None).await;
+    let (status, error) = fx.send(Method::PUT, "/tasks/T-1/labels/api", None).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(error["error"]["code"], "task_closed");
+}
+
+#[tokio::test]
+async fn a_label_name_with_a_slash_and_a_space_travels_percent_encoded() {
+    let fx = Fixture::new().await;
+    fx.ok(
+        Method::POST,
+        "/labels",
+        Some(json!({"name": "front/end ui", "color": "teal"})),
+    )
+    .await;
+    fx.ok(Method::POST, "/tasks", Some(json!({"title": "Work"})))
+        .await;
+    let (status, view) = fx
+        .send(Method::PUT, "/tasks/T-1/labels/front%2Fend%20ui", None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        view["labels"],
+        json!([{"name": "front/end ui", "color": "teal"}])
+    );
+    let (status, view) = fx
+        .send(Method::DELETE, "/tasks/T-1/labels/front%2Fend%20ui", None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(view["labels"], json!([]));
 }

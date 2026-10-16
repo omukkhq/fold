@@ -29,6 +29,8 @@ import { focusRing } from "@/lib/focus";
 import { useNow } from "@/live/useNow";
 import { knownFrom } from "@/mentions/parse";
 import {
+  actionsOnDraft,
+  isOlderDraft,
   panelKind,
   threadClosedText,
   threadTarget,
@@ -245,7 +247,15 @@ export function RequestDetailScreen({
   });
   const latest = detail.drafts.at(-1) ?? null;
   const draft = shownDraft(detail.drafts, chosen);
-  const actions = visibleActions(r, human);
+  const actions = actionsOnDraft(
+    visibleActions(r, human),
+    draft?.version ?? null,
+    latest?.version ?? null,
+  );
+  const olderDraft = isOlderDraft(
+    draft?.version ?? null,
+    latest?.version ?? null,
+  );
   const kind = panelKind(r, human, editing !== null);
   const pending = write.isPending ? write.variables.action : null;
   const failureOf = (action: RequestAction) =>
@@ -362,6 +372,7 @@ export function RequestDetailScreen({
               pending={pending}
               failure={decisionFailure}
               cards={latest?.cards.length ?? 0}
+              olderDraft={olderDraft}
               onApprove={() => {
                 write.mutate({
                   action: "approve",

@@ -199,8 +199,9 @@ export function splitMentions(
 export function mentionHref(slug: string, mention: Mention): string | null {
   const base = `/p/${slug}`;
   if (isPerson(mention)) {
+    // The board filters by agent, so a worker such as `frontend/ui` opens its agent's cards.
     return mention.person === "agent"
-      ? `${base}/board?${new URLSearchParams({ agent: mention.name }).toString()}`
+      ? `${base}/board?${new URLSearchParams({ agent: mention.name.split("/")[0] ?? mention.name }).toString()}`
       : null;
   }
   if (mention.mark === "@") {

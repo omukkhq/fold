@@ -56,9 +56,17 @@ export const keys = {
   messages: (slug: string) => [slug, "messages"] as const,
   taskMessages: (slug: string, task: string) =>
     [slug, "messages", "task", task] as const,
+  /** Under the messages prefix, so a thread read on its own refreshes with the list. */
+  messagesThread: (slug: string, thread: string) =>
+    [slug, "messages", "thread", thread] as const,
   /** Under the messages prefix, so every message event that refreshes the threads also refreshes the count. */
   messagesAwaiting: (slug: string) => [slug, "messages", "awaiting"] as const,
   repository: (slug: string) => [slug, "repository"] as const,
+  /** Outside the repository prefix: a revision never changes, so no integration refreshes its trees and files. */
+  revisionTree: (slug: string, revision: string, dir: string) =>
+    [slug, "revision-tree", revision, dir] as const,
+  revisionFile: (slug: string, revision: string, path: string) =>
+    [slug, "revision-file", revision, path] as const,
   git: (slug: string) => [slug, "git"] as const,
   /** Every task read of the project, under one prefix. */
   tasks: (slug: string) => [slug, "task"] as const,
@@ -71,6 +79,9 @@ export const keys = {
   /** Under the workspaces prefix, so every event that refreshes the workspaces also refreshes the review checkouts. */
   reviewCheckouts: (slug: string) =>
     [slug, "workspaces", "review-checkouts"] as const,
+  /** The directory listings of a workspace, which a change of its working files makes stale. */
+  workspaceTrees: (slug: string, workspace: string) =>
+    [slug, "workspace", workspace, "tree"] as const,
   workspaceLiveAll: (slug: string) => [slug, "workspace-live"] as const,
   workers: (slug: string) => [slug, "workers"] as const,
   workerQuestions: (slug: string) => [slug, "worker-questions"] as const,

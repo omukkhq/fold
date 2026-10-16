@@ -10,8 +10,8 @@ export interface ReconnectingParts {
 }
 
 /**
- * The reconnecting banner's sentence in its parts; `retryAt` adds the countdown W02 draws. Times are UTC milliseconds.
- * `shown` names what is on screen: W02 says "the board".
+ * The reconnecting banner's sentence in its parts; `retryAt` adds the countdown. Times are UTC milliseconds.
+ * `shown` names what is on screen: for example "the board".
  */
 export function reconnectingParts(
   now: number,

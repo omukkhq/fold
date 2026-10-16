@@ -184,7 +184,7 @@ function Workspace({
 
 function Checkpoints({ task, live, now }: Props) {
   const [open, setOpen] = useState(false);
-  const all = recordedCheckpoints(task.checkpoints ?? [], live);
+  const all = recordedCheckpoints(task.checkpoints, live);
   const list = collapse(all, 1, open);
   return (
     <SideGroup title="Checkpoints">
@@ -648,7 +648,7 @@ function History({ task }: { task: TaskDetail }) {
   );
 }
 
-/** W03's side column, top to bottom as the frame orders it. */
+/** The side column, top to bottom. */
 export function TaskSide({ slug, task, live, now }: Props) {
   return (
     <aside className="flex w-full shrink-0 flex-col gap-20 border-border-subtle md:w-side-panel md:border-l md:pt-2 md:pl-20">
@@ -659,7 +659,7 @@ export function TaskSide({ slug, task, live, now }: Props) {
       <Proposal slug={slug} task={task} />
       <HumanReview slug={slug} task={task} />
       <Dependencies slug={slug} task={task} />
-      {/* W03 draws no empty History, so the group is left out for a task read without events. */}
+      {/* An empty History draws nothing, so the group is left out for a task read without events. */}
       {task.history.length > 0 ? <History task={task} /> : null}
     </aside>
   );

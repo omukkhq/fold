@@ -48,7 +48,7 @@ export function changeBadge(kind: ChangeKind): ChangeBadge {
   return BADGES[kind];
 }
 
-/** W06 writes removals with U+2212 and leaves out a count that is zero. */
+/** Removals are written with U+2212. */
 export function lineCounts(
   file: Pick<ComparedFile, "added_lines" | "removed_lines">,
 ): {
@@ -61,7 +61,7 @@ export function lineCounts(
   };
 }
 
-/** The words beside the path in the diff head, as W08 writes `new file`. */
+/** The words beside the path in the diff head, such as `new file`. */
 export function changeNote(file: ComparedFile): string | null {
   if (file.change === "renamed" && file.previous_path !== null) {
     return `renamed from ${file.previous_path}`;
@@ -234,7 +234,7 @@ function diffHref(slug: string, from: string, to: string): string {
   return `/p/${slug}/diff?${new URLSearchParams({ from, to }).toString()}`;
 }
 
-/** W06's "Compare with" list for a workspace: its base, main when main moved past the base, and its checkpoints, newest first. */
+/** The "Compare with" list for a workspace: its base, main when main moved past the base, and its checkpoints, newest first. */
 export function compareOptions(
   slug: string,
   comparison: Comparison,

@@ -28,6 +28,7 @@ import { MentionText } from "@/mentions/MentionText";
 import { MentionTextarea } from "@/mentions/MentionTextarea";
 import type { Known } from "@/mentions/parse";
 import {
+  OLDER_DRAFT_NOTE,
   decisionText,
   pendingText,
   versionsNote,
@@ -71,6 +72,8 @@ export interface DecisionProps {
   failure: Failure | null;
   /** The cards of the latest version, which an approval turns into tasks. */
   cards: number;
+  /** The draft on screen is not the latest, so the decisions that name the latest draft are off. */
+  olderDraft: boolean;
   onApprove: () => void;
   /** Resolves once the daemon stored the comment; rejects with its error. */
   onRequestChanges: (comment: string) => Promise<void>;
@@ -85,6 +88,7 @@ export function DecisionPanel({
   pending,
   failure,
   cards,
+  olderDraft,
   onApprove,
   onRequestChanges,
   onEdit,
@@ -116,6 +120,9 @@ export function DecisionPanel({
       <p className="text-bar leading-snug text-text-muted">
         {decisionText(r, actions, busy)}
       </p>
+      {olderDraft ? (
+        <p className="text-meta text-text-muted">{OLDER_DRAFT_NOTE}</p>
+      ) : null}
       {has("approve") ? (
         <>
           <Button

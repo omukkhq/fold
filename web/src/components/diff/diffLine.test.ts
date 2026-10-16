@@ -21,7 +21,7 @@ describe("diffLineStyle", () => {
   });
 });
 
-describe("W06 diff rows", () => {
+describe("diff rows", () => {
   it("draws only the hunk header across the number columns", () => {
     expect(KINDS.filter((kind) => diffLineStyle(kind).header)).toEqual([
       "hunk",

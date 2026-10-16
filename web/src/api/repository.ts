@@ -34,6 +34,19 @@ export async function listRevisions(slug: string): Promise<Pages<Revision>> {
   }, MAX_PAGES);
 }
 
+/** One revision by its id, whether or not the listing reached it. Rejects with `revision_not_found` for a revision the project does not have. */
+export async function getRevision(
+  slug: string,
+  revision: string,
+): Promise<Revision> {
+  const detail = await unwrap(
+    api.GET("/api/v1/projects/{slug}/revisions/{r}", {
+      params: { path: { slug, r: revision } },
+    }),
+  );
+  return detail.revision;
+}
+
 /** The entries of one directory (`""` is the root) in name order. Rejects with `revision_not_found` for a revision the project does not have. */
 export async function getTree(
   slug: string,

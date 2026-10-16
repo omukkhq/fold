@@ -9,9 +9,8 @@ use fold_daemon::projects::{ProjectHandle, Slot};
 use fold_daemon::services::tasks::CreateTask;
 use fold_daemon::{Daemon, DaemonConfig, RunningDaemon};
 use serde_json::json;
-use tokio::io::AsyncWriteExt;
 
-use crate::common::Host;
+use crate::common::{Host, feed};
 
 const MESSAGING: [&str; 2] = [
     "CLAUDE_CODE_MESSAGING_SOCKET",
@@ -78,9 +77,7 @@ async fn hook(host: &Host, socket: &Path, cwd: &Path, env: &[(&str, &str)], stdi
     }
     command.envs(env.iter().copied());
     let mut child = command.spawn().unwrap();
-    let mut input = child.stdin.take().unwrap();
-    input.write_all(stdin.as_bytes()).await.unwrap();
-    drop(input);
+    feed(&mut child, stdin).await;
     child.wait_with_output().await.unwrap()
 }
 
@@ -278,9 +275,7 @@ async fn an_unreachable_daemon_exits_0_with_one_line() {
         command.env_remove(name);
     }
     let mut child = command.spawn().unwrap();
-    let mut input = child.stdin.take().unwrap();
-    input.write_all(stdin.as_bytes()).await.unwrap();
-    drop(input);
+    feed(&mut child, &stdin).await;
     let output = child.wait_with_output().await.unwrap();
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stdout.is_empty());

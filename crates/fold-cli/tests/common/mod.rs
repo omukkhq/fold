@@ -11,9 +11,22 @@ use rmcp::service::RunningService;
 use rmcp::{RoleClient, ServiceExt};
 use serde_json::Value;
 use tempfile::TempDir;
+use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, Command};
 
 pub type Client = RunningService<RoleClient, ()>;
+
+/// Writes `stdin` to the child and closes it. A hook may exit before it reads its input, as `fld hook` does without `FOLD_AGENT`, so a broken pipe is accepted; any other write error fails the test.
+pub async fn feed(child: &mut Child, stdin: &str) {
+    let mut input = child.stdin.take().unwrap();
+    if let Err(error) = input.write_all(stdin.as_bytes()).await {
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::BrokenPipe,
+            "writing the hook's stdin failed: {error}"
+        );
+    }
+}
 
 /// A private host: HOME and the XDG directories in one temporary directory, and one registered project, `app`. `daemon.toml` makes any daemon started here listen on a free port.
 pub struct Host {

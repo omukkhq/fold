@@ -26,7 +26,7 @@ const REASONS = {
   invalid: "Choose two revisions.",
 } as const;
 
-// W11 draws the comparison as one button in the tree's bar, so the two choices sit inline at the button's height.
+// The comparison is one button in the tree's bar, so the two choices sit inline at the button's height.
 const SELECT = cn(controlClasses, focusRing, "w-auto py-7 font-mono text-bar");
 
 export function CompareBar({ slug, revisions, selected }: CompareBarProps) {

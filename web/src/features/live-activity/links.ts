@@ -30,15 +30,6 @@ export function checkpointHref(
   return diffHref(slug, base, checkpoint);
 }
 
-/** A changeset is compared with the revision it was recorded against. */
-export function changesetHref(
-  slug: string,
-  base: string,
-  changeset: string,
-): string {
-  return diffHref(slug, base, changeset);
-}
-
 export function taskHref(slug: string, task: string): string {
   return `/p/${slug}/t/${task}`;
 }

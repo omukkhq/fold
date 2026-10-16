@@ -7,9 +7,8 @@ use fold_daemon::projects::{ProjectHandle, Slot};
 use fold_daemon::services::messages::{MessageService, SendMessage};
 use fold_daemon::{Daemon, DaemonConfig, RunningDaemon};
 use serde_json::json;
-use tokio::io::AsyncWriteExt;
 
-use crate::common::{Host, daemons};
+use crate::common::{Host, daemons, feed};
 
 /// A daemon of the host on a socket of its own, with agents `frontend` and `backend` in project `app`.
 #[cfg(test)]
@@ -84,9 +83,7 @@ async fn hook(host: &Host, socket: Option<&Path>, agent: Option<&str>, stdin: &s
         command.env("FOLD_AGENT", agent);
     }
     let mut child = command.spawn().unwrap();
-    let mut input = child.stdin.take().unwrap();
-    input.write_all(stdin.as_bytes()).await.unwrap();
-    drop(input);
+    feed(&mut child, stdin).await;
     child.wait_with_output().await.unwrap()
 }
 

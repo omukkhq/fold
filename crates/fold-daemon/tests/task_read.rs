@@ -158,6 +158,52 @@ async fn the_proposal_the_reviews_and_the_integration_follow_the_task_to_done() 
 }
 
 #[tokio::test]
+async fn the_checkpoints_of_the_workspace_come_newest_first_and_stay_after_the_task_is_done() {
+    let fx = Fixture::new().await;
+    fx.proposal().await;
+    let author = by(&fx.frontend.worker);
+    fx.workspaces
+        .record_checkpoint(&author, ws(1), Some("first"))
+        .await
+        .unwrap();
+    fx.write("src/more.rs", "pub fn w() {}\n");
+    fx.workspaces
+        .record_checkpoint(&author, ws(1), Some("second"))
+        .await
+        .unwrap();
+
+    let labels = |view: &tasks::TaskDetail| -> Vec<Option<String>> {
+        view.checkpoints
+            .iter()
+            .map(|checkpoint| checkpoint.label.clone())
+            .collect()
+    };
+    let open = fx.tasks.get_view(t(1)).await.unwrap();
+    assert_eq!(
+        labels(&open),
+        vec![Some("second".to_owned()), Some("first".to_owned()), None],
+        "the workspace opened with an automatic checkpoint, the oldest"
+    );
+
+    fx.agents
+        .set_integrator(&human(), &AgentName::parse("review").unwrap(), true)
+        .await
+        .unwrap();
+    let review = fx.agents.actor(&fx.review.ctx, None).await.unwrap();
+    fx.reviews
+        .submit_review(&review, p(1), Verdict::Approve, "fine", Vec::new())
+        .await
+        .unwrap();
+    fx.reviews
+        .integrate_proposal(&review, p(1), Some(1))
+        .await
+        .unwrap();
+    let done = fx.tasks.get_view(t(1)).await.unwrap();
+    assert!(done.workspace.is_none());
+    assert_eq!(labels(&done), labels(&open));
+}
+
+#[tokio::test]
 async fn a_closed_proposal_is_not_shown_and_the_board_reports_the_last_edit() {
     let fx = Fixture::new().await;
     fx.proposal().await;

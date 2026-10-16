@@ -60,7 +60,7 @@ export function NavTabs({ slug }: { slug: string }) {
           </HrefLink>
         );
       })}
-      {/* W02 draws the create control at the end of the tab row on every screen; it opens the dialog over the board. */}
+      {/* The create control sits at the end of the tab row on every screen; it opens the dialog over the board. */}
       <HrefLink
         href={newTaskPath(slug)}
         className={cn(buttonClasses("primary", "md"), focusRing, "ml-auto")}

@@ -171,6 +171,7 @@ describe("liveStrip without the task details", () => {
     const bare = {
       activity: null,
       attention: [],
+      checkpoints: [],
       claims: task().claims,
       workspace: "ws-2",
       workspace_info: null,

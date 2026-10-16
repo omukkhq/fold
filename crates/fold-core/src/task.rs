@@ -46,15 +46,23 @@ fn single_line(text: &str) -> Option<String> {
     (!trimmed.is_empty() && !trimmed.contains(['\n', '\r'])).then(|| trimmed.to_owned())
 }
 
+/// A label name is a path segment of the label routes, and URL normalisation removes the segments `.` and `..` before a request is sent.
+fn not_a_dot_segment(line: &str) -> bool {
+    line != "." && line != ".."
+}
+
 macro_rules! define_line {
-    ($(#[$meta:meta])* $name:ident, $error:expr) => {
+    ($(#[$meta:meta])* $name:ident, $error:expr $(, $accept:expr)?) => {
         $(#[$meta])*
         #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
         pub struct $name(String);
 
         impl $name {
             pub fn parse(text: &str) -> Result<Self, TaskValueError> {
-                single_line(text).map(Self).ok_or($error)
+                single_line(text)
+                    $(.filter(|line| $accept(line)))?
+                    .map(Self)
+                    .ok_or($error)
             }
 
             pub fn as_str(&self) -> &str {
@@ -84,9 +92,10 @@ define_line!(
     TaskValueError::InvalidTitle
 );
 define_line!(
-    /// One trimmed line of text; names are compared exactly, so `Bug` and `bug` are two labels.
+    /// One trimmed line of text other than `.` and `..`; names are compared exactly, so `Bug` and `bug` are two labels.
     LabelName,
-    TaskValueError::InvalidLabelName
+    TaskValueError::InvalidLabelName,
+    not_a_dot_segment
 );
 define_line!(
     /// One trimmed line of text, unique within its task. A task's first checklist is [`ChecklistName::subtasks`].
@@ -237,6 +246,18 @@ mod tests {
             "a\nb".parse::<LabelName>(),
             Err(TaskValueError::InvalidLabelName)
         );
+    }
+
+    #[test]
+    fn a_label_name_is_never_a_dot_segment() {
+        for bad in [".", "..", " .. "] {
+            assert_eq!(LabelName::parse(bad), Err(TaskValueError::InvalidLabelName));
+        }
+        for good in ["...", ".x", "a.b", "./a"] {
+            assert_eq!(LabelName::parse(good).unwrap().as_str(), good);
+        }
+        assert_eq!(TaskTitle::parse("..").unwrap().as_str(), "..");
+        assert_eq!(ChecklistName::parse(".").unwrap().as_str(), ".");
     }
 
     #[test]

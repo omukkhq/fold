@@ -14,7 +14,7 @@ interface ToolbarProps {
   onSearch: (next: BoardSearch) => void;
   labels: readonly BoardLabel[];
   agents: readonly ProjectAgent[];
-  /** null while the board loads; the button then shows `–` as W02's loading frame draws it. */
+  /** null while the board loads; the button then shows `–`. */
   needsYou: number | null;
   summary: string;
 }

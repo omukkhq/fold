@@ -210,6 +210,10 @@ describe("person mentions", () => {
     expect(person?.mention && mentionHref("demo", person.mention)).toBe(
       "/p/demo/board?agent=frontend",
     );
+    const [, worker] = splitMentions("hi @frontend/ui now", undefined, people);
+    expect(worker?.mention && mentionHref("demo", worker.mention)).toBe(
+      "/p/demo/board?agent=frontend",
+    );
     const [, human] = splitMentions("hi @tanim now", undefined, people);
     expect(human?.mention && mentionHref("demo", human.mention)).toBeNull();
   });

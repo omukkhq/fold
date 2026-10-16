@@ -249,8 +249,45 @@ describe("patch rules", () => {
     const next = live("ws-1", "1 file, +2 -0");
     applyEvent(client, slug, guarded({ kind: "workspace_changed", ...next }));
     expect(client.getQueryData(keys.workspaceLive(slug, "ws-1"))).toEqual(next);
-    // Only the workspace diffs, picked by a predicate rather than a key, are read again.
-    expect(invalidated.every((key) => key === undefined)).toBe(true);
+    // The workspace diffs are picked by a predicate rather than a key; the directory listings of the workspace are read again by key.
+    expect(invalidated.filter((key) => key !== undefined)).toEqual([
+      JSON.stringify(keys.workspaceTrees(slug, "ws-1")),
+    ]);
+  });
+
+  it("reads the directory listings of a workspace again when it changes", () => {
+    const tree = [slug, "workspace", "ws-1", "tree", "src"];
+    const other = [slug, "workspace", "ws-2", "tree", "src"];
+    client.setQueryData(tree, []);
+    client.setQueryData(other, []);
+    applyEvent(
+      client,
+      slug,
+      guarded({ kind: "workspace_changed", ...live("ws-1", "1 file, +2 -0") }),
+    );
+    expect(client.getQueryState(tree)?.isInvalidated).toBe(true);
+    expect(client.getQueryState(other)?.isInvalidated).toBe(false);
+    client.setQueryData(tree, []);
+    applyEvent(
+      client,
+      slug,
+      guarded({ kind: "snapshot", seq: 3, workspaces: [live("ws-1", "x")] }),
+    );
+    expect(client.getQueryState(tree)?.isInvalidated).toBe(true);
+  });
+
+  it("leaves the trees and files of a revision alone when the project is read again", () => {
+    const tree = keys.revisionTree(slug, "r1", "");
+    const file = keys.revisionFile(slug, "r1", "a.txt");
+    client.setQueryData(tree, []);
+    client.setQueryData(file, {});
+    client.setQueryData(keys.repository(slug), {});
+    invalidateProject(client, slug);
+    expect(client.getQueryState(keys.repository(slug))?.isInvalidated).toBe(
+      true,
+    );
+    expect(client.getQueryState(tree)?.isInvalidated).toBe(false);
+    expect(client.getQueryState(file)?.isInvalidated).toBe(false);
   });
 
   it("leaves the workspace list and the activity list alone on a workspace_changed frame", () => {
@@ -372,8 +409,10 @@ describe("patch rules", () => {
     expect(client.getQueryData(keys.workspace(slug, "ws-2"))).toEqual({
       id: "ws-2",
     });
-    // Only the workspace diffs, picked by a predicate rather than a key, are read again.
-    expect(invalidated.every((key) => key === undefined)).toBe(true);
+    // The workspace diffs, picked by a predicate, and the directory listings of the live workspaces are read again.
+    expect(
+      invalidated.every((key) => key === undefined || key.includes('"tree"')),
+    ).toBe(true);
   });
 });
 

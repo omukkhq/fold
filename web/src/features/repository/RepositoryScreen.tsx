@@ -1,9 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
-import { FolderLock } from "lucide-react";
+import { FolderLock, SearchX } from "lucide-react";
 import { useState } from "react";
 import { olderNotListed } from "@/api/pages";
 import {
   repositoryQuery,
+  revisionQuery,
   revisionsQuery,
   treeQuery,
 } from "@/api/repositoryQueries";
@@ -14,6 +15,7 @@ import { Skeleton } from "@/components/states/Skeleton";
 import { CompareBar } from "./CompareBar";
 import { FileView } from "./FileView";
 import { mainCopyText } from "./describe";
+import { isMissingRevision, pickRevision } from "./revision";
 import { folderAt, parentDirs, parentOf } from "./search";
 import { CommitId } from "@/components/mono/CommitId";
 import { GitStatus } from "../git/GitStatus";
@@ -46,8 +48,18 @@ export function RepositoryScreen({
   const [now] = useState(() => Date.now());
 
   const listed = revisions.data?.items;
+  const pick = listed ? pickRevision(listed, revision) : null;
+  // A revision older than the listing reaches is read on its own.
+  const unlisted = useQuery({
+    ...revisionQuery(slug, pick?.kind === "unlisted" ? pick.id : ""),
+    enabled: pick?.kind === "unlisted",
+  });
   const shownRevision =
-    listed?.find((r) => r.id === revision)?.id ?? listed?.[0]?.id;
+    pick?.kind === "unlisted"
+      ? unlisted.data?.id
+      : pick?.kind === "listed"
+        ? pick.id
+        : listed?.[0]?.id;
   // One lookup of the entry's parent decides whether a mentioned path is a folder or a file; until it answers, the path opens nothing.
   const lookup = useQuery({
     ...treeQuery(slug, shownRevision ?? "", parentOf(path ?? "")),
@@ -89,7 +101,36 @@ export function RepositoryScreen({
       </div>
     );
   }
-  const selected = history.find((r) => r.id === revision)?.id ?? newest.id;
+  if (pick?.kind === "unlisted" && !unlisted.data) {
+    if (unlisted.isError && isMissingRevision(unlisted.error)) {
+      return (
+        <div className="px-24 pt-20 pb-24">
+          <EmptyPanel icon={SearchX} title={`${pick.id} does not exist`}>
+            The project has no such revision.
+          </EmptyPanel>
+        </div>
+      );
+    }
+    if (unlisted.isError) {
+      return (
+        <ErrorBanner
+          title="The revision could not load."
+          message="The daemon did not answer."
+          onRetry={() => void unlisted.refetch()}
+        />
+      );
+    }
+    return (
+      <div className="px-24 pt-20 pb-24">
+        <Skeleton />
+      </div>
+    );
+  }
+  const selected =
+    pick?.kind === "unlisted" ? pick.id : (shownRevision ?? newest.id);
+  const selectedCommit = (
+    unlisted.data ?? history.find((r) => r.id === selected)
+  )?.commit;
   const onlyFirst = history.length === 1;
   const mainCopy = mainCopyText(repository.data);
 
@@ -139,7 +180,7 @@ export function RepositoryScreen({
         <div className="flex min-h-32 flex-wrap items-center justify-between gap-10">
           <span className="flex items-center gap-10">
             <Mono className="text-bar font-semibold text-text">{selected}</Mono>
-            <CommitId commit={history.find((r) => r.id === selected)?.commit} />
+            <CommitId commit={selectedCommit} />
           </span>
           {onlyFirst ? null : (
             <CompareBar

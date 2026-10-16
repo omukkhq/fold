@@ -15,7 +15,7 @@ import { keys } from "../api/keys";
 import { createAppRouter } from "../app/router";
 import { createQueryClient } from "../app/queryClient";
 import { ThemeProvider } from "../theme/ThemeProvider";
-import { stubFetch, type StubRequest } from "../test/stubFetch";
+import { errorReply, stubFetch, type StubRequest } from "../test/stubFetch";
 import { ProjectsScreen } from "./projects/ProjectsScreen";
 import { RepositoryScreen } from "./repository/RepositoryScreen";
 
@@ -202,6 +202,16 @@ function stubRepository(revisions = REVISIONS): StubRequest[] {
         recent: revisions,
       },
     },
+    "GET /api/v1/projects/demo/revisions/r1": {
+      body: { revision: REVISIONS[4], files: [], totals: {} },
+    },
+    "GET /api/v1/projects/demo/revisions/r99": errorReply(
+      404,
+      "revision_not_found",
+    ),
+    "GET /api/v1/projects/demo/revisions/r1/tree": {
+      body: { path: "", entries: [entry("OLD.md", "file")] },
+    },
     "GET /api/v1/projects/demo/revisions/r5/tree": (request) => ({
       body: {
         path: request.search.get("path") ?? "",
@@ -383,7 +393,7 @@ describe("Repository screen", () => {
     expect(screen.getByText(/Only r1 exists/)).toBeTruthy();
   });
 
-  it("opens the revision named in the address and ignores an unknown one", async () => {
+  it("opens the revision named in the address and says an unknown one does not exist", async () => {
     renderRepository("r3");
     const list = await screen.findByRole("list", { name: "Main revisions" });
     const current = within(list)
@@ -392,11 +402,20 @@ describe("Repository screen", () => {
     expect(current?.textContent.startsWith("r3")).toBe(true);
     cleanup();
     renderRepository("r99");
-    const again = await screen.findByRole("list", { name: "Main revisions" });
-    const newest = within(again)
-      .getAllByRole("button")
-      .find((b) => b.getAttribute("aria-current") === "true");
-    expect(newest?.textContent.startsWith("r5")).toBe(true);
+    expect(await screen.findByText("r99 does not exist")).toBeTruthy();
+    expect(screen.queryByRole("list", { name: "Main revisions" })).toBeNull();
+  });
+
+  it("reads a revision the listing did not reach and shows its tree", async () => {
+    renderRepository("r1", REVISIONS.slice(0, 3));
+    expect(await screen.findByText("OLD.md")).toBeTruthy();
+    expect(screen.queryByText("README.md")).toBeNull();
+    const list = screen.getByRole("list", { name: "Main revisions" });
+    expect(
+      within(list)
+        .getAllByRole("button")
+        .some((b) => b.getAttribute("aria-current") === "true"),
+    ).toBe(false);
   });
 
   it("compares the chosen revision with the one before it", async () => {

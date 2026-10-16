@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { cn } from "@/lib/cn";
 
 interface EmptyPanelProps {
-  /** W02's empty board draws no icon, so a screen may leave it out. */
+  /** An empty board draws no icon, so a screen may leave it out. */
   icon?: LucideIcon;
   title: string;
   /** The next step, as text. */

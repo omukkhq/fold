@@ -28,10 +28,14 @@ export interface StreamOptions {
   transport: Transport;
   handlers: StreamHandlers;
   random?: () => number;
+  /** The newest stored event the caller already applied, so the first connection resumes after it. */
+  lastSeq?: number | null;
 }
 
 export interface StreamHandle {
   stop(): void;
+  /** The newest stored event seen so far, or null before any. */
+  seq(): number | null;
   /** Starts the next attempt now instead of at the end of the backoff delay; does nothing while a connection is open. */
   retry(): void;
 }
@@ -45,7 +49,7 @@ export function startStream(options: StreamOptions): StreamHandle {
   const random = options.random ?? Math.random;
   let stopped = false;
   const isStopped = () => stopped;
-  let lastSeq: number | null = null;
+  let lastSeq: number | null = options.lastSeq ?? null;
   let current: AbortController | null = null;
   let wake: (() => void) | null = null;
 
@@ -181,5 +185,6 @@ export function startStream(options: StreamOptions): StreamHandle {
     retry() {
       wake?.();
     },
+    seq: () => lastSeq,
   };
 }

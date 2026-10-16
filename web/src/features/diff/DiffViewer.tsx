@@ -12,6 +12,7 @@ import {
   layoutFile,
   listedFiles,
   shownEntry,
+  threadEnds,
 } from "./layout";
 import {
   binaryNote,
@@ -139,7 +140,9 @@ function FileBody({
       />
     );
   }
-  const layout = layoutFile(diff.hunks, expanded, limit);
+  const layout = layoutFile(diff.hunks, expanded, limit, {
+    keep: threadEnds(rows.threads ?? [], file.path),
+  });
   if (layout.rows.length === 0) {
     return (
       <p className="px-14 py-12 text-bar text-text-muted">
@@ -231,7 +234,7 @@ export function DiffViewer({
         aria-label={file.path}
         className="min-w-0 flex-1 overflow-hidden rounded-l border border-border-subtle bg-surface"
       >
-        {/* The rows' fills would cover an inset ring, so the panel has a real border; the head's padding gives a pixel to each border, as the frame's inner strokes take it. */}
+        {/* The rows' fills would cover an inset ring, so the panel has a real border; the head's padding gives up a pixel to each border, so the borders do not change the head's height. */}
         <header className="flex items-center gap-10 border-b border-border-subtle bg-bg px-14 py-9">
           <h2 className="min-w-0 flex-1 truncate font-mono text-code font-semibold text-text">
             {file.path}

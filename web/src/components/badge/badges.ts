@@ -28,11 +28,11 @@ export interface BadgeSpec {
   text: string;
   /** Classes for the fill and the text and icon colour. */
   classes: string;
-  /** Padding and type size; the frames draw three badge shapes. */
+  /** Padding and type size; a badge has one of three shapes. */
   shape: string;
 }
 
-// W07's proposal pill, W02's attention mark and W00's Blocked mark. The leading follows the size, because
+// The proposal pill, the attention mark and the Blocked mark. The leading follows the size, because
 // tailwind-merge drops a leading that comes before a size.
 const PILL = "px-8 py-2 text-meta leading-snug";
 const ATTENTION = "px-7 py-2 text-meta leading-snug";

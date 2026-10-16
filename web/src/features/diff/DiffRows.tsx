@@ -22,6 +22,7 @@ import {
   sameSelection,
   samePoint,
   tabStop,
+  threadPointsOf,
   threadsCovering,
   threadsEndingAt,
   type DiffSelection,
@@ -44,7 +45,7 @@ export interface DiffRowsProps {
 const ROW_FOCUS =
   "cursor-pointer outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring";
 
-/** A block under a line, indented past the number and sign columns as W08 draws the comment box. */
+/** A block under a line, indented past the number and sign columns. */
 function UnderLine({ children }: { children: ReactNode }) {
   return (
     <div role="row">
@@ -105,8 +106,9 @@ export function DiffRows({
     const point = pointOf(row);
     if (!point) return null;
     const key = pointKey(point);
-    const covering = threadsCovering(threads, path, point);
-    const ending = threadsEndingAt(threads, path, point);
+    const drawn = threadPointsOf(row);
+    const covering = drawn.flatMap((p) => threadsCovering(threads, path, p));
+    const ending = drawn.flatMap((p) => threadsEndingAt(threads, path, p));
     const selected = isSelected(selection, path, point);
     return (
       <Fragment key={row.key}>

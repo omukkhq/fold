@@ -110,7 +110,7 @@ function MoreLink({ slug, text }: { slug: string; text: string | null }) {
   );
 }
 
-/** W02 · loading: every column with three skeleton cards and no count. */
+/** Loading: every column with three skeleton cards and no count. */
 export function LoadingColumns() {
   return (
     <Row>
@@ -125,7 +125,7 @@ export function LoadingColumns() {
   );
 }
 
-/** W02 · empty: the five columns at zero, and the next step in the Todo column, where new tasks arrive. */
+/** Empty: the five columns at zero, and the next step in the Todo column, where new tasks arrive. */
 export function EmptyColumns({ slug }: { slug: string }) {
   return (
     <Row>

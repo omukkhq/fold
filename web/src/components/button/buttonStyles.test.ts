@@ -29,7 +29,7 @@ describe("buttonClasses", () => {
   });
 });
 
-describe("W00 button geometry", () => {
+describe("button geometry", () => {
   it("pads a ghost button 10 and the others 14 across", () => {
     expect(buttonClasses("ghost", "md")).toContain("px-10");
     for (const variant of ["primary", "secondary", "danger"] as const) {

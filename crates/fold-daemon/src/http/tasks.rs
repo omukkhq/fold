@@ -15,7 +15,7 @@ use utoipa_axum::routes;
 use super::Project;
 use super::actor::Human;
 use super::error::{ApiError, ApiJson, ErrorEnvelope};
-use super::events::DurableEventType;
+use super::events::{CheckpointSummary, DurableEventType};
 use super::reviews::ReviewVerdict;
 use crate::daemon::AppState;
 use crate::services::tasks::{self as service, ItemContent};
@@ -28,6 +28,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(board))
         .routes(routes!(list_tasks, create_task))
         .routes(routes!(get_task, update_task, delete_task))
+        .routes(routes!(attach_label, detach_label))
         .routes(routes!(archive_task))
         .routes(routes!(add_dependency))
         .routes(routes!(remove_dependency))
@@ -437,6 +438,8 @@ pub struct TaskView {
     pub activity: Option<BoardActivity>,
     /// Of the live workspace, or of the latest one when none is live; newest first.
     pub changesets: Vec<TaskChangeset>,
+    /// Of the live workspace, or of the latest one when none is live; pruned ones left out, newest first.
+    pub checkpoints: Vec<CheckpointSummary>,
     /// The open proposal, or the integrated one once it is Done.
     #[schema(required = true)]
     pub proposal: Option<TaskProposal>,
@@ -630,6 +633,11 @@ impl From<service::TaskDetail> for TaskView {
                     message: changeset.message,
                     created_at: changeset.created_at.as_millis(),
                 })
+                .collect(),
+            checkpoints: detail
+                .checkpoints
+                .iter()
+                .map(CheckpointSummary::from)
                 .collect(),
             proposal: detail.proposal.map(|proposal| TaskProposal {
                 id: proposal.id.to_string(),
@@ -965,6 +973,78 @@ pub async fn update_task(
     };
     let tasks = &project.0.tasks;
     tasks.update_task(&human.actor(), task, patch).await?;
+    Ok(Json(task_view(tasks.get_view(task).await?, Some(&human))))
+}
+
+/// Puts one existing label on a task and keeps the labels it already has. Putting a label that is already there changes nothing.
+#[utoipa::path(
+    put,
+    path = "/api/v1/projects/{slug}/tasks/{id}/labels/{name}",
+    operation_id = "attach_label",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("id" = String, Path, description = "The task id, such as T-12"),
+        ("name" = String, Path, description = "The name of an existing label"),
+    ),
+    responses(
+        (status = 200, description = "The task with its labels", body = TaskView),
+        (status = 400, description = "`invalid_id`, `invalid_name` or `invalid_label_name`", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
+        (status = 404, description = "`task_not_found`, `label_not_found` or `project_not_found`", body = ErrorEnvelope),
+        (status = 409, description = "`task_closed`: the task is archived", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn attach_label(
+    human: Human,
+    project: Project,
+    Path((_slug, task, name)): Path<(String, String, String)>,
+) -> Result<Json<TaskView>, ApiError> {
+    change_label(human, project, &task, &name, true).await
+}
+
+/// Takes one label off a task and keeps the labels it still has. Taking off a label the task does not carry changes nothing.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/projects/{slug}/tasks/{id}/labels/{name}",
+    operation_id = "detach_label",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("id" = String, Path, description = "The task id, such as T-12"),
+        ("name" = String, Path, description = "The name of the label"),
+    ),
+    responses(
+        (status = 200, description = "The task with its labels", body = TaskView),
+        (status = 400, description = "`invalid_id`, `invalid_name` or `invalid_label_name`", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
+        (status = 404, description = "`task_not_found` or `project_not_found`", body = ErrorEnvelope),
+        (status = 409, description = "`task_closed`: the task is archived", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn detach_label(
+    human: Human,
+    project: Project,
+    Path((_slug, task, name)): Path<(String, String, String)>,
+) -> Result<Json<TaskView>, ApiError> {
+    change_label(human, project, &task, &name, false).await
+}
+
+async fn change_label(
+    human: Human,
+    project: Project,
+    task: &str,
+    name: &str,
+    attach: bool,
+) -> Result<Json<TaskView>, ApiError> {
+    let task: TaskId = id(task)?;
+    let name = fold(LabelName::parse(name))?;
+    let tasks = &project.0.tasks;
+    tasks
+        .change_label(&human.actor(), task, name, attach)
+        .await?;
     Ok(Json(task_view(tasks.get_view(task).await?, Some(&human))))
 }
 

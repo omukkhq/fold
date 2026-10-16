@@ -1,5 +1,6 @@
 import {
   useMutation,
+  useQuery,
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query";
@@ -10,25 +11,27 @@ import {
   GitPullRequest,
   MessageSquarePlus,
   MessagesSquare,
+  SearchX,
   SquareKanban,
 } from "lucide-react";
 import { useState } from "react";
 import { keys } from "@/api/keys";
 import { sendMessage, type NewMessage } from "@/api/messages";
 import { olderNotListed } from "@/api/pages";
-import { messagesQuery } from "@/api/queries";
+import { messagesQuery, threadQuery } from "@/api/queries";
 import { Button } from "@/components/button/Button";
 import { Menu } from "@/components/overlay/Menu";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
+import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
 import {
   filterLabel,
   filterOptions,
   filterThreads,
-  findThread,
   type ThreadFilter,
 } from "./filters";
 import { FeedbackDialog } from "./FeedbackDialog";
+import { isMissingThread, openThread } from "./openThread";
 import { messagesHref, type MessagesSearch } from "./search";
 import { ThreadList } from "./ThreadList";
 import { ThreadPanel } from "./ThreadPanel";
@@ -84,7 +87,14 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
   };
   const options = filterOptions(data);
   const visible = filterThreads(data, filter);
-  const open = findThread(visible, search.thread) ?? visible[0] ?? null;
+  const target = openThread(data, visible, search.thread);
+  // A thread the listing did not reach is read on its own.
+  const unlisted = useQuery({
+    ...threadQuery(slug, target.kind === "unlisted" ? target.id : ""),
+    enabled: target.kind === "unlisted",
+  });
+  const open =
+    target.kind === "listed" ? target.thread : (unlisted.data ?? null);
 
   function go(next: MessagesSearch) {
     void router.navigate({ href: messagesHref(slug, next) });
@@ -170,6 +180,13 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
           </p>
         ) : null}
       </div>
+      {target.kind === "unlisted" && !unlisted.data ? (
+        <UnlistedThread
+          id={target.id}
+          error={unlisted.error}
+          onRetry={() => void unlisted.refetch()}
+        />
+      ) : null}
       {open ? (
         <ThreadPanel
           key={open.id}
@@ -193,6 +210,34 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
       />
     </div>
   );
+}
+
+function UnlistedThread({
+  id,
+  error,
+  onRetry,
+}: {
+  id: string;
+  error: unknown;
+  onRetry: () => void;
+}) {
+  if (isMissingThread(error)) {
+    return (
+      <EmptyPanel icon={SearchX} title={`${id} does not exist`}>
+        The project has no such message.
+      </EmptyPanel>
+    );
+  }
+  if (error !== null) {
+    return (
+      <ErrorBanner
+        title="The thread could not load."
+        message="The daemon did not answer."
+        onRetry={onRetry}
+      />
+    );
+  }
+  return <Skeleton className="flex-1" />;
 }
 
 export function MessagesPending() {

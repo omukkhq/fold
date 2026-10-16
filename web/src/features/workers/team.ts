@@ -419,7 +419,7 @@ export function waitsForCoders(
 }
 
 /**
- * The team as W09 draws it: the main agents first, then one group per area with its lead and the task coders under it, then the review lead with its batch reviewers.
+ * The team: the main agents first, then one group per area with its lead and the task coders under it, then the review lead with its batch reviewers.
  * A main agent is an agent fold does not supervise: the user's own Claude Code session.
  */
 export function teamGroups(input: TeamInput): TeamGroup[] {

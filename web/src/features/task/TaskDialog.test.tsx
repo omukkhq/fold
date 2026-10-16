@@ -250,6 +250,27 @@ function registerDaemon(): void {
     }
     return ok(patch(id, change));
   });
+  daemon.on(`PUT ${P}/:slug/tasks/:id/labels/:name`, (call) => {
+    const id = call.params.id ?? "";
+    const found = labels.find((l) => l.name === call.params.name);
+    const current = view(id).labels;
+    if (!found) return refuse(404, "label_not_found");
+    return ok(
+      patch(id, {
+        labels: current.some((l) => l.name === found.name)
+          ? current
+          : [...current, found],
+      }),
+    );
+  });
+  daemon.on(`DELETE ${P}/:slug/tasks/:id/labels/:name`, (call) => {
+    const id = call.params.id ?? "";
+    return ok(
+      patch(id, {
+        labels: view(id).labels.filter((l) => l.name !== call.params.name),
+      }),
+    );
+  });
   daemon.on(`GET ${P}/:slug/labels`, () => ok({ labels }));
   daemon.on(`POST ${P}/:slug/labels`, (call) => {
     const body = call.body as { name: string; color: string };
@@ -643,6 +664,24 @@ describe("the task dialog route", () => {
     expect(within(review).getByText("Auth work")).toBeTruthy();
   }, 20_000);
 
+  it("lists the checkpoints of a task whose workspace is not live", async () => {
+    patch("T-2", {
+      workspace: null,
+      checkpoints: [
+        {
+          id: "ck-7",
+          label: "before the merge",
+          automatic: false,
+          created_at: 5_000,
+        },
+      ],
+    });
+    const { dialog } = await openTask();
+    const checkpoints = region(dialog, "Checkpoints");
+    expect(within(checkpoints).getByText("ck-7")).toBeTruthy();
+    expect(within(checkpoints).queryByText("No checkpoints yet.")).toBeNull();
+  });
+
   it("shows the review claim when the daemon sends one", async () => {
     patch("T-2", {
       claims: [
@@ -686,6 +725,51 @@ describe("the task dialog route", () => {
     });
     expect(router.state.location.search).toEqual({ label: "ui" });
     expect(screen.queryByRole("dialog")).toBeNull();
+  }, 15_000);
+
+  it("shows the next task's own title in a closed editor after following a link", async () => {
+    const { dialog } = await openTask();
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Edit the title" }),
+    );
+    expect(
+      await within(dialog).findByRole("button", { name: "Save title" }),
+    ).toBeTruthy();
+    await userEvent.click(
+      within(region(dialog, "Dependencies")).getByRole("link", {
+        name: /Session cookie/,
+      }),
+    );
+    // The keyed dialog is a new element, so the next task is read from the screen.
+    const next = await screen.findByRole("dialog", {}, WAIT);
+    expect(
+      await within(next).findByRole(
+        "heading",
+        { name: "Session cookie" },
+        WAIT,
+      ),
+    ).toBeTruthy();
+    expect(
+      within(next).queryByRole("button", { name: "Save title" }),
+    ).toBeNull();
+  }, 15_000);
+
+  it("says so when the clipboard refuses the link, and resets the button on blur", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("refused"));
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    const { dialog } = await openTask();
+    const copy = within(dialog).getByRole("button", { name: "Copy link" });
+    await userEvent.click(copy);
+    expect(
+      await within(dialog).findByRole("button", { name: "Not copied" }),
+    ).toBeTruthy();
+    await userEvent.tab();
+    expect(
+      await within(dialog).findByRole("button", { name: "Copy link" }),
+    ).toBeTruthy();
   }, 15_000);
 
   it("says a task that does not exist is not there", async () => {

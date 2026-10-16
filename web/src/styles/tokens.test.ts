@@ -7,7 +7,7 @@ import tokensCss from "./tokens.css?raw";
 
 const sources = readSources(import.meta.url, "", ["ts", "tsx", "css"]);
 
-const W00_COLOURS = [
+const DESIGN_COLOURS = [
   "bg",
   "surface",
   "sunken",
@@ -71,7 +71,7 @@ const W00_COLOURS = [
   "diff-comment-marker",
   "diff-outdated",
 ];
-const W00_OTHER = [
+const DESIGN_OTHER = [
   "font-ui",
   "font-mono",
   "radius-xs",
@@ -145,11 +145,11 @@ describe("token contract", () => {
     expect([...dark.keys()].sort()).toEqual(names);
     expect([...auto.keys()].sort()).toEqual(names);
   });
-  it("carries every W00 variable", () => {
-    for (const n of W00_COLOURS) expect(light.has(n), n).toBe(true);
-    for (const n of W00_OTHER) expect(root.has(n), n).toBe(true);
+  it("carries every design variable", () => {
+    for (const n of DESIGN_COLOURS) expect(light.has(n), n).toBe(true);
+    for (const n of DESIGN_OTHER) expect(root.has(n), n).toBe(true);
   });
-  it("defines the elevations once, outside the theme blocks, as W00 draws them for both themes", () => {
+  it("defines the elevations once, outside the theme blocks, the same for both themes", () => {
     expect(root.get("elevation-card")).toBe("0 1px 2px #1a1a1f14");
     expect(root.get("elevation-dialog")).toBe("0 16px 48px #0a0a0b40");
     for (const set of [light, dark, auto]) {
@@ -169,7 +169,7 @@ describe("token contract", () => {
 });
 
 describe("fonts", () => {
-  it("bundles JetBrains Mono in the weights the frames use", () => {
+  it("bundles JetBrains Mono in the weights the screens use", () => {
     const weights = [
       ...fontsCss.matchAll(/jetbrains-mono\/latin-(\d+)\.css/g),
     ].map((m) => m[1]);

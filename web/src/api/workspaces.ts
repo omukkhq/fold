@@ -8,24 +8,8 @@ export type WorkspaceState = Schemas["WorkspaceStateView"];
 export type AttentionKind = Schemas["AttentionKind"];
 /** The daemon decides attention; the web only shows it. */
 export type AttentionItem = Schemas["AttentionItem"];
-export interface ChangesetSummary {
-  /** @example C-40 */
-  id: string;
-  message: string;
-  /** UTC milliseconds. */
-  recorded_at: number;
-  /** The revision the changeset was recorded against, the `from` of its comparison. */
-  base: string;
-}
-
-/** Fields the workspace routes leave out of `WorkspaceEntryView`. Each is optional, and the screen draws nothing for an absent one. */
-export interface WorkspaceDetails {
-  /** The changesets recorded in the workspace. */
-  changesets?: ChangesetSummary[];
-}
-
 /** A workspace with its live state when the list was read (null when not attached) and the attention items of its task. */
-export type WorkspaceEntry = Schemas["WorkspaceEntryView"] & WorkspaceDetails;
+export type WorkspaceEntry = Schemas["WorkspaceEntryView"];
 /** The working changes of an active workspace after a full scan, with its watch mode and the files the scan could not read. */
 export type WorkspaceChanges = Schemas["WorkspaceChangesView"];
 

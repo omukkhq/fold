@@ -31,11 +31,7 @@ export type TaskProposal = Schemas["TaskProposal"];
 export type TaskIntegration = Schemas["TaskIntegration"];
 export type TaskEvent = Schemas["TaskEvent"];
 
-/** The generated task read plus the checkpoints the daemon's task read does not carry; the live frame names them too. */
-export type TaskDetail = Schemas["TaskView"] & {
-  /** Newest first. */
-  checkpoints?: CheckpointSummary[];
-};
+export type TaskDetail = Schemas["TaskView"];
 
 /** Whom the feedback box can address besides the claim holder. */
 export interface MessageTargets {
@@ -159,25 +155,29 @@ export async function createLabelOn(
   await attachLabel(slug, task, label.name);
 }
 
-/** The route takes the whole label set, so the set is read again first: a label another writer added meanwhile stays. */
-async function changeLabels(
+/** Puts one label on the task; the daemon keeps the labels the task already has, so concurrent changes never undo each other. */
+export async function attachLabel(
   slug: string,
   task: string,
-  change: (names: string[]) => string[],
+  name: string,
 ): Promise<void> {
-  const current = await getTask(slug, task);
-  const names = current.labels.map((label) => label.name);
-  await update(slug, task, { labels: change(names) });
-}
-
-export function attachLabel(slug: string, task: string, name: string) {
-  return changeLabels(slug, task, (names) =>
-    names.includes(name) ? names : [...names, name],
+  await unwrap(
+    api.PUT("/api/v1/projects/{slug}/tasks/{id}/labels/{name}", {
+      params: { path: { slug, id: task, name } },
+    }),
   );
 }
 
-export function removeLabel(slug: string, task: string, name: string) {
-  return changeLabels(slug, task, (names) => names.filter((n) => n !== name));
+export async function removeLabel(
+  slug: string,
+  task: string,
+  name: string,
+): Promise<void> {
+  await unwrap(
+    api.DELETE("/api/v1/projects/{slug}/tasks/{id}/labels/{name}", {
+      params: { path: { slug, id: task, name } },
+    }),
+  );
 }
 
 /** A linked item also adds the edge "this task needs the child", so it can be refused with `dependency_cycle`. */

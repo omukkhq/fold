@@ -1,7 +1,7 @@
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 export type ButtonSize = "md" | "sm";
 
-// The frames draw strokes inside the box, so a stroke is an inset ring: a CSS border would add 2px to the size.
+// A stroke sits inside the box, so it is an inset ring: a CSS border would add 2px to the size.
 // `leading-snug` follows the type size in each string, because tailwind-merge drops a leading that comes before a size.
 const BASE =
   "inline-flex items-center justify-center gap-6 rounded-m font-medium whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-60";
@@ -15,7 +15,7 @@ const VARIANTS: Record<ButtonVariant, string> = {
     "bg-danger-soft font-semibold text-danger inset-ring inset-ring-danger",
 };
 
-/** W00 pads a ghost button 7 by 10 and the others 7 by 14; the small size is the banner's Retry, 3 by 8. */
+/** A ghost button pads 7 by 10 and the others 7 by 14; the small size is the banner's Retry, 3 by 8. */
 function sizeClasses(variant: ButtonVariant, size: ButtonSize): string {
   if (size === "sm") {
     return "px-8 py-3 text-code leading-snug";

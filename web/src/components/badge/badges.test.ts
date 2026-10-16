@@ -10,7 +10,7 @@ describe("badgeSpec", () => {
     expect(spec.shape).toMatch(/^px-\d+ py-\d+ text-[a-z]+ leading-snug$/);
   });
 
-  it("draws the blocked mark as W00 does, 3 by 8 at 11px", () => {
+  it("draws the blocked mark 3 by 8 at 11px", () => {
     expect(badgeSpec("blocked").shape).toBe(
       "px-8 py-3 text-caption leading-snug",
     );

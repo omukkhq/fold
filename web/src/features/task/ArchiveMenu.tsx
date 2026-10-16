@@ -7,7 +7,7 @@ import { Menu } from "@/components/overlay/Menu";
 import { WriteError } from "./parts";
 import { useTaskWrite } from "./useTaskWrite";
 
-/** W03's "…" menu in the dialog head. Archiving asks first, stays pending until the board has been read again and then closes the dialog. */
+/** The "…" menu in the dialog head. Archiving asks first, stays pending until the board has been read again and then closes the dialog. */
 export function ArchiveMenu({
   slug,
   task,

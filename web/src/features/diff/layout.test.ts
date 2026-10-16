@@ -12,6 +12,7 @@ import {
   layoutFile,
   listedFiles,
   pairRenames,
+  threadEnds,
   type DiffRow,
   type ExpanderRow,
   type LineRow,
@@ -171,12 +172,52 @@ describe("collapseRuns", () => {
     expect(opened).toEqual(rows);
   });
 
+  it("keeps open a run that holds the end of a thread on either side", () => {
+    const rows = hunkRows([hunk(1, 1, [add("x"), ...context(6), add("y")])]);
+    // c3 is old line 3 and new line 4.
+    for (const end of ["new:4", "old:3"]) {
+      expect(
+        collapseRuns(rows, new Set(), { ...options, keep: new Set([end]) }),
+      ).toEqual(rows);
+    }
+    expect(
+      collapseRuns(rows, new Set(), {
+        ...options,
+        keep: new Set(["old:4"]),
+      }).some((r) => r.type === "expander"),
+    ).toBe(false);
+    expect(
+      collapseRuns(rows, new Set(), {
+        ...options,
+        keep: new Set(["new:9"]),
+      }).some((r) => r.type === "expander"),
+    ).toBe(true);
+  });
+
   it("uses the default threshold of eight and edge of three", () => {
     const rows = hunkRows([hunk(1, 1, [add("x"), ...context(8), add("y")])]);
     expect(collapseRuns(rows, new Set())).toEqual(rows);
     const longer = hunkRows([hunk(1, 1, [add("x"), ...context(9), add("y")])]);
     const out = collapseRuns(longer, new Set());
     expect(out.find((r) => r.type === "expander")).toMatchObject({ hidden: 3 });
+  });
+});
+
+describe("threadEnds", () => {
+  it("names the end line and side of each thread on the file", () => {
+    const range = (path: string, side: string, end_line: number) => ({
+      range: { path, side, end_line },
+    });
+    expect(
+      threadEnds(
+        [
+          range("a.rs", "new", 4),
+          range("a.rs", "old", 7),
+          range("b.rs", "new", 1),
+        ],
+        "a.rs",
+      ),
+    ).toEqual(new Set(["new:4", "old:7"]));
   });
 });
 

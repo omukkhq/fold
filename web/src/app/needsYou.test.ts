@@ -53,7 +53,7 @@ describe("itemsFor", () => {
 });
 
 describe("needsYouGroups", () => {
-  it("groups in frame order and links each item to its screen", () => {
+  it("groups in group order and links each item to its screen", () => {
     const groups = needsYouGroups("demo", items);
     expect(groups.map((g) => g.title)).toEqual([
       "Questions",
