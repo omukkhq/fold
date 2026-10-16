@@ -227,6 +227,12 @@ describe("eventLine", () => {
     expect(line("worker.failed", { agent: "web-coder" })).toBe(
       "web-coder failed",
     );
+    expect(line("worker.refreshed", { agent: "web-lead", handoff: true })).toBe(
+      "gave web-lead a fresh context with its hand-off note",
+    );
+    expect(
+      line("worker.refreshed", { agent: "web-lead", handoff: false }),
+    ).toBe("gave web-lead a fresh context");
     expect(line("proposal.opened", { version: 1 })).toBe(
       "opened P-4 v1 for T-12",
     );

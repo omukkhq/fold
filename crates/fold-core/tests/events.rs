@@ -91,6 +91,7 @@ fn all_equals_the_plans_event_types() {
         "worker.stopped",
         "worker.failed",
         "worker.output",
+        "worker.refreshed",
     ]);
     assert_eq!(declared, expected);
 }

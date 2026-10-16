@@ -18,7 +18,7 @@ pub use integrate::{
     can_integrate, gate_report,
 };
 pub use requests::{can_claim_request, can_create_request, is_drafter, is_requester};
-pub use workers::{Starter, can_define_area, can_start_worker, can_stop_worker};
+pub use workers::{Starter, can_define_area, can_start_worker, can_stop_worker, can_write_handoff};
 
 /// A refusal by a policy gate. The code is a stable error code, so every transport reports it unchanged.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]

@@ -517,6 +517,13 @@ const SPECS: Record<EventType, Spec> = {
     icon: TriangleAlert,
     text: (e) => `${workerOf(e)} failed`,
   },
+  "worker.refreshed": {
+    icon: Bot,
+    text: (e) =>
+      e.data.handoff === true
+        ? `gave ${workerOf(e)} a fresh context with its hand-off note`
+        : `gave ${workerOf(e)} a fresh context`,
+  },
 };
 
 /** Every stored event type this build writes a line for. */

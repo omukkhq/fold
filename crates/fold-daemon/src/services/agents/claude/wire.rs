@@ -241,6 +241,16 @@ pub struct ResultMessage {
     pub permission_denials: Vec<PermissionDenial>,
     #[serde(default)]
     pub errors: Vec<String>,
+    /// Each model the process used, by name, with its context window.
+    #[serde(default, rename = "modelUsage")]
+    pub model_usage: std::collections::BTreeMap<String, ModelUsage>,
+}
+
+/// What a result reports for one model. The probe saw `contextWindow` 1000000 for Haiku.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+pub struct ModelUsage {
+    #[serde(default, rename = "contextWindow")]
+    pub context_window: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

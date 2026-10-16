@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE worker_processes SET handoff_asked_at = ?2, handoff_asked_turns = ?3\n         WHERE id = ?1 AND handoff_asked_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "51f4c1a7e33dce01dbed391ddcfb06b09ed52bcdf7b22345821b2a10538fa0a6"
+}

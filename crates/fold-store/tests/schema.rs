@@ -23,9 +23,10 @@ INSERT INTO review_batch_members (id, batch_id, proposal_id, version_id, positio
 INSERT INTO workspaces (id, number, task_id, worker_id, kind, path, base_revision_id, review_batch_id, state, created_at) VALUES (2, 2, 1, 1, 'review', 'ws/review-rb-1', 1, 1, 'active', 0);
 INSERT INTO review_batch_lines (workspace_id, member_id, path, start_line, end_line, member_start_line) VALUES (2, 1, 'a.rs', 1, 1, 1);
 INSERT INTO review_batch_comments (id, batch_id, number, body, created_at) VALUES (1, 1, 1, 'b', 0);
+INSERT INTO handoffs (agent_id, session_id, body, created_at) VALUES (1, 's', 'b', 0);
 ";
 
-const APPEND_ONLY: [&str; 11] = [
+const APPEND_ONLY: [&str; 12] = [
     "completions",
     "revisions",
     "changesets",
@@ -37,6 +38,7 @@ const APPEND_ONLY: [&str; 11] = [
     "events",
     "review_batch_lines",
     "review_batch_comments",
+    "handoffs",
 ];
 
 /// The append-only tables whose rows are derived in the transaction of a row that carries the time, so they have no `created_at` of their own.
@@ -79,6 +81,7 @@ async fn baseline_creates_every_table_of_the_data_model() {
         "counters",
         "dependencies",
         "events",
+        "handoffs",
         "integrations",
         "labels",
         "message_recipients",

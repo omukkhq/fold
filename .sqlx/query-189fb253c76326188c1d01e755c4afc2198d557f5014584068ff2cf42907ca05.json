@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT handoff_asked_turns FROM worker_processes WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "handoff_asked_turns",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "worker_processes",
+            "name": "handoff_asked_turns"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "189fb253c76326188c1d01e755c4afc2198d557f5014584068ff2cf42907ca05"
+}

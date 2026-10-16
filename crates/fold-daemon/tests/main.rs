@@ -54,6 +54,7 @@ mod event_bus;
 mod events_service;
 mod gc;
 mod git_commits;
+mod handoffs;
 mod http_agents;
 mod http_assets;
 mod http_auth;

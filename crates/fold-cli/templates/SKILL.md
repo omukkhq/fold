@@ -140,6 +140,8 @@ fold can run agents for you. Each worker agent is a headless Claude Code session
 6. fold stops a task coder when each of its tasks has an open proposal, a batch reviewer when each of its proposals has a verdict, and either one after `idle_minutes` without a turn. Call `stop_worker(name)` to stop a worker. A stopped worker keeps its session, so fold can resume it.
 7. `list_workers` shows the areas with their leads and every worker with its role, state, tasks or proposals, turns, cost and context size.
 8. A start over the limits in `.fold/config.toml` fails with `worker_limit_reached`. By default 3 workers run at a time, at most 2 in one area.
+9. A lead never loses its work to a full context. When a lead's context passes `handoff_at` of its role (60 percent of the model's context window by default) and its turn has ended, fold asks it once for a hand-off note. The lead calls `write_handoff(text)` with what it is doing, its open decisions and what comes next, then ends its turn. fold starts the lead again in a new session whose first turn holds the note and a summary of its open tasks, open proposals and unread messages. A lead that writes no note within a few turns starts fresh with the summary alone. `list_workers` shows each worker's newest note.
+10. fold does not refresh the main agent, because it is the user's own session. When your context as the main agent grows large, send yourself a hand-off note with `send_message`, run `/clear`, and read the note with `get_inbox` in the new session.
 
 Claude Code runs each worker in its auto permission mode. When auto mode cannot decide on a tool call, fold refuses that call and the worker continues without it.
 
@@ -173,6 +175,7 @@ Every error has a stable `code`, a message and a hint that names the next tool. 
 | `task_outside_area` | Start a task coder only for tasks with the label of your own area. Call `get_task` to see the labels. |
 | `area_has_lead` | The area's lead runs already. Send it a message instead. |
 | `worker_limit_reached` | Call `list_workers`. Wait until a worker stops, or stop one with `stop_worker`. |
+| `handoff_denied` | Only an area lead or the review lead writes a hand-off note. As the main agent, send yourself the note and run `/clear`. |
 
 ## Never
 

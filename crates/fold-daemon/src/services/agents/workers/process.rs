@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -25,6 +25,8 @@ use crate::services::agents::AgentError;
 use crate::services::agents::claude::{ClaudeInput, ClaudeMessage, OutgoingRequest};
 use crate::services::events::{BusMessage, EventBuffer, EventBus};
 use crate::services::projects::load_config;
+
+mod refresh;
 
 /// The programs a worker process runs. The daemon reads no environment variable, so a test points `claude` at a stand-in here.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,7 +97,7 @@ struct Running {
     input: mpsc::UnboundedSender<Input>,
     exited: watch::Receiver<bool>,
     pid: Option<u32>,
-    /// Set when the daemon stops: the process ends but the row keeps its state, so a restarted daemon resumes the worker.
+    /// Set when the daemon stops or a lead is refreshed: the process ends but the row keeps its state, so a restarted daemon resumes the worker and a refresh starts it in a new session.
     detached: Arc<AtomicBool>,
     /// Set once the process is reaped, after which its pid may belong to another process and is never signalled.
     reaped: Arc<AtomicBool>,
@@ -125,6 +127,8 @@ struct Inner {
     generation: AtomicU64,
     requests: AtomicU64,
     watch: Mutex<Option<JoinHandle<()>>>,
+    /// The leads whose fresh start is under way, so a note and a turn end that both ask for it start one session.
+    refreshing: Mutex<HashSet<AgentName>>,
 }
 
 impl Drop for Inner {
@@ -172,6 +176,7 @@ impl Supervisor {
                 generation: AtomicU64::new(0),
                 requests: AtomicU64::new(0),
                 watch: Mutex::new(None),
+                refreshing: Mutex::new(HashSet::new()),
             }),
         };
         let receiver = supervisor.inner.bus.subscribe();
@@ -500,6 +505,7 @@ impl Supervisor {
         }
         let now = self.inner.clock.now();
         let id = process.id;
+        let mut ended = None;
         let written = match change {
             _ if detached => Ok(()),
             RowChange::None => Ok(()),
@@ -526,7 +532,9 @@ impl Supervisor {
             RowChange::TurnEnded {
                 total_cost_usd,
                 usage,
+                windows,
             } => {
+                ended = Some(windows);
                 let totals = TurnTotals {
                     cost_micro_usd: process.base_cost.saturating_add(micro_usd(total_cost_usd)),
                     cache_read_tokens: usage.cache_read_input_tokens,
@@ -538,7 +546,7 @@ impl Supervisor {
                     .await
             }
         };
-        if let Err(error) = written {
+        if let Err(error) = &written {
             tracing::warn!(agent = %process.agent, code = error.code().unwrap_or("store_error"), "could not record a worker's output");
         }
         if let Ok(event) = LiveEvent::new(
@@ -547,6 +555,11 @@ impl Supervisor {
             step.data(process.agent.as_str()),
         ) {
             self.inner.bus.publish_live(event);
+        }
+        if let Some(windows) = ended
+            && written.is_ok()
+        {
+            self.after_turn(&process.agent, &windows).await;
         }
     }
 

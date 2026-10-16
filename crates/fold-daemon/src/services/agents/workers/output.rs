@@ -59,6 +59,8 @@ pub(super) enum RowChange {
     TurnEnded {
         total_cost_usd: f64,
         usage: Usage,
+        /// The context window of each model the process used, by model name.
+        windows: Vec<(String, u64)>,
     },
 }
 
@@ -131,6 +133,11 @@ pub(super) fn effect_of(message: &ClaudeMessage) -> LineEffect {
             change: RowChange::TurnEnded {
                 total_cost_usd: result.total_cost_usd,
                 usage: result.usage,
+                windows: result
+                    .model_usage
+                    .iter()
+                    .map(|(model, usage)| (model.clone(), usage.context_window))
+                    .collect(),
             },
             reply: None,
         },
@@ -252,6 +259,7 @@ mod tests {
                 RowChange::TurnEnded {
                     total_cost_usd,
                     usage,
+                    ..
                 } => Some((total_cost_usd, usage)),
                 _ => None,
             })

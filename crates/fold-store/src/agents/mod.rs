@@ -9,8 +9,13 @@ use sqlx::{SqliteConnection, SqliteExecutor};
 use crate::error::StoreError;
 use crate::workspaces::WorkspaceState;
 
+mod handoffs;
 mod workers;
 
+pub use handoffs::{
+    HandoffRow, OpenProposalRow, OpenTaskRow, handoff_asked, insert_handoff, latest_handoff,
+    open_area_proposals, open_area_tasks, refresh_session, session_handoff, set_handoff_asked,
+};
 pub use workers::{
     AreaRow, NewWorkerProcess, TurnTotals, WorkerProcessRow, bind_proposal, bind_task,
     coders_of_task, find_area, find_worker_process, insert_area, insert_worker_process, label_id,

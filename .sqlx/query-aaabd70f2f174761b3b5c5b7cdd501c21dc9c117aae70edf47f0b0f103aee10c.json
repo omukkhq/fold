@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) AS \"count!: i64\" FROM proposals p\n           WHERE p.state = 'open'\n             AND (?1 IS NULL OR EXISTS (SELECT 1 FROM task_labels l WHERE l.task_id = p.task_id AND l.label_id = ?1))",
+  "describe": {
+    "columns": [
+      {
+        "name": "count!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "aaabd70f2f174761b3b5c5b7cdd501c21dc9c117aae70edf47f0b0f103aee10c"
+}

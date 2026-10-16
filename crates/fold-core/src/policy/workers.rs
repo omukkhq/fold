@@ -98,6 +98,23 @@ pub fn can_stop_worker(
     }
 }
 
+/// Only a long-lived worker gets a fresh context: a short-lived one stops when its work is done, and the main agent is the user's own session, which clears its context itself.
+pub fn can_write_handoff(starter: &Starter) -> Result<(), PolicyDenied> {
+    match starter {
+        Starter::AreaLead(_) | Starter::ReviewLead => Ok(()),
+        Starter::MainAgent => Err(PolicyDenied {
+            code: codes::HANDOFF_DENIED,
+            message: "fold does not refresh the main agent's session",
+            hint: "send yourself the note with send_message, then run /clear",
+        }),
+        _ => Err(PolicyDenied {
+            code: codes::HANDOFF_DENIED,
+            message: "only an area lead or the review lead writes a hand-off note",
+            hint: "keep working; fold stops a short-lived worker when its work is done",
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,5 +239,23 @@ mod tests {
             codes::WORKER_STOP_DENIED
         );
         assert!(can_stop_worker(&Starter::Subagent, Role::TaskCoder, None).is_err());
+    }
+
+    #[test]
+    fn only_a_lead_writes_a_hand_off_note() {
+        assert!(can_write_handoff(&Starter::AreaLead(area("web"))).is_ok());
+        assert!(can_write_handoff(&Starter::ReviewLead).is_ok());
+        for starter in [
+            Starter::MainAgent,
+            Starter::Human,
+            Starter::ShortLived,
+            Starter::Subagent,
+            Starter::System,
+        ] {
+            assert_eq!(
+                can_write_handoff(&starter).unwrap_err().code(),
+                codes::HANDOFF_DENIED
+            );
+        }
     }
 }

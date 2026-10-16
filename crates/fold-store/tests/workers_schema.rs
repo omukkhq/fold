@@ -171,7 +171,7 @@ async fn a_worker_process_keeps_its_role_area_and_session_and_binds_its_own_kind
     );
     for change in [
         "UPDATE worker_processes SET role = 'review_lead' WHERE id = 1",
-        "UPDATE worker_processes SET session_id = 'other' WHERE id = 1",
+        "UPDATE worker_processes SET session_id = 'other', state = 'working' WHERE id = 1",
         "UPDATE worker_processes SET area_id = NULL WHERE id = 1",
         "DELETE FROM worker_processes WHERE id = 1",
     ] {

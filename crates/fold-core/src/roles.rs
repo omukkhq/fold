@@ -7,6 +7,13 @@ use crate::error::{FoldError, codes};
 use crate::ids::{ProposalId, TaskId};
 use crate::task::LabelName;
 
+mod handoff;
+
+pub use handoff::{
+    HANDOFF_REQUEST, HANDOFF_TURNS, MAX_HANDOFF_CHARS, RefreshFacts, SUMMARY_ITEMS,
+    SummaryProposal, SummaryTask, check_handoff, handoff_due, handoff_overdue, refresh_turn,
+};
+
 /// The kinds of worker agent fold starts and supervises. The main agent is the user's own interactive session and has no role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

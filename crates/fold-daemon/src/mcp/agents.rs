@@ -22,6 +22,7 @@ pub const DEFINE_AREA: &str = "define_area";
 pub const START_WORKER: &str = "start_worker";
 pub const STOP_WORKER: &str = "stop_worker";
 pub const LIST_WORKERS: &str = "list_workers";
+pub const WRITE_HANDOFF: &str = "write_handoff";
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -100,6 +101,16 @@ pub struct GetActivityInput {
     pub as_worker: Option<String>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct WriteHandoffInput {
+    /// The hand-off note for your next session, at most 8000 characters: what you are doing, your open decisions and what comes next. Tasks, proposals, reviews and messages stay in fold, so leave them out.
+    pub text: String,
+    /// The worker that makes this call. Leave it out: only a lead's main worker writes its note.
+    #[serde(rename = "as", default)]
+    pub as_worker: Option<String>,
+}
+
 pub fn tools() -> Vec<Tool> {
     vec![
         Tool::new(
@@ -129,8 +140,13 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             LIST_WORKERS,
-            "List the areas with their leads and every worker fold runs, with its role, state, bound tasks or proposals, turns, cost and context size.",
+            "List the areas with their leads and every worker fold runs, with its role, state, bound tasks or proposals, turns, cost, context size and newest hand-off note.",
             schema_for_type::<ListWorkersInput>(),
+        ),
+        Tool::new(
+            WRITE_HANDOFF,
+            "As an area lead or the review lead, store your hand-off note when fold asks for it; fold then starts you again with a fresh context whose first turn holds the note and the current fold state.",
+            schema_for_type::<WriteHandoffInput>(),
         ),
     ]
 }
@@ -234,9 +250,22 @@ pub async fn list_workers(server: &FoldServer, arguments: &JsonObject) -> Result
     let _: ListWorkersInput = parse(arguments)?;
     let areas = server.agents.list_areas().await.map_err(from_agent)?;
     let workers = server.agents.list_workers().await.map_err(from_agent)?;
+    let mut listed = Vec::with_capacity(workers.len());
+    for worker in &workers {
+        let mut value = worker_process_json(worker);
+        let note = server
+            .agents
+            .latest_handoff(&worker.agent)
+            .await
+            .map_err(from_agent)?;
+        value["handoff"] = note.map_or(Value::Null, |note| {
+            json!({"session": note.session_id, "created_at": note.created_at, "text": note.body})
+        });
+        listed.push(value);
+    }
     Ok(json!({
         "areas": areas.iter().map(area_json).collect::<Vec<_>>(),
-        "workers": workers.iter().map(worker_process_json).collect::<Vec<_>>(),
+        "workers": listed,
     }))
 }
 
@@ -323,4 +352,22 @@ pub async fn get_activity(server: &FoldServer, arguments: &JsonObject) -> Result
         .flat_map(|agent| agent.workers.iter().map(activity_json))
         .collect();
     Ok(json!({ "workers": workers }))
+}
+
+pub async fn write_handoff(
+    server: &FoldServer,
+    as_worker: Option<&WorkerName>,
+    arguments: &JsonObject,
+) -> Result<Value, FoldError> {
+    let input: WriteHandoffInput = parse(arguments)?;
+    let actor = server.actor(as_worker).await?;
+    server
+        .agents
+        .write_handoff(&actor, &input.text)
+        .await
+        .map_err(from_agent)?;
+    Ok(json!({
+        "stored": true,
+        "next": "end your turn; fold starts you again with a fresh context that reads this note",
+    }))
 }

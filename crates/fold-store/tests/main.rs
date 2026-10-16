@@ -16,6 +16,7 @@ mod counters;
 mod dependencies;
 mod events;
 mod gc;
+mod handoffs_schema;
 mod humans;
 mod integrations_schema;
 mod messages_schema;

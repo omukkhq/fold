@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 const SKILL: &str = include_str!("../templates/SKILL.md");
 const AGENTS_SECTION: &str = include_str!("../templates/agents_section.md");
 
-const FOLD_TOOLS: [&str; 71] = [
+const FOLD_TOOLS: [&str; 72] = [
     "register_agent",
     "register_worker",
     "list_agents",
@@ -75,6 +75,7 @@ const FOLD_TOOLS: [&str; 71] = [
     "edit_request_draft",
     "approve_request_draft",
     "close_request",
+    "write_handoff",
 ];
 
 /// The tools of `FOLD_TOOLS` that the MCP server lists and the skill does not teach yet. A tool leaves this list in the change that teaches it.
@@ -88,7 +89,7 @@ const PENDING_TOOLS: [&str; 6] = [
 ];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 131] = [
+const FOLD_ERROR_CODES: [&str; 132] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -220,6 +221,7 @@ const FOLD_ERROR_CODES: [&str; 131] = [
     "worker_exists",
     "worker_process_not_found",
     "main_tag_denied",
+    "handoff_denied",
 ];
 
 /// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.
@@ -238,7 +240,7 @@ const INVALID_REQUEST_REASONS: [&str; 9] = [
     "attachment_too_large",
 ];
 
-const NON_TOOL_NAMES: [&str; 16] = [
+const NON_TOOL_NAMES: [&str; 17] = [
     "stall_minutes",
     "lease_minutes",
     "request_changes",
@@ -255,6 +257,7 @@ const NON_TOOL_NAMES: [&str; 16] = [
     "task_coder",
     "batch_reviewer",
     "idle_minutes",
+    "handoff_at",
 ];
 
 const SECTIONS: [&str; 13] = [

@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT p.number AS \"number!: i64\", t.number AS \"task!: i64\", p.title FROM proposals p\n           JOIN tasks t ON t.id = p.task_id\n           WHERE p.state = 'open'\n             AND (?1 IS NULL OR EXISTS (SELECT 1 FROM task_labels l WHERE l.task_id = p.task_id AND l.label_id = ?1))\n           ORDER BY p.number LIMIT ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "task!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "title",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "title"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "75af3224b1d91089a8bae8cc7b2cec70ae5009ef93cda7c564fae9b8f92a3fdc"
+}

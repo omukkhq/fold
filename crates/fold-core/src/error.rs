@@ -149,6 +149,7 @@ define_codes! {
     WORKER_EXISTS = "worker_exists",
     WORKER_PROCESS_NOT_FOUND = "worker_process_not_found",
     MAIN_TAG_DENIED = "main_tag_denied",
+    HANDOFF_DENIED = "handoff_denied",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT t.number AS \"number!: i64\", t.status, t.title FROM tasks t\n           WHERE t.status <> 'done' AND t.archived_at IS NULL\n             AND (?1 IS NULL OR EXISTS (SELECT 1 FROM task_labels l WHERE l.task_id = t.id AND l.label_id = ?1))\n           ORDER BY t.number LIMIT ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "status",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "title",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "title"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "6f21e7cb6a5935e54e5031f51c069ff0645aa787f9f25345cd5557a72f6ac3ec"
+}

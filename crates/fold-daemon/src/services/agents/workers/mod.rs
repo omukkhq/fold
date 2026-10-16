@@ -17,6 +17,7 @@ use super::{AgentError, AgentService, main_actor};
 use crate::services::events::EventBuffer;
 use crate::services::projects::load_config;
 
+mod handoff;
 mod output;
 mod process;
 
@@ -48,6 +49,18 @@ pub(crate) fn code_of(error: &AgentError) -> &'static str {
         AgentError::Store(error) => error.code().unwrap_or("store_error"),
         AgentError::Event(_) => codes::INTERNAL_ERROR,
     }
+}
+
+/// A fresh Claude Code session id for a new worker or a lead's fresh context.
+fn new_session() -> Result<String, AgentError> {
+    let mut bytes = [0_u8; 16];
+    getrandom::fill(&mut bytes).map_err(|_| {
+        FoldError::new(
+            codes::INTERNAL_ERROR,
+            "the system could not give random bytes",
+        )
+    })?;
+    Ok(session_uuid(bytes))
 }
 
 fn invalid(message: &str, hint: &str) -> AgentError {
@@ -206,14 +219,7 @@ impl AgentService {
         }
         let config = load_config(supervisor.paths()).await?;
         let model = request.model.clone().or(config.role(role).model);
-        let mut bytes = [0_u8; 16];
-        getrandom::fill(&mut bytes).map_err(|_| {
-            FoldError::new(
-                codes::INTERNAL_ERROR,
-                "the system could not give random bytes",
-            )
-        })?;
-        let session = session_uuid(bytes);
+        let session = new_session()?;
         let by = actor.event_actor();
         let now = self.clock.now();
         let limits = config.workers.limits();

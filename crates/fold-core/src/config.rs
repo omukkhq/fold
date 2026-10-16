@@ -72,6 +72,9 @@ pub struct RoleConfig {
     /// The MCP servers the role may load, by name: `fold` and servers of the project's `.mcp.json`. Without it the role loads every server the user's own Claude Code loads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp: Option<Vec<String>>,
+    /// Only for the long-lived roles: the share of the model's context window, in percent, past which fold gives the worker a fresh context through a hand-off note.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff_at: Option<u64>,
 }
 
 /// A role's settings with the defaults filled in.
@@ -82,10 +85,15 @@ pub struct RoleSettings {
     /// `None` for a long-lived role, which never stops for being idle.
     pub idle_minutes: Option<u64>,
     pub mcp: Option<Vec<String>>,
+    /// `None` for a short-lived role, which stops when its work is done and is never refreshed.
+    pub handoff_at: Option<u64>,
 }
 
 /// How long a short-lived worker may stay idle before fold stops it, when its role sets no `idle_minutes`.
 pub const DEFAULT_IDLE_MINUTES: u64 = 15;
+
+/// The share of its model's context window, in percent, past which a long-lived worker gets a fresh context, when its role sets no `handoff_at`.
+pub const DEFAULT_HANDOFF_AT: u64 = 60;
 
 /// The `[git]` section: the branch of the project folder's repository `.git` that every integration is committed to and the folder has checked out.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -165,6 +173,9 @@ impl ProjectConfig {
             idle_minutes: (!role.is_long_lived())
                 .then(|| section.idle_minutes.unwrap_or(DEFAULT_IDLE_MINUTES)),
             mcp: section.mcp,
+            handoff_at: role
+                .is_long_lived()
+                .then(|| section.handoff_at.unwrap_or(DEFAULT_HANDOFF_AT)),
         }
     }
 
@@ -403,6 +414,13 @@ fn check_roles_section(value: &toml::Value) -> Result<(), FoldError> {
                         return Err(refused(&name, "must be a list of server names"));
                     }
                 }
+                "handoff_at" if !role.is_long_lived() => {
+                    return Err(refused(&name, "applies only to area_lead and review_lead"));
+                }
+                "handoff_at" => match value.as_integer() {
+                    Some(percent) if (1..=99).contains(&percent) => {}
+                    _ => return Err(refused(&name, "must be a whole percent from 1 to 99")),
+                },
                 _ => return Err(refused(&name, "is not a config key")),
             }
         }
@@ -579,6 +597,44 @@ mod tests {
             defaults.role(Role::TaskCoder).cache_ttl,
             CacheTtl::FiveMinutes
         );
+    }
+
+    #[test]
+    fn handoff_at_is_a_percent_for_the_long_lived_roles() {
+        let config = ProjectConfig::from_toml("[roles.review_lead]\nhandoff_at = 45\n").unwrap();
+        assert_eq!(config.role(Role::ReviewLead).handoff_at, Some(45));
+        assert_eq!(
+            config.role(Role::AreaLead).handoff_at,
+            Some(DEFAULT_HANDOFF_AT)
+        );
+        assert_eq!(config.role(Role::TaskCoder).handoff_at, None);
+        assert_eq!(config.role(Role::BatchReviewer).handoff_at, None);
+        for (text, key) in [
+            (
+                "[roles.task_coder]\nhandoff_at = 50",
+                "roles.task_coder.handoff_at",
+            ),
+            (
+                "[roles.area_lead]\nhandoff_at = 0",
+                "roles.area_lead.handoff_at",
+            ),
+            (
+                "[roles.area_lead]\nhandoff_at = 100",
+                "roles.area_lead.handoff_at",
+            ),
+            (
+                "[roles.area_lead]\nhandoff_at = \"60%\"",
+                "roles.area_lead.handoff_at",
+            ),
+        ] {
+            let error = ProjectConfig::from_toml(text).unwrap_err();
+            assert_eq!(error.code(), "invalid_config", "{text}");
+            assert_eq!(
+                error.details().cloned().map(serde_json::Value::Object),
+                Some(serde_json::json!({"key": key})),
+                "{text}"
+            );
+        }
     }
 
     #[test]

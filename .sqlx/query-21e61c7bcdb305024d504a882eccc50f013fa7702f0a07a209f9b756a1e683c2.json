@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT session_id, body, created_at FROM handoffs WHERE agent_id = ? ORDER BY id DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "session_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "handoffs",
+            "name": "session_id"
+          }
+        }
+      },
+      {
+        "name": "body",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "handoffs",
+            "name": "body"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "handoffs",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "21e61c7bcdb305024d504a882eccc50f013fa7702f0a07a209f9b756a1e683c2"
+}
