@@ -251,7 +251,7 @@ function HumanActions({
   const blockId = useId();
   const v = `v${String(proposal.summary.current_version)}`;
   const busy = actions.pending !== null;
-  if (view.kind === "version" && !view.current) {
+  if (!view.current) {
     return (
       <div className="flex flex-col gap-8 border-t border-border-subtle pt-10">
         <p className="text-code leading-snug text-text-muted">

@@ -15,10 +15,10 @@ use serde_json::{Value, json};
 use super::FoldServer;
 use super::error::{from_agent, from_review};
 use super::identity::parse;
-use super::workspaces::file_line;
+use super::workspaces::{file_diff_value, file_line};
 use crate::services::reviews::{
-    CommentInput, CommentLocation, CommentView, IntegrationOutcome, ProposalDetail, ProposalFilter,
-    ProposalSummary, ProposalView, ReviewService, integration_conflicted,
+    ChangeRange, CommentInput, CommentLocation, CommentView, IntegrationOutcome, ProposalDetail,
+    ProposalFilter, ProposalSummary, ProposalView, ReviewService, integration_conflicted,
 };
 
 pub mod batches;
@@ -26,6 +26,7 @@ pub mod batches;
 pub const CREATE_PROPOSAL: &str = "create_proposal";
 pub const LIST_PROPOSALS: &str = "list_proposals";
 pub const GET_PROPOSAL: &str = "get_proposal";
+pub const GET_PROPOSAL_DIFF: &str = "get_proposal_diff";
 pub const UPDATE_PROPOSAL: &str = "update_proposal";
 pub const CLOSE_PROPOSAL: &str = "close_proposal";
 pub const CLAIM_REVIEW: &str = "claim_review";
@@ -73,6 +74,25 @@ pub struct ProposalVersionInput {
     /// A version number, such as 2 for v2. Leave it out for the current version.
     #[serde(default)]
     pub version: Option<u32>,
+    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
+    #[serde(rename = "as", default)]
+    pub as_worker: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct GetProposalDiffInput {
+    /// The proposal, such as P-3.
+    pub id: String,
+    /// The version to read, such as 2 for v2. Leave it out for the current version.
+    #[serde(default)]
+    pub version: Option<u32>,
+    /// An earlier version, such as 1 for v1, to read only what changed since it; pass the last_reviewed version of get_proposal, the newest earlier version that has a verdict. Leave it out for the full change against the version's base.
+    #[serde(default)]
+    pub since: Option<u32>,
+    /// One changed file, such as src/lib.rs. With it the result holds that file's hunks; without it, the list of changed files.
+    #[serde(default)]
+    pub path: Option<String>,
     /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
     #[serde(rename = "as", default)]
     pub as_worker: Option<String>,
@@ -207,8 +227,13 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             GET_PROPOSAL,
-            "Read one proposal: versions, evidence, the task and its prerequisites, the review claim, reviews, comment counts, the gate report for integrating, the human review mark, the conflict report and the changed files.",
+            "Read one proposal: versions, evidence, the task and its prerequisites, the review claim, reviews, comment counts, last_reviewed (the newest earlier version that has a verdict, by any reviewer), the gate report for integrating, the human review mark, the conflict report and the changed files.",
             schema_for_type::<ProposalVersionInput>(),
+        ),
+        Tool::new(
+            GET_PROPOSAL_DIFF,
+            "Read the change of a proposal version: against its base, or with since only what changed after an earlier version, such as last_reviewed, the newest earlier version that has a verdict. Lists the changed files with line counts, or one file's hunks when you pass path. On a since change, comment with side new and the new line numbers: they are the version's own lines.",
+            schema_for_type::<GetProposalDiffInput>(),
         ),
         Tool::new(
             UPDATE_PROPOSAL,
@@ -283,6 +308,7 @@ pub async fn call(
         CREATE_PROPOSAL => create_proposal(reviews, &actor, arguments).await?,
         LIST_PROPOSALS => list_proposals(reviews, arguments).await?,
         GET_PROPOSAL => get_proposal(reviews, &actor, arguments).await?,
+        GET_PROPOSAL_DIFF => get_proposal_diff(reviews, arguments).await?,
         UPDATE_PROPOSAL => update_proposal(reviews, &actor, arguments).await?,
         CLOSE_PROPOSAL => close_proposal(reviews, &actor, arguments).await?,
         CLAIM_REVIEW => claim_review(reviews, &actor, arguments).await?,
@@ -446,6 +472,7 @@ fn view_json(view: &ProposalView) -> Value {
             "on_version": view.comments.selected,
             "outdated": view.comments.outdated,
         },
+        "last_reviewed": view.last_reviewed.map(version),
         "gates": view.gates.iter().map(gate_json).collect::<Vec<_>>(),
         "human_review": mark_json(summary.human_review.as_ref()),
         "conflict": detail.conflict,
@@ -576,6 +603,54 @@ async fn get_proposal(
         .await
         .map_err(from_review)?;
     Ok(view_json(&view))
+}
+
+async fn get_proposal_diff(
+    reviews: &ReviewService,
+    arguments: &JsonObject,
+) -> Result<Value, FoldError> {
+    let input: GetProposalDiffInput = parse(arguments)?;
+    let proposal = proposal_id(&input.id)?;
+    let range = ChangeRange {
+        version: input.version,
+        since: input.since,
+    };
+    let (shown, since, mut value) = match input.path {
+        Some(path) => {
+            let diff = reviews
+                .proposal_file_diff(proposal, range, &path)
+                .await
+                .map_err(from_review)?;
+            (diff.version, diff.since, file_diff_value(&diff.change))
+        }
+        None => {
+            let changes = reviews
+                .proposal_changes(proposal, range)
+                .await
+                .map_err(from_review)?;
+            let comparison = &changes.change;
+            let value = json!({
+                "id": proposal,
+                "from": comparison.from.label,
+                "to": comparison.to.label,
+                "files": comparison.files.iter().map(file_line).collect::<Vec<_>>(),
+                "totals": {
+                    "files": comparison.totals.files,
+                    "added": comparison.totals.added_lines,
+                    "removed": comparison.totals.removed_lines,
+                },
+            });
+            (changes.version, changes.since, value)
+        }
+    };
+    let last = reviews
+        .last_reviewed(proposal, shown)
+        .await
+        .map_err(from_review)?;
+    value["version"] = json!(version(shown));
+    value["since"] = json!(since.map(version));
+    value["last_reviewed"] = json!(last.map(version));
+    Ok(value)
 }
 
 async fn update_proposal(

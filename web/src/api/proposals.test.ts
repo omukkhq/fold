@@ -10,13 +10,18 @@ import { keys } from "./keys";
 import {
   addComment,
   getProposal,
+  getProposalChanges,
+  getProposalFileDiff,
   integrateProposal,
   listComments,
   listProposals,
   submitReview,
 } from "./proposals";
+import { comparedFile, comparison, fileDiff } from "../test/diff";
 import {
+  proposalChangesQuery,
   proposalCommentsQuery,
+  proposalFileDiffQuery,
   proposalQuery,
   proposalsQuery,
 } from "./queries";
@@ -62,6 +67,73 @@ describe("proposal reads", () => {
     const comments = await listComments("demo", "P-4");
     expect(comments.map((c) => [c.id, c.outdated])).toEqual([["rc-1", true]]);
     expect(calls[0]?.search.has("version")).toBe(false);
+  });
+});
+
+describe("proposal diff reads", () => {
+  const FILE = comparedFile("src/lib.rs", "modified");
+
+  it("reads a version's full change and the change since an earlier version", async () => {
+    const calls = stubFetch({
+      [`GET ${P}/P-4/diff`]: { body: { view: "files", ...comparison([FILE]) } },
+    });
+    const full = await getProposalChanges("demo", "P-4", {
+      version: 2,
+      since: null,
+    });
+    expect(full.files).toEqual([FILE]);
+    await getProposalChanges("demo", "P-4", { version: 2, since: 1 });
+    expect(calls.map((c) => Object.fromEntries(c.search))).toEqual([
+      { version: "2" },
+      { version: "2", since: "1" },
+    ]);
+  });
+
+  it("reads one file's hunks of the range", async () => {
+    const calls = stubFetch({
+      [`GET ${P}/P-4/diff`]: { body: { view: "file", ...fileDiff(FILE, []) } },
+    });
+    const diff = await getProposalFileDiff(
+      "demo",
+      "P-4",
+      { version: 2, since: 1 },
+      "src/lib.rs",
+    );
+    expect(diff.path).toBe("src/lib.rs");
+    expect(Object.fromEntries(calls[0]?.search ?? [])).toEqual({
+      version: "2",
+      since: "1",
+      path: "src/lib.rs",
+    });
+  });
+
+  it("refuses an answer of the other shape and rejects with the daemon's code", async () => {
+    stubFetch({
+      [`GET ${P}/P-4/diff`]: { body: { view: "file", ...fileDiff(FILE, []) } },
+      [`GET ${P}/P-5/diff`]: { body: { view: "files", ...comparison([FILE]) } },
+      [`GET ${P}/P-6/diff`]: errorReply(400, "invalid_request"),
+    });
+    const range = { version: 2, since: null };
+    await expect(getProposalChanges("demo", "P-4", range)).rejects.toSatisfy(
+      (e: unknown) => isApiError(e, "internal_error"),
+    );
+    await expect(
+      getProposalFileDiff("demo", "P-5", range, "src/lib.rs"),
+    ).rejects.toSatisfy((e: unknown) => isApiError(e, "internal_error"));
+    await expect(getProposalChanges("demo", "P-6", range)).rejects.toSatisfy(
+      (e: unknown) => isApiError(e, "invalid_request"),
+    );
+  });
+
+  it("keys a range by its version numbers, outside the proposal", () => {
+    const range = { version: 2, since: 1 };
+    expect(proposalChangesQuery("demo", "P-4", range).queryKey).toEqual(
+      keys.proposalChanges("demo", "P-4", 2, 1),
+    );
+    expect(
+      proposalFileDiffQuery("demo", "P-4", range, "a.rs").queryKey,
+    ).toEqual(keys.proposalFileDiff("demo", "P-4", 2, 1, "a.rs"));
+    expect(keys.proposalChanges("demo", "P-4", 2, 1)[1]).toBe("proposal-diff");
   });
 });
 

@@ -1,5 +1,6 @@
 import { api } from "./client";
-import { isApiError } from "./errors";
+import type { Comparison, FileDiff } from "./diff";
+import { ApiError, isApiError } from "./errors";
 import { unwrap } from "./result";
 import type { components } from "./schema";
 
@@ -60,6 +61,53 @@ export async function getProposal(
     if (isApiError(error, "proposal_not_found")) return null;
     throw error;
   }
+}
+
+/** Which change of a proposal to read: `version` against its base, or against the earlier version `since`. Both are numbers, so the answer never changes for the same range. */
+export interface ChangeRange {
+  version: number;
+  since: number | null;
+}
+
+function rangeQuery(range: ChangeRange) {
+  return range.since === null
+    ? { version: range.version }
+    : { version: range.version, since: range.since };
+}
+
+/** The changed files of a version against its base, or of what changed after `since`. */
+export async function getProposalChanges(
+  slug: string,
+  id: string,
+  range: ChangeRange,
+): Promise<Comparison> {
+  const view = await unwrap(
+    api.GET("/api/v1/projects/{slug}/proposals/{id}/diff", {
+      params: { ...base(slug, id), query: rangeQuery(range) },
+    }),
+  );
+  if (view.view !== "files") {
+    throw new ApiError("internal_error", "the daemon sent one file");
+  }
+  return view;
+}
+
+/** The hunks of one changed file of the range. On a change since an earlier version the new side's line numbers are the version's own. */
+export async function getProposalFileDiff(
+  slug: string,
+  id: string,
+  range: ChangeRange,
+  path: string,
+): Promise<FileDiff> {
+  const view = await unwrap(
+    api.GET("/api/v1/projects/{slug}/proposals/{id}/diff", {
+      params: { ...base(slug, id), query: { ...rangeQuery(range), path } },
+    }),
+  );
+  if (view.view !== "file") {
+    throw new ApiError("internal_error", "the daemon sent a file list");
+  }
+  return view;
 }
 
 /** Every comment of every version in number order; the screens place them by the version each was written on. */

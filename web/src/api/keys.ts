@@ -26,6 +26,20 @@ export const keys = {
   /** Under the proposal prefix, so every event and write that refreshes the proposal also refreshes its comments. */
   proposalComments: (slug: string, proposal: string) =>
     [slug, "proposal", proposal, "comments"] as const,
+  /** Outside the proposal prefix: a change between two version numbers never changes, so no event refreshes it. */
+  proposalChanges: (
+    slug: string,
+    proposal: string,
+    version: number,
+    since: number | null,
+  ) => [slug, "proposal-diff", proposal, version, since] as const,
+  proposalFileDiff: (
+    slug: string,
+    proposal: string,
+    version: number,
+    since: number | null,
+    path: string,
+  ) => [slug, "proposal-diff", proposal, version, since, path] as const,
   requests: (slug: string) => [slug, "requests"] as const,
   request: (slug: string, request: string) =>
     [slug, "request", request] as const,

@@ -8,6 +8,7 @@ import {
   diffThreads,
   groupByFile,
   linesText,
+  placeThreads,
   unplacedThreads,
 } from "./threads";
 
@@ -177,6 +178,24 @@ describe("placing threads", () => {
       "rc-5",
       "rc-4",
     ]);
+  });
+  it("places threads on listed files, and without the old side moves old-side threads under the diff", () => {
+    const sided = buildThreads(
+      [
+        comment(1, 1),
+        comment(2, 1, { side: "old", start_line: 5, end_line: 5 }),
+      ],
+      1,
+    );
+    const both = placeThreads(sided, ["a.sql"], true);
+    expect(both.placed.map((t) => t.id)).toEqual(["rc-1", "rc-2"]);
+    expect(both.unplaced).toEqual([]);
+    const newOnly = placeThreads(sided, ["a.sql"], false);
+    expect(newOnly.placed.map((t) => t.id)).toEqual(["rc-1"]);
+    expect(newOnly.unplaced.map((t) => t.id)).toEqual(["rc-2"]);
+    expect(
+      placeThreads(threads, ["a.sql"], true).unplaced.map((t) => t.id),
+    ).toEqual(["rc-1", "rc-2", "rc-5", "rc-4"]);
   });
 });
 

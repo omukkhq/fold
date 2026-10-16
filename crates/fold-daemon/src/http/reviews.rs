@@ -15,13 +15,14 @@ use utoipa_axum::routes;
 
 use super::Project;
 use super::actor::Human;
+use super::diff::{DiffView, comparison_view, file_view};
 use super::error::{ApiError, ApiJson, ApiQuery, ErrorEnvelope};
 use super::tasks::{HumanReviewMark, TaskStatus, TaskView, id, task_view};
-use super::workspaces::{ComparedFile, ComparisonTotals};
+use super::workspaces::{ChangeSource, ComparedFile, ComparisonTotals};
 use crate::daemon::AppState;
 use crate::services::reviews::{
-    self as service, CommentInput, CommentLocation, IntegrationOutcome, ProposalFilter,
-    ReviewCheckout, ReviewService, Turn, integration_conflicted,
+    self as service, ChangeRange, CommentInput, CommentLocation, IntegrationOutcome,
+    ProposalFilter, ReviewCheckout, ReviewService, Turn, integration_conflicted,
 };
 
 pub mod batches;
@@ -32,6 +33,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(set_human_review, clear_human_review))
         .routes(routes!(list_proposals))
         .routes(routes!(get_proposal))
+        .routes(routes!(get_proposal_diff))
         .routes(routes!(list_review_comments, add_review_comment))
         .routes(routes!(submit_review))
         .routes(routes!(integrate_proposal))
@@ -625,6 +627,9 @@ pub struct ProposalDetail {
     /// Every version's reviews, oldest first.
     pub reviews: Vec<ProposalReview>,
     pub comments: CommentCounts,
+    /// The newest version before the selected one that has a verdict, by any reviewer, agent or human: what changed since it is what is left to review.
+    #[schema(required = true)]
+    pub last_reviewed_version: Option<u32>,
     /// What stands between the requesting human and integrating the selected version.
     pub gates: Vec<ProposalGate>,
     /// The latest conflict report of the selected version.
@@ -675,6 +680,7 @@ impl From<service::ProposalView> for ProposalDetail {
                 on_version: view.comments.selected,
                 outdated: view.comments.outdated,
             },
+            last_reviewed_version: view.last_reviewed,
             gates: view.gates.into_iter().map(ProposalGate::from).collect(),
             conflict: detail.conflict.map(ConflictReportView::from),
             files: view.files.into_iter().map(ComparedFile::from).collect(),
@@ -878,6 +884,20 @@ pub struct VersionQuery {
     pub version: Option<u32>,
 }
 
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ProposalDiffQuery {
+    /// A version number; left out, the current version.
+    #[serde(default)]
+    pub version: Option<u32>,
+    /// An earlier version: the answer holds only what changed after it. Left out, the version against its base revision.
+    #[serde(default)]
+    pub since: Option<u32>,
+    /// One changed file, such as `src/lib.rs`: its new path for a rename, its old path for a deletion. With it the answer holds that file's hunks; without it, the list of changed files.
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
 fn proposal(text: &str) -> Result<ProposalId, ApiError> {
     id(text)
 }
@@ -945,6 +965,52 @@ pub async fn get_proposal(
         .view_proposal(&human.actor(), proposal(&id)?, query.version)
         .await?;
     Ok(Json(view.into()))
+}
+
+/// The change of a proposal version, calculated on request from stored trees: against its base revision, or with `since` only what changed after an earlier version. A version side is named by its changeset. On a change since an earlier version the new side's line numbers are the version's own, so a `new` line comment taken from them lands on the version.
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{slug}/proposals/{id}/diff",
+    operation_id = "get_proposal_diff",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("id" = String, Path, description = "The proposal id, such as P-3"),
+        ProposalDiffQuery,
+    ),
+    responses(
+        (status = 200, description = "The file list, or one file's hunks", body = DiffView),
+        (status = 400, description = "`invalid_id`, `invalid_path`, or `invalid_request`: the query string is not valid or `since` is not a version before the one read", body = ErrorEnvelope),
+        (status = 404, description = "`proposal_not_found`: no such proposal or version, `path_not_in_comparison`, or `project_not_found`", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn get_proposal_diff(
+    State(state): State<AppState>,
+    project: Project,
+    Path((_slug, id)): Path<(String, String)>,
+    ApiQuery(query): ApiQuery<ProposalDiffQuery>,
+) -> Result<Json<DiffView>, ApiError> {
+    let proposal = proposal(&id)?;
+    let range = ChangeRange {
+        version: query.version,
+        since: query.since,
+    };
+    let reviews = service(&state, &project);
+    let view = match query.path {
+        Some(path) => DiffView::File(file_view(
+            ChangeSource::Recorded,
+            reviews
+                .proposal_file_diff(proposal, range, &path)
+                .await?
+                .change,
+        )),
+        None => DiffView::Files(comparison_view(
+            ChangeSource::Recorded,
+            reviews.proposal_changes(proposal, range).await?.change,
+        )),
+    };
+    Ok(Json(view))
 }
 
 /// The comments of a proposal in number order, each marked outdated when it was made on an earlier version.

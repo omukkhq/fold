@@ -1,4 +1,4 @@
-import type { ProposalSummary } from "@/api/proposals";
+import type { ComparisonTotals, ProposalSummary } from "@/api/proposals";
 import type { ReviewBatch, ReviewBatchMember } from "@/api/reviews";
 import type { WorkerProcess } from "@/api/workers";
 import { reviewerActor } from "@/people/names";
@@ -86,6 +86,71 @@ export function memberRows(
         needsHuman: needsHumanOf(summary),
       };
     });
+}
+
+/** The change switch of the batch view: each member's full change, or only what changed after the newest earlier version that got a verdict, by anyone. */
+export type ChangeMode = "full" | "since";
+
+/** Only a batch with a member that has such an earlier version has something to switch. */
+export function hasSince(batch: ReviewBatch): boolean {
+  return batch.members.some((m) => m.since !== null);
+}
+
+/** `1 file · +3 −1`. */
+export function countsText(totals: ComparisonTotals): string {
+  const files = `${String(totals.files)} file${totals.files === 1 ? "" : "s"}`;
+  return `${files} · +${String(totals.added_lines)} −${String(totals.removed_lines)}`;
+}
+
+export interface MemberChange {
+  /** Null while the full change of the member is not read yet. */
+  counts: string | null;
+  note: string;
+  /** The earlier version the change is read since; null for the full change. */
+  since: number | null;
+}
+
+/** A member shows its change since the earlier version in `since` mode when it has one, and its full change otherwise. */
+export function memberChange(
+  member: ReviewBatchMember,
+  mode: ChangeMode,
+  full: ComparisonTotals | undefined,
+): MemberChange {
+  if (mode === "since" && member.since !== null) {
+    return {
+      counts: countsText(member.since.totals),
+      note: `since v${String(member.since.version)}`,
+      since: member.since.version,
+    };
+  }
+  return {
+    counts: full === undefined ? null : countsText(full),
+    note: "full change",
+    since: null,
+  };
+}
+
+/** The proposal screen opens on the change the row shows. */
+export function memberSearch(change: MemberChange | undefined): {
+  since?: number;
+} {
+  return change === undefined || change.since === null
+    ? {}
+    : { since: change.since };
+}
+
+/** Each member's change by proposal; `full` holds the full changes read so far, by proposal. */
+export function memberChanges(
+  batch: ReviewBatch,
+  mode: ChangeMode,
+  full: ReadonlyMap<string, ComparisonTotals>,
+): Map<string, MemberChange> {
+  return new Map(
+    batch.members.map((m) => [
+      m.proposal,
+      memberChange(m, mode, full.get(m.proposal)),
+    ]),
+  );
 }
 
 /** The members whose proposal conflicts with main, in merge order. */

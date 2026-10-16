@@ -478,18 +478,7 @@ impl ReviewService {
             .iter()
             .find(|view| view.version == wanted)
             .cloned()
-            .ok_or_else(|| {
-                FoldError::new(
-                    codes::PROPOSAL_NOT_FOUND,
-                    format!("{proposal} has no v{wanted}"),
-                )
-                .with_details([
-                    ("proposal", json!(proposal.to_string())),
-                    ("version", json!(wanted)),
-                    ("current_version", json!(row.current_version)),
-                ])
-                .with_hint("call get_proposal without a version to see every version")
-            })?;
+            .ok_or_else(|| version_not_found(proposal, wanted, row.current_version))?;
         let conflict = self.conflict_report(proposal, selected.version).await?;
         let task_status = tasks::get_by_number(read, row.task)
             .await?
@@ -744,6 +733,20 @@ pub(super) fn require_open(
     } else {
         Err(not_open(&row))
     }
+}
+
+pub(super) fn version_not_found(proposal: ProposalId, wanted: u32, current: u32) -> ReviewError {
+    FoldError::new(
+        codes::PROPOSAL_NOT_FOUND,
+        format!("{proposal} has no v{wanted}"),
+    )
+    .with_details([
+        ("proposal", json!(proposal.to_string())),
+        ("version", json!(wanted)),
+        ("current_version", json!(current)),
+    ])
+    .with_hint("call get_proposal without a version to see every version")
+    .into()
 }
 
 pub(super) fn proposal_not_found(proposal: ProposalId) -> ReviewError {

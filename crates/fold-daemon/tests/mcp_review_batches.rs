@@ -161,6 +161,23 @@ async fn a_reviewer_batches_checks_out_and_reviews_two_proposals_through_the_too
         listed["batches"][0]["verdicts"].as_array().unwrap().len(),
         2
     );
+
+    fx.write(2, "src/two.rs", "first\n");
+    let backend = fx.agent("backend").await;
+    fx.reviews()
+        .update_proposal(
+            &backend,
+            fold_core::ProposalId::from_number(2).unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let read = ok(&review, "get_review_batch", json!({"id": "rb-1"})).await;
+    assert_eq!(read["members"][0]["since"], Value::Null);
+    assert_eq!(
+        read["members"][1]["since"],
+        json!({"version": "v1", "files": 1, "added": 0, "removed": 1})
+    );
 }
 
 #[tokio::test]

@@ -110,6 +110,69 @@ async function setup(
 }
 
 describe("BatchScreen", () => {
+  it("switches between each member's full change and its change since the last review", async () => {
+    const user = userEvent.setup();
+    const changed = (files: number, added: number) => ({
+      body: {
+        view: "files",
+        source: "recorded",
+        from: {
+          kind: "revision",
+          id: "r17",
+          base: null,
+          task: null,
+          worker: null,
+        },
+        to: {
+          kind: "changeset",
+          id: "C-4",
+          base: null,
+          task: "T-12",
+          worker: null,
+        },
+        files: [],
+        totals: { files, added_lines: added, removed_lines: 0 },
+        warnings: [],
+      },
+    });
+    await setup(
+      batch({
+        members: [
+          member("P-3", {
+            position: 1,
+            version: 2,
+            current_version: 2,
+            since: {
+              version: 1,
+              totals: { files: 1, added_lines: 3, removed_lines: 1 },
+            },
+          }),
+          member("P-4", { position: 2, task: "T-11" }),
+        ],
+      }),
+      {
+        [`GET ${BASE}/proposals/P-3/diff`]: changed(3, 96),
+        [`GET ${BASE}/proposals/P-4/diff`]: changed(2, 40),
+      },
+    );
+    const table = screen.getByRole("table", { name: "Members" });
+    expect(within(table).getByText("1 file · +3 −1")).toBeTruthy();
+    expect(within(table).getByText("since v1")).toBeTruthy();
+    expect(await within(table).findByText("2 files · +40 −0")).toBeTruthy();
+    expect(
+      within(table).getByRole("link", { name: "P-3" }).getAttribute("href"),
+    ).toBe("/p/demo/proposals/P-3?since=1");
+    const change = screen.getByRole("group", { name: "Change" });
+    await user.click(
+      within(change).getByRole("button", { name: "Full change" }),
+    );
+    expect(await within(table).findByText("3 files · +96 −0")).toBeTruthy();
+    expect(within(table).queryByText("since v1")).toBeNull();
+    expect(
+      within(table).getByRole("link", { name: "P-3" }).getAttribute("href"),
+    ).toBe("/p/demo/proposals/P-3");
+  });
+
   it("lists the members with their verdicts, the checkout and the reviewer", async () => {
     await setup(rb3);
     const table = screen.getByRole("table", { name: "Members" });

@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use fold_core::dag::Dag;
 use fold_core::events::types;
-use fold_core::reviews::{Side, Verdict};
+use fold_core::reviews::{Side, Verdict, last_verdict_version};
 use fold_core::{
     Actor, AgentActor, CommentId, EventActor, FoldError, IdKind, NewEvent, ProposalId,
     ReviewBatchId, TaskId, Timestamp, WorkerName, WorkspaceId, codes, policy,
@@ -11,11 +11,13 @@ use fold_store::reviews::batches::{
     self, BatchRow, BatchState, MemberRelease, MemberRow, NewBatchCheckout, NewLineOrigin,
 };
 use fold_store::reviews::{self, ProposalRow, ProposalState, ReviewTarget};
-use fold_store::{StoreError, WriteTx, counters, tasks, workspaces};
+use fold_store::{Store, StoreError, WriteTx, counters, tasks, workspaces};
 use fold_vcs::batch::{BatchMember, BatchMerge, FileOrigins};
 use fold_vcs::browse;
+use fold_vcs::compare::Totals;
 use serde_json::{Value, json};
 
+use super::changes::ChangeRange;
 use super::checkouts::remove_unnamed_dir;
 use super::claims::take_review_claim;
 use super::comments::{CommentInput, CommentLocation, MAX_BODY_CHARS, check_ranges, check_shape};
@@ -27,6 +29,24 @@ use crate::services::tasks::{recompute, worker_row};
 use crate::services::workspaces::{
     ArchiveReason, WorkspaceError, WorkspaceRef, WorkspaceView, archive_in_tx,
 };
+
+/// The earlier version whose change a member shows: only an open proposal that has a version after the newest one with a verdict, or after the one it joined at, has one.
+async fn since_version(
+    store: &Store,
+    member: &MemberRow,
+    proposal: &ProposalRow,
+) -> Result<Option<u32>, ReviewError> {
+    let current = proposal.current_version;
+    if proposal.state != ProposalState::Open {
+        return Ok(None);
+    }
+    let rows = reviews::list_reviews(store.read(), member.proposal).await?;
+    let reviewed = last_verdict_version(
+        rows.iter().map(|review| (review.version, review.verdict)),
+        current,
+    );
+    Ok(reviewed.or((member.version < current).then_some(member.version)))
+}
 
 /// The fewest proposals a batch is made of; one proposal is reviewed with `submit_review`.
 const MIN_MEMBERS: usize = 2;
@@ -48,6 +68,15 @@ pub struct BatchMemberView {
     pub proposal_state: ProposalState,
     /// `None` while the proposal is in the batch.
     pub released: Option<MemberRelease>,
+    /// What an open proposal changed after an earlier version a reviewer read.
+    pub since: Option<MemberSince>,
+}
+
+/// The change of a member's current version since an earlier version: the newest one with a verdict, by anyone, else the version the member joined at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemberSince {
+    pub version: u32,
+    pub totals: Totals,
 }
 
 /// A verdict the batch gave, on the member version it reviewed.
@@ -655,6 +684,20 @@ impl ReviewService {
             let proposal = reviews::get_proposal(read, member.proposal)
                 .await?
                 .ok_or(StoreError::Corrupt("review_batch_members.proposal_id"))?;
+            let since = match since_version(&self.store, &member, &proposal).await? {
+                Some(version) => {
+                    let range = ChangeRange {
+                        version: Some(proposal.current_version),
+                        since: Some(version),
+                    };
+                    let change = self.proposal_changes(member.proposal, range).await?;
+                    Some(MemberSince {
+                        version,
+                        totals: change.change.totals,
+                    })
+                }
+                None => None,
+            };
             members.push(BatchMemberView {
                 proposal: member.proposal,
                 task: member.task,
@@ -663,6 +706,7 @@ impl ReviewService {
                 current_version: proposal.current_version,
                 proposal_state: proposal.state,
                 released: member.release,
+                since,
             });
         }
         let checkout = match batches::active_batch_checkout(read, row.id).await? {

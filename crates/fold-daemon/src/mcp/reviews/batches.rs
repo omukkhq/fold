@@ -123,7 +123,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             GET_REVIEW_BATCH,
-            "Read one review batch: members in merge order with the version each joined at and its current version, the checkout and the verdicts.",
+            "Read one review batch: members in merge order with the version each joined at, its current version and, for a member with a newer version than the newest one with a verdict or the one it joined at, since: that earlier version and the size of the change after it (read it with get_proposal_diff and since), the checkout and the verdicts.",
             schema_for_type::<ReviewBatchIdInput>(),
         ),
         Tool::new(
@@ -175,14 +175,23 @@ fn batch_json(batch: &ReviewBatchView) -> Value {
         .members
         .iter()
         .map(|member| {
-            json!({
+            let mut line = json!({
                 "proposal": member.proposal,
                 "task": member.task,
                 "version": version(member.version),
                 "current_version": version(member.current_version),
                 "proposal_state": member.proposal_state.as_str(),
                 "in_batch": member.released.is_none(),
-            })
+            });
+            if let Some(since) = &member.since {
+                line["since"] = json!({
+                    "version": version(since.version),
+                    "files": since.totals.files,
+                    "added": since.totals.added_lines,
+                    "removed": since.totals.removed_lines,
+                });
+            }
+            line
         })
         .collect();
     let verdicts: Vec<Value> = batch

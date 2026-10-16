@@ -3,7 +3,7 @@ use std::str::FromStr;
 use fold_core::{
     Actor, CheckpointId, FoldError, RevisionId, TaskId, WorkerName, WorkspaceId, codes,
 };
-use fold_vcs::compare::FileChange;
+use fold_vcs::compare::{FileChange, FileDiff};
 use fold_vcs::diff::{DiffLine, Hunk, LineKind};
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{JsonObject, Tool};
@@ -324,6 +324,23 @@ fn state_line(state: &StateSummary) -> Value {
     line
 }
 
+/// One file's hunks, as `compare_revisions` and `get_proposal_diff` give them with a path.
+pub(super) fn file_diff_value(diff: &FileDiff) -> Value {
+    let mut value = json!({
+        "path": diff.path.to_string(),
+        "change": diff.change.as_str(),
+        "binary": diff.binary,
+        "hunks": diff.hunks.iter().map(hunk_value).collect::<Vec<_>>(),
+    });
+    if let Some(old) = &diff.old_path {
+        value["old_path"] = json!(old.to_string());
+    }
+    if diff.too_large {
+        value["too_large"] = json!(true);
+    }
+    value
+}
+
 fn hunk_value(hunk: &Hunk) -> Value {
     json!({
         "old_start": hunk.old_start,
@@ -408,19 +425,7 @@ pub async fn compare_revisions(
             .diff_file(from, to, &path)
             .await
             .map_err(from_workspace)?;
-        let mut value = json!({
-            "path": diff.path.to_string(),
-            "change": diff.change.as_str(),
-            "binary": diff.binary,
-            "hunks": diff.hunks.iter().map(hunk_value).collect::<Vec<_>>(),
-        });
-        if let Some(old) = &diff.old_path {
-            value["old_path"] = json!(old.to_string());
-        }
-        if diff.too_large {
-            value["too_large"] = json!(true);
-        }
-        return Ok(value);
+        return Ok(file_diff_value(&diff));
     }
     let comparison = server
         .workspaces

@@ -1,10 +1,14 @@
 import { ActorText } from "@/people/ActorText";
 import { segmentsText, type Segments } from "@/people/segments";
 import { PersonName } from "@/people/PersonName";
-import { ChevronRight, GitCompare, GitPullRequest } from "lucide-react";
+import { ChevronRight, GitPullRequest } from "lucide-react";
 import type { ProposalDetail } from "@/api/proposals";
 import { HrefLink } from "@/app/HrefLink";
 import { TAB_LIST, tabClasses } from "@/components/overlay/tabStyles";
+import {
+  SEGMENT_LIST,
+  segmentClasses,
+} from "@/components/segments/segmentStyles";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import {
@@ -15,7 +19,12 @@ import {
   versionText,
 } from "./present";
 import { ReviewPill } from "./ReviewPill";
-import { detailHref, versionTabs, type DetailView } from "./view";
+import {
+  changeOptions,
+  detailHref,
+  versionTabs,
+  type DetailView,
+} from "./view";
 
 export function ProposalHeader({
   slug,
@@ -33,6 +42,7 @@ export function ProposalHeader({
   revision: string | null;
 }) {
   const summary = proposal.summary;
+  const options = changeOptions(proposal, view);
   const current = currentVersion(proposal);
   const meta = [
     `proposal ${versionText(summary)}`,
@@ -108,22 +118,35 @@ export function ProposalHeader({
           </span>
         ))}
       </div>
-      <nav aria-label="Versions" className={TAB_LIST}>
-        {versionTabs(proposal, view).map((tab) => {
-          const Icon = tab.compare ? GitCompare : GitPullRequest;
-          return (
+      <div className={cn(TAB_LIST, "justify-between")}>
+        <nav aria-label="Versions" className="flex items-center gap-22">
+          {versionTabs(proposal, view).map((tab) => (
             <HrefLink
               key={tab.key}
               href={detailHref(slug, summary.id, tab.search)}
               aria-current={tab.selected ? "page" : undefined}
               className={cn(tabClasses(tab.selected), focusRing)}
             >
-              <Icon aria-hidden="true" size={15} />
+              <GitPullRequest aria-hidden="true" size={15} />
               {tab.label}
             </HrefLink>
-          );
-        })}
-      </nav>
+          ))}
+        </nav>
+        {options === null ? null : (
+          <nav aria-label="Change" className={SEGMENT_LIST}>
+            {options.map((option) => (
+              <HrefLink
+                key={option.key}
+                href={detailHref(slug, summary.id, option.search)}
+                aria-current={option.selected ? "page" : undefined}
+                className={cn(segmentClasses(option.selected), focusRing)}
+              >
+                {option.label}
+              </HrefLink>
+            ))}
+          </nav>
+        )}
+      </div>
     </header>
   );
 }

@@ -383,6 +383,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/proposals/{id}/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The change of a proposal version, calculated on request from stored trees: against its base revision, or with `since` only what changed after an earlier version. A version side is named by its changeset. On a change since an earlier version the new side's line numbers are the version's own, so a `new` line comment taken from them lands on the version. */
+        get: operations["get_proposal_diff"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/proposals/{id}/integrate": {
         parameters: {
             query?: never;
@@ -2159,6 +2176,11 @@ export interface components {
             files: components["schemas"]["ComparedFile"][];
             /** @description What stands between the requesting human and integrating the selected version. */
             gates: components["schemas"]["ProposalGate"][];
+            /**
+             * Format: int32
+             * @description The newest version before the selected one that has a verdict, by any reviewer, agent or human: what changed since it is what is left to review.
+             */
+            last_reviewed_version: number | null;
             /** @description The direct prerequisites of the task. */
             prerequisites: components["schemas"]["ProposalTask"][];
             review_claim: components["schemas"]["ReviewClaim"] | null;
@@ -2602,12 +2624,19 @@ export interface components {
             /** @example P-3 */
             proposal: string;
             proposal_state: components["schemas"]["ProposalStateView"];
+            since: components["schemas"]["ReviewBatchSince"] | null;
             /** @example T-12 */
             task: string;
             /**
              * Format: int32
              * @description The version the batch reviews: the one the proposal had when it joined.
              */
+            version: number;
+        };
+        /** @description The change of a member's current version after an earlier version. */
+        ReviewBatchSince: {
+            totals: components["schemas"]["ComparisonTotals"];
+            /** Format: int32 */
             version: number;
         };
         /** @enum {string} */
@@ -5522,6 +5551,92 @@ export interface operations {
             };
             /** @description `unknown_comment_path` or `invalid_comment_range`: the lines are not in the file on that side */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_proposal_diff: {
+        parameters: {
+            query?: {
+                /** @description A version number; left out, the current version. */
+                version?: number;
+                /** @description An earlier version: the answer holds only what changed after it. Left out, the version against its base revision. */
+                since?: number;
+                /** @description One changed file, such as `src/lib.rs`: its new path for a rename, its old path for a deletion. With it the answer holds that file's hunks; without it, the list of changed files. */
+                path?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The proposal id, such as P-3 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file list, or one file's hunks */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiffView"];
+                };
+            };
+            /** @description `invalid_id`, `invalid_path`, or `invalid_request`: the query string is not valid or `since` is not a version before the one read */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `proposal_not_found`: no such proposal or version, `path_not_in_comparison`, or `project_not_found` */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

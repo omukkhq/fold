@@ -1,10 +1,12 @@
 import {
   skipToken,
   useMutation,
+  useQueries,
   useQuery,
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query";
+import { useState } from "react";
 import {
   Bot,
   Check,
@@ -19,7 +21,9 @@ import {
 } from "lucide-react";
 import { HrefLink } from "@/app/HrefLink";
 import { keys } from "@/api/keys";
+import type { ComparisonTotals } from "@/api/proposals";
 import {
+  proposalChangesQuery,
   proposalsQuery,
   reviewBatchQuery,
   sessionQuery,
@@ -31,7 +35,12 @@ import {
   buttonClasses,
   buttonIconClass,
 } from "@/components/button/buttonStyles";
+import {
+  SEGMENT_LIST,
+  segmentClasses,
+} from "@/components/segments/segmentStyles";
 import { Skeleton } from "@/components/states/Skeleton";
+import { detailHref } from "@/features/proposals/view";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { PersonName } from "@/people/PersonName";
@@ -43,11 +52,16 @@ import {
   VERDICT_TEXT,
   checkoutView,
   conflictedMembers,
+  hasSince,
+  memberChanges,
   memberCountText,
   memberRows,
+  memberSearch,
   reviewLead,
   reviewerLine,
   workerTotals,
+  type ChangeMode,
+  type MemberChange,
   type MemberRow,
   type VerdictKind,
 } from "./present";
@@ -108,6 +122,24 @@ function VerdictCell({ row }: { row: MemberRow }) {
   );
 }
 
+const CHANGE_OPTIONS: { mode: ChangeMode; label: string }[] = [
+  { mode: "full", label: "Full change" },
+  { mode: "since", label: "Since last review" },
+];
+
+function ChangeCell({ change }: { change: MemberChange | undefined }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <span className="font-mono text-code whitespace-nowrap text-text">
+        {change?.counts ?? "…"}
+      </span>
+      <span className="text-meta whitespace-nowrap text-text-muted">
+        {change?.note}
+      </span>
+    </div>
+  );
+}
+
 function StopReviewer({
   slug,
   worker,
@@ -151,6 +183,22 @@ export function BatchScreen({ slug, id }: { slug: string; id: string }) {
     queryFn: skipToken,
   });
   const rows = memberRows(batch, proposals.data ?? []);
+  const switchable = hasSince(batch);
+  const [mode, setMode] = useState<ChangeMode>("since");
+  const fullChanges = useQueries({
+    queries: batch.members.map((m) =>
+      proposalChangesQuery(slug, m.proposal, {
+        version: m.current_version,
+        since: null,
+      }),
+    ),
+  });
+  const full = new Map<string, ComparisonTotals>();
+  batch.members.forEach((m, index) => {
+    const totals = fullChanges[index]?.data?.totals;
+    if (totals) full.set(m.proposal, totals);
+  });
+  const changes = memberChanges(batch, switchable ? mode : "full", full);
   const conflicts = conflictedMembers(rows);
   const all = workers.data?.workers ?? [];
   const reviewer = all.find((w) => w.name === batch.holder) ?? null;
@@ -239,6 +287,32 @@ export function BatchScreen({ slug, id }: { slug: string; id: string }) {
               </HrefLink>
             </div>
           ))}
+          {switchable ? (
+            <div className="flex flex-wrap items-center gap-12">
+              <div role="group" aria-label="Change" className={SEGMENT_LIST}>
+                {CHANGE_OPTIONS.map((option) => (
+                  <button
+                    key={option.mode}
+                    type="button"
+                    aria-pressed={mode === option.mode}
+                    onClick={() => {
+                      setMode(option.mode);
+                    }}
+                    className={cn(
+                      segmentClasses(mode === option.mode),
+                      focusRing,
+                    )}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-bar text-text-muted">
+                A member with a newer version shows only what changed after the
+                newest earlier version that got a verdict.
+              </p>
+            </div>
+          ) : null}
           <div className="overflow-x-auto rounded-l border border-border-subtle bg-surface">
             <table className="w-full border-collapse" aria-label="Members">
               <thead className="bg-bg">
@@ -249,6 +323,7 @@ export function BatchScreen({ slug, id }: { slug: string; id: string }) {
                     "Task",
                     "Author",
                     "Version",
+                    "Change",
                     "Verdict",
                   ].map((head) => (
                     <th key={head} scope="col" className={HEAD}>
@@ -265,7 +340,11 @@ export function BatchScreen({ slug, id }: { slug: string; id: string }) {
                   >
                     <td className={cn(CELL, MONO)}>
                       <HrefLink
-                        href={`/p/${slug}/proposals/${row.proposal}`}
+                        href={detailHref(
+                          slug,
+                          row.proposal,
+                          memberSearch(changes.get(row.proposal)),
+                        )}
                         className={cn(
                           "rounded-s underline-offset-2 hover:underline",
                           focusRing,
@@ -288,6 +367,9 @@ export function BatchScreen({ slug, id }: { slug: string; id: string }) {
                       )}
                     </td>
                     <td className={cn(CELL, MONO)}>{row.version}</td>
+                    <td className={CELL}>
+                      <ChangeCell change={changes.get(row.proposal)} />
+                    </td>
                     <td className={CELL}>
                       <VerdictCell row={row} />
                     </td>

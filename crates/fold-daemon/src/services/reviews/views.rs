@@ -3,6 +3,7 @@ use fold_core::merge::{Conflict, ReportFile};
 use fold_core::policy::{
     CallerFacts, GateRefusal, GateState, IntegrateInput, ProposalFacts, gate_report,
 };
+use fold_core::reviews::last_verdict_version;
 use fold_core::{
     Actor, FoldError, ProposalId, TaskDescription, TaskId, TaskStatus, TaskTitle, codes,
 };
@@ -49,6 +50,8 @@ pub struct ProposalView {
     /// The reviews of every version, oldest first.
     pub reviews: Vec<ReviewView>,
     pub comments: CommentCounts,
+    /// The newest version before the selected one that has a verdict, by anyone: what changed since it is what is left to review.
+    pub last_reviewed: Option<u32>,
     /// In the order the integration procedure checks the gates.
     pub gates: Vec<GateState>,
     /// The files the selected version changes against its base, in path order.
@@ -57,7 +60,7 @@ pub struct ProposalView {
 }
 
 impl ReviewService {
-    /// A proposal as `caller` sees it: the detail of [`ReviewService::get_proposal`] with the task, its prerequisites, the review claim, the reviews, the comment counts, the gate report for integrating the selected version, and the files that version changes against its base. A read: it writes nothing.
+    /// A proposal as `caller` sees it: the detail of [`ReviewService::get_proposal`] with the task, its prerequisites, the review claim, the reviews, the comment counts, the newest earlier version with a verdict, the gate report for integrating the selected version, and the files that version changes against its base. A read: it writes nothing.
     pub async fn view_proposal(
         &self,
         caller: &Actor,
@@ -89,6 +92,10 @@ impl ReviewService {
             }),
             None => None,
         };
+        let last_reviewed = last_verdict_version(
+            rows.iter().map(|review| (review.version, review.verdict)),
+            detail.selected.version,
+        );
         let selected = detail.selected.version;
         let current = detail.summary.current_version;
         let mut comments = CommentCounts::default();
@@ -132,6 +139,7 @@ impl ReviewService {
             claim,
             reviews: rows,
             comments,
+            last_reviewed,
             gates,
             files: comparison.files,
             totals: comparison.totals,

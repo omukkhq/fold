@@ -167,7 +167,7 @@ fn source(from: StateRef, to: StateRef) -> ChangeSource {
     }
 }
 
-fn comparison_view(source: ChangeSource, comparison: StateComparison) -> ComparisonView {
+pub(super) fn comparison_view(source: ChangeSource, comparison: StateComparison) -> ComparisonView {
     ComparisonView {
         source,
         from: comparison.from.into(),
@@ -182,7 +182,7 @@ fn comparison_view(source: ChangeSource, comparison: StateComparison) -> Compari
     }
 }
 
-fn file_view(source: ChangeSource, diff: FileDiff) -> FileDiffView {
+pub(super) fn file_view(source: ChangeSource, diff: FileDiff) -> FileDiffView {
     FileDiffView {
         source,
         path: diff.path.to_string(),

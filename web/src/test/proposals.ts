@@ -129,6 +129,7 @@ export function proposalDetail(
     review_claim: null,
     reviews: [],
     comments: { total: 0, on_version: 0, outdated: 0 },
+    last_reviewed_version: null,
     gates: humanGates(),
     conflict: null,
     files: [],

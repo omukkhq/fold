@@ -18,10 +18,11 @@ use serde_json::{Value, json};
 /// The fixed count always puts the unread part on the footer line; real counts can add to it.
 const FOOTER: &str = "fold: ";
 
-const REVIEW_TOOLS: [&str; 12] = [
+const REVIEW_TOOLS: [&str; 13] = [
     "create_proposal",
     "list_proposals",
     "get_proposal",
+    "get_proposal_diff",
     "update_proposal",
     "close_proposal",
     "claim_review",
@@ -293,6 +294,131 @@ async fn get_proposal_shows_versions_gates_and_files() {
     assert_eq!(error["code"], "proposal_not_found");
     let error = err(&review, "get_proposal", json!({"id": "nine"})).await;
     assert_eq!(error["code"], "invalid_id");
+}
+
+/// After `request_changes` on v1 the reviewer reads only what v2 changed, and a `new` comment on those lines lands on v2. Another agent, such as a new batch reviewer, reads the same earlier verdict.
+#[tokio::test]
+async fn a_reviewer_reads_only_the_change_since_the_last_verdict() {
+    let fx = Fixture::new().await;
+    let frontend = connect(&fx, "frontend").await;
+    let review = connect(&fx, "review").await;
+    ok(&frontend, "create_workspace", json!({"task": "T-1"})).await;
+    fx.write(1, "src/lib.rs", "pub fn y() {}\n");
+    fx.write(1, "README.md", "# demo v1\n");
+    ok(
+        &frontend,
+        "create_proposal",
+        json!({"task": "T-1", "title": "Rename x"}),
+    )
+    .await;
+    let first = ok(&review, "get_proposal", json!({"id": "P-1"})).await;
+    assert_eq!(first["last_reviewed"], Value::Null);
+    ok(
+        &review,
+        "submit_review",
+        json!({"id": "P-1", "verdict": "request_changes", "body": "add z"}),
+    )
+    .await;
+    fx.write(1, "src/lib.rs", "pub fn y() {}\npub fn z() {}\n");
+    ok(&frontend, "update_proposal", json!({"id": "P-1"})).await;
+
+    let view = ok(&review, "get_proposal", json!({"id": "P-1"})).await;
+    assert_eq!(view["last_reviewed"], "v1");
+    let since = ok(
+        &review,
+        "get_proposal_diff",
+        json!({"id": "P-1", "since": 1}),
+    )
+    .await;
+    assert_eq!(since["version"], "v2");
+    assert_eq!(since["since"], "v1");
+    assert_eq!(since["last_reviewed"], "v1");
+    assert_eq!(
+        since["files"],
+        json!([{"path": "src/lib.rs", "change": "modified", "added": 1, "removed": 0}])
+    );
+    let full = ok(&review, "get_proposal_diff", json!({"id": "P-1"})).await;
+    assert_eq!(full["since"], Value::Null);
+    assert_eq!(full["from"], "r1");
+    assert_eq!(
+        full["totals"],
+        json!({"files": 2, "added": 3, "removed": 2})
+    );
+
+    let hunks = ok(
+        &review,
+        "get_proposal_diff",
+        json!({"id": "P-1", "since": 1, "path": "src/lib.rs"}),
+    )
+    .await;
+    assert_eq!(
+        hunks["hunks"],
+        json!([{"old_start": 1, "old_lines": 1, "new_start": 1, "new_lines": 2, "lines": [
+            {"kind": "context", "old_no": 1, "new_no": 1, "text": "pub fn y() {}\n"},
+            {"kind": "added", "old_no": null, "new_no": 2, "text": "pub fn z() {}\n"},
+        ]}])
+    );
+    ok(
+        &review,
+        "submit_review",
+        json!({"id": "P-1", "verdict": "comment", "body": "", "comments": [
+            {"path": "src/lib.rs", "start_line": 2, "end_line": 2, "side": "new", "body": "document z"},
+        ]}),
+    )
+    .await;
+    let comments = ok(&review, "get_review_comments", json!({"id": "P-1"})).await;
+    let comment = comments["comments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|comment| comment["body"] == "document z")
+        .unwrap();
+    assert_eq!(comment["version"], "v2");
+    assert_eq!(comment["side"], "new");
+    assert_eq!(
+        (&comment["start_line"], &comment["end_line"]),
+        (&json!(2), &json!(2))
+    );
+    assert_eq!(comment["outdated"], false);
+
+    let next = connect(&fx, "batch-reviewer-2").await;
+    let view = ok(&next, "get_proposal", json!({"id": "P-1"})).await;
+    assert_eq!(view["last_reviewed"], "v1");
+    ok(
+        &next,
+        "submit_review",
+        json!({"id": "P-1", "verdict": "request_changes", "body": "test z"}),
+    )
+    .await;
+    let view = ok(&next, "get_proposal", json!({"id": "P-1"})).await;
+    assert_eq!(view["last_reviewed"], "v1");
+    let first = ok(&next, "get_proposal", json!({"id": "P-1", "version": 1})).await;
+    assert_eq!(first["last_reviewed"], Value::Null);
+    let since = ok(
+        &next,
+        "get_proposal_diff",
+        json!({"id": "P-1", "since": 1, "path": "src/lib.rs"}),
+    )
+    .await;
+    assert_eq!(
+        (&since["version"], &since["since"], &since["last_reviewed"]),
+        (&json!("v2"), &json!("v1"), &json!("v1"))
+    );
+
+    let error = err(
+        &review,
+        "get_proposal_diff",
+        json!({"id": "P-1", "since": 2}),
+    )
+    .await;
+    assert_eq!(error["code"], "invalid_request");
+    let error = err(
+        &review,
+        "get_proposal_diff",
+        json!({"id": "P-1", "since": 1, "version": 5}),
+    )
+    .await;
+    assert_eq!(error["code"], "proposal_not_found");
 }
 
 #[tokio::test]

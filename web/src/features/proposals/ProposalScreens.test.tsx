@@ -15,6 +15,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Comparison, FileDiff } from "@/api/diff";
 import type {
+  ChangeRange,
   ProposalDetail,
   ProposalSummary,
   ReviewComment,
@@ -47,10 +48,10 @@ vi.mock("@/api/client", async (importOriginal) => {
 
 const SCHEMA = "migrations/0004_reports.sql";
 
-// The version diff is the diff seam's to read; the proposal screens only name the states it compares.
+// The version diff is the proposal diff seam's to read; the proposal screens only name the range they read.
 const diffReads = vi.hoisted(() => ({ refs: [] as string[] }));
-vi.mock("@/api/diff", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/api/diff")>();
+vi.mock("@/api/proposals", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/api/proposals")>();
   const { add, comparedFile, comparison, fileDiff, hunk, state } = await import(
     "@/test/diff"
   );
@@ -66,26 +67,28 @@ vi.mock("@/api/diff", async (importOriginal) => {
     removed_lines: 0,
     new_hash: "f".repeat(64),
   });
+  const from = (range: ChangeRange) =>
+    range.since === null ? "base" : `v${String(range.since)}`;
   return {
     ...actual,
-    getComparison: (
+    getProposalChanges: (
       _slug: string,
-      from: string | undefined,
-      to: string,
+      _id: string,
+      range: ChangeRange,
     ): Promise<Comparison> => {
-      diffReads.refs.push(`${from ?? ""}..${to}`);
+      diffReads.refs.push(`${from(range)}..v${String(range.version)}`);
       return Promise.resolve(
         comparison([file], {
           source: "recorded",
-          from: state("changeset", from ?? ""),
-          to: state("changeset", to),
+          from: state("changeset", from(range)),
+          to: state("changeset", `v${String(range.version)}`),
         }),
       );
     },
-    getFileDiff: (
+    getProposalFileDiff: (
       _slug: string,
-      _from: string | undefined,
-      _to: string,
+      _id: string,
+      _range: ChangeRange,
       path: string,
     ): Promise<FileDiff> =>
       Promise.resolve(
@@ -523,7 +526,7 @@ describe("Proposal detail", () => {
     const thread = await screen.findByRole("list", { name: "Thread rc-1" });
     expect(within(thread).getByText("on v1 · line 3 · outdated")).toBeTruthy();
     expect(within(thread).getByText("reply · v2")).toBeTruthy();
-    expect(diffReads.refs).toContain("r8..C-18");
+    expect(diffReads.refs).toContain("base..v2");
     expect(
       screen
         .getByRole("link", { name: "v2 · approved" })
@@ -535,19 +538,45 @@ describe("Proposal detail", () => {
       screen.getByRole("link", { name: "v1 · changes requested" }),
     );
     expect(await screen.findByText("on v1 · line 3")).toBeTruthy();
-    expect(diffReads.refs).toContain("r7..C-11");
+    expect(diffReads.refs).toContain("base..v1");
     expect(screen.queryByText(/outdated/)).toBeNull();
     expect(screen.getByText(/v1 is an earlier version/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Approve v2" })).toBeNull();
     expect(screen.getByText(/46 passed/)).toBeTruthy();
 
-    await user.click(screen.getByRole("link", { name: "Compare v1 → v2" }));
+    expect(screen.queryByRole("navigation", { name: "Change" })).toBeNull();
+  });
+
+  it("switches to the change since the version the review asked changes on, where a new-side comment lands on the current version", async () => {
+    const user = userEvent.setup();
+    const { container } = renderAt("/p/demo/proposals/P-4");
+    const change = await screen.findByRole("navigation", { name: "Change" });
+    expect(
+      within(change)
+        .getByRole("link", { name: "Full change" })
+        .getAttribute("aria-current"),
+    ).toBe("page");
+    await user.click(within(change).getByRole("link", { name: "Since v1" }));
     await waitFor(() => {
-      expect(diffReads.refs).toContain("C-11..C-18");
+      expect(diffReads.refs).toContain("v1..v2");
     });
-    await waitFor(() => {
-      expect(screen.queryByRole("list", { name: "Thread rc-1" })).toBeNull();
+    expect(
+      screen
+        .getByRole("link", { name: "v2 · approved" })
+        .getAttribute("aria-current"),
+    ).toBe("page");
+    await user.click(await lineCell(container, "new:4"));
+    const form = await screen.findByRole("form", {
+      name: "Comment on line 4 · new side · tanim",
     });
+    await user.type(within(form).getByLabelText("Comment"), "Since v1.");
+    await user.click(
+      within(form).getByRole("button", { name: "Add to review" }),
+    );
+    expect(await screen.findByText("Since v1.")).toBeTruthy();
+    expect(
+      writes("POST /api/v1/projects/demo/proposals/P-4/comments")[0]?.body,
+    ).toMatchObject({ path: SCHEMA, side: "new", start_line: 4, end_line: 4 });
   });
 
   it("posts a comment on one line and on a run of lines with the range the selection gives, showing it after the server answers", async () => {

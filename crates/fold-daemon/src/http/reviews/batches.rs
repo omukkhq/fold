@@ -10,6 +10,7 @@ use utoipa_axum::routes;
 use super::super::Project;
 use super::super::error::{ApiError, ApiQuery, ErrorEnvelope};
 use super::super::tasks::id;
+use super::super::workspaces::ComparisonTotals;
 use super::{ProposalStateView, ReviewVerdict, service};
 use crate::daemon::AppState;
 use crate::services::reviews::ReviewBatchView as Batch;
@@ -55,6 +56,16 @@ pub struct ReviewBatchMember {
     pub proposal_state: ProposalStateView,
     /// False once the member was removed or the batch was submitted.
     pub in_batch: bool,
+    /// For an open proposal with a version after the newest one that has a verdict, by any reviewer, or after the one it joined at: that earlier version and the size of the change after it.
+    #[schema(required = true)]
+    pub since: Option<ReviewBatchSince>,
+}
+
+/// The change of a member's current version after an earlier version.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ReviewBatchSince {
+    pub version: u32,
+    pub totals: ComparisonTotals,
 }
 
 /// A verdict the batch gave.
@@ -139,6 +150,10 @@ impl From<Batch> for ReviewBatch {
                     current_version: member.current_version,
                     proposal_state: member.proposal_state.into(),
                     in_batch: member.released.is_none(),
+                    since: member.since.map(|since| ReviewBatchSince {
+                        version: since.version,
+                        totals: since.totals.into(),
+                    }),
                 })
                 .collect(),
             checkout: batch.checkout.map(|checkout| ReviewBatchCheckout {

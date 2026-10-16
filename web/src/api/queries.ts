@@ -5,7 +5,14 @@ import { getProjectGit } from "./git";
 import { keys } from "./keys";
 import { countAwaitingHuman, listThreads } from "./messages";
 import { getProject, listProjects } from "./projects";
-import { getProposal, listComments, listProposals } from "./proposals";
+import {
+  getProposal,
+  getProposalChanges,
+  getProposalFileDiff,
+  listComments,
+  listProposals,
+  type ChangeRange,
+} from "./proposals";
 import { getRequest, getThread, listRequests } from "./requests";
 import { getReviewBatch, listReviewBatches } from "./reviews";
 import { getSession } from "./session";
@@ -87,6 +94,29 @@ export const proposalQuery = (slug: string, id: string) =>
   queryOptions({
     queryKey: keys.proposal(slug, id),
     queryFn: () => getProposal(slug, id),
+    staleTime: Infinity,
+  });
+
+export const proposalChangesQuery = (
+  slug: string,
+  id: string,
+  range: ChangeRange,
+) =>
+  queryOptions({
+    queryKey: keys.proposalChanges(slug, id, range.version, range.since),
+    queryFn: () => getProposalChanges(slug, id, range),
+    staleTime: Infinity,
+  });
+
+export const proposalFileDiffQuery = (
+  slug: string,
+  id: string,
+  range: ChangeRange,
+  path: string,
+) =>
+  queryOptions({
+    queryKey: keys.proposalFileDiff(slug, id, range.version, range.since, path),
+    queryFn: () => getProposalFileDiff(slug, id, range, path),
     staleTime: Infinity,
   });
 

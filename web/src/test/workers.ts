@@ -83,6 +83,7 @@ export function member(
     version: 1,
     current_version: 1,
     in_batch: true,
+    since: null,
     proposal_state: "open",
     ...fields,
   };

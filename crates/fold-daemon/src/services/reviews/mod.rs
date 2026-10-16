@@ -11,6 +11,7 @@ use super::tasks::TaskError;
 use super::workspaces::{WorkspaceError, WorkspaceService};
 
 mod batches;
+mod changes;
 mod checkouts;
 mod claims;
 mod comments;
@@ -24,8 +25,10 @@ mod views;
 
 pub use batches::{
     BatchCheckout, BatchComment, BatchCommentView, BatchLines, BatchMemberView, BatchReviewed,
-    BatchVerdict, BatchVerdictView, LeftOut, LeftOutReason, ReviewBatchView, SubmittedBatch,
+    BatchVerdict, BatchVerdictView, LeftOut, LeftOutReason, MemberSince, ReviewBatchView,
+    SubmittedBatch,
 };
+pub use changes::{ChangeRange, ProposalChange};
 pub use checkouts::ReviewCheckout;
 pub use claims::ReviewClaimView;
 pub use comments::{CommentInput, CommentLocation, CommentView};

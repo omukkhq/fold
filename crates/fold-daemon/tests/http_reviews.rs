@@ -201,6 +201,115 @@ async fn a_proposal_without_a_mark_counts_as_human_approved() {
 }
 
 #[tokio::test]
+async fn the_proposal_diff_reads_the_change_since_an_earlier_version() {
+    let fx = with_p1().await;
+    let p1 = fold_core::ProposalId::from_number(1).unwrap();
+    fx.reviews()
+        .submit_review(
+            &human("tanim"),
+            p1,
+            fold_core::reviews::Verdict::RequestChanges,
+            "add z",
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    fx.write(1, "src/lib.rs", "pub fn y() {}\npub fn z() {}\n");
+    let frontend = fx.agent("frontend").await;
+    fx.reviews()
+        .update_proposal(&frontend, p1, None)
+        .await
+        .unwrap();
+
+    let answer = send(&fx, Method::GET, "/proposals/P-1", None, &[TANIM]).await;
+    assert_eq!(answer.body["last_reviewed_version"], 1, "{}", answer.body);
+    let answer = send(&fx, Method::GET, "/proposals/P-1?version=1", None, &[]).await;
+    assert_eq!(
+        answer.body["last_reviewed_version"],
+        Value::Null,
+        "{}",
+        answer.body
+    );
+
+    let answer = send(&fx, Method::GET, "/proposals/P-1/diff?since=1", None, &[]).await;
+    assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
+    let since = &answer.body;
+    assert_eq!(since["view"], "files");
+    assert_eq!(since["source"], "recorded");
+    assert_eq!(since["from"]["kind"], "changeset");
+    assert_eq!(since["from"]["task"], "T-1");
+    assert_eq!(since["to"]["kind"], "changeset");
+    assert_ne!(since["from"]["id"], since["to"]["id"]);
+    assert_eq!(since["files"][0]["path"], "src/lib.rs");
+    assert_eq!(
+        (
+            &since["files"][0]["added_lines"],
+            &since["files"][0]["removed_lines"]
+        ),
+        (&json!(1), &json!(0))
+    );
+
+    let answer = send(&fx, Method::GET, "/proposals/P-1/diff?version=2", None, &[]).await;
+    assert_eq!(
+        answer.body["from"],
+        json!({"kind": "revision", "id": "r1", "base": null, "task": null, "worker": null})
+    );
+    assert_eq!(
+        answer.body["totals"],
+        json!({"files": 1, "added_lines": 2, "removed_lines": 1})
+    );
+
+    let answer = send(
+        &fx,
+        Method::GET,
+        "/proposals/P-1/diff?since=1&path=src/lib.rs",
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(answer.body["view"], "file", "{}", answer.body);
+    let lines = &answer.body["hunks"][0]["lines"];
+    assert_eq!(lines[0]["kind"], "context");
+    assert_eq!(lines[1]["kind"], "added");
+    assert_eq!(lines[1]["new_no"], 2);
+    assert_eq!(lines.as_array().unwrap().len(), 2);
+
+    for (query, status, code) in [
+        ("since=2", StatusCode::BAD_REQUEST, "invalid_request"),
+        (
+            "since=1&version=1",
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+        ),
+        (
+            "since=7&version=9",
+            StatusCode::NOT_FOUND,
+            "proposal_not_found",
+        ),
+        (
+            "since=1&path=README.md",
+            StatusCode::NOT_FOUND,
+            "path_not_in_comparison",
+        ),
+    ] {
+        let answer = send(
+            &fx,
+            Method::GET,
+            &format!("/proposals/P-1/diff?{query}"),
+            None,
+            &[],
+        )
+        .await;
+        assert_eq!((answer.status, answer.code()), (status, code), "{query}");
+    }
+    let answer = send(&fx, Method::GET, "/proposals/P-4/diff", None, &[]).await;
+    assert_eq!(
+        (answer.status, answer.code()),
+        (StatusCode::NOT_FOUND, "proposal_not_found")
+    );
+}
+
+#[tokio::test]
 async fn get_proposal_reports_the_gates_for_the_requesting_human() {
     let fx = with_p1().await;
     let answer = send(&fx, Method::GET, "/proposals/P-1", None, &[TANIM]).await;

@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 const SKILL: &str = include_str!("../templates/SKILL.md");
 const AGENTS_SECTION: &str = include_str!("../templates/agents_section.md");
 
-const FOLD_TOOLS: [&str; 73] = [
+const FOLD_TOOLS: [&str; 74] = [
     "register_agent",
     "register_worker",
     "list_agents",
@@ -51,6 +51,7 @@ const FOLD_TOOLS: [&str; 73] = [
     "create_proposal",
     "list_proposals",
     "get_proposal",
+    "get_proposal_diff",
     "update_proposal",
     "close_proposal",
     "claim_review",
@@ -236,7 +237,7 @@ const INVALID_REQUEST_REASONS: [&str; 9] = [
     "attachment_too_large",
 ];
 
-const NON_TOOL_NAMES: [&str; 19] = [
+const NON_TOOL_NAMES: [&str; 20] = [
     "stall_minutes",
     "lease_minutes",
     "request_changes",
@@ -256,6 +257,7 @@ const NON_TOOL_NAMES: [&str; 19] = [
     "handoff_at",
     "clear_max_per_area",
     "max_per_area",
+    "last_reviewed",
 ];
 
 const SECTIONS: [&str; 14] = [

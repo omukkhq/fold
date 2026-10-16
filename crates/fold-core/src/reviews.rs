@@ -235,6 +235,18 @@ pub fn human_approved_after(mark: &HumanReviewMark, reviews: &[ReviewFact], seq:
     })
 }
 
+/// The newest version before `version` that has a verdict, a comment not counted, so a reviewer of `version` can read only what changed since it. Anyone's verdict counts, an agent's or a human's: the next version is often reviewed by another agent than the earlier one, because each batch reviewer fold starts is an agent of its own.
+pub fn last_verdict_version(
+    reviews: impl IntoIterator<Item = (u32, Verdict)>,
+    version: u32,
+) -> Option<u32> {
+    reviews
+        .into_iter()
+        .filter(|(reviewed, verdict)| *verdict != Verdict::Comment && *reviewed < version)
+        .map(|(reviewed, _)| reviewed)
+        .max()
+}
+
 fn last_request_changes(reviews: &[ReviewFact]) -> Option<u64> {
     reviews
         .iter()
@@ -293,6 +305,24 @@ mod tests {
             approver: Approver::IntegratorAgent,
             ..fact(verdict, seq)
         }
+    }
+
+    #[test]
+    fn last_verdict_version_is_the_newest_earlier_version_with_a_verdict() {
+        let rows = [
+            (1, Verdict::RequestChanges),
+            (2, Verdict::Comment),
+            (2, Verdict::RequestChanges),
+            (3, Verdict::Comment),
+            (4, Verdict::Approve),
+        ];
+        assert_eq!(last_verdict_version(rows, 1), None);
+        assert_eq!(last_verdict_version(rows, 2), Some(1));
+        assert_eq!(last_verdict_version(rows, 3), Some(2));
+        assert_eq!(last_verdict_version(rows, 4), Some(2));
+        assert_eq!(last_verdict_version(rows, 5), Some(4));
+        assert_eq!(last_verdict_version([(1, Verdict::Comment)], 2), None);
+        assert_eq!(last_verdict_version([], 2), None);
     }
 
     fn mark(reviewer: Option<&str>) -> HumanReviewMark {

@@ -11,15 +11,16 @@ import {
   addComment,
   integrateProposal,
   submitReview,
+  type ChangeRange,
   type NewComment,
   type NewReview,
   type ProposalDetail,
   type ReviewComment,
 } from "@/api/proposals";
 import {
-  comparisonQuery,
-  fileDiffQuery,
+  proposalChangesQuery,
   proposalCommentsQuery,
+  proposalFileDiffQuery,
   proposalQuery,
 } from "@/api/queries";
 import { HrefLink } from "@/app/HrefLink";
@@ -46,8 +47,11 @@ import { integrationOf, mainHead } from "./integration";
 import { ProposalHeader } from "./ProposalHeader";
 import { SidePanel } from "./SidePanel";
 import { CommentComposer, ThreadBox } from "./Threads";
-import { buildThreads, diffThreads, unplacedThreads } from "./threads";
+import { buildThreads, placeThreads } from "./threads";
 import {
+  OLD_SIDE_NOTE,
+  commentsOnSide,
+  emptyChangeText,
   resolveView,
   shownVersion,
   type DetailSearch,
@@ -69,12 +73,12 @@ function failureText(error: unknown): string {
 
 function useFileDiff(
   slug: string,
-  from: string,
-  to: string,
+  id: string,
+  range: ChangeRange,
   path: string | null,
 ): FileDiffView {
   const query = useQuery({
-    ...fileDiffQuery(slug, from, to, path ?? ""),
+    ...proposalFileDiffQuery(slug, id, range, path ?? ""),
     enabled: path !== null,
   });
   if (query.isError) {
@@ -116,23 +120,24 @@ function DiffArea({
   onSearch,
   onComment,
 }: DiffAreaProps) {
-  const from = view.kind === "compare" ? view.fromRef : view.from;
-  const comparison = useQuery(comparisonQuery(slug, from, view.to));
+  const id = proposal.summary.id;
+  const comparison = useQuery(proposalChangesQuery(slug, id, view.range));
   const [selection, setSelection] = useState<DiffSelection | null>(null);
   const files = comparison.data ? listedFiles(comparison.data.files) : [];
   const file = currentFile(files, search.path);
   const fileDiff = useFileDiff(
     slug,
-    from,
-    view.to,
+    id,
+    view.range,
     file !== null && fileBody(file) === "text" ? file.path : null,
   );
   const version = shownVersion(view);
-  const threads = version === null ? [] : buildThreads(comments, version);
+  const threads = buildThreads(comments, version);
   const byId = new Map(threads.map((t) => [t.id, t]));
-  const unplaced = unplacedThreads(
+  const { placed, unplaced } = placeThreads(
     threads,
     files.map((f) => f.path),
+    view.kind === "version",
   );
   const composer = human !== null && canComment(proposal, human, version);
 
@@ -150,12 +155,8 @@ function DiffArea({
   const data = comparison.data;
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-16">
-      {data === null || files.length === 0 ? (
-        <EmptyPanel title={data === null ? "No diff" : "No changes"}>
-          {data === null
-            ? `fold has no diff for ${view.kind === "compare" ? `${view.fromLabel} and ${view.label}` : view.label}.`
-            : `${view.label} holds the same files as its base.`}
-        </EmptyPanel>
+      {files.length === 0 ? (
+        <EmptyPanel title="No changes">{emptyChangeText(view)}</EmptyPanel>
       ) : (
         <DiffViewer
           comparison={data}
@@ -168,7 +169,7 @@ function DiffArea({
           fileDiff={fileDiff}
           selection={selection}
           onSelect={setSelection}
-          threads={diffThreads(threads)}
+          threads={placed}
           renderThread={(anchor) => {
             const thread = byId.get(anchor.id);
             return thread ? (
@@ -177,22 +178,25 @@ function DiffArea({
           }}
           renderComposer={
             composer
-              ? (sel) => (
-                  <CommentComposer
-                    slug={slug}
-                    key={`${sel.path}:${sel.side}:${String(sel.start_line)}:${String(sel.end_line)}`}
-                    selection={sel}
-                    human={human}
-                    failureText={failureText}
-                    onCancel={() => {
-                      setSelection(null);
-                    }}
-                    onSubmit={async (body) => {
-                      await onComment({ ...sel, body });
-                      setSelection(null);
-                    }}
-                  />
-                )
+              ? (sel) =>
+                  !commentsOnSide(view, sel.side) ? (
+                    <p className="text-code text-text-muted">{OLD_SIDE_NOTE}</p>
+                  ) : (
+                    <CommentComposer
+                      slug={slug}
+                      key={`${sel.path}:${sel.side}:${String(sel.start_line)}:${String(sel.end_line)}`}
+                      selection={sel}
+                      human={human}
+                      failureText={failureText}
+                      onCancel={() => {
+                        setSelection(null);
+                      }}
+                      onSubmit={async (body) => {
+                        await onComment({ ...sel, body });
+                        setSelection(null);
+                      }}
+                    />
+                  )
               : undefined
           }
         />
@@ -319,7 +323,7 @@ export function ProposalDetailScreen({
       ) : null}
       <div className="flex items-start gap-20 px-24 pt-16 pb-24">
         <DiffArea
-          key={`${view.kind}:${view.to}`}
+          key={`${String(view.range.version)}:${String(view.range.since)}`}
           slug={slug}
           proposal={data}
           comments={comments.data ?? []}

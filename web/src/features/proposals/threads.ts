@@ -190,6 +190,30 @@ export function unplacedThreads(
   return threads.filter((t) => t.range === null || !listed.has(t.range.path));
 }
 
+export interface PlacedThreads {
+  /** The anchors the diff viewer draws threads at. */
+  placed: DiffThread[];
+  /** The threads listed under the diff. */
+  unplaced: CommentThread[];
+}
+
+/** Places threads on a diff of `listedPaths`. Without the old side, as on a change since an earlier version whose old lines no comment reads, a thread on the old side joins the threads the diff cannot place. */
+export function placeThreads(
+  threads: readonly CommentThread[],
+  listedPaths: readonly string[],
+  oldSide: boolean,
+): PlacedThreads {
+  const listed = new Set(listedPaths);
+  const onDiff = (t: CommentThread) =>
+    t.range !== null &&
+    listed.has(t.range.path) &&
+    (oldSide || t.range.side === "new");
+  return {
+    placed: diffThreads(threads.filter(onDiff)),
+    unplaced: threads.filter((t) => !onDiff(t)),
+  };
+}
+
 export function linesText(range: DiffSelection): string {
   return range.start_line === range.end_line
     ? `line ${String(range.start_line)}`

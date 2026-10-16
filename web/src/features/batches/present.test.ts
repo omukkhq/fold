@@ -3,6 +3,11 @@ import { batch, member, proposalSummary, workerProcess } from "@/test/workers";
 import {
   checkoutView,
   conflictedMembers,
+  countsText,
+  hasSince,
+  memberChange,
+  memberChanges,
+  memberSearch,
   memberCountText,
   memberRows,
   reviewLead,
@@ -151,5 +156,51 @@ describe("batch texts", () => {
     });
     expect(reviewerLine(reviewer)).toBe("Batch reviewer · sonnet");
     expect(reviewerLine({ ...reviewer, model: null })).toBe("Batch reviewer");
+  });
+});
+
+describe("the change switch", () => {
+  const since = {
+    version: 1,
+    totals: { files: 1, added_lines: 3, removed_lines: 1 },
+  };
+  const full = { files: 2, added_lines: 40, removed_lines: 0 };
+
+  it("is offered only when a member has an earlier reviewed version", () => {
+    expect(hasSince(batch({ members: [member("P-3")] }))).toBe(false);
+    expect(hasSince(batch({ members: [member("P-3", { since })] }))).toBe(true);
+  });
+
+  it("counts files and lines", () => {
+    expect(countsText(full)).toBe("2 files · +40 −0");
+    expect(countsText(since.totals)).toBe("1 file · +3 −1");
+  });
+
+  it("shows the change since the earlier version, else the full change once it is read", () => {
+    const back = member("P-3", { version: 2, current_version: 2, since });
+    expect(memberChange(back, "since", full)).toEqual({
+      counts: "1 file · +3 −1",
+      note: "since v1",
+      since: 1,
+    });
+    expect(memberChange(back, "full", full)).toEqual({
+      counts: "2 files · +40 −0",
+      note: "full change",
+      since: null,
+    });
+    expect(memberChange(member("P-4"), "since", undefined)).toEqual({
+      counts: null,
+      note: "full change",
+      since: null,
+    });
+    const changes = memberChanges(
+      batch({ members: [back, member("P-4")] }),
+      "since",
+      new Map([["P-4", full]]),
+    );
+    expect(changes.get("P-4")?.counts).toBe("2 files · +40 −0");
+    expect(memberSearch(changes.get("P-3"))).toEqual({ since: 1 });
+    expect(memberSearch(changes.get("P-4"))).toEqual({});
+    expect(memberSearch(undefined)).toEqual({});
   });
 });
