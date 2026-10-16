@@ -45,6 +45,9 @@ export const keys = {
   /** Under the messages prefix, so every message event that refreshes the threads also refreshes the count. */
   messagesAwaiting: (slug: string) => [slug, "messages", "awaiting"] as const,
   repository: (slug: string) => [slug, "repository"] as const,
+  git: (slug: string) => [slug, "git"] as const,
+  /** Every task read of the project, under one prefix. */
+  tasks: (slug: string) => [slug, "task"] as const,
   workspaces: (slug: string) => [slug, "workspaces"] as const,
   workspace: (slug: string, workspace: string) =>
     [slug, "workspace", workspace] as const,

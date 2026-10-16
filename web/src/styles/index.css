@@ -157,6 +157,12 @@
   --width-review-panel: var(--width-review-panel);
   --width-event-stream: var(--width-event-stream);
   --width-request-dialog: var(--width-request-dialog);
+  --width-git-key: var(--width-git-key);
+  --width-git-location: var(--width-git-location);
+  --width-git-branch: var(--width-git-branch);
+  --width-git-commit: var(--width-git-commit);
+  --width-project-agents: var(--width-project-agents);
+  --width-project-state: var(--width-project-state);
 
   --height-*: initial;
   --height-bar: var(--height-bar);

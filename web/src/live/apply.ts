@@ -28,6 +28,7 @@ const DOMAINS = new Set([
   "integration",
   "main",
   "remote",
+  "git",
   "message",
   "request",
 ]);
@@ -368,7 +369,12 @@ function invalidationKeys(
     case "main":
       return [repository, board];
     case "remote":
-      return [repository];
+      return [repository, keys.git(slug)];
+    case "git":
+      // `git.committed` names the revision whose commit the revision, proposal and task reads show.
+      return type === "git.committed"
+        ? [repository, keys.git(slug), keys.proposals(slug), keys.tasks(slug)]
+        : [repository, keys.git(slug), keys.project(slug)];
     case "request":
       return type === "request.approved"
         ? [

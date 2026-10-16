@@ -25,6 +25,7 @@ import type {
 } from "@/api/proposals";
 import { HrefLink } from "@/app/HrefLink";
 import { Button } from "@/components/button/Button";
+import { CommitId } from "@/components/mono/CommitId";
 import { MentionInline, MentionText } from "@/mentions/MentionText";
 import { MentionTextarea } from "@/mentions/MentionTextarea";
 import { formatAsOfMinute } from "@/format/time";
@@ -450,6 +451,7 @@ export function SidePanel({
               >
                 {integration.revision}
               </HrefLink>
+              <CommitId commit={integration.commit} className="font-normal" />
             </p>
             <p className="font-mono text-caption text-text-muted">
               {integration.actor ? (

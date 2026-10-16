@@ -5,6 +5,8 @@ import type { Revision } from "@/api/repository";
 export interface IntegrationView {
   /** @example r9 */
   revision: string;
+  /** The Git commit of the revision; null until the daemon writes it, and while only the integrate answer names the revision. */
+  commit: string | null;
   /** An integration publishes the current version. */
   version: number;
   /** UTC milliseconds. */
@@ -27,6 +29,7 @@ export function integrationOf(
   if (revision) {
     return {
       revision: revision.id,
+      commit: revision.commit,
       version: p.current_version,
       at: revision.created_at,
       actor: null,
@@ -35,6 +38,7 @@ export function integrationOf(
   if (answered?.proposal === p.id) {
     return {
       revision: answered.revision,
+      commit: null,
       version: p.current_version,
       at: p.closed_at ?? p.updated_at,
       actor: null,

@@ -15,10 +15,16 @@ describe("integrationOf", () => {
   it("finds the revision of main that names the integrated proposal", () => {
     expect(integrationOf(integrated, revisions)).toEqual({
       revision: "r9",
+      commit: null,
       version: 2,
       at: revision(9).created_at,
       actor: null,
     });
+  });
+
+  it("carries the Git commit of the revision once it is written", () => {
+    const written = [{ ...revision(9, "P-3"), commit: "4f2a9c1e" }];
+    expect(integrationOf(integrated, written)?.commit).toBe("4f2a9c1e");
   });
 
   it("takes the human's own integrate answer until the revisions name the proposal", () => {
@@ -29,6 +35,7 @@ describe("integrationOf", () => {
     };
     expect(integrationOf(integrated, [], answer)).toEqual({
       revision: "r9",
+      commit: null,
       version: 2,
       at: 7,
       actor: null,

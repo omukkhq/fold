@@ -86,6 +86,7 @@ async fn baseline_creates_every_table_of_the_data_model() {
         "proposal_versions",
         "proposals",
         "refs",
+        "remote_states",
         "request_attachments",
         "request_comments",
         "request_draft_cards",

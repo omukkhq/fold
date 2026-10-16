@@ -1,5 +1,8 @@
+use fold_core::events::types;
 use fold_core::reviews::standing_approvers;
-use fold_core::{Clock, EventActor, FoldError, ProjectPaths, RevisionId, Timestamp, codes};
+use fold_core::{
+    Actor, Clock, EventActor, FoldError, NewEvent, ProjectPaths, RevisionId, Timestamp, codes,
+};
 use fold_store::workspaces::{
     IntegrationKind, RevisionRow, get_by_number, head, insert_revision_commits, list_after,
     uncommitted_revisions,
@@ -17,9 +20,10 @@ use serde_json::json;
 
 use super::remote::blocking;
 use super::{ProjectError, load_config};
+use crate::services::events::EventBuffer;
 
 /// What one run of the commit writer did.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Default)]
 pub struct Committed {
     /// The revisions it wrote commits for, oldest first.
     pub added: Vec<(RevisionId, CommitId)>,
@@ -27,6 +31,8 @@ pub struct Committed {
     pub outside: Option<CommitId>,
     /// The project folder has changes that are not committed, or an untracked file in the way, so the branch and the folder stay on the older commit until the next run finds the folder clean.
     pub uncommitted: bool,
+    /// One `git.committed` per `revision_commits` row the run added, appended in the transaction that added the rows; the caller publishes them.
+    pub events: EventBuffer,
 }
 
 /// Writes the commit of every main revision that `.fold/git-sync.map` does not name yet into the project's Git repository at [`ProjectPaths::git_dir`], records each in `revision_commits`, and brings the `[git]` branch and the project folder to the newest. The project's Git sync lock is held throughout, so this, a push and a pull run one after the other, in this process or another. Running it again with nothing new changes nothing.
@@ -46,7 +52,7 @@ pub async fn commit_main(
 
 /// [`commit_main`] for a caller that holds the Git sync lock (`held`) and read `map` under it; both come back for the caller's next step.
 ///
-/// The map is the record of which revision is which commit, so [`FOLD_HEAD_REF`] is first put on the map's last commit: a ref a stopped write moved past it is written again, to the same commits, because a commit's id depends only on the revision. `git fast-import` writes the new commits there, and the map gains their lines. The `[git]` branch is checked out in the project folder and moves only by fast-forward, after the map: an unborn branch is created on `r1`'s commit, whose tree the folder holds as `fld init` leaves it, with the index set to it, and then follows as any branch does; a tip that is not an ancestor of fold's newest commit holds commits someone made outside fold, so nothing moves and the tip is returned in [`Committed::outside`]; otherwise the folder follows as [`follow_main`] describes, or stays when it has changes of its own. A stop between the map and the move leaves a branch that the next run moves. Then one transaction adds a `revision_commits` row for every mapped revision that has none, which also covers a map line whose row a stop cut off.
+/// The map is the record of which revision is which commit, so [`FOLD_HEAD_REF`] is first put on the map's last commit: a ref a stopped write moved past it is written again, to the same commits, because a commit's id depends only on the revision. `git fast-import` writes the new commits there, and the map gains their lines. The `[git]` branch is checked out in the project folder and moves only by fast-forward, after the map: an unborn branch is created on `r1`'s commit, whose tree the folder holds as `fld init` leaves it, with the index set to it, and then follows as any branch does; a tip that is not an ancestor of fold's newest commit holds commits someone made outside fold, so nothing moves and the tip is returned in [`Committed::outside`]; otherwise the folder follows as [`follow_main`] describes, or stays when it has changes of its own. A stop between the map and the move leaves a branch that the next run moves. Then one transaction adds a `revision_commits` row and a `git.committed` event for every mapped revision that has none, which also covers a map line whose row a stop cut off.
 pub(crate) async fn commit_locked<H: Send + 'static>(
     store: &Store,
     paths: &ProjectPaths,
@@ -63,7 +69,7 @@ pub(crate) async fn commit_locked<H: Send + 'static>(
     }
     let revisions = export_revisions(store, &rows).await?;
     let (git, paths_owned, branch_owned) = (git.clone(), paths.clone(), branch.to_owned());
-    let (held, map, committed) = blocking(move || {
+    let (held, map, mut committed) = blocking(move || {
         let (paths, branch) = (paths_owned, branch_owned);
         #[cfg(feature = "failpoints")]
         fail::fail_point!("git_commit_before_write", |_| Err(fired(
@@ -146,9 +152,25 @@ pub(crate) async fn commit_locked<H: Send + 'static>(
         .filter_map(|number| Some((number, map.commit_of(number)?.to_string())))
         .collect();
     if !missing.is_empty() {
+        let events = missing
+            .iter()
+            .map(|(revision, commit)| {
+                NewEvent::new(types::GIT_COMMITTED, Actor::System.event_actor())
+                    .and_then(|event| event.data(json!({"commit": commit})))
+                    .map(|event| event.revision(*revision))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| FoldError::new(codes::INTERNAL_ERROR, error.to_string()))?;
         let branch = branch.to_owned();
-        store
-            .write(async |tx| insert_revision_commits(tx, &branch, &missing, now).await)
+        committed.events = store
+            .write(async |tx| -> Result<EventBuffer, ProjectError> {
+                insert_revision_commits(tx, &branch, &missing, now).await?;
+                let mut buffer = EventBuffer::new();
+                for event in &events {
+                    buffer.append(tx, event, now).await?;
+                }
+                Ok(buffer)
+            })
             .await?;
     }
     Ok((held, map, committed))

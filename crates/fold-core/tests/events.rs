@@ -84,6 +84,7 @@ fn all_equals_the_plans_event_types() {
         "git.outside_commits",
         "git.uncommitted_changes",
         "git.attention_cleared",
+        "git.committed",
         "agent.presence_changed",
         "area.defined",
         "worker.started",

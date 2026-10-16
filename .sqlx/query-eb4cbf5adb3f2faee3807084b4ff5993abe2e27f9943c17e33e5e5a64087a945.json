@@ -1,0 +1,86 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT s.name AS \"name!\", r.number AS \"number?: i64\", s.pushed_at, c.\"commit\" AS \"commit?\", s.failure_code, s.failed_at\n           FROM remote_states s\n           LEFT JOIN revisions r ON r.id = s.pushed_revision_id\n           LEFT JOIN revision_commits c ON c.revision_id = s.pushed_revision_id\n           ORDER BY s.name",
+  "describe": {
+    "columns": [
+      {
+        "name": "name!",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "remote_states",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "number?: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "revisions",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "pushed_at",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "remote_states",
+            "name": "pushed_at"
+          }
+        }
+      },
+      {
+        "name": "commit?",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "revision_commits",
+            "name": "commit"
+          }
+        }
+      },
+      {
+        "name": "failure_code",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "remote_states",
+            "name": "failure_code"
+          }
+        }
+      },
+      {
+        "name": "failed_at",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "remote_states",
+            "name": "failed_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "eb4cbf5adb3f2faee3807084b4ff5993abe2e27f9943c17e33e5e5a64087a945"
+}

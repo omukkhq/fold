@@ -627,7 +627,7 @@ impl Drop for AutoCommit {
     }
 }
 
-/// Starts `auto_commit` for one project. It writes the commit of every revision that has none into the project's repository, and brings the project folder to it, once at the start, which catches up an integration a stopped daemon never committed, and again after every committed integration of either kind, which the bus carries only after its commit. After an integration it then runs the push of `fld push` as `fold` to each remote whose `push_on_integrate` is true, read at that moment. A commit covers every revision so far, so the integrations that arrive while one runs need one more run at most. A failed commit appends `git.commit_failed` and a failed push `remote.push_failed`, each in its own transaction, and logs the project and the code only; the integration stands either way.
+/// Starts `auto_commit` for one project. It writes the commit of every revision that has none into the project's repository, and brings the project folder to it, once at the start, which catches up an integration a stopped daemon never committed, and again after every committed integration of either kind, which the bus carries only after its commit. After an integration it then runs the push of `fld push` as `fold` to each remote whose `push_on_integrate` is true, read at that moment. A commit covers every revision so far, so the integrations that arrive while one runs need one more run at most. Each commit recorded in `revision_commits` gets its `git.committed` event in the same transaction, published once the run returns, so the web interface shows the commit without a reload. A failed commit appends `git.commit_failed`, and a failed push appends `remote.push_failed` with the remote's failure in `remote_states`, each in its own transaction, and logs the project and the code only; the integration stands either way.
 pub fn auto_commit(context: RemoteContext, git: Git) -> AutoCommit {
     let receiver = context.bus.subscribe();
     AutoCommit(tokio::spawn(run_auto_commit(context, git, receiver)))
@@ -663,7 +663,8 @@ async fn commit_after_integration(context: &RemoteContext, git: &Git) -> bool {
     let committed =
         projects::commit_main(&context.store, &context.paths, git, context.clock.as_ref()).await;
     let error = match committed {
-        Ok(committed) => {
+        Ok(mut committed) => {
+            context.bus.publish(std::mem::take(&mut committed.events));
             let change = context
                 .git_attention
                 .set(committed.outside.is_some(), committed.uncommitted);
@@ -747,7 +748,35 @@ async fn push_after_integration(context: &RemoteContext, git: &Git) {
         let event = NewEvent::new(types::REMOTE_PUSH_FAILED, Actor::System.event_actor()).and_then(
             |event| event.data(json!({"remote": name, "branch": remote.branch, "code": code})),
         );
-        record_failure(context, event, "remote.push_failed").await;
+        record_failed_push(context, event, &name, code).await;
+    }
+}
+
+/// Appends `remote.push_failed` and the remote's failure in `remote_states` in one transaction of their own, and publishes the event.
+async fn record_failed_push(
+    context: &RemoteContext,
+    event: Result<NewEvent, fold_core::EventError>,
+    name: &str,
+    code: &str,
+) {
+    let Ok(event) = event else {
+        return;
+    };
+    let now = context.clock.now();
+    let recorded = context
+        .store
+        .write(async |tx| -> Result<EventBuffer, StoreError> {
+            workspaces::record_push_failure(tx, name, code, now).await?;
+            let mut buffer = EventBuffer::new();
+            buffer.append(tx, &event, now).await?;
+            Ok(buffer)
+        })
+        .await;
+    match recorded {
+        Ok(buffer) => context.bus.publish(buffer),
+        Err(error) => {
+            tracing::warn!(project = %context.slug, event = "remote.push_failed", code = error.code().unwrap_or(codes::INTERNAL_ERROR), "an event was not recorded");
+        }
     }
 }
 
@@ -772,7 +801,7 @@ async fn record_failure(
     match recorded {
         Ok(buffer) => context.bus.publish(buffer),
         Err(error) => {
-            tracing::warn!(project = %context.slug, event = name, code = error.code().unwrap_or(codes::INTERNAL_ERROR), "a failure event was not recorded");
+            tracing::warn!(project = %context.slug, event = name, code = error.code().unwrap_or(codes::INTERNAL_ERROR), "an event was not recorded");
         }
     }
 }

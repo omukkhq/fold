@@ -1,4 +1,5 @@
 import type { Revision } from "@/api/repository";
+import { CommitId } from "@/components/mono/CommitId";
 import { Mono } from "@/components/mono/Mono";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
@@ -57,6 +58,12 @@ export function RevisionList({
                 </span>
                 <Mono className="truncate text-label text-text-muted">
                   <ActorText segments={lines.meta} />
+                  {revision.commit === null ? null : " · "}
+                  <CommitId
+                    commit={revision.commit}
+                    copy={false}
+                    className="text-label"
+                  />
                 </Mono>
               </span>
             </button>

@@ -337,3 +337,76 @@ async fn a_revision_records_its_commit_once_and_reads_show_it() {
     }
     assert_append_only(store, "revision_commits").await;
 }
+
+#[tokio::test]
+async fn a_remote_keeps_its_last_push_and_the_failure_after_it() {
+    let project = TestProject::new().await;
+    let r1 = init(&project).await;
+    append(&project, &child(&r1, 2)).await.unwrap();
+    let store = project.store();
+    let now = project.now();
+    let a = "a".repeat(40);
+    store
+        .write(async |tx| {
+            workspaces::insert_revision_commits(tx, "main", &[(id(1), a.clone())], now).await?;
+            workspaces::record_push(tx, "origin", id(1), now).await?;
+            workspaces::record_push_failure(tx, "origin", "remote_ahead", now).await?;
+            workspaces::record_push_failure(tx, "backup", "git_failed", now).await
+        })
+        .await
+        .unwrap();
+    let states = workspaces::remote_states(store.read()).await.unwrap();
+    assert_eq!(
+        states,
+        [
+            workspaces::RemoteState {
+                name: "backup".to_owned(),
+                pushed: None,
+                failed: Some(workspaces::RemoteFailed {
+                    code: "git_failed".to_owned(),
+                    at: now,
+                }),
+            },
+            workspaces::RemoteState {
+                name: "origin".to_owned(),
+                pushed: Some(workspaces::RemotePushed {
+                    revision: id(1),
+                    commit: Some(a.clone()),
+                    at: now,
+                }),
+                failed: Some(workspaces::RemoteFailed {
+                    code: "remote_ahead".to_owned(),
+                    at: now,
+                }),
+            },
+        ]
+    );
+
+    // A later push clears the failure; its revision has no commit yet.
+    store
+        .write(async |tx| workspaces::record_push(tx, "origin", id(2), now).await)
+        .await
+        .unwrap();
+    let states = workspaces::remote_states(store.read()).await.unwrap();
+    assert_eq!(
+        states[1].pushed,
+        Some(workspaces::RemotePushed {
+            revision: id(2),
+            commit: None,
+            at: now,
+        })
+    );
+    assert_eq!(states[1].failed, None);
+
+    let missing = store
+        .write(async |tx| workspaces::record_push(tx, "origin", id(9), now).await)
+        .await;
+    assert!(matches!(missing, Err(StoreError::RevisionNotFound(_))));
+    for bad in [
+        "INSERT INTO remote_states (name) VALUES ('')",
+        "INSERT INTO remote_states (name, failure_code) VALUES ('x', 'git_failed')",
+        "INSERT INTO remote_states (name, pushed_at) VALUES ('y', 0)",
+    ] {
+        assert!(exec(store, bad).await.is_err(), "{bad}");
+    }
+}

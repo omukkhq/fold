@@ -386,6 +386,36 @@ describe("invalidation rules", () => {
     expect(hit(keys.board(slug))).toBe(false);
   });
 
+  it("refreshes the Git status for every remote event", () => {
+    for (const type of [
+      "remote.pushed",
+      "remote.push_failed",
+      "remote.pulled",
+    ]) {
+      invalidated = [];
+      applyEvent(client, slug, ev(type));
+      expect(hit(keys.git(slug))).toBe(true);
+    }
+  });
+
+  it("refreshes the revisions, proposals and tasks when a Git commit is written", () => {
+    applyEvent(client, slug, ev("git.committed", { revision: "r8" }));
+    expect(hit(keys.repository(slug))).toBe(true);
+    expect(hit(keys.git(slug))).toBe(true);
+    expect(hit(keys.proposals(slug))).toBe(true);
+    expect(hit(keys.tasks(slug))).toBe(true);
+  });
+
+  it("refreshes the Git status and the project for a failed or outside commit", () => {
+    for (const type of ["git.commit_failed", "git.outside_commits"]) {
+      invalidated = [];
+      applyEvent(client, slug, ev(type));
+      expect(hit(keys.git(slug))).toBe(true);
+      expect(hit(keys.project(slug))).toBe(true);
+      expect(hit(keys.proposals(slug))).toBe(false);
+    }
+  });
+
   it("invalidates repository and board, and no proposal key, for a pull integration", () => {
     for (const type of [
       "integration.succeeded",

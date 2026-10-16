@@ -18,6 +18,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(list, open))
         .routes(routes!(list_humans))
         .routes(routes!(show))
+        .routes(routes!(show_git))
         .routes(routes!(collect_garbage))
         .routes(routes!(push))
         .routes(routes!(pull))
@@ -199,6 +200,102 @@ pub async fn show(Project(handle): Project) -> Result<Json<ProjectSummary>, ApiE
         available: true,
         overview: Some(projects::overview(&handle).await?.into()),
     }))
+}
+
+/// The project's Git repository and the state of its remotes.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ProjectGit {
+    /// The project folder, which holds the repository.
+    pub repository: String,
+    /// The branch every integration is committed to.
+    pub branch: String,
+    /// Ordered by name; empty when no remote is set.
+    pub remotes: Vec<GitRemote>,
+}
+
+/// One Git remote of the project.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct GitRemote {
+    pub name: String,
+    /// The URL or path, without credentials.
+    pub location: String,
+    /// The remote branch main is pushed to.
+    pub branch: String,
+    /// Whether fold pushes after each integration.
+    pub push_on_integrate: bool,
+    /// The newest push that reached the remote; null before the first.
+    #[schema(required = true)]
+    pub pushed: Option<GitPushed>,
+    /// The failed push after the newest successful one; null when the last push succeeded or none failed.
+    #[schema(required = true)]
+    pub failed: Option<GitPushFailed>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct GitPushed {
+    /// The newest revision the push sent.
+    #[schema(example = "r17")]
+    pub revision: String,
+    /// The Git commit of that revision; null while it has none.
+    #[schema(required = true)]
+    pub commit: Option<String>,
+    /// UTC milliseconds.
+    #[schema(value_type = i64)]
+    pub at: Timestamp,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct GitPushFailed {
+    /// The error code of the failed push.
+    pub code: String,
+    /// UTC milliseconds.
+    #[schema(value_type = i64)]
+    pub at: Timestamp,
+}
+
+impl From<projects::GitStatus> for ProjectGit {
+    fn from(status: projects::GitStatus) -> Self {
+        Self {
+            repository: status.repository.to_string_lossy().into_owned(),
+            branch: status.branch,
+            remotes: status
+                .remotes
+                .into_iter()
+                .map(|remote| GitRemote {
+                    name: remote.name,
+                    location: remote.location,
+                    branch: remote.branch,
+                    push_on_integrate: remote.push_on_integrate,
+                    pushed: remote.pushed.map(|pushed| GitPushed {
+                        revision: pushed.revision.to_string(),
+                        commit: pushed.commit,
+                        at: pushed.at,
+                    }),
+                    failed: remote.failed.map(|failed| GitPushFailed {
+                        code: failed.code,
+                        at: failed.at,
+                    }),
+                })
+                .collect(),
+        }
+    }
+}
+
+/// The Git repository of one open project, its branch and its remotes with the last push of each.
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{slug}/git",
+    operation_id = "show_project_git",
+    params(("slug" = String, Path, description = "The project slug")),
+    responses(
+        (status = 200, description = "The Git state", body = ProjectGit),
+        (status = 404, description = "The slug is not registered", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn show_git(Project(handle): Project) -> Result<Json<ProjectGit>, ApiError> {
+    Ok(Json(projects::git_status(&handle).await?.into()))
 }
 
 /// Opens a project that was registered after the daemon started. Socket only; an open project answers the same again.

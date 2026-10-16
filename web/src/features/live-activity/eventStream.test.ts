@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { DurableEvent } from "../../api/events";
 import { EVENT_LIMIT } from "../../live/eventList";
-import { checkoutRows, checkoutText, eventRows, liveDot } from "./eventStream";
+import {
+  checkoutRows,
+  checkoutText,
+  commitsByRevision,
+  eventRows,
+  liveDot,
+} from "./eventStream";
 
 function event(seq: number, over: Partial<DurableEvent> = {}): DurableEvent {
   return {
@@ -42,6 +48,40 @@ describe("eventRows", () => {
   it("gives an unknown type the generic line", () => {
     const unknown = { ...event(1), type: "future.thing" };
     expect(eventRows([unknown], NOW)[0]?.text).toBe("event future.thing");
+  });
+
+  it("adds the Git commit to the integration line of its revision and gives git.committed no row", () => {
+    const rows = eventRows(
+      [
+        event(1, {
+          type: "proposal.integrated",
+          proposal: "P-5",
+          revision: "r8",
+        }),
+        event(2, { type: "main.advanced", revision: "r8" }),
+        event(3, {
+          type: "git.committed",
+          revision: "r8",
+          data: { commit: "4f2a9c1e" },
+        }),
+      ],
+      NOW,
+    );
+    expect(rows.map((row) => [row.seq, row.commit])).toEqual([
+      [2, null],
+      [1, "4f2a9c1e"],
+    ]);
+  });
+
+  it("shows no commit on an integration line before its commit is written", () => {
+    const rows = eventRows(
+      [
+        event(1, { type: "integration.succeeded", revision: "r9" }),
+        event(2, { type: "integration.succeeded", revision: null }),
+      ],
+      NOW,
+    );
+    expect(rows.map((row) => row.commit)).toEqual([null, null]);
   });
 
   it("returns no rows for no events", () => {
@@ -134,5 +174,24 @@ describe("checkoutRows", () => {
         last: "ran tests · 2 min ago",
       }),
     ).toBe("P-4 v2 in ws/review-p-4 · ran tests · 2 min ago · not recordable");
+  });
+});
+
+describe("commitsByRevision", () => {
+  it("maps each revision to its first reported commit and skips malformed events", () => {
+    const committed = (seq: number, revision: string | null, data = {}) =>
+      event(seq, { type: "git.committed", revision, data });
+    const map = commitsByRevision([
+      committed(1, "r1", { commit: "aaa" }),
+      committed(2, "r1", { commit: "bbb" }),
+      committed(3, null, { commit: "ccc" }),
+      committed(4, "r2", { commit: 7 }),
+      event(5, {
+        type: "main.advanced",
+        revision: "r3",
+        data: { commit: "d" },
+      }),
+    ]);
+    expect([...map]).toEqual([["r1", "aaa"]]);
   });
 });

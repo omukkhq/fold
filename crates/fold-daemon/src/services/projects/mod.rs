@@ -34,6 +34,7 @@ use crate::projects::{ProjectHandle, Slot};
 
 mod commits;
 mod gc;
+mod git_status;
 mod pull;
 mod remote;
 mod web_auth;
@@ -41,6 +42,7 @@ mod web_auth;
 pub(crate) use commits::error_code;
 pub use commits::{Committed, commit_main, commit_message};
 pub use gc::{GcReport, gc};
+pub use git_status::{GitStatus, PushFailed, Pushed, RemoteStatus, git_status, public_location};
 pub use pull::{PullOutcome, PulledConflict, pull};
 pub(crate) use remote::push_with;
 pub use remote::{PushOutcome, RemoteContext, push};

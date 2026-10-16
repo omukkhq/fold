@@ -111,7 +111,7 @@ async fn run(
         })
         .await?
     };
-    let (held, map, committed) = commit_locked(
+    let (held, map, mut committed) = commit_locked(
         &handle.store,
         &handle.paths,
         git,
@@ -121,6 +121,7 @@ async fn run(
         handle.clock.now(),
     )
     .await?;
+    handle.bus.publish(std::mem::take(&mut committed.events));
     let (name, branch, tip, held) = match committed.outside {
         Some(tip) => match remote {
             Some(named) => return Err(outside_first(&local, named).into()),

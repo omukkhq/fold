@@ -1,3 +1,4 @@
+import { CommitId } from "@/components/mono/CommitId";
 import { PersonName } from "@/people/PersonName";
 import { cn } from "../../lib/cn";
 import { liveDot } from "./eventStream";
@@ -55,16 +56,15 @@ export function EventStream({ slug }: { slug: string }) {
       <ol className="flex flex-col px-8 py-6">
         {stream.rows.map((row) => (
           <li key={row.seq} className="flex gap-10 rounded-s p-8">
-            <row.icon
-              aria-hidden="true"
-              size={14}
-              className={cn(
-                "mt-2 shrink-0",
-                row.emphasis ? "text-text" : "text-text-muted",
-              )}
-            />
+            <span className="flex h-16 w-14 shrink-0 items-center justify-center">
+              <row.icon
+                aria-hidden="true"
+                size={14}
+                className={row.emphasis ? "text-text" : "text-text-muted"}
+              />
+            </span>
             <div className="flex min-w-0 flex-1 flex-col gap-2">
-              <div className="flex gap-6">
+              <div className="flex h-16 items-center gap-6">
                 <span className="min-w-0 flex-1 truncate font-mono text-label text-text">
                   <PersonName name={row.actor} slot="eventActor" />
                 </span>
@@ -79,6 +79,8 @@ export function EventStream({ slug }: { slug: string }) {
                 )}
               >
                 {row.text}
+                {row.commit === null ? null : " · "}
+                <CommitId commit={row.commit} />
               </p>
             </div>
           </li>

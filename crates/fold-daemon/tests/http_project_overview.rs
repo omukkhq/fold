@@ -157,3 +157,89 @@ async fn an_unavailable_project_lists_only_its_slug_name_and_availability() {
         ]})
     );
 }
+
+#[tokio::test]
+#[cfg(test)]
+async fn the_git_route_reports_the_repository_the_remotes_and_the_last_push_of_each() {
+    use fold_core::RevisionId;
+    use fold_store::workspaces::{insert_revision_commits, record_push, record_push_failure};
+
+    let project = TestProject::new().await;
+    let objects = ObjectStore::open(&project.paths().fold_dir()).unwrap();
+    let tree = write_initial_tree(&objects, FlatTree::default()).unwrap();
+    let stored = write_revision(&objects, &initial_revision(tree, project.now()).unwrap()).unwrap();
+    create_initial_revision(project.store(), &stored, None)
+        .await
+        .unwrap();
+    let r1 = RevisionId::try_from_db(1).unwrap();
+    let now = project.now();
+    project
+        .store()
+        .write(async |tx| {
+            insert_revision_commits(
+                tx,
+                "main",
+                &[(r1, "4f2a9c1e4f2a9c1e4f2a9c1e4f2a9c1e4f2a9c1e".to_owned())],
+                now,
+            )
+            .await
+        })
+        .await
+        .unwrap();
+    std::fs::write(
+        project.paths().config(),
+        "[remotes.backup]\nurl = \"https://ana:secret@example.com/ledger.git\"\nbranch = \"trunk\"\n\n[remotes.origin]\nurl = \"git@example.com:ledger.git\"\nbranch = \"main\"\npush_on_integrate = true\n",
+    )
+    .unwrap();
+    let state = state_of(&project);
+    let row = register(&project, "demo").await;
+    let handle = state
+        .projects
+        .open(&row, state.clock.clone())
+        .await
+        .unwrap();
+
+    let (status, body) = call(&state, Method::GET, "/api/v1/projects/demo/git", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["repository"],
+        project.paths().root().to_string_lossy().as_ref()
+    );
+    assert_eq!(body["branch"], "main");
+    assert_eq!(body["remotes"][0]["name"], "backup");
+    assert_eq!(
+        body["remotes"][0]["location"],
+        "https://example.com/ledger.git"
+    );
+    assert_eq!(body["remotes"][0]["branch"], "trunk");
+    assert_eq!(body["remotes"][0]["pushed"], Value::Null);
+    assert_eq!(body["remotes"][1]["location"], "git@example.com:ledger.git");
+    assert_eq!(body["remotes"][1]["push_on_integrate"], true);
+
+    handle
+        .store
+        .write(async |tx| {
+            record_push(tx, "origin", r1, now).await?;
+            record_push_failure(tx, "origin", "remote_ahead", now).await?;
+            record_push_failure(tx, "backup", "git_failed", now).await
+        })
+        .await
+        .unwrap();
+    let (_, body) = call(&state, Method::GET, "/api/v1/projects/demo/git", None).await;
+    assert_eq!(body["remotes"][0]["failed"]["code"], "git_failed");
+    assert_eq!(body["remotes"][1]["pushed"]["revision"], "r1");
+    assert_eq!(
+        body["remotes"][1]["pushed"]["commit"],
+        "4f2a9c1e4f2a9c1e4f2a9c1e4f2a9c1e4f2a9c1e"
+    );
+    assert_eq!(body["remotes"][1]["failed"]["code"], "remote_ahead");
+
+    handle
+        .store
+        .write(async |tx| record_push(tx, "origin", r1, now).await)
+        .await
+        .unwrap();
+    let (_, body) = call(&state, Method::GET, "/api/v1/projects/demo/git", None).await;
+    assert_eq!(body["remotes"][1]["failed"], Value::Null);
+    assert_eq!(body["remotes"][1]["pushed"]["revision"], "r1");
+}

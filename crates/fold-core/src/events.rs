@@ -113,6 +113,7 @@ define_event_types! {
     GIT_OUTSIDE_COMMITS = "git.outside_commits",
     GIT_UNCOMMITTED_CHANGES = "git.uncommitted_changes",
     GIT_ATTENTION_CLEARED = "git.attention_cleared",
+    GIT_COMMITTED = "git.committed",
     AGENT_PRESENCE_CHANGED = "agent.presence_changed",
     AREA_DEFINED = "area.defined",
     WORKER_STARTED = "worker.started",

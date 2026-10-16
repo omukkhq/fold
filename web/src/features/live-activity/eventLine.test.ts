@@ -265,6 +265,12 @@ describe("eventLine", () => {
     expect(eventLine(event("git.commit_failed")).text).toBe(
       "writing the Git commit of r17 failed",
     );
+    expect(eventLine(event("git.committed", bare)).text).toBe(
+      "wrote a Git commit",
+    );
+    expect(eventLine(event("git.committed")).text).toBe(
+      "wrote the Git commit of r17",
+    );
     expect(eventLine(event("git.outside_commits")).text).toBe(
       "the Git branch has commits fold did not write; run fld pull",
     );

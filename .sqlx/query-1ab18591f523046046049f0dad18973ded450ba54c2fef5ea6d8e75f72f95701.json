@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO remote_states (name, failure_code, failed_at) VALUES (?1, ?2, ?3)\n           ON CONFLICT (name) DO UPDATE SET\n               failure_code = excluded.failure_code,\n               failed_at = excluded.failed_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "1ab18591f523046046049f0dad18973ded450ba54c2fef5ea6d8e75f72f95701"
+}

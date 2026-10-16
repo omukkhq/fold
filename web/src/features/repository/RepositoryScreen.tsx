@@ -15,6 +15,8 @@ import { CompareBar } from "./CompareBar";
 import { FileView } from "./FileView";
 import { mainCopyText } from "./describe";
 import { folderAt, parentDirs, parentOf } from "./search";
+import { CommitId } from "@/components/mono/CommitId";
+import { GitStatus } from "../git/GitStatus";
 import { RevisionList } from "./RevisionList";
 import { TreeView } from "./TreeView";
 
@@ -135,7 +137,10 @@ export function RepositoryScreen({
         className="flex min-w-0 flex-1 flex-col gap-12"
       >
         <div className="flex min-h-32 flex-wrap items-center justify-between gap-10">
-          <Mono className="text-bar font-semibold text-text">{selected}</Mono>
+          <span className="flex items-center gap-10">
+            <Mono className="text-bar font-semibold text-text">{selected}</Mono>
+            <CommitId commit={history.find((r) => r.id === selected)?.commit} />
+          </span>
           {onlyFirst ? null : (
             <CompareBar
               key={selected}
@@ -162,6 +167,7 @@ export function RepositoryScreen({
             {mainCopy}
           </p>
         )}
+        <GitStatus slug={slug} variant="panel" />
       </section>
     </div>
   );

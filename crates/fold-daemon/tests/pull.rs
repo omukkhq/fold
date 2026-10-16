@@ -18,7 +18,9 @@ use fold_core::{
 use fold_daemon::http::socket_router;
 use fold_daemon::projects::ProjectHandle;
 use fold_daemon::services::events::BusMessage;
-use fold_daemon::services::projects::{PullOutcome, PushOutcome, init_project, pull, push};
+use fold_daemon::services::projects::{
+    PullOutcome, PushOutcome, git_status, init_project, pull, push,
+};
 use fold_daemon::services::reviews::{IntegrationOutcome, ReviewService};
 use fold_daemon::services::tasks::CreateTask;
 use fold_daemon::services::workspaces::{WorkspaceError, WorkspaceRef, WorkspaceService};
@@ -721,6 +723,13 @@ async fn push_on_integrate_pushes_after_an_integration_and_records_a_failure() {
     assert_eq!(pushed.actor.as_str(), "fold");
     assert_eq!(pushed.data["last"], first.to_string());
     assert_eq!(git(&remote, &["show", "main:a.txt"]), "one\n");
+    let status = git_status(&project.handle).await.unwrap();
+    let origin = &status.remotes[0];
+    assert_eq!(
+        origin.pushed.as_ref().map(|pushed| pushed.revision),
+        Some(first)
+    );
+    assert_eq!(origin.failed, None);
 
     // A missing local path would become a new repository, so a plain file stands in for a broken remote.
     fs::remove_dir_all(&remote).unwrap();
@@ -732,6 +741,16 @@ async fn push_on_integrate_pushes_after_an_integration_and_records_a_failure() {
     assert_eq!(
         failed.data,
         json!({"remote": "origin", "branch": "main", "code": codes::GIT_FAILED})
+    );
+    let status = git_status(&project.handle).await.unwrap();
+    let origin = &status.remotes[0];
+    assert_eq!(
+        origin.pushed.as_ref().map(|pushed| pushed.revision),
+        Some(first)
+    );
+    assert_eq!(
+        origin.failed.as_ref().map(|failed| failed.code.as_str()),
+        Some(codes::GIT_FAILED)
     );
     assert_eq!(project.head().await, second);
     assert_eq!(

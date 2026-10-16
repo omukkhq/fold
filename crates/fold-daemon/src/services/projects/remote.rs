@@ -5,6 +5,7 @@ use fold_core::{
     codes, events::types, policy,
 };
 use fold_store::Store;
+use fold_store::workspaces::record_push;
 use fold_vcs::git::{CommitId, Git};
 use fold_vcs::git_remote::{
     create_local_remote, fetch_branch, is_ancestor, prepare_mirror, project_repository,
@@ -38,7 +39,7 @@ pub enum PushOutcome {
     },
 }
 
-/// Writes the commits that the project's repository lacks for main, as every integration does, then pushes main's newest commit to the branch of the remote `remote`, never with force, and appends `remote.pushed` in one transaction. Without a name the push goes to the only remote. The configuration is read on every call, so `fld remote set` takes effect without a restart. A remote that is an absolute local path that does not exist is created as a bare repository first. A remote branch with commits that main lacks fails with `remote_ahead` before anything is sent; one already on main's newest commit is up to date. A push never changes main, tasks, workspaces or claims, and a failed one writes no event. The project's remote lock and its Git sync lock are held throughout, so pushes, pulls and the commit of each integration run one after the other. The push runs as its own task, so a caller that stops waiting never leaves the remote moved without its event.
+/// Writes the commits that the project's repository lacks for main, as every integration does, then pushes main's newest commit to the branch of the remote `remote`, never with force, and appends `remote.pushed` with the push in `remote_states` in one transaction. Without a name the push goes to the only remote. The configuration is read on every call, so `fld remote set` takes effect without a restart. A remote that is an absolute local path that does not exist is created as a bare repository first. A remote branch with commits that main lacks fails with `remote_ahead` before anything is sent; one already on main's newest commit is up to date. A push never changes main, tasks, workspaces or claims, and a failed one writes no event. The project's remote lock and its Git sync lock are held throughout, so pushes, pulls and the commit of each integration run one after the other. The push runs as its own task, so a caller that stops waiting never leaves the remote moved without its event.
 pub async fn push(
     handle: &Arc<ProjectHandle>,
     actor: &Actor,
@@ -150,7 +151,7 @@ async fn run(
         })
         .await?
     };
-    let (held, map, _) = commit_locked(
+    let (held, map, committed) = commit_locked(
         &handle.store,
         &handle.paths,
         git,
@@ -160,6 +161,7 @@ async fn run(
         handle.clock.now(),
     )
     .await?;
+    handle.bus.publish(committed.events);
     let entries = map.entries().to_vec();
     let Some((last, tip)) = entries.last().cloned() else {
         return Err(FoldError::new(codes::INTERNAL_ERROR, "main has no commit to push").into());
@@ -208,6 +210,7 @@ async fn run(
     let buffer = handle
         .store
         .write(async |tx| -> Result<EventBuffer, ProjectError> {
+            record_push(tx, &name, last, now).await?;
             let mut buffer = EventBuffer::new();
             buffer.append(tx, &event, now).await?;
             Ok(buffer)

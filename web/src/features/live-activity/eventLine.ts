@@ -431,6 +431,13 @@ const SPECS: Record<EventType, Spec> = {
         ? "writing the Git commit failed"
         : `writing the Git commit of ${e.revision} failed`,
   },
+  "git.committed": {
+    icon: GitCommitHorizontal,
+    text: (e) =>
+      e.revision === null
+        ? "wrote a Git commit"
+        : `wrote the Git commit of ${e.revision}`,
+  },
   "git.outside_commits": {
     icon: TriangleAlert,
     text: fixed("the Git branch has commits fold did not write; run fld pull"),

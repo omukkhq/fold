@@ -34,6 +34,9 @@ async fn commit(fx: &Fixture) -> Result<usize, Option<&'static str>> {
     .map_err(|error| error.code())
 }
 
+/// The `git.committed` events that name a `revision_commits` row's revision and commit.
+const COMMITTED_EVENTS_OF_ROWS: &str = r#"SELECT COUNT(*) FROM events e JOIN revision_commits rc ON rc.revision_id = e.revision_id AND rc."commit" = json_extract(e.data, '$.commit') WHERE e.type = 'git.committed'"#;
+
 fn map(fx: &Fixture) -> String {
     std::fs::read_to_string(fx.project.paths().fold_dir().join(SYNC_MAP_FILE)).unwrap_or_default()
 }
@@ -115,6 +118,7 @@ async fn a_stop_before_the_rows_fills_them_from_the_map() {
     fx.restart().await;
     assert_eq!(commit(&fx).await, Ok(0));
     assert_map_matches_rows(&fx, 2).await;
+    assert_eq!(fx.count(COMMITTED_EVENTS_OF_ROWS).await, 2);
     scenario.teardown();
 }
 

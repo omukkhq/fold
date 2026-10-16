@@ -6,6 +6,7 @@ mod conflicts;
 mod gc;
 mod lifecycle;
 mod refs;
+mod remotes;
 mod revisions;
 
 pub(crate) use changesets::parse_stats;
@@ -28,6 +29,9 @@ pub use lifecycle::{
     sync_checkpoint, task_workspace_paths, touch,
 };
 pub use refs::{advance_main, create_main, main_head};
+pub use remotes::{
+    RemoteFailed, RemotePushed, RemoteState, record_push, record_push_failure, remote_states,
+};
 pub use revisions::{
     IntegratedProposal, IntegrationInfo, IntegrationKind, MAX_PAGE, RevisionRow, ancestors,
     create_initial_revision, get_by_hash, get_by_number, head, initial_revision, insert_revision,

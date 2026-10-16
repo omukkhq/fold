@@ -75,6 +75,12 @@
   --width-review-panel: 330px;
   --width-event-stream: 360px;
   --width-request-dialog: 560px;
+  --width-git-key: 64px;
+  --width-git-location: 280px;
+  --width-git-branch: 72px;
+  --width-git-commit: 56px;
+  --width-project-agents: 260px;
+  --width-project-state: 170px;
 }
 
 :root {

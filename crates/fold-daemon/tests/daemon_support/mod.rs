@@ -213,5 +213,21 @@ async fn open(project: &TestProject) -> (AppState, Arc<ProjectHandle>) {
         root: project.paths().root().to_string_lossy().into_owned(),
     };
     let handle = state.projects.open(&row, clock).await.unwrap();
+    caught_up(&handle).await;
     (state, handle)
+}
+
+/// Waits until the project's commit job has recorded the commit of every revision, so the `git.committed` events of its first run are stored before a test counts events.
+pub async fn caught_up(handle: &ProjectHandle) {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while !workspaces::uncommitted_revisions(handle.store.read())
+            .await
+            .unwrap()
+            .is_empty()
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the commit job records every revision's commit");
 }

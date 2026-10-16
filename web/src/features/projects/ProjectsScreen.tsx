@@ -9,10 +9,13 @@ import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { cn } from "@/lib/cn";
 import { PersonName } from "@/people/PersonName";
 import { focusRing } from "@/lib/focus";
+import { GitStatus } from "../git/GitStatus";
 import { lastChangeLine, summaryLine } from "./counts";
 
 const ROW =
   "flex items-center gap-20 rounded-l bg-surface px-20 py-16 inset-ring inset-ring-border-subtle";
+const CARD =
+  "flex flex-col overflow-hidden rounded-l bg-surface inset-ring inset-ring-border-subtle";
 
 export function ProjectsScreen() {
   const { data: projects } = useSuspenseQuery(projectsQuery());
@@ -70,7 +73,7 @@ export function ProjectsScreen() {
                     </div>
                     {overview ? (
                       <>
-                        <div className="flex items-center gap-6">
+                        <div className="flex w-project-agents shrink-0 items-center gap-6">
                           {overview.agents.length === 0 ? (
                             <span className="text-code text-text-muted">
                               no agents connected
@@ -86,7 +89,7 @@ export function ProjectsScreen() {
                             ))
                           )}
                         </div>
-                        <span className="flex items-center gap-6 text-code">
+                        <span className="flex w-project-state shrink-0 items-center justify-end gap-6 text-code">
                           <span
                             aria-hidden
                             className={cn(
@@ -118,12 +121,21 @@ export function ProjectsScreen() {
                 return (
                   <li key={project.slug}>
                     {project.available ? (
-                      <HrefLink
-                        href={`/p/${project.slug}/board`}
-                        className={cn(ROW, "hover:bg-sunken", focusRing)}
-                      >
-                        {content}
-                      </HrefLink>
+                      <div className={CARD}>
+                        <HrefLink
+                          href={`/p/${project.slug}/board`}
+                          className={cn(
+                            "flex items-center gap-20 rounded-t-l px-20 pt-16 pb-12 hover:bg-sunken",
+                            focusRing,
+                          )}
+                        >
+                          {content}
+                        </HrefLink>
+                        <GitStatus
+                          slug={project.slug}
+                          className="mx-20 border-t border-border-subtle pt-12 pb-16"
+                        />
+                      </div>
                     ) : (
                       <div className={cn(ROW, "opacity-60")}>{content}</div>
                     )}

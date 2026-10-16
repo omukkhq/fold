@@ -13,14 +13,40 @@ export interface EventRow {
   icon: LucideIcon;
   text: string;
   emphasis: boolean;
+  /** The Git commit of the revision an integration line names, once `git.committed` has reported it; null otherwise. */
+  commit: string | null;
 }
 
-/** The newest events first, whatever order the cache holds them in. */
+/** The integration lines that show the commit of their revision. */
+const COMMIT_LINES = new Set(["proposal.integrated", "integration.succeeded"]);
+
+/** The Git commit of each revision the events report, by revision id. Each commit is written once, so a repeat keeps the first. */
+export function commitsByRevision(
+  events: readonly AnyEvent[],
+): ReadonlyMap<string, string> {
+  const commits = new Map<string, string>();
+  for (const event of events) {
+    const commit = event.data.commit;
+    if (
+      event.type === "git.committed" &&
+      event.revision !== null &&
+      typeof commit === "string" &&
+      !commits.has(event.revision)
+    ) {
+      commits.set(event.revision, commit);
+    }
+  }
+  return commits;
+}
+
+/** The newest events first, whatever order the cache holds them in. `git.committed` has no row of its own: it adds the commit to the integration line of its revision. */
 export function eventRows(
   events: readonly AnyEvent[],
   now: number,
 ): EventRow[] {
+  const commits = commitsByRevision(events);
   return [...events]
+    .filter((event) => event.type !== "git.committed")
     .sort((a, b) => b.seq - a.seq)
     .slice(0, EVENT_LIMIT)
     .map((event) => {
@@ -32,6 +58,10 @@ export function eventRows(
         icon: line.icon,
         text: line.text,
         emphasis: line.emphasis,
+        commit:
+          COMMIT_LINES.has(event.type) && event.revision !== null
+            ? (commits.get(event.revision) ?? null)
+            : null,
       };
     });
 }

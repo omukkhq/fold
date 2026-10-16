@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::daemon_support::caught_up;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use fold_core::events::types;
@@ -40,6 +41,8 @@ struct Fixture {
     project: TestProject,
     state: AppState,
     handle: Arc<ProjectHandle>,
+    /// The newest `seq` once the project is open: the events the commit job stored for `r1`. The events a test appends follow it.
+    base: u64,
 }
 
 #[cfg(test)]
@@ -81,11 +84,26 @@ impl Fixture {
             root: project.paths().root().to_string_lossy().into_owned(),
         };
         let handle = state.projects.open(&row, clock).await.unwrap();
+        caught_up(&handle).await;
+        let base = fold_store::events::head_seq(handle.store.read())
+            .await
+            .unwrap();
         Self {
             project,
             state,
             handle,
+            base,
         }
+    }
+
+    /// The `seq` of the `n`th event the test stored, counting from 1.
+    fn at(&self, n: u64) -> u64 {
+        self.base + n
+    }
+
+    /// [`Fixture::at`] as a `Last-Event-ID` header value.
+    fn id(&self, n: u64) -> String {
+        self.at(n).to_string()
     }
 
     fn bus(&self) -> &EventBus {
@@ -358,12 +376,18 @@ fn parse(block: &str) -> Option<Frame> {
 #[tokio::test]
 async fn a_reconnect_replays_the_missed_events_then_the_snapshot_then_new_events() {
     let fx = Fixture::new().await;
-    assert_eq!(fx.append(10).await, (1..=10).collect::<Vec<u64>>());
-    let mut frames = fx.open(Some("4")).await;
-    assert_eq!(frames.seqs(6).await, vec![5, 6, 7, 8, 9, 10]);
-    assert_eq!(frames.frame().await.snapshot(), (10, Vec::new()));
-    assert_eq!(fx.append(1).await, vec![11]);
-    assert_eq!(frames.frame().await.seq(), 11);
+    assert_eq!(
+        fx.append(10).await,
+        (1..=10).map(|n| fx.at(n)).collect::<Vec<u64>>()
+    );
+    let mut frames = fx.open(Some(&fx.id(4))).await;
+    assert_eq!(
+        frames.seqs(6).await,
+        (5..=10).map(|n| fx.at(n)).collect::<Vec<u64>>()
+    );
+    assert_eq!(frames.frame().await.snapshot(), (fx.at(10), Vec::new()));
+    assert_eq!(fx.append(1).await, vec![fx.at(11)]);
+    assert_eq!(frames.frame().await.seq(), fx.at(11));
 }
 
 #[tokio::test]
@@ -371,9 +395,9 @@ async fn a_first_connection_starts_at_the_snapshot_without_old_events() {
     let fx = Fixture::new().await;
     fx.append(3).await;
     let mut frames = fx.open(None).await;
-    assert_eq!(frames.frame().await.snapshot(), (3, Vec::new()));
+    assert_eq!(frames.frame().await.snapshot(), (fx.at(3), Vec::new()));
     fx.append(1).await;
-    assert_eq!(frames.frame().await.seq(), 4);
+    assert_eq!(frames.frame().await.seq(), fx.at(4));
 }
 
 #[tokio::test]
@@ -381,23 +405,26 @@ async fn an_event_committed_after_the_subscription_is_sent_exactly_once() {
     let fx = Fixture::new().await;
     fx.append(10).await;
     // The answer is back, so the stream has subscribed; nothing of the replay is read yet.
-    let mut frames = fx.open(Some("4")).await;
+    let mut frames = fx.open(Some(&fx.id(4))).await;
     fx.append(1).await;
-    assert_eq!(frames.seqs(7).await, vec![5, 6, 7, 8, 9, 10, 11]);
-    assert_eq!(frames.frame().await.snapshot().0, 11);
+    assert_eq!(
+        frames.seqs(7).await,
+        (5..=11).map(|n| fx.at(n)).collect::<Vec<u64>>()
+    );
+    assert_eq!(frames.frame().await.snapshot().0, fx.at(11));
     fx.append(1).await;
     assert_eq!(
         frames.frame().await.seq(),
-        12,
-        "11 is not sent a second time"
+        fx.at(12),
+        "the 11th is not sent a second time"
     );
 
     let mut fresh = fx.open(None).await;
     fx.append(1).await;
-    assert_eq!(fresh.frame().await.snapshot().0, 12);
-    assert_eq!(fresh.frame().await.seq(), 13);
+    assert_eq!(fresh.frame().await.snapshot().0, fx.at(12));
+    assert_eq!(fresh.frame().await.seq(), fx.at(13));
     fx.append(1).await;
-    assert_eq!(fresh.frame().await.seq(), 14);
+    assert_eq!(fresh.frame().await.seq(), fx.at(14));
 }
 
 #[tokio::test]
@@ -405,32 +432,43 @@ async fn an_event_committed_before_the_subscription_and_published_after_it_is_se
     let fx = Fixture::new().await;
     fx.append(4).await;
     let late = fx.commit(1).await;
-    let mut frames = fx.open(Some("4")).await;
+    let mut frames = fx.open(Some(&fx.id(4))).await;
     fx.bus().publish(late);
-    assert_eq!(frames.seqs(1).await, vec![5]);
-    assert_eq!(frames.frame().await.snapshot().0, 5);
+    assert_eq!(frames.seqs(1).await, vec![fx.at(5)]);
+    assert_eq!(frames.frame().await.snapshot().0, fx.at(5));
     fx.append(1).await;
-    assert_eq!(frames.frame().await.seq(), 6, "5 is not sent a second time");
+    assert_eq!(
+        frames.frame().await.seq(),
+        fx.at(6),
+        "the 5th is not sent a second time"
+    );
 
     let late = fx.commit(1).await;
     let mut fresh = fx.open(None).await;
     fx.bus().publish(late);
-    assert_eq!(fresh.frame().await.snapshot().0, 7);
+    assert_eq!(fresh.frame().await.snapshot().0, fx.at(7));
     fx.append(1).await;
-    assert_eq!(fresh.frame().await.seq(), 8, "7 is older than the snapshot");
+    assert_eq!(
+        fresh.frame().await.seq(),
+        fx.at(8),
+        "the 7th is older than the snapshot"
+    );
 }
 
 #[tokio::test]
 async fn events_published_out_of_commit_order_are_sent_in_seq_order() {
     let fx = Fixture::new().await;
     let mut frames = fx.open(None).await;
-    assert_eq!(frames.frame().await.snapshot().0, 0);
+    assert_eq!(frames.frame().await.snapshot().0, fx.at(0));
     let first = fx.commit(1).await;
     let second = fx.commit(1).await;
     fx.bus().publish(second);
     fx.bus().publish(first);
     fx.append(1).await;
-    assert_eq!(frames.seqs(3).await, vec![1, 2, 3]);
+    assert_eq!(
+        frames.seqs(3).await,
+        (1..=3).map(|n| fx.at(n)).collect::<Vec<u64>>()
+    );
 }
 
 #[tokio::test]
@@ -456,7 +494,7 @@ async fn live_frames_have_no_id_and_collapse_to_the_newest_per_workspace_and_age
             presence: Presence::Idle,
         }
     );
-    assert_eq!(frames.frame().await.seq(), 1);
+    assert_eq!(frames.frame().await.seq(), fx.at(1));
 }
 
 #[tokio::test]
@@ -466,24 +504,24 @@ async fn a_newer_live_state_replaces_one_that_is_queued_but_unsent() {
     frames.frame().await.snapshot();
     fx.append(1).await;
     fx.publish_workspace(1, "v1");
-    assert_eq!(frames.frame().await.seq(), 1);
+    assert_eq!(frames.frame().await.seq(), fx.at(1));
     fx.publish_workspace(1, "v2");
     fx.publish_workspace(1, "v3");
     assert_eq!(frames.frame().await.workspace(), live_workspace(1, "v3"));
     fx.append(1).await;
-    assert_eq!(frames.frame().await.seq(), 2);
+    assert_eq!(frames.frame().await.seq(), fx.at(2));
 }
 
 #[tokio::test]
 async fn a_workspace_state_queued_before_the_snapshot_is_left_to_the_snapshot() {
     let fx = Fixture::new().await;
     fx.append(2).await;
-    let mut frames = fx.open(Some("1")).await;
+    let mut frames = fx.open(Some(&fx.id(1))).await;
     // The live state holds no ws-1, as after the workspace ended: only its old frame is still queued.
     fx.publish_workspace(1, "ended");
     fx.publish_presence("frontend", "idle");
-    assert_eq!(frames.seqs(1).await, vec![2]);
-    assert_eq!(frames.frame().await.snapshot(), (2, Vec::new()));
+    assert_eq!(frames.seqs(1).await, vec![fx.at(2)]);
+    assert_eq!(frames.frame().await.snapshot(), (fx.at(2), Vec::new()));
     assert_eq!(
         frames.frame().await.presence(),
         PresenceChange {
@@ -492,7 +530,7 @@ async fn a_workspace_state_queued_before_the_snapshot_is_left_to_the_snapshot() 
         }
     );
     fx.append(1).await;
-    assert_eq!(frames.frame().await.seq(), 3);
+    assert_eq!(frames.frame().await.seq(), fx.at(3));
 }
 
 #[tokio::test]
@@ -550,29 +588,38 @@ async fn a_lagging_client_is_closed_and_its_reconnect_receives_the_missed_events
     let fx = Fixture::new().await;
     fx.append(2).await;
     let mut frames = fx.open(None).await;
-    assert_eq!(frames.frame().await.snapshot().0, 2);
+    assert_eq!(frames.frame().await.snapshot().0, fx.at(2));
     // More than the bus holds, while the client reads nothing.
     let missed = fx.append(1_100).await;
     assert!(frames.next().await.is_none(), "the lagging stream ends");
 
-    let mut again = fx.open(Some("2")).await;
+    let mut again = fx.open(Some(&fx.id(2))).await;
     assert_eq!(again.seqs(missed.len()).await, missed);
-    assert_eq!(again.frame().await.snapshot().0, 1_102);
+    assert_eq!(again.frame().await.snapshot().0, fx.at(1_102));
 }
 
 #[tokio::test]
 async fn a_bad_last_event_id_or_an_unknown_project_is_refused() {
     let fx = Fixture::new().await;
     fx.append(10).await;
-    for id in ["abc", "-1", "", "4.5", "+4", "11", "18446744073709551616"] {
+    let future = fx.id(11);
+    for id in [
+        "abc",
+        "-1",
+        "",
+        "4.5",
+        "+4",
+        &future,
+        "18446744073709551616",
+    ] {
         assert_eq!(
             fx.refused(PATH, Some(id)).await,
             (StatusCode::BAD_REQUEST, "invalid_last_event_id".to_owned()),
             "Last-Event-ID {id:?}"
         );
     }
-    let mut frames = fx.open(Some("10")).await;
-    assert_eq!(frames.frame().await.snapshot().0, 10);
+    let mut frames = fx.open(Some(&fx.id(10))).await;
+    assert_eq!(frames.frame().await.snapshot().0, fx.at(10));
     assert_eq!(
         fx.refused("/api/v1/projects/nope/events", None).await,
         (StatusCode::NOT_FOUND, "project_not_found".to_owned())

@@ -1,6 +1,7 @@
 import { queryOptions } from "@tanstack/react-query";
 import { getComparison, getFileDiff } from "./diff";
 import { RECENT_EVENTS, listAgents } from "./agents";
+import { getProjectGit } from "./git";
 import { keys } from "./keys";
 import { countAwaitingHuman, listThreads } from "./messages";
 import { getProject, listProjects } from "./projects";
@@ -16,6 +17,12 @@ export const projectQuery = (slug: string) =>
   queryOptions({
     queryKey: keys.project(slug),
     queryFn: () => getProject(slug),
+  });
+
+export const gitQuery = (slug: string) =>
+  queryOptions({
+    queryKey: keys.git(slug),
+    queryFn: () => getProjectGit(slug),
   });
 
 export const sessionQuery = () =>

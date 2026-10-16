@@ -25,6 +25,7 @@ import {
 import { HrefLink } from "@/app/HrefLink";
 import { Button, IconButton } from "@/components/button/Button";
 import { TextField } from "@/components/form/controls";
+import { CommitId } from "@/components/mono/CommitId";
 import { Mono } from "@/components/mono/Mono";
 import { taskPath } from "@/features/board/card";
 import { formatAge } from "@/format/time";
@@ -286,6 +287,7 @@ function Proposal({ slug, task }: { slug: string; task: TaskDetail }) {
           <Mono href={revisionPath(slug, integration.revision)}>
             {integration.revision}
           </Mono>{" "}
+          <CommitId commit={integration.commit} />{" "}
           <ActorText
             segments={integrationText(integration)}
             personClassName="text-bar"

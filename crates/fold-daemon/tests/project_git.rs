@@ -92,6 +92,47 @@ async fn integrate(fx: &Fixture) {
         .unwrap();
 }
 
+#[tokio::test]
+async fn a_commit_run_appends_git_committed_with_each_row_it_records() {
+    let fx = Fixture::new().await;
+    integrate(&fx).await;
+    let committed = commit_main(
+        fx.project.store(),
+        fx.project.paths(),
+        &Git::default(),
+        fx.project.clock(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(fx.count("SELECT COUNT(*) FROM revision_commits").await, 2);
+    assert_eq!(
+        fx.count(
+            r#"SELECT COUNT(*) FROM events e JOIN revision_commits rc ON rc.revision_id = e.revision_id AND rc."commit" = json_extract(e.data, '$.commit') WHERE e.type = 'git.committed'"#
+        )
+        .await,
+        2
+    );
+    let published: Vec<_> = committed
+        .events
+        .events()
+        .iter()
+        .map(|event| (event.event_type, event.revision))
+        .collect();
+    assert_eq!(
+        published,
+        [
+            (
+                types::GIT_COMMITTED,
+                Some(RevisionId::try_from_db(1).unwrap())
+            ),
+            (
+                types::GIT_COMMITTED,
+                Some(RevisionId::try_from_db(2).unwrap())
+            ),
+        ]
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_integration_moves_the_branch_and_the_folder_and_leaves_it_clean() {
     let fx = Fixture::new().await;
@@ -117,6 +158,27 @@ async fn an_integration_moves_the_branch_and_the_folder_and_leaves_it_clean() {
         Path::new("../README.md")
     );
     assert_eq!(git(&root, &["status", "--porcelain"]), "");
+
+    let filter = EventFilter {
+        types: vec![types::GIT_COMMITTED],
+        ..EventFilter::default()
+    };
+    until(async || {
+        fold_store::events::read_after(fx.project.store().read(), 0, &filter, 10)
+            .await
+            .unwrap()
+            .len()
+            == 2
+    })
+    .await;
+    let events = fold_store::events::read_after(fx.project.store().read(), 0, &filter, 10)
+        .await
+        .unwrap();
+    assert_eq!(
+        events[1].revision,
+        Some(RevisionId::try_from_db(2).unwrap())
+    );
+    assert_eq!(events[1].data, serde_json::json!({"commit": second}));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
