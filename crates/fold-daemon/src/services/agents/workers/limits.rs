@@ -1,9 +1,9 @@
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use fold_core::events::types;
 use fold_core::roles::{AreaLimitChange, WorkerLimits, WorkerLimitsChange};
 use fold_core::{Actor, FoldError, NewEvent, ProjectConfig, ProjectPaths, codes, policy};
+use fold_vcs::atomic::{EditLock, write_atomic};
 use serde_json::{Value, json};
 use toml_edit::{DocumentMut, Item, Table, TableLike, Value as TomlValue, value};
 
@@ -113,21 +113,9 @@ fn set_number(section: &mut dyn TableLike, key: &str, number: u64) -> Result<(),
     Ok(())
 }
 
-/// Writes `text` beside `path`, flushes it and renames it into place, so a reader sees the old file or the new one.
+/// Writes `text` over `path` through `write_atomic`, so a reader sees the old file or the new one.
 fn replace(path: &Path, text: &str) -> Result<(), FoldError> {
-    let mut staging: PathBuf = path.to_owned();
-    staging.set_extension("toml.new");
-    let write = || -> std::io::Result<()> {
-        let mut file = std::fs::File::create(&staging)?;
-        file.write_all(text.as_bytes())?;
-        file.flush()?;
-        file.sync_all()?;
-        std::fs::rename(&staging, path)
-    };
-    write().map_err(|error| {
-        let _ = std::fs::remove_file(&staging);
-        config_io(&error)
-    })
+    write_atomic(path, text.as_bytes()).map_err(|error| config_io(&error))
 }
 
 /// Puts `original` back after a write that did not commit; `None` removes the file, as it was missing before.
@@ -142,7 +130,7 @@ fn restore(path: &Path, original: Option<&str>) -> Result<(), FoldError> {
     }
 }
 
-/// Serialises the config rewrites of every project, so a restore never overwrites a rewrite that started after it.
+/// Serialises the config rewrites of the daemon's projects; the file lock held beside it serialises them with `fld remote`, so a restore never overwrites a rewrite that started after it.
 static REWRITE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 impl AgentService {
@@ -173,6 +161,15 @@ impl AgentService {
             })?
             .config();
         let _rewrite = REWRITE.lock().await;
+        let _file_lock = {
+            let path = path.clone();
+            joined(
+                tokio::task::spawn_blocking(move || {
+                    EditLock::acquire(&path).map_err(|error| config_io(&error))
+                })
+                .await,
+            )?
+        };
         let planned = {
             let path = path.clone();
             joined(tokio::task::spawn_blocking(move || edit(&path, &change)).await)?

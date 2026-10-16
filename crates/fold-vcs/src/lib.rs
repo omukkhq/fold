@@ -1,3 +1,4 @@
+pub mod atomic;
 pub mod batch;
 pub mod browse;
 pub mod compare;

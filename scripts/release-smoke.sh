@@ -34,7 +34,7 @@ got=$("$bin" --version 2>&1) || fail "'$bin --version' exited with an error: $go
 [ "$got" = "$want" ] || fail "expected '$want', got '$got'"
 
 work=$(mktemp -d) || fail "cannot create a temporary folder"
-mkdir -p "$work/data" "$work/config" "$work/runtime" "$work/project"
+mkdir -p "$work/data" "$work/config" "$work/runtime"
 chmod 700 "$work/runtime"
 export XDG_DATA_HOME="$work/data" XDG_CONFIG_HOME="$work/config" XDG_RUNTIME_DIR="$work/runtime" HOME="$work"
 socket="$work/runtime/fold/fold.sock"
@@ -43,7 +43,7 @@ step=free-port
 port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])' 2>/dev/null) ||
   fail "cannot find a free port (python3 is needed)"
 
-# The daemon starts before init: init starts a daemon itself when none runs, and that one would listen on the default port.
+# The daemon starts before init so that it listens on the chosen port; init creates the project folder and refuses one that exists.
 step=serve
 "$bin" serve --listen "127.0.0.1:$port" >"$work/serve.log" 2>&1 &
 pid=$!

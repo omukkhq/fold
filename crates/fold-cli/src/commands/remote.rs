@@ -7,7 +7,8 @@ use fold_core::config::{
     GIT_SECTION, REMOTES_SECTION, UNNAMED_REMOTE, check_branch, check_remote, check_remote_name,
 };
 use fold_core::{FoldError, GitConfig, ProjectConfig, ProjectPaths, codes};
-use fold_daemon::services::projects::{ProjectError, slug_for_dir_on_host};
+use fold_daemon::services::projects::{ProjectError, public_location, slug_for_dir_on_host};
+use fold_vcs::atomic::EditLock;
 use fold_vcs::git::Git;
 use fold_vcs::git_remote::{default_branch, prepare_mirror, project_repository, remove_remote};
 use hyper::Method;
@@ -182,6 +183,7 @@ fn set(
             })?
         }
     };
+    let _lock = lock_config(&paths.config())?;
     let text = read_config(&paths.config())?;
     let edited = with_remote(&text, &args.name, &url, &branch)?;
     prepare_mirror(git, &mirror, &args.name, &url)?;
@@ -199,6 +201,7 @@ fn set(
 /// Deletes `[remotes.<name>]` from the config and the remote with its fetched refs from the project's Git repository.
 fn remove(paths: &ProjectPaths, name: &str, out: &mut impl Write) -> Result<(), RemoteError> {
     check_remote_name(name)?;
+    let _lock = lock_config(&paths.config())?;
     let text = read_config(&paths.config())?;
     let edited = without_remote(&text, name)?;
     remove_remote(&Git::default(), &paths.git_dir(), name)?;
@@ -222,24 +225,11 @@ fn list(paths: &ProjectPaths, out: &mut impl Write) -> Result<(), RemoteError> {
             &format!(
                 "{name}\t{}\t{}{mark}",
                 remote.branch,
-                without_credentials(&remote.url)
+                public_location(&remote.url)
             ),
         )?;
     }
     Ok(())
-}
-
-/// `scheme://user:secret@host/path` without `user:secret@`; any other form is returned as it is.
-fn without_credentials(url: &str) -> String {
-    let Some(start) = url.find("://").map(|index| index + 3) else {
-        return url.to_owned();
-    };
-    let rest = &url[start..];
-    let host_end = rest.find('/').unwrap_or(rest.len());
-    match rest[..host_end].rfind('@') {
-        Some(at) => format!("{}{}", &url[..start], &rest[at + 1..]),
-        None => url.to_owned(),
-    }
 }
 
 fn read_config(path: &Path) -> Result<String, FoldError> {
@@ -284,19 +274,16 @@ fn lift_unnamed_remote(doc: &mut DocumentMut) -> Result<(), FoldError> {
     let Some(git) = doc.get_mut(GIT_SECTION).and_then(Item::as_table_like_mut) else {
         return Ok(());
     };
-    let url = git.remove("remote");
-    let push_on_integrate = git.remove("push_on_integrate");
-    let Some(url) = url else {
+    if !git.contains_key("remote") {
         return Ok(());
-    };
+    }
     let branch = git
         .get("branch")
         .cloned()
         .unwrap_or_else(|| value(GitConfig::default().branch));
+    let url = git.remove("remote").unwrap_or_default();
+    let push_on_integrate = git.remove("push_on_integrate");
     let remotes = remotes_table(doc)?;
-    if remotes.contains_key(UNNAMED_REMOTE) {
-        return Ok(());
-    }
     let mut section = Table::new();
     section.insert("url", url);
     section.insert("branch", branch);
@@ -320,8 +307,9 @@ fn remotes_table(doc: &mut DocumentMut) -> Result<&mut Table, FoldError> {
     })
 }
 
-/// `text` with `[remotes.<name>]` holding `url` and `branch`, its `push_on_integrate` kept, or `false` when absent. The result must be a valid config, so a file that is already invalid is refused before anything is written.
+/// `text` with `[remotes.<name>]` holding `url` and `branch`, its `push_on_integrate` kept, or `false` when absent. The input and the result must both be valid configs, so a file that fold-core refuses, such as one that names the origin twice, is refused before anything is written.
 fn with_remote(text: &str, name: &str, url: &str, branch: &str) -> Result<String, FoldError> {
+    ProjectConfig::from_toml(text)?;
     let mut doc = parse_config(text)?;
     lift_unnamed_remote(&mut doc)?;
     let section = |push_on_integrate: bool| {
@@ -374,18 +362,14 @@ fn without_remote(text: &str, name: &str) -> Result<String, FoldError> {
     Ok(doc.to_string())
 }
 
-/// Written to a new temporary file beside it and renamed over it, so a reader sees the old file or the new one and two writers never share a temporary file.
+/// Written through `write_atomic`, which keeps the file's permission bits.
 fn write_config(path: &Path, text: &str) -> Result<(), FoldError> {
-    let dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let mut temporary = tempfile::NamedTempFile::new_in(dir).map_err(|error| config_io(&error))?;
-    temporary
-        .write_all(text.as_bytes())
-        .and_then(|()| temporary.as_file().sync_all())
-        .map_err(|error| config_io(&error))?;
-    temporary
-        .persist(path)
-        .map_err(|error| config_io(&error.error))?;
-    Ok(())
+    fold_vcs::atomic::write_atomic(path, text.as_bytes()).map_err(|error| config_io(&error))
+}
+
+/// Holds the config's edit lock, which the daemon takes for its own rewrites, until the guard drops.
+fn lock_config(path: &Path) -> Result<EditLock, FoldError> {
+    EditLock::acquire(path).map_err(|error| config_io(&error))
 }
 
 fn config_io(error: &io::Error) -> FoldError {
@@ -705,21 +689,84 @@ mod tests {
         }
     }
 
+    fn project_with_config(text: &str) -> (tempfile::TempDir, ProjectPaths) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let paths = ProjectPaths::new(dir.path());
+        std::fs::create_dir_all(paths.config().parent().unwrap()).unwrap();
+        std::fs::write(paths.config(), text).unwrap();
+        (dir, paths)
+    }
+
     #[test]
     fn credentials_never_reach_the_list() {
-        assert_eq!(
-            without_credentials("https://user:token@example.com/a.git"),
-            "https://example.com/a.git"
+        let (_dir, paths) = project_with_config(
+            "[remotes.origin]\nurl = \"https://user:token@example.com/a.git?private_token=abc\"\nbranch = \"main\"\n",
         );
+        let mut out = Vec::new();
+        list(&paths, &mut out).unwrap();
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains("https://example.com/a.git"), "{out}");
+        assert!(!out.contains("token") && !out.contains("abc"), "{out}");
+    }
+
+    #[test]
+    fn a_config_that_names_the_origin_twice_is_refused_and_left_as_it_is() {
+        let twice =
+            "[git]\nremote = \"/a.git\"\n\n[remotes.origin]\nurl = \"/b.git\"\nbranch = \"main\"\n";
         assert_eq!(
-            without_credentials("https://example.com/a@b.git"),
-            "https://example.com/a@b.git"
+            with_remote(twice, "backup", "/c.git", "main")
+                .unwrap_err()
+                .code(),
+            codes::INVALID_CONFIG
         );
+        let (dir, paths) = project_with_config(twice);
+        git(dir.path(), &["init", "--quiet"]);
+        let mut out = Vec::new();
+        let args = SetArgs {
+            name: "backup".to_owned(),
+            url: "/c.git".to_owned(),
+            branch: Some("main".to_owned()),
+        };
         assert_eq!(
-            without_credentials("git@example.com:a.git"),
-            "git@example.com:a.git"
+            set(&paths, &args, &Git::default(), &mut out)
+                .unwrap_err()
+                .code(),
+            Some(codes::INVALID_CONFIG)
         );
-        assert_eq!(without_credentials("/srv/a.git"), "/srv/a.git");
+        assert_eq!(std::fs::read_to_string(paths.config()).unwrap(), twice);
+    }
+
+    #[test]
+    fn a_remote_change_waits_for_a_config_edit_in_progress_and_keeps_it() {
+        let both = "[remotes.origin]\nurl = \"/a.git\"\nbranch = \"main\"\n\n[remotes.backup]\nurl = \"/b.git\"\nbranch = \"main\"\n";
+        let (_dir, paths) = project_with_config(both);
+        let held = EditLock::acquire(&paths.config()).unwrap();
+        let removing = {
+            let paths = paths.clone();
+            std::thread::spawn(move || remove(&paths, "backup", &mut Vec::new()).is_ok())
+        };
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        assert_eq!(std::fs::read_to_string(paths.config()).unwrap(), both);
+        let edited = format!("lease_minutes = 9\n\n{both}");
+        fold_vcs::atomic::write_atomic(&paths.config(), edited.as_bytes()).unwrap();
+        drop(held);
+        assert!(removing.join().unwrap());
+        let text = std::fs::read_to_string(paths.config()).unwrap();
+        assert!(text.contains("lease_minutes = 9"), "{text}");
+        assert!(!text.contains("backup"), "{text}");
+    }
+
+    #[test]
+    fn a_written_config_keeps_its_permission_bits() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_dir, paths) = project_with_config("lease_minutes = 7\n");
+        std::fs::set_permissions(paths.config(), std::fs::Permissions::from_mode(0o640)).unwrap();
+        write_config(&paths.config(), "lease_minutes = 8\n").unwrap();
+        let mode = std::fs::metadata(paths.config())
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o640);
     }
 
     fn reply(status: u16, body: serde_json::Value) -> Response {
@@ -1017,7 +1064,7 @@ mod tests {
                     .unwrap()
                     .file_name()
                     .to_string_lossy()
-                    .starts_with(".tmp"))
+                    .ends_with(".tmp"))
                 .count(),
             0
         );

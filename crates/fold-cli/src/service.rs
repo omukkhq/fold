@@ -151,24 +151,9 @@ fn exec_word(path: &str) -> String {
     }
 }
 
-/// The unit is written to a temporary file in its own directory and renamed into place, so a reader never sees half a unit.
+/// The unit goes through `write_atomic`, so a reader never sees half a unit.
 fn write_unit(path: &Path, text: &str) -> io::Result<()> {
-    let dir = path
-        .parent()
-        .ok_or_else(|| io::Error::other("the unit path has no directory"))?;
-    std::fs::create_dir_all(dir)?;
-    let temp = dir.join(format!(".fold.service.{}.tmp", std::process::id()));
-    let written = std::fs::File::create(&temp).and_then(|mut file| {
-        file.write_all(text.as_bytes())?;
-        file.sync_all()
-    });
-    match written.and_then(|()| std::fs::rename(&temp, path)) {
-        Ok(()) => Ok(()),
-        Err(error) => {
-            let _ = std::fs::remove_file(&temp);
-            Err(error)
-        }
-    }
+    fold_vcs::atomic::write_atomic(path, text.as_bytes())
 }
 
 #[cfg(test)]

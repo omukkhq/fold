@@ -17,6 +17,8 @@ const START_TIMEOUT: Duration = Duration::from_secs(5);
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(2);
 /// Claude Code's hook input is a small JSON object; anything longer is refused unread.
 const MAX_INPUT: u64 = 1 << 20;
+/// The edit guard reads a `Write` of any size, because the content is part of the input; past this many bytes it denies.
+const MAX_EDIT_INPUT: u64 = 256 << 20;
 
 #[derive(Args, Debug)]
 pub struct HookArgs {
@@ -167,24 +169,106 @@ fn stop(options: &HookOptions, agent: &str) -> Result<Option<Value>, String> {
 
 /// Claude Code reads a deny decision from this hook even where no permission rule could express it: its path rules cannot deny a folder but one folder below it, and they would bind the human's own sessions too, while this hook runs for agents only.
 fn pre_tool_use() -> Result<Option<Value>, String> {
-    let input = input()?;
-    let cwd = input["cwd"].as_str().ok_or(codes::INVALID_REQUEST)?;
-    let tool = &input["tool_input"];
-    let Some(file) = tool["file_path"]
-        .as_str()
-        .or_else(|| tool["notebook_path"].as_str())
-    else {
+    edit_decision(io::stdin().lock(), MAX_EDIT_INPUT)
+}
+
+/// What the edit guard needs from the tool input. The content of a large `Write` is skipped while reading, so the input's size never hides the path from the guard.
+#[derive(Default)]
+struct EditTarget {
+    cwd: Option<String>,
+    file: Option<String>,
+}
+
+impl<'de> serde::Deserialize<'de> for EditTarget {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Fields;
+        impl<'de> serde::de::Visitor<'de> for Fields {
+            type Value = EditTarget;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a JSON object")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<EditTarget, A::Error> {
+                let mut target = EditTarget::default();
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "cwd" => target.cwd = map.next_value::<Option<String>>()?,
+                        "tool_input" => target.file = map.next_value::<ToolInput>()?.0,
+                        _ => {
+                            map.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(target)
+            }
+        }
+        deserializer.deserialize_map(Fields)
+    }
+}
+
+struct ToolInput(Option<String>);
+
+impl<'de> serde::Deserialize<'de> for ToolInput {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Fields;
+        impl<'de> serde::de::Visitor<'de> for Fields {
+            type Value = ToolInput;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a JSON object")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<ToolInput, A::Error> {
+                let (mut file, mut notebook) = (None, None);
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "file_path" => file = map.next_value::<Option<String>>()?,
+                        "notebook_path" => notebook = map.next_value::<Option<String>>()?,
+                        _ => {
+                            map.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(ToolInput(file.or(notebook)))
+            }
+            fn visit_unit<E>(self) -> Result<ToolInput, E> {
+                Ok(ToolInput(None))
+            }
+        }
+        deserializer.deserialize_any(Fields)
+    }
+}
+
+/// The guard's answer for one tool input. Input past `limit` bytes cannot be read to its end, so it is denied rather than left without a decision.
+fn edit_decision(input: impl Read, limit: u64) -> Result<Option<Value>, String> {
+    let mut input = input.take(limit);
+    let target = match serde_json::from_reader::<_, EditTarget>(&mut input) {
+        Ok(target) => target,
+        Err(_) if input.limit() == 0 => {
+            return Ok(Some(deny(
+                "the tool input is too large for fold to check; make the edit in smaller parts inside your workspace under .fold/ws/",
+            )));
+        }
+        Err(_) => return Err(codes::INVALID_REQUEST.to_owned()),
+    };
+    let cwd = target.cwd.ok_or(codes::INVALID_REQUEST)?;
+    let Some(file) = target.file else {
         return Ok(None);
     };
-    Ok(edit_refusal(Path::new(cwd), Path::new(file)).map(|reason| {
-        json!({
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": reason,
-            }
-        })
-    }))
+    Ok(edit_refusal(Path::new(&cwd), Path::new(&file)).map(|reason| deny(&reason)))
+}
+
+fn deny(reason: &str) -> Value {
+    json!({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        }
+    })
 }
 
 /// Why an agent may not change `file`, or `None` when it may. Inside the fold project that holds `cwd`, an agent changes files only inside one workspace below `.fold/ws/`: the project folder is main, which changes only through integration, and the rest of `.fold/` is fold's data. A path outside the project is left to Claude Code's own rules. `..` and the symlinks of the folders that exist are resolved first, so neither leads into or out of a workspace unseen.
@@ -203,12 +287,15 @@ fn edit_refusal(cwd: &Path, file: &Path) -> Option<String> {
     })
 }
 
-/// `path` with `.` and `..` removed and its longest existing ancestor replaced by its canonical form.
+/// `path` with `.` and `..` removed and its longest existing ancestor replaced by its canonical form. A `..` follows the symlinks before it, as the operating system does, so `link/..` is the parent of the link's target.
 fn resolve(path: &Path) -> PathBuf {
     let mut lexical = PathBuf::new();
     for component in path.components() {
         match component {
             Component::ParentDir => {
+                if let Ok(canonical) = std::fs::canonicalize(&lexical) {
+                    lexical = canonical;
+                }
                 lexical.pop();
             }
             Component::CurDir => {}
@@ -347,5 +434,84 @@ mod tests {
         ));
         assert!(!refused(dir.path(), "app/src/lib.rs"));
         assert!(!refused(&dir.path().join("missing"), "x"));
+    }
+
+    #[test]
+    fn dot_dot_follows_the_symlink_before_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("app");
+        std::fs::create_dir_all(root.join(".fold/ws/t-1")).unwrap();
+        std::fs::write(root.join(".fold/fold.db"), "").unwrap();
+        std::fs::write(root.join("README.md"), "").unwrap();
+        // `link` leads to a folder below the project folder, so `link/..` is the project folder.
+        let below = root.join("sub/deeper");
+        std::fs::create_dir_all(&below).unwrap();
+        symlink(&below, root.join(".fold/ws/t-1/link")).unwrap();
+        let outside = dir.path().join("outside/deep");
+        std::fs::create_dir_all(&outside).unwrap();
+        symlink(&outside, root.join(".fold/ws/t-1/away")).unwrap();
+        let workspace = root.join(".fold/ws/t-1");
+
+        // Lexically `link/../README.md` is inside the workspace; the operating system writes to `sub/README.md` of main.
+        assert!(edit_refusal(&workspace, Path::new("link/../README.md")).is_some());
+        assert!(edit_refusal(&workspace, Path::new("link/../../README.md")).is_some());
+        // Lexically `inner/../../x` leaves the workspace; really `inner` is two levels down and the file stays in it.
+        std::fs::create_dir_all(workspace.join("a/b")).unwrap();
+        symlink(workspace.join("a/b"), workspace.join("inner")).unwrap();
+        assert!(edit_refusal(&workspace, Path::new("inner/../../x")).is_none());
+        assert!(edit_refusal(&root, Path::new(".fold/ws/t-1/link/../../README.md")).is_some());
+        // `away/..` leaves the project; Claude Code's own rules decide there.
+        assert!(edit_refusal(&workspace, Path::new("away/../x")).is_none());
+        // `sub/..` is a plain folder inside main.
+        assert!(edit_refusal(&root, Path::new("sub/../README.md")).is_some());
+    }
+
+    fn project_with_input(content_len: usize, file: &str) -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("app");
+        std::fs::create_dir_all(root.join(".fold/ws/t-1")).unwrap();
+        std::fs::write(root.join(".fold/fold.db"), "").unwrap();
+        let input = json!({
+            "tool_input": {"content": "x".repeat(content_len), "file_path": file},
+            "cwd": root.to_str().unwrap(),
+        });
+        (dir, input.to_string())
+    }
+
+    fn denied(answer: Result<Option<Value>, String>) -> bool {
+        answer
+            .unwrap()
+            .is_some_and(|value| value["hookSpecificOutput"]["permissionDecision"] == "deny")
+    }
+
+    #[test]
+    fn a_large_write_is_judged_by_its_path() {
+        let (_dir, into_main) = project_with_input(2 << 20, "README.md");
+        assert!(into_main.len() > MAX_INPUT as usize);
+        assert!(denied(edit_decision(into_main.as_bytes(), MAX_EDIT_INPUT)));
+
+        let (_dir, into_workspace) = project_with_input(2 << 20, ".fold/ws/t-1/big.txt");
+        assert!(!denied(edit_decision(
+            into_workspace.as_bytes(),
+            MAX_EDIT_INPUT
+        )));
+    }
+
+    #[test]
+    fn input_past_the_limit_is_denied_and_bad_input_is_an_error() {
+        let (_dir, input) = project_with_input(1000, ".fold/ws/t-1/a.txt");
+        assert!(denied(edit_decision(input.as_bytes(), 100)));
+        assert!(edit_decision(&b"not json"[..], MAX_EDIT_INPUT).is_err());
+        assert!(edit_decision(&br#"{"tool_input":{}}"#[..], MAX_EDIT_INPUT).is_err());
+        assert!(
+            edit_decision(&br#"{"cwd":"/","tool_input":{}}"#[..], MAX_EDIT_INPUT)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            edit_decision(&br#"{"cwd":"/","tool_input":null}"#[..], MAX_EDIT_INPUT)
+                .unwrap()
+                .is_none()
+        );
     }
 }

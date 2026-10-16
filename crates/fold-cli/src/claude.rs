@@ -208,14 +208,9 @@ fn start(
     Ok(Start::New(id))
 }
 
-/// Writes the record through a temporary file and a rename, so a reader never sees half an id. Agent names hold no `.`, so the temporary file of one name is never the record of another.
+/// Writes the record through `write_atomic`, so a reader never sees half an id and two starts of one agent never share a temporary file.
 fn write_record(path: &Path, id: &str) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let temp = path.with_extension("tmp");
-    std::fs::write(&temp, format!("{id}\n"))?;
-    std::fs::rename(&temp, path)
+    fold_vcs::atomic::write_atomic(path, format!("{id}\n").as_bytes())
 }
 
 /// Replaces the recorded session of `agent` with `id` when `agent` has a record that names another session. Only `fld claude` and `fld new` create a record, so an agent they never started, such as a worker, keeps having none.

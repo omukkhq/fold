@@ -1,5 +1,4 @@
-use std::io::{self, Write as _};
-use std::os::unix::fs::PermissionsExt;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use fold_core::{FoldError, codes};
@@ -280,7 +279,7 @@ pub fn agents_md(existing: Option<&str>, section: &str) -> Result<String, &'stat
     }
 }
 
-/// Atomic: a temporary file in the same directory, flushed, then renamed over the path. An existing file keeps its permissions.
+/// Atomic through `write_atomic`; an existing file keeps its permissions.
 fn replace(path: &Path, content: &[u8]) -> Result<(), ClaudeFileError> {
     let io_error = |source| ClaudeFileError::Io {
         path: path.to_owned(),
@@ -289,18 +288,7 @@ fn replace(path: &Path, content: &[u8]) -> Result<(), ClaudeFileError> {
     if read(path)?.as_deref() == Some(content) {
         return Ok(());
     }
-    let dir = path.parent().unwrap_or(Path::new("."));
-    std::fs::create_dir_all(dir).map_err(io_error)?;
-    let mode = match std::fs::metadata(path) {
-        Ok(metadata) => metadata.permissions(),
-        Err(_) => std::fs::Permissions::from_mode(0o644),
-    };
-    let mut file = tempfile::NamedTempFile::new_in(dir).map_err(io_error)?;
-    file.write_all(content).map_err(io_error)?;
-    file.as_file().set_permissions(mode).map_err(io_error)?;
-    file.as_file().sync_all().map_err(io_error)?;
-    file.persist(path).map_err(|error| io_error(error.error))?;
-    Ok(())
+    fold_vcs::atomic::write_atomic(path, content).map_err(io_error)
 }
 
 /// The files that make Claude Code skip `AGENTS.md`, from the project root upwards. `root` must be absolute, or the walk stops at the current directory. `home` is the canonical `HOME`, whose `.claude/CLAUDE.md` is the user's own and is skipped.

@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs::{self, File, Metadata};
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::io;
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -9,7 +9,7 @@ use fold_core::object::{ObjectHash, varint};
 use fold_core::tree::EntryKind;
 
 use crate::paths::RepoPath;
-use crate::platform::{Capabilities, DirHandle, file_identity, file_mode, sync_dir};
+use crate::platform::{Capabilities, DirHandle, file_identity, file_mode};
 
 const MAGIC: &[u8; 4] = b"FIDX";
 const VERSION: u8 = 1;
@@ -18,7 +18,6 @@ const CHECKSUM_LEN: usize = 32;
 const KIND_SHIFT: u32 = 16;
 const MODE_MASK: u32 = 0xFFFF;
 
-static SAVE_COUNTER: AtomicU64 = AtomicU64::new(0);
 static PROBE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// What the last scan or write saw of one file, and the hash it had then.
@@ -108,19 +107,7 @@ impl StatIndex {
             path.file_name().unwrap_or_default().to_string_lossy()
         );
         sweep_saves(dir, &prefix)?;
-        let number = SAVE_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let tmp: PathBuf = dir.join(format!("{prefix}{}-{number}.tmp", std::process::id()));
-        let written = (|| {
-            let mut file = File::create(&tmp)?;
-            file.write_all(&encode(&self.entries))?;
-            file.sync_all()?;
-            fs::rename(&tmp, path)
-        })();
-        if let Err(error) = written {
-            let _ = fs::remove_file(&tmp);
-            return Err(error);
-        }
-        sync_dir(dir)?;
+        crate::atomic::write_atomic(path, &encode(&self.entries))?;
         self.boundary_ns = mtime_ns(&fs::metadata(path)?);
         self.rebuilt = false;
         Ok(())

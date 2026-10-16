@@ -185,3 +185,31 @@ async fn a_lead_and_a_value_over_twenty_are_refused_and_a_human_sets_a_limit_ove
     );
     assert_eq!(limit_events(&harness).await.len(), 2);
 }
+
+#[tokio::test]
+async fn a_limit_change_waits_for_a_config_edit_in_progress_and_keeps_it() {
+    let fake = FakeClaude::new("result");
+    let harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    let config = std::path::Path::new(harness.root()).join(".fold/config.toml");
+    std::fs::write(&config, BEFORE).unwrap();
+
+    let held = fold_vcs::atomic::EditLock::acquire(&config).unwrap();
+    let edited = BEFORE.replace(
+        "[integration]",
+        "[remotes.origin]\nurl = \"/srv/a.git\"\nbranch = \"main\"\n\n[integration]",
+    );
+    let (set, ()) = tokio::join!(
+        harness.call(MAIN, "set_worker_limits", json!({"task_coder": 10})),
+        async {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            assert_eq!(std::fs::read_to_string(&config).unwrap(), BEFORE);
+            fold_vcs::atomic::write_atomic(&config, edited.as_bytes()).unwrap();
+            drop(held);
+        }
+    );
+    assert_eq!(set["limits"]["task_coder"], 10);
+    assert_eq!(
+        std::fs::read_to_string(&config).unwrap(),
+        edited.replace("task_coder = 4", "task_coder = 10")
+    );
+}
