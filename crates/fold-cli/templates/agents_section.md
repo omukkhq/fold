@@ -2,7 +2,7 @@
 
 This directory is a fold project. Its files are fold main, the integrated code, and its own Git repository gets one commit for each integration. fold keeps its data in `.fold/`, and each task workspace is under `.fold/ws/`.
 
-The user starts the main agent here with `fld claude`, which starts fold when needed. Start every other session here with `FOLD_AGENT=<name> claude --name <name>`. Your fold identity and your Claude Code name are then the same.
+The user starts the main agent here with `fld claude`, which starts fold when needed and continues the last main session, or with `fld new` for a new session. Start every other session here with `FOLD_AGENT=<name> claude --name <name>`. Your fold identity and your Claude Code name are then the same.
 
 The fold workflow in short:
 

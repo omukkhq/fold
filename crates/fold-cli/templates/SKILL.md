@@ -11,7 +11,7 @@ Each section below is for one role. The main agent runs the team, an orchestrato
 
 ## Identity
 
-The user starts the main agent in the project folder with `fld claude`. It starts the daemon when needed, then the user's own Claude Code session as the agent `main` with the `main` tag. `fld claude --name <name>` picks another name, and the arguments after `--` go to `claude`. Start any other session with `FOLD_AGENT=<name> claude --name <name>`. The environment variable gives your agent name to the tools, and the Claude Code name gives the session its messaging socket. Without it, call `register_agent(name, tags?)` first.
+The user starts the main agent in the project folder with `fld claude`. It starts the daemon when needed, then the user's own Claude Code session as the agent `main` with the `main` tag. `fld claude` continues the last main session, also after `/clear` or `/resume` inside it, and `fld new` starts a new one. `fld claude --name <name>` picks another name, and the arguments after `--` go to `claude`. Start any other session with `FOLD_AGENT=<name> claude --name <name>`. The environment variable gives your agent name to the tools, and the Claude Code name gives the session its messaging socket. Without it, call `register_agent(name, tags?)` first.
 
 Every other tool refuses with `agent_not_registered` until the agent is registered. Use `list_agents` to see the agents, their presence, their workers and their claims.
 

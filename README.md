@@ -10,7 +10,7 @@ cd ~/myapp
 fld claude
 ```
 
-`fld init` makes the folder a project, and `fld claude` starts fold and the main agent, your own Claude Code session. Tell the main agent what to build. It plans the work as tasks, defines the areas of the project and starts a lead for each area and a review lead; the leads start the coders and reviewers, and fold integrates each approved proposal with one Git commit. Run `fld agent tag review-lead integrator` once the review lead runs, so its approvals integrate.
+`fld init` makes the folder a project, and `fld claude` starts fold and the main agent, your own Claude Code session. Run `fld claude` again later to return to the same conversation, or `fld new` to start a new one. Tell the main agent what to build. It plans the work as tasks, defines the areas of the project and starts a lead for each area and a review lead; the leads start the coders and reviewers, and fold integrates each approved proposal with one Git commit. Run `fld agent tag review-lead integrator` once the review lead runs, so its approvals integrate.
 
 ## Commands
 
@@ -32,7 +32,8 @@ A project is one folder, and its files are fold main: the code every integration
 
 | Command | What it does |
 |---|---|
-| `fld claude` | Starts the daemon when needed, then your own Claude Code session in the project root as the project's main agent: the agent `main` with the `main` tag, which handles requests, defines areas, plans tasks and starts the worker agents. `--name` picks another agent name, and the arguments after `--` go to `claude`. It refuses outside a project and when another agent is the main agent, and it changes no Claude Code settings. |
+| `fld claude` | Starts the daemon when needed, then your own Claude Code session in the project root as the project's main agent: the agent `main` with the `main` tag, which handles requests, defines areas, plans tasks and starts the worker agents. It continues the last conversation of the main agent, so you return to it: the session that fld started last, or the one you moved to inside it with `/clear` or `/resume`. When there is none, or Claude Code no longer has it, it starts a new one. A session you started without fld is never continued. `--name` picks another agent name, which keeps its own conversation, and the arguments after `--` go to `claude`; when they choose the session themselves (`--resume`, `--continue`, `--session-id`), fld adds none of its own. It refuses outside a project and when another agent is the main agent, and it changes no Claude Code settings. |
+| `fld new` | Does what `fld claude` does, but always starts a new main session, which the next `fld claude` continues. `fld new claude` is the same. |
 | `fld mcp` | Connects a Claude Code session to the daemon over stdio, starting the daemon when needed. The `.mcp.json` that `fld init` writes registers it as the `fold` server. |
 | `fld agent tag <agent> integrator` | Grants the `integrator` tag to an agent of the project; only a human grants it. Agents set their other tags themselves when they register. |
 | `fld agent untag <agent> integrator` | Removes the tag. |

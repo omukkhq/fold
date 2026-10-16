@@ -470,9 +470,9 @@ fn the_skill_uses_exactly_the_four_verdicts() {
     }
 }
 
-const SUBCOMMANDS: [&str; 14] = [
-    "init", "serve", "mcp", "doctor", "setup", "gc", "agent", "claude", "token", "remote", "push",
-    "pull", "hook", "dev",
+const SUBCOMMANDS: [&str; 15] = [
+    "init", "serve", "mcp", "doctor", "setup", "gc", "agent", "claude", "new", "token", "remote",
+    "push", "pull", "hook", "dev",
 ];
 
 /// Lines that name the old binary on purpose: the hook prefix that `fld init --refresh` replaces in files written for it, and the fixture that proves the refresh replaces its server and hooks.

@@ -4,9 +4,10 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use clap::Args;
+use clap::{Args, ValueEnum};
 use fold_cli::daemon_client::{self, ClientConfig, ClientError, DaemonClient, Response};
-use fold_core::{AgentName, FoldError, MAIN_TAG, codes};
+use fold_core::roles::session_uuid;
+use fold_core::{AgentName, FoldError, MAIN_TAG, ProjectPaths, codes};
 use fold_daemon::services::projects::{ProjectError, root_for_dir_on_host, slug_for_dir_on_host};
 use hyper::Method;
 use thiserror::Error;
@@ -25,6 +26,36 @@ pub struct ClaudeArgs {
     /// Arguments for claude itself, after `--`
     #[arg(last = true)]
     claude_args: Vec<OsString>,
+}
+
+#[derive(Args, Debug)]
+pub struct NewArgs {
+    /// What to start; `claude` is the only one and the default
+    #[arg(value_enum)]
+    target: Option<NewTarget>,
+    #[command(flatten)]
+    claude: ClaudeArgs,
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NewTarget {
+    /// A new Claude Code session as the main agent
+    Claude,
+}
+
+/// Which Claude Code session the main agent gets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Session {
+    /// The main session that `fld` started last, or a new one when Claude Code no longer has it.
+    Continue,
+    New,
+}
+
+/// The session arguments of one `claude` run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Start {
+    New(String),
+    Resume(String),
 }
 
 #[derive(Debug, Error)]
@@ -49,6 +80,8 @@ pub enum ClaudeError {
         message: String,
         hint: Option<String>,
     },
+    #[error("cannot record the main session in .fold: {0}")]
+    Record(io::Error),
     #[error("cannot run claude: {0}")]
     Exec(io::Error),
 }
@@ -61,9 +94,12 @@ impl ClaudeError {
             Self::Config(error) => error.code(),
             Self::Project(error) => error.code(),
             Self::Refused { code, .. } => Some(code),
-            Self::Cwd(_) | Self::Exe(_) | Self::Runtime(_) | Self::Client(_) | Self::Exec(_) => {
-                None
-            }
+            Self::Cwd(_)
+            | Self::Exe(_)
+            | Self::Runtime(_)
+            | Self::Client(_)
+            | Self::Record(_)
+            | Self::Exec(_) => None,
         }
     }
 
@@ -71,7 +107,7 @@ impl ClaudeError {
     pub fn hint(&self) -> Option<&str> {
         match self {
             Self::Project(_) if self.code() == Some(codes::PROJECT_NOT_FOUND) => {
-                Some("run fld claude inside a fold project, or run fld init there first")
+                Some("run fld init in the project folder first")
             }
             Self::Fold(error) | Self::Project(ProjectError::Fold(error)) => error.hint(),
             Self::Refused { hint, .. } => hint.as_deref(),
@@ -81,13 +117,21 @@ impl ClaudeError {
             | Self::Cwd(_)
             | Self::Exe(_)
             | Self::Runtime(_)
-            | Self::Client(_) => None,
+            | Self::Client(_)
+            | Self::Record(_) => None,
         }
     }
 }
 
-/// Starts the daemon when it is not running, then replaces this process with the user's own `claude`, an interactive session in the project root that is the main agent. `FOLD_AGENT` and `--name` give the session its agent name and its messaging socket, and `FOLD_AGENT_TAGS` makes `fld mcp` register it with the `main` tag. It writes no Claude Code settings. It returns only when it could not start `claude`.
-pub fn run(args: &ClaudeArgs, dirs: &Dirs) -> Result<(), ClaudeError> {
+/// `fld new` and `fld new claude`: [`run`] with a new session.
+pub fn run_new(args: &NewArgs, dirs: &Dirs) -> Result<(), ClaudeError> {
+    match args.target {
+        None | Some(NewTarget::Claude) => run(&args.claude, Session::New, dirs),
+    }
+}
+
+/// Starts the daemon when it is not running, then replaces this process with the user's own `claude`, an interactive session in the project root that is the main agent. `FOLD_AGENT` and `--name` give the session its agent name and its messaging socket, and `FOLD_AGENT_TAGS` makes `fld mcp` register it with the `main` tag. fold chooses the id of every new session and records it, so that [`Session::Continue`] resumes the session `fld` started and never one the user started without it, which `claude --continue` could pick. It writes no Claude Code settings. It returns only when it could not start `claude`.
+pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), ClaudeError> {
     let agent = AgentName::parse(&args.name).map_err(FoldError::from)?;
     let host = host_paths(dirs)?;
     let cwd = std::env::current_dir()
@@ -110,16 +154,166 @@ pub fn run(args: &ClaudeArgs, dirs: &Dirs) -> Result<(), ClaudeError> {
         Ok::<_, ClaudeError>(root)
     })?;
     drop(runtime);
-    let error = command(Path::new("claude"), &root, &agent, &args.claude_args).exec();
+    let start = if picks_session(&args.claude_args) {
+        None
+    } else {
+        let config_dir = claude_config_dir(|name| std::env::var_os(name)).map(|dir| root.join(dir));
+        Some(start(
+            &ProjectPaths::new(&root),
+            &agent,
+            session,
+            config_dir.as_deref(),
+            new_session_id,
+        )?)
+    };
+    let error = command(
+        Path::new("claude"),
+        &root,
+        &agent,
+        start.as_ref(),
+        &args.claude_args,
+    )
+    .exec();
     Err(ClaudeError::Exec(error))
 }
 
-/// The `claude` run of `fld claude`: its own arguments come after `--name`.
-fn command(claude: &Path, root: &Path, agent: &AgentName, extra: &[OsString]) -> Command {
+/// Whether the user's own arguments for `claude` already choose the session. fold then adds no session argument of its own, which `claude` would refuse or take in place of the user's, and keeps its record as it is.
+fn picks_session(extra: &[OsString]) -> bool {
+    extra.iter().any(|arg| {
+        let arg = arg.to_string_lossy();
+        matches!(
+            arg.as_ref(),
+            "-c" | "--continue" | "-r" | "--resume" | "--session-id"
+        ) || arg.starts_with("--resume=")
+            || arg.starts_with("--session-id=")
+    })
+}
+
+/// Resumes the recorded session of `agent` when Claude Code still has it; otherwise records `new_id()` as that session and starts it.
+fn start(
+    paths: &ProjectPaths,
+    agent: &AgentName,
+    session: Session,
+    config_dir: Option<&Path>,
+    new_id: impl FnOnce() -> Result<String, ClaudeError>,
+) -> Result<Start, ClaudeError> {
+    if session == Session::Continue
+        && let Some(id) = recorded(paths, agent)
+        && config_dir.is_some_and(|dir| transcript_exists(dir, paths.root(), &id))
+    {
+        return Ok(Start::Resume(id));
+    }
+    let id = new_id()?;
+    write_record(&paths.main_session(agent), &id).map_err(ClaudeError::Record)?;
+    Ok(Start::New(id))
+}
+
+/// Writes the record through a temporary file and a rename, so a reader never sees half an id. Agent names hold no `.`, so the temporary file of one name is never the record of another.
+fn write_record(path: &Path, id: &str) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let temp = path.with_extension("tmp");
+    std::fs::write(&temp, format!("{id}\n"))?;
+    std::fs::rename(&temp, path)
+}
+
+/// Replaces the recorded session of `agent` with `id` when `agent` has a record that names another session. Only `fld claude` and `fld new` create a record, so an agent they never started, such as a worker, keeps having none.
+pub(crate) fn follow_record(paths: &ProjectPaths, agent: &AgentName, id: &str) -> io::Result<()> {
+    let path = paths.main_session(agent);
+    if !is_session_id(id) || !path.is_file() || recorded(paths, agent).as_deref() == Some(id) {
+        return Ok(());
+    }
+    write_record(&path, id)
+}
+
+fn new_session_id() -> Result<String, ClaudeError> {
+    let mut bytes = [0_u8; 16];
+    getrandom::fill(&mut bytes).map_err(|_| {
+        FoldError::new(
+            codes::INTERNAL_ERROR,
+            "the system could not give random bytes",
+        )
+    })?;
+    Ok(session_uuid(bytes))
+}
+
+/// The recorded session id of `agent`, when the record holds one.
+fn recorded(paths: &ProjectPaths, agent: &AgentName) -> Option<String> {
+    let text = std::fs::read_to_string(paths.main_session(agent)).ok()?;
+    let id = text.trim();
+    is_session_id(id).then(|| id.to_owned())
+}
+
+/// A UUID in the form of [`session_uuid`], so a record can never name a path outside Claude Code's project folder.
+fn is_session_id(id: &str) -> bool {
+    id.len() == 36
+        && id.bytes().enumerate().all(|(index, byte)| match index {
+            8 | 13 | 18 | 23 => byte == b'-',
+            _ => byte.is_ascii_hexdigit(),
+        })
+}
+
+/// Claude Code's own folder from the environment `var`: `CLAUDE_CONFIG_DIR`, or `.claude` in the home directory; a relative one is relative to the project root, where `claude` runs. It is `None` when fold cannot be sure which folder Claude Code keeps the project's transcripts in, so that a new session starts: Claude Code takes a set but empty `CLAUDE_CONFIG_DIR` as given, and `CLAUDE_CODE_PROJECT_DIR_NAME` can give the project folder another name.
+fn claude_config_dir(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    if var("CLAUDE_CODE_PROJECT_DIR_NAME").is_some_and(|name| !name.is_empty()) {
+        return None;
+    }
+    match var("CLAUDE_CONFIG_DIR") {
+        Some(dir) if dir.is_empty() => None,
+        Some(dir) => Some(PathBuf::from(dir)),
+        None => var("HOME")
+            .filter(|home| !home.is_empty())
+            .map(|home| PathBuf::from(home).join(".claude")),
+    }
+}
+
+/// Whether Claude Code still has the session `id` of the project at `root`. An interactive `claude --resume` of a session it does not have stops at "No conversation found", and an `exec` cannot recover from that, so fold checks first that the session's transcript file exists. It tests only that the file is there and never opens it, because the transcript holds the user's conversation. Where the file lives is Claude Code's own layout, not a documented interface: `projects/<name>/<id>.jsonl` in its folder, where the name is the root with every UTF-16 unit other than an ASCII letter or digit replaced by `-`, and a name longer than 200 characters is cut to 200 and followed by `-` and a hash, which Claude Code itself matches by that prefix. When the layout changes, the file is not found and a new session starts, which loses the old conversation but never stops the user at an error. A transcript appears only after the first message, so a session the user left empty starts again as a new one.
+fn transcript_exists(config_dir: &Path, root: &Path, id: &str) -> bool {
+    const MAX_NAME: usize = 200;
+    let projects = config_dir.join("projects");
+    let file = format!("{id}.jsonl");
+    let mut name = String::new();
+    for c in root.to_string_lossy().chars() {
+        if c.is_ascii_alphanumeric() {
+            name.push(c);
+        } else {
+            name.extend(std::iter::repeat_n('-', c.len_utf16()));
+        }
+    }
+    if name.len() <= MAX_NAME {
+        return projects.join(&name).join(&file).is_file();
+    }
+    let prefix = format!("{}-", &name[..MAX_NAME]);
+    std::fs::read_dir(&projects)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|dir| dir.starts_with(&prefix))
+                && entry.path().join(&file).is_file()
+        })
+}
+
+/// The `claude` run of `fld claude`: its own arguments come after `--name` and the session, which is `None` when they choose it themselves.
+fn command(
+    claude: &Path,
+    root: &Path,
+    agent: &AgentName,
+    start: Option<&Start>,
+    extra: &[OsString],
+) -> Command {
     let mut command = Command::new(claude);
+    command.arg("--name").arg(agent.as_str());
+    match start {
+        Some(Start::New(id)) => command.arg("--session-id").arg(id),
+        Some(Start::Resume(id)) => command.arg("--resume").arg(id),
+        None => &mut command,
+    };
     command
-        .arg("--name")
-        .arg(agent.as_str())
         .args(extra)
         .current_dir(root)
         .env("FOLD_AGENT", agent.as_str())
@@ -184,6 +378,250 @@ mod tests {
         Wrapper::try_parse_from(std::iter::once("claude").chain(args.iter().copied()))
     }
 
+    #[derive(Parser, Debug)]
+    struct NewWrapper {
+        #[command(flatten)]
+        args: NewArgs,
+    }
+
+    fn parse_new(args: &[&str]) -> Result<NewArgs, clap::Error> {
+        NewWrapper::try_parse_from(std::iter::once("new").chain(args.iter().copied()))
+            .map(|wrapper| wrapper.args)
+    }
+
+    const ID: &str = "0f8e2c1a-5b7d-4c3e-9a1f-2d4b6c8e0a13";
+
+    #[test]
+    fn fld_new_takes_claude_as_an_optional_target() {
+        let bare = parse_new(&[]).unwrap();
+        assert_eq!(bare.target, None);
+        assert_eq!(bare.claude.name, "main");
+        let named = parse_new(&["claude", "--name", "lead", "--", "--model", "opus"]).unwrap();
+        assert_eq!(named.target, Some(NewTarget::Claude));
+        assert_eq!(named.claude.name, "lead");
+        assert_eq!(named.claude.claude_args, ["--model", "opus"]);
+        let rest = parse_new(&["--", "claude"]).unwrap();
+        assert_eq!(rest.target, None);
+        assert_eq!(rest.claude.claude_args, ["claude"]);
+        assert!(parse_new(&["codex"]).is_err());
+    }
+
+    #[test]
+    fn session_ids_are_uuids_only() {
+        assert!(is_session_id(ID));
+        assert!(is_session_id(&new_session_id().unwrap()));
+        assert!(!is_session_id(""));
+        assert!(!is_session_id("../../../../etc/passwd-aaaaaaaaaaaaaaaaaaa"));
+        assert!(!is_session_id("0f8e2c1a-5b7d-4c3e-9a1f-2d4b6c8e0a1g"));
+        assert!(!is_session_id("0f8e2c1a05b7d-4c3e-9a1f-2d4b6c8e0a13"));
+    }
+
+    #[test]
+    fn a_transcript_counts_only_in_the_folder_of_the_root() {
+        let config = tempfile::tempdir().unwrap();
+        let root = Path::new("/home/ana/my.app/web_2");
+        assert!(!transcript_exists(config.path(), root, ID));
+        let other = config.path().join("projects/-home-ana-other");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join(format!("{ID}.jsonl")), "").unwrap();
+        assert!(!transcript_exists(config.path(), root, ID));
+        let folder = config.path().join("projects/-home-ana-my-app-web-2");
+        std::fs::create_dir_all(&folder).unwrap();
+        assert!(!transcript_exists(config.path(), root, ID));
+        std::fs::write(folder.join(format!("{ID}.jsonl")), "").unwrap();
+        assert!(transcript_exists(config.path(), root, ID));
+        assert!(!transcript_exists(
+            config.path(),
+            root,
+            &ID.replace('0', "1")
+        ));
+    }
+
+    #[test]
+    fn a_long_root_matches_its_cut_folder_name() {
+        let config = tempfile::tempdir().unwrap();
+        let root = PathBuf::from(format!("/{}", "a".repeat(250)));
+        assert!(!transcript_exists(config.path(), &root, ID));
+        let cut = format!("-{}-1x2y3z", "a".repeat(199));
+        let folder = config.path().join("projects").join(cut);
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join(format!("{ID}.jsonl")), "").unwrap();
+        assert!(transcript_exists(config.path(), &root, ID));
+        assert!(!transcript_exists(
+            config.path(),
+            &root,
+            &ID.replace('0', "1")
+        ));
+        let other = "11111111-2222-4333-8444-555555555555";
+        let uncut = config
+            .path()
+            .join("projects")
+            .join(format!("-{}", "a".repeat(250)));
+        std::fs::create_dir_all(&uncut).unwrap();
+        std::fs::write(uncut.join(format!("{other}.jsonl")), "").unwrap();
+        assert!(
+            !transcript_exists(config.path(), &root, other),
+            "only the cut name, a dash and the hash"
+        );
+    }
+
+    #[test]
+    fn a_character_outside_utf16s_basic_plane_counts_as_two_dashes() {
+        let config = tempfile::tempdir().unwrap();
+        let root = Path::new("/home/ana/\u{1f642}app");
+        let folder = config.path().join("projects/-home-ana---app");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join(format!("{ID}.jsonl")), "").unwrap();
+        assert!(transcript_exists(config.path(), root, ID));
+    }
+
+    #[test]
+    fn the_config_dir_is_none_when_the_transcripts_folder_is_unsure() {
+        let dir = |vars: &[(&str, &str)]| {
+            let vars: Vec<(String, OsString)> = vars
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), OsString::from(value)))
+                .collect();
+            claude_config_dir(move |name| {
+                vars.iter()
+                    .find(|(key, _)| key == name)
+                    .map(|(_, value)| value.clone())
+            })
+        };
+        assert_eq!(
+            dir(&[("HOME", "/home/ana")]),
+            Some(PathBuf::from("/home/ana/.claude"))
+        );
+        assert_eq!(
+            dir(&[("HOME", "/home/ana"), ("CLAUDE_CONFIG_DIR", "/etc/cc")]),
+            Some(PathBuf::from("/etc/cc"))
+        );
+        assert_eq!(
+            dir(&[("HOME", "/home/ana"), ("CLAUDE_CONFIG_DIR", "")]),
+            None
+        );
+        assert_eq!(
+            dir(&[
+                ("CLAUDE_CONFIG_DIR", "/etc/cc"),
+                ("CLAUDE_CODE_PROJECT_DIR_NAME", "app")
+            ]),
+            None
+        );
+        assert_eq!(
+            dir(&[("HOME", "/home/ana"), ("CLAUDE_CODE_PROJECT_DIR_NAME", "")]),
+            Some(PathBuf::from("/home/ana/.claude"))
+        );
+        assert_eq!(dir(&[("HOME", "")]), None);
+        assert_eq!(dir(&[]), None);
+    }
+
+    #[test]
+    fn the_users_own_session_arguments_replace_folds() {
+        let picks =
+            |args: &[&str]| picks_session(&args.iter().map(OsString::from).collect::<Vec<_>>());
+        for chosen in [
+            &["-c"][..],
+            &["--continue"],
+            &["-r"],
+            &["--resume", ID],
+            &["--model", "opus", "--resume=x"],
+            &["--session-id", ID],
+            &["--session-id=x"],
+        ] {
+            assert!(picks(chosen), "{chosen:?}");
+        }
+        for other in [&[][..], &["--model", "opus"], &["--resumes"], &["-p", "hi"]] {
+            assert!(!picks(other), "{other:?}");
+        }
+    }
+
+    #[test]
+    fn continue_resumes_the_recorded_session_while_claude_has_it() {
+        let config = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let paths = ProjectPaths::new(project.path());
+        std::fs::create_dir_all(paths.fold_dir()).unwrap();
+        let main = AgentName::parse("main").unwrap();
+        let lead = AgentName::parse("lead").unwrap();
+        let fresh = |id: &'static str| move || Ok::<_, ClaudeError>(id.to_owned());
+        let begin = |agent: &AgentName, session, config: Option<&Path>, new_id| {
+            start(&paths, agent, session, config, new_id)
+        };
+        let continued = begin(&main, Session::Continue, Some(config.path()), fresh(ID));
+        assert_eq!(continued.unwrap(), Start::New(ID.to_owned()));
+        assert_eq!(
+            std::fs::read_to_string(paths.main_session(&main)).unwrap(),
+            format!("{ID}\n")
+        );
+        let other = "11111111-2222-4333-8444-555555555555";
+        let empty = begin(&main, Session::Continue, Some(config.path()), fresh(other));
+        assert_eq!(
+            empty.unwrap(),
+            Start::New(other.to_owned()),
+            "no transcript yet"
+        );
+
+        let name: String = project
+            .path()
+            .to_string_lossy()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
+        let folder = config.path().join("projects").join(name);
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join(format!("{other}.jsonl")), "").unwrap();
+        let resumed = begin(&main, Session::Continue, Some(config.path()), fresh(ID));
+        assert_eq!(resumed.unwrap(), Start::Resume(other.to_owned()));
+        let own = begin(&lead, Session::Continue, Some(config.path()), fresh(ID));
+        assert_eq!(
+            own.unwrap(),
+            Start::New(ID.to_owned()),
+            "another name never resumes the session of main"
+        );
+        assert_eq!(recorded(&paths, &main).as_deref(), Some(other));
+        assert_eq!(recorded(&paths, &lead).as_deref(), Some(ID));
+        let no_config = begin(&main, Session::Continue, None, fresh(ID));
+        assert_eq!(no_config.unwrap(), Start::New(ID.to_owned()));
+        let new = begin(&main, Session::New, Some(config.path()), fresh(other));
+        assert_eq!(new.unwrap(), Start::New(other.to_owned()));
+        std::fs::write(paths.main_session(&main), "not an id\n").unwrap();
+        let bad = begin(&main, Session::Continue, Some(config.path()), fresh(ID));
+        assert_eq!(bad.unwrap(), Start::New(ID.to_owned()));
+
+        std::fs::remove_dir_all(paths.fold_dir()).unwrap();
+        std::fs::write(paths.fold_dir(), "").unwrap();
+        let unrecorded = begin(&main, Session::New, Some(config.path()), fresh(ID));
+        assert!(matches!(unrecorded, Err(ClaudeError::Record(_))));
+        let failed = start(&paths, &main, Session::New, Some(config.path()), || {
+            Err(ClaudeError::Runtime(io::Error::other("x")))
+        });
+        assert!(matches!(failed, Err(ClaudeError::Runtime(_))));
+    }
+
+    #[test]
+    fn a_record_follows_the_session_only_for_an_agent_that_has_one() {
+        let project = tempfile::tempdir().unwrap();
+        let paths = ProjectPaths::new(project.path());
+        let main = AgentName::parse("main").unwrap();
+        let worker = AgentName::parse("web-coder").unwrap();
+        let other = "11111111-2222-4333-8444-555555555555";
+        follow_record(&paths, &worker, other).unwrap();
+        assert!(
+            !paths.main_session(&worker).exists(),
+            "a worker gets no record"
+        );
+        write_record(&paths.main_session(&main), ID).unwrap();
+        follow_record(&paths, &main, "not an id").unwrap();
+        assert_eq!(recorded(&paths, &main).as_deref(), Some(ID));
+        follow_record(&paths, &main, other).unwrap();
+        assert_eq!(recorded(&paths, &main).as_deref(), Some(other));
+        follow_record(&paths, &main, other).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(paths.main_session(&main)).unwrap(),
+            format!("{other}\n")
+        );
+    }
+
     #[test]
     fn the_name_defaults_to_main_and_the_rest_goes_to_claude() {
         let parsed = parse(&[]).unwrap().args;
@@ -200,15 +638,38 @@ mod tests {
     #[test]
     fn claude_runs_in_the_root_with_the_name_and_the_main_tag() {
         let agent = AgentName::parse("main").unwrap();
+        let extra = [OsString::from("--model"), OsString::from("opus")];
+        let resumed = command(
+            Path::new("claude"),
+            Path::new("/src/app"),
+            &agent,
+            Some(&Start::Resume(ID.to_owned())),
+            &extra,
+        );
+        let args: Vec<_> = resumed.get_args().collect();
+        assert_eq!(args, ["--name", "main", "--resume", ID, "--model", "opus"]);
+        let own = command(
+            Path::new("claude"),
+            Path::new("/src/app"),
+            &agent,
+            None,
+            &[OsString::from("-c")],
+        );
+        let args: Vec<_> = own.get_args().collect();
+        assert_eq!(args, ["--name", "main", "-c"]);
         let command = command(
             Path::new("claude"),
             Path::new("/src/app"),
             &agent,
-            &[OsString::from("--model"), OsString::from("opus")],
+            Some(&Start::New(ID.to_owned())),
+            &extra,
         );
         assert_eq!(command.get_program(), "claude");
         let args: Vec<_> = command.get_args().collect();
-        assert_eq!(args, ["--name", "main", "--model", "opus"]);
+        assert_eq!(
+            args,
+            ["--name", "main", "--session-id", ID, "--model", "opus"]
+        );
         assert_eq!(command.get_current_dir(), Some(Path::new("/src/app")));
         let envs: Vec<_> = command.get_envs().collect();
         assert!(envs.contains(&("FOLD_AGENT".as_ref(), Some("main".as_ref()))));
@@ -269,6 +730,8 @@ mod tests {
         assert_eq!(exec.code(), None);
         assert!(exec.hint().unwrap().contains("Claude Code"));
         assert_eq!(ClaudeError::Runtime(io::Error::other("x")).hint(), None);
+        let record = ClaudeError::Record(io::Error::other("x"));
+        assert_eq!((record.code(), record.hint()), (None, None));
         let bad = ClaudeError::Fold(FoldError::new(codes::INVALID_NAME, "bad").with_hint("pick"));
         assert_eq!(bad.code(), Some("invalid_name"));
         assert_eq!(bad.hint(), Some("pick"));

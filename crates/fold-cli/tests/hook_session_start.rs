@@ -2,7 +2,9 @@ use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::sync::Arc;
 
-use fold_core::{Actor, AgentName, HumanName, ManualClock, TaskDescription, TaskTitle};
+use fold_core::{
+    Actor, AgentName, HumanName, ManualClock, ProjectPaths, TaskDescription, TaskTitle,
+};
 use fold_daemon::projects::{ProjectHandle, Slot};
 use fold_daemon::services::tasks::CreateTask;
 use fold_daemon::{Daemon, DaemonConfig, RunningDaemon};
@@ -151,6 +153,52 @@ async fn the_inbox_socket_and_token_reach_the_daemon_only_when_both_are_set() {
     let output = hook(&host, &socket, &host.root, &env, &stdin).await;
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(handle.push.sockets(&frontend), [PathBuf::from(inbox)]);
+    daemon.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn every_session_start_moves_an_existing_record_to_its_session() {
+    let host = Host::new().await;
+    let (daemon, socket, _handle) = start(&host).await;
+    let agent = [("FOLD_AGENT", "frontend")];
+    let record = ProjectPaths::new(&host.root).main_session(&AgentName::parse("frontend").unwrap());
+    let read = || std::fs::read_to_string(&record).unwrap();
+    let started = |id: &str, source: &str| {
+        json!({"session_id": id, "hook_event_name": "SessionStart", "source": source, "cwd": host.root})
+            .to_string()
+    };
+    let first = "11111111-1111-4111-8111-111111111111";
+    let cleared = "22222222-2222-4222-8222-222222222222";
+    let other = "33333333-3333-4333-8333-333333333333";
+
+    // Without a record, as for a worker, the hook writes none.
+    let output = hook(
+        &host,
+        &socket,
+        &host.root,
+        &agent,
+        &started(cleared, "clear"),
+    )
+    .await;
+    assert_eq!(output.status.code(), Some(0));
+    assert!(!output.stdout.is_empty());
+    assert!(!record.exists());
+
+    std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+    std::fs::write(&record, format!("{first}\n")).unwrap();
+    for (id, source) in [(cleared, "clear"), (other, "resume"), (other, "compact")] {
+        let output = hook(&host, &socket, &host.root, &agent, &started(id, source)).await;
+        assert_eq!(output.status.code(), Some(0), "{source}");
+        assert!(!output.stdout.is_empty(), "{source}");
+        assert_eq!(read(), format!("{id}\n"), "{source}");
+    }
+    let output = hook(&host, &socket, &host.root, &agent, &started("s", "startup")).await;
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        read(),
+        format!("{other}\n"),
+        "only a session id is recorded"
+    );
     daemon.shutdown().await;
 }
 

@@ -41,8 +41,10 @@ enum Command {
     Gc(commands::gc::GcArgs),
     /// Manage the agents of the project in the working directory
     Agent(agent::AgentArgs),
-    /// Start the daemon when needed, then your own Claude Code session as the project's main agent
+    /// Start the daemon when needed, then continue the project's main agent: the Claude Code session that fld started last, or a new one
     Claude(claude::ClaudeArgs),
+    /// Start the daemon when needed, then a new Claude Code session as the project's main agent; fld new claude is the same
+    New(claude::NewArgs),
     /// Manage the tokens that sign humans in to the web interface off localhost
     Token(token::TokenArgs),
     /// Link the project to a remote Git repository
@@ -100,7 +102,11 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
             agent::run(&args, &serve::Dirs::from_env(), out).map_err(Failure::Agent)
         }
         Some(Command::Claude(args)) => {
-            claude::run(&args, &serve::Dirs::from_env()).map_err(Failure::Claude)
+            claude::run(&args, claude::Session::Continue, &serve::Dirs::from_env())
+                .map_err(Failure::Claude)
+        }
+        Some(Command::New(args)) => {
+            claude::run_new(&args, &serve::Dirs::from_env()).map_err(Failure::Claude)
         }
         Some(Command::Token(args)) => {
             token::run(&args, &serve::Dirs::from_env(), out).map_err(Failure::Token)

@@ -4,12 +4,12 @@ use std::time::Duration;
 
 use clap::{Args, Subcommand};
 use fold_cli::daemon_client::{self, ClientConfig, ClientError, DaemonClient};
-use fold_core::{ProjectPaths, codes};
+use fold_core::{AgentName, ProjectPaths, codes};
 use hyper::Method;
 use serde_json::{Value, json};
 
-use crate::output;
 use crate::serve::{self, Dirs};
+use crate::{claude, output};
 
 /// How long `fld hook session-start` waits for a daemon it starts.
 const START_TIMEOUT: Duration = Duration::from_secs(5);
@@ -91,6 +91,7 @@ fn cwd(input: &Value) -> Result<String, &'static str> {
 
 fn session_start(options: &HookOptions, agent: &str) -> Result<Option<Value>, String> {
     let input = input()?;
+    follow_session(&input, agent);
     let mut body = json!({"cwd": cwd(&input)?, "agent": agent});
     let messaging = |name| std::env::var(name).ok().filter(|value| !value.is_empty());
     if let (Some(socket), Some(token)) = (
@@ -119,6 +120,26 @@ fn session_start(options: &HookOptions, agent: &str) -> Result<Option<Value>, St
             "additionalContext": context,
         }
     })))
+}
+
+/// Claude Code starts a new session in the same process on `/clear` and opens another one on its own `/resume`, and each start runs this hook with the session's id, so the record that `fld claude` resumes follows the conversation the user has open. It writes the id only, and only for an agent that already has a record. A failure leaves the old record, which `fld claude` resumes or replaces, so it never holds the session's context back.
+fn follow_session(input: &Value, agent: &str) {
+    let (Some(id), Some(cwd), Ok(agent)) = (
+        input["session_id"].as_str(),
+        input["cwd"].as_str(),
+        AgentName::parse(agent),
+    ) else {
+        return;
+    };
+    let Ok(cwd) = std::fs::canonicalize(cwd) else {
+        return;
+    };
+    if let Some(root) = cwd
+        .ancestors()
+        .find(|dir| ProjectPaths::new(*dir).db().is_file())
+    {
+        let _ = claude::follow_record(&ProjectPaths::new(root), &agent, id);
+    }
 }
 
 fn stop(options: &HookOptions, agent: &str) -> Result<Option<Value>, String> {

@@ -52,6 +52,8 @@ fld claude
 
 `fld claude` starts the daemon when it is not running, then your own Claude Code session as the agent `main`, the main agent of the project. Talk to it: tell it what to build, and it turns your words into tasks, defines the areas, and starts an area lead for each area and a review lead. The leads start short-lived coders and reviewers, and fold integrates each approved proposal with one Git commit. When the review lead runs, run `fld agent tag review-lead integrator` once, so its approvals integrate. `fld claude --name <name>` gives the main agent another name, and the arguments after `--` go to `claude`, such as `fld claude -- --model opus`.
 
+Run `fld claude` again later to continue the same conversation: it resumes the main session that fld started last, or the one you moved to inside it with `/clear` or `/resume`, and starts a new one when Claude Code no longer has it. Run `fld new` (or `fld new claude`) to start a new main session.
+
 To work with your own sessions instead of worker agents, start one Claude Code session per agent, each in its own terminal, from the project root, and run `fld agent tag review integrator` once, so the review agent can integrate:
 
 ```bash

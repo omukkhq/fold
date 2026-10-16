@@ -94,6 +94,11 @@ impl ProjectPaths {
         self.fold_dir().join("workers").join(agent.as_str())
     }
 
+    /// The Claude Code session id of the last session that `fld claude` or `fld new` started as `agent`, which `fld claude --name <agent>` resumes. It holds that one id only, so each name continues its own session and never that of another.
+    pub fn main_session(&self, agent: &AgentName) -> PathBuf {
+        self.fold_dir().join("sessions").join(agent.as_str())
+    }
+
     /// The MCP servers of the project that Claude Code reads.
     pub fn mcp_json(&self) -> PathBuf {
         self.root.join(".mcp.json")
@@ -178,6 +183,10 @@ mod tests {
             Path::new("/srv/demo/.fold/workers/web-lead")
         );
         assert_eq!(paths.mcp_json(), Path::new("/srv/demo/.mcp.json"));
+        assert_eq!(
+            paths.main_session(&AgentName::parse("main").unwrap()),
+            Path::new("/srv/demo/.fold/sessions/main")
+        );
         let workspace = WorkspaceId::from_number(9).unwrap();
         assert_eq!(
             paths.workspace_index(workspace),
