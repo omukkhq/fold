@@ -291,6 +291,8 @@ impl Supervisor {
             .env("CLAUDE_CODE_PROMPT_CACHE_TTL", ttl)
             .env("CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL", ttl)
             .envs(launcher.env.iter().map(|(key, value)| (key, value)))
+            // A daemon that `fld claude`'s session started inherits its `main` tag request, which a worker never makes.
+            .env_remove("FOLD_AGENT_TAGS")
             .current_dir(self.inner.paths.root())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -913,7 +915,7 @@ impl Supervisor {
         Ok(stopped)
     }
 
-    /// Runs again, after a daemon start, every worker that was working or idle when the daemon stopped: `--resume` of its session, with a turn that tells a working one to go on. A task coder whose session is gone starts again in a new one. A worker with an open question waits without a process until a human answers it, and then resumes with the answer as its first turn. A worker left `starting` ends `failed` and one left `stopping` ends `stopped`. Requested changes and conflicts that the worker limits held back are then served.
+    /// Runs again, after a daemon start, every worker that was working or idle when the daemon stopped: `--resume` of its session, with a turn that tells a working one to go on. A worker whose session is gone starts again in a new one, a lead with its latest hand-off note. A worker with an open question waits without a process until a human answers it, and then resumes with the answer as its first turn. A worker left `starting` ends `failed` and one left `stopping` ends `stopped`. Requested changes and conflicts that the worker limits held back are then served.
     pub async fn resume_after_restart(&self) -> Result<(), AgentError> {
         let mut conn = self
             .inner
@@ -938,9 +940,8 @@ impl Supervisor {
                             agents::restart_worker_process(tx.conn(), row.id, now).await
                         })
                         .await?;
-                    let watch = self.launch(&row, true, turn).await?;
-                    if let Some(watch) = watch.filter(|_| row.role == fold_core::Role::TaskCoder) {
-                        tokio::spawn(self.clone().restart_lost(row.agent.clone(), watch));
+                    if let Some(watch) = self.launch(&row, true, turn).await? {
+                        tokio::spawn(self.clone().restart_lost(row.agent.clone(), watch, None));
                     }
                 }
                 WorkerState::Starting => self.fail(row.id, &row.agent, "daemon_restart").await?,

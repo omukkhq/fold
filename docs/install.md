@@ -44,15 +44,21 @@ cd ~/myapp
 
 The folder `~/myapp` is the project: its files are fold main and its `.git` gets one commit per integration. For code that is already in a Git repository, run `fld init --from-git` in that repository instead; it keeps the history. fold keeps its data and the agents' workspaces in `.fold/`.
 
-Then start one Claude Code session per agent, each in its own terminal, from the project root:
+Then start fold and the main agent from the project root:
+
+```bash
+fld claude
+```
+
+`fld claude` starts the daemon when it is not running, then your own Claude Code session as the agent `main`, the main agent of the project. Talk to it: tell it what to build, and it turns your words into tasks, defines the areas, and starts an area lead for each area and a review lead. The leads start short-lived coders and reviewers, and fold integrates each approved proposal with one Git commit. When the review lead runs, run `fld agent tag review-lead integrator` once, so its approvals integrate. `fld claude --name <name>` gives the main agent another name, and the arguments after `--` go to `claude`, such as `fld claude -- --model opus`.
+
+To work with your own sessions instead of worker agents, start one Claude Code session per agent, each in its own terminal, from the project root, and run `fld agent tag review integrator` once, so the review agent can integrate:
 
 ```bash
 FOLD_AGENT=frontend claude --name frontend
 FOLD_AGENT=backend claude --name backend
 FOLD_AGENT=review claude --name review
 ```
-
-Run `fld agent tag review integrator` once, so the review agent can integrate.
 
 ## Service
 

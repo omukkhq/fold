@@ -3,7 +3,7 @@ use std::path::{Component, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use fold_core::{AgentName, FoldError, codes};
+use fold_core::{AgentName, FoldError, Tag, codes};
 use rmcp::ServiceExt;
 use rmcp::service::ServerInitializeError;
 use serde::{Deserialize, Serialize};
@@ -40,6 +40,9 @@ pub struct Hello {
     pub pid: u32,
     /// `FOLD_AGENT`; an empty name counts as unset.
     pub agent: Option<String>,
+    /// `FOLD_AGENT_TAGS`, split at commas: the tags the session's agent registers with, such as `main` from `fld claude`. They need `agent`, and an adapter that sends none omits the field.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 /// The daemon's answer line.
@@ -232,6 +235,11 @@ async fn open(
 > {
     let hello = parse_hello(line)?;
     let agent = hello.agent.as_deref().map(AgentName::parse).transpose()?;
+    let tags = hello
+        .tags
+        .iter()
+        .map(|tag| Tag::parse(tag))
+        .collect::<Result<Vec<_>, _>>()?;
     let handle = projects::open_for_dir(state, &hello.cwd)
         .await
         .map_err(from_project)?;
@@ -249,7 +257,7 @@ async fn open(
         .await
         .map_err(from_agent)?;
     if let Some(agent) = agent
-        && let Err(error) = agents.register_agent(&mut session, &agent, &[]).await
+        && let Err(error) = agents.register_agent(&mut session, &agent, &tags).await
     {
         let _ = agents.end_session(&session).await;
         return Err(from_agent(error));

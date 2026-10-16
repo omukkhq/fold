@@ -22,8 +22,8 @@
 # [integration]
 # Whether fold integrates a ready proposal by itself: an integrator agent approved it, nothing asks for changes, a human approved it after the agent when the task is marked for human review, and every prerequisite task is Done. With false, an integrator or a human integrates it.
 # automatic = true
-# The worker agents fold starts and supervises: at most `max` run at a time in the project, and at most `max_per_area` in one area.
+# The short-lived worker agents fold starts and supervises: at most `task_coder` task coders and at most `batch_reviewer` batch reviewers run at a time. The area leads and the review lead are outside these limits. The key `max_per_area` also limits the task coders of one area; without it an area has no limit of its own.
 # [workers]
-# max = 3
-# max_per_area = 2
+# task_coder = 4
+# batch_reviewer = 3
 # Each worker role can have a `[roles.<role>]` section, for area_lead, review_lead, task_coder or batch_reviewer, with the keys `model` (passed to Claude Code as `--model`), `cache_ttl` ("1h" or "5m"; "1h" for leads and batch reviewers and "5m" for task coders by default), `idle_minutes` (task_coder and batch_reviewer only; 15 by default), `handoff_at` (area_lead and review_lead only; the percent of the model's context window past which fold asks the lead for a hand-off note and starts it again with a fresh context; 60 by default) and `mcp`, a list of server names, `fold` and servers of the project's `.mcp.json`, that limits the role to those servers. A role's prompt is `.fold/roles/<role>.md` when that file exists, else the prompt that ships with fold.

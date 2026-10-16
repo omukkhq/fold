@@ -210,9 +210,11 @@ impl Supervisor {
                     .with_hint("call list_workers")
                     .into());
                 }
-                let (running, in_area) = agents::running_counts(tx.conn(), row.area_id).await?;
+                let (running, in_area) =
+                    agents::running_counts(tx.conn(), row.role, row.area_id).await?;
                 check_limits(
                     limits,
+                    row.role,
                     running,
                     row.area.as_ref().map(|area| (area, in_area)),
                 )?;
@@ -347,14 +349,61 @@ impl Supervisor {
         }
     }
 
-    /// A task coder that a daemon start resumed: when its session is gone, it starts again in a new one.
-    pub(super) async fn restart_lost(self, agent: AgentName, watch: StartWatch) {
+    /// A worker that a daemon start or a later start resumed with `--resume`: when its session is gone, it starts again in a new one with its role's first turn, which for a lead holds its latest hand-off note. `instructions` are the starter's, for a start that resumed a stopped lead.
+    pub(in crate::services::agents::workers) async fn restart_lost(
+        self,
+        agent: AgentName,
+        watch: StartWatch,
+        instructions: Option<String>,
+    ) {
         if watch.outcome().await != SessionStart::Lost {
             return;
         }
-        if let Err(error) = self.start_fresh(&agent, &[], RESTART_LOST).await {
-            tracing::warn!(%agent, code = crate::services::agents::code_of(&error), "could not start a coder whose session is gone");
+        let fresh = match self
+            .lost_instructions(&agent, instructions.as_deref())
+            .await
+        {
+            Ok(text) => self.start_fresh(&agent, &[], &text).await,
+            Err(error) => Err(error),
+        };
+        if let Err(error) = fresh {
+            tracing::warn!(%agent, code = crate::services::agents::code_of(&error), "could not start a worker whose session is gone");
         }
+    }
+
+    /// What a worker whose session is gone is told in its new session: a task coder to check its claims and proposals, a batch reviewer to check its verdicts, a lead to read its latest hand-off note, then the starter's instructions.
+    async fn lost_instructions(
+        &self,
+        agent: &AgentName,
+        instructions: Option<&str>,
+    ) -> Result<String, AgentError> {
+        let mut conn = self
+            .inner
+            .store
+            .read()
+            .acquire()
+            .await
+            .map_err(StoreError::from)?;
+        let row = agents::find_worker_process(&mut conn, agent)
+            .await?
+            .ok_or_else(|| not_supervised(agent))?;
+        let mut text = match row.role {
+            Role::TaskCoder => RESTART_LOST.to_owned(),
+            Role::BatchReviewer => REVIEWER_LOST.to_owned(),
+            Role::AreaLead | Role::ReviewLead => {
+                match agents::latest_handoff(&mut *conn, row.agent_id).await? {
+                    Some(note) => format!(
+                        "{LEAD_LOST} Your latest hand-off note:\n\n{}",
+                        note.body.trim()
+                    ),
+                    None => LEAD_LOST.to_owned(),
+                }
+            }
+        };
+        if let Some(extra) = instructions.map(str::trim).filter(|text| !text.is_empty()) {
+            let _ = write!(text, "\n\n{extra}");
+        }
+        Ok(text)
     }
 
     async fn load(&self, item: ResumeItem) -> Result<Found, AgentError> {
@@ -409,7 +458,7 @@ impl Supervisor {
         Ok(())
     }
 
-    /// The coder's session is gone: the same row, so the same author, starts again with a new session, its binding and `instructions`, which name what `found` asks of it. A row that did not end `failed` was stopped on purpose and stays stopped.
+    /// The worker's session is gone: the same row, so the same author or lead, starts again with a new session, its binding and `instructions`, which name what `found` asks of it. With nothing found it records one `worker.resumed` of reason `session_lost`. A row that did not end `failed` was stopped on purpose and stays stopped.
     async fn start_fresh(
         &self,
         agent: &AgentName,
@@ -431,9 +480,11 @@ impl Supervisor {
                 if row.state != WorkerState::Failed {
                     return Ok(None);
                 }
-                let (running, in_area) = agents::running_counts(tx.conn(), row.area_id).await?;
+                let (running, in_area) =
+                    agents::running_counts(tx.conn(), row.role, row.area_id).await?;
                 check_limits(
                     limits,
+                    row.role,
                     running,
                     row.area.as_ref().map(|area| (area, in_area)),
                 )?;
@@ -450,6 +501,12 @@ impl Supervisor {
                     buffer
                         .append(tx, &resumed_event(agent, found, false)?, now)
                         .await?;
+                }
+                if found.is_empty() {
+                    let event = NewEvent::new(types::WORKER_RESUMED, EventActor::fold())?.data(
+                        json!({"agent": agent.as_str(), "reason": "session_lost", "resumed": false}),
+                    )?;
+                    buffer.append(tx, &event, now).await?;
                 }
                 Ok::<_, AgentError>(agents::find_worker_process(tx.conn(), agent).await?)
             })
@@ -469,7 +526,7 @@ impl Supervisor {
             name: agent,
             area: row.area.as_ref().zip(label.as_ref()),
             tasks: &row.tasks,
-            proposals: &[],
+            proposals: &row.proposals,
             instructions: Some(instructions),
         });
         self.launch(&row, false, Some(turn)).await?;
@@ -526,6 +583,12 @@ const STOP_LINE: &str = "fold stops you once each of these proposals has its new
 
 /// What a task coder whose session a daemon start could not resume is told.
 const RESTART_LOST: &str = "fold restarted and your earlier session is gone, so fold started you in a new one. Check your claims, your task workspaces and the proposals you already sent before you go on. Send a new version of an open proposal with update_proposal; do not open a second one.";
+
+/// What a lead whose session could not be resumed is told before its note.
+const LEAD_LOST: &str = "Your earlier session is gone, so fold started you in a new one. Read your area with get_task_graph and your workers with list_workers before you go on.";
+
+/// What a batch reviewer whose session could not be resumed is told.
+const REVIEWER_LOST: &str = "Your earlier session is gone, so fold started you in a new one. Read each of your proposals with get_proposal and give a verdict only to those that have none from you.";
 
 fn section_text(found: &Found) -> String {
     let ResumeItem {

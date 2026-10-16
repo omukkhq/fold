@@ -1,4 +1,5 @@
 mod agent;
+mod claude;
 mod commands;
 mod doctor;
 mod hook;
@@ -40,6 +41,8 @@ enum Command {
     Gc(commands::gc::GcArgs),
     /// Manage the agents of the project in the working directory
     Agent(agent::AgentArgs),
+    /// Start the daemon when needed, then your own Claude Code session as the project's main agent
+    Claude(claude::ClaudeArgs),
     /// Manage the tokens that sign humans in to the web interface off localhost
     Token(token::TokenArgs),
     /// Link the project to a remote Git repository
@@ -69,6 +72,7 @@ enum Failure {
     Service(service::ServiceError),
     Gc(commands::gc::GcError),
     Agent(agent::AgentError),
+    Claude(claude::ClaudeError),
     Token(token::TokenError),
     Remote(commands::remote::RemoteError),
     #[cfg(feature = "dev-seed")]
@@ -94,6 +98,9 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         .map_err(Failure::Gc),
         Some(Command::Agent(args)) => {
             agent::run(&args, &serve::Dirs::from_env(), out).map_err(Failure::Agent)
+        }
+        Some(Command::Claude(args)) => {
+            claude::run(&args, &serve::Dirs::from_env()).map_err(Failure::Claude)
         }
         Some(Command::Token(args)) => {
             token::run(&args, &serve::Dirs::from_env(), out).map_err(Failure::Token)
@@ -137,6 +144,12 @@ fn main() -> anyhow::Result<()> {
         Err(Failure::Agent(error)) => Err(match error.code() {
             Some(code) => anyhow::anyhow!("{code}: {error}"),
             None => error.into(),
+        }),
+        Err(Failure::Claude(error)) => Err(match (error.code(), error.hint()) {
+            (Some(code), Some(hint)) => anyhow::anyhow!("{code}: {error}\nhint: {hint}"),
+            (Some(code), None) => anyhow::anyhow!("{code}: {error}"),
+            (None, Some(hint)) => anyhow::anyhow!("{error}\nhint: {hint}"),
+            (None, None) => error.into(),
         }),
         Err(Failure::Token(error)) => Err(match error.code() {
             Some(code) => anyhow::anyhow!("{code}: {error}"),

@@ -103,9 +103,9 @@ impl AgentService {
         })
     }
 
-    /// Who the actor is for the worker rules: a human, the main agent, a supervised worker of some role, a subagent or the daemon.
+    /// Who the actor is for the worker rules: a human, the main agent, an agent that is neither while the main agent exists, a supervised worker of some role, a subagent or the daemon.
     pub async fn starter(&self, actor: &Actor) -> Result<Starter, AgentError> {
-        let supervised = match actor {
+        let (supervised, main_exists) = match actor {
             Actor::Agent(agent) => {
                 let mut conn = self
                     .store
@@ -113,13 +113,14 @@ impl AgentService {
                     .acquire()
                     .await
                     .map_err(StoreError::from)?;
-                agents::find_worker_process(&mut conn, &agent.agent)
+                let supervised = agents::find_worker_process(&mut conn, &agent.agent)
                     .await?
-                    .map(|row| (row.role, row.area))
+                    .map(|row| (row.role, row.area));
+                (supervised, agents::main_exists(&mut *conn).await?)
             }
-            Actor::Human { .. } | Actor::System => None,
+            Actor::Human { .. } | Actor::System => (None, false),
         };
-        Ok(Starter::of(actor, supervised))
+        Ok(Starter::of(actor, supervised, main_exists))
     }
 
     /// Defines area `name` over the tasks labelled `label`. The label must exist; an area name or label that another area has is refused with `area_exists`.
@@ -208,7 +209,7 @@ impl AgentService {
             .ok_or_else(|| not_supervised(agent))
     }
 
-    /// Starts a worker agent: the agent and its main worker, its process row in state `starting` and its binding, in one transaction with `worker.started`; then its Claude Code process with its first turn. A lead whose area or role already has a stopped lead resumes that lead instead.
+    /// Starts a worker agent: the agent and its main worker, its process row in state `starting` and its binding, in one transaction with `worker.started`; then its Claude Code process with its first turn. A lead whose area or role already has a stopped or failed lead resumes that lead instead, and starts it in a new session when its old one is gone.
     pub async fn start_worker(
         &self,
         actor: &Actor,
@@ -296,9 +297,10 @@ impl AgentService {
                     Role::BatchReviewer => {}
                 }
                 let area_id = area_row.as_ref().map(|area| area.id);
-                let (running, in_area) = agents::running_counts(tx.conn(), area_id).await?;
+                let (running, in_area) = agents::running_counts(tx.conn(), role, area_id).await?;
                 check_limits(
                     limits,
+                    role,
                     running,
                     area_row.as_ref().map(|area| (&area.name, in_area)),
                 )?;
@@ -402,7 +404,14 @@ impl AgentService {
             }
             Started::Resume(agent) => {
                 let text = turn(&agent);
-                self.resume_worker(&agent, text).await
+                if let Some(watch) = supervisor.resume(&agent, text, &[]).await? {
+                    tokio::spawn(supervisor.clone().restart_lost(
+                        agent.clone(),
+                        watch,
+                        request.instructions.clone(),
+                    ));
+                }
+                self.get_worker(&agent).await
             }
         }
     }

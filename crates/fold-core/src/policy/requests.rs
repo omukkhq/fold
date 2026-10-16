@@ -14,7 +14,7 @@ pub fn can_create_request(actor: &Actor) -> Result<Requester, PolicyDenied> {
     })
 }
 
-/// Turning a request into cards is an orchestrator's job, so only the main worker of an agent claims one: a subagent worker works inside its parent's plan, and a human answers the drafter instead. While some agent has the `main` tag (`main_exists`), the main agent handles every request, so only its main worker claims. It returns the admitted agent, whose main worker becomes the drafter.
+/// Turning a request into cards is an orchestrator's job, so only the main worker of an agent claims one: a subagent worker works inside its parent's plan, and a human answers the drafter instead. While some agent has the `main` tag (`main_exists`), the main agent handles every request, so only its main worker claims and every other agent is refused as no orchestrator. It returns the admitted agent, whose main worker becomes the drafter.
 pub fn can_claim_request(actor: &Actor, main_exists: bool) -> Result<&AgentActor, PolicyDenied> {
     match actor {
         Actor::Agent(agent)
@@ -23,8 +23,8 @@ pub fn can_claim_request(actor: &Actor, main_exists: bool) -> Result<&AgentActor
             Ok(agent)
         }
         Actor::Agent(agent) if agent.worker.is_main() => Err(PolicyDenied {
-            code: codes::MAIN_AGENT_REQUIRED,
-            message: "only the main agent claims a request",
+            code: codes::ORCHESTRATOR_REQUIRED,
+            message: "only the agent with the main tag claims a request while it exists",
             hint: "ask the main agent to call claim_request",
         }),
         Actor::Agent(_) | Actor::Human { .. } | Actor::System => Err(PolicyDenied {
@@ -137,7 +137,7 @@ mod tests {
         );
         for other in [agent("backend"), tagged("backend", "review")] {
             let denied = can_claim_request(&other, true).unwrap_err();
-            assert_eq!(denied.code(), codes::MAIN_AGENT_REQUIRED);
+            assert_eq!(denied.code(), codes::ORCHESTRATOR_REQUIRED);
             assert!(denied.hint().contains("main agent"));
         }
         assert_eq!(

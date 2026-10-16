@@ -423,6 +423,14 @@ pub async fn all_tags(executor: impl SqliteExecutor<'_>) -> Result<Vec<(i64, Tag
         .collect()
 }
 
+/// Whether some agent has the `main` tag, which makes it the one main agent of the project.
+pub async fn main_exists(executor: impl SqliteExecutor<'_>) -> Result<bool, StoreError> {
+    Ok(all_tags(executor)
+        .await?
+        .iter()
+        .any(|(_, tag)| tag.is_main()))
+}
+
 /// The actor label that granted each tag that has one, as `(agent_id, tag, granted_by)`.
 pub async fn tag_granters(
     executor: impl SqliteExecutor<'_>,

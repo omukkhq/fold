@@ -2,7 +2,7 @@
 
 This directory is a fold project. Its files are fold main, the integrated code, and its own Git repository gets one commit for each integration. fold keeps its data in `.fold/`, and each task workspace is under `.fold/ws/`.
 
-Start every session here with `FOLD_AGENT=<name> claude --name <name>`. Your fold identity and your Claude Code name are then the same.
+The user starts the main agent here with `fld claude`, which starts fold when needed. Start every other session here with `FOLD_AGENT=<name> claude --name <name>`. Your fold identity and your Claude Code name are then the same.
 
 The fold workflow in short:
 
@@ -12,7 +12,7 @@ The fold workflow in short:
 4. Open a proposal for the task.
 5. Answer the review, and open a new version of the proposal if it asks for changes.
 
-The `fold` skill holds the full workflow for orchestrators, workers and reviewers, and for requests. Load it before you start.
+The `fold` skill holds the full workflow for the main agent, orchestrators, workers and reviewers, for the worker agents fold runs, and for requests. Load it before you start.
 
 In text for people (messages, review comments, evidence, task descriptions), write `#T-12` to name a fold item and `@path` to name a file. The `fold` skill lists the marks.
 

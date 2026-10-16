@@ -248,6 +248,13 @@ describe("eventLine", () => {
       }),
     ).toBe("restarted web-coder in a new session for the conflict on P-4");
     expect(
+      line("worker.resumed", {
+        agent: "web-lead",
+        reason: "session_lost",
+        resumed: false,
+      }),
+    ).toBe("restarted web-lead in a new session");
+    expect(
       line("worker.permission_asked", { agent: "web-coder", tool: "Bash" }),
     ).toBe("web-coder asked to use Bash");
     expect(line("worker.permission_asked")).toBe(

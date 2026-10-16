@@ -449,9 +449,8 @@ impl Supervisor {
             .write(async |tx| agents::restart_worker_process(tx.conn(), row.id, now).await)
             .await?;
         self.replay(question);
-        let watch = self.launch(&row, true, Some(turn)).await?;
-        if let Some(watch) = watch.filter(|_| row.role == fold_core::Role::TaskCoder) {
-            tokio::spawn(self.clone().restart_lost(row.agent.clone(), watch));
+        if let Some(watch) = self.launch(&row, true, Some(turn)).await? {
+            tokio::spawn(self.clone().restart_lost(row.agent.clone(), watch, None));
         }
         Ok(())
     }

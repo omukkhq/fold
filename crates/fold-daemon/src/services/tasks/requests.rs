@@ -248,7 +248,7 @@ impl TaskService {
         Ok((Some(guard), hashes))
     }
 
-    /// Makes the actor's main worker the drafter, sorts the request as `kind` and names it `title`; an `open` request becomes `drafting`. While an agent has the `main` tag, only that agent claims (`main_agent_required`). A request whose drafter's agent has had no open session for `lease_minutes` is taken over (`taken_over: true`); any other held request is `already_claimed`. A repeat claim by the drafter changes nothing.
+    /// Makes the actor's main worker the drafter, sorts the request as `kind` and names it `title`; an `open` request becomes `drafting`. While an agent has the `main` tag, only that agent claims (`orchestrator_required`). A request whose drafter's agent has had no open session for `lease_minutes` is taken over (`taken_over: true`); any other held request is `already_claimed`. A repeat claim by the drafter changes nothing.
     pub async fn claim_request(
         &self,
         actor: &Actor,
@@ -262,10 +262,7 @@ impl TaskService {
         let mut buffer = EventBuffer::new();
         self.store
             .write(async |tx| {
-                let main_exists = agents::all_tags(tx.conn())
-                    .await?
-                    .iter()
-                    .any(|(_, tag)| tag.is_main());
+                let main_exists = agents::main_exists(tx.conn()).await?;
                 let claimant =
                     policy::can_claim_request(actor, main_exists).map_err(FoldError::from)?;
                 let worker = worker_row(tx, claimant).await?;

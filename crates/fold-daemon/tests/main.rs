@@ -17,6 +17,7 @@ pub mod workers_support;
 pub mod workspaces_support;
 
 mod acceptance_10_requests;
+mod acceptance_11_main_agent;
 mod acceptance_1_three_sessions;
 mod acceptance_2_messaging;
 mod acceptance_3_parallel_workspaces;

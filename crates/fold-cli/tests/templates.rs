@@ -79,14 +79,7 @@ const FOLD_TOOLS: [&str; 72] = [
 ];
 
 /// The tools of `FOLD_TOOLS` that the MCP server lists and the skill does not teach yet. A tool leaves this list in the change that teaches it.
-const PENDING_TOOLS: [&str; 6] = [
-    "create_review_batch",
-    "list_review_batches",
-    "get_review_batch",
-    "remove_from_batch",
-    "create_batch_checkout",
-    "submit_batch_review",
-];
+const PENDING_TOOLS: [&str; 0] = [];
 
 /// Every code of the error table and the named `invalid_request` reasons.
 const FOLD_ERROR_CODES: [&str; 134] = [
@@ -262,10 +255,11 @@ const NON_TOOL_NAMES: [&str; 17] = [
     "handoff_at",
 ];
 
-const SECTIONS: [&str; 13] = [
+const SECTIONS: [&str; 14] = [
     "Identity",
     "Messaging",
     "Noticing news",
+    "Orchestrating",
     "Orchestrator",
     "Worker",
     "Reviewer",
@@ -423,6 +417,7 @@ fn the_agents_section_is_short_and_has_no_imports_or_design_documents() {
 #[test]
 fn the_agents_section_points_to_the_skill_and_the_repository_rules() {
     assert!(AGENTS_SECTION.starts_with("## fold\n"));
+    assert!(AGENTS_SECTION.contains("`fld claude`"));
     assert!(AGENTS_SECTION.contains("FOLD_AGENT=<name> claude --name <name>"));
     assert!(AGENTS_SECTION.contains("`fold` skill"));
     assert!(AGENTS_SECTION.contains("`.fold/ws/`"));
@@ -470,9 +465,9 @@ fn the_skill_uses_exactly_the_four_verdicts() {
     }
 }
 
-const SUBCOMMANDS: [&str; 13] = [
-    "init", "serve", "mcp", "doctor", "setup", "gc", "agent", "token", "remote", "push", "pull",
-    "hook", "dev",
+const SUBCOMMANDS: [&str; 14] = [
+    "init", "serve", "mcp", "doctor", "setup", "gc", "agent", "claude", "token", "remote", "push",
+    "pull", "hook", "dev",
 ];
 
 /// Lines that name the old binary on purpose: the hook prefix that `fld init --refresh` replaces in files written for it, and the fixture that proves the refresh replaces its server and hooks.

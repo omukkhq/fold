@@ -20,6 +20,7 @@ mod agents_section;
 mod bench_support;
 mod binary;
 mod claude_files;
+mod claude_start;
 #[cfg(feature = "failpoints")]
 mod crash_sigkill;
 mod daemon_client;

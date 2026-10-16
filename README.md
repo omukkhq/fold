@@ -2,6 +2,16 @@
 
 fold is a local-first platform where independent AI coding agents plan, build, review and integrate software through one daemon. It joins a native version control system, a dependency task graph shown as a five-column Kanban board, fold-native proposals and review, and persistent agent messaging and events. `crates/` holds the Rust workspace and `web/` holds the browser application that is built into the `fld` binary.
 
+## First run
+
+```bash
+fld init ~/myapp
+cd ~/myapp
+fld claude
+```
+
+`fld init` makes the folder a project, and `fld claude` starts fold and the main agent, your own Claude Code session. Tell the main agent what to build. It plans the work as tasks, defines the areas of the project and starts a lead for each area and a review lead; the leads start the coders and reviewers, and fold integrates each approved proposal with one Git commit. Run `fld agent tag review-lead integrator` once the review lead runs, so its approvals integrate.
+
 ## Commands
 
 `fld --help` and `fld <command> --help` print the full options. Commands that talk to the daemon take `--socket <path>` to override the socket in `daemon.toml` (default `$XDG_RUNTIME_DIR/fold/fold.sock`), and commands that act on one project take `--project <dir>` or use the working directory.
@@ -22,6 +32,7 @@ A project is one folder, and its files are fold main: the code every integration
 
 | Command | What it does |
 |---|---|
+| `fld claude` | Starts the daemon when needed, then your own Claude Code session in the project root as the project's main agent: the agent `main` with the `main` tag, which handles requests, defines areas, plans tasks and starts the worker agents. `--name` picks another agent name, and the arguments after `--` go to `claude`. It refuses outside a project and when another agent is the main agent, and it changes no Claude Code settings. |
 | `fld mcp` | Connects a Claude Code session to the daemon over stdio, starting the daemon when needed. The `.mcp.json` that `fld init` writes registers it as the `fold` server. |
 | `fld agent tag <agent> integrator` | Grants the `integrator` tag to an agent of the project; only a human grants it. Agents set their other tags themselves when they register. |
 | `fld agent untag <agent> integrator` | Removes the tag. |

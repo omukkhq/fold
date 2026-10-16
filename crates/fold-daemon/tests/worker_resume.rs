@@ -426,6 +426,11 @@ async fn a_batch_review_resumes_the_coder_once_with_every_member_it_wrote() {
 async fn a_resume_the_worker_limits_refuse_runs_once_a_worker_stops() {
     let fake = FakeClaude::new("result");
     let (harness, _work) = proposed_by_a_coder(&fake, &[("page.html", "<p>page</p>\n")]).await;
+    std::fs::write(
+        std::path::Path::new(harness.root()).join(".fold/config.toml"),
+        "[workers]\nmax_per_area = 1\n",
+    )
+    .unwrap();
     harness
         .call(
             MAIN,
@@ -451,7 +456,7 @@ async fn a_resume_the_worker_limits_refuse_runs_once_a_worker_stops() {
     assert_eq!(
         worker(&harness, CODER).await.state,
         WorkerState::Stopped,
-        "the area holds its lead and the other coder"
+        "the area holds the other coder"
     );
 
     harness
@@ -472,11 +477,24 @@ async fn a_resume_the_worker_limits_refuse_runs_once_a_worker_stops() {
 async fn a_daemon_start_serves_a_resume_the_worker_limits_refused() {
     let fake = FakeClaude::new("result");
     let (mut harness, _work) = proposed_by_a_coder(&fake, &[("page.html", "<p>page</p>\n")]).await;
-    std::fs::write(
-        std::path::Path::new(harness.root()).join(".fold/config.toml"),
-        "[workers]\nmax_per_area = 1\n",
-    )
-    .unwrap();
+    let config = std::path::Path::new(harness.root()).join(".fold/config.toml");
+    std::fs::write(&config, "[workers]\ntask_coder = 1\n").unwrap();
+    harness
+        .call(
+            MAIN,
+            "create_task",
+            json!({"title": "Draw the menu", "labels": ["ui"]}),
+        )
+        .await;
+    let other = harness
+        .call(
+            "web-lead",
+            "start_worker",
+            json!({"role": "task_coder", "tasks": ["T-2"]}),
+        )
+        .await;
+    let other = other["worker"]["name"].as_str().unwrap().to_owned();
+    until_state(&harness, &other, WorkerState::Idle).await;
     harness
         .project
         .clock()
@@ -484,12 +502,12 @@ async fn a_daemon_start_serves_a_resume_the_worker_limits_refused() {
         .unwrap();
     request_changes(&harness, "P-1", "Split the page.").await;
     harness.stop().await;
-    assert_eq!(fake.runs_of(CODER).len(), 1, "the area holds its lead");
-    std::fs::write(
-        std::path::Path::new(harness.root()).join(".fold/config.toml"),
-        "[workers]\nmax_per_area = 2\n",
-    )
-    .unwrap();
+    assert_eq!(
+        fake.runs_of(CODER).len(),
+        1,
+        "the other coder holds the only place"
+    );
+    std::fs::write(&config, "[workers]\ntask_coder = 2\n").unwrap();
 
     harness.start_again().await;
     let runs = until_runs(&fake, CODER, 2).await;
@@ -533,5 +551,185 @@ async fn a_daemon_start_that_finds_a_coders_session_gone_starts_it_fresh() {
         started,
         [Value::Null, json!(false)],
         "the first start and the new session"
+    );
+}
+
+const LEAD: &str = "web-lead";
+
+/// Area `web` over label `ui` and its lead, started by the main agent and in `state`.
+async fn lead_in(fake: &FakeClaude, state: WorkerState) -> (Harness, WorkerProcessRow) {
+    let harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness
+        .call(MAIN, "create_label", json!({"name": "ui", "color": "sage"}))
+        .await;
+    harness
+        .call(MAIN, "define_area", json!({"name": "web", "label": "ui"}))
+        .await;
+    harness
+        .call(
+            MAIN,
+            "start_worker",
+            json!({"role": "area_lead", "area": "web"}),
+        )
+        .await;
+    until_runs(fake, LEAD, 1).await;
+    let row = until_state(&harness, LEAD, state).await;
+    (harness, row)
+}
+
+/// The data of every stored `worker.resumed` of reason `session_lost`, once there is one.
+async fn until_session_lost(harness: &Harness) -> Vec<Value> {
+    eventually(WAIT, async || {
+        let lost: Vec<Value> = harness
+            .events()
+            .await
+            .into_iter()
+            .filter(|event| {
+                event.kind == "worker.resumed" && event.data["reason"] == "session_lost"
+            })
+            .map(|event| {
+                assert_eq!(event.proposal, None);
+                event.data
+            })
+            .collect();
+        if lost.is_empty() { Err(0) } else { Ok(lost) }
+    })
+    .await
+}
+
+#[tokio::test]
+async fn a_daemon_start_that_finds_a_leads_session_gone_starts_it_fresh_with_its_note() {
+    let fake = FakeClaude::new("init").lost_sessions();
+    let (mut harness, working) = lead_in(&fake, WorkerState::Working).await;
+    let now = harness.project.now();
+    harness
+        .handle
+        .store
+        .write(async |tx| {
+            fold_store::agents::insert_handoff(
+                tx.conn(),
+                working.agent_id,
+                &working.session_id,
+                "Split the menu task next.",
+                now,
+            )
+            .await
+        })
+        .await
+        .unwrap();
+    harness.stop().await;
+
+    harness.start_again().await;
+    let runs = until_runs(&fake, LEAD, 3).await;
+    assert_eq!(runs[1].flag("--resume"), Some(working.session_id.as_str()));
+    let fresh = &runs[2];
+    assert!(!fresh.has("--resume"));
+    let session = fresh.flag("--session-id").unwrap();
+    assert_ne!(session, working.session_id);
+    let turn = &fresh.stdin[1];
+    for wanted in [
+        "the area lead of area web",
+        "Your earlier session is gone",
+        "Your latest hand-off note:",
+        "Split the menu task next.",
+    ] {
+        assert!(turn.contains(wanted), "{wanted} in {turn}");
+    }
+    assert_eq!(
+        until_session_lost(&harness).await,
+        [json!({"agent": LEAD, "reason": "session_lost", "resumed": false})]
+    );
+    let row = until_state(&harness, LEAD, WorkerState::Working).await;
+    assert_eq!(row.session_id, session);
+}
+
+#[tokio::test]
+async fn a_start_of_a_stopped_lead_whose_session_is_gone_starts_it_fresh() {
+    let fake = FakeClaude::new("result").lost_sessions();
+    let (harness, idle) = lead_in(&fake, WorkerState::Idle).await;
+    harness
+        .call(MAIN, "stop_worker", json!({"name": LEAD}))
+        .await;
+    until_state(&harness, LEAD, WorkerState::Stopped).await;
+
+    harness
+        .call(
+            MAIN,
+            "start_worker",
+            json!({"role": "area_lead", "area": "web", "instructions": "Plan the menu first."}),
+        )
+        .await;
+    let runs = until_runs(&fake, LEAD, 3).await;
+    assert_eq!(runs[1].flag("--resume"), Some(idle.session_id.as_str()));
+    let fresh = &runs[2];
+    assert!(!fresh.has("--resume"));
+    let session = fresh.flag("--session-id").unwrap();
+    assert_ne!(session, idle.session_id);
+    let turn = &fresh.stdin[1];
+    for wanted in [
+        "the area lead of area web",
+        "Your earlier session is gone",
+        "Plan the menu first.",
+    ] {
+        assert!(turn.contains(wanted), "{wanted} in {turn}");
+    }
+    assert!(!turn.contains("hand-off note"), "{turn}");
+    assert_eq!(
+        until_session_lost(&harness).await,
+        [json!({"agent": LEAD, "reason": "session_lost", "resumed": false})]
+    );
+    let row = until_state(&harness, LEAD, WorkerState::Idle).await;
+    assert_eq!(row.session_id, session);
+}
+
+#[tokio::test]
+async fn a_daemon_start_that_finds_a_batch_reviewers_session_gone_starts_it_fresh() {
+    let fake = FakeClaude::new("init").lost_sessions();
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    let task = harness.create_task(MAIN, "Draw the page").await;
+    let work = harness.start_work("backend", &task).await;
+    work.write(&[("page.html", "<p>page</p>\n")]);
+    let proposal = harness.propose("backend", &work, "Draw the page").await;
+    harness
+        .call(MAIN, "start_worker", json!({"role": "review_lead"}))
+        .await;
+    harness.connect("review-lead").await;
+    harness
+        .call(
+            "review-lead",
+            "start_worker",
+            json!({"role": "batch_reviewer", "proposals": [proposal]}),
+        )
+        .await;
+    let reviewer = "batch-reviewer";
+    until_runs(&fake, reviewer, 1).await;
+    let working = until_state(&harness, reviewer, WorkerState::Working).await;
+    harness.stop().await;
+
+    harness.start_again().await;
+    let runs = until_runs(&fake, reviewer, 3).await;
+    assert_eq!(runs[1].flag("--resume"), Some(working.session_id.as_str()));
+    let fresh = &runs[2];
+    assert!(!fresh.has("--resume"));
+    let session = fresh.flag("--session-id").unwrap();
+    assert_ne!(session, working.session_id);
+    let turn = &fresh.stdin[1];
+    for wanted in [
+        "batch reviewer for P-1",
+        "Your earlier session is gone",
+        "give a verdict only to those that have none from you",
+    ] {
+        assert!(turn.contains(wanted), "{wanted} in {turn}");
+    }
+    assert!(
+        until_session_lost(&harness)
+            .await
+            .contains(&json!({"agent": reviewer, "reason": "session_lost", "resumed": false}))
+    );
+    let row = until_state(&harness, reviewer, WorkerState::Working).await;
+    assert_eq!(row.session_id, session);
+    assert_eq!(
+        row.proposals,
+        [fold_core::ProposalId::from_number(1).unwrap()]
     );
 }

@@ -175,6 +175,11 @@ impl Harness {
 
     /// Opens a new adapter session of `agent`: the handshake line, the daemon's answer, then MCP on the rest of the stream.
     pub async fn connect(&mut self, agent: &str) {
+        self.connect_tagged(agent, &[]).await;
+    }
+
+    /// [`Harness::connect`] with the tags of `FOLD_AGENT_TAGS` in the handshake line, as `fld claude` gives its session the `main` tag.
+    pub async fn connect_tagged(&mut self, agent: &str, tags: &[&str]) {
         assert!(
             !self.sessions.contains_key(agent),
             "{agent} is already connected"
@@ -183,7 +188,7 @@ impl Harness {
         let (client_end, server_end) = tokio::io::duplex(256 * 1024);
         let server = tokio::spawn(handshake::accept(self.state.clone(), server_end));
         let (read, mut write) = tokio::io::split(client_end);
-        let hello = json!({"fold": PROTOCOL_VERSION, "cwd": self.root(), "pid": self.next_pid, "agent": agent});
+        let hello = json!({"fold": PROTOCOL_VERSION, "cwd": self.root(), "pid": self.next_pid, "agent": agent, "tags": tags});
         write
             .write_all(format!("{hello}\n").as_bytes())
             .await

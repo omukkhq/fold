@@ -78,7 +78,7 @@ async fn only_the_main_agent_claims_once_there_is_one_and_card_labels_must_exist
 
     make_main(&h, MAIN).await;
     let refused = h.refused("backend", "claim_request", claim.clone()).await;
-    assert_eq!(refused["code"], codes::MAIN_AGENT_REQUIRED);
+    assert_eq!(refused["code"], codes::ORCHESTRATOR_REQUIRED);
     assert!(
         refused["hint"]
             .as_str()

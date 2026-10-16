@@ -253,12 +253,23 @@ async fn the_row_follows_its_process_through_turns_stops_and_restarts() {
     let id = process(&store, 1, Role::AreaLead, Some(1), "s1").await;
     let web = Some(1);
     assert_eq!(
-        agents::running_counts(store.read(), web).await.unwrap(),
+        agents::running_counts(store.read(), Role::AreaLead, web)
+            .await
+            .unwrap(),
         (1, 1)
     );
     assert_eq!(
-        agents::running_counts(store.read(), None).await.unwrap(),
+        agents::running_counts(store.read(), Role::AreaLead, None)
+            .await
+            .unwrap(),
         (1, 0)
+    );
+    assert_eq!(
+        agents::running_counts(store.read(), Role::TaskCoder, web)
+            .await
+            .unwrap(),
+        (0, 0),
+        "each role counts its own workers"
     );
     let lead = AgentName::parse("web-lead").unwrap();
     store
@@ -311,7 +322,9 @@ async fn the_row_follows_its_process_through_turns_stops_and_restarts() {
         .await
         .unwrap();
     assert_eq!(
-        agents::running_counts(store.read(), web).await.unwrap(),
+        agents::running_counts(store.read(), Role::AreaLead, web)
+            .await
+            .unwrap(),
         (0, 0)
     );
     store

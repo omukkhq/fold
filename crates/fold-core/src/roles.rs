@@ -172,41 +172,64 @@ pub fn check_model(model: &str) -> Result<(), FoldError> {
     }
 }
 
-/// The `[workers]` limits of a project, counted over the workers whose process is running.
+/// The `[workers]` limits of a project, counted over the short-lived workers whose process is running. The long-lived leads are outside them, so a full limit never holds back the plan of an area or the review of the project.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WorkerLimits {
-    pub max: u64,
-    pub max_per_area: u64,
+    pub task_coder: u64,
+    pub batch_reviewer: u64,
+    /// `None`: an area has no limit of its own.
+    pub max_per_area: Option<u64>,
 }
 
-/// Refuses one more running worker when the project or its area is full. `in_area` is `None` for a worker without an area.
+impl WorkerLimits {
+    /// The limit of `role`, `None` for a long-lived role.
+    pub fn of(self, role: Role) -> Option<u64> {
+        match role {
+            Role::TaskCoder => Some(self.task_coder),
+            Role::BatchReviewer => Some(self.batch_reviewer),
+            Role::AreaLead | Role::ReviewLead => None,
+        }
+    }
+}
+
+/// Refuses one more running worker of `role` when its role or its area is full. `running` counts the running workers of `role`, and `in_area` is the worker's area with the running workers of `role` in it, `None` for a worker without an area. A lead is never refused.
 pub fn check_limits(
     limits: WorkerLimits,
+    role: Role,
     running: u64,
     in_area: Option<(&AreaName, u64)>,
 ) -> Result<(), FoldError> {
-    if running >= limits.max {
+    let Some(max) = limits.of(role) else {
+        return Ok(());
+    };
+    if running >= max {
         return Err(FoldError::new(
             codes::WORKER_LIMIT_REACHED,
-            format!("the project already runs {running} workers, its limit"),
+            format!("the project already runs {running} workers of role {role}, its limit"),
         )
-        .with_details([("max", serde_json::json!(limits.max))])
-        .with_hint("stop a worker with stop_worker, or raise [workers] max in .fold/config.toml"));
+        .with_details([
+            ("role", serde_json::json!(role.as_str())),
+            ("max", serde_json::json!(max)),
+        ])
+        .with_hint(format!(
+            "the {role} limit is {max}: wait until a {role} stops, stop one with stop_worker, or raise [workers] {role} in .fold/config.toml"
+        )));
     }
-    if let Some((area, count)) = in_area
-        && count >= limits.max_per_area
+    if let Some(((area, count), max)) = in_area.zip(limits.max_per_area)
+        && count >= max
     {
         return Err(FoldError::new(
             codes::WORKER_LIMIT_REACHED,
-            format!("area {area} already runs {count} workers, its limit"),
+            format!("area {area} already runs {count} workers of role {role}, its limit"),
         )
         .with_details([
+            ("role", serde_json::json!(role.as_str())),
             ("area", serde_json::json!(area.as_str())),
-            ("max_per_area", serde_json::json!(limits.max_per_area)),
+            ("max_per_area", serde_json::json!(max)),
         ])
-        .with_hint(
-            "stop a worker of the area with stop_worker, or raise [workers] max_per_area in .fold/config.toml",
-        ));
+        .with_hint(format!(
+            "the limit of area {area} is {max}: wait until a {role} of the area stops, stop one with stop_worker, or raise [workers] max_per_area in .fold/config.toml"
+        )));
     }
     Ok(())
 }
@@ -369,22 +392,47 @@ mod tests {
     }
 
     #[test]
-    fn limits_count_the_project_and_the_area() {
+    fn limits_count_each_short_lived_role_and_never_a_lead() {
         let limits = WorkerLimits {
-            max: 3,
-            max_per_area: 2,
+            task_coder: 4,
+            batch_reviewer: 3,
+            max_per_area: None,
         };
         let web = area("web");
-        assert!(check_limits(limits, 2, Some((&web, 1))).is_ok());
-        assert!(check_limits(limits, 0, None).is_ok());
-        let full = check_limits(limits, 3, None).unwrap_err();
+        assert!(check_limits(limits, Role::TaskCoder, 3, Some((&web, 3))).is_ok());
+        let full = check_limits(limits, Role::TaskCoder, 4, Some((&web, 4))).unwrap_err();
         assert_eq!(full.code(), codes::WORKER_LIMIT_REACHED);
-        let area_full = check_limits(limits, 2, Some((&web, 2))).unwrap_err();
+        assert_eq!(
+            full.details().unwrap()["role"],
+            serde_json::json!("task_coder")
+        );
+        assert_eq!(full.details().unwrap()["max"], serde_json::json!(4));
+        assert!(full.hint().unwrap().contains("task_coder limit is 4"));
+        assert!(check_limits(limits, Role::BatchReviewer, 2, None).is_ok());
+        let reviewers = check_limits(limits, Role::BatchReviewer, 3, None).unwrap_err();
+        assert!(
+            reviewers
+                .hint()
+                .unwrap()
+                .contains("batch_reviewer limit is 3")
+        );
+        for lead in [Role::AreaLead, Role::ReviewLead] {
+            assert!(check_limits(limits, lead, 100, Some((&web, 100))).is_ok());
+        }
+
+        let per_area = WorkerLimits {
+            max_per_area: Some(2),
+            ..limits
+        };
+        assert!(check_limits(per_area, Role::TaskCoder, 3, Some((&web, 1))).is_ok());
+        assert!(check_limits(per_area, Role::TaskCoder, 3, None).is_ok());
+        let area_full = check_limits(per_area, Role::TaskCoder, 2, Some((&web, 2))).unwrap_err();
         assert_eq!(area_full.code(), codes::WORKER_LIMIT_REACHED);
         assert_eq!(
             area_full.details().unwrap()["area"],
             serde_json::json!("web")
         );
+        assert!(area_full.hint().unwrap().contains("limit of area web is 2"));
     }
 
     #[test]

@@ -56,6 +56,7 @@ pub fn run(args: &McpArgs) -> Result<(), McpError> {
         cwd,
         pid: std::process::id(),
         agent,
+        tags: agent_tags(std::env::var("FOLD_AGENT_TAGS").ok().as_deref()),
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -65,6 +66,17 @@ pub fn run(args: &McpArgs) -> Result<(), McpError> {
     // The stdin reader blocks a runtime thread until the next line, which may never come.
     runtime.shutdown_background();
     outcome
+}
+
+/// The comma-separated tags of `FOLD_AGENT_TAGS`, without blanks. The daemon checks each one.
+fn agent_tags(value: Option<&str>) -> Vec<String> {
+    value
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|tag| !tag.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 fn client_config(args: &McpArgs) -> Result<ClientConfig, McpError> {
@@ -111,5 +123,18 @@ async fn session(config: &ClientConfig, hello: &Hello) -> Result<(), McpError> {
     tokio::select! {
         _ = tokio::io::copy(&mut stdin, &mut write) => Ok(()),
         _ = tokio::io::copy(&mut read, &mut stdout) => Err(McpError::DaemonClosed),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_agent_tags_are_the_comma_separated_words() {
+        assert_eq!(agent_tags(None), Vec::<String>::new());
+        assert_eq!(agent_tags(Some("")), Vec::<String>::new());
+        assert_eq!(agent_tags(Some("main")), ["main"]);
+        assert_eq!(agent_tags(Some(" main, ui ,,")), ["main", "ui"]);
     }
 }

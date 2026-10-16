@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT COUNT(*) AS \"total!: i64\",\n                  COALESCE(SUM(area_id IS ?1), 0) AS \"in_area!: i64\"\n           FROM worker_processes WHERE state NOT IN ('stopped', 'failed')",
+  "query": "SELECT COUNT(*) AS \"total!: i64\",\n                  COALESCE(SUM(area_id IS ?2), 0) AS \"in_area!: i64\"\n           FROM worker_processes WHERE role = ?1 AND state NOT IN ('stopped', 'failed')",
   "describe": {
     "columns": [
       {
@@ -17,12 +17,12 @@
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 2
     },
     "nullable": [
       false,
       false
     ]
   },
-  "hash": "ed9188342b9a99d46bca57c65f3ce66a3adbab7a5e771d2aeec00aab67ab2c2a"
+  "hash": "e1aac948a8f878af2f9c3633371e44b3e713c10d1371db58e67bfb43ff4db519"
 }

@@ -485,3 +485,43 @@ fn parse_hello_treats_an_empty_agent_as_unset() {
     assert_eq!(hello.agent.as_deref(), Some("web"));
     assert_eq!(hello.pid, 3);
 }
+
+#[tokio::test]
+async fn the_tags_of_the_handshake_register_the_main_agent_once() {
+    let host = Host::start().await;
+    let mut hello = host.hello(&host.root, Some("main"));
+    hello["tags"] = json!(["main"]);
+    let (answer, (read, write)) = handshake(host.state(), &hello).await;
+    assert!(answer.ok, "{answer:?}");
+    let client: Client = ().serve((read, write)).await.unwrap();
+    assert_eq!(
+        list_agents(&client).await,
+        json!({"agents": [{"name": "main", "tags": ["main"], "presence": "active", "workers": ["main"]}]})
+    );
+
+    let mut other = host.hello(&host.root, Some("lead"));
+    other["tags"] = json!(["main"]);
+    let (code, _) = refused(host.state(), format!("{other}\n").as_bytes()).await;
+    assert_eq!(code, "main_tag_denied");
+    let mut granted = host.hello(&host.root, Some("lead"));
+    granted["tags"] = json!(["integrator"]);
+    let (code, _) = refused(host.state(), format!("{granted}\n").as_bytes()).await;
+    assert_eq!(code, "human_required");
+    let mut bad = host.hello(&host.root, Some("lead"));
+    bad["tags"] = json!(["Not a tag"]);
+    let (code, _) = refused(host.state(), format!("{bad}\n").as_bytes()).await;
+    assert_eq!(code, "invalid_name");
+    drop(client);
+    host.daemon.shutdown().await;
+}
+
+#[test]
+fn parse_hello_reads_the_tags_and_an_adapter_without_them_sends_none() {
+    let hello =
+        parse_hello(br#"{"fold":1,"cwd":"/src/app","pid":3,"agent":"main","tags":["main"]}"#)
+            .unwrap();
+    assert_eq!(hello.tags, ["main"]);
+    let hello = parse_hello(br#"{"fold":1,"cwd":"/src/app","pid":3,"agent":"web"}"#).unwrap();
+    assert!(hello.tags.is_empty());
+    assert!(!serde_json::to_string(&hello).unwrap().contains("tags"));
+}

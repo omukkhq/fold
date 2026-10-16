@@ -123,6 +123,9 @@ function startedText(event: DurableEvent): string {
 /** A coder handed its proposal again: `resumed` is false when its session was gone and it started in a new one. */
 function resumedText(event: DurableEvent): string {
   const worker = workerOf(event);
+  if (event.data.reason === "session_lost") {
+    return `restarted ${worker} in a new session`;
+  }
   const proposal = proposalOf(event);
   const why =
     event.data.reason === "conflict"

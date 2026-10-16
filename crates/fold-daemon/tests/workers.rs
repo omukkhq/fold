@@ -422,53 +422,68 @@ async fn a_fold_notice_reaches_a_worker_once_as_a_user_turn() {
 }
 
 #[tokio::test]
-async fn the_fourth_worker_is_refused() {
+async fn the_fifth_task_coder_and_the_fourth_batch_reviewer_are_refused_and_a_lead_never_is() {
     let fake = FakeClaude::new("result");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
     areas(&harness).await;
+    let task = harness.create_task(MAIN, "Write the docs").await;
+    let work = harness.start_work("backend", &task).await;
+    std::fs::write(work.dir.join("docs.txt"), "docs\n").unwrap();
+    let proposal = harness.propose("backend", &work, "Write the docs").await;
     let lead = start_lead(&mut harness, "web").await;
+    let coder = json!({"role": "task_coder", "tasks": ["T-1"]});
+    for _ in 0..4 {
+        harness.call(&lead, "start_worker", coder.clone()).await;
+    }
+    let refused = harness.refused(&lead, "start_worker", coder.clone()).await;
+    assert_eq!(refused["code"], codes::WORKER_LIMIT_REACHED);
+    assert_eq!(refused["details"], json!({"role": "task_coder", "max": 4}));
+    assert!(
+        refused["hint"]
+            .as_str()
+            .unwrap()
+            .contains("task_coder limit is 4"),
+        "{refused}"
+    );
+    assert!(
+        harness
+            .handle
+            .agents()
+            .get_worker(&name("web-coder-5"))
+            .await
+            .is_err()
+    );
+
     start_lead(&mut harness, "api").await;
     let review = harness
         .call(MAIN, "start_worker", json!({"role": "review_lead"}))
         .await;
     assert_eq!(review["worker"]["name"], "review-lead");
-    let refused = harness
-        .refused(
-            &lead,
-            "start_worker",
-            json!({"role": "task_coder", "tasks": ["T-1"]}),
-        )
-        .await;
-    assert_eq!(refused["code"], codes::WORKER_LIMIT_REACHED);
-    assert_eq!(refused["details"]["max"], 3);
-    assert!(
+    harness.connect("review-lead").await;
+    let reviewer = json!({"role": "batch_reviewer", "proposals": [proposal]});
+    for _ in 0..3 {
         harness
-            .handle
-            .agents()
-            .get_worker(&name("web-coder"))
-            .await
-            .is_err()
+            .call("review-lead", "start_worker", reviewer.clone())
+            .await;
+    }
+    let full = harness
+        .refused("review-lead", "start_worker", reviewer)
+        .await;
+    assert_eq!(full["code"], codes::WORKER_LIMIT_REACHED);
+    assert_eq!(full["details"], json!({"role": "batch_reviewer", "max": 3}));
+    assert!(
+        full["hint"]
+            .as_str()
+            .unwrap()
+            .contains("batch_reviewer limit is 3"),
+        "{full}"
     );
 
     harness
-        .call(MAIN, "stop_worker", json!({"name": "review-lead"}))
+        .call(&lead, "stop_worker", json!({"name": "web-coder"}))
         .await;
-    let coder = harness
-        .call(
-            &lead,
-            "start_worker",
-            json!({"role": "task_coder", "tasks": ["T-1"]}),
-        )
-        .await;
-    assert_eq!(coder["worker"]["name"], "web-coder");
-    let full = harness
-        .refused(
-            &lead,
-            "start_worker",
-            json!({"role": "task_coder", "tasks": ["T-1"]}),
-        )
-        .await;
-    assert_eq!(full["code"], codes::WORKER_LIMIT_REACHED);
+    let fifth = harness.call(&lead, "start_worker", coder).await;
+    assert_eq!(fifth["worker"]["name"], "web-coder-5");
 }
 
 #[tokio::test]

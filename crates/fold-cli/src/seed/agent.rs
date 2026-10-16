@@ -41,6 +41,7 @@ impl Agent {
             cwd: root.to_owned(),
             pid: std::process::id(),
             agent: Some(name.to_owned()),
+            tags: Vec::new(),
         };
         let mut line = serde_json::to_vec(&hello).map_err(|_| SeedError::Handshake)?;
         line.push(b'\n');

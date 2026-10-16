@@ -386,15 +386,18 @@ pub async fn list_worker_processes(
     with_bindings(conn, raw).await
 }
 
-/// How many worker processes are running, in the whole project and in area `area_id`.
+/// How many worker processes of `role` are running, in the whole project and in area `area_id`.
 pub async fn running_counts(
     executor: impl SqliteExecutor<'_>,
+    role: Role,
     area_id: Option<i64>,
 ) -> Result<(u64, u64), StoreError> {
+    let role = role.as_str();
     let row = sqlx::query!(
         r#"SELECT COUNT(*) AS "total!: i64",
-                  COALESCE(SUM(area_id IS ?1), 0) AS "in_area!: i64"
-           FROM worker_processes WHERE state NOT IN ('stopped', 'failed')"#,
+                  COALESCE(SUM(area_id IS ?2), 0) AS "in_area!: i64"
+           FROM worker_processes WHERE role = ?1 AND state NOT IN ('stopped', 'failed')"#,
+        role,
         area_id
     )
     .fetch_one(executor)

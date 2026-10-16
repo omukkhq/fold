@@ -1,5 +1,5 @@
 use crate::actor::Actor;
-use crate::agents::AreaName;
+use crate::agents::{AreaName, Tag};
 use crate::error::codes;
 use crate::roles::Role;
 
@@ -9,8 +9,10 @@ use super::PolicyDenied;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Starter {
     Human,
-    /// The main worker of an agent that fold does not supervise: the user's own interactive session.
+    /// The main worker of the agent with the `main` tag: the user's own interactive session. While no agent has the tag, the main worker of any agent that fold does not supervise counts as the main agent.
     MainAgent,
+    /// The main worker of an agent that fold does not supervise and that lacks the `main` tag, while another agent has it.
+    Unsupervised,
     AreaLead(AreaName),
     ReviewLead,
     /// A task coder or a batch reviewer.
@@ -21,14 +23,19 @@ pub enum Starter {
 }
 
 impl Starter {
-    /// `supervised` is the role and area of the acting agent's worker process, `None` when fold does not supervise the agent.
-    pub fn of(actor: &Actor, supervised: Option<(Role, Option<AreaName>)>) -> Starter {
+    /// `supervised` is the role and area of the acting agent's worker process, `None` when fold does not supervise the agent. `main_exists` is whether some agent has the `main` tag.
+    pub fn of(
+        actor: &Actor,
+        supervised: Option<(Role, Option<AreaName>)>,
+        main_exists: bool,
+    ) -> Starter {
         match actor {
             Actor::Human { .. } => Starter::Human,
             Actor::System => Starter::System,
             Actor::Agent(agent) if !agent.worker.is_main() => Starter::Subagent,
-            Actor::Agent(_) => match supervised {
-                None => Starter::MainAgent,
+            Actor::Agent(agent) => match supervised {
+                None if !main_exists || agent.tags.iter().any(Tag::is_main) => Starter::MainAgent,
+                None => Starter::Unsupervised,
                 Some((Role::AreaLead, Some(area))) => Starter::AreaLead(area),
                 Some((Role::ReviewLead, _)) => Starter::ReviewLead,
                 Some((Role::AreaLead, None) | (Role::TaskCoder | Role::BatchReviewer, _)) => {
@@ -43,6 +50,7 @@ impl Starter {
 pub fn can_define_area(starter: &Starter) -> Result<(), PolicyDenied> {
     match starter {
         Starter::Human | Starter::MainAgent => Ok(()),
+        Starter::Unsupervised => Err(not_the_main_agent("ask the main agent to call define_area")),
         _ => Err(PolicyDenied {
             code: codes::MAIN_AGENT_REQUIRED,
             message: "only the main agent or a human can define an area",
@@ -57,6 +65,9 @@ pub fn can_start_worker(starter: &Starter, role: Role) -> Result<(), PolicyDenie
         (Role::AreaLead | Role::ReviewLead, Starter::Human | Starter::MainAgent)
         | (Role::TaskCoder, Starter::AreaLead(_))
         | (Role::BatchReviewer, Starter::ReviewLead) => Ok(()),
+        (Role::AreaLead | Role::ReviewLead, Starter::Unsupervised) => Err(not_the_main_agent(
+            "ask the main agent to call start_worker",
+        )),
         (Role::AreaLead | Role::ReviewLead, _) => Err(PolicyDenied {
             code: codes::MAIN_AGENT_REQUIRED,
             message: "only the main agent or a human can start a lead",
@@ -85,7 +96,7 @@ pub fn can_stop_worker(
         Starter::Human | Starter::MainAgent | Starter::System => true,
         Starter::AreaLead(own) => role == Role::TaskCoder && area == Some(own),
         Starter::ReviewLead => role == Role::BatchReviewer,
-        Starter::ShortLived | Starter::Subagent => false,
+        Starter::Unsupervised | Starter::ShortLived | Starter::Subagent => false,
     };
     if allowed {
         Ok(())
@@ -95,6 +106,15 @@ pub fn can_stop_worker(
             message: "only the worker's starter, the main agent or a human can stop it",
             hint: "call list_workers to see who leads the worker",
         })
+    }
+}
+
+/// While the main agent exists, an agent that fold does not supervise leaves the plan of the whole project to it. `hint` names the call the main agent makes instead.
+fn not_the_main_agent(hint: &'static str) -> PolicyDenied {
+    PolicyDenied {
+        code: codes::ORCHESTRATOR_REQUIRED,
+        message: "only the agent with the main tag can do this while it exists",
+        hint,
     }
 }
 
@@ -134,40 +154,86 @@ mod tests {
         AreaName::parse(name).unwrap()
     }
 
+    fn tagged(worker: &str, tag: &str) -> Actor {
+        let Actor::Agent(mut agent) = agent(worker) else {
+            unreachable!()
+        };
+        agent.tags.push(Tag::parse(tag).unwrap());
+        Actor::Agent(agent)
+    }
+
     #[test]
     fn the_starter_follows_the_actor_and_its_supervised_role() {
         let human = Actor::human(HumanName::parse("ana").unwrap());
-        assert_eq!(Starter::of(&human, None), Starter::Human);
-        assert_eq!(Starter::of(&Actor::System, None), Starter::System);
-        assert_eq!(Starter::of(&agent("main"), None), Starter::MainAgent);
-        assert_eq!(Starter::of(&agent("main/ui"), None), Starter::Subagent);
+        let of = |actor: &Actor, supervised| Starter::of(actor, supervised, false);
+        assert_eq!(of(&human, None), Starter::Human);
+        assert_eq!(of(&Actor::System, None), Starter::System);
+        assert_eq!(of(&agent("main"), None), Starter::MainAgent);
+        assert_eq!(of(&agent("main/ui"), None), Starter::Subagent);
         assert_eq!(
-            Starter::of(
+            of(
                 &agent("web-lead"),
                 Some((Role::AreaLead, Some(area("web"))))
             ),
             Starter::AreaLead(area("web"))
         );
         assert_eq!(
-            Starter::of(
+            of(
                 &agent("web-lead/x"),
                 Some((Role::AreaLead, Some(area("web"))))
             ),
             Starter::Subagent
         );
         assert_eq!(
-            Starter::of(&agent("review-lead"), Some((Role::ReviewLead, None))),
+            of(&agent("review-lead"), Some((Role::ReviewLead, None))),
             Starter::ReviewLead
         );
         for role in [Role::TaskCoder, Role::BatchReviewer] {
-            assert_eq!(
-                Starter::of(&agent("w"), Some((role, None))),
-                Starter::ShortLived
-            );
+            assert_eq!(of(&agent("w"), Some((role, None))), Starter::ShortLived);
         }
         assert_eq!(
-            Starter::of(&agent("w"), Some((Role::AreaLead, None))),
+            of(&agent("w"), Some((Role::AreaLead, None))),
             Starter::ShortLived
+        );
+    }
+
+    #[test]
+    fn once_an_agent_has_the_main_tag_only_it_is_the_main_agent() {
+        assert_eq!(
+            Starter::of(&tagged("lead", "main"), None, true),
+            Starter::MainAgent
+        );
+        for untagged in [agent("frontend"), tagged("frontend", "review")] {
+            assert_eq!(Starter::of(&untagged, None, true), Starter::Unsupervised);
+        }
+        assert_eq!(
+            Starter::of(&tagged("lead/sub", "main"), None, true),
+            Starter::Subagent
+        );
+        assert_eq!(
+            Starter::of(&agent("web-lead"), Some((Role::ReviewLead, None)), true),
+            Starter::ReviewLead
+        );
+        let denied = can_define_area(&Starter::Unsupervised).unwrap_err();
+        assert_eq!(denied.code(), codes::ORCHESTRATOR_REQUIRED);
+        assert!(denied.hint().contains("define_area"));
+        for role in [Role::AreaLead, Role::ReviewLead] {
+            let denied = can_start_worker(&Starter::Unsupervised, role).unwrap_err();
+            assert_eq!(denied.code(), codes::ORCHESTRATOR_REQUIRED);
+            assert!(denied.hint().contains("start_worker"));
+        }
+        assert_eq!(
+            can_start_worker(&Starter::Unsupervised, Role::TaskCoder)
+                .unwrap_err()
+                .code(),
+            codes::WORKER_START_DENIED
+        );
+        assert!(can_stop_worker(&Starter::Unsupervised, Role::TaskCoder, None).is_err());
+        assert_eq!(
+            can_write_handoff(&Starter::Unsupervised)
+                .unwrap_err()
+                .code(),
+            codes::HANDOFF_DENIED
         );
     }
 
