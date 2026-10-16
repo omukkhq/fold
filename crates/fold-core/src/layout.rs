@@ -110,6 +110,21 @@ impl ProjectPaths {
     }
 }
 
+/// The environment variable that names the agent of a fold Claude Code session: `fld claude` sets it for the main agent, the worker supervisor for each worker, and `fld mcp` and `fld hook` read it.
+pub const AGENT_ENV: &str = "FOLD_AGENT";
+
+/// The environment variable that lists the tags a session's agent registers with; `fld claude` sets `main` in it.
+pub const AGENT_TAGS_ENV: &str = "FOLD_AGENT_TAGS";
+
+/// The key of the servers object in an MCP configuration such as `.mcp.json`.
+pub const MCP_SERVERS_KEY: &str = "mcpServers";
+
+/// The key of fold's own server below `mcpServers`, in the project's `.mcp.json`, in a worker's MCP configuration and in a role's `mcp` list.
+pub const MCP_SERVER_NAME: &str = "fold";
+
+/// The `fld` subcommand that fold's MCP server entry runs: the stdio adapter to the daemon.
+pub const MCP_COMMAND: &str = "mcp";
+
 /// The parent of every workspace directory relative to the project root.
 pub const WS_DIR: &str = ".fold/ws";
 

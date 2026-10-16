@@ -6,7 +6,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::error::from_agent;
-use super::{FoldServer, agents};
+use super::{FoldServer, agents, parse};
 
 pub const REGISTER_AGENT: &str = "register_agent";
 pub const REGISTER_WORKER: &str = "register_worker";
@@ -57,15 +57,6 @@ pub fn tools() -> Vec<Tool> {
     ]
 }
 
-pub(super) fn parse<T: for<'de> Deserialize<'de>>(arguments: &JsonObject) -> Result<T, FoldError> {
-    serde_json::from_value(Value::Object(arguments.clone())).map_err(|_| {
-        FoldError::new(
-            fold_core::codes::INVALID_REQUEST,
-            "the arguments do not match the tool's input schema",
-        )
-    })
-}
-
 pub async fn register_agent(
     server: &FoldServer,
     arguments: &JsonObject,
@@ -77,20 +68,15 @@ pub async fn register_agent(
         .iter()
         .map(|tag| Tag::parse(tag))
         .collect::<Result<Vec<_>, _>>()?;
+    let as_worker = input
+        .as_worker
+        .as_deref()
+        .map(WorkerName::parse)
+        .transpose()?;
     let mut session = server.session.lock().await;
-    // An unbound session resolves `as` only once this call has bound it, so a worker of another agent is refused before anything is written.
-    if session.agent.is_none()
-        && let Some(worker) = input.as_worker.as_deref()
-        && WorkerName::parse(worker)?.agent() != name
-    {
-        return Err(FoldError::new(
-            fold_core::codes::WORKER_NOT_FOUND,
-            "the worker does not exist",
-        ));
-    }
     let registered = server
         .agents
-        .register_agent_from_tool(&mut session, &name, &tags)
+        .register_agent_from_tool(&mut session, &name, &tags, as_worker.as_ref())
         .await
         .map_err(from_agent)?;
     Ok(json!({

@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "WITH RECURSIVE reach(id) AS (\n               SELECT id FROM tasks WHERE number IN (SELECT value FROM json_each(?1))\n               UNION\n               SELECT d.task_id FROM dependencies d JOIN reach r ON d.needs_task_id = r.id\n           )\n           SELECT t.number AS \"task!: i64\", n.number AS \"needs!: i64\"\n           FROM dependencies d\n           JOIN reach r ON r.id = d.needs_task_id\n           JOIN tasks t ON t.id = d.task_id\n           JOIN tasks n ON n.id = d.needs_task_id\n           ORDER BY t.number, n.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "task!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "needs!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "20aa4adb5d7ee04f470c7040a79f23e6541ead4cda3ca0c01fc86e21be1adb02"
+}

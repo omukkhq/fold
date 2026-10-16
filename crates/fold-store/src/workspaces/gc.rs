@@ -5,6 +5,7 @@ use fold_core::{Timestamp, WorkspaceId};
 use sqlx::SqliteExecutor;
 
 use crate::error::StoreError;
+use crate::store::WriteTx;
 
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 
@@ -59,7 +60,7 @@ pub struct ClosedWorkspace {
     pub closed_at: Timestamp,
 }
 
-/// The archived or abandoned workspaces closed more than `closed_workspace_days` days before `now`, by id.
+/// The archived or abandoned workspaces closed more than `closed_workspace_days` days before `now` whose directory gc has not removed yet, by id.
 pub async fn closed_workspaces_due<'e>(
     db: impl SqliteExecutor<'e>,
     now: Timestamp,
@@ -76,6 +77,7 @@ pub async fn closed_workspaces_due<'e>(
         r#"SELECT number AS "number!: i64", path, closed_at AS "closed_at!: i64"
            FROM workspaces
            WHERE state IN ('archived', 'abandoned') AND closed_at IS NOT NULL AND closed_at < ?
+             AND directory_removed_at IS NULL
            ORDER BY number"#,
         cutoff
     )
@@ -92,4 +94,23 @@ pub async fn closed_workspaces_due<'e>(
             })
         })
         .collect()
+}
+
+/// Records that gc removed the directory of the closed workspace, so `closed_workspaces_due` leaves it out from then on. False when no closed workspace has this id.
+pub async fn mark_directory_removed(
+    tx: &mut WriteTx,
+    workspace: WorkspaceId,
+    now: Timestamp,
+) -> Result<bool, StoreError> {
+    let (workspace, now) = (workspace.to_db(), now.as_millis());
+    let changed = sqlx::query!(
+        "UPDATE workspaces SET directory_removed_at = ?2
+         WHERE number = ?1 AND state IN ('archived', 'abandoned') AND directory_removed_at IS NULL",
+        workspace,
+        now
+    )
+    .execute(tx.conn())
+    .await?
+    .rows_affected();
+    Ok(changed == 1)
 }

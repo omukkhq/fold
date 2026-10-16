@@ -16,6 +16,7 @@ use fold_store::testing::{TestProject, eventually};
 use serde_json::{Value, json};
 
 use crate::common::acceptance::{Harness, SLUG, WAIT};
+use crate::common::awaiting_human;
 use crate::workers_support::{FakeClaude, Run};
 
 const MAIN: &str = "frontend";
@@ -641,7 +642,7 @@ async fn a_supervisor_that_falls_behind_its_bus_still_answers_a_replied_question
         clock,
     );
     let question = eventually(WAIT, async || {
-        let waiting = messages.awaiting_human().await.unwrap();
+        let waiting = awaiting_human(project.store()).await;
         waiting
             .first()
             .map(|message| message.id)

@@ -375,7 +375,7 @@ async fn errors_carry_the_code_and_the_next_tool() {
             "code": "recipient_not_found",
             "message": "recipient ghost does not exist",
             "details": {"to": ["ghost"]},
-            "hint": "call list_agents",
+            "hint": "list the agents and their workers with list_agents",
         })
     );
     for (tool, arguments) in [
@@ -389,7 +389,10 @@ async fn errors_carry_the_code_and_the_next_tool() {
         let result = call_raw(&frontend, tool, arguments).await;
         let error = &body(&result)["error"];
         assert_eq!(error["code"], "message_not_found", "{tool}");
-        assert_eq!(error["hint"], "call get_inbox", "{tool}");
+        assert_eq!(
+            error["hint"], "call get_inbox to see your messages",
+            "{tool}"
+        );
     }
     for (tool, arguments, code) in [
         ("get_thread", json!({"thread": "T-1"}), "invalid_id"),

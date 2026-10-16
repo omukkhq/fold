@@ -28,7 +28,7 @@ async fn seeded() -> (tempfile::TempDir, Store, i64) {
     let process = store
         .write(async |tx| {
             agents::insert_worker_process(
-                tx.conn(),
+                tx,
                 &NewWorkerProcess {
                     agent_id: 1,
                     role: Role::ReviewLead,
@@ -52,7 +52,7 @@ async fn question(store: &Store, process: i64, kind: QuestionKind, number: Optio
     store
         .write(async |tx| {
             agents::insert_question(
-                tx.conn(),
+                tx,
                 &NewQuestion {
                     worker_process_id: process,
                     kind,
@@ -84,7 +84,7 @@ async fn a_question_takes_one_answer_or_one_closure_and_never_changes() {
     store
         .write(async |tx| {
             agents::insert_answer(
-                tx.conn(),
+                tx,
                 first,
                 PermissionBehavior::Deny,
                 &ana,
@@ -97,15 +97,7 @@ async fn a_question_takes_one_answer_or_one_closure_and_never_changes() {
         .unwrap();
     let again = store
         .write(async |tx| {
-            agents::insert_answer(
-                tx.conn(),
-                first,
-                PermissionBehavior::Allow,
-                &ana,
-                None,
-                at(4),
-            )
-            .await
+            agents::insert_answer(tx, first, PermissionBehavior::Allow, &ana, None, at(4)).await
         })
         .await
         .unwrap_err();
@@ -114,21 +106,13 @@ async fn a_question_takes_one_answer_or_one_closure_and_never_changes() {
         Some("worker_permission_answers.question_id")
     );
     let closed = store
-        .write(async |tx| agents::close_open_questions(tx.conn(), process, at(5)).await)
+        .write(async |tx| agents::close_open_questions(tx, process, at(5)).await)
         .await
         .unwrap();
     assert_eq!(closed, 1, "only the unanswered question closes");
     let late = store
         .write(async |tx| {
-            agents::insert_answer(
-                tx.conn(),
-                second,
-                PermissionBehavior::Allow,
-                &ana,
-                None,
-                at(6),
-            )
-            .await
+            agents::insert_answer(tx, second, PermissionBehavior::Allow, &ana, None, at(6)).await
         })
         .await
         .unwrap_err();
@@ -205,13 +189,12 @@ async fn an_ask_question_links_its_messages_and_is_only_allowed() {
     let tool = question(&store, process, QuestionKind::Tool, Some(1)).await;
     let m1 = MessageId::from_number(1).unwrap();
     store
-        .write(async |tx| agents::insert_question_message(tx.conn(), ask, 1, m1).await)
+        .write(async |tx| agents::insert_question_message(tx, ask, 1, m1).await)
         .await
         .unwrap();
     let on_tool = store
         .write(async |tx| {
-            agents::insert_question_message(tx.conn(), tool, 1, MessageId::from_number(2).unwrap())
-                .await
+            agents::insert_question_message(tx, tool, 1, MessageId::from_number(2).unwrap()).await
         })
         .await
         .unwrap_err();
@@ -242,7 +225,7 @@ async fn an_ask_question_links_its_messages_and_is_only_allowed() {
     );
     let denied = store
         .write(async |tx| {
-            agents::insert_answer(tx.conn(), ask, PermissionBehavior::Deny, &ana, None, at(3)).await
+            agents::insert_answer(tx, ask, PermissionBehavior::Deny, &ana, None, at(3)).await
         })
         .await
         .unwrap_err();
@@ -253,8 +236,7 @@ async fn an_ask_question_links_its_messages_and_is_only_allowed() {
     );
     store
         .write(async |tx| {
-            agents::insert_answer(tx.conn(), ask, PermissionBehavior::Allow, &ana, None, at(3))
-                .await
+            agents::insert_answer(tx, ask, PermissionBehavior::Allow, &ana, None, at(3)).await
         })
         .await
         .unwrap();

@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -29,8 +30,9 @@ pub enum AssetSource {
     Dir(PathBuf),
 }
 
+/// An embedded file's bytes are borrowed from the binary, so serving one copies nothing.
 struct Asset {
-    bytes: Vec<u8>,
+    bytes: Cow<'static, [u8]>,
     etag: String,
 }
 
@@ -42,8 +44,8 @@ enum Lookup {
 }
 
 impl AssetSource {
-    /// `path` is a normalised relative path. Anything that is not a regular file inside the source is absent.
-    async fn read(&self, path: &str) -> Lookup {
+    /// `path` is a normalised relative path. Anything that is not a regular file inside the source is absent. A file on disk whose entity tag `if_none_match` already names is not read.
+    async fn read(&self, path: &str, if_none_match: Option<&str>) -> Lookup {
         match self {
             Self::Embedded => {
                 let path = path.to_owned();
@@ -51,7 +53,7 @@ impl AssetSource {
                 let file = tokio::task::spawn_blocking(move || {
                     WebBuild::get(&path).map(|file| Asset {
                         etag: format!("\"{}\"", hex(&file.metadata.sha256_hash())),
-                        bytes: file.data.into_owned(),
+                        bytes: file.data,
                     })
                 })
                 .await
@@ -59,12 +61,12 @@ impl AssetSource {
                 .flatten();
                 file.map_or(Lookup::Absent, Lookup::Found)
             }
-            Self::Dir(root) => read_dir_file(root, path).await,
+            Self::Dir(root) => read_dir_file(root, path, if_none_match).await,
         }
     }
 }
 
-async fn read_dir_file(root: &Path, path: &str) -> Lookup {
+async fn read_dir_file(root: &Path, path: &str, if_none_match: Option<&str>) -> Lookup {
     let Ok(root) = tokio::fs::canonicalize(root).await else {
         return Lookup::Absent;
     };
@@ -86,10 +88,17 @@ async fn read_dir_file(root: &Path, path: &str) -> Lookup {
         .ok()
         .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
         .map_or(0, |age| age.as_nanos());
+    let etag = format!("\"{:x}-{modified:x}\"", meta.len());
+    if if_none_match.is_some_and(|header| etag_matches(header, &etag)) {
+        return Lookup::Found(Asset {
+            bytes: Cow::Borrowed(&[]),
+            etag,
+        });
+    }
     match tokio::fs::read(&file).await {
         Ok(bytes) => Lookup::Found(Asset {
-            etag: format!("\"{:x}-{modified:x}\"", meta.len()),
-            bytes,
+            etag,
+            bytes: Cow::Owned(bytes),
         }),
         Err(_) => Lookup::Absent,
     }
@@ -144,10 +153,18 @@ pub async fn serve(State(state): State<AppState>, request: Request) -> Response 
     let Some(relative) = normalise(path) else {
         return ApiError::not_found().into_response();
     };
-    let (found, name, fallback) = match state.assets.read(&relative).await {
+    let if_none_match = request
+        .headers()
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok());
+    let (found, name, fallback) = match state.assets.read(&relative, if_none_match).await {
         Lookup::Found(asset) => (Lookup::Found(asset), relative, false),
         Lookup::Refused => return ApiError::not_found().into_response(),
-        _ => (state.assets.read(INDEX).await, INDEX.to_owned(), true),
+        _ => (
+            state.assets.read(INDEX, if_none_match).await,
+            INDEX.to_owned(),
+            true,
+        ),
     };
     let Lookup::Found(asset) = found else {
         return ApiError(

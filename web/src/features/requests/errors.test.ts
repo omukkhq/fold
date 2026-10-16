@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "@/api/errors";
-import {
-  charCount,
-  describeFailure,
-  draftReasonText,
-  reloadsRequest,
-} from "./errors";
+import { describeFailure, draftReasonText, reloadsRequest } from "./errors";
 
 const err = (
   code: string,
@@ -136,12 +131,5 @@ describe("reloadsRequest", () => {
     expect(reloadsRequest(err("invalid_request"))).toBe(false);
     expect(reloadsRequest(err("requester_required"))).toBe(false);
     expect(reloadsRequest(new Error("x"))).toBe(false);
-  });
-});
-
-describe("charCount", () => {
-  it("counts a surrogate pair as one character, as the daemon does", () => {
-    expect(charCount("ab")).toBe(2);
-    expect(charCount("😀x")).toBe(2);
   });
 });

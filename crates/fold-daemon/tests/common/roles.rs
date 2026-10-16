@@ -25,14 +25,14 @@ pub async fn give_role(store: &Store, agent: &str, role: Role, area: Option<&str
                         let label = LabelName::parse(area.as_str()).unwrap();
                         tasks::insert_label(tx, &label, LabelColor::Sage, now).await?;
                         let label_id = agents::label_id(tx.conn(), &label).await?.unwrap();
-                        Some(agents::insert_area(tx.conn(), area, label_id, "main", now).await?)
+                        Some(agents::insert_area(tx, area, label_id, "main", now).await?)
                     }
                 },
                 None => None,
             };
             let session_id = format!("00000000-0000-4000-9000-{agent_id:012}");
             let id = agents::insert_worker_process(
-                tx.conn(),
+                tx,
                 &NewWorkerProcess {
                     agent_id,
                     role,
@@ -44,9 +44,9 @@ pub async fn give_role(store: &Store, agent: &str, role: Role, area: Option<&str
                 },
             )
             .await?;
-            agents::set_worker_state(tx.conn(), id, WorkerState::Stopped, now).await?;
+            agents::set_worker_state(tx, id, WorkerState::Stopped, now).await?;
             if let (Role::AreaLead, Some(area_id)) = (role, area_id) {
-                agents::set_area_lead(tx.conn(), area_id, agent_id).await?;
+                agents::set_area_lead(tx, area_id, agent_id).await?;
             }
             Ok::<_, StoreError>(())
         })

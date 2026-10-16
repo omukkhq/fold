@@ -28,6 +28,7 @@ import {
 import { integratedRevisions } from "./integration";
 import { claimLine, reviewPill, versionText, waitingOn } from "./present";
 import { ReviewPill, WaitingChip } from "./ReviewPill";
+import { projectPath } from "@/routes/paths";
 
 interface ProposalsScreenProps {
   slug: string;
@@ -185,7 +186,7 @@ export function ProposalsScreen({
                     <td className={CELL}>
                       <span className="flex flex-wrap items-center gap-8">
                         <HrefLink
-                          href={`/p/${slug}/proposals/${p.id}`}
+                          href={projectPath(slug, "proposals", p.id)}
                           className={cn(
                             "rounded-s text-body leading-snug font-medium text-text hover:underline",
                             focusRing,

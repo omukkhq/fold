@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { MAX_TEXT_CHARS, charCount } from "./errors";
+import { MAX_TEXT_CHARS, charCount } from "@/format/text";
 
 function text(empty: string) {
   return z

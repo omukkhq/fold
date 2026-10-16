@@ -180,11 +180,13 @@ pub struct EventActor(String);
 
 impl EventActor {
     pub const FOLD: &'static str = "fold";
+    /// What a human's label starts with, before the name: `human:ana`. Requesters and message addresses write humans the same way.
+    pub const HUMAN_PREFIX: &'static str = "human:";
 
     pub fn parse(label: &str) -> Result<EventActor, EventError> {
         let valid = if label == Self::FOLD {
             true
-        } else if let Some(human) = label.strip_prefix("human:") {
+        } else if let Some(human) = label.strip_prefix(Self::HUMAN_PREFIX) {
             Self::valid_human(human)
         } else if WorkerName::parse(label).is_ok() {
             true
@@ -210,7 +212,7 @@ impl EventActor {
     }
 
     pub fn human(name: &HumanName) -> EventActor {
-        EventActor(format!("human:{name}"))
+        EventActor(format!("{}{name}", Self::HUMAN_PREFIX))
     }
 
     pub fn as_str(&self) -> &str {
@@ -219,10 +221,19 @@ impl EventActor {
 
     /// The agent of a worker actor, which is its first segment; `None` for a human and for `fold`.
     pub fn agent(&self) -> Option<&str> {
-        if self.0 == Self::FOLD || self.0.starts_with("human:") {
+        if self.0 == Self::FOLD || self.is_human() {
             return None;
         }
         self.0.split('/').next()
+    }
+
+    pub fn is_human(&self) -> bool {
+        self.0.starts_with(Self::HUMAN_PREFIX)
+    }
+
+    /// The name of a human actor; `None` for a worker and for `fold`.
+    pub fn human_name(&self) -> Option<&str> {
+        self.0.strip_prefix(Self::HUMAN_PREFIX)
     }
 
     fn valid_name(name: &str) -> bool {
@@ -271,6 +282,8 @@ pub struct NewEvent {
     pub revision: Option<RevisionId>,
     /// Stored in its own column for the recipient rule of message events; it is not part of a stored `Event`, whose `data` names the message.
     pub message: Option<MessageId>,
+    /// Why the event happened, stored in its own column so a reader that decides on it filters in SQL. `data` carries the same reason for agents and the web; it is not part of a stored `Event`.
+    pub reason: Option<String>,
     pub data: serde_json::Value,
 }
 
@@ -288,6 +301,7 @@ impl NewEvent {
             workspace: None,
             revision: None,
             message: None,
+            reason: None,
             data: serde_json::Value::Object(serde_json::Map::new()),
         })
     }
@@ -319,6 +333,12 @@ impl NewEvent {
     #[must_use]
     pub fn message(mut self, message: MessageId) -> Self {
         self.message = Some(message);
+        self
+    }
+
+    #[must_use]
+    pub fn reason(mut self, reason: &str) -> Self {
+        self.reason = Some(reason.to_owned());
         self
     }
 
@@ -436,6 +456,18 @@ pub fn concerns(event: &Event, facts: &AgentEventFacts) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_human_actor_names_its_human() {
+        let human = EventActor::human(&HumanName::parse("ana").unwrap());
+        assert!(human.is_human());
+        assert_eq!(human.human_name(), Some("ana"));
+        assert_eq!(human.agent(), None);
+        let worker = EventActor::parse("frontend/ui").unwrap();
+        assert!(!worker.is_human());
+        assert_eq!(worker.human_name(), None);
+        assert!(!EventActor::fold().is_human());
+    }
 
     fn event(event_type: EventType, actor: &str) -> Event {
         Event {

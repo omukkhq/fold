@@ -1,8 +1,11 @@
 use std::path::Path;
 
 use fold_core::events::types;
-use fold_core::roles::{AreaLimitChange, WorkerLimits, WorkerLimitsChange};
-use fold_core::{Actor, FoldError, NewEvent, ProjectConfig, ProjectPaths, codes, policy};
+use fold_core::roles::{AreaLimitChange, WorkerLimits, WorkerLimitsChange, check_limits};
+use fold_core::{
+    Actor, AreaName, FoldError, NewEvent, ProjectConfig, ProjectPaths, Role, codes, policy,
+};
+use fold_store::{WriteTx, agents};
 use fold_vcs::atomic::{EditLock, write_atomic};
 use serde_json::{Value, json};
 use toml_edit::{DocumentMut, Item, Table, TableLike, Value as TomlValue, value};
@@ -16,6 +19,19 @@ use crate::services::projects::Lease;
 pub struct WorkerLimitsChanged {
     pub old: WorkerLimits,
     pub new: WorkerLimits,
+}
+
+/// Refuses one more worker of `role` in `area`, with its row id and name, when the running workers already fill a limit. Read on the writer inside the start, so two starts cannot both take the last place.
+pub(super) async fn check_running(
+    tx: &mut WriteTx,
+    limits: WorkerLimits,
+    role: Role,
+    area: Option<(i64, &AreaName)>,
+) -> Result<(), AgentError> {
+    let (running, in_area) =
+        agents::running_counts(tx.conn(), role, area.map(|(id, _)| id)).await?;
+    check_limits(limits, role, running, area.map(|(_, name)| (name, in_area)))?;
+    Ok(())
 }
 
 fn limits_json(limits: WorkerLimits) -> Value {
@@ -137,7 +153,7 @@ impl AgentService {
     pub(super) fn config_paths(&self) -> Option<&ProjectPaths> {
         match (&self.workers, &self.lease) {
             (Some(supervisor), _) => Some(supervisor.paths()),
-            (None, Lease::Config(paths)) => Some(paths),
+            (None, Lease::Config(config)) => Some(config.paths()),
             (None, Lease::Minutes(_)) => None,
         }
     }

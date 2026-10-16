@@ -5,7 +5,7 @@ use std::time::Duration;
 use clap::Args;
 use fold_cli::claude_files::{self, ClaudeFileError};
 use fold_cli::daemon_client::{self, ClientConfig, ClientError, DaemonClient, Response};
-use fold_core::{FoldError, HostPaths, codes};
+use fold_core::{FoldError, HostPaths, ProjectPaths, codes};
 use fold_daemon::SystemClock;
 use fold_daemon::services::projects::{
     FolderFiles, ProjectError, init_new_project, init_project_from_git, root_for_dir_on_host,
@@ -15,7 +15,7 @@ use hyper::Method;
 use thiserror::Error;
 
 use crate::output;
-use crate::serve::{Dirs, socket_path};
+use crate::serve::{Dirs, current_thread_runtime, socket_path};
 
 /// How long a daemon gets to accept the connection and answer the open request.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(10);
@@ -91,19 +91,15 @@ pub fn run(args: &InitArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), Ini
     }
     let Some(dir) = &args.dir else {
         let cwd = std::env::current_dir().map_err(InitError::Dir)?;
-        let args = InitArgs {
-            dir: Some(cwd),
-            ..args.clone()
-        };
-        return initialise(&args, dirs, out).map(|_| ());
+        return initialise(&cwd, args, dirs, out).map(|_| ());
     };
     if args.from_git {
-        return initialise(args, dirs, out).map(|_| ());
+        return initialise(dir, args, dirs, out).map(|_| ());
     }
     if std::fs::symlink_metadata(dir).is_ok() {
         return Err(InitError::Refused(dir_exists(dir)));
     }
-    let initialised = initialise(args, dirs, out);
+    let initialised = initialise(dir, args, dirs, out);
     if initialised.is_err() {
         // Init created the directory; an empty one would only make the next `fld init DIR` fail.
         let _ = std::fs::remove_dir(dir);
@@ -116,25 +112,20 @@ fn dir_exists(dir: &Path) -> FoldError {
         codes::INVALID_REQUEST,
         format!("{} exists already", dir.display()),
     )
-    .with_hint(format!("cd {} && fld init", dir.display()))
+    .with_hint(format!("cd {} && fld init", output::shell_quote(dir)))
     .with_details([("reason", serde_json::json!("dir_exists"))])
 }
 
-/// [`run`], returning the slug of the new project.
+/// [`run`] for the project at `dir`, returning the slug of the new project.
 pub(crate) fn initialise(
+    dir: &Path,
     args: &InitArgs,
     dirs: &Dirs,
     out: &mut impl Write,
 ) -> Result<String, InitError> {
-    let Some(dir) = args.dir.as_deref() else {
-        return Err(InitError::Dir(io::Error::from(io::ErrorKind::InvalidInput)));
-    };
     let host = host_paths(dirs).map_err(InitError::HostPaths)?;
     let socket = socket_path(args.socket.as_deref(), dirs);
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(InitError::Runtime)?;
+    let runtime = current_thread_runtime().map_err(InitError::Runtime)?;
     let name = args.name.as_deref();
     let project = runtime.block_on(async {
         if args.from_git {
@@ -204,10 +195,7 @@ fn refresh(dir: Option<&Path>, dirs: &Dirs, out: &mut impl Write) -> Result<(), 
     }
     .map_err(InitError::Dir)?;
     let host = host_paths(dirs).map_err(InitError::HostPaths)?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(InitError::Runtime)?;
+    let runtime = current_thread_runtime().map_err(InitError::Runtime)?;
     let root = runtime.block_on(root_for_dir_on_host(&host, &dir))?;
     write_claude_files(&root, dirs, out)?;
     output::line(
@@ -219,15 +207,11 @@ fn refresh(dir: Option<&Path>, dirs: &Dirs, out: &mut impl Write) -> Result<(), 
 
 /// Writes the Claude Code files into a new project's folder before init records it, so they are part of `r1`, and returns the files and folders that did not exist before.
 fn new_claude_files(root: &Path) -> Result<Vec<PathBuf>, FoldError> {
-    let written = [
-        claude_files::MCP_FILE,
-        claude_files::AGENTS_FILE,
-        ".claude",
-        claude_files::SETTINGS_FILE,
-        ".claude/skills",
-        ".claude/skills/fold",
-        claude_files::SKILL_FILE,
-    ];
+    // A folder comes before the files below it, so only the topmost new path is recorded.
+    let written = [claude_files::MCP_FILE, claude_files::AGENTS_FILE]
+        .into_iter()
+        .chain(claude_files::FOLDERS)
+        .chain([claude_files::SETTINGS_FILE, claude_files::SKILL_FILE]);
     let mut created: Vec<PathBuf> = Vec::new();
     for path in written.map(|relative| root.join(relative)) {
         if std::fs::symlink_metadata(&path).is_err()
@@ -261,12 +245,17 @@ fn write_claude_files(root: &Path, dirs: &Dirs, out: &mut impl Write) -> Result<
 
 /// Init uses a running daemon and never starts one.
 fn client(socket: PathBuf) -> DaemonClient {
-    let config = ClientConfig {
-        socket,
-        runtime_dir: None,
-        fold_exe: None,
-    };
-    DaemonClient::new(config, daemon_client::human_from_env().ok())
+    DaemonClient::new(
+        ClientConfig::running(socket),
+        daemon_client::human_from_env().ok(),
+    )
+}
+
+/// The nearest directory at or above `dir` that holds a project database. The caller decides how `dir` is made absolute, because a symlink in it decides which project is found.
+pub(crate) fn project_root_at_or_above(dir: &Path) -> Option<PathBuf> {
+    dir.ancestors()
+        .find(|candidate| ProjectPaths::new(*candidate).db().is_file())
+        .map(Path::to_owned)
 }
 
 pub(crate) fn host_paths(dirs: &Dirs) -> Result<HostPaths, FoldError> {
@@ -300,12 +289,12 @@ async fn register(client: &DaemonClient, slug: &str) -> Registration {
 /// A missing socket file or a refused connection means no daemon runs, which is not an error: the daemon opens every registered project when it starts.
 fn interpret(answer: Result<Response, ClientError>) -> Registration {
     match answer {
-        Ok(response) if (200..300).contains(&response.status) => Registration::Opened,
+        Ok(response) if response.is_success() => Registration::Opened,
         Ok(response) => Registration::Refused(
-            response.body["error"]["code"]
-                .as_str()
-                .unwrap_or("unknown")
-                .to_owned(),
+            response
+                .refusal()
+                .code
+                .unwrap_or_else(|| "unknown".to_owned()),
         ),
         Err(ClientError::NoDaemon { .. }) => Registration::NoDaemon,
         Err(ClientError::Body) => Registration::Refused("unknown".to_owned()),
@@ -468,6 +457,25 @@ mod tests {
         );
         assert!(matches!(error, InitError::Refused(_)));
         assert!(!dir.path().join(".fold").exists());
+    }
+
+    #[test]
+    fn the_hint_quotes_a_directory_name_with_a_space() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let spaced = dir.path().join("my app");
+        std::fs::create_dir(&spaced).unwrap();
+        let args = InitArgs {
+            dir: Some(spaced.clone()),
+            name: None,
+            from_git: false,
+            socket: None,
+            refresh: false,
+        };
+        let error = run(&args, &Dirs::default(), &mut Vec::new()).unwrap_err();
+        assert_eq!(
+            error.hint(),
+            Some(format!("cd '{}' && fld init", spaced.display()).as_str())
+        );
     }
 
     #[test]

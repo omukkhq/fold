@@ -36,6 +36,31 @@ async fn append_all(project: &TestProject, batch: Vec<NewEvent>) -> Vec<u64> {
 }
 
 #[tokio::test]
+async fn append_stores_the_reason_in_its_own_column_and_leaves_data_as_given() {
+    let project = TestProject::new().await;
+    let with = new_event(types::WORKSPACE_WATCH_DEGRADED)
+        .reason("watch_limit")
+        .data(json!({"reason": "watch_limit"}))
+        .unwrap();
+    append_all(&project, vec![with, new_event(types::TASK_CREATED)]).await;
+    let rows: Vec<(Option<String>, String)> =
+        sqlx::query_as("SELECT reason, data FROM events ORDER BY seq")
+            .fetch_all(project.store().read())
+            .await
+            .unwrap();
+    assert_eq!(
+        rows,
+        [
+            (
+                Some("watch_limit".to_owned()),
+                r#"{"reason":"watch_limit"}"#.to_owned()
+            ),
+            (None, "{}".to_owned()),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn append_returns_increasing_seq_and_the_stored_event() {
     let project = TestProject::new().await;
     assert_eq!(events::head_seq(project.store().read()).await.unwrap(), 0);
@@ -443,13 +468,15 @@ async fn read_reaching_keeps_a_message_event_only_for_an_agent_whose_worker_rece
     batch.push(by(types::MESSAGE_ACKNOWLEDGED, "be").message(to_be));
     batch.push(by(types::MESSAGE_SENT, "human:ana").message(to_fe));
     let seqs = append_all(&project, batch).await;
-    let messages = [types::MESSAGE_SENT, types::MESSAGE_ACKNOWLEDGED];
+    let messages = [types::MESSAGE_SENT];
+    let own = [types::MESSAGE_ACKNOWLEDGED];
     let page = events::read_reaching(
         project.store().read(),
         0,
         &EventFilter::default(),
         1,
         &messages,
+        &own,
         100,
     )
     .await
@@ -466,12 +493,50 @@ async fn read_reaching_keeps_a_message_event_only_for_an_agent_whose_worker_rece
         &EventFilter::default(),
         2,
         &messages,
+        &own,
         2,
     )
     .await
     .unwrap();
     let read: Vec<u64> = backend.iter().map(|event| event.seq).collect();
     assert_eq!(read, [seqs[1200], seqs[1201]]);
+
+    exec(
+        &project,
+        "INSERT INTO message_recipients (message_id, worker_id, addressed_as)
+         SELECT m.id, 1, 'agent' FROM messages m WHERE m.number = 1;",
+    )
+    .await;
+    let acked = append_all(
+        &project,
+        vec![by(types::MESSAGE_ACKNOWLEDGED, "be/sub").message(to_be)],
+    )
+    .await;
+    let reach = async |agent: i64| -> Vec<u64> {
+        events::read_reaching(
+            project.store().read(),
+            seqs[1202],
+            &EventFilter::default(),
+            agent,
+            &messages,
+            &own,
+            10,
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|event| event.seq)
+        .collect()
+    };
+    assert_eq!(
+        reach(2).await,
+        acked,
+        "the acknowledging agent's subworker counts"
+    );
+    assert!(
+        reach(1).await.is_empty(),
+        "another recipient of the acknowledged message is not woken"
+    );
 }
 
 #[tokio::test]

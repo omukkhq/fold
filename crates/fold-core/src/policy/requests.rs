@@ -59,7 +59,7 @@ pub fn is_drafter<'a>(
     drafter: Option<&WorkerName>,
 ) -> Result<&'a AgentActor, PolicyDenied> {
     match actor {
-        Actor::Agent(agent) if drafter.is_some_and(|drafter| agent.agent == drafter.agent()) => {
+        Actor::Agent(agent) if drafter.is_some_and(|drafter| drafter.belongs_to(&agent.agent)) => {
             Ok(agent)
         }
         Actor::Agent(_) | Actor::Human { .. } | Actor::System => Err(PolicyDenied {

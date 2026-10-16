@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use fold_core::object::{ObjectHash, varint};
 use fold_core::tree::EntryKind;
 
-use crate::paths::RepoPath;
+use crate::paths::{RepoPath, entries_at_or_below};
 use crate::platform::{Capabilities, DirHandle, file_identity, file_mode};
 
 const MAGIC: &[u8; 4] = b"FIDX";
@@ -173,6 +173,14 @@ impl StatIndex {
 
     pub fn iter(&self) -> impl Iterator<Item = (&RepoPath, &StatEntry)> {
         self.entries.iter()
+    }
+
+    /// The entries at `prefix` and below it, found by a range of the map; `None` gives every entry.
+    pub(crate) fn at_or_below(
+        &self,
+        prefix: Option<&RepoPath>,
+    ) -> impl Iterator<Item = (&RepoPath, &StatEntry)> {
+        entries_at_or_below(&self.entries, prefix.map_or(&[][..], RepoPath::as_bytes))
     }
 
     /// The stored hash, only when the file type fits the recorded kind and size, modification time and mode match, and the inode too when both sides have one. An entry whose modification time is not older than the boundary is never fresh: an edit in the same clock tick as the last recorded write would otherwise go unseen. Without symlink support a symlink entry is a regular file on disk.

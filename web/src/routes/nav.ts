@@ -1,3 +1,5 @@
+import { projectPath } from "./paths";
+
 export type NavId =
   | "board"
   | "activity"
@@ -26,7 +28,7 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
 ];
 
 export function navPath(slug: string, entry: NavEntry): string {
-  return `/p/${slug}/${entry.segment}`;
+  return projectPath(slug, entry.segment);
 }
 
 /** The task dialog route renders the board beneath it, so `t/...` belongs to Board; a review batch groups proposals, so `batches/...` belongs to Proposals. */

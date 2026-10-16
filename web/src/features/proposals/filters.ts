@@ -1,4 +1,5 @@
 import type { ProposalState, ProposalSummary } from "@/api/proposals";
+import { projectPath, withQuery } from "@/routes/paths";
 
 export const STATES: readonly ProposalState[] = [
   "open",
@@ -75,8 +76,7 @@ export function listHref(slug: string, search: ListSearch): string {
     params.set("state", search.state);
   if (search.claim) params.set("claim", search.claim);
   if (search.conflicted) params.set("conflicted", "true");
-  const query = params.toString();
-  return `/p/${slug}/proposals${query ? `?${query}` : ""}`;
+  return withQuery(projectPath(slug, "proposals"), params);
 }
 
 export function claimLabel(claim: ClaimFilter | undefined): string {

@@ -1,60 +1,21 @@
-use std::fmt;
-use std::str::FromStr;
-
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{ProposalId, TaskId, WorkspaceId};
-use crate::task::{TaskKind, TaskValueError};
+use crate::task::{TaskKind, TaskValueError, define_names};
 
-/// A task's column on the board. The value is always calculated from `TaskFacts`; nothing sets it directly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TaskStatus {
-    Backlog,
-    Todo,
-    InProgress,
-    Review,
-    Done,
-}
-
-impl TaskStatus {
-    pub const ALL: &'static [TaskStatus] = &[
-        TaskStatus::Backlog,
-        TaskStatus::Todo,
-        TaskStatus::InProgress,
-        TaskStatus::Review,
-        TaskStatus::Done,
-    ];
-
-    /// The text stored in `tasks.status`, the same as the serde form.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            TaskStatus::Backlog => "backlog",
-            TaskStatus::Todo => "todo",
-            TaskStatus::InProgress => "in_progress",
-            TaskStatus::Review => "review",
-            TaskStatus::Done => "done",
-        }
-    }
-}
-
-impl FromStr for TaskStatus {
-    type Err = TaskValueError;
-
-    fn from_str(text: &str) -> Result<Self, Self::Err> {
-        TaskStatus::ALL
-            .iter()
-            .copied()
-            .find(|status| status.as_str() == text)
-            .ok_or(TaskValueError::InvalidStatus)
-    }
-}
-
-impl fmt::Display for TaskStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
+define_names!(
+    /// A task's column on the board. The value is always calculated from `TaskFacts`; nothing sets it directly. Its text is what `tasks.status` stores and the serde form.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum TaskStatus {
+        Backlog = "backlog",
+        Todo = "todo",
+        InProgress = "in_progress",
+        Review = "review",
+        Done = "done",
+    },
+    error = TaskValueError::InvalidStatus
+);
 
 /// Where the task's open proposal stands. `WithAuthor` means the next move belongs to the author, `WithReviewer` that it belongs to a reviewer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

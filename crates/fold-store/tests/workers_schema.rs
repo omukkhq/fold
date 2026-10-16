@@ -40,7 +40,7 @@ async fn process(
     store
         .write(async |tx| {
             agents::insert_worker_process(
-                tx.conn(),
+                tx,
                 &NewWorkerProcess {
                     agent_id,
                     role,
@@ -64,7 +64,7 @@ async fn an_area_has_one_lead_for_good_and_one_label() {
     let ui = fold_core::LabelName::parse("ui").unwrap();
     let label = agents::label_id(store.read(), &ui).await.unwrap().unwrap();
     let area = store
-        .write(async |tx| agents::insert_area(tx.conn(), &web, label, "main", at(1)).await)
+        .write(async |tx| agents::insert_area(tx, &web, label, "main", at(1)).await)
         .await
         .unwrap();
     let same_label = exec(
@@ -75,11 +75,11 @@ async fn an_area_has_one_lead_for_good_and_one_label() {
     .unwrap_err();
     assert_eq!(same_label.constraint().as_deref(), Some("areas.label_id"));
     store
-        .write(async |tx| agents::set_area_lead(tx.conn(), area, 1).await)
+        .write(async |tx| agents::set_area_lead(tx, area, 1).await)
         .await
         .unwrap();
     let second = store
-        .write(async |tx| agents::set_area_lead(tx.conn(), area, 3).await)
+        .write(async |tx| agents::set_area_lead(tx, area, 3).await)
         .await
         .unwrap_err();
     assert!(second.to_string().contains("areas_lead_once"), "{second}");
@@ -114,7 +114,7 @@ async fn an_area_profile_changes_while_its_lead_stays_set_once() {
     let (_dir, store) = seeded().await;
     let web = fold_core::AreaName::parse("web").unwrap();
     let area = store
-        .write(async |tx| agents::insert_area(tx.conn(), &web, 1, "main", at(1)).await)
+        .write(async |tx| agents::insert_area(tx, &web, 1, "main", at(1)).await)
         .await
         .unwrap();
     let fresh = agents::find_area(store.read(), &web)
@@ -123,7 +123,7 @@ async fn an_area_profile_changes_while_its_lead_stays_set_once() {
         .unwrap();
     assert_eq!(fresh.profile, AreaProfile::default());
     store
-        .write(async |tx| agents::set_area_lead(tx.conn(), area, 1).await)
+        .write(async |tx| agents::set_area_lead(tx, area, 1).await)
         .await
         .unwrap();
     let design = AreaProfile {
@@ -132,7 +132,7 @@ async fn an_area_profile_changes_while_its_lead_stays_set_once() {
         mcp: Some(vec!["pencil".to_owned(), "fold".to_owned()]),
     };
     store
-        .write(async |tx| agents::set_area_profile(tx.conn(), area, &design).await)
+        .write(async |tx| agents::set_area_profile(tx, area, &design).await)
         .await
         .unwrap();
     let row = agents::find_area(store.read(), &web)
@@ -148,7 +148,7 @@ async fn an_area_profile_changes_while_its_lead_stays_set_once() {
         ..AreaProfile::default()
     };
     store
-        .write(async |tx| agents::set_area_profile(tx.conn(), area, &fewer).await)
+        .write(async |tx| agents::set_area_profile(tx, area, &fewer).await)
         .await
         .unwrap();
     let row = agents::find_area(store.read(), &web)
@@ -224,24 +224,52 @@ async fn a_worker_process_keeps_its_role_area_and_session_and_binds_its_own_kind
     let proposal = ProposalId::from_number(3).unwrap();
     store
         .write(async |tx| {
-            assert!(agents::bind_task(tx.conn(), coder, task).await?);
-            assert!(!agents::bind_task(tx.conn(), coder, TaskId::from_number(9).unwrap()).await?);
-            assert!(agents::bind_proposal(tx.conn(), reviewer, proposal).await?);
+            assert!(agents::bind_task(tx, coder, task).await?);
             assert!(
-                !agents::bind_proposal(tx.conn(), reviewer, ProposalId::from_number(9).unwrap())
-                    .await?
+                agents::bind_task(tx, coder, task).await?,
+                "a task named twice counts as bound"
+            );
+            assert!(!agents::bind_task(tx, coder, TaskId::from_number(9).unwrap()).await?);
+            assert!(agents::bind_proposal(tx, reviewer, proposal).await?);
+            assert!(
+                agents::bind_proposal(tx, reviewer, proposal).await?,
+                "a proposal named twice counts as bound"
+            );
+            assert!(
+                !agents::bind_proposal(tx, reviewer, ProposalId::from_number(9).unwrap()).await?
             );
             Ok::<_, fold_store::StoreError>(())
         })
         .await
         .unwrap();
+    let mut conn = store.read().acquire().await.unwrap();
+    let rows = agents::list_worker_processes(&mut conn).await.unwrap();
+    let bound: Vec<(Vec<TaskId>, Vec<ProposalId>)> = rows
+        .iter()
+        .map(|row| (row.tasks.clone(), row.proposals.clone()))
+        .collect();
+    assert_eq!(
+        bound,
+        [
+            (vec![], vec![]),
+            (vec![task], vec![]),
+            (vec![], vec![proposal])
+        ],
+        "each row reads its own bindings once"
+    );
+    let found = agents::find_worker_process(&mut conn, &rows[2].agent)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(found.proposals, [proposal]);
+    drop(conn);
     let wrong_kind = store
-        .write(async |tx| agents::bind_task(tx.conn(), lead, task).await)
+        .write(async |tx| agents::bind_task(tx, lead, task).await)
         .await
         .unwrap_err();
     assert!(wrong_kind.to_string().contains("worker_tasks_coder_only"));
     let wrong_kind = store
-        .write(async |tx| agents::bind_proposal(tx.conn(), coder, proposal).await)
+        .write(async |tx| agents::bind_proposal(tx, coder, proposal).await)
         .await
         .unwrap_err();
     assert!(
@@ -269,12 +297,15 @@ async fn a_worker_process_keeps_its_role_area_and_session_and_binds_its_own_kind
     );
     assert_eq!(
         agents::coders_of_task(store.read(), task).await.unwrap(),
-        [AgentName::parse("web-coder").unwrap()]
+        [agents::BoundWorker {
+            id: coder,
+            agent: AgentName::parse("web-coder").unwrap()
+        }]
     );
     assert_eq!(
-        agents::tasks_awaiting_proposal(store.read(), coder)
+        agents::tasks_awaiting_proposal(store.read(), &[coder])
             .await
-            .unwrap(),
+            .unwrap()[&coder],
         1
     );
     exec(
@@ -284,9 +315,9 @@ async fn a_worker_process_keeps_its_role_area_and_session_and_binds_its_own_kind
     .await
     .unwrap();
     assert_eq!(
-        agents::tasks_awaiting_proposal(store.read(), coder)
+        agents::tasks_awaiting_proposal(store.read(), &[coder])
             .await
-            .unwrap(),
+            .unwrap()[&coder],
         0,
         "a proposal that integrated before fold looked counts as sent"
     );
@@ -297,9 +328,9 @@ async fn a_worker_process_keeps_its_role_area_and_session_and_binds_its_own_kind
         .await
         .unwrap();
     assert_eq!(
-        agents::tasks_awaiting_proposal(store.read(), coder)
+        agents::tasks_awaiting_proposal(store.read(), &[coder])
             .await
-            .unwrap(),
+            .unwrap()[&coder],
         0,
         "a Done task waits for nothing"
     );
@@ -307,13 +338,24 @@ async fn a_worker_process_keeps_its_role_area_and_session_and_binds_its_own_kind
         agents::reviewers_of_proposal(store.read(), proposal)
             .await
             .unwrap(),
-        [AgentName::parse("review-lead").unwrap()]
+        [agents::BoundWorker {
+            id: reviewer,
+            agent: AgentName::parse("review-lead").unwrap()
+        }]
     );
     assert_eq!(
-        agents::proposals_without_verdict(store.read(), reviewer)
+        agents::proposals_without_verdict(store.read(), &[reviewer])
             .await
-            .unwrap(),
+            .unwrap()[&reviewer],
         1
+    );
+    let both = agents::proposals_without_verdict(store.read(), &[reviewer, lead])
+        .await
+        .unwrap();
+    assert_eq!(
+        (both[&reviewer], both[&lead]),
+        (1, 0),
+        "every asked worker gets a count"
     );
     exec(&store, "DELETE FROM tasks WHERE id = 1")
         .await
@@ -354,11 +396,11 @@ async fn the_row_follows_its_process_through_turns_stops_and_restarts() {
     let lead = AgentName::parse("web-lead").unwrap();
     store
         .write(async |tx| {
-            agents::set_worker_pid(tx.conn(), id, Some(42)).await?;
-            assert!(agents::mark_worker_working(tx.conn(), id).await?);
-            agents::set_worker_context(tx.conn(), id, Some("sonnet"), Some(900)).await?;
+            agents::set_worker_pid(tx, id, Some(42)).await?;
+            assert!(agents::mark_worker_working(tx, id).await?);
+            agents::set_worker_context(tx, id, Some("sonnet"), Some(900)).await?;
             agents::record_turn(
-                tx.conn(),
+                tx,
                 id,
                 TurnTotals {
                     cost_micro_usd: 30,
@@ -394,9 +436,9 @@ async fn the_row_follows_its_process_through_turns_stops_and_restarts() {
     assert_eq!(row.pid, Some(42));
     store
         .write(async |tx| {
-            agents::set_worker_state(tx.conn(), id, WorkerState::Stopping, at(30)).await?;
-            assert!(!agents::mark_worker_working(tx.conn(), id).await?);
-            agents::record_exit(tx.conn(), id, WorkerState::Stopped, Some(0), at(31)).await?;
+            agents::set_worker_state(tx, id, WorkerState::Stopping, at(30)).await?;
+            assert!(!agents::mark_worker_working(tx, id).await?);
+            agents::record_exit(tx, id, WorkerState::Stopped, Some(0), at(31)).await?;
             Ok::<_, fold_store::StoreError>(())
         })
         .await
@@ -408,7 +450,7 @@ async fn the_row_follows_its_process_through_turns_stops_and_restarts() {
         (0, 0)
     );
     store
-        .write(async |tx| agents::restart_worker_process(tx.conn(), id, at(40)).await)
+        .write(async |tx| agents::restart_worker_process(tx, id, at(40)).await)
         .await
         .unwrap();
     let mut conn = store.read().acquire().await.unwrap();
@@ -426,7 +468,13 @@ async fn the_row_follows_its_process_through_turns_stops_and_restarts() {
 #[tokio::test]
 async fn a_project_has_one_review_lead() {
     let (_dir, store) = seeded().await;
+    assert_eq!(agents::review_lead(store.read()).await.unwrap(), None);
     process(&store, 4, Role::ReviewLead, None, "s1").await;
+    let lead = agents::review_lead(store.read()).await.unwrap().unwrap();
+    let mut conn = store.read().acquire().await.unwrap();
+    let row = agents::find_worker_process(&mut conn, &lead).await.unwrap();
+    assert_eq!(row.map(|row| row.role), Some(Role::ReviewLead));
+    drop(conn);
     let second = exec(
         &store,
         "INSERT INTO worker_processes (agent_id, role, session_id, state, started_by, started_at) VALUES (5, 'review_lead', 's2', 'starting', 'main', 0)",
@@ -451,9 +499,7 @@ async fn a_new_session_comes_only_with_a_new_start() {
     .unwrap();
     let coder = process(&store, 2, Role::TaskCoder, Some(1), "s2").await;
     store
-        .write(async |tx| {
-            agents::set_worker_state(tx.conn(), coder, WorkerState::Working, at(15)).await
-        })
+        .write(async |tx| agents::set_worker_state(tx, coder, WorkerState::Working, at(15)).await)
         .await
         .unwrap();
     for change in [
@@ -478,8 +524,8 @@ async fn a_new_session_comes_only_with_a_new_start() {
     .expect("a running row moves to starting with a new session");
     store
         .write(async |tx| {
-            agents::record_exit(tx.conn(), coder, WorkerState::Failed, Some(1), at(30)).await?;
-            agents::refresh_session(tx.conn(), coder, "s3", at(40)).await
+            agents::record_exit(tx, coder, WorkerState::Failed, Some(1), at(30)).await?;
+            agents::refresh_session(tx, coder, "s3", at(40)).await
         })
         .await
         .unwrap();

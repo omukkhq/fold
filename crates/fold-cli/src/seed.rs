@@ -5,8 +5,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand};
-use fold_cli::daemon_client::{ClientConfig, ClientError, DaemonClient};
-use fold_core::{ProjectPaths, codes};
+use fold_cli::daemon_client::{ClientConfig, ClientError, DaemonClient, HandshakeError};
+use fold_core::{EventActor, ProjectPaths, codes};
 use hyper::Method;
 use serde_json::{Value, json};
 use thiserror::Error;
@@ -57,10 +57,10 @@ pub enum SeedError {
     Files(#[from] io::Error),
     #[error("cannot connect to {}: {source}", path.display())]
     Socket { path: PathBuf, source: io::Error },
-    #[error("the handshake with the daemon failed")]
-    Handshake,
-    #[error("the daemon refused the session: {code}")]
-    Refused { code: String },
+    #[error(transparent)]
+    Handshake(HandshakeError),
+    #[error("the daemon refused the session: {code}: {message}")]
+    Refused { code: String, message: String },
     #[error("{tool} failed: {code}")]
     Tool { tool: &'static str, code: String },
     #[error("{tool} did not answer as expected")]
@@ -79,13 +79,22 @@ pub enum SeedError {
     Write(io::Error),
 }
 
+impl From<HandshakeError> for SeedError {
+    fn from(error: HandshakeError) -> Self {
+        match error {
+            HandshakeError::Refused { code, message, .. } => Self::Refused { code, message },
+            other => Self::Handshake(other),
+        }
+    }
+}
+
 impl SeedError {
     /// The stable code of the errors that have one.
     pub fn code(&self) -> Option<&str> {
         match self {
             Self::Exists { .. } => Some(codes::SEED_EXISTS),
             Self::Init(error) => error.code(),
-            Self::Refused { code } | Self::Tool { code, .. } | Self::Route { code, .. } => {
+            Self::Refused { code, .. } | Self::Tool { code, .. } | Self::Route { code, .. } => {
                 Some(code)
             }
             _ => None,
@@ -125,7 +134,7 @@ fn seed(args: &SeedArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), SeedEr
         socket: Some(socket.clone()),
         refresh: false,
     };
-    let slug = init::initialise(&init, dirs, &mut io::sink())?;
+    let slug = init::initialise(&dir, &init, dirs, &mut io::sink())?;
     let root = dir.canonicalize()?;
     // The scenario integrates each proposal at the step that needs it and keeps approved proposals open for the board.
     let config = ProjectPaths::new(&root).config();
@@ -133,10 +142,7 @@ fn seed(args: &SeedArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), SeedEr
     text.push_str("\n[integration]\nautomatic = false\n");
     std::fs::write(&config, text)?;
 
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(SeedError::Runtime)?;
+    let runtime = serve::current_thread_runtime().map_err(SeedError::Runtime)?;
     let built = runtime.block_on(build(&socket, &root, &slug))?;
 
     let mut write = |text: String| output::line(out, &text).map_err(SeedError::Write);
@@ -148,7 +154,13 @@ fn seed(args: &SeedArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), SeedEr
     for (column, total) in &built.columns {
         write(format!("{column}: {total}"))?;
     }
-    write(format!("board: http://127.0.0.1:7420/p/{slug}/board"))
+    let listen = dirs
+        .config_file()
+        .and_then(|path| serve::read_file_config(&path))
+        .ok()
+        .and_then(|file| file.listen)
+        .unwrap_or(serve::DEFAULT_LISTEN);
+    write(format!("board: http://{listen}/p/{slug}/board"))
 }
 
 #[derive(Debug, Default)]
@@ -165,11 +177,7 @@ struct Built {
 }
 
 async fn build(socket: &Path, root: &Path, slug: &str) -> Result<Built, SeedError> {
-    let config = ClientConfig {
-        socket: socket.to_owned(),
-        runtime_dir: None,
-        fold_exe: None,
-    };
+    let config = ClientConfig::running(socket.to_owned());
     let mut seeder = Seeder {
         root: root.to_owned(),
         slug: slug.to_owned(),
@@ -707,7 +715,7 @@ impl Seeder {
             .call(
                 "send_message",
                 json!({
-                    "to": [format!("human:{HUMAN}")],
+                    "to": [format!("{}{HUMAN}", EventActor::HUMAN_PREFIX)],
                     "body": "Should the limit apply per client address or per token?",
                     "task": tasks.limit,
                 }),
@@ -837,10 +845,10 @@ impl Seeder {
             .request(method.clone(), &path, body.as_ref())
             .await?;
         if response.status >= 400 {
-            let code = response.body["error"]["code"]
-                .as_str()
-                .unwrap_or("unknown")
-                .to_owned();
+            let code = response
+                .refusal()
+                .code
+                .unwrap_or_else(|| "unknown".to_owned());
             return Err(SeedError::Route { method, path, code });
         }
         Ok(response.body)
@@ -875,10 +883,10 @@ fn text<'a>(value: &'a Value, tool: &'static str) -> Result<&'a str, SeedError> 
     value.as_str().ok_or(SeedError::Unexpected { tool })
 }
 
-/// `text` with the 1-based `line` replaced; the text may hold several lines.
+/// `text` with the 1-based `line` replaced; the text may hold several lines. A line the text does not have changes nothing.
 fn replace_line(text: &str, line: usize, with: &str) -> String {
     let mut lines: Vec<&str> = text.lines().collect();
-    if let Some(slot) = lines.get_mut(line - 1) {
+    if let Some(slot) = line.checked_sub(1).and_then(|index| lines.get_mut(index)) {
         *slot = with;
     }
     let mut joined = lines.join("\n");
@@ -886,10 +894,10 @@ fn replace_line(text: &str, line: usize, with: &str) -> String {
     joined
 }
 
-/// `text` with `added` after the 1-based `line`.
+/// `text` with `added` after the 1-based `line`, or at the end when the text has fewer lines.
 fn insert_after(text: &str, line: usize, added: &str) -> String {
     let mut lines: Vec<&str> = text.lines().collect();
-    lines.insert(line, added.trim_end_matches('\n'));
+    lines.insert(line.min(lines.len()), added.trim_end_matches('\n'));
     let mut joined = lines.join("\n");
     joined.push('\n');
     joined
@@ -903,7 +911,11 @@ async fn edit(
 ) -> Result<(), SeedError> {
     let file = workspace.dir.join(path);
     blocking(move || {
-        let current = std::fs::read_to_string(&file).unwrap_or_default();
+        let current = match std::fs::read_to_string(&file) {
+            Ok(text) => text,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
+            Err(error) => return Err(error),
+        };
         if let Some(parent) = file.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -933,6 +945,33 @@ mod tests {
         assert_eq!(replace_line("a\nb\nc\n", 2, "x\ny"), "a\nx\ny\nc\n");
         assert_eq!(insert_after("a\nb\n", 1, "x\n"), "a\nx\nb\n");
         assert_eq!(insert_after("a\n", 1, "x\n"), "a\nx\n");
+    }
+
+    #[tokio::test]
+    async fn an_edit_creates_a_missing_file_and_stops_at_an_unreadable_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Workspace {
+            id: "ws-1".to_owned(),
+            dir: dir.path().to_owned(),
+        };
+        edit(&workspace, "new/a.txt", |text| format!("{text}x"))
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("new/a.txt")).unwrap(),
+            "x"
+        );
+        let error = edit(&workspace, "new", |text| text).await.unwrap_err();
+        assert!(matches!(error, SeedError::Files(_)));
+        assert!(dir.path().join("new/a.txt").is_file());
+    }
+
+    #[test]
+    fn a_line_outside_the_text_never_panics() {
+        assert_eq!(replace_line("a\n", 0, "x"), "a\n");
+        assert_eq!(replace_line("a\n", 9, "x"), "a\n");
+        assert_eq!(insert_after("a\n", 9, "x\n"), "a\nx\n");
+        assert_eq!(insert_after("", 0, "x\n"), "x\n");
     }
 
     #[test]

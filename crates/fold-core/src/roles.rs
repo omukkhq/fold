@@ -1,11 +1,9 @@
-use std::fmt;
-
 use serde::{Deserialize, Serialize};
 
 use crate::agents::{AgentName, AreaName};
 use crate::error::{FoldError, codes};
 use crate::ids::{ProposalId, TaskId};
-use crate::task::LabelName;
+use crate::task::{LabelName, define_names};
 
 mod answers;
 mod handoff;
@@ -21,37 +19,19 @@ pub use profile::{
     area_prompt,
 };
 
-/// The kinds of worker agent fold starts and supervises. The main agent is the user's own interactive session and has no role.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Role {
-    AreaLead,
-    ReviewLead,
-    TaskCoder,
-    BatchReviewer,
-}
+define_names!(
+    /// The kinds of worker agent fold starts and supervises. The main agent is the user's own interactive session and has no role.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum Role {
+        AreaLead = "area_lead",
+        ReviewLead = "review_lead",
+        TaskCoder = "task_coder",
+        BatchReviewer = "batch_reviewer",
+    }
+);
 
 impl Role {
-    pub const ALL: [Role; 4] = [
-        Role::AreaLead,
-        Role::ReviewLead,
-        Role::TaskCoder,
-        Role::BatchReviewer,
-    ];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Role::AreaLead => "area_lead",
-            Role::ReviewLead => "review_lead",
-            Role::TaskCoder => "task_coder",
-            Role::BatchReviewer => "batch_reviewer",
-        }
-    }
-
-    pub fn parse(text: &str) -> Option<Role> {
-        Role::ALL.into_iter().find(|role| role.as_str() == text)
-    }
-
     /// A lead lives until someone stops it; a task coder or batch reviewer is bound to its work and stops when it is done or idle.
     pub fn is_long_lived(self) -> bool {
         matches!(self, Role::AreaLead | Role::ReviewLead)
@@ -76,83 +56,34 @@ impl Role {
     }
 }
 
-impl fmt::Display for Role {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+define_names!(
+    /// The value of `CLAUDE_CODE_PROMPT_CACHE_TTL` and `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL`. Claude Code writes the cache into the `ephemeral_1h` or `ephemeral_5m` bucket accordingly.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    pub enum CacheTtl {
+        #[serde(rename = "1h")]
+        OneHour = "1h",
+        #[serde(rename = "5m")]
+        FiveMinutes = "5m",
     }
-}
+);
 
-/// The value of `CLAUDE_CODE_PROMPT_CACHE_TTL` and `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL`. Claude Code writes the cache into the `ephemeral_1h` or `ephemeral_5m` bucket accordingly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum CacheTtl {
-    #[serde(rename = "1h")]
-    OneHour,
-    #[serde(rename = "5m")]
-    FiveMinutes,
-}
-
-impl CacheTtl {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            CacheTtl::OneHour => "1h",
-            CacheTtl::FiveMinutes => "5m",
-        }
+define_names!(
+    /// The supervised process of a worker agent. `Starting` lasts until Claude Code reports its session; `Idle` is between turns; `Stopped` and `Failed` keep the session so the worker can be resumed.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum WorkerState {
+        Starting = "starting",
+        Working = "working",
+        Idle = "idle",
+        Stopping = "stopping",
+        Stopped = "stopped",
+        Failed = "failed",
     }
-
-    pub fn parse(text: &str) -> Option<CacheTtl> {
-        [CacheTtl::OneHour, CacheTtl::FiveMinutes]
-            .into_iter()
-            .find(|ttl| ttl.as_str() == text)
-    }
-}
-
-/// The supervised process of a worker agent. `Starting` lasts until Claude Code reports its session; `Idle` is between turns; `Stopped` and `Failed` keep the session so the worker can be resumed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum WorkerState {
-    Starting,
-    Working,
-    Idle,
-    Stopping,
-    Stopped,
-    Failed,
-}
+);
 
 impl WorkerState {
-    pub const ALL: [WorkerState; 6] = [
-        WorkerState::Starting,
-        WorkerState::Working,
-        WorkerState::Idle,
-        WorkerState::Stopping,
-        WorkerState::Stopped,
-        WorkerState::Failed,
-    ];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            WorkerState::Starting => "starting",
-            WorkerState::Working => "working",
-            WorkerState::Idle => "idle",
-            WorkerState::Stopping => "stopping",
-            WorkerState::Stopped => "stopped",
-            WorkerState::Failed => "failed",
-        }
-    }
-
-    pub fn parse(text: &str) -> Option<WorkerState> {
-        WorkerState::ALL
-            .into_iter()
-            .find(|state| state.as_str() == text)
-    }
-
     /// A process exists or is about to: it counts against the worker limits.
     pub fn is_running(self) -> bool {
         !matches!(self, WorkerState::Stopped | WorkerState::Failed)
-    }
-}
-
-impl fmt::Display for WorkerState {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
     }
 }
 
@@ -359,7 +290,7 @@ pub fn default_worker_name(role: Role, area: Option<&AreaName>, attempt: u32) ->
     let tail = format!("{base}{suffix}");
     let name = match prefix {
         Some(prefix) => {
-            let room = MAX_AGENT_NAME.saturating_sub(tail.len() + 1);
+            let room = crate::agents::MAX_NAME_LEN.saturating_sub(tail.len() + 1);
             let prefix: String = prefix.chars().take(room).collect();
             let prefix = prefix.trim_end_matches(['-', '_']);
             format!("{prefix}-{tail}")
@@ -368,8 +299,6 @@ pub fn default_worker_name(role: Role, area: Option<&AreaName>, attempt: u32) ->
     };
     AgentName::parse(&name).ok()
 }
-
-const MAX_AGENT_NAME: usize = 32;
 
 /// A version 4 UUID from 16 random bytes, the `--session-id` fold gives Claude Code. The daemon draws the bytes, so this stays pure.
 pub fn session_uuid(mut bytes: [u8; 16]) -> String {

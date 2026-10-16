@@ -5,18 +5,20 @@ use std::path::{Path, PathBuf};
 
 use fold_core::merge::{
     Conflict, ConflictKind, TreeMerge, contains_marker_line, merge_trees, merge3, render_markers,
+    sync_labels,
 };
 use fold_core::object::{ObjectHash, ObjectKind, hash_object};
-use fold_core::tree::{EntryKind, FlatEntry, FlatTree, flatten};
+use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
 use fold_core::{FoldError, RevisionId, codes};
 
+use crate::compare::load_flat;
 use crate::index::StatIndex;
 use crate::materialise::{Batch, MaterialiseOptions};
 use crate::objects::ObjectStore;
-use crate::paths::{RepoPath, WorkspaceError, open_parent, os_bytes, os_path, resolve};
+use crate::paths::{RepoPath, WorkspaceError, open_parent, os_bytes, resolve};
 use crate::platform::is_executable;
+use crate::restore::{occupied, occupied_above};
 use crate::scan::{Reading, hash_stable};
-use crate::snapshot::load_tree;
 
 /// Main's side of a conflict is written beside the conflicted path under this suffix.
 pub const SIDECAR_SUFFIX: &[u8] = b".fold-main";
@@ -60,11 +62,8 @@ pub struct MarkerLabels {
 
 impl MarkerLabels {
     pub fn sync(base: RevisionId, main: RevisionId) -> Self {
-        Self {
-            ours: "workspace".into(),
-            base: format!("base {base}"),
-            theirs: format!("main {main}"),
-        }
+        let [ours, base, theirs] = sync_labels(base, main);
+        Self { ours, base, theirs }
     }
 }
 
@@ -90,10 +89,9 @@ pub fn sync(
             already_current: true,
         });
     }
-    let load = |hash: &ObjectHash| load_tree(objects, hash);
-    let base = flatten(&input.base_tree, &load)?;
-    let ours = flatten(&input.ours_tree, &load)?;
-    let main = flatten(&input.main_tree, &load)?;
+    let base = load_flat(objects, &input.base_tree)?;
+    let ours = load_flat(objects, &input.ours_tree)?;
+    let main = load_flat(objects, &input.main_tree)?;
     let blob = |hash: &ObjectHash| read_blob(objects, hash);
     let merge = merge_trees(&base, &ours, &main, &blob)?;
     let labels = MarkerLabels::sync(input.base_number, input.main_number);
@@ -115,7 +113,7 @@ pub fn write_merge(
     ours_tree: &ObjectHash,
     labels: &MarkerLabels,
 ) -> Result<Vec<ConflictedPath>, FoldError> {
-    let ours = flatten(ours_tree, &|hash| load_tree(objects, hash))?;
+    let ours = load_flat(objects, ours_tree)?;
     Ok(apply(objects, root, index, merge, &ours, labels)?.conflicted)
 }
 
@@ -313,14 +311,14 @@ fn check(
     for (path, _) in &plan.writes {
         let fits = match ours.get(path.as_bytes()) {
             Some(expected) => matches(root, index, path, expected)?,
-            None => clear_to_write(root, path, &plan.removals)?,
+            None => !occupied(root, path, &|found| plan.removals.contains(found))?,
         };
         if !fits {
             changed.push(path.to_string());
         }
     }
     for path in &plan.sidecars {
-        if !parents_clear(root, path, &plan.removals)?.unwrap_or(true) {
+        if occupied_above(root, path, &|found| plan.removals.contains(found))? {
             changed.push(path.to_string());
         }
         unrecorded_at(root, index, ours, path, &mut changed)?;
@@ -419,69 +417,6 @@ fn unrecorded_at(
         }
     }
     Ok(())
-}
-
-/// True when writing a path the workspace side does not have destroys nothing: nothing is there, or only a directory that holds nothing but planned removals and empty directories, and no parent is a file that stays.
-fn clear_to_write(
-    root: &Path,
-    path: &RepoPath,
-    removals: &BTreeSet<RepoPath>,
-) -> Result<bool, WorkspaceError> {
-    match parents_clear(root, path, removals)? {
-        Some(clear) => Ok(clear),
-        None => {
-            let located = root.join(os_path(path)?);
-            match metadata(&located)? {
-                None => Ok(true),
-                Some(meta) if meta.is_dir() => Ok(only_removals_below(&located, path, removals)?),
-                Some(_) => Ok(false),
-            }
-        }
-    }
-}
-
-/// Walks the parents of `path` from the root. `Some` settles the answer: `Some(true)` when a parent is missing or is a file the plan removes, so nothing exists at `path`; `Some(false)` when a parent is a file that stays. `None` when every parent is a real directory.
-fn parents_clear(
-    root: &Path,
-    path: &RepoPath,
-    removals: &BTreeSet<RepoPath>,
-) -> Result<Option<bool>, WorkspaceError> {
-    let bytes = path.as_bytes();
-    for (at, _) in bytes.iter().enumerate().filter(|(_, byte)| **byte == b'/') {
-        let parent = RepoPath::parse(&bytes[..at])?;
-        match metadata(&root.join(os_path(&parent)?))? {
-            None => return Ok(Some(true)),
-            Some(meta) if meta.is_dir() => {}
-            Some(_) => return Ok(Some(removals.contains(&parent))),
-        }
-    }
-    Ok(None)
-}
-
-/// True when every file below the directory is a planned removal, so only empty directories stay there once they are gone.
-fn only_removals_below(
-    dir: &Path,
-    prefix: &RepoPath,
-    removals: &BTreeSet<RepoPath>,
-) -> Result<bool, WorkspaceError> {
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let Some(name) = os_bytes(&entry.file_name()) else {
-            return Ok(false);
-        };
-        let Ok(child) = RepoPath::child(Some(prefix), &name) else {
-            return Ok(false);
-        };
-        let removed = if entry.file_type()?.is_dir() {
-            only_removals_below(&entry.path(), &child, removals)?
-        } else {
-            removals.contains(&child)
-        };
-        if !removed {
-            return Ok(false);
-        }
-    }
-    Ok(true)
 }
 
 /// The path under `root`, or `None` when a parent is not a real directory, which means nothing recorded can be there.

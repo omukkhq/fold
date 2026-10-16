@@ -160,4 +160,16 @@ describe("feedbackSchema", () => {
       firstMessage(feedbackSchema.safeParse({ to: "holder", body: " " })),
     ).toBe("Write the feedback.");
   });
+
+  it("counts characters as the daemon does, so a surrogate pair is one", () => {
+    expect(
+      feedbackSchema.safeParse({ to: "holder", body: "😀".repeat(20_000) })
+        .success,
+    ).toBe(true);
+    expect(
+      firstMessage(
+        feedbackSchema.safeParse({ to: "holder", body: "x".repeat(20_001) }),
+      ),
+    ).toBe("Keep the feedback to 20000 characters.");
+  });
 });

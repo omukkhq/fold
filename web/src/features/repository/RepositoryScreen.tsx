@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { FolderLock, SearchX } from "lucide-react";
 import { useState } from "react";
+import { useNow } from "@/live/useNow";
 import { olderNotListed } from "@/api/pages";
 import {
   repositoryQuery,
@@ -45,7 +46,7 @@ export function RepositoryScreen({
   );
   const [openPath, setOpenPath] = useState<string | null>(path ?? null);
   // The clock is read once per mount: the row times are a snapshot, not a ticking display.
-  const [now] = useState(() => Date.now());
+  const now = useNow(true, 30_000);
 
   const listed = revisions.data?.items;
   const pick = listed ? pickRevision(listed, revision) : null;

@@ -1,5 +1,6 @@
 use fold_core::events::types;
 use fold_core::policy::{self, MarkChange, PolicyDenied};
+use fold_core::reviews::MAX_REASON_CHARS;
 use fold_core::reviews::{
     HumanReviewMark, changes_requested, deciding_approval, human_approval_standing,
 };
@@ -7,6 +8,7 @@ use fold_core::status::ProposalFact;
 use fold_core::{
     Actor, FoldError, HumanName, NewEvent, ProposalId, TaskId, TaskStatus, Timestamp, codes,
 };
+use fold_store::SqliteConnection;
 use fold_store::tasks::TaskRow;
 use fold_store::{Store, StoreError, projects, reviews, tasks};
 use serde_json::json;
@@ -14,9 +16,6 @@ use serde_json::json;
 use super::{ReviewError, ReviewService};
 use crate::services::events::EventBuffer;
 use crate::services::tasks::task_not_found;
-
-/// The longest reason, in characters.
-const MAX_REASON_CHARS: usize = 500;
 
 /// An open proposal that is with the reviewer on a marked task whose current version an agent that decides reviews approved and no human the mark accepts approved.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -138,6 +137,15 @@ impl ReviewService {
 /// The open proposals on marked tasks that are with the reviewer and whose current version waits for the human: an agent that decides reviews approved it and no standing approval by a human the mark accepts exists. A human sees a marked proposal once such an agent has approved it; the automatic integration counts the human's approval whenever it was given. Read in one transaction of `read`'s read pool. It decides the `human_review` attention kind, so clients derive nothing.
 pub async fn awaiting_human_review(read: &Store) -> Result<Vec<AwaitingHumanReview>, StoreError> {
     let mut tx = read.read().begin().await?;
+    let waiting = awaiting_human_review_in(&mut tx).await?;
+    tx.commit().await?;
+    Ok(waiting)
+}
+
+/// [`awaiting_human_review`] on `tx`, so a caller reads it inside a read transaction of its own.
+pub async fn awaiting_human_review_in(
+    tx: &mut SqliteConnection,
+) -> Result<Vec<AwaitingHumanReview>, StoreError> {
     let marked = tasks::marked_open_proposals(&mut *tx).await?;
     let mut waiting = Vec::new();
     for row in marked {
@@ -166,7 +174,6 @@ pub async fn awaiting_human_review(read: &Store) -> Result<Vec<AwaitingHumanRevi
                 .map_or(row.version_at, |marked| marked.max(row.version_at)),
         });
     }
-    tx.commit().await?;
     Ok(waiting)
 }
 
@@ -174,9 +181,9 @@ pub async fn awaiting_human_review(read: &Store) -> Result<Vec<AwaitingHumanRevi
 fn check_reason(reason: &str) -> Result<String, ReviewError> {
     let reason = reason.trim();
     let problem = if reason.is_empty() {
-        "the reason must not be empty"
+        "the reason must not be empty".to_owned()
     } else if reason.chars().count() > MAX_REASON_CHARS {
-        "the reason must be at most 500 characters"
+        format!("the reason must be at most {MAX_REASON_CHARS} characters")
     } else {
         return Ok(reason.to_owned());
     };

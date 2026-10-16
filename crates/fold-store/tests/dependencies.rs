@@ -82,7 +82,7 @@ async fn a_second_row_for_the_same_pair_is_refused_by_the_primary_key() {
         .await
         .unwrap();
     for origin in DependencyOrigin::ALL {
-        let error = insert(project.store(), 1, 2, *origin, now)
+        let error = insert(project.store(), 1, 2, origin, now)
             .await
             .unwrap_err();
         assert!(error.unique_violation(), "{origin}: {error}");
@@ -225,4 +225,77 @@ async fn a_corrupt_origin_is_reported_by_column() {
         matches!(error, StoreError::Corrupt("dependencies.origin")),
         "{error}"
     );
+}
+
+/// 2 needs 1, 3 needs 2, 4 needs 1, and 5 stands apart and needs 4.
+#[tokio::test]
+async fn reachability_follows_needs_edges_in_both_directions() {
+    let project = project_with_tasks(6).await;
+    let now = project.now();
+    for (task, needs) in [(2, 1), (3, 2), (4, 1), (5, 4)] {
+        insert(project.store(), task, needs, DependencyOrigin::Direct, now)
+            .await
+            .unwrap();
+    }
+    let mut conn = project.store().read().acquire().await.unwrap();
+    let below_two = tasks::dependent_edges(&mut conn, &[id(2)]).await.unwrap();
+    assert_eq!(below_two, [(id(3), id(2))], "only the dependents of T-2");
+    let below_four = tasks::dependent_edges(&mut conn, &[id(4), id(6)])
+        .await
+        .unwrap();
+    assert_eq!(below_four, [(id(5), id(4))]);
+    let all = tasks::dependent_edges(&mut conn, &[id(1)]).await.unwrap();
+    assert_eq!(
+        all,
+        [
+            (id(2), id(1)),
+            (id(3), id(2)),
+            (id(4), id(1)),
+            (id(5), id(4))
+        ]
+    );
+    assert!(
+        tasks::needs_transitively(&mut conn, id(3), id(1))
+            .await
+            .unwrap()
+    );
+    assert!(
+        tasks::needs_transitively(&mut conn, id(5), id(5))
+            .await
+            .unwrap()
+    );
+    assert!(
+        !tasks::needs_transitively(&mut conn, id(1), id(3))
+            .await
+            .unwrap()
+    );
+    assert!(
+        !tasks::needs_transitively(&mut conn, id(3), id(4))
+            .await
+            .unwrap()
+    );
+    assert!(
+        !tasks::needs_transitively(&mut conn, id(9), id(1))
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn the_edges_of_a_task_run_both_ways() {
+    let project = project_with_tasks(4).await;
+    let now = project.now();
+    for (task, needs) in [(2, 1), (3, 2), (4, 1)] {
+        insert(project.store(), task, needs, DependencyOrigin::Direct, now)
+            .await
+            .unwrap();
+    }
+    let mut conn = project.store().read().acquire().await.unwrap();
+    let pairs: Vec<(TaskId, TaskId)> = tasks::edges_of(&mut conn, id(2))
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|edge| (edge.task, edge.needs))
+        .collect();
+    assert_eq!(pairs, [(id(2), id(1)), (id(3), id(2))]);
 }

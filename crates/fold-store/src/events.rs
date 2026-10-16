@@ -31,11 +31,12 @@ pub async fn append(
     let workspace = event.workspace.map(WorkspaceId::to_db);
     let revision = event.revision.map(RevisionId::to_db);
     let message = event.message.map(MessageId::to_db);
+    let reason = event.reason.as_deref();
     let data = event.data.to_string();
     let created_at = now.as_millis();
     let seq = sqlx::query_scalar!(
-        r#"INSERT INTO events (type, actor, task_id, proposal_id, workspace_id, revision_id, message_id, data, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        r#"INSERT INTO events (type, actor, task_id, proposal_id, workspace_id, revision_id, message_id, reason, data, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            RETURNING seq AS "seq!: i64""#,
         event_type,
         actor,
@@ -44,6 +45,7 @@ pub async fn append(
         workspace,
         revision,
         message,
+        reason,
         data,
         created_at
     )
@@ -157,13 +159,14 @@ pub async fn after(pool: &SqlitePool, after: u64, limit: usize) -> Result<Vec<Ev
     read_after(pool, after, &EventFilter::default(), limit).await
 }
 
-/// [`read_after`] for the agent with row id `agent_id`: an event of one of `message_types` is selected only when a worker of the agent receives the message it names in `events.message_id`, so one query returns the page an agent's wait keeps.
+/// [`read_after`] for the agent with row id `agent_id`: an event of one of `message_types` is selected only when a worker of the agent receives the message it names in `events.message_id`, and an event of one of `own_types` only when a worker of the agent performed it, so one query returns the page an agent's wait keeps.
 pub async fn read_reaching(
     executor: impl SqliteExecutor<'_>,
     after: u64,
     filter: &EventFilter,
     agent_id: i64,
     message_types: &[EventType],
+    own_types: &[EventType],
     limit: usize,
 ) -> Result<Vec<Event>, StoreError> {
     let after = seq_param(after)?;
@@ -173,6 +176,7 @@ pub async fn read_reaching(
     let task = filter.task.map(TaskId::to_db);
     let proposal = filter.proposal.map(ProposalId::to_db);
     let message_types = json_list(message_types.iter(), |t| t.as_str().into());
+    let own_types = json_list(own_types.iter(), |t| t.as_str().into());
     let rows = sqlx::query_as!(
         EventRecord,
         r#"SELECT e.seq AS "seq!: i64", e.type AS event_type, e.actor, e.task_id, e.proposal_id,
@@ -188,6 +192,11 @@ pub async fn read_reaching(
                       JOIN message_recipients r ON r.message_id = m.id
                       JOIN workers w ON w.id = r.worker_id
                       WHERE m.number = e.message_id AND w.agent_id = ?5))
+             AND (e.type NOT IN (SELECT value FROM json_each(?8))
+                  OR EXISTS (
+                      SELECT 1 FROM agents g
+                      WHERE g.id = ?5
+                        AND (e.actor = g.name OR substr(e.actor, 1, length(g.name) + 1) = g.name || '/')))
            ORDER BY e.seq ASC
            LIMIT ?7"#,
         after,
@@ -196,7 +205,8 @@ pub async fn read_reaching(
         proposal,
         agent_id,
         message_types,
-        limit
+        limit,
+        own_types
     )
     .fetch_all(executor)
     .await?;
@@ -418,7 +428,7 @@ pub async fn recipient_agents(
         .collect()
 }
 
-/// The claims, prerequisites and proposals of every worker of the agent. The caller passes one read transaction, so the four reads see one state.
+/// The claims, prerequisites and proposals of every worker of the agent. The caller passes one read transaction, so its three queries see one state.
 pub async fn agent_facts(
     conn: &mut SqliteConnection,
     agent_id: i64,

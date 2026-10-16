@@ -1,14 +1,13 @@
-use fold_daemon::http::host::CLIENT_HEADER;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
-use std::time::Duration;
-
 use fold_core::{Actor, AgentActor, AgentName, EventFilter, FoldError, TaskId, WorkerName, codes};
 use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
+use fold_daemon::http::host::CLIENT_HEADER;
 use fold_daemon::http::{openapi, router};
 use fold_daemon::projects::{ProjectHandle, Projects};
 use fold_daemon::services::agents::AgentService;

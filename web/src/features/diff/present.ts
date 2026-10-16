@@ -8,6 +8,7 @@ import type {
 import type { CheckpointSummary } from "@/api/tasks";
 import { revisionCount, revisionsAhead } from "@/format/revisions";
 import type { LineRow } from "./layout";
+import { projectPath, withQuery } from "@/routes/paths";
 
 export interface ChangeBadge {
   letter: string;
@@ -133,12 +134,12 @@ export function comparisonCrumbs(
   const { from, to } = comparison;
   if (to.kind === "workspace") {
     return [
-      { label: "Activity", href: `/p/${slug}/activity`, mono: false },
+      { label: "Activity", href: projectPath(slug, "activity"), mono: false },
       { label: to.id, href: null, mono: true },
     ];
   }
   return [
-    { label: "Repository", href: `/p/${slug}/repository`, mono: false },
+    { label: "Repository", href: projectPath(slug, "repository"), mono: false },
     { label: `${from.id} → ${to.id}`, href: null, mono: true },
   ];
 }
@@ -231,7 +232,7 @@ export interface CompareSources {
 }
 
 function diffHref(slug: string, from: string, to: string): string {
-  return `/p/${slug}/diff?${new URLSearchParams({ from, to }).toString()}`;
+  return withQuery(projectPath(slug, "diff"), { from, to });
 }
 
 /** The "Compare with" list for a workspace: its base, main when main moved past the base, and its checkpoints, newest first. */

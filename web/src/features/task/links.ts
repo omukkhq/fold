@@ -1,6 +1,4 @@
-function base(slug: string): string {
-  return `/p/${encodeURIComponent(slug)}`;
-}
+import { projectPath, withQuery } from "@/routes/paths";
 
 /** The diff viewer; without `from` it compares against the base recorded for `to`. */
 export function diffPath(
@@ -15,17 +13,17 @@ export function diffPath(
   if (diff.path !== undefined) {
     params.set("path", diff.path);
   }
-  return `${base(slug)}/diff?${params.toString()}`;
+  return withQuery(projectPath(slug, "diff"), params);
 }
 
 export function proposalPath(slug: string, proposal: string): string {
-  return `${base(slug)}/proposals/${encodeURIComponent(proposal)}`;
+  return projectPath(slug, "proposals", proposal);
 }
 
 export function threadPath(slug: string, thread: string): string {
-  return `${base(slug)}/messages?${new URLSearchParams({ thread }).toString()}`;
+  return withQuery(projectPath(slug, "messages"), { thread });
 }
 
 export function revisionPath(slug: string, revision: string): string {
-  return `${base(slug)}/repository?${new URLSearchParams({ revision }).toString()}`;
+  return withQuery(projectPath(slug, "repository"), { revision });
 }

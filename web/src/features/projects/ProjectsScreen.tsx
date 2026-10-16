@@ -1,6 +1,6 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { ChevronRight, FolderGit2 } from "lucide-react";
-import { useState } from "react";
+import { useNow } from "@/live/useNow";
 import { projectsQuery } from "@/api/queries";
 import { HrefLink } from "@/app/HrefLink";
 import { ThemeToggle } from "@/app/ThemeToggle";
@@ -12,6 +12,7 @@ import { PersonName } from "@/people/PersonName";
 import { focusRing } from "@/lib/focus";
 import { GitStatus } from "../git/GitStatus";
 import { lastChangeLine, summaryLine } from "./counts";
+import { projectPath } from "@/routes/paths";
 
 const ROW =
   "flex items-center gap-20 rounded-l bg-surface px-20 py-16 inset-ring inset-ring-border-subtle";
@@ -21,7 +22,7 @@ const CARD =
 export function ProjectsScreen() {
   const { data: projects } = useSuspenseQuery(projectsQuery());
   // The clock is read once per mount: the change times are a snapshot.
-  const [now] = useState(() => Date.now());
+  const now = useNow(true, 30_000);
   return (
     <div className="flex min-h-screen flex-col bg-bg">
       <header className="flex h-bar items-center justify-between border-b border-border-subtle bg-surface px-24">
@@ -124,7 +125,7 @@ export function ProjectsScreen() {
                     {project.available ? (
                       <div className={CARD}>
                         <HrefLink
-                          href={`/p/${project.slug}/board`}
+                          href={projectPath(project.slug, "board")}
                           className={cn(
                             "flex items-center gap-20 rounded-t-l px-20 pt-16 pb-12 hover:bg-sunken",
                             focusRing,

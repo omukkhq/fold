@@ -9,11 +9,14 @@ use fold_core::{
 };
 use fold_store::messages::{self, MessageHead, MessageRow, NewMessage, RecipientRow};
 use fold_store::tasks::claims;
-use fold_store::{Store, StoreError, WriteTx, agents, counters, projects, reviews, tasks};
+use fold_store::{Store, StoreError, WriteTx, counters, projects, reviews, tasks};
 use serde_json::json;
 use thiserror::Error;
 
+use crate::services::agents::{actor_worker, worker_not_found};
 use crate::services::events::{EventBuffer, EventBus};
+#[cfg(feature = "failpoints")]
+use crate::services::fired;
 
 mod inbox;
 mod threads;
@@ -21,7 +24,6 @@ mod threads;
 pub use inbox::{InboxItem, unread_count};
 pub use threads::{
     DEFAULT_THREAD_LIMIT, Feedback, MAX_THREAD_LIMIT, ThreadPage, ThreadQuery, ThreadView,
-    tasks_awaiting_human,
 };
 
 #[derive(Debug, Error)]
@@ -43,6 +45,11 @@ impl MessageError {
             MessageError::Store(error) => error.code(),
             MessageError::Event(_) => None,
         }
+    }
+
+    /// The code a log line names: the stable code, or `internal_error` for an internal failure.
+    pub fn log_code(&self) -> &'static str {
+        self.code().unwrap_or(codes::INTERNAL_ERROR)
     }
 }
 
@@ -164,6 +171,18 @@ impl MessageService {
         request: Option<RequestId>,
         choices: Option<MessageChoices>,
     ) -> Result<MessageView, MessageError> {
+        self.send_inner(actor, input, request, choices, false).await
+    }
+
+    /// The send of [`MessageService::send_with_choices`]. With `to_drafter` the message goes to the drafter of `request`, read in the send's own transaction, instead of to `input.to`.
+    pub(super) async fn send_inner(
+        &self,
+        actor: &Actor,
+        input: SendMessage,
+        request: Option<RequestId>,
+        choices: Option<MessageChoices>,
+        to_drafter: bool,
+    ) -> Result<MessageView, MessageError> {
         policy::can_send_message(actor).map_err(FoldError::from)?;
         let humans = projects::list_humans(self.registry.read()).await?;
         let sender = Sender::of(actor);
@@ -197,16 +216,20 @@ impl MessageService {
                 if let Some(proposal) = input.proposal
                     && !reviews::proposal_exists(tx.conn(), proposal).await?
                 {
-                    return Err(FoldError::new(
-                        codes::PROPOSAL_NOT_FOUND,
-                        format!("{proposal} does not exist"),
-                    )
-                    .with_hint("call list_proposals to see the proposals")
-                    .into());
+                    return Err(crate::services::reviews::proposal_missing(proposal).into());
                 }
+                let to = match request {
+                    Some(request) if to_drafter => {
+                        let row = tasks::requests::fetch(tx.conn(), request)
+                            .await?
+                            .ok_or_else(|| crate::services::tasks::request_missing(request))?;
+                        let drafter = row.drafter.ok_or_else(|| threads::no_drafter(request))?;
+                        vec![Address::of_worker(&drafter.worker)]
+                    }
+                    _ => input.to.clone(),
+                };
                 let directory = messages::directory(tx.conn(), humans).await?;
-                let recipients =
-                    resolve(&input.to, &directory, &sender).map_err(FoldError::from)?;
+                let recipients = resolve(&to, &directory, &sender).map_err(FoldError::from)?;
                 let draft = Draft {
                     actor,
                     sender: &sender,
@@ -224,14 +247,16 @@ impl MessageService {
                 #[cfg(feature = "failpoints")]
                 fail::fail_point!("send_message_in_transaction", |_| Err(fired(
                     "send_message_in_transaction"
-                )));
+                )
+                .into()));
                 Ok::<_, MessageError>(view)
             })
             .await?;
         #[cfg(feature = "failpoints")]
         fail::fail_point!("send_message_after_commit", |_| Err(fired(
             "send_message_after_commit"
-        )));
+        )
+        .into()));
         self.bus.publish(buffer);
         Ok(view)
     }
@@ -292,18 +317,6 @@ impl MessageService {
             .ok_or_else(|| message_not_found(message))?;
         let rows = messages::thread(&mut tx, head.thread).await?;
         tx.commit().await.map_err(StoreError::from)?;
-        Ok(rows.into_iter().map(message_view).collect())
-    }
-
-    /// Questions from workers to humans that no human has answered in their thread yet, in number order, each with its task.
-    pub async fn awaiting_human(&self) -> Result<Vec<MessageView>, MessageError> {
-        let mut conn = self
-            .store
-            .read()
-            .acquire()
-            .await
-            .map_err(StoreError::from)?;
-        let rows = messages::awaiting_human(&mut conn).await?;
         Ok(rows.into_iter().map(message_view).collect())
     }
 }
@@ -483,27 +496,15 @@ async fn require_sender(tx: &mut WriteTx, actor: &Actor) -> Result<(), MessageEr
     let Actor::Agent(agent) = actor else {
         return Ok(());
     };
-    let worker = match agents::find_agent(tx.conn(), &agent.agent).await? {
-        Some(row) => agents::find_worker(tx.conn(), row.id, &agent.worker).await?,
-        None => None,
-    };
-    if worker.is_none() {
-        return Err(
-            FoldError::new(codes::WORKER_NOT_FOUND, "the worker does not exist")
-                .with_hint("call register_worker")
-                .into(),
-        );
+    if actor_worker(tx.conn(), agent).await?.is_none() {
+        return Err(worker_not_found().into());
     }
     Ok(())
 }
 
 async fn require_task(tx: &mut WriteTx, task: TaskId) -> Result<(), MessageError> {
     if tasks::fetch(tx.conn(), task).await?.is_none() {
-        return Err(
-            FoldError::new(codes::TASK_NOT_FOUND, format!("{task} does not exist"))
-                .with_hint("call get_task_graph to see the tasks")
-                .into(),
-        );
+        return Err(crate::services::tasks::task_missing(task).into());
     }
     Ok(())
 }
@@ -550,10 +551,4 @@ fn no_claim_holder(task: TaskId) -> FoldError {
     )
     .with_details([("task", json!(task.to_string()))])
     .with_hint("choose a recipient for the feedback")
-}
-
-/// The error a fired failpoint returns, as a crash at that point would stop the command.
-#[cfg(feature = "failpoints")]
-fn fired(name: &str) -> MessageError {
-    FoldError::new(codes::FAILPOINT, format!("{name} fired")).into()
 }

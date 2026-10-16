@@ -5,11 +5,6 @@ use crate::ids::TaskId;
 use crate::status::TaskStatus;
 use crate::time::Timestamp;
 
-/// A task is ready when it is in Todo and no agent holds an unreleased implementation claim on it.
-pub fn is_ready(status: TaskStatus, has_unreleased_implementation_claim: bool) -> bool {
-    status == TaskStatus::Todo && !has_unreleased_implementation_claim
-}
-
 /// How many direct dependents only `task` holds back: those in Backlog, In Progress or Review whose every other prerequisite is Done. A started dependent counts because an agent already waits on it. A task missing from `statuses` counts as not Done and not started.
 pub fn unblock_count(task: TaskId, dag: &Dag, statuses: &BTreeMap<TaskId, TaskStatus>) -> usize {
     dag.dependents(task)
@@ -44,11 +39,6 @@ pub fn ready_order(candidates: &[Candidate]) -> Vec<TaskId> {
     sorted.into_iter().map(|c| c.task).collect()
 }
 
-/// Two tasks can be worked on at the same time when neither needs the other, directly or through others.
-pub fn can_run_in_parallel(a: TaskId, b: TaskId, dag: &Dag) -> bool {
-    dag.independent(a, b)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -64,15 +54,6 @@ mod tests {
 
     fn statuses(list: &[(u32, TaskStatus)]) -> BTreeMap<TaskId, TaskStatus> {
         list.iter().map(|&(n, s)| (t(n), s)).collect()
-    }
-
-    #[test]
-    fn ready_needs_todo_and_no_claim() {
-        assert!(is_ready(Todo, false));
-        assert!(!is_ready(Todo, true));
-        for s in [Backlog, InProgress, Review, Done] {
-            assert!(!is_ready(s, false));
-        }
     }
 
     #[test]
@@ -166,12 +147,5 @@ mod tests {
     #[test]
     fn ready_order_of_nothing_is_empty() {
         assert!(ready_order(&[]).is_empty());
-    }
-
-    #[test]
-    fn parallel_means_independent() {
-        let dag = Dag::from_edges([(t(2), t(1))]);
-        assert!(!can_run_in_parallel(t(1), t(2), &dag));
-        assert!(can_run_in_parallel(t(1), t(3), &dag));
     }
 }

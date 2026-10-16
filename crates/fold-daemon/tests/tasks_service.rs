@@ -358,7 +358,11 @@ async fn refusals_carry_their_codes_and_change_nothing() {
         )
         .await
         .unwrap_err();
-    assert_eq!(code(closed), "task_closed");
+    let TaskError::Fold(refusal) = closed else {
+        panic!("an archived task is a refusal");
+    };
+    assert_eq!(refusal.code(), "task_closed");
+    assert_eq!(refusal.details().unwrap()["reason"], "archived");
     assert_eq!(counts(&project).await, before);
     assert!(receiver.try_recv().is_err());
     assert!(service.list(false).await.unwrap().is_empty());

@@ -26,6 +26,8 @@ use super::notify;
 use super::proposals::{Retirement, proposal_not_found, retire_proposal};
 use super::{ReviewError, ReviewService};
 use crate::services::events::EventBuffer;
+#[cfg(feature = "failpoints")]
+use crate::services::fired;
 use crate::services::tasks::{TaskError, recompute};
 use crate::services::workspaces::{ArchiveReason, archive_in_tx};
 
@@ -152,7 +154,7 @@ enum Subject {
 }
 
 /// The first refusal of the gates on `facts`, as `can_integrate` decides it.
-fn decide(
+pub(super) fn decide(
     facts: &IntegrationFacts,
     caller: &CallerFacts,
     expected_version: Option<u32>,
@@ -241,7 +243,11 @@ impl ReviewService {
         let open = reviews::list_proposals(&mut *read, Some(ProposalState::Open), None).await?;
         let mut ready = None;
         for row in open {
-            if row.conflicted || passed.contains(&row.id) {
+            // No version passes the automatic gates without an approval as its latest verdict, so only those proposals read their gate facts.
+            if row.conflicted
+                || passed.contains(&row.id)
+                || row.latest_verdict != Some(Verdict::Approve)
+            {
                 continue;
             }
             let Some(facts) = reviews::integration_facts(&mut read, row.id).await? else {
@@ -310,6 +316,8 @@ impl ReviewService {
                     proposal,
                     task,
                     version,
+                    expected_version,
+                    automatic,
                     ..
                 } = plan.subject
                 {
@@ -324,6 +332,8 @@ impl ReviewService {
                             version: plan.other_tree,
                         },
                         conflicts: &conflicts,
+                        expected_version,
+                        automatic,
                     };
                     #[cfg(feature = "failpoints")]
                     fail::fail_point!("integration_before_conflict_record");
@@ -335,9 +345,9 @@ impl ReviewService {
             }
         };
         #[cfg(feature = "failpoints")]
-        fail::fail_point!("integration_after_merge", |_| Err(fired(
+        fail::fail_point!("integration_after_merge", |_| Err(Step::from(fired(
             "integration_after_merge"
-        )));
+        ))));
         // Allocated in its own write, so a failed attempt never gives its number to a later one.
         let number = self
             .store
@@ -361,9 +371,9 @@ impl ReviewService {
             .await
             .map_err(ReviewError::from)?;
         #[cfg(feature = "failpoints")]
-        fail::fail_point!("integration_after_objects", |_| Err(fired(
+        fail::fail_point!("integration_after_objects", |_| Err(Step::from(fired(
             "integration_after_objects"
-        )));
+        ))));
         let mut buffer = EventBuffer::new();
         let commit = Commit {
             actor,
@@ -378,9 +388,9 @@ impl ReviewService {
             .write(async |tx| commit.run(tx, &mut buffer).await)
             .await?;
         #[cfg(feature = "failpoints")]
-        fail::fail_point!("integration_after_commit", |_| Err(fired(
+        fail::fail_point!("integration_after_commit", |_| Err(Step::from(fired(
             "integration_after_commit"
-        )));
+        ))));
         drop(locks);
         self.bus.publish(buffer);
         for workspace in archived {
@@ -539,12 +549,12 @@ impl ReviewService {
     }
 }
 
-/// The caller as the gates see it, with the acting agent's `standing`. The daemon integrates only through the automatic integration, so `Actor::System` is refused on every other path.
-fn caller_facts(
+/// The caller as the gates see it, with the acting agent's `standing`. The daemon integrates only through the automatic integration, so `Actor::System` is refused on every other path, and a proposal view reads the gates for an agent or a named human only.
+pub(super) fn caller_facts(
     actor: &Actor,
     standing: AgentStanding,
     automatic: bool,
-) -> Result<CallerFacts, Step> {
+) -> Result<CallerFacts, FoldError> {
     match actor {
         Actor::Agent(agent) => Ok(CallerFacts::Agent {
             agent: agent.agent.clone(),
@@ -552,7 +562,7 @@ fn caller_facts(
         }),
         Actor::Human { name } => Ok(CallerFacts::Human(name.clone())),
         Actor::System if automatic => Ok(CallerFacts::Automatic),
-        Actor::System => Err(FoldError::from(GateRefusal::IntegratorRequired).into()),
+        Actor::System => Err(FoldError::from(GateRefusal::IntegratorRequired)),
     }
 }
 
@@ -638,9 +648,9 @@ impl Commit<'_> {
             }
         };
         #[cfg(feature = "failpoints")]
-        fail::fail_point!("integration_in_transaction", |_| Err(fired(
+        fail::fail_point!("integration_in_transaction", |_| Err(Step::from(fired(
             "integration_in_transaction"
-        )));
+        ))));
         Ok(archived)
     }
 
@@ -679,7 +689,7 @@ impl Commit<'_> {
         Ok(())
     }
 
-    /// The gates again on the writer's connection, because reviews, versions and prerequisites change without the integration mutex. Anything that no longer holds starts the attempt again, whose gate step then reports it.
+    /// The gates again on the writer's connection, because reviews, versions and prerequisites change without the integration mutex. A gate that fails now starts the attempt again, whose gate step then reports it.
     async fn recheck(
         &self,
         tx: &mut WriteTx,
@@ -787,16 +797,19 @@ impl Commit<'_> {
                 }))?;
             buffer.append(tx, &released, self.now).await?;
         }
-        buffer.extend(recompute(tx, &[task], self.now).await?.events);
-        notify::integration_messages(tx, buffer, &facts, revision, self.now).await?;
+        let recomputed = recompute(tx, &[task], self.now).await?;
+        buffer.extend(recomputed.events);
+        notify::integration_messages(
+            tx,
+            buffer,
+            &facts,
+            revision,
+            &recomputed.became_todo,
+            self.now,
+        )
+        .await?;
         Ok(archived)
     }
-}
-
-/// The error a fired failpoint returns, as a crash at that point would stop the command.
-#[cfg(feature = "failpoints")]
-fn fired(name: &str) -> Step {
-    FoldError::new(codes::FAILPOINT, format!("{name} fired")).into()
 }
 
 /// Whether the latest verdict on the version already is `human`'s approval, so integrating adds no second one.

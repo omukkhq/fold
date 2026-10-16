@@ -1,4 +1,3 @@
-use fold_daemon::http::host::CLIENT_HEADER;
 use std::sync::Arc;
 
 use axum::Router;
@@ -10,6 +9,7 @@ use fold_core::{
 };
 use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
+use fold_daemon::http::host::CLIENT_HEADER;
 use fold_daemon::http::{router, socket_router};
 use fold_daemon::projects::{ProjectHandle, Projects};
 use fold_daemon::services::agents::AgentService;

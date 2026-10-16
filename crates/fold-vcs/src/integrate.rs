@@ -1,16 +1,16 @@
 use fold_core::merge::{Conflict, TreeMerge, merge_trees};
 use fold_core::object::{ObjectHash, ObjectKind};
-use fold_core::tree::flatten;
+use fold_core::tree::FlatTree;
 use fold_core::{FoldError, codes};
 
+use crate::compare::load_flat;
 use crate::objects::{ObjectError, ObjectStore};
-use crate::revision_store::write_initial_tree;
-use crate::snapshot::load_tree;
+use crate::snapshot::store_changed_trees;
 
 /// The result of merging a proposal version or a remote tree onto main.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MergeOutcome {
-    /// Every object of the tree is in the store, written or refreshed by this call.
+    /// Every object of the tree is in the store. This call wrote or refreshed each merged blob and each tree it rebuilt, or the root of `other` when main had not moved; every other object of the tree is one that main's head or `other` already names.
     Merged { tree_hash: ObjectHash },
     /// In path order. Nothing was written.
     Conflicted(Vec<Conflict>),
@@ -23,17 +23,25 @@ pub fn tree_merge(
     ours: &ObjectHash,
     theirs: &ObjectHash,
 ) -> Result<TreeMerge, FoldError> {
-    let load = |hash: &ObjectHash| load_tree(objects, hash);
-    let base = flatten(base, &load)?;
-    let ours = flatten(ours, &load)?;
-    let theirs = flatten(theirs, &load)?;
+    let theirs = load_flat(objects, theirs)?;
+    merge_flat(objects, base, ours, &theirs)
+}
+
+fn merge_flat(
+    objects: &ObjectStore,
+    base: &ObjectHash,
+    ours: &ObjectHash,
+    theirs: &FlatTree,
+) -> Result<TreeMerge, FoldError> {
+    let base = load_flat(objects, base)?;
+    let ours = load_flat(objects, ours)?;
     let blob = |hash: &ObjectHash| -> Result<Vec<u8>, FoldError> {
         Ok(objects.read_expecting(hash, ObjectKind::Blob)?.payload)
     };
-    merge_trees(&base, &ours, &theirs, &blob)
+    merge_trees(&base, &ours, theirs, &blob)
 }
 
-/// Merges `other` onto `head` against their common `base`, all three root trees in `objects`. When `base` is `head`, main has not moved and the result is `other`, refreshed so garbage collection keeps it until the revision that names it commits. Otherwise the tree merge runs over the stored trees and blobs; a clean merge writes its merged blobs and then its trees bottom-up, and a conflicted one writes nothing. Blocking: call it through `spawn_blocking`.
+/// Merges `other` onto `head` against their common `base`, all three root trees in `objects`. When `base` is `head`, main has not moved and the result is `other`, refreshed so garbage collection keeps it until the revision that names it commits. Otherwise the tree merge runs over the stored trees and blobs; a clean merge writes its merged blobs and then, bottom-up, only the trees of `head` above a path the merge changed, and a conflicted one writes nothing. Blocking: call it through `spawn_blocking`.
 pub fn merge_onto_head(
     objects: &ObjectStore,
     base: &ObjectHash,
@@ -46,7 +54,8 @@ pub fn merge_onto_head(
         }
         return Ok(MergeOutcome::Merged { tree_hash: *other });
     }
-    let merge = tree_merge(objects, base, other, head)?;
+    let head_entries = load_flat(objects, head)?;
+    let merge = merge_flat(objects, base, other, &head_entries)?;
     if !merge.conflicts.is_empty() {
         return Ok(MergeOutcome::Conflicted(merge.conflicts));
     }
@@ -59,6 +68,6 @@ pub fn merge_onto_head(
             ));
         }
     }
-    let tree_hash = write_initial_tree(objects, merge.merged)?;
+    let tree_hash = store_changed_trees(objects, Some(*head), &head_entries, &merge.merged)?;
     Ok(MergeOutcome::Merged { tree_hash })
 }

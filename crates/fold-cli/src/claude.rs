@@ -5,9 +5,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use clap::{Args, ValueEnum};
-use fold_cli::daemon_client::{self, ClientConfig, ClientError, DaemonClient, Response};
-use fold_core::roles::session_uuid;
+use fold_cli::claude_files;
+use fold_cli::daemon_client::{self, ClientError, DaemonClient, Response};
 use fold_core::{AgentName, FoldError, MAIN_TAG, ProjectPaths, codes};
+use fold_daemon::services::agents::new_session_id;
 use fold_daemon::services::projects::{ProjectError, root_for_dir_on_host, slug_for_dir_on_host};
 use hyper::Method;
 use thiserror::Error;
@@ -21,7 +22,7 @@ pub struct ClaudeArgs {
     #[arg(long, default_value = MAIN_TAG)]
     name: String,
     /// Unix socket of the daemon; overrides daemon.toml (default $XDG_RUNTIME_DIR/fold/fold.sock)
-    #[arg(long)]
+    #[arg(long, env = serve::SOCKET_ENV)]
     socket: Option<PathBuf>,
     /// Arguments for claude itself, after `--`
     #[arg(last = true)]
@@ -68,8 +69,6 @@ pub enum ClaudeError {
     Project(#[from] ProjectError),
     #[error("cannot read the working directory: {0}")]
     Cwd(io::Error),
-    #[error("cannot find the fld binary: {0}")]
-    Exe(io::Error),
     #[error("cannot start the async runtime: {0}")]
     Runtime(io::Error),
     #[error(transparent)]
@@ -94,12 +93,9 @@ impl ClaudeError {
             Self::Config(error) => error.code(),
             Self::Project(error) => error.code(),
             Self::Refused { code, .. } => Some(code),
-            Self::Cwd(_)
-            | Self::Exe(_)
-            | Self::Runtime(_)
-            | Self::Client(_)
-            | Self::Record(_)
-            | Self::Exec(_) => None,
+            Self::Cwd(_) | Self::Runtime(_) | Self::Client(_) | Self::Record(_) | Self::Exec(_) => {
+                None
+            }
         }
     }
 
@@ -111,11 +107,13 @@ impl ClaudeError {
             }
             Self::Fold(error) | Self::Project(ProjectError::Fold(error)) => error.hint(),
             Self::Refused { hint, .. } => hint.as_deref(),
-            Self::Exec(_) => Some("install Claude Code, so that claude is on your PATH"),
-            Self::Config(_)
+            Self::Exec(error) if error.kind() == io::ErrorKind::NotFound => {
+                Some("install Claude Code, so that claude is on your PATH")
+            }
+            Self::Exec(_)
+            | Self::Config(_)
             | Self::Project(_)
             | Self::Cwd(_)
-            | Self::Exe(_)
             | Self::Runtime(_)
             | Self::Client(_)
             | Self::Record(_) => None,
@@ -137,11 +135,9 @@ pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), Claud
     let cwd = std::env::current_dir()
         .and_then(|dir| dir.canonicalize())
         .map_err(ClaudeError::Cwd)?;
-    let config = client_config(args.socket.as_deref(), dirs)?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(ClaudeError::Runtime)?;
+    let config = serve::client_config(args.socket.as_deref(), dirs)?;
+    let socket = args.socket.is_some().then(|| config.socket.clone());
+    let runtime = serve::current_thread_runtime().map_err(ClaudeError::Runtime)?;
     let root = runtime.block_on(async {
         let root = root_for_dir_on_host(&host, &cwd).await?;
         let slug = slug_for_dir_on_host(&host, &cwd).await?;
@@ -163,7 +159,7 @@ pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), Claud
             &agent,
             session,
             config_dir.as_deref(),
-            new_session_id,
+            || Ok(new_session_id()?),
         )?)
     };
     let error = command(
@@ -172,6 +168,7 @@ pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), Claud
         &agent,
         start.as_ref(),
         &args.claude_args,
+        socket.as_deref(),
     )
     .exec();
     Err(ClaudeError::Exec(error))
@@ -220,17 +217,6 @@ pub(crate) fn follow_record(paths: &ProjectPaths, agent: &AgentName, id: &str) -
         return Ok(());
     }
     write_record(&path, id)
-}
-
-fn new_session_id() -> Result<String, ClaudeError> {
-    let mut bytes = [0_u8; 16];
-    getrandom::fill(&mut bytes).map_err(|_| {
-        FoldError::new(
-            codes::INTERNAL_ERROR,
-            "the system could not give random bytes",
-        )
-    })?;
-    Ok(session_uuid(bytes))
 }
 
 /// The recorded session id of `agent`, when the record holds one.
@@ -293,13 +279,14 @@ fn transcript_exists(config_dir: &Path, root: &Path, id: &str) -> bool {
         })
 }
 
-/// The `claude` run of `fld claude`: its own arguments come after `--name` and the session, which is `None` when they choose it themselves.
+/// The `claude` run of `fld claude`: its own arguments come after `--name` and the session, which is `None` when they choose it themselves. `socket` is the socket the user chose with `--socket` or `FOLD_SOCKET`; the session's `fld mcp` and hooks read it from `FOLD_SOCKET`, as they have no flag of their own to carry it.
 fn command(
     claude: &Path,
     root: &Path,
     agent: &AgentName,
     start: Option<&Start>,
     extra: &[OsString],
+    socket: Option<&Path>,
 ) -> Command {
     let mut command = Command::new(claude);
     command.arg("--name").arg(agent.as_str());
@@ -311,29 +298,26 @@ fn command(
     command
         .args(extra)
         .current_dir(root)
-        .env("FOLD_AGENT", agent.as_str())
-        .env("FOLD_AGENT_TAGS", MAIN_TAG);
+        .env(claude_files::AGENT_ENV, agent.as_str())
+        .env(claude_files::AGENT_TAGS_ENV, MAIN_TAG);
+    if let Some(socket) = socket {
+        command.env(serve::SOCKET_ENV, socket);
+    }
     command
-}
-
-fn client_config(socket: Option<&Path>, dirs: &Dirs) -> Result<ClientConfig, ClaudeError> {
-    let socket = serve::socket_path(socket, dirs)?.ok_or(ClientError::RuntimeDirMissing)?;
-    Ok(ClientConfig {
-        socket: std::path::absolute(&socket).map_err(ClaudeError::Cwd)?,
-        runtime_dir: serve::runtime_dir(dirs).ok(),
-        fold_exe: Some(std::env::current_exe().map_err(ClaudeError::Exe)?),
-    })
 }
 
 /// Refuses before `claude` starts when another agent already has the `main` tag, which the session's adapter would get at its handshake.
 fn main_is_free(response: &Response, agent: &AgentName) -> Result<(), ClaudeError> {
-    if !(200..300).contains(&response.status) {
-        let error = &response.body["error"];
-        let text = |key: &str| error[key].as_str().map(str::to_owned);
+    if !response.is_success() {
+        let refusal = response.refusal();
         return Err(ClaudeError::Refused {
-            code: text("code").unwrap_or_else(|| codes::INTERNAL_ERROR.to_owned()),
-            message: text("message").unwrap_or_else(|| "the daemon refused the request".to_owned()),
-            hint: text("hint"),
+            code: refusal
+                .code
+                .unwrap_or_else(|| codes::INTERNAL_ERROR.to_owned()),
+            message: refusal
+                .message
+                .unwrap_or_else(|| "the daemon refused the request".to_owned()),
+            hint: refusal.hint,
         });
     }
     let holder = response.body["agents"]
@@ -399,6 +383,17 @@ mod tests {
         assert_eq!(rest.target, None);
         assert_eq!(rest.claude.claude_args, ["claude"]);
         assert!(parse_new(&["codex"]).is_err());
+    }
+
+    #[test]
+    fn the_socket_comes_from_fold_socket_as_its_session_reads_it() {
+        use clap::CommandFactory;
+        let command = Wrapper::command();
+        let socket = command
+            .get_arguments()
+            .find(|arg| arg.get_id() == "socket")
+            .unwrap();
+        assert_eq!(socket.get_env(), Some(std::ffi::OsStr::new("FOLD_SOCKET")));
     }
 
     #[test]
@@ -640,6 +635,7 @@ mod tests {
             &agent,
             Some(&Start::Resume(ID.to_owned())),
             &extra,
+            None,
         );
         let args: Vec<_> = resumed.get_args().collect();
         assert_eq!(args, ["--name", "main", "--resume", ID, "--model", "opus"]);
@@ -649,6 +645,7 @@ mod tests {
             &agent,
             None,
             &[OsString::from("-c")],
+            None,
         );
         let args: Vec<_> = own.get_args().collect();
         assert_eq!(args, ["--name", "main", "-c"]);
@@ -658,6 +655,7 @@ mod tests {
             &agent,
             Some(&Start::New(ID.to_owned())),
             &extra,
+            Some(Path::new("/run/by-hand.sock")),
         );
         assert_eq!(command.get_program(), "claude");
         let args: Vec<_> = command.get_args().collect();
@@ -669,6 +667,8 @@ mod tests {
         let envs: Vec<_> = command.get_envs().collect();
         assert!(envs.contains(&("FOLD_AGENT".as_ref(), Some("main".as_ref()))));
         assert!(envs.contains(&("FOLD_AGENT_TAGS".as_ref(), Some("main".as_ref()))));
+        assert!(envs.contains(&("FOLD_SOCKET".as_ref(), Some("/run/by-hand.sock".as_ref()))));
+        assert!(!own.get_envs().any(|(name, _)| name == "FOLD_SOCKET"));
     }
 
     #[test]
@@ -699,7 +699,7 @@ mod tests {
         );
         let refused = Response {
             status: 404,
-            body: json!({"error": {"code": "project_not_found", "message": "gone", "hint": "fld init"}}),
+            body: json!({"error": {"code": "project_not_found", "message": "gone", "details": {"hint": "fld init"}}}),
         };
         let error = main_is_free(&refused, &agent).unwrap_err();
         assert_eq!(error.code(), Some("project_not_found"));
@@ -724,6 +724,8 @@ mod tests {
         let exec = ClaudeError::Exec(io::Error::from(io::ErrorKind::NotFound));
         assert_eq!(exec.code(), None);
         assert!(exec.hint().unwrap().contains("Claude Code"));
+        let denied = ClaudeError::Exec(io::Error::from(io::ErrorKind::PermissionDenied));
+        assert_eq!(denied.hint(), None);
         assert_eq!(ClaudeError::Runtime(io::Error::other("x")).hint(), None);
         let record = ClaudeError::Record(io::Error::other("x"));
         assert_eq!((record.code(), record.hint()), (None, None));

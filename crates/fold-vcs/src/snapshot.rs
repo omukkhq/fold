@@ -4,10 +4,11 @@ use std::path::Path;
 
 use fold_core::FoldError;
 use fold_core::object::{ObjectHash, ObjectKind};
-use fold_core::tree::{EntryKind, FlatEntry, FlatTree, Tree, apply_changes, flatten};
+use fold_core::tree::{EntryKind, FlatEntry, FlatTree, Tree, apply_changes};
 
+use crate::compare::load_flat;
 use crate::index::StatIndex;
-use crate::objects::ObjectStore;
+use crate::objects::{ObjectError, ObjectStore};
 use crate::paths::{RepoPath, WorkspaceError, open_parent};
 use crate::scan::{ChangeKind, ScanOptions, ScanResult, SkipReason, changes, scan};
 
@@ -44,7 +45,7 @@ pub fn snapshot(
     opts: &ScanOptions<'_>,
 ) -> Result<Snapshot, FoldError> {
     let base = match &base_tree {
-        Some(tree) => flatten(tree, &|hash| load_tree(objects, hash))?,
+        Some(tree) => load_flat(objects, tree)?,
         None => FlatTree::new(),
     };
     let opts = ScanOptions {
@@ -101,18 +102,7 @@ pub fn record(
         }
     }
     // Taken again after the failed stores, which can bring back a base directory whose files the first pass saw deleted.
-    let pending: Changes = changes(base, &current)
-        .into_iter()
-        .map(|change| {
-            let entry = current.get(&change.path).copied();
-            (change.path, entry)
-        })
-        .collect();
-
-    let tree = match base_tree.filter(|_| pending.is_empty()) {
-        Some(unchanged) => unchanged,
-        None => build_tree(objects, base_tree, &pending)?,
-    };
+    let tree = store_changed_trees(objects, base_tree, base, &current)?;
     index.save(index_path).map_err(WorkspaceError::from)?;
     Ok(Snapshot {
         tree,
@@ -121,18 +111,27 @@ pub fn record(
     })
 }
 
-/// Applies the changes to the base tree and stores the new trees, children before parents.
-fn build_tree(
+/// The root of the tree that holds `current`, built on `base_tree`, whose entries are `base`. Only the trees above a changed path are rebuilt and stored, children before parents; every other subtree keeps the hash it has in `base_tree`, and an unchanged state is `base_tree` itself.
+pub(crate) fn store_changed_trees(
     objects: &ObjectStore,
     base_tree: Option<ObjectHash>,
-    pending: &Changes,
+    base: &FlatTree,
+    current: &FlatTree,
 ) -> Result<ObjectHash, FoldError> {
-    let built = apply_changes(base_tree, pending, &|hash| load_tree(objects, hash))?;
+    let pending: BTreeMap<Vec<u8>, Option<FlatEntry>> = changes(base, current)
+        .into_iter()
+        .map(|change| {
+            let entry = current.get(&change.path).copied();
+            (change.path, entry)
+        })
+        .collect();
+    if let Some(unchanged) = base_tree.filter(|_| pending.is_empty()) {
+        return Ok(unchanged);
+    }
+    let built = apply_changes(base_tree, &pending, &|hash| load_tree(objects, hash))?;
     store_trees(objects, &built.new_trees)?;
     Ok(built.root)
 }
-
-type Changes = BTreeMap<Vec<u8>, Option<FlatEntry>>;
 
 fn store_trees(
     objects: &ObjectStore,
@@ -140,7 +139,13 @@ fn store_trees(
 ) -> Result<(), WorkspaceError> {
     for (hash, payload) in trees {
         let stored = objects.write(ObjectKind::Tree, payload)?;
-        debug_assert_eq!(&stored, hash);
+        if stored != *hash {
+            return Err(ObjectError::Corrupt {
+                hash: *hash,
+                reason: "the built tree was stored under another hash",
+            }
+            .into());
+        }
     }
     Ok(())
 }
@@ -203,7 +208,8 @@ fn store_blob(
     Ok(written == entry.hash)
 }
 
-pub(crate) fn load_tree(objects: &ObjectStore, hash: &ObjectHash) -> Result<Tree, FoldError> {
+/// One stored tree, refused when the object is not a tree or does not decode.
+pub fn load_tree(objects: &ObjectStore, hash: &ObjectHash) -> Result<Tree, FoldError> {
     let object = objects
         .read_expecting(hash, ObjectKind::Tree)
         .map_err(FoldError::from)?;
@@ -226,6 +232,18 @@ mod tests {
         inodes: true,
         read_only_bit: true,
     };
+
+    #[test]
+    fn a_tree_stored_under_another_hash_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let objects = ObjectStore::open(&dir.path().join(".fold")).unwrap();
+        let wrong = fold_core::object::hash_object(ObjectKind::Tree, b"other");
+        let refused = store_trees(&objects, &[(wrong, b"payload".to_vec())]).unwrap_err();
+        assert!(matches!(
+            refused,
+            WorkspaceError::Object(ObjectError::Corrupt { hash, .. }) if hash == wrong
+        ));
+    }
 
     #[test]
     fn an_unstable_file_keeps_its_base_entry_and_adds_a_warning() {

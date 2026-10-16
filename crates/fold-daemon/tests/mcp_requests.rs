@@ -502,5 +502,30 @@ async fn a_bad_kind_or_state_filter_names_the_tool_that_lists_requests() {
         let error = err(&h, "frontend", "list_requests", filter).await;
         assert_eq!(error["code"], "invalid_request");
         assert!(error["hint"].as_str().unwrap().contains("list_requests"));
+        let text = error.to_string();
+        assert!(!text.contains("chore") && !text.contains("stuck"), "{text}");
     }
+}
+
+#[tokio::test]
+async fn list_requests_returns_the_newest_up_to_its_limit() {
+    let h = harness().await;
+    for body in ["first", "second", "third"] {
+        ok(&h, "frontend", "create_request", json!({"body": body})).await;
+    }
+    let ids = |listed: &Value| -> Vec<String> {
+        listed["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|request| request["id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let two = ok(&h, "backend", "list_requests", json!({"limit": 2})).await;
+    assert_eq!(ids(&two), ["RQ-3", "RQ-2"]);
+    let none = err(&h, "backend", "list_requests", json!({"limit": 0})).await;
+    assert_eq!(none["code"], "invalid_request", "{none}");
+    assert_eq!(none["details"]["field"], "limit", "{none}");
+    let all = ok(&h, "backend", "list_requests", json!({})).await;
+    assert_eq!(ids(&all), ["RQ-3", "RQ-2", "RQ-1"]);
 }

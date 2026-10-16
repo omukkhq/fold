@@ -21,6 +21,8 @@ use serde_json::json;
 use super::remote::blocking;
 use super::{ProjectError, load_config};
 use crate::services::events::EventBuffer;
+#[cfg(feature = "failpoints")]
+use crate::services::fired;
 
 /// What one run of the commit writer did.
 #[derive(Debug, Default)]
@@ -189,11 +191,6 @@ fn history_missing(revision: RevisionId, commit: &CommitId) -> FoldError {
         ("revision", json!(revision.to_string())),
         ("commit", json!(commit.as_str())),
     ])
-}
-
-#[cfg(feature = "failpoints")]
-fn fired(name: &str) -> FoldError {
-    FoldError::new(codes::FAILPOINT, format!("{name} fired"))
 }
 
 /// The main revisions after `last`, the newest mapped revision and its commit, oldest first, with the base the first of them continues; every revision and no base when nothing is mapped, and none when main has no revision.

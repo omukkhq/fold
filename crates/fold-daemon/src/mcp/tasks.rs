@@ -13,12 +13,12 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::error::{from_agent, from_task};
-use super::identity::parse;
+use super::parse;
 use super::{FoldServer, FooterPart, FooterSource};
 use crate::services::agents::{AgentService, SessionContext};
 use crate::services::tasks::{
     ChecklistItemPatch, ClaimView, Claimed, CreateTask, DetailEdge, ItemContent, LabelView,
-    NewChecklistItem, TaskDetail, TaskPatch, TaskService,
+    NewChecklistItem, TaskDetail, TaskPatch, TaskService, item_content,
 };
 
 pub mod requests;
@@ -465,18 +465,9 @@ pub async fn call(
     as_worker: Option<&WorkerName>,
     arguments: &JsonObject,
 ) -> Result<Option<Value>, FoldError> {
-    let request_tool = requests::is_request_tool(tool);
-    if !request_tool && !tools().iter().any(|known| known.name == tool) {
-        return Ok(None);
-    }
-    let session = server.session().await;
-    let actor = server
-        .agents
-        .actor(&session, as_worker)
-        .await
-        .map_err(from_agent)?;
-    if request_tool {
-        return requests::run(server, tool, &actor, arguments).await;
+    let actor = server.actor(as_worker).await?;
+    if let Some(value) = requests::run(server, tool, &actor, arguments).await? {
+        return Ok(Some(value));
     }
     run(server, tool, &actor, arguments).await
 }
@@ -670,21 +661,8 @@ async fn add_checklist_item(
 ) -> Result<Value, FoldError> {
     let tasks = &server.tasks;
     let input: AddChecklistItemInput = parse(arguments)?;
-    let content = match (input.text, input.linked_task) {
-        (Some(text), None) => ItemContent::Step(StepText::parse(&text)?),
-        (None, Some(child)) => ItemContent::Linked(id(&child)?),
-        _ => {
-            return Err(FoldError::new(
-                fold_core::codes::INVALID_REQUEST,
-                "give text or linked_task, not both",
-            )
-            .with_hint(
-                "call add_checklist_item with text for a step or linked_task for a child task",
-            ));
-        }
-    };
     let item = NewChecklistItem {
-        content,
+        content: item_content(input.text.as_deref(), input.linked_task.as_deref())?,
         checklist: input
             .checklist
             .as_deref()
@@ -730,7 +708,7 @@ async fn move_checklist_item(
         .transpose()?;
     let item: ChecklistItemId = id(&input.id)?;
     let view = tasks
-        .move_checklist_item(actor, item, input.position, checklist)
+        .move_checklist_item(actor, item, Some(input.position), checklist)
         .await
         .map_err(from_task)?;
     Ok(json!({"item": view.id, "checklist": view.checklist.as_str()}))

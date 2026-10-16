@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
 use std::io::{self, BufWriter, Read, Write};
@@ -6,7 +7,7 @@ use std::process::{ChildStdin, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use fold_core::object::ObjectHash;
-use fold_core::tree::{EntryKind, FlatEntry, FlatTree, flatten};
+use fold_core::tree::{EntryKind, FlatEntry, TreeEntry};
 use fold_core::{FoldError, RevisionId, Timestamp, codes};
 use serde_json::json;
 
@@ -156,14 +157,11 @@ fn write_stream(
 ) -> Result<(), StreamError> {
     let mut out = BufWriter::with_capacity(BUFFER_SIZE, stdin);
     let pipe = |_: io::Error| StreamError::Pipe;
-    let load = |hash: &ObjectHash| load_tree(objects, hash);
-    let mut previous = match base {
-        Some(base) => flatten(&base.tree, &load).map_err(StreamError::Fold)?,
-        None => FlatTree::new(),
-    };
+    let mut previous = base.map(|base| base.tree);
     out.write_all(b"feature done\n").map_err(pipe)?;
     for (index, revision) in revisions.iter().enumerate() {
-        let current = flatten(&revision.tree, &load).map_err(StreamError::Fold)?;
+        let changed =
+            tree_changes(objects, previous.as_ref(), &revision.tree).map_err(StreamError::Fold)?;
         let seconds = revision.created_at.as_millis().div_euclid(1000);
         let mut head = format!("commit {refname}\nmark :{}\n", index + 1);
         for (role, signature) in [
@@ -193,21 +191,99 @@ fn write_stream(
                 .map_err(pipe)?;
         }
         // Deletions come first, so a path that turns from a file into a directory, or back, is free before it is written.
-        for path in previous.keys().filter(|path| !current.contains_key(*path)) {
+        for path in &changed.deleted {
             out.write_all(b"D ").map_err(pipe)?;
             out.write_all(&quote_path(path)).map_err(pipe)?;
             out.write_all(b"\n").map_err(pipe)?;
         }
-        for (path, entry) in &current {
-            if previous.get(path) != Some(entry) {
-                write_file(objects, &mut out, path, entry)?;
-            }
+        for (path, entry) in &changed.written {
+            write_file(objects, &mut out, path, entry)?;
         }
         out.write_all(b"\n").map_err(pipe)?;
-        previous = current;
+        previous = Some(revision.tree);
     }
     out.write_all(b"done\n").map_err(pipe)?;
     out.flush().map_err(pipe)
+}
+
+/// What one commit changes, each list in path order.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct TreeChanges {
+    /// Files and symlinks of the old tree that the new one does not have.
+    deleted: Vec<Vec<u8>>,
+    /// Files and symlinks of the new tree that the old one does not have with the same kind and content.
+    written: Vec<(Vec<u8>, FlatEntry)>,
+}
+
+/// The changes from the tree `old` to the tree `new`. A directory with the same hash on both sides is never read, so a commit costs only the directories it changed.
+fn tree_changes(
+    objects: &ObjectStore,
+    old: Option<&ObjectHash>,
+    new: &ObjectHash,
+) -> Result<TreeChanges, FoldError> {
+    let mut changes = TreeChanges::default();
+    diff_dir(objects, old, Some(new), &[], &mut changes)?;
+    changes.deleted.sort();
+    changes.written.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(changes)
+}
+
+fn diff_dir(
+    objects: &ObjectStore,
+    old: Option<&ObjectHash>,
+    new: Option<&ObjectHash>,
+    prefix: &[u8],
+    changes: &mut TreeChanges,
+) -> Result<(), FoldError> {
+    if old == new {
+        return Ok(());
+    }
+    let entries = |tree: Option<&ObjectHash>| -> Result<BTreeMap<Vec<u8>, TreeEntry>, FoldError> {
+        Ok(match tree {
+            Some(tree) => load_tree(objects, tree)?
+                .entries
+                .into_iter()
+                .map(|entry| (entry.name.clone(), entry))
+                .collect(),
+            None => BTreeMap::new(),
+        })
+    };
+    let olds = entries(old)?;
+    let news = entries(new)?;
+    let names: BTreeSet<&Vec<u8>> = olds.keys().chain(news.keys()).collect();
+    for name in names {
+        let (before, after) = (olds.get(name), news.get(name));
+        if before == after {
+            continue;
+        }
+        let mut path = prefix.to_vec();
+        if !path.is_empty() {
+            path.push(b'/');
+        }
+        path.extend_from_slice(name);
+        let dir = |entry: Option<&TreeEntry>| {
+            entry
+                .filter(|entry| entry.kind == EntryKind::Directory)
+                .map(|entry| entry.hash)
+        };
+        let (old_dir, new_dir) = (dir(before), dir(after));
+        if old_dir.is_some() || new_dir.is_some() {
+            diff_dir(objects, old_dir.as_ref(), new_dir.as_ref(), &path, changes)?;
+        }
+        let is_file = |entry: &&TreeEntry| entry.kind != EntryKind::Directory;
+        match (before.filter(is_file), after.filter(is_file)) {
+            (_, Some(entry)) => changes.written.push((
+                path,
+                FlatEntry {
+                    kind: entry.kind,
+                    hash: entry.hash,
+                },
+            )),
+            (Some(_), None) => changes.deleted.push(path),
+            (None, None) => {}
+        }
+    }
+    Ok(())
 }
 
 fn write_file(
@@ -301,7 +377,79 @@ fn check_signature(signature: &Signature) -> Result<(), FoldError> {
 
 #[cfg(test)]
 mod tests {
+    use fold_core::object::{ObjectKind, hash_object};
+    use fold_core::tree::FlatTree;
+
     use super::*;
+    use crate::revision_store::write_initial_tree;
+
+    fn tree(objects: &ObjectStore, files: &[(&str, EntryKind, &[u8])]) -> ObjectHash {
+        let entries: FlatTree = files
+            .iter()
+            .map(|(path, kind, content)| {
+                let hash = objects.write(ObjectKind::Blob, content).unwrap();
+                (path.as_bytes().to_vec(), FlatEntry { kind: *kind, hash })
+            })
+            .collect();
+        write_initial_tree(objects, entries).unwrap()
+    }
+
+    #[test]
+    fn a_commit_lists_only_what_changed_also_where_files_and_directories_swap() {
+        let dir = tempfile::tempdir().unwrap();
+        let objects = ObjectStore::open(dir.path()).unwrap();
+        let file = EntryKind::File;
+        let old = tree(
+            &objects,
+            &[
+                ("a", file, b"x"),
+                ("d/b", file, b"y"),
+                ("d/c", file, b"z"),
+                ("f", file, b"w"),
+                ("same/deep/s", file, b"s"),
+            ],
+        );
+        let new = tree(
+            &objects,
+            &[
+                ("a", EntryKind::Executable, b"x"),
+                ("d", file, b"now a file"),
+                ("f/g", file, b"w"),
+                ("h", EntryKind::Symlink, b"a"),
+                ("same/deep/s", file, b"s"),
+            ],
+        );
+        let changes = tree_changes(&objects, Some(&old), &new).unwrap();
+        assert_eq!(
+            changes.deleted,
+            [b"d/b".to_vec(), b"d/c".to_vec(), b"f".to_vec()]
+        );
+        let written: Vec<(&[u8], EntryKind)> = changes
+            .written
+            .iter()
+            .map(|(path, entry)| (path.as_slice(), entry.kind))
+            .collect();
+        assert_eq!(
+            written,
+            [
+                (&b"a"[..], EntryKind::Executable),
+                (b"d", file),
+                (b"f/g", file),
+                (b"h", EntryKind::Symlink),
+            ]
+        );
+        assert_eq!(
+            changes.written[1].1.hash,
+            hash_object(ObjectKind::Blob, b"now a file")
+        );
+        assert_eq!(
+            tree_changes(&objects, Some(&new), &new).unwrap(),
+            TreeChanges::default()
+        );
+        let first = tree_changes(&objects, None, &old).unwrap();
+        assert!(first.deleted.is_empty());
+        assert_eq!(first.written.len(), 5);
+    }
 
     #[test]
     fn paths_are_quoted_only_when_fast_import_needs_it() {

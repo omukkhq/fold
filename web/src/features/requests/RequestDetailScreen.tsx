@@ -67,6 +67,7 @@ import {
   VersionsBlock,
   ViewerPanel,
 } from "./SidePanel";
+import { projectPath } from "@/routes/paths";
 
 interface RequestDetailScreenProps {
   slug: string;
@@ -218,7 +219,7 @@ export function RequestDetailScreen({
           action={
             missing ? (
               <HrefLink
-                href={`/p/${slug}/requests`}
+                href={projectPath(slug, "requests")}
                 className={cn(buttonClasses("secondary", "md"), focusRing)}
               >
                 <span className={buttonIconClass("secondary")}>

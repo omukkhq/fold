@@ -313,6 +313,7 @@ async fn release_review_is_for_the_holder_agent_and_frees_the_proposal() {
         .list_proposals(fold_daemon::services::reviews::ProposalFilter {
             state: None,
             unclaimed: true,
+            limit: None,
         })
         .await
         .unwrap();

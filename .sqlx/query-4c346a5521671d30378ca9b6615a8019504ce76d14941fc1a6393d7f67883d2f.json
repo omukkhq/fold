@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT w.id AS \"id!: i64\", g.name FROM worker_tasks b\n           JOIN tasks t ON t.id = b.task_id\n           JOIN worker_processes w ON w.id = b.worker_process_id\n           JOIN agents g ON g.id = w.agent_id\n           WHERE t.number = ? AND w.state NOT IN ('stopped', 'failed', 'stopping')\n           ORDER BY w.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "worker_processes",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "4c346a5521671d30378ca9b6615a8019504ce76d14941fc1a6393d7f67883d2f"
+}

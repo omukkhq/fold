@@ -746,11 +746,16 @@ async fn a_done_task_locks_its_whole_checklist() {
             .await
             .unwrap_err(),
         fx.tasks
-            .move_checklist_item(&agent(), open, 0, None)
+            .move_checklist_item(&agent(), open, Some(0), None)
             .await
             .unwrap_err(),
         fx.tasks
-            .move_checklist_item(&agent(), open, 0, Some(ChecklistName::parse("QA").unwrap()))
+            .move_checklist_item(
+                &agent(),
+                open,
+                Some(0),
+                Some(ChecklistName::parse("QA").unwrap()),
+            )
             .await
             .unwrap_err(),
     ];

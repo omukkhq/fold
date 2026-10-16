@@ -90,7 +90,7 @@ To run the tests of one file in `crates/<crate>/tests/`, select its module: `car
 
 ## Web
 
-1. **Keep the application static.** Vite + React with no SSR; routing with TanStack Router, server state with TanStack Query, forms with react-hook-form and zod.
+1. **Keep the application static.** Vite + React with no SSR; routing with TanStack Router, server state with TanStack Query.
 2. **Use the semantic tokens in `web/src/styles/tokens.css`, never raw colours.** Their names match the variables in `fold.pen`; type, spacing and radii come from the tokens too.
 3. **Build on Radix primitives** for menus, dialogs, popovers, tabs and tooltips. Don't hand-roll focus management.
 4. **Use Lucide icons** (`lucide-react`).

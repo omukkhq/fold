@@ -272,16 +272,15 @@ pub async fn prune_auto(
         .filter(|id| Some(*id) != marked)
         .collect();
     let pruned_at = now.as_millis();
-    for id in &pruned {
-        let number_value = id.to_db();
-        sqlx::query!(
-            "UPDATE checkpoints SET pruned_at = ? WHERE number = ?",
-            pruned_at,
-            number_value
-        )
-        .execute(tx.conn())
-        .await?;
-    }
+    let numbers = serde_json::to_string(&pruned.iter().map(|id| id.to_db()).collect::<Vec<_>>())
+        .map_err(|_| StoreError::Invalid("checkpoint numbers"))?;
+    sqlx::query!(
+        "UPDATE checkpoints SET pruned_at = ? WHERE number IN (SELECT value FROM json_each(?))",
+        pruned_at,
+        numbers
+    )
+    .execute(tx.conn())
+    .await?;
     pruned.sort();
     Ok(pruned)
 }

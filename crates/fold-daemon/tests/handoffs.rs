@@ -246,6 +246,7 @@ async fn a_lead_past_its_threshold_hands_off_to_a_fresh_session() {
     let listed = harness.call(MAIN, "list_workers", json!({})).await;
     let listed = &listed["workers"][0];
     assert_eq!(listed["handoff"]["text"], note);
+    assert_eq!(listed["handoff"]["chars"], note.chars().count());
     assert_eq!(listed["handoff"]["session"], started.session_id.as_str());
 
     let mut live = Vec::new();
@@ -313,7 +314,7 @@ async fn a_note_written_during_a_turn_refreshes_the_lead_when_the_turn_ends() {
         .store
         .write(async |tx| {
             agents::insert_handoff(
-                tx.conn(),
+                tx,
                 started.agent_id,
                 &started.session_id,
                 note,

@@ -9,6 +9,20 @@ pub fn line(out: &mut impl Write, text: &str) -> io::Result<()> {
     writeln!(out, "{text}")
 }
 
+/// The path as one word for a POSIX shell: unchanged when it holds only characters a shell never treats specially, else in single quotes.
+pub fn shell_quote(path: &std::path::Path) -> String {
+    let text = path.to_string_lossy();
+    let plain = !text.is_empty()
+        && text
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "/._-+=:,@%".contains(c));
+    if plain {
+        text.into_owned()
+    } else {
+        format!("'{}'", text.replace('\'', "'\\''"))
+    }
+}
+
 /// `r1: 3 files, 120 bytes`
 pub fn revision_summary(revision: &impl Display, files: usize, bytes: u64) -> String {
     let noun = if files == 1 { "file" } else { "files" };
@@ -53,6 +67,16 @@ pub fn web_token_line(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_path_with_special_characters_is_quoted_for_the_shell() {
+        let quote = |text: &str| shell_quote(std::path::Path::new(text));
+        assert_eq!(quote("/home/ana/app"), "/home/ana/app");
+        assert_eq!(quote("/home/ana/my app"), "'/home/ana/my app'");
+        assert_eq!(quote("/tmp/it's"), "'/tmp/it'\\''s'");
+        assert_eq!(quote("/tmp/$(rm)"), "'/tmp/$(rm)'");
+        assert_eq!(quote(""), "''");
+    }
 
     #[test]
     fn web_token_line_shows_never_for_an_unused_token_and_the_label_last() {

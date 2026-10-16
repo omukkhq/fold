@@ -57,7 +57,7 @@ pub(super) fn facts(open: &[Option<Timestamp>]) -> Vec<SessionFact> {
 }
 
 impl AgentService {
-    /// Sends `agent.presence_changed` for every agent last seen active that is no longer active at the clock's time, and remembers every agent's presence. It writes nothing and returns how many frames it sent.
+    /// Sends `agent.presence_changed` for every agent last seen active that is not active at the clock's time, and remembers every agent's presence. It writes nothing and returns how many frames it sent.
     pub async fn sweep_presence(&self) -> Result<usize, AgentError> {
         let mut seen = self.seen.0.lock().await;
         let rows = agents::open_session_calls_by_agent(self.store.read()).await?;

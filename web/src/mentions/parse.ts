@@ -5,6 +5,7 @@ import {
   type People,
   type PersonKind,
 } from "@/people/names";
+import { idHref, projectPath, withQuery } from "@/routes/paths";
 
 /** `#T-12`: a fold item by its public id. */
 export interface ItemMention {
@@ -197,40 +198,25 @@ export function splitMentions(
 
 /** The screen a mention opens; a human has none. */
 export function mentionHref(slug: string, mention: Mention): string | null {
-  const base = `/p/${slug}`;
   if (isPerson(mention)) {
     // The board filters by agent, so a worker such as `frontend/ui` opens its agent's cards.
     return mention.person === "agent"
-      ? `${base}/board?${new URLSearchParams({ agent: mention.name.split("/")[0] ?? mention.name }).toString()}`
+      ? withQuery(projectPath(slug, "board"), {
+          agent: mention.name.split("/")[0] ?? mention.name,
+        })
       : null;
   }
   if (mention.mark === "@") {
-    const query = new URLSearchParams(
+    const query: Record<string, string> =
       mention.workspace === null
         ? { path: mention.path }
-        : { to: mention.workspace, path: mention.path },
-    ).toString();
-    return mention.workspace === null
-      ? `${base}/repository?${query}`
-      : `${base}/diff?${query}`;
+        : { to: mention.workspace, path: mention.path };
+    return withQuery(
+      projectPath(slug, mention.workspace === null ? "repository" : "diff"),
+      query,
+    );
   }
-  const id = mention.id;
-  switch (mention.kind) {
-    case "task":
-      return `${base}/t/${id}`;
-    case "proposal":
-      return `${base}/proposals/${id}`;
-    case "request":
-      return `${base}/requests/${id}`;
-    case "revision":
-      return `${base}/repository?revision=${id}`;
-    case "message":
-      return `${base}/messages?thread=${id}`;
-    case "changeset":
-    case "workspace":
-    case "checkpoint":
-      return `${base}/diff?to=${id}`;
-  }
+  return idHref(slug, mention.kind, mention.id);
 }
 
 /** The ids of the lists a screen holds; a list it does not hold leaves its kind unknown, so those mentions stay links. */

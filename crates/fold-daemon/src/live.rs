@@ -1,14 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Duration;
 
 use fold_core::events::types;
 use fold_core::object::ObjectHash;
 use fold_core::tree::{ChangeKind as FileChangeKind, ChangeTally, FlatTree};
 use fold_core::{
-    Clock, EventActor, FoldError, LiveEvent, NewEvent, ProjectConfig, ProjectPaths, ProposalId,
-    RevisionId, TaskId, Timestamp, WorkerName, WorkspaceId, codes,
+    CheckpointId, Clock, EventActor, FoldError, LiveEvent, NewEvent, ProjectConfig, ProjectPaths,
+    ProposalId, RevisionId, TaskId, Timestamp, WorkerName, WorkspaceId, codes,
 };
 use fold_store::Store;
 use fold_store::workspaces::{self, Checkpoint, CheckpointKind, WorkspaceKind, WorkspaceState};
@@ -23,13 +24,16 @@ use fold_vcs::snapshot::{Warning, WarningReason};
 use fold_vcs::watch::{
     DegradedReason, WatchBackend, WatchConfig, WatchEvent, WatchHub, WatchRefused,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
+use utoipa::ToSchema;
 
-use crate::http::events::{ChangeKind, ChangedFile, CheckpointSummary, LiveWorkspace};
 use crate::services::events::{EventBuffer, EventBus};
 use crate::services::workspaces::{WorkspaceError, capabilities};
+use crate::support::{blocking, lock, unpoisoned};
 
 /// How many `(old hash, new hash)` line counts one workspace keeps.
 const LINE_CACHE_PAIRS: usize = 4096;
@@ -92,6 +96,68 @@ pub struct WorkspaceLive {
     pub missing: bool,
 }
 
+/// What an active workspace holds right now. These are working changes, never history.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct LiveWorkspace {
+    #[schema(value_type = String, example = "ws-9")]
+    pub workspace: WorkspaceId,
+    #[schema(value_type = String, example = "T-12")]
+    pub task: TaskId,
+    /// The worker label, `agent` or `agent/worker`.
+    #[schema(example = "frontend/ui")]
+    pub worker: String,
+    /// The revision the workspace is based on.
+    #[schema(value_type = String, example = "r17")]
+    pub base: RevisionId,
+    pub files: Vec<ChangedFile>,
+    /// A one-line change summary, such as `3 files: 2 modified, 1 added (+40 -5)`, or `no changes`.
+    pub summary: String,
+    /// UTC milliseconds.
+    #[schema(value_type = i64)]
+    pub last_activity_at: Timestamp,
+    pub checkpoints: Vec<CheckpointSummary>,
+    #[schema(value_type = Option<String>, required = true, example = "P-3")]
+    pub proposal: Option<ProposalId>,
+    /// The worker holds the task's implementation claim and nothing in the workspace changed for `stall_minutes`. Calls do not count, so a stalled worker can hold a fresh lease.
+    pub stalled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ChangedFile {
+    /// Relative to the workspace root.
+    pub path: String,
+    /// The path before a rename; null for every other change.
+    #[schema(required = true)]
+    pub previous_path: Option<String>,
+    pub change: ChangeKind,
+    pub added_lines: u32,
+    pub removed_lines: u32,
+    /// A binary file is compared by hash only, so its line counts are 0.
+    pub binary: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangeKind {
+    Added,
+    Modified,
+    Deleted,
+    Renamed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct CheckpointSummary {
+    #[schema(value_type = String, example = "ck-88")]
+    pub id: CheckpointId,
+    #[schema(required = true)]
+    pub label: Option<String>,
+    /// False for a checkpoint an agent recorded explicitly.
+    pub automatic: bool,
+    /// UTC milliseconds.
+    #[schema(value_type = i64)]
+    pub created_at: Timestamp,
+}
+
 impl From<&Checkpoint> for CheckpointSummary {
     fn from(checkpoint: &Checkpoint) -> Self {
         Self {
@@ -103,8 +169,81 @@ impl From<&Checkpoint> for CheckpointSummary {
     }
 }
 
-type States = RwLock<HashMap<WorkspaceId, Arc<WorkspaceLive>>>;
-type Routes = Mutex<HashMap<WorkspaceId, mpsc::UnboundedSender<Command>>>;
+type StateMap = HashMap<WorkspaceId, Arc<WorkspaceLive>>;
+
+/// Every attached workspace's state. A change takes `map` for writing and then `order` before it lets `map` go, and publishes holding only `order`: the bus carries each workspace's states in the order they were made, and a reader never waits for a state to serialise.
+#[derive(Default)]
+struct States {
+    map: RwLock<StateMap>,
+    order: Mutex<()>,
+}
+
+impl States {
+    fn read(&self) -> RwLockReadGuard<'_, StateMap> {
+        unpoisoned(self.map.read())
+    }
+
+    fn write(&self) -> RwLockWriteGuard<'_, StateMap> {
+        unpoisoned(self.map.write())
+    }
+
+    /// Stores `next` under the write guard `map`, and publishes its view when `changed`.
+    fn store(
+        &self,
+        mut map: RwLockWriteGuard<'_, StateMap>,
+        bus: &EventBus,
+        workspace: WorkspaceId,
+        next: Arc<WorkspaceLive>,
+        changed: bool,
+    ) {
+        if !changed {
+            map.insert(workspace, next);
+            return;
+        }
+        let order = lock(&self.order);
+        map.insert(workspace, Arc::clone(&next));
+        drop(map);
+        publish(bus, &next.view);
+        drop(order);
+    }
+}
+type Routes = Mutex<HashMap<WorkspaceId, Route>>;
+
+/// How many commands wait for a busy pipeline. A pipeline takes every waiting command in one round, so the queue fills only while a scan runs.
+const QUEUE: usize = 256;
+
+/// Where one workspace's commands go.
+#[derive(Clone)]
+struct Route {
+    sender: mpsc::Sender<Command>,
+    overflow: Arc<Overflow>,
+}
+
+/// What the watcher could not queue for a pipeline whose queue was full. Changed paths, rescans and a missing root are covered by a full scan; a degraded watch is not, so its reason is kept for the next round.
+#[derive(Default)]
+struct Overflow {
+    full_scan: AtomicBool,
+    degraded: Mutex<Option<DegradedReason>>,
+}
+
+impl Overflow {
+    fn keep(&self, command: Command) {
+        if let Command::Degraded(reason) = command {
+            *lock(&self.degraded) = Some(reason);
+        }
+        self.full_scan.store(true, Ordering::Relaxed);
+    }
+
+    /// Adds what was kept to `round` and forgets it.
+    fn take_into(&self, round: &mut Round) {
+        if let Some(reason) = lock(&self.degraded).take() {
+            round.degraded = Some(reason);
+        }
+        if self.full_scan.swap(false, Ordering::Relaxed) {
+            round.full = true;
+        }
+    }
+}
 type Answer = oneshot::Sender<Result<Arc<WorkspaceLive>, FoldError>>;
 
 /// The in-memory state of every attached workspace of one project, kept by one pipeline task per workspace that the watcher and the rescan tick feed. Nothing here is trusted across a restart: attaching scans the directory again. Nothing here writes into a workspace directory.
@@ -143,10 +282,7 @@ struct Shared {
 
 impl Drop for Shared {
     fn drop(&mut self) {
-        let pipelines = self
-            .pipelines
-            .get_mut()
-            .unwrap_or_else(PoisonError::into_inner);
+        let pipelines = unpoisoned(self.pipelines.get_mut());
         for (_, pipeline) in pipelines.drain() {
             pipeline.abort();
         }
@@ -158,11 +294,7 @@ impl Shared {
         Arc::clone(self.hub.get_or_init(|| {
             let routes = Arc::clone(&self.routes);
             let sink = move |event: WatchEvent| route(&routes, event);
-            let backend = self
-                .backend
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .take();
+            let backend = lock(&self.backend).take();
             Arc::new(match backend {
                 Some(backend) => WatchHub::start_with(Boxed(backend), self.config.watch, sink),
                 None => WatchHub::start(self.config.watch, sink),
@@ -170,12 +302,10 @@ impl Shared {
         }))
     }
 
-    fn sender(&self, workspace: WorkspaceId) -> Option<mpsc::UnboundedSender<Command>> {
-        self.routes
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+    fn sender(&self, workspace: WorkspaceId) -> Option<mpsc::Sender<Command>> {
+        lock(&self.routes)
             .get(&workspace)
-            .cloned()
+            .map(|route| route.sender.clone())
     }
 }
 
@@ -187,9 +317,11 @@ fn route(routes: &Routes, event: WatchEvent) {
         WatchEvent::Degraded { workspace, reason } => (workspace, Command::Degraded(reason)),
         WatchEvent::RootMissing { workspace } => (workspace, Command::RootMissing),
     };
-    let routes = routes.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some(sender) = routes.get(&workspace) {
-        let _ = sender.send(command);
+    let routes = lock(routes);
+    if let Some(route) = routes.get(&workspace)
+        && let Err(TrySendError::Full(command)) = route.sender.try_send(command)
+    {
+        route.overflow.keep(command);
     }
 }
 
@@ -331,12 +463,15 @@ impl LiveState {
             .await?
         };
         let rules = Arc::clone(&opened.rules);
-        let (sender, commands) = mpsc::unbounded_channel();
-        shared
-            .routes
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(workspace, sender);
+        let (sender, commands) = mpsc::channel(QUEUE);
+        let overflow = Arc::new(Overflow::default());
+        lock(&shared.routes).insert(
+            workspace,
+            Route {
+                sender,
+                overflow: Arc::clone(&overflow),
+            },
+        );
         let watching = {
             let shared = Arc::clone(shared);
             tokio::task::spawn_blocking(move || shared.hub().add_workspace(workspace, &root, rules))
@@ -380,12 +515,8 @@ impl LiveState {
             watch: WatchMode::Watching,
             missing: false,
         };
-        let handle = tokio::spawn(pipeline.run(commands));
-        shared
-            .pipelines
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(workspace, handle);
+        let handle = tokio::spawn(pipeline.run(commands, overflow));
+        lock(&shared.pipelines).insert(workspace, handle);
         Ok(())
     }
 
@@ -393,19 +524,11 @@ impl LiveState {
     pub async fn detach(&self, workspace: WorkspaceId) {
         let shared = &self.shared;
         let _serial = shared.lifecycle.lock().await;
-        let sender = shared
-            .routes
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&workspace);
-        if let Some(sender) = sender {
-            let _ = sender.send(Command::Stop);
+        let sender = lock(&shared.routes).remove(&workspace);
+        if let Some(route) = sender {
+            let _ = route.sender.send(Command::Stop).await;
         }
-        let pipeline = shared
-            .pipelines
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&workspace);
+        let pipeline = lock(&shared.pipelines).remove(&workspace);
         if let Some(pipeline) = pipeline {
             let _ = pipeline.await;
         }
@@ -413,11 +536,7 @@ impl LiveState {
             let hub = Arc::clone(hub);
             let _ = tokio::task::spawn_blocking(move || hub.remove_workspace(workspace)).await;
         }
-        shared
-            .states
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&workspace);
+        shared.states.write().remove(&workspace);
     }
 
     /// Scans the whole workspace now and returns the fresh state. Commands that record or replace working files call it first, so they never act on a state the watcher has not delivered yet.
@@ -445,10 +564,10 @@ impl LiveState {
         command: impl FnOnce(Answer) -> Command,
     ) -> Result<Arc<WorkspaceLive>, WorkspaceError> {
         let (answer, answered) = oneshot::channel();
-        let sent = self
-            .shared
-            .sender(workspace)
-            .is_some_and(|sender| sender.send(command(answer)).is_ok());
+        let sent = match self.shared.sender(workspace) {
+            Some(sender) => sender.send(command(answer)).await.is_ok(),
+            None => false,
+        };
         if !sent {
             return Err(not_attached(workspace).into());
         }
@@ -476,7 +595,7 @@ impl LiveState {
         match workspaces::list_checkpoints(self.shared.store.read(), workspace, false).await {
             Ok(checkpoints) => self.set_checkpoints(workspace, &checkpoints),
             Err(error) => {
-                tracing::warn!(workspace = %workspace, code = error.code().unwrap_or("store_error"), "the live checkpoints were not read");
+                tracing::warn!(workspace = %workspace, code = error.log_code(), "the live checkpoints were not read");
             }
         }
     }
@@ -499,11 +618,8 @@ impl LiveState {
         stalled: bool,
     ) -> bool {
         let shared = &self.shared;
-        let mut states = shared
-            .states
-            .write()
-            .unwrap_or_else(PoisonError::into_inner);
-        let Some(current) = states.get(&workspace) else {
+        let map = shared.states.write();
+        let Some(current) = map.get(&workspace) else {
             return false;
         };
         if current.missing
@@ -515,8 +631,9 @@ impl LiveState {
         let mut next = WorkspaceLive::clone(current);
         next.view.stalled = stalled;
         next.updated_at = shared.clock.now();
-        publish(&shared.bus, &next.view);
-        states.insert(workspace, Arc::new(next));
+        shared
+            .states
+            .store(map, &shared.bus, workspace, Arc::new(next), true);
         true
     }
 
@@ -533,34 +650,22 @@ impl LiveState {
 
     /// Lets every pipeline look at the clock: a workspace whose full rescan is due (`rescan_seconds` after the last) scans, and a held summary write goes out once its interval has passed. The live job calls it every [`crate::jobs::LIVE_TICK`]. Returns how many workspaces it reached.
     pub fn tick(&self) -> usize {
-        let routes = self
-            .shared
-            .routes
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let routes = lock(&self.shared.routes);
         routes
             .values()
-            .filter(|sender| sender.send(Command::Tick).is_ok())
+            // A pipeline whose queue is full is busy scanning; the next tick reaches it.
+            .filter(|route| route.sender.try_send(Command::Tick).is_ok())
             .count()
     }
 
     pub fn get(&self, workspace: WorkspaceId) -> Option<Arc<WorkspaceLive>> {
-        self.shared
-            .states
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(&workspace)
-            .cloned()
+        self.shared.states.read().get(&workspace).cloned()
     }
 
     /// Every attached workspace that has finished its first scan, by id.
     pub fn all(&self) -> Vec<Arc<WorkspaceLive>> {
-        let states = self
-            .shared
-            .states
-            .read()
-            .unwrap_or_else(PoisonError::into_inner);
-        let mut all: Vec<Arc<WorkspaceLive>> = states.values().cloned().collect();
+        let mut all: Vec<Arc<WorkspaceLive>> =
+            self.shared.states.read().values().cloned().collect();
         all.sort_by_key(|state| state.view.workspace);
         all
     }
@@ -582,8 +687,8 @@ fn amend(
     now: Timestamp,
     change: impl FnOnce(&mut LiveWorkspace),
 ) {
-    let mut states = states.write().unwrap_or_else(PoisonError::into_inner);
-    let Some(current) = states.get(&workspace) else {
+    let map = states.write();
+    let Some(current) = map.get(&workspace) else {
         return;
     };
     let mut next = WorkspaceLive::clone(current);
@@ -592,11 +697,10 @@ fn amend(
         return;
     }
     next.updated_at = now;
-    publish(bus, &next.view);
-    states.insert(workspace, Arc::new(next));
+    states.store(map, bus, workspace, Arc::new(next), true);
 }
 
-/// Sent while holding the state's write guard, so the bus carries a workspace's states in the order they were made.
+/// Sent while holding the states' order lock, so the bus carries a workspace's states in the order they were made.
 fn publish(bus: &EventBus, view: &LiveWorkspace) {
     let event = serde_json::to_value(view).map_err(|_| ()).and_then(|data| {
         LiveEvent::new(types::WORKSPACE_CHANGED, Some(view.workspace), data).map_err(|_| ())
@@ -710,7 +814,7 @@ struct Scanned {
 }
 
 impl Pipeline {
-    async fn run(mut self, mut commands: mpsc::UnboundedReceiver<Command>) {
+    async fn run(mut self, mut commands: mpsc::Receiver<Command>, overflow: Arc<Overflow>) {
         while let Some(first) = commands.recv().await {
             let mut round = Round::default();
             round.take(first);
@@ -718,6 +822,7 @@ impl Pipeline {
             while let Ok(command) = commands.try_recv() {
                 round.take(command);
             }
+            overflow.take_into(&mut round);
             if round.stop {
                 for answer in round.answers {
                     let _ = answer.send(Err(not_attached(self.workspace)));
@@ -854,8 +959,8 @@ impl Pipeline {
             tally.add(kind, file.added_lines, file.removed_lines);
         }
         let files = scanned.files.iter().map(changed_file).collect();
-        let mut states = self.states.write().unwrap_or_else(PoisonError::into_inner);
-        let current = states.get(&self.workspace).cloned();
+        let map = self.states.write();
+        let current = map.get(&self.workspace).cloned();
         let mut view = current
             .as_ref()
             .map_or_else(|| self.initial.clone(), |current| current.view.clone());
@@ -879,30 +984,29 @@ impl Pipeline {
             updated_at: now,
             missing: false,
         });
-        if current
+        let changed = current
             .as_ref()
-            .is_none_or(|current| current.view != next.view)
-        {
-            publish(&self.bus, &next.view);
-        }
-        states.insert(self.workspace, Arc::clone(&next));
+            .is_none_or(|current| current.view != next.view);
+        self.states
+            .store(map, &self.bus, self.workspace, Arc::clone(&next), changed);
         next
     }
 
     /// Marks the state missing and clears its stalled flag.
     fn mark_missing(&self, now: Timestamp) {
-        let mut states = self.states.write().unwrap_or_else(PoisonError::into_inner);
-        let Some(current) = states.get(&self.workspace) else {
+        let map = self.states.write();
+        let Some(current) = map.get(&self.workspace) else {
             return;
         };
         let mut next = WorkspaceLive::clone(current);
         next.missing = true;
         next.view.stalled = false;
-        if next.view != current.view {
+        let changed = next.view != current.view;
+        if changed {
             next.updated_at = now;
-            publish(&self.bus, &next.view);
         }
-        states.insert(self.workspace, Arc::new(next));
+        self.states
+            .store(map, &self.bus, self.workspace, Arc::new(next), changed);
     }
 
     async fn degrade(&mut self, reason: DegradedReason, now: Timestamp) {
@@ -911,17 +1015,22 @@ impl Pipeline {
         }
         self.watch = WatchMode::Degraded;
         {
-            let mut states = self.states.write().unwrap_or_else(PoisonError::into_inner);
-            if let Some(current) = states.get(&self.workspace) {
+            let mut map = self.states.write();
+            if let Some(current) = map.get(&self.workspace) {
                 let mut next = WorkspaceLive::clone(current);
                 next.watch = WatchMode::Degraded;
-                states.insert(self.workspace, Arc::new(next));
+                map.insert(self.workspace, Arc::new(next));
             }
         }
         tracing::warn!(workspace = %self.workspace, reason = reason.as_str(), "the watch fell back to timer scans");
         let event = NewEvent::new(types::WORKSPACE_WATCH_DEGRADED, EventActor::fold())
-            .map(|event| event.task(self.task).workspace(self.workspace))
-            .and_then(|event| event.data(json!({"reason": reason.as_str()})));
+            .map(|event| {
+                event
+                    .task(self.task)
+                    .workspace(self.workspace)
+                    .reason(reason.as_str())
+            })
+            .and_then(|event| event.data(json!({(DegradedReason::DATA_KEY): reason.as_str()})));
         let Ok(event) = event else {
             return;
         };
@@ -933,20 +1042,14 @@ impl Pipeline {
         match written {
             Ok(()) => self.bus.publish(buffer),
             Err(error) => {
-                tracing::warn!(workspace = %self.workspace, code = error.code().unwrap_or("store_error"), "the degraded watch was not recorded");
+                tracing::warn!(workspace = %self.workspace, code = error.log_code(), "the degraded watch was not recorded");
             }
         }
     }
 
     /// Mirrors the state into the row's summary columns, at most once per [`TOUCH_INTERVAL`] unless `at_stop`, which the pipeline sets as it stops. A change inside the interval is written by the first tick after it.
     async fn flush_summary(&mut self, now: Timestamp, at_stop: bool) {
-        let Some(state) = self
-            .states
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(&self.workspace)
-            .cloned()
-        else {
+        let Some(state) = self.states.read().get(&self.workspace).cloned() else {
             return;
         };
         let changed = u32::try_from(state.view.files.len()).unwrap_or(u32::MAX);
@@ -972,7 +1075,7 @@ impl Pipeline {
                 self.touched_at = Some(now);
             }
             Err(error) => {
-                tracing::warn!(workspace = %workspace, code = error.code().unwrap_or("store_error"), "the workspace summary was not saved");
+                tracing::warn!(workspace = %workspace, code = error.log_code(), "the workspace summary was not saved");
             }
         }
     }
@@ -1117,19 +1220,6 @@ fn same_content(before: &FlatTree, after: &FlatTree) -> bool {
             .all(|((a, a_entry), (b, b_entry))| a == b && a_entry.hash == b_entry.hash)
 }
 
-async fn blocking<T: Send + 'static>(
-    work: impl FnOnce() -> Result<T, FoldError> + Send + 'static,
-) -> Result<T, FoldError> {
-    tokio::task::spawn_blocking(work)
-        .await
-        .unwrap_or_else(|error| {
-            Err(FoldError::new(
-                codes::INTERNAL_ERROR,
-                format!("blocking work stopped: {error}"),
-            ))
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1155,6 +1245,50 @@ mod tests {
         assert_eq!(defaults.watch, WatchConfig::default());
         assert_eq!(WatchMode::Watching.as_str(), "watching");
         assert_eq!(WatchMode::Degraded.as_str(), "degraded");
+    }
+
+    #[test]
+    fn a_full_queue_marks_the_route_for_a_full_scan_and_keeps_a_degraded_watch() {
+        let (sender, mut commands) = mpsc::channel(1);
+        let overflow = Arc::new(Overflow::default());
+        let workspace: WorkspaceId = "ws-1".parse().unwrap();
+        let routes: Routes = Mutex::new(HashMap::from([(
+            workspace,
+            Route {
+                sender,
+                overflow: Arc::clone(&overflow),
+            },
+        )]));
+        route(
+            &routes,
+            WatchEvent::Changed {
+                workspace,
+                paths: vec![path("a.txt")],
+            },
+        );
+        let mut round = Round::default();
+        overflow.take_into(&mut round);
+        assert!(!round.full && round.degraded.is_none());
+        route(&routes, WatchEvent::RescanRequested { workspace });
+        route(
+            &routes,
+            WatchEvent::Degraded {
+                workspace,
+                reason: DegradedReason::WatchLimit,
+            },
+        );
+        assert!(matches!(commands.try_recv(), Ok(Command::Paths(_))));
+        assert!(
+            commands.try_recv().is_err(),
+            "the overflowing commands were not queued"
+        );
+        let mut round = Round::default();
+        overflow.take_into(&mut round);
+        assert!(round.full, "the next round scans in full");
+        assert_eq!(round.degraded, Some(DegradedReason::WatchLimit));
+        let mut again = Round::default();
+        overflow.take_into(&mut again);
+        assert!(!again.full && again.degraded.is_none(), "taken once");
     }
 
     #[test]

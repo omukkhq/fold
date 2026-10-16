@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 
 use fold_core::events::types;
 use fold_core::merge::{ConflictKind, TreeMerge};
@@ -21,6 +21,7 @@ use super::lifecycle::{io_error, rename_into_place, staging_dir};
 use super::{WorkspaceError, WorkspaceService, blocking, capabilities};
 use crate::services::events::EventBuffer;
 use crate::services::tasks::{CreateTask, create_in_tx, recompute};
+use crate::support::{lock, unpoisoned};
 
 /// The most conflicted paths a sync task's description lists; the rest are counted.
 const LISTED_PATHS: usize = 200;
@@ -137,7 +138,7 @@ impl WorkspaceService {
                     Ok((path, dir))
                 })
                 .await?;
-                *placed.lock().unwrap_or_else(PoisonError::into_inner) = Some(dir);
+                *lock(&placed) = Some(dir);
                 let number = counters::allocate(tx, IdKind::Workspace).await?;
                 let id =
                     WorkspaceId::from_number(number).ok_or(StoreError::Corrupt("counters.next"))?;
@@ -174,10 +175,7 @@ impl WorkspaceService {
         let (task, id, path) = match written {
             Ok(created) => created,
             Err(error) => {
-                let dir = placed
-                    .into_inner()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .unwrap_or(staging);
+                let dir = unpoisoned(placed.into_inner()).unwrap_or(staging);
                 let removed = tokio::task::spawn_blocking(move || fs::remove_dir_all(dir)).await;
                 if !matches!(removed, Ok(Ok(()))) {
                     tracing::warn!("a sync workspace directory without a row was not removed");
@@ -194,7 +192,7 @@ impl WorkspaceService {
         if let Some(live) = &self.live
             && let Err(error) = live.attach(id).await
         {
-            tracing::warn!(workspace = %id, code = error.code().unwrap_or("store_error"), "the live state did not start");
+            tracing::warn!(workspace = %id, code = error.log_code(), "the live state did not start");
         }
         tracing::info!(task = %task, workspace = %id, remote_commit = %sync.remote_commit, conflicted = conflicted.len(), "pull conflicted; sync task created");
         Ok(SyncTaskCreated {

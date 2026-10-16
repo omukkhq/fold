@@ -3,7 +3,7 @@ use std::io;
 use std::os::fd::AsFd;
 use std::path::Path;
 use std::pin::Pin;
-use std::sync::{Arc, PoisonError, RwLock};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use axum::{Extension, Router};
@@ -17,6 +17,7 @@ use tokio::sync::watch;
 use tokio::task::{JoinHandle, JoinSet};
 
 use crate::daemon::DRAIN_TIMEOUT;
+use crate::support::unpoisoned;
 
 /// Takes over a connection whose first byte is `{`. The stream is untouched: the handler reads the handshake line itself.
 pub type HandshakeHandler =
@@ -30,18 +31,32 @@ pub struct SocketPeer {
 }
 
 impl SocketPeer {
-    fn of(stream: &UnixStream) -> Self {
-        let pid = stream
-            .peer_cred()
-            .ok()
+    /// `None` for a peer that does not run as the daemon's own user. The socket file is restricted to its owner only after it is bound, so a peer of another user could connect in between; it is refused here.
+    fn of(stream: &UnixStream) -> Option<Self> {
+        let cred = stream.peer_cred().ok();
+        if !same_user(
+            cred.map(|cred| cred.uid()),
+            rustix::process::getuid().as_raw(),
+        ) {
+            return None;
+        }
+        let pid = cred
             .and_then(|cred| cred.pid())
             .and_then(|pid| u32::try_from(pid).ok())
             .filter(|pid| *pid != 0);
-        Self { pid }
+        Some(Self { pid })
     }
 }
 
+/// A peer whose user the kernel does not report is refused too.
+fn same_user(peer: Option<u32>, own: u32) -> bool {
+    peer == Some(own)
+}
+
 const ACCEPT_BACKOFF: Duration = Duration::from_millis(50);
+
+/// How long a connection may wait before its first byte. An adapter sends its handshake and an HTTP client its request at once, so a silent connection is dropped.
+const FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The Unix socket listener. One socket carries two protocols, told apart by the first byte of a connection: `{` starts the JSON handshake, anything else is HTTP/1.1.
 pub struct SocketServer {
@@ -84,7 +99,7 @@ impl SocketServer {
 
     /// Replaces the handshake handler; connections that arrive later use it.
     pub fn on_handshake(&self, handler: HandshakeHandler) {
-        *self.handler.write().unwrap_or_else(PoisonError::into_inner) = handler;
+        *unpoisoned(self.handler.write()) = handler;
     }
 
     /// Ends the open connections and waits until they are closed; the accept loop stops at the `shutdown` of [`SocketServer::bind`]. Each connection finishes what it is doing: an HTTP connection its request, an MCP session the calls in flight, whose adapter then reads the end of the stream. A connection still open after [`DRAIN_TIMEOUT`] is cut. Until this is called, the connections that were open at the shutdown keep being served, so the daemon can stop its worker processes while their sessions still answer.
@@ -114,7 +129,7 @@ async fn accept_loop(
             _ = shutdown.changed() => break,
             accepted = listener.accept() => match accepted {
                 Ok((stream, _)) => {
-                    let handler = handler.read().unwrap_or_else(PoisonError::into_inner).clone();
+                    let handler = unpoisoned(handler.read()).clone();
                     connections.spawn(serve_connection(
                         stream,
                         router.clone(),
@@ -151,11 +166,15 @@ async fn serve_connection(
     handler: HandshakeHandler,
     draining: watch::Receiver<bool>,
 ) {
-    let peer = SocketPeer::of(&stream);
-    match first_byte(&stream).await {
-        Some(b'{') => serve_handshake(stream, peer, handler, draining).await,
-        Some(_) => serve_http(stream, router.layer(Extension(peer)), draining).await,
-        None => {}
+    let Some(peer) = SocketPeer::of(&stream) else {
+        tracing::warn!("refused a socket peer of another user");
+        return;
+    };
+    match tokio::time::timeout(FIRST_BYTE_TIMEOUT, first_byte(&stream)).await {
+        Ok(Some(b'{')) => serve_handshake(stream, peer, handler, draining).await,
+        Ok(Some(_)) => serve_http(stream, router.layer(Extension(peer)), draining).await,
+        Ok(None) => {}
+        Err(_) => tracing::debug!("a socket connection sent nothing and was dropped"),
     }
 }
 
@@ -213,5 +232,38 @@ async fn serve_http(stream: UnixStream, router: Router, mut draining: watch::Rec
     };
     if let Err(error) = served {
         tracing::debug!(%error, "socket connection ended with an error");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::io::AsyncReadExt as _;
+
+    use super::*;
+
+    #[test]
+    fn only_a_peer_of_the_same_user_is_served() {
+        assert!(same_user(Some(1000), 1000));
+        assert!(!same_user(Some(0), 1000));
+        assert!(!same_user(None, 1000));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_connection_that_sends_nothing_is_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fold.sock");
+        let (_stop, shutdown) = watch::channel(false);
+        let handshake: HandshakeHandler = Arc::new(|_, _| Box::pin(async {}));
+        let server = SocketServer::bind(&path, Router::new(), handshake, shutdown)
+            .await
+            .unwrap();
+        let mut client = UnixStream::connect(&path).await.unwrap();
+        let mut buffer = [0_u8; 1];
+        let read = tokio::time::timeout(FIRST_BYTE_TIMEOUT * 2, client.read(&mut buffer)).await;
+        assert!(
+            matches!(read, Ok(Ok(0))),
+            "the daemon closes the connection"
+        );
+        drop(server);
     }
 }

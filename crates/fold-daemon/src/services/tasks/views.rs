@@ -19,7 +19,7 @@ use fold_store::{StoreError, events};
 
 pub use fold_store::tasks::{ChecklistCounts, TaskRef};
 
-use super::attention::{AttentionItem, attention, stalled_tasks};
+use super::attention::{AttentionItem, attention, attention_in, stalled_tasks};
 use super::{
     ChecklistItemView, ClaimView, HumanReviewMark, LabelView, REPORT_LIMIT, ReportView, TaskError,
     TaskService, TaskView, label_view, task_not_found, view,
@@ -233,15 +233,15 @@ impl TaskService {
         let labels = tasks::labels_for_conn(&mut tx, id).await?;
         let names = checklists::checklists(&mut tx, id).await?;
         let items = checklists::items(&mut tx, id).await?;
-        let edges = tasks::edges_conn(&mut tx).await?;
+        let edges = tasks::edges_of(&mut tx, id).await?;
         let claim = claims::unreleased_for_task(&mut *tx, id).await?;
-        let workspace = tasks::live_workspace(&mut tx, id).await?;
         let facts = tasks::load_facts(&mut tx, &[id])
             .await?
             .pop()
             .ok_or_else(|| task_not_found(id))?
             .facts;
         let live = workspaces::live_task_workspace(&mut *tx, id).await?;
+        let workspace = live.as_ref().map(|row| row.id);
         let main = workspaces::main_head(&mut *tx).await?;
         let info = match (&live, main) {
             (Some(live), Some(main)) => Some(WorkspaceInfo {
@@ -330,6 +330,11 @@ impl TaskService {
             .into_iter()
             .map(|task| (task.id, task))
             .collect();
+        let stalled = stalled_tasks(self.live.as_ref());
+        let attention = attention_in(&mut tx, &[id], &stalled)
+            .await?
+            .remove(&id)
+            .unwrap_or_default();
         tx.commit().await.map_err(StoreError::from)?;
 
         let edge = |(task, origin): &(TaskId, DependencyOrigin)| {
@@ -361,11 +366,6 @@ impl TaskService {
                 });
             }
         }
-        let stalled = stalled_tasks(self.live.as_ref());
-        let attention = attention(&self.store, &[id], &stalled, now)
-            .await?
-            .remove(&id)
-            .unwrap_or_default();
         let claim = match claim {
             Some(claim) => Some(ClaimView {
                 task: id,
@@ -444,11 +444,10 @@ impl TaskService {
 
     /// The five columns in board order. Backlog to Review hold every task in number order; Done holds the [`BOARD_DONE_LIMIT`] most recently completed tasks, newest first, and counts the rest in `total`.
     pub async fn board(&self) -> Result<Board, TaskError> {
-        let now = self.clock.now();
         let mut snapshot = tasks::board_snapshot(self.store.read()).await?;
         let ids: Vec<TaskId> = snapshot.tasks.iter().map(|row| row.id).collect();
         let stalled = stalled_tasks(self.live.as_ref());
-        let mut attention = attention(&self.store, &ids, &stalled, now).await?;
+        let mut attention = attention(&self.store, &ids, &stalled).await?;
         let statuses: BTreeMap<TaskId, TaskStatus> = snapshot
             .tasks
             .iter()

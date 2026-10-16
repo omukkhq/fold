@@ -9,6 +9,7 @@ pub mod projects;
 pub mod push;
 pub mod services;
 pub mod socket;
+pub(crate) mod support;
 
 pub use clock::SystemClock;
 pub use config::DaemonConfig;

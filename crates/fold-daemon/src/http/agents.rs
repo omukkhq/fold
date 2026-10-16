@@ -1,14 +1,12 @@
 use axum::Json;
-use axum::extract::Query;
-use axum::extract::rejection::QueryRejection;
-use fold_core::{Event, FoldError, Presence, codes};
+use fold_core::{Event, Presence};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 use super::Project;
-use super::error::{ApiError, ErrorEnvelope};
+use super::error::{ApiError, ApiQuery, ErrorEnvelope};
 use super::events::DurableEvent;
 use super::tasks::AttentionKind;
 use crate::daemon::AppState;
@@ -305,10 +303,8 @@ impl From<AgentOverview> for AgentEntry {
 )]
 pub async fn list_agents(
     project: Project,
-    query: Result<Query<AgentsQuery>, QueryRejection>,
+    ApiQuery(query): ApiQuery<AgentsQuery>,
 ) -> Result<Json<AgentList>, ApiError> {
-    let Query(query) = query
-        .map_err(|_| FoldError::new(codes::INVALID_REQUEST, "events must be a whole number"))?;
     let filter = OverviewFilter {
         agent: None,
         events: query

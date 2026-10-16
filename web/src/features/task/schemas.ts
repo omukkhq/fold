@@ -1,6 +1,15 @@
 import { z } from "zod";
+import { MAX_TEXT_CHARS, charCount } from "@/format/text";
 import { LABEL_NAMES } from "@/components/label/labelColors";
 import { parseTaskParam } from "@/routes/params";
+
+/** The daemon's limit on one text body, counted in characters as it counts them. */
+function textLimit(noun: string): [(value: string) => boolean, string] {
+  return [
+    (value) => charCount(value) <= MAX_TEXT_CHARS,
+    `Keep the ${noun} to ${String(MAX_TEXT_CHARS)} characters.`,
+  ];
+}
 
 const taskId = z
   .string()
@@ -21,17 +30,13 @@ export type TitleForm = z.infer<typeof titleSchema>;
 
 export const newTaskSchema = z.object({
   title: titleSchema.shape.title,
-  description: z
-    .string()
-    .max(20_000, "Keep the description to 20000 characters."),
+  description: z.string().refine(...textLimit("description")),
   noProposal: z.boolean(),
 });
 export type NewTaskForm = z.infer<typeof newTaskSchema>;
 
 export const descriptionSchema = z.object({
-  description: z
-    .string()
-    .max(20_000, "Keep the description to 20000 characters."),
+  description: z.string().refine(...textLimit("description")),
 });
 export type DescriptionForm = z.infer<typeof descriptionSchema>;
 
@@ -94,7 +99,7 @@ export const sendBackSchema = z.object({
     .string()
     .trim()
     .min(1, "Say what the coder must change.")
-    .max(20_000, "Keep the note to 20000 characters."),
+    .refine(...textLimit("note")),
 });
 export type SendBackForm = z.infer<typeof sendBackSchema>;
 
@@ -104,6 +109,6 @@ export const feedbackSchema = z.object({
     .string()
     .trim()
     .min(1, "Write the feedback.")
-    .max(10_000, "Keep the feedback to 10000 characters."),
+    .refine(...textLimit("feedback")),
 });
 export type FeedbackForm = z.infer<typeof feedbackSchema>;

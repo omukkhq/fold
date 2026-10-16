@@ -1,4 +1,3 @@
-use fold_daemon::http::host::CLIENT_HEADER;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -8,6 +7,7 @@ use axum::http::{Method, Request, StatusCode, header};
 use fold_core::{Clock, HumanName, Timestamp, WebTokenId};
 use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
+use fold_daemon::http::host::CLIENT_HEADER;
 use fold_daemon::http::router;
 use fold_daemon::projects::Projects;
 use fold_daemon::services::projects::{

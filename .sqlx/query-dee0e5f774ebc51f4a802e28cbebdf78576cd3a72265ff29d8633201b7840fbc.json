@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS (SELECT 1 FROM open_human_questions WHERE thread_id = ?) AS \"awaiting!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "awaiting!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "dee0e5f774ebc51f4a802e28cbebdf78576cd3a72265ff29d8633201b7840fbc"
+}

@@ -1,10 +1,8 @@
 use std::collections::BTreeSet;
 
-use fold_core::events::types;
 use fold_core::reviews::standing_agent_approval;
 use fold_core::{
-    AddressedAs, MessageBody, Recipient, RevisionId, Target, TaskId, TaskStatus, Timestamp,
-    WorkerName,
+    AddressedAs, MessageBody, Recipient, RevisionId, Target, TaskId, Timestamp, WorkerName,
 };
 use fold_store::WriteTx;
 use fold_store::reviews::IntegrationFacts;
@@ -14,12 +12,13 @@ use super::ReviewError;
 use crate::services::events::EventBuffer;
 use crate::services::messages::send_from_fold_in_tx;
 
-/// Tells the agents an integrated proposal concerns, in the integration's own transaction and after its events: the author's agent, the reviewer's agent (the holder of the review claim, else the agent whose approval stands) and the agent holding the claim on each task that `buffer` shows turning Todo. It is one message from `fold` linked to the task, so an agent that has several of these roles gets it once. `facts` are the ones the transaction rechecked, read before the review claim was released.
+/// Tells the agents an integrated proposal concerns, in the integration's own transaction and after its events: the author's agent, the reviewer's agent (the holder of the review claim, else the agent whose approval stands) and the agent holding the claim on each task of `ready`, the tasks the integration's recalculation moved to Todo. It is one message from `fold` linked to the task, so an agent that has several of these roles gets it once. `facts` are the ones the transaction rechecked, read before the review claim was released.
 pub(super) async fn integration_messages(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,
     facts: &IntegrationFacts,
     revision: RevisionId,
+    ready: &[TaskId],
     now: Timestamp,
 ) -> Result<(), ReviewError> {
     let (proposal, task) = (facts.proposal.id, facts.proposal.task);
@@ -29,13 +28,12 @@ pub(super) async fn integration_messages(
         None => standing_agent_approval(&facts.reviews),
     };
     to.extend(reviewer);
-    let ready = newly_ready(buffer);
-    for ready_task in &ready {
+    for ready_task in ready {
         if let Some(claim) = claims::unreleased_for_task(tx.conn(), *ready_task).await? {
             to.insert(claim.worker.agent());
         }
     }
-    let body = MessageBody::parse(body_text(proposal, task, revision, &ready))?;
+    let body = MessageBody::parse(body_text(proposal, task, revision, ready))?;
     let recipients = to
         .iter()
         .map(|agent| Recipient {
@@ -45,20 +43,6 @@ pub(super) async fn integration_messages(
         .collect();
     send_from_fold_in_tx(tx, buffer, recipients, (task, proposal), &body, now).await?;
     Ok(())
-}
-
-/// The tasks whose `task.status_changed` in this transaction moved them to Todo, in the order the recalculation reached them.
-fn newly_ready(buffer: &EventBuffer) -> Vec<TaskId> {
-    buffer
-        .events()
-        .iter()
-        .filter(|event| event.event_type == types::TASK_STATUS_CHANGED)
-        .filter(|event| {
-            event.data.get("to").and_then(serde_json::Value::as_str)
-                == Some(TaskStatus::Todo.as_str())
-        })
-        .filter_map(|event| event.task)
-        .collect()
 }
 
 fn body_text(

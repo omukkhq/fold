@@ -25,6 +25,7 @@ import {
   versionTabs,
   type DetailView,
 } from "./view";
+import { projectPath } from "@/routes/paths";
 
 export function ProposalHeader({
   slug,
@@ -62,7 +63,7 @@ export function ProposalHeader({
         <ol className="flex items-center gap-8 text-bar">
           <li>
             <HrefLink
-              href={`/p/${slug}/proposals`}
+              href={projectPath(slug, "proposals")}
               className={cn(
                 "rounded-s text-text-muted hover:text-text",
                 focusRing,
@@ -103,7 +104,7 @@ export function ProposalHeader({
         <span>
           for{" "}
           <HrefLink
-            href={`/p/${slug}/t/${summary.task}`}
+            href={projectPath(slug, "t", summary.task)}
             className={cn(
               "rounded-s font-mono hover:text-text hover:underline",
               focusRing,

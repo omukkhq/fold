@@ -55,70 +55,18 @@ pub fn materialise(
 ) -> Result<Materialised, WorkspaceError> {
     prepare_target(root)?;
     let mut batch = Batch::open(root)?;
-    batch.root_handle()?;
     batch.dirs.insert(Vec::new());
     let mut done = Materialised {
         index: StatIndex::empty(opts.caps),
         degraded: Vec::new(),
         synced: Synced::default(),
     };
-    write_tree(objects, tree, None, opts, &mut batch, &mut done)?;
+    let root_dir = batch.root_handle()?.try_clone()?;
+    write_tree(objects, tree, None, &root_dir, opts, &mut batch, &mut done)?;
     let staging = batch.staging()?.try_clone()?;
     done.synced = batch.finish()?;
     done.index.mark_boundary_in(&staging)?;
     Ok(done)
-}
-
-/// Writes into `root` each file and symlink of the tree that is missing there, and creates `root` when it does not exist. A path that holds anything is left as it is: [`materialise`] renames each entry into place whole, so after one that stopped part-way the paths it reached hold their content and only the missing ones need writing. Returns how many entries were written.
-pub fn fill_missing(
-    objects: &ObjectStore,
-    tree: &ObjectHash,
-    root: &Path,
-    opts: &MaterialiseOptions,
-) -> Result<usize, WorkspaceError> {
-    let mut batch = Batch::open(root)?;
-    batch.root_handle()?;
-    let mut written = 0;
-    fill_tree(objects, tree, None, opts, &mut batch, &mut written)?;
-    batch.finish()?;
-    Ok(written)
-}
-
-fn fill_tree(
-    objects: &ObjectStore,
-    hash: &ObjectHash,
-    prefix: Option<&RepoPath>,
-    opts: &MaterialiseOptions,
-    batch: &mut Batch,
-    written: &mut usize,
-) -> Result<(), WorkspaceError> {
-    let tree = Tree::decode(&objects.read_expecting(hash, ObjectKind::Tree)?.payload)?;
-    for entry in tree.entries {
-        let path = RepoPath::child(prefix, &entry.name)?;
-        if entry.kind == EntryKind::Directory {
-            fill_tree(objects, &entry.hash, Some(&path), opts, batch, written)?;
-            continue;
-        }
-        let (parents, name) = path.parents_and_name();
-        let held = batch.open_dirs(&parents, &path)?;
-        let present = match held.as_ref().and_then(|held| held.last()) {
-            None => false,
-            Some(parent) => match parent.metadata(name) {
-                Ok(_) => true,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => false,
-                Err(error) => return Err(error.into()),
-            },
-        };
-        if !present {
-            let flat = FlatEntry {
-                kind: entry.kind,
-                hash: entry.hash,
-            };
-            batch.write_entry(objects, &path, &flat, opts)?;
-            *written += 1;
-        }
-    }
-    Ok(())
 }
 
 fn prepare_target(root: &Path) -> Result<(), WorkspaceError> {
@@ -136,28 +84,36 @@ fn prepare_target(root: &Path) -> Result<(), WorkspaceError> {
     }
 }
 
+/// Each file is written through the open handle of its directory, so no directory is opened again from the root.
 fn write_tree(
     objects: &ObjectStore,
     hash: &ObjectHash,
     prefix: Option<&RepoPath>,
+    dir: &DirHandle,
     opts: &MaterialiseOptions,
     batch: &mut Batch,
     done: &mut Materialised,
 ) -> Result<(), WorkspaceError> {
     let tree = Tree::decode(&objects.read_expecting(hash, ObjectKind::Tree)?.payload)?;
+    let key = prefix.map_or_else(Vec::new, |prefix| prefix.as_bytes().to_vec());
     for entry in tree.entries {
         let path = RepoPath::child(prefix, &entry.name)?;
         if entry.kind == EntryKind::Directory {
-            let names: Vec<&[u8]> = path.components().collect();
-            batch.create_dirs(&names, &path)?;
-            write_tree(objects, &entry.hash, Some(&path), opts, batch, done)?;
+            let Some((child, created)) = dir.child_or_create(&entry.name)? else {
+                return Err(WorkspaceError::invalid(path.as_bytes()));
+            };
+            if created {
+                batch.dirs.insert(key.clone());
+            }
+            write_tree(objects, &entry.hash, Some(&path), &child, opts, batch, done)?;
             continue;
         }
         let flat = FlatEntry {
             kind: entry.kind,
             hash: entry.hash,
         };
-        let written = batch.write_entry(objects, &path, &flat, opts)?;
+        batch.dirs.insert(key.clone());
+        let written = batch.write_into(objects, dir, &entry.name, &flat, opts)?;
         if written.degraded {
             done.degraded.push(path.clone());
         }
@@ -241,6 +197,18 @@ impl Batch {
         }
         let (parents, name) = path.parents_and_name();
         let parent = self.create_dirs(&parents, path)?;
+        self.write_into(objects, &parent, name, entry, opts)
+    }
+
+    /// [`Batch::write_entry`] into the open directory `parent`, which the caller notes for the flush.
+    fn write_into(
+        &mut self,
+        objects: &ObjectStore,
+        parent: &DirHandle,
+        name: &[u8],
+        entry: &FlatEntry,
+        opts: &MaterialiseOptions,
+    ) -> Result<Written, WorkspaceError> {
         let staging = self.staging()?;
         let tmp = format!(
             "{}-{}",
@@ -250,7 +218,7 @@ impl Batch {
         .into_bytes();
         // The stat comes from the staged entry, which no one else can reach: an edit that lands at the destination right after the rename then differs from the index, so the next scan reads it.
         let staged = stage(objects, staging, &tmp, entry, opts).and_then(|staged| {
-            staging.rename(&tmp, &parent, name)?;
+            staging.rename(&tmp, parent, name)?;
             Ok(staged)
         });
         let (outcome, file, meta) = match staged {

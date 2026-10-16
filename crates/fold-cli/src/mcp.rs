@@ -2,17 +2,17 @@ use std::io;
 use std::path::PathBuf;
 
 use clap::Args;
-use fold_cli::daemon_client::{self, ClientConfig, ClientError};
-use fold_daemon::mcp::handshake::{Answer, Hello, MAX_LINE, PROTOCOL_VERSION};
+use fold_cli::claude_files::{AGENT_ENV, AGENT_TAGS_ENV};
+use fold_cli::daemon_client::{self, ClientConfig, ClientError, HandshakeError};
+use fold_daemon::mcp::handshake::{Hello, PROTOCOL_VERSION};
 use thiserror::Error;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
 use crate::serve;
 
 #[derive(Args)]
 pub struct McpArgs {
     /// Unix socket path; overrides daemon.toml (default $XDG_RUNTIME_DIR/fold/fold.sock)
-    #[arg(long)]
+    #[arg(long, env = serve::SOCKET_ENV)]
     socket: Option<PathBuf>,
 }
 
@@ -20,35 +20,27 @@ pub struct McpArgs {
 pub enum McpError {
     #[error(transparent)]
     Config(#[from] serve::ServeError),
-    #[error("cannot find the fld binary: {0}")]
-    Exe(io::Error),
     #[error("cannot read the working directory: {0}")]
     Cwd(io::Error),
     #[error("cannot start the async runtime: {0}")]
     Runtime(io::Error),
     #[error(transparent)]
     Client(#[from] ClientError),
-    #[error("{code}: {message}{}", hint.as_ref().map(|hint| format!(" ({hint})")).unwrap_or_default())]
-    Refused {
-        code: String,
-        message: String,
-        hint: Option<String>,
-    },
-    #[error("the daemon sent no valid handshake answer")]
-    NoAnswer,
-    #[error("the handshake with the daemon failed: {0}")]
-    Io(io::Error),
+    #[error(transparent)]
+    Handshake(#[from] HandshakeError),
+    #[error("the connection to the daemon failed: {0}")]
+    Copy(io::Error),
     #[error("the daemon closed the session; start a new session to reconnect")]
     DaemonClosed,
 }
 
 /// Connects this session to the daemon and copies MCP bytes between stdio and the socket until either side closes. One process is one session.
 pub fn run(args: &McpArgs) -> Result<(), McpError> {
-    let config = client_config(args)?;
+    let config = serve::client_config(args.socket.as_deref(), &serve::Dirs::from_env())?;
     let cwd = std::env::current_dir()
         .and_then(|dir| dir.canonicalize())
         .map_err(McpError::Cwd)?;
-    let agent = std::env::var_os("FOLD_AGENT")
+    let agent = std::env::var_os(AGENT_ENV)
         .filter(|name| !name.is_empty())
         .map(|name| name.to_string_lossy().into_owned());
     let hello = Hello {
@@ -56,12 +48,9 @@ pub fn run(args: &McpArgs) -> Result<(), McpError> {
         cwd,
         pid: std::process::id(),
         agent,
-        tags: agent_tags(std::env::var("FOLD_AGENT_TAGS").ok().as_deref()),
+        tags: agent_tags(std::env::var(AGENT_TAGS_ENV).ok().as_deref()),
     };
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(McpError::Runtime)?;
+    let runtime = serve::current_thread_runtime().map_err(McpError::Runtime)?;
     let outcome = runtime.block_on(session(&config, &hello));
     // The stdin reader blocks a runtime thread until the next line, which may never come.
     runtime.shutdown_background();
@@ -79,56 +68,64 @@ fn agent_tags(value: Option<&str>) -> Vec<String> {
         .collect()
 }
 
-fn client_config(args: &McpArgs) -> Result<ClientConfig, McpError> {
-    let dirs = serve::Dirs::from_env();
-    let runtime_dir = serve::runtime_dir(&dirs).ok();
-    let socket =
-        serve::socket_path(args.socket.as_deref(), &dirs)?.ok_or(ClientError::RuntimeDirMissing)?;
-    Ok(ClientConfig {
-        socket: std::path::absolute(&socket).map_err(McpError::Cwd)?,
-        runtime_dir,
-        fold_exe: Some(std::env::current_exe().map_err(McpError::Exe)?),
-    })
-}
-
 async fn session(config: &ClientConfig, hello: &Hello) -> Result<(), McpError> {
     let stream = daemon_client::connect(config).await?;
-    let (read, mut write) = stream.into_split();
-    let mut line = serde_json::to_vec(hello).map_err(|_| McpError::NoAnswer)?;
-    line.push(b'\n');
-    write.write_all(&line).await.map_err(McpError::Io)?;
-
-    let mut read = BufReader::new(read);
-    let mut answer = Vec::new();
-    (&mut read)
-        .take(MAX_LINE as u64)
-        .read_until(b'\n', &mut answer)
-        .await
-        .map_err(McpError::Io)?;
-    let answer: Answer = serde_json::from_slice(&answer).map_err(|_| McpError::NoAnswer)?;
-    if !answer.ok {
-        return Err(match answer.error {
-            Some(error) => McpError::Refused {
-                code: error.code,
-                message: error.message,
-                hint: error.hint,
-            },
-            None => McpError::NoAnswer,
-        });
-    }
+    let (mut read, mut write) = daemon_client::handshake(stream, hello).await?;
 
     // These copies carry protocol bytes, never user output.
     let mut stdin = tokio::io::stdin();
     let mut stdout = tokio::io::stdout();
     tokio::select! {
-        _ = tokio::io::copy(&mut stdin, &mut write) => Ok(()),
-        _ = tokio::io::copy(&mut read, &mut stdout) => Err(McpError::DaemonClosed),
+        copied = tokio::io::copy(&mut stdin, &mut write) => session_ended(copied),
+        copied = tokio::io::copy(&mut read, &mut stdout) => Err(daemon_ended(copied)),
+    }
+}
+
+/// The session ends cleanly when Claude Code closes stdin. A write that fails because the daemon went away is the daemon closing the session.
+fn session_ended(copied: io::Result<u64>) -> Result<(), McpError> {
+    match copied {
+        Ok(_) => Ok(()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset
+            ) =>
+        {
+            Err(McpError::DaemonClosed)
+        }
+        Err(error) => Err(McpError::Copy(error)),
+    }
+}
+
+/// The daemon's side ends with its end of stream, or with the error that stopped the copy.
+fn daemon_ended(copied: io::Result<u64>) -> McpError {
+    match copied {
+        Ok(_) => McpError::DaemonClosed,
+        Err(error) => McpError::Copy(error),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_copy_error_is_reported_as_itself() {
+        assert!(session_ended(Ok(3)).is_ok());
+        let gone = io::Error::from(io::ErrorKind::BrokenPipe);
+        assert!(matches!(
+            session_ended(Err(gone)),
+            Err(McpError::DaemonClosed)
+        ));
+        let other = io::Error::from(io::ErrorKind::PermissionDenied);
+        assert!(matches!(session_ended(Err(other)), Err(McpError::Copy(_))));
+        assert!(matches!(daemon_ended(Ok(0)), McpError::DaemonClosed));
+        let error = daemon_ended(Err(io::Error::other("stdout closed")));
+        assert_eq!(
+            error.to_string(),
+            "the connection to the daemon failed: stdout closed"
+        );
+    }
 
     #[test]
     fn the_agent_tags_are_the_comma_separated_words() {

@@ -1,10 +1,12 @@
 use fold_core::roles::PermissionBehavior;
-use fold_core::{AgentName, HumanName, MessageId, PermissionQuestionId, Timestamp};
+use fold_core::{AgentName, EventActor, HumanName, MessageId, PermissionQuestionId, Timestamp};
 use serde_json::Value;
 use sqlx::{SqliteConnection, SqliteExecutor};
 
-use super::{optional_time, time};
+use super::optional_time;
+use crate::columns::time;
 use crate::error::StoreError;
+use crate::store::WriteTx;
 
 /// What a worker's `can_use_tool` request asked: a call that a permission rule marks `ask`, or an `AskUserQuestion` call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,7 +138,7 @@ impl RawQuestion {
 
 /// Stores a question and returns its row id.
 pub async fn insert_question(
-    executor: impl SqliteExecutor<'_>,
+    tx: &mut WriteTx,
     question: &NewQuestion<'_>,
 ) -> Result<i64, StoreError> {
     let number = question.number.map(PermissionQuestionId::to_db);
@@ -158,14 +160,14 @@ pub async fn insert_question(
         input,
         now
     )
-    .fetch_one(executor)
+    .fetch_one(tx.conn())
     .await?;
     Ok(id)
 }
 
 /// Stores the answer to an open question. A second answer, or an answer to a closed question, fails on the table's constraints.
 pub async fn insert_answer(
-    executor: impl SqliteExecutor<'_>,
+    tx: &mut WriteTx,
     question_id: i64,
     behavior: PermissionBehavior,
     by: &HumanName,
@@ -173,7 +175,8 @@ pub async fn insert_answer(
     now: Timestamp,
 ) -> Result<(), StoreError> {
     let behavior = behavior.as_str();
-    let by = format!("human:{by}");
+    let by = EventActor::human(by);
+    let by = by.as_str();
     let now = now.as_millis();
     sqlx::query!(
         "INSERT INTO worker_permission_answers (question_id, behavior, answered_by, message, created_at)
@@ -184,14 +187,14 @@ pub async fn insert_answer(
         message,
         now
     )
-    .execute(executor)
+    .execute(tx.conn())
     .await?;
     Ok(())
 }
 
 /// Closes every open question of the worker, when fold stops it or its process ends. Returns how many it closed.
 pub async fn close_open_questions(
-    executor: impl SqliteExecutor<'_>,
+    tx: &mut WriteTx,
     worker_process_id: i64,
     now: Timestamp,
 ) -> Result<u64, StoreError> {
@@ -205,7 +208,7 @@ pub async fn close_open_questions(
         worker_process_id,
         now
     )
-    .execute(executor)
+    .execute(tx.conn())
     .await?;
     Ok(done.rows_affected())
 }
@@ -312,7 +315,7 @@ pub async fn question_by_id(
 
 /// Links the question message for the `position`-th question of an `ask` question.
 pub async fn insert_question_message(
-    executor: impl SqliteExecutor<'_>,
+    tx: &mut WriteTx,
     question_id: i64,
     position: i64,
     message: MessageId,
@@ -325,7 +328,7 @@ pub async fn insert_question_message(
         position,
         number
     )
-    .execute(executor)
+    .execute(tx.conn())
     .await?;
     Ok(())
 }

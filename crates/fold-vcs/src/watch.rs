@@ -61,6 +61,9 @@ pub enum DegradedReason {
 }
 
 impl DegradedReason {
+    /// The key in a `workspace.watch_degraded` event's data that names the reason.
+    pub const DATA_KEY: &'static str = "reason";
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::WatchLimit => "watch_limit",
@@ -549,15 +552,9 @@ fn next_tick(tick: Instant, now: Instant, interval: Duration) -> Option<Instant>
 /// A directory's device and inode, so a directory replaced under the same name gets a fresh watch.
 type DirIdentity = (u64, u64);
 
-#[cfg(unix)]
 fn dir_identity(meta: &Metadata) -> DirIdentity {
     use std::os::unix::fs::MetadataExt;
     (meta.dev(), meta.ino())
-}
-
-#[cfg(not(unix))]
-fn dir_identity(_meta: &Metadata) -> DirIdentity {
-    (0, 0)
 }
 
 struct Workspace {
@@ -609,8 +606,8 @@ impl Workspace {
         RepoPath::parse(&names.join(&b'/')).ok().map(Some)
     }
 
-    fn full(&self, path: &RepoPath) -> Option<PathBuf> {
-        os_path(path).ok().map(|relative| self.root.join(relative))
+    fn full(&self, path: &RepoPath) -> PathBuf {
+        self.root.join(os_path(path))
     }
 
     fn touched(&mut self, ctx: &mut Ctx<'_>, path: RepoPath) {
@@ -619,9 +616,7 @@ impl Workspace {
             let folder = parent(&path);
             self.sync_tree(ctx, folder, false);
         }
-        let Some(full) = self.full(&path) else {
-            return;
-        };
+        let full = self.full(&path);
         let identity = fs::symlink_metadata(&full)
             .ok()
             .filter(Metadata::is_dir)
@@ -654,10 +649,7 @@ impl Workspace {
                 .as_ref()
                 .map_or_else(Vec::new, |dir| dir.as_bytes().to_vec());
             let full = match &dir {
-                Some(dir) => match self.full(dir) {
-                    Some(full) => full,
-                    None => continue,
-                },
+                Some(dir) => self.full(dir),
                 None => self.root.clone(),
             };
             let meta = match fs::symlink_metadata(&full) {
@@ -672,6 +664,7 @@ impl Workspace {
                 continue;
             };
             let mut listed: BTreeSet<Vec<u8>> = BTreeSet::new();
+            let rules = self.rules.dir_rules(dir.as_ref());
             for entry in reader.flatten() {
                 let Some(name) = os_bytes(&entry.file_name()) else {
                     continue;
@@ -683,7 +676,7 @@ impl Workspace {
                     continue;
                 };
                 let is_dir = entry.file_type().is_ok_and(|kind| kind.is_dir());
-                if self.rules.is_ignored_below(&child, is_dir) {
+                if rules.is_ignored(&child, is_dir) {
                     if is_dir {
                         self.unwatch_below(ctx.backend, child.as_bytes());
                     }

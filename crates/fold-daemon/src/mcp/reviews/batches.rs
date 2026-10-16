@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::super::error::from_review;
-use super::super::identity::parse;
+use super::super::parse;
 use super::{id, proposal_id, version};
 use crate::services::reviews::{
     BatchComment, BatchLines, BatchVerdict, ReviewBatchView, ReviewService,

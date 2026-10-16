@@ -23,6 +23,14 @@ use super::{
     worker_row,
 };
 use crate::services::events::EventBuffer;
+use crate::services::page_limit;
+use crate::support::blocking;
+
+/// The most requests one list returns.
+pub const MAX_REQUEST_LIST: u32 = 200;
+
+/// The requests an agent's list returns when it names no limit.
+pub const DEFAULT_REQUEST_LIST: u32 = 50;
 
 /// A file dropped on a new request. The transports read it from a workspace path or an upload; the service stores its bytes as a blob before the row that names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -230,21 +238,14 @@ impl TaskService {
         let access = self.object_access()?;
         let guard = access.lock.read_owned().await;
         let fold_dir = access.fold_dir;
-        let hashes = tokio::task::spawn_blocking(move || {
+        let hashes = blocking(move || {
             let objects = ObjectStore::open(&fold_dir)?;
-            blobs
+            Ok(blobs
                 .iter()
                 .map(|bytes| objects.write(ObjectKind::Blob, bytes))
-                .collect::<Result<Vec<_>, _>>()
+                .collect::<Result<Vec<_>, _>>()?)
         })
-        .await
-        .map_err(|error| {
-            FoldError::new(
-                codes::INTERNAL_ERROR,
-                format!("blocking work stopped: {error}"),
-            )
-        })?
-        .map_err(FoldError::from)?;
+        .await?;
         Ok((Some(guard), hashes))
     }
 
@@ -283,7 +284,7 @@ impl TaskService {
                         return Ok(());
                     }
                     let (open, last_end) =
-                        requests::agent_activity(tx.conn(), drafter.agent_id).await?;
+                        agents::agent_activity(tx.conn(), drafter.agent_id).await?;
                     if !drafter_lapsed(open, last_end, drafter.since, now, lease_minutes) {
                         return Err(FoldError::new(
                             codes::ALREADY_CLAIMED,
@@ -381,9 +382,7 @@ impl TaskService {
                         RequestStep::Submit
                     }
                     Role::Requester => {
-                        let deputy = requester_deputy(tx, &row.requester).await?;
-                        policy::is_requester(actor, &row.requester, deputy.as_ref())
-                            .map_err(FoldError::from)?;
+                        require_requester(tx, actor, &row).await?;
                         RequestStep::Edit
                     }
                 };
@@ -447,9 +446,7 @@ impl TaskService {
         self.store
             .write(async |tx| {
                 let row = open_row(tx, request).await?;
-                let deputy = requester_deputy(tx, &row.requester).await?;
-                policy::is_requester(actor, &row.requester, deputy.as_ref())
-                    .map_err(FoldError::from)?;
+                require_requester(tx, actor, &row).await?;
                 let next = row.state.after(RequestStep::RequestChanges, request)?;
                 require_latest(&row, version)?;
                 let comment = request_text(comment, "comment", false)?.unwrap_or_default();
@@ -480,9 +477,7 @@ impl TaskService {
             .store
             .write(async |tx| {
                 let row = open_row(tx, request).await?;
-                let deputy = requester_deputy(tx, &row.requester).await?;
-                policy::is_requester(actor, &row.requester, deputy.as_ref())
-                    .map_err(FoldError::from)?;
+                require_requester(tx, actor, &row).await?;
                 let next = row.state.after(RequestStep::Approve, request)?;
                 require_latest(&row, expected_version)?;
                 let draft = requests::drafts(tx.conn(), request)
@@ -558,9 +553,7 @@ impl TaskService {
         self.store
             .write(async |tx| {
                 let row = open_row(tx, request).await?;
-                let deputy = requester_deputy(tx, &row.requester).await?;
-                policy::is_requester(actor, &row.requester, deputy.as_ref())
-                    .map_err(FoldError::from)?;
+                require_requester(tx, actor, &row).await?;
                 row.state.after(RequestStep::Close, request)?;
                 let reason = request_text(reason, "reason", false)?.unwrap_or_default();
                 requests::close(tx, request, &reason, now).await?;
@@ -676,19 +669,12 @@ impl TaskService {
         drop(conn);
         let access = self.object_access()?;
         let hash = attachment.object;
-        let bytes = tokio::task::spawn_blocking(move || {
-            ObjectStore::open(&access.fold_dir)?
-                .read_expecting(&hash, ObjectKind::Blob)
-                .map(|object| object.payload)
+        let bytes = blocking(move || {
+            Ok(ObjectStore::open(&access.fold_dir)?
+                .read_expecting(&hash, ObjectKind::Blob)?
+                .payload)
         })
-        .await
-        .map_err(|error| {
-            FoldError::new(
-                codes::INTERNAL_ERROR,
-                format!("blocking work stopped: {error}"),
-            )
-        })?
-        .map_err(FoldError::from)?;
+        .await?;
         Ok((attachment, bytes))
     }
 
@@ -701,18 +687,22 @@ impl TaskService {
         })?)
     }
 
-    /// The requests `filter` selects, newest first.
+    /// The requests `filter` selects, newest first. A limit of 0 is `invalid_request`; one over [`MAX_REQUEST_LIST`] is lowered to it.
     pub async fn list_requests(
         &self,
         filter: &RequestFilter,
     ) -> Result<Vec<RequestView>, TaskError> {
+        let filter = RequestFilter {
+            limit: page_limit(filter.limit, MAX_REQUEST_LIST)?,
+            ..filter.clone()
+        };
         let mut conn = self
             .store
             .read()
             .acquire()
             .await
             .map_err(StoreError::from)?;
-        Ok(requests::list(&mut conn, filter)
+        Ok(requests::list(&mut conn, &filter)
             .await?
             .into_iter()
             .map(RequestView::from)
@@ -740,7 +730,17 @@ async fn next_request_id(tx: &mut WriteTx) -> Result<RequestId, TaskError> {
     Ok(RequestId::from_number(number).ok_or(StoreError::Corrupt("counters.next"))?)
 }
 
-/// The request read in the command's transaction, refused when it does not exist or only reads.
+/// Refuses `actor` unless it is the request's requester, or the deputy that acts for an agent requester that fold supervises.
+async fn require_requester(
+    tx: &mut WriteTx,
+    actor: &Actor,
+    row: &RequestRow,
+) -> Result<(), TaskError> {
+    let deputy = requester_deputy(tx, &row.requester).await?;
+    policy::is_requester(actor, &row.requester, deputy.as_ref()).map_err(FoldError::from)?;
+    Ok(())
+}
+
 /// The deputy of an agent requester that fold supervises, from its worker process.
 async fn requester_deputy(
     tx: &mut WriteTx,
@@ -754,6 +754,7 @@ async fn requester_deputy(
         .and_then(|process| deputy(process.role, &process.started_by)))
 }
 
+/// The request read in the command's transaction, refused when it does not exist or only reads.
 async fn open_row(tx: &mut WriteTx, request: RequestId) -> Result<RequestRow, TaskError> {
     let row = requests::fetch(tx.conn(), request)
         .await?

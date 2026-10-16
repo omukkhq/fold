@@ -1,10 +1,11 @@
 use fold_core::roles::{
     AreaProfile, AreaProfileChange, AreaProfileRequest, WorkerLimits, WorkerLimitsChange,
 };
+use fold_core::text::shorten;
 use fold_core::{
     AgentName, AreaName, FoldError, LabelName, ProposalId, Role, Tag, TaskId, WorkerName, codes,
 };
-use fold_store::agents::{AreaRow, WorkerProcessRow};
+use fold_store::agents::{AreaRow, HandoffRow, WorkerProcessRow};
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{JsonObject, Tool};
 use rmcp::schemars::JsonSchema;
@@ -13,7 +14,7 @@ use serde_json::{Value, json};
 
 use super::FoldServer;
 use super::error::from_agent;
-use super::identity::parse;
+use super::parse;
 use crate::services::agents::{
     AgentOverview, ClaimSummary, OverviewFilter, ProposalSummary, StartWorker, WorkerOverview,
     WorkspaceSummary,
@@ -382,6 +383,7 @@ pub async fn list_workers(server: &FoldServer, arguments: &JsonObject) -> Result
     let _: ListWorkersInput = parse(arguments)?;
     let areas = server.agents.list_areas().await.map_err(from_agent)?;
     let workers = server.agents.list_workers().await.map_err(from_agent)?;
+    let mut notes = server.agents.latest_handoffs().await.map_err(from_agent)?;
     let config = server.agents.worker_config().await;
     let mut listed = Vec::with_capacity(workers.len());
     for worker in &workers {
@@ -389,14 +391,9 @@ pub async fn list_workers(server: &FoldServer, arguments: &JsonObject) -> Result
         value["cache_ttl"] = config.as_ref().map_or(Value::Null, |config| {
             json!(config.role(worker.role).cache_ttl.as_str())
         });
-        let note = server
-            .agents
-            .latest_handoff(&worker.agent)
-            .await
-            .map_err(from_agent)?;
-        value["handoff"] = note.map_or(Value::Null, |note| {
-            json!({"session": note.session_id, "created_at": note.created_at, "text": note.body})
-        });
+        value["handoff"] = notes
+            .remove(&worker.agent)
+            .map_or(Value::Null, |note| handoff_json(&note));
         listed.push(value);
     }
     Ok(json!({
@@ -404,6 +401,18 @@ pub async fn list_workers(server: &FoldServer, arguments: &JsonObject) -> Result
         "workers": listed,
         "limits": config.as_ref().map_or(Value::Null, |config| limits_json(config.workers.limits())),
     }))
+}
+
+/// How much of a hand-off note `list_workers` shows. The whole note goes to the lead's next session; the list only lets the main agent see what each lead was doing.
+const HANDOFF_PREVIEW_CHARS: usize = 300;
+
+fn handoff_json(note: &HandoffRow) -> Value {
+    json!({
+        "session": note.session_id,
+        "created_at": note.created_at,
+        "text": shorten(&note.body, HANDOFF_PREVIEW_CHARS),
+        "chars": note.body.chars().count(),
+    })
 }
 
 fn claim_json(claim: &ClaimSummary) -> Value {
@@ -507,4 +516,26 @@ pub async fn write_handoff(
         "stored": true,
         "next": "end your turn; fold starts you again with a fresh context that reads this note",
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use fold_core::Timestamp;
+
+    use super::*;
+
+    #[test]
+    fn a_listed_hand_off_note_shows_its_start_and_its_length() {
+        let note = HandoffRow {
+            session_id: "s1".to_owned(),
+            body: "é".repeat(HANDOFF_PREVIEW_CHARS + 50),
+            created_at: Timestamp::from_millis(5).unwrap(),
+        };
+        let shown = handoff_json(&note);
+        let text = shown["text"].as_str().unwrap();
+        assert_eq!(text.chars().count(), HANDOFF_PREVIEW_CHARS);
+        assert!(text.ends_with('…'));
+        assert_eq!(shown["chars"], HANDOFF_PREVIEW_CHARS + 50);
+        assert_eq!(shown["session"], "s1");
+    }
 }

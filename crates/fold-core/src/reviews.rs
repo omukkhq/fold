@@ -1,47 +1,21 @@
-use std::fmt;
-
 use crate::actor::AgentActor;
 use crate::agents::{AgentName, HumanName};
 use crate::events::EventActor;
+use crate::task::define_names;
 
-/// What a review says about one proposal version. `Comment` is not a verdict on the work: it leaves the turn where it was.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Verdict {
-    Comment,
-    RequestChanges,
-    Approve,
-    Reject,
-}
+/// The longest reason a review command takes, in characters: why a proposal closes, why a reviewer gives a review claim up, or why a human must look.
+pub const MAX_REASON_CHARS: usize = 500;
 
-impl Verdict {
-    pub const ALL: [Verdict; 4] = [
-        Verdict::Comment,
-        Verdict::RequestChanges,
-        Verdict::Approve,
-        Verdict::Reject,
-    ];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Verdict::Comment => "comment",
-            Verdict::RequestChanges => "request_changes",
-            Verdict::Approve => "approve",
-            Verdict::Reject => "reject",
-        }
+define_names!(
+    /// What a review says about one proposal version. `Comment` is not a verdict on the work: it leaves the turn where it was.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum Verdict {
+        Comment = "comment",
+        RequestChanges = "request_changes",
+        Approve = "approve",
+        Reject = "reject",
     }
-
-    pub fn parse(text: &str) -> Option<Verdict> {
-        Verdict::ALL
-            .into_iter()
-            .find(|verdict| verdict.as_str() == text)
-    }
-}
-
-impl fmt::Display for Verdict {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
+);
 
 /// Who a policy gate admitted to review: an agent through one of its workers, or a named human.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

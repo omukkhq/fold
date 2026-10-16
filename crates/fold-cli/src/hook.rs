@@ -3,11 +3,13 @@ use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 use clap::{Args, Subcommand};
+use fold_cli::claude_files;
 use fold_cli::daemon_client::{self, ClientConfig, ClientError, DaemonClient};
 use fold_core::{AgentName, ProjectPaths, codes};
 use hyper::Method;
 use serde_json::{Value, json};
 
+use crate::init::project_root_at_or_above;
 use crate::serve::{self, Dirs};
 use crate::{claude, output};
 
@@ -39,13 +41,13 @@ enum HookCommand {
 #[derive(Args, Debug)]
 struct HookOptions {
     /// Unix socket of the daemon; overrides daemon.toml (default $XDG_RUNTIME_DIR/fold/fold.sock)
-    #[arg(long)]
+    #[arg(long, env = serve::SOCKET_ENV)]
     socket: Option<PathBuf>,
 }
 
 /// A hook never fails the session: every failure writes one line naming its code to stderr and nothing to stdout, and the exit code stays 0.
 pub fn run(args: &HookArgs, out: &mut impl Write) {
-    let Some(agent) = std::env::var_os("FOLD_AGENT")
+    let Some(agent) = std::env::var_os(claude_files::AGENT_ENV)
         .filter(|name| !name.is_empty())
         .map(|name| name.to_string_lossy().into_owned())
     else {
@@ -136,11 +138,8 @@ fn follow_session(input: &Value, agent: &str) {
     let Ok(cwd) = std::fs::canonicalize(cwd) else {
         return;
     };
-    if let Some(root) = cwd
-        .ancestors()
-        .find(|dir| ProjectPaths::new(*dir).db().is_file())
-    {
-        let _ = claude::follow_record(&ProjectPaths::new(root), &agent, id);
+    if let Some(root) = project_root_at_or_above(&cwd) {
+        let _ = claude::follow_record(&ProjectPaths::new(&root), &agent, id);
     }
 }
 
@@ -150,11 +149,7 @@ fn stop(options: &HookOptions, agent: &str) -> Result<Option<Value>, String> {
         return Ok(None);
     }
     let body = json!({"cwd": cwd(&input)?, "agent": agent});
-    let config = ClientConfig {
-        socket: socket(options, &Dirs::from_env())?,
-        runtime_dir: None,
-        fold_exe: None,
-    };
+    let config = ClientConfig::running(socket(options, &Dirs::from_env())?);
     let answer = exchange(config, ANSWER_TIMEOUT, "/api/v1/hooks/stop", &body)?;
     let unread = answer["unread"].as_u64().ok_or(codes::INTERNAL_ERROR)?;
     if unread == 0 {
@@ -274,11 +269,9 @@ fn deny(reason: &str) -> Value {
 /// Why an agent may not change `file`, or `None` when it may. Inside the fold project that holds `cwd`, an agent changes files only inside one workspace below `.fold/ws/`: the project folder is main, which changes only through integration, and the rest of `.fold/` is fold's data. A path outside the project is left to Claude Code's own rules. `..` and the symlinks of the folders that exist are resolved first, so neither leads into or out of a workspace unseen.
 fn edit_refusal(cwd: &Path, file: &Path) -> Option<String> {
     let cwd = std::fs::canonicalize(cwd).ok()?;
-    let root = cwd
-        .ancestors()
-        .find(|dir| ProjectPaths::new(*dir).db().is_file())?;
+    let root = project_root_at_or_above(&cwd)?;
     let target = resolve(&cwd.join(file));
-    let inside = target.strip_prefix(root).ok()?;
+    let inside = target.strip_prefix(&root).ok()?;
     let in_workspace = inside
         .strip_prefix(fold_core::layout::WS_DIR)
         .is_ok_and(|below| below.components().count() >= 2);
@@ -335,10 +328,7 @@ fn exchange(
     path: &str,
     body: &Value,
 ) -> Result<Value, String> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|_| codes::INTERNAL_ERROR)?;
+    let runtime = serve::current_thread_runtime().map_err(|_| codes::INTERNAL_ERROR)?;
     let outcome = runtime.block_on(async {
         match tokio::time::timeout(connect_timeout, daemon_client::connect(&config)).await {
             Ok(Ok(_stream)) => {}
@@ -363,13 +353,13 @@ fn exchange(
     });
     runtime.shutdown_background();
     let response = outcome?;
-    if (200..300).contains(&response.status) {
+    if response.is_success() {
         return Ok(response.body);
     }
-    Err(response.body["error"]["code"]
-        .as_str()
-        .unwrap_or(codes::INTERNAL_ERROR)
-        .to_owned())
+    Err(response
+        .refusal()
+        .code
+        .unwrap_or_else(|| codes::INTERNAL_ERROR.to_owned()))
 }
 
 fn client_code(error: &ClientError) -> &'static str {

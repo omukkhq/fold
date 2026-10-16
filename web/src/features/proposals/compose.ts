@@ -1,14 +1,15 @@
 import { z } from "zod";
 
-export const MAX_BODY = 8000;
+import { MAX_TEXT_CHARS, charCount } from "@/format/text";
 
+/** The daemon trims a review or comment body, then counts it as `charCount` does. */
 function body(empty: string) {
   return z
     .string()
     .refine((value) => value.trim().length > 0, empty)
     .refine(
-      (value) => value.trim().length <= MAX_BODY,
-      `A review holds at most ${String(MAX_BODY)} characters.`,
+      (value) => charCount(value.trim()) <= MAX_TEXT_CHARS,
+      `A review holds at most ${String(MAX_TEXT_CHARS)} characters.`,
     );
 }
 

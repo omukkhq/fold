@@ -3,12 +3,13 @@ use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use fold_core::push::{MAX_NOTICE_LEN, Notice, PushContext, is_pushed, notice_for, request_of};
 use fold_core::requests::{Requester, deputy};
 use fold_core::{AgentName, Event, FoldError, Tag, TaskId, TaskStatus, Timestamp, codes};
+use fold_store::agents::AgentRow;
 use fold_store::reviews;
 use fold_store::tasks::{claims, requests};
 use fold_store::{Store, StoreError, agents, events, tasks};
@@ -20,6 +21,7 @@ use tokio::sync::broadcast::error::RecvError;
 
 use crate::jobs::ProjectTask;
 use crate::services::events::{BusMessage, EventBus};
+use crate::support::lock;
 
 /// The newest sockets kept per agent. One agent rarely runs more sessions at once.
 pub const MAX_TARGETS: usize = 4;
@@ -312,10 +314,6 @@ fn postable(text: &str) -> bool {
         && !text.contains("cross-session-message")
 }
 
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
 #[derive(Debug, Clone)]
 struct Queued {
     text: Arc<str>,
@@ -530,7 +528,7 @@ async fn deliver_events(
             Ok(ctx) => targets.deliver(&notice_for(&event, &ctx), event.seq),
             Err(error) => tracing::warn!(
                 seq = event.seq,
-                code = error.code().unwrap_or(codes::INTERNAL_ERROR),
+                code = error.log_code(),
                 "session push could not load the event's context"
             ),
         }
@@ -551,7 +549,7 @@ async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError
             .get("message")
             .and_then(serde_json::Value::as_str)
             .and_then(|message| message.parse::<fold_core::MessageId>().ok());
-        if event.actor.as_str().starts_with("human:")
+        if event.actor.is_human()
             && let Some(message) = message
             && let Some(asker) = agents::asker_answered_by(store.read(), message).await?
         {
@@ -684,17 +682,26 @@ async fn tagged(
     store: &Store,
     is_tag: fn(&Tag) -> bool,
 ) -> Result<std::collections::BTreeSet<AgentName>, StoreError> {
+    let every = agents::list_agents(store.read()).await?;
+    tagged_among(store, &every, is_tag).await
+}
+
+/// The agents of `every` with a tag `is_tag` accepts.
+async fn tagged_among(
+    store: &Store,
+    every: &[AgentRow],
+    is_tag: fn(&Tag) -> bool,
+) -> Result<std::collections::BTreeSet<AgentName>, StoreError> {
     let tagged: Vec<i64> = agents::all_tags(store.read())
         .await?
         .into_iter()
         .filter(|(_, tag)| is_tag(tag))
         .map(|(agent, _)| agent)
         .collect();
-    Ok(agents::list_agents(store.read())
-        .await?
-        .into_iter()
+    Ok(every
+        .iter()
         .filter(|agent| tagged.contains(&agent.id))
-        .map(|agent| agent.name)
+        .map(|agent| agent.name.clone())
         .collect())
 }
 

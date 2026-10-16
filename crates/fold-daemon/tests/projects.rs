@@ -2,7 +2,7 @@ use std::path::Path;
 
 use fold_core::{Clock, HostPaths, ManualClock, ProjectConfig, ProjectPaths};
 use fold_daemon::services::projects::{
-    ProjectError, init_project, init_project_from_git, load_config,
+    Lease, ProjectError, init_project, init_project_from_git, load_config,
 };
 use fold_store::projects;
 use fold_store::{Store, StoreError};
@@ -252,6 +252,50 @@ async fn load_config_reads_the_file_and_refuses_bad_values() {
     std::fs::create_dir(paths.config()).unwrap();
     let error = load_config(&paths).await.unwrap_err();
     assert_eq!(code(&error), Some("workspace_io"));
+}
+
+#[tokio::test]
+async fn the_footer_lease_parses_the_file_again_only_when_a_stat_shows_a_change() {
+    let host = Host::new();
+    let project = init_project(&host.paths, &host.root("app"), None, &host.clock)
+        .await
+        .unwrap();
+    let paths = ProjectPaths::new(&project.root);
+    let config = paths.config();
+    let lease = Lease::config(paths.clone());
+    std::fs::write(&config, "lease_minutes = 7\n").unwrap();
+    assert_eq!(lease.recent_minutes().await.unwrap(), 7);
+    let modified = std::fs::metadata(&config).unwrap().modified().unwrap();
+    let rewrite = |text: &str, at: std::time::SystemTime| {
+        std::fs::write(&config, text).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&config)
+            .unwrap()
+            .set_modified(at)
+            .unwrap();
+    };
+
+    rewrite("lease_minutes = 0\n", modified);
+    assert_eq!(lease.clone().recent_minutes().await.unwrap(), 7);
+    let error = lease.minutes().await.unwrap_err();
+    assert_eq!(code(&error), Some("invalid_config"));
+
+    let later = modified + std::time::Duration::from_secs(1);
+    rewrite("lease_minutes = 0\n", later);
+    let error = lease.recent_minutes().await.unwrap_err();
+    assert_eq!(code(&error), Some("invalid_config"));
+    let ProjectError::Fold(refusal) = error else {
+        panic!("an invalid file is a refusal");
+    };
+    assert_eq!(refusal.hint(), Some("ask a human to fix .fold/config.toml"));
+    rewrite("lease_minutes = 9\n", later);
+    assert_eq!(lease.recent_minutes().await.unwrap(), 9);
+    std::fs::remove_file(&config).unwrap();
+    assert_eq!(
+        lease.recent_minutes().await.unwrap(),
+        ProjectConfig::default().lease_minutes
+    );
 }
 
 #[tokio::test]

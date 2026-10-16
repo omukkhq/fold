@@ -353,11 +353,12 @@ fn request_id(text: &str) -> Result<RequestId, ApiError> {
     Ok(text.parse::<RequestId>().map_err(FoldError::from)?)
 }
 
-fn invalid_filter(name: &str, value: &str) -> ApiError {
+/// The message names the filter and never repeats its value.
+fn invalid_filter(name: &str) -> ApiError {
     ApiError(
         FoldError::new(
             codes::INVALID_REQUEST,
-            format!("{value} is not a request {name}"),
+            format!("the {name} filter is not a known request {name}"),
         )
         .with_details([("reason", json!(name))]),
     )
@@ -391,22 +392,22 @@ pub async fn list_requests(
             .as_deref()
             .map(|text| {
                 fold_core::requests::RequestState::parse(text)
-                    .ok_or_else(|| invalid_filter("state", text))
+                    .ok_or_else(|| invalid_filter("state"))
             })
             .transpose()?,
         kind: params
             .kind
             .as_deref()
             .map(|text| {
-                fold_core::requests::RequestKind::parse(text)
-                    .ok_or_else(|| invalid_filter("kind", text))
+                fold_core::requests::RequestKind::parse(text).ok_or_else(|| invalid_filter("kind"))
             })
             .transpose()?,
         requester: params
             .requester
             .as_deref()
-            .map(|text| Requester::parse(text).ok_or_else(|| invalid_filter("requester", text)))
+            .map(|text| Requester::parse(text).ok_or_else(|| invalid_filter("requester")))
             .transpose()?,
+        limit: None,
     };
     let items = project
         .0

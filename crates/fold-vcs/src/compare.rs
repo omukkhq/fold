@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use fold_core::object::{ObjectHash, ObjectKind, hash_object};
 pub use fold_core::tree::ChangeKind;
-use fold_core::tree::{FlatEntry, FlatTree, flatten};
+use fold_core::tree::{EntryKind, FlatEntry, FlatTree, flatten};
 use fold_core::{FoldError, codes};
 use serde_json::json;
 
@@ -16,7 +16,7 @@ use crate::index::StatIndex;
 use crate::objects::ObjectStore;
 use crate::paths::{RepoPath, WorkspaceError, open_parent};
 use crate::platform::Capabilities;
-use crate::scan::{self, DEFAULT_MAX_FILE_BYTES, Reading, ScanOptions, Skipped, StableRead};
+use crate::scan::{self, ScanOptions, Skipped, StableRead};
 use crate::snapshot::{Warning, WarningReason, keep_base, load_tree, remove_below};
 
 /// One changed path. A hash is `None` on the side where the path does not exist. Line counts are zero for a binary file.
@@ -106,20 +106,21 @@ pub struct WorkingState {
     pub warnings: Vec<Warning>,
 }
 
-/// The working files of the workspace at `root` as a comparison side. It writes nothing: the stat index at `index_path` is only read, to skip hashing files whose metadata did not move, and no object is stored. A path the scan skips or finds unstable keeps what `base_tree` has there, as a snapshot would record it.
+/// The working files of the workspace at `root` as a comparison side. It writes nothing: the stat index at `index_path` is only read, to skip hashing files whose metadata did not move, and no object is stored. A path the scan skips or finds unstable keeps what `base_tree` has there, as a snapshot would record it; `max_file_bytes` is the project's largest file, so a comparison skips exactly the files a recording would skip.
 pub fn working_state(
     objects: &ObjectStore,
     root: &Path,
     index_path: &Path,
     base_tree: &ObjectHash,
     caps: Capabilities,
+    max_file_bytes: u64,
 ) -> Result<WorkingState, FoldError> {
     let base = load_flat(objects, base_tree)?;
     let rules = IgnoreRules::new(root);
     let mut index = StatIndex::load(index_path, caps);
     let opts = ScanOptions {
         rules: &rules,
-        max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+        max_file_bytes,
         caps,
         recorded: Some(&base),
     };
@@ -311,18 +312,18 @@ pub fn file_diff(
             )
             .with_details([("path", json!(path.to_string()))])
         })?;
-    let old = side_content(objects, from, found.old_path.as_ref(), found.old)?;
-    let new = side_content(objects, to, Some(&found.path), found.new)?;
-    let too_large = [&old, &new]
-        .into_iter()
-        .flatten()
-        .any(|bytes| bytes.len() > MAX_INLINE_BYTES);
+    let too_large = too_large(objects, from, to, &found)?;
+    let (old, new) = if too_large {
+        (None, None)
+    } else {
+        both_sides(objects, from, to, &found)?
+    };
     let text = (!too_large)
         .then(|| texts(old.as_deref(), new.as_deref()))
         .flatten();
-    let hunks = match text {
-        Some((old, new)) => diff_text(old, new, DEFAULT_CONTEXT),
-        None => Vec::new(),
+    let hunks = match (found.change, text) {
+        (ChangeKind::Renamed | ChangeKind::ModeChanged, _) | (_, None) => Vec::new(),
+        (_, Some((old, new))) => diff_text(old, new, DEFAULT_CONTEXT),
     };
     Ok(FileDiff {
         path: found.path,
@@ -347,13 +348,19 @@ struct Found {
     new: Option<FlatEntry>,
 }
 
+/// A deleted and an added entry pair as a rename when they hold the same blob as the same kind: a symlink never pairs with a file of the same text. Empty files never pair, because any two of them hold the same blob without one coming from the other.
 fn classify(from: &FlatTree, to: &FlatTree) -> Vec<Found> {
+    type ByBlob<'t> = BTreeMap<(ObjectHash, EntryKind), Vec<(&'t Vec<u8>, FlatEntry)>>;
     let mut found = Vec::new();
-    let mut deleted: BTreeMap<ObjectHash, Vec<(&Vec<u8>, FlatEntry)>> = BTreeMap::new();
-    let mut added: BTreeMap<ObjectHash, Vec<(&Vec<u8>, FlatEntry)>> = BTreeMap::new();
+    let mut deleted: ByBlob<'_> = BTreeMap::new();
+    let mut added: ByBlob<'_> = BTreeMap::new();
+    let empty = hash_object(ObjectKind::Blob, b"");
     for (path, new) in to {
         match from.get(path) {
-            None => added.entry(new.hash).or_default().push((path, *new)),
+            None => added
+                .entry((new.hash, new.kind))
+                .or_default()
+                .push((path, *new)),
             Some(old) if old == new => {}
             Some(old) => {
                 let change = if old.hash == new.hash {
@@ -374,11 +381,18 @@ fn classify(from: &FlatTree, to: &FlatTree) -> Vec<Found> {
         }
     }
     for (path, old) in from.iter().filter(|(path, _)| !to.contains_key(*path)) {
-        deleted.entry(old.hash).or_default().push((path, *old));
+        deleted
+            .entry((old.hash, old.kind))
+            .or_default()
+            .push((path, *old));
     }
-    for (hash, mut news) in added {
-        let mut olds = deleted.remove(&hash).unwrap_or_default();
-        let paired = news.len().min(olds.len());
+    for (key, mut news) in added {
+        let mut olds = deleted.remove(&key).unwrap_or_default();
+        let paired = if key.0 == empty {
+            0
+        } else {
+            news.len().min(olds.len())
+        };
         // Both lists are in path order, so the pairing is the same every time.
         for ((old_path, old), (new_path, new)) in olds.drain(..paired).zip(news.drain(..paired)) {
             push(
@@ -403,7 +417,7 @@ fn classify(from: &FlatTree, to: &FlatTree) -> Vec<Found> {
             );
         }
         if !olds.is_empty() {
-            deleted.insert(hash, olds);
+            deleted.insert(key, olds);
         }
     }
     for (path, old) in deleted.into_values().flatten() {
@@ -479,15 +493,21 @@ fn measure(
     })
 }
 
-/// A rename and a mode change keep the blob, so their counts depend on the pair alone, as every other kind's do.
+/// A rename and a mode change keep the blob, so their counts depend on the pair alone, as every other kind's do. A side larger than [`MAX_INLINE_BYTES`] is not read, so such a file counts no lines and is not marked binary, as its diff shows no hunks.
 fn count(
     objects: &ObjectStore,
     from: &State,
     to: &State,
     found: &Found,
 ) -> Result<Counted, FoldError> {
-    let old = side_content(objects, from, found.old_path.as_ref(), found.old)?;
-    let new = side_content(objects, to, Some(&found.path), found.new)?;
+    if too_large(objects, from, to, found)? {
+        return Ok(Counted {
+            added: 0,
+            removed: 0,
+            binary: false,
+        });
+    }
+    let (old, new) = both_sides(objects, from, to, found)?;
     let text = texts(old.as_deref(), new.as_deref());
     let (added, removed) = match (found.change, text) {
         (ChangeKind::Renamed | ChangeKind::ModeChanged, _) | (_, None) => (0, 0),
@@ -513,6 +533,63 @@ fn texts<'a>(old: Option<&'a [u8]>, new: Option<&'a [u8]>) -> Option<(&'a str, &
         Some(bytes) => std::str::from_utf8(bytes).ok(),
     };
     Some((text(old)?, text(new)?))
+}
+
+/// Whether either side holds more than [`MAX_INLINE_BYTES`], known from the blob's header or the working file's metadata before any content is read.
+fn too_large(
+    objects: &ObjectStore,
+    from: &State,
+    to: &State,
+    found: &Found,
+) -> Result<bool, FoldError> {
+    let limit = MAX_INLINE_BYTES as u64;
+    Ok(
+        side_len(objects, from, found.old_path.as_ref(), found.old)? > limit
+            || side_len(objects, to, Some(&found.path), found.new)? > limit,
+    )
+}
+
+/// One side's content; `None` where the path does not exist.
+type Side = Option<Vec<u8>>;
+
+/// The content of both sides. A rename or a mode change keeps the blob, so only the new side is read and stands for both.
+fn both_sides(
+    objects: &ObjectStore,
+    from: &State,
+    to: &State,
+    found: &Found,
+) -> Result<(Side, Side), FoldError> {
+    let new = side_content(objects, to, Some(&found.path), found.new)?;
+    if matches!(found.change, ChangeKind::Renamed | ChangeKind::ModeChanged) {
+        return Ok((new.clone(), new));
+    }
+    let old = side_content(objects, from, found.old_path.as_ref(), found.old)?;
+    Ok((old, new))
+}
+
+/// A missing side, or a working file that went since the scan, is 0: reading it later reports the change.
+fn side_len(
+    objects: &ObjectStore,
+    state: &State,
+    path: Option<&RepoPath>,
+    entry: Option<FlatEntry>,
+) -> Result<u64, FoldError> {
+    let (Some(path), Some(entry)) = (path, entry) else {
+        return Ok(0);
+    };
+    if let Some(root) = &state.working
+        && !objects.contains(&entry.hash).map_err(FoldError::from)?
+    {
+        let Some((dir, name)) = open_parent(root, path)? else {
+            return Ok(0);
+        };
+        return match dir.metadata(name) {
+            Ok(meta) => Ok(meta.len()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(0),
+            Err(error) => Err(WorkspaceError::from(error).into()),
+        };
+    }
+    objects.blob_size(&entry.hash).map_err(FoldError::from)
 }
 
 fn side_content(
@@ -544,7 +621,7 @@ fn content(
         .payload)
 }
 
-/// A symlink gives its target text and is never followed. The content counts only when it still has the hash the scan recorded, so a file changed since never gives line counts for that hash. A file that went or changed is reported as changed, so the caller compares again; any other failure, such as a file it may not read, is returned as it is.
+/// A symlink gives its target text and is never followed. The content counts only when it still has the hash the scan recorded, so a file changed since never gives line counts for that hash. A file that went, changed, or grew past [`MAX_INLINE_BYTES`] since its size was checked is reported as changed, so the caller compares again; any other failure, such as a file it may not read, is returned as it is.
 fn read_working(root: &Path, path: &RepoPath, expected: &ObjectHash) -> Result<Vec<u8>, FoldError> {
     let changed = || {
         FoldError::new(
@@ -572,23 +649,12 @@ fn read_working(root: &Path, path: &RepoPath, expected: &ObjectHash) -> Result<V
         let hash = hash_object(ObjectKind::Blob, &target);
         (target, hash)
     } else {
-        let denied = || failed(io::ErrorKind::PermissionDenied.into());
-        // A file that grew since the scan would be read whole only to fail the hash check, so a large one is hashed first without keeping its content, and the read never goes past the size that hash was found at.
-        let limit = if meta.len() > MAX_INLINE_BYTES as u64 {
-            match scan::hash_stable(&dir, name, u64::MAX).map_err(failed)? {
-                Reading::Hashed(hash, end) if hash == *expected => end.len(),
-                Reading::Denied => return Err(denied()),
-                _ => return Err(changed()),
-            }
-        } else {
-            MAX_INLINE_BYTES as u64
-        };
-        match scan::read_stable(&dir, name, limit).map_err(failed)? {
+        match scan::read_stable(&dir, name, MAX_INLINE_BYTES as u64).map_err(failed)? {
             StableRead::Read(bytes, hash) => (bytes, hash),
             StableRead::Unstable | StableRead::Gone | StableRead::TooLarge => {
                 return Err(changed());
             }
-            StableRead::Denied => return Err(denied()),
+            StableRead::Denied => return Err(failed(io::ErrorKind::PermissionDenied.into())),
         }
     };
     if hash != *expected {
@@ -601,10 +667,8 @@ fn read_working(root: &Path, path: &RepoPath, expected: &ObjectHash) -> Result<V
 mod tests {
     use std::fs;
 
-    use fold_core::tree::EntryKind;
-
     use super::*;
-    use crate::scan::{SkipReason, with_rewrites_during_reads};
+    use crate::scan::{DEFAULT_MAX_FILE_BYTES, SkipReason, with_rewrites_during_reads};
 
     const HOST: Capabilities = Capabilities {
         symlinks: true,
@@ -668,6 +732,43 @@ mod tests {
             caps: HOST,
             recorded: None,
         }
+    }
+
+    #[test]
+    fn the_working_side_skips_the_files_over_the_given_limit() {
+        let ws = workspace();
+        let rules = IgnoreRules::new(&ws.root);
+        let index_path = ws.root.with_extension("index");
+        let mut index = StatIndex::load(&index_path, HOST);
+        let recorded = crate::restore::record_checkpoint_tree(
+            &ws.objects,
+            &ws.root,
+            &mut index,
+            &index_path,
+            None,
+            &opts(&rules, DEFAULT_MAX_FILE_BYTES),
+        )
+        .unwrap();
+        fs::write(ws.root.join("big.bin"), [9u8; 100]).unwrap();
+        let big = b"big.bin".as_slice();
+        let limited =
+            working_state(&ws.objects, &ws.root, &index_path, &recorded.tree, HOST, 80).unwrap();
+        assert_eq!(limited.state.entries()[big], ws.base[big]);
+        assert!(limited.warnings.contains(&Warning {
+            path: path("big.bin"),
+            reason: WarningReason::Skipped(SkipReason::TooLarge),
+        }));
+        let open = working_state(
+            &ws.objects,
+            &ws.root,
+            &index_path,
+            &recorded.tree,
+            HOST,
+            DEFAULT_MAX_FILE_BYTES,
+        )
+        .unwrap();
+        assert_ne!(open.state.entries()[big].hash, ws.base[big].hash);
+        assert!(open.warnings.is_empty());
     }
 
     #[test]
@@ -880,24 +981,35 @@ mod tests {
     }
 
     #[test]
-    fn a_large_working_file_is_hashed_before_it_is_kept_in_memory() {
+    fn a_working_file_over_the_inline_size_is_never_read() {
         let ws = workspace();
         let rules = IgnoreRules::new(&ws.root);
         let opts = opts(&rules, DEFAULT_MAX_FILE_BYTES);
         let mut index = StatIndex::empty(HOST);
         let mut current = FlatTree::new();
         let lines = MAX_INLINE_BYTES / 2 + 1;
-        fs::write(ws.root.join("large.txt"), "x\n".repeat(lines)).unwrap();
+        let large = ws.root.join("large.txt");
+        fs::write(&large, "x\n".repeat(lines)).unwrap();
         refresh_working(&ws.root, &mut index, &mut current, &ws.base, None, &opts).unwrap();
         let from = State::recorded(ws.base.clone());
         let to = State::working(ws.root.clone(), current);
 
-        let counted = compare(&ws.objects, &from, &to).unwrap();
-        assert_eq!(counted.totals.added_lines, u32::try_from(lines).unwrap());
+        // A file nobody may read still compares and diffs, so neither looked at its content.
+        fs::set_permissions(&large, std::os::unix::fs::PermissionsExt::from_mode(0o000)).unwrap();
+        let counted = compare(&ws.objects, &from, &to);
+        let diff = file_diff(&ws.objects, &from, &to, &path("large.txt"));
+        fs::set_permissions(&large, std::os::unix::fs::PermissionsExt::from_mode(0o644)).unwrap();
+        let counted = counted.unwrap();
+        assert_eq!(counted.totals.files, 1);
+        assert_eq!(counted.totals.added_lines, 0);
+        assert!(!counted.files[0].binary);
+        let diff = diff.unwrap();
+        assert!(diff.too_large && !diff.binary && diff.hunks.is_empty());
 
-        fs::write(ws.root.join("large.txt"), "y\n".repeat(lines * 2)).unwrap();
-        let changed = compare(&ws.objects, &from, &to).unwrap_err();
-        assert!(changed.message().contains("compare again"));
+        // Once the file is small again its content no longer has the scanned hash.
+        fs::write(&large, b"small\n").unwrap();
+        let shrunk = compare(&ws.objects, &from, &to).unwrap_err();
+        assert!(shrunk.message().contains("compare again"));
     }
 
     #[test]

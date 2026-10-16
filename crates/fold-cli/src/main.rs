@@ -125,58 +125,92 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
     }
 }
 
+/// What the command line shows of a failure besides its message: the stable code and the hint that names the next step.
+trait Coded: std::error::Error {
+    fn code_and_hint(&self) -> (Option<String>, Option<String>);
+}
+
+/// Implements [`Coded`] for an error type from its `code` and, when it has one, `hint`.
+macro_rules! coded {
+    ($error:ty) => {
+        impl Coded for $error {
+            fn code_and_hint(&self) -> (Option<String>, Option<String>) {
+                (self.code().map(str::to_owned), None)
+            }
+        }
+    };
+    ($error:ty, hint) => {
+        impl Coded for $error {
+            fn code_and_hint(&self) -> (Option<String>, Option<String>) {
+                (
+                    self.code().map(str::to_owned),
+                    self.hint().map(str::to_owned),
+                )
+            }
+        }
+    };
+}
+
+coded!(serve::ServeError);
+coded!(init::InitError, hint);
+coded!(claude::ClaudeError, hint);
+coded!(token::TokenError, hint);
+coded!(doctor::DoctorError, hint);
+coded!(service::ServiceError, hint);
+coded!(commands::gc::GcError, hint);
+coded!(commands::remote::RemoteError, hint);
+#[cfg(feature = "dev-seed")]
+coded!(seed::SeedError, hint);
+
+/// The error and every cause in its chain that its own message does not already hold, joined with `: `. Most of the CLI's errors name their cause in their message, which the chain would print a second time.
+fn message_with_causes(error: &dyn std::error::Error) -> String {
+    let mut message = error.to_string();
+    let mut cause = error.source();
+    while let Some(next) = cause {
+        let text = next.to_string();
+        if !message.contains(&text) {
+            message = format!("{message}: {text}");
+        }
+        cause = next.source();
+    }
+    message
+}
+
+/// `code: message`, then `hint: ...` on its own line, for the parts the error has.
+fn failure_message(error: &(impl Coded + 'static)) -> anyhow::Error {
+    let message = message_with_causes(error);
+    let (code, hint) = error.code_and_hint();
+    let mut text = match code {
+        Some(code) => format!("{code}: {message}"),
+        None => message,
+    };
+    if let Some(hint) = hint {
+        text.push_str("\nhint: ");
+        text.push_str(&hint);
+    }
+    anyhow::anyhow!(text)
+}
+
 fn main() -> anyhow::Result<()> {
     // Not locked here: `fld mcp` writes stdout from a tokio blocking thread, which would wait forever for a lock that this thread holds.
     match run(std::env::args_os(), &mut io::stdout()) {
         Ok(()) => Ok(()),
         Err(Failure::Parse(error)) => error.exit(),
         Err(Failure::Write(error)) => Err(error.into()),
-        Err(Failure::Serve(error)) => Err(match error.code() {
-            Some(code) => anyhow::anyhow!("{code}: {error}"),
-            None => error.into(),
-        }),
-        Err(Failure::Init(error)) => Err(match (error.code(), error.hint()) {
-            (Some(code), Some(hint)) => anyhow::anyhow!("{code}: {error}\nhint: {hint}"),
-            (Some(code), None) => anyhow::anyhow!("{code}: {error}"),
-            _ => error.into(),
-        }),
-        Err(Failure::Claude(error)) => Err(match (error.code(), error.hint()) {
-            (Some(code), Some(hint)) => anyhow::anyhow!("{code}: {error}\nhint: {hint}"),
-            (Some(code), None) => anyhow::anyhow!("{code}: {error}"),
-            (None, Some(hint)) => anyhow::anyhow!("{error}\nhint: {hint}"),
-            (None, None) => error.into(),
-        }),
-        Err(Failure::Token(error)) => Err(match error.code() {
-            Some(code) => anyhow::anyhow!("{code}: {error}"),
-            None => error.into(),
-        }),
+        Err(Failure::Serve(error)) => Err(failure_message(&error)),
+        Err(Failure::Init(error)) => Err(failure_message(&error)),
+        Err(Failure::Claude(error)) => Err(failure_message(&error)),
+        Err(Failure::Token(error)) => Err(failure_message(&error)),
         Err(Failure::Mcp(error)) => {
             let _ = output::line(&mut io::stderr().lock(), &format!("fld mcp: {error}"));
             std::process::exit(1)
         }
-        Err(Failure::Doctor(error)) => Err(match error.code() {
-            Some(code) => anyhow::anyhow!("{code}: {error}"),
-            None => error.into(),
-        }),
-        Err(Failure::Service(error)) => Err(match (error.code(), error.hint()) {
-            (Some(code), Some(hint)) => anyhow::anyhow!("{code}: {error}\nhint: {hint}"),
-            (Some(code), None) => anyhow::anyhow!("{code}: {error}"),
-            _ => error.into(),
-        }),
-        Err(Failure::Gc(error)) => Err(match error.code() {
-            Some(code) => anyhow::anyhow!("{code}: {error}"),
-            None => error.into(),
-        }),
-        Err(Failure::Remote(error)) => Err(match error.code() {
-            Some(code) => anyhow::anyhow!("{code}: {error}"),
-            None => anyhow::anyhow!("{error}"),
-        }),
+        Err(Failure::Doctor(error)) => Err(failure_message(&error)),
+        Err(Failure::Service(error)) => Err(failure_message(&error)),
+        Err(Failure::Gc(error)) => Err(failure_message(&error)),
+        Err(Failure::Remote(error)) => Err(failure_message(&error)),
         #[cfg(feature = "dev-seed")]
-        Err(Failure::Seed(error)) => Err(match (error.code(), error.hint()) {
-            (Some(code), Some(hint)) => anyhow::anyhow!("{code}: {error}\nhint: {hint}"),
-            (Some(code), None) => anyhow::anyhow!("{code}: {error}"),
-            _ => anyhow::anyhow!("{error}"),
-        }),
+        Err(Failure::Seed(error)) => Err(failure_message(&error)),
     }
 }
 
@@ -222,6 +256,68 @@ mod tests {
         let (result, out) = run_with(&["fld", "--bogus"]);
         assert_eq!(parse_kind(result), ErrorKind::UnknownArgument);
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn a_failure_shows_its_code_hint_and_each_cause_once() {
+        let cause = io::Error::other("disk full");
+        let error = service::ServiceError::WriteUnit {
+            path: "/unit".into(),
+            source: cause,
+        };
+        let shown = failure_message(&error).to_string();
+        assert_eq!(
+            shown,
+            "service_install_failed: cannot write /unit: disk full"
+        );
+        let hinted = claude::ClaudeError::Refused {
+            code: "main_tag_denied".to_owned(),
+            message: "taken".to_owned(),
+            hint: Some("run fld claude --name lead".to_owned()),
+        };
+        assert_eq!(
+            failure_message(&hinted).to_string(),
+            "main_tag_denied: taken\nhint: run fld claude --name lead"
+        );
+        let plain = doctor::DoctorError::Runtime(io::Error::other("x"));
+        assert_eq!(
+            failure_message(&plain).to_string(),
+            "cannot start the async runtime: x"
+        );
+        let refused = commands::gc::GcError::Refused {
+            code: "gc_in_progress".to_owned(),
+            message: "a collection runs".to_owned(),
+            hint: Some("try again later".to_owned()),
+        };
+        assert_eq!(
+            failure_message(&refused).to_string(),
+            "gc_in_progress: a collection runs\nhint: try again later"
+        );
+        let token = token::TokenError::Fold(
+            fold_core::FoldError::new(fold_core::codes::TOKEN_NOT_FOUND, "no wt-9")
+                .with_hint("run fld token list"),
+        );
+        assert_eq!(
+            failure_message(&token).to_string(),
+            "token_not_found: no wt-9\nhint: run fld token list"
+        );
+        let paths = doctor::DoctorError::HostPaths(
+            fold_core::FoldError::new(fold_core::codes::INVALID_HOST_PATHS, "bad")
+                .with_hint("set HOME"),
+        );
+        assert_eq!(
+            failure_message(&paths).to_string(),
+            "invalid_host_paths: bad\nhint: set HOME"
+        );
+    }
+
+    #[test]
+    fn a_cause_the_message_leaves_out_is_appended() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("cannot read the file")]
+        struct Outer(#[source] io::Error);
+        let shown = message_with_causes(&Outer(io::Error::other("permission denied")));
+        assert_eq!(shown, "cannot read the file: permission denied");
     }
 
     #[test]

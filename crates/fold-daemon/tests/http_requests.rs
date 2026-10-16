@@ -367,6 +367,8 @@ async fn bad_input_is_refused_with_its_code() {
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(filter["error"]["code"], "invalid_request");
+    assert_eq!(filter["error"]["details"]["reason"], "state");
+    assert!(!filter.to_string().contains("nope"));
 
     let file: &[u8] = b"x";
     let many: Vec<FormPart<'_>> = std::iter::once(("body", None, None, &b"slow"[..]))

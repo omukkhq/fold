@@ -1,9 +1,10 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{ChildStdin, ChildStdout, Stdio};
 
 use fold_core::FoldError;
+use fold_core::object::ObjectHash;
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree, validate_name};
 
 use crate::git::{Git, check_rev, failed, unexpected_output, wait_error};
@@ -20,8 +21,8 @@ pub struct GitImportOptions {
     pub max_file_bytes: u64,
 }
 
-/// Stores the committed tree of `rev` in `repo` and returns its root: no history, no working tree and no ignore rule, except that `.git` and `.fold` never import. The tree is listed with `git ls-tree` and each blob read with `git cat-file --batch` rather than taken from `git archive`, because an archive leaves out `export-ignore` paths, rewrites `export-subst` files and holds only the subdirectory it runs in. Nothing is written into `repo`. Blobs of a failed run stay behind as unreferenced objects. Blocking: async callers go through `spawn_blocking`.
-pub fn archive_tree(
+/// Stores the committed tree of `rev` in `repo` and returns its root: no history, no working tree and no ignore rule, except that `.git` and `.fold` never import. The tree is listed with `git ls-tree` and each blob read once with `git cat-file --batch` rather than taken from `git archive`, because an archive leaves out `export-ignore` paths, rewrites `export-subst` files and holds only the subdirectory it runs in. Nothing is written into `repo`. Blobs of a failed run stay behind as unreferenced objects. Blocking: async callers go through `spawn_blocking`.
+pub fn import_commit(
     objects: &ObjectStore,
     git: &Git,
     repo: &Path,
@@ -207,7 +208,20 @@ fn read_each(
     let mut output = BufReader::with_capacity(BUFFER_SIZE, output);
     let stream = |_: io::Error| Failure::Stream;
     let mut header = Vec::new();
+    // A blob listed at several paths is read and stored once.
+    let mut stored: HashMap<&str, ObjectHash> = HashMap::new();
     for item in wanted {
+        if let Some(hash) = stored.get(item.blob.as_str()) {
+            collected.bytes += item.size;
+            collected.entries.insert(
+                item.path.as_bytes().to_vec(),
+                FlatEntry {
+                    kind: item.kind,
+                    hash: *hash,
+                },
+            );
+            continue;
+        }
         input
             .write_all(format!("{}\n", item.blob).as_bytes())
             .map_err(stream)?;
@@ -231,6 +245,7 @@ fn read_each(
         if written.size != item.size || end != *b"\n" {
             return Err(Failure::Stream);
         }
+        stored.insert(&item.blob, written.hash);
         collected.bytes += written.size;
         collected.entries.insert(
             item.path.as_bytes().to_vec(),

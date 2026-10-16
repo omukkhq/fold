@@ -88,6 +88,13 @@ describe("describeError", () => {
     );
   });
 
+  it("words the codes every screen words the same way from the shared sentences", () => {
+    expect(describeError(refusal("human_name_required"))).toEqual({
+      field: null,
+      text: "Tell fold your name first, then try once more.",
+    });
+  });
+
   it("leaves every other code, and a value with no code, to the generic banner", () => {
     expect(describeError(refusal("task_not_found"))).toBeNull();
     expect(describeError(refusal("human_review_already_set"))).toBeNull();

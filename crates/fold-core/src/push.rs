@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use crate::agents::{AgentName, AreaName};
-use crate::events::{Event, EventActor, types};
+use crate::events::{Event, types};
 use crate::ids::{MessageId, RequestId, TaskId};
 use crate::status::TaskStatus;
 
@@ -132,7 +132,7 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
                 format!("{proposal} changes requested"),
                 "get_review_comments",
             )),
-            "approve" if is_human(&event.actor) && !ctx.retired => Some((
+            "approve" if event.actor.is_human() && !ctx.retired => Some((
                 ctx.review_claim.iter().cloned().collect(),
                 format!("{proposal} approved by a human"),
                 "integrate_proposal",
@@ -321,15 +321,12 @@ fn verdict(event: &Event) -> Option<&str> {
         .and_then(serde_json::Value::as_str)
 }
 
-fn is_human(actor: &EventActor) -> bool {
-    actor.as_str().starts_with("human:")
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::events::EventActor;
     use crate::ids::ProposalId;
     use crate::time::Timestamp;
 

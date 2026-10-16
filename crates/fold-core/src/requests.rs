@@ -11,7 +11,8 @@ use crate::error::{FoldError, codes};
 use crate::events::EventActor;
 use crate::ids::{RequestId, TaskId};
 use crate::roles::Role;
-use crate::task::LabelName;
+use crate::task::{LabelName, define_names};
+use crate::text::{LineFault, one_line};
 use crate::time::Timestamp;
 
 /// The most cards one draft holds.
@@ -23,81 +24,30 @@ pub const MAX_TEXT_CHARS: usize = 20_000;
 /// The longest draft-local card key.
 pub const MAX_KEY_LEN: usize = 32;
 
-/// What a request asks for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum RequestKind {
-    Bug,
-    Feature,
-    Question,
-}
-
-impl RequestKind {
-    pub const ALL: &'static [RequestKind] = &[
-        RequestKind::Bug,
-        RequestKind::Feature,
-        RequestKind::Question,
-    ];
-
-    /// The text stored in `requests.kind`.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            RequestKind::Bug => "bug",
-            RequestKind::Feature => "feature",
-            RequestKind::Question => "question",
-        }
+define_names!(
+    /// What a request asks for. Its text is what `requests.kind` stores.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum RequestKind {
+        Bug = "bug",
+        Feature = "feature",
+        Question = "question",
     }
+);
 
-    pub fn parse(text: &str) -> Option<RequestKind> {
-        Self::ALL.iter().copied().find(|kind| kind.as_str() == text)
+define_names!(
+    /// Where a request stands. `Drafting` is a claimed request without a draft; `Open` has neither a drafter nor a draft. `Approved` and `Closed` are final. Its text is what `requests.state` stores.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum RequestState {
+        Open = "open",
+        Drafting = "drafting",
+        DraftReady = "draft_ready",
+        ChangesRequested = "changes_requested",
+        Approved = "approved",
+        Closed = "closed",
     }
-}
-
-impl fmt::Display for RequestKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-/// Where a request stands. `Drafting` is a claimed request without a draft; `Open` has neither a drafter nor a draft. `Approved` and `Closed` are final.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum RequestState {
-    Open,
-    Drafting,
-    DraftReady,
-    ChangesRequested,
-    Approved,
-    Closed,
-}
+);
 
 impl RequestState {
-    pub const ALL: &'static [RequestState] = &[
-        RequestState::Open,
-        RequestState::Drafting,
-        RequestState::DraftReady,
-        RequestState::ChangesRequested,
-        RequestState::Approved,
-        RequestState::Closed,
-    ];
-
-    /// The text stored in `requests.state`.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            RequestState::Open => "open",
-            RequestState::Drafting => "drafting",
-            RequestState::DraftReady => "draft_ready",
-            RequestState::ChangesRequested => "changes_requested",
-            RequestState::Approved => "approved",
-            RequestState::Closed => "closed",
-        }
-    }
-
-    pub fn parse(text: &str) -> Option<RequestState> {
-        Self::ALL
-            .iter()
-            .copied()
-            .find(|state| state.as_str() == text)
-    }
-
     pub fn is_final(self) -> bool {
         matches!(self, RequestState::Approved | RequestState::Closed)
     }
@@ -152,47 +102,21 @@ impl RequestState {
     }
 }
 
-impl fmt::Display for RequestState {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+define_names!(
+    /// The commands that move a request.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum RequestStep {
+        Claim = "claim",
+        Release = "release",
+        Submit = "submit",
+        RequestChanges = "request_changes",
+        Edit = "edit",
+        Approve = "approve",
+        Close = "close",
     }
-}
-
-/// The commands that move a request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum RequestStep {
-    Claim,
-    Release,
-    Submit,
-    RequestChanges,
-    Edit,
-    Approve,
-    Close,
-}
+);
 
 impl RequestStep {
-    pub const ALL: &'static [RequestStep] = &[
-        RequestStep::Claim,
-        RequestStep::Release,
-        RequestStep::Submit,
-        RequestStep::RequestChanges,
-        RequestStep::Edit,
-        RequestStep::Approve,
-        RequestStep::Close,
-    ];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            RequestStep::Claim => "claim",
-            RequestStep::Release => "release",
-            RequestStep::Submit => "submit",
-            RequestStep::RequestChanges => "request_changes",
-            RequestStep::Edit => "edit",
-            RequestStep::Approve => "approve",
-            RequestStep::Close => "close",
-        }
-    }
-
     fn done(self) -> &'static str {
         match self {
             RequestStep::Claim => "claimed",
@@ -227,12 +151,12 @@ impl Requester {
     pub fn label(&self) -> String {
         match self {
             Requester::Agent(agent) => agent.as_str().to_owned(),
-            Requester::Human(name) => format!("human:{name}"),
+            Requester::Human(name) => format!("{}{name}", EventActor::HUMAN_PREFIX),
         }
     }
 
     pub fn parse(label: &str) -> Option<Requester> {
-        match label.strip_prefix("human:") {
+        match label.strip_prefix(EventActor::HUMAN_PREFIX) {
             Some(name) => HumanName::parse(name).ok().map(Requester::Human),
             None => AgentName::parse(label).ok().map(Requester::Agent),
         }
@@ -257,8 +181,7 @@ pub fn deputy(role: Role, started_by: &str) -> Option<Requester> {
     match by.agent() {
         Some(agent) => AgentName::parse(agent).ok().map(Requester::Agent),
         None => by
-            .as_str()
-            .strip_prefix("human:")
+            .human_name()
             .and_then(|name| HumanName::parse(name).ok())
             .map(Requester::Human),
     }
@@ -383,17 +306,12 @@ fn invalid_text(reason: &'static str, field: &'static str) -> FoldError {
 
 /// A request title: one trimmed line of at most [`MAX_TITLE_CHARS`] characters. Refused with `invalid_request` and `details.reason`.
 pub fn request_title(text: &str) -> Result<String, FoldError> {
-    let title = text.trim();
-    if title.is_empty() {
-        return Err(invalid_text("empty", "title"));
+    match one_line(text, MAX_TITLE_CHARS) {
+        Ok(title) => Ok(title.to_owned()),
+        Err(LineFault::Empty) => Err(invalid_text("empty", "title")),
+        Err(LineFault::NotOneLine) => Err(invalid_text("not_one_line", "title")),
+        Err(LineFault::TooLong) => Err(invalid_text("too_long", "title")),
     }
-    if title.contains(['\n', '\r']) {
-        return Err(invalid_text("not_one_line", "title"));
-    }
-    if title.chars().count() > MAX_TITLE_CHARS {
-        return Err(invalid_text("too_long", "title"));
-    }
-    Ok(title.to_owned())
 }
 
 /// A body, comment, note or close reason: kept as given, at most [`MAX_TEXT_CHARS`] characters, and not blank unless `optional`. A blank optional text is `None`.
@@ -583,16 +501,11 @@ pub fn validate_draft(cards: Vec<DraftCard>, edges: Vec<DraftEdge>) -> Result<Dr
             return Err(DraftRefusal::DuplicateKey(card.key.clone()));
         }
         let key = || card.key.clone();
-        let title = card.title.trim();
-        if title.is_empty() {
-            return Err(DraftRefusal::EmptyTitle(key()));
-        }
-        if title.contains(['\n', '\r']) {
-            return Err(DraftRefusal::TitleNotOneLine(key()));
-        }
-        if title.chars().count() > MAX_TITLE_CHARS {
-            return Err(DraftRefusal::TitleTooLong(key()));
-        }
+        let title = one_line(&card.title, MAX_TITLE_CHARS).map_err(|fault| match fault {
+            LineFault::Empty => DraftRefusal::EmptyTitle(key()),
+            LineFault::NotOneLine => DraftRefusal::TitleNotOneLine(key()),
+            LineFault::TooLong => DraftRefusal::TitleTooLong(key()),
+        })?;
         if card.description.trim().is_empty() {
             return Err(DraftRefusal::EmptyDescription(key()));
         }
@@ -689,11 +602,11 @@ mod tests {
     #[test]
     fn kinds_and_states_round_trip_through_their_text() {
         for kind in RequestKind::ALL {
-            assert_eq!(RequestKind::parse(kind.as_str()), Some(*kind));
+            assert_eq!(RequestKind::parse(kind.as_str()), Some(kind));
             assert_eq!(kind.to_string(), kind.as_str());
         }
         for state in RequestState::ALL {
-            assert_eq!(RequestState::parse(state.as_str()), Some(*state));
+            assert_eq!(RequestState::parse(state.as_str()), Some(state));
             assert_eq!(state.to_string(), state.as_str());
         }
         assert_eq!(RequestKind::parse("Bug"), None);
@@ -766,7 +679,7 @@ mod tests {
         for state in [RequestState::Approved, RequestState::Closed] {
             assert!(state.is_final());
             for step in RequestStep::ALL {
-                let error = state.after(*step, rq()).unwrap_err();
+                let error = state.after(step, rq()).unwrap_err();
                 assert_eq!(error.code(), codes::REQUEST_NOT_OPEN);
                 assert_eq!(error.message(), format!("RQ-4 is {state}"));
             }

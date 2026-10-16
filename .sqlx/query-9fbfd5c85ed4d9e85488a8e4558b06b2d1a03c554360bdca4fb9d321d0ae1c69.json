@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE workspaces SET directory_removed_at = ?2\n         WHERE number = ?1 AND state IN ('archived', 'abandoned') AND directory_removed_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "9fbfd5c85ed4d9e85488a8e4558b06b2d1a03c554360bdca4fb9d321d0ae1c69"
+}

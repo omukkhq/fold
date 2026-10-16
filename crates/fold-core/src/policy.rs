@@ -9,6 +9,7 @@ use crate::roles::Role;
 mod batches;
 mod human_review;
 mod integrate;
+mod projects;
 mod questions;
 mod requests;
 mod sessions;
@@ -23,6 +24,7 @@ pub use integrate::{
     CallerFacts, Gate, GateRefusal, GateState, GateStatus, IntegrateInput, ProposalFacts,
     can_integrate, gate_report, human_check_done, prerequisites_done,
 };
+pub use projects::can_pull;
 pub use questions::can_answer_worker_permission;
 pub use requests::{can_claim_request, can_create_request, is_drafter, is_requester};
 pub use sessions::{SessionPeer, can_bind_agent, can_name_human};
@@ -149,14 +151,11 @@ pub fn can_abandon_workspace(
     actor: &Actor,
     owner: Option<&WorkerName>,
 ) -> Result<(), PolicyDenied> {
-    match actor {
-        Actor::Agent(agent) if owner == Some(&agent.worker) => Ok(()),
-        Actor::Agent(_) | Actor::Human { .. } | Actor::System => Err(PolicyDenied {
-            code: codes::NOT_WORKSPACE_OWNER,
-            message: "only the owning worker can abandon a workspace",
-            hint: "call get_workspace to see the owner",
-        }),
-    }
+    owning_worker(
+        actor,
+        owner,
+        "only the owning worker can abandon a workspace",
+    )
 }
 
 /// Feedback is the human path onto a task: it is stored as a message from the named human, so an agent or the system sends an ordinary message instead.
@@ -173,11 +172,24 @@ pub fn can_send_feedback(actor: &Actor) -> Result<(), PolicyDenied> {
 
 /// Only the worker that owns a workspace records, restores or syncs in it, because a workspace holds that one worker's unfinished work. `owner` is the workspace's worker; a human, the system and every other worker are refused.
 pub fn can_change_workspace(actor: &Actor, owner: Option<&WorkerName>) -> Result<(), PolicyDenied> {
+    owning_worker(
+        actor,
+        owner,
+        "only the owning worker can change a workspace",
+    )
+}
+
+/// Admits only the worker `owner`; anyone else is `not_workspace_owner` with `message`.
+fn owning_worker(
+    actor: &Actor,
+    owner: Option<&WorkerName>,
+    message: &'static str,
+) -> Result<(), PolicyDenied> {
     match actor {
         Actor::Agent(agent) if owner == Some(&agent.worker) => Ok(()),
         Actor::Agent(_) | Actor::Human { .. } | Actor::System => Err(PolicyDenied {
             code: codes::NOT_WORKSPACE_OWNER,
-            message: "only the owning worker can change a workspace",
+            message,
             hint: "call get_workspace to see the owner",
         }),
     }
@@ -232,7 +244,7 @@ pub fn can_close_proposal(
 ) -> Result<(), PolicyDenied> {
     match actor {
         Actor::Human { .. } => Ok(()),
-        Actor::Agent(agent) if agent.agent == author.agent() || standing.decides_reviews() => {
+        Actor::Agent(agent) if author.belongs_to(&agent.agent) || standing.decides_reviews() => {
             Ok(())
         }
         Actor::Agent(_) | Actor::System => Err(PolicyDenied {
@@ -280,7 +292,7 @@ pub fn can_submit_verdict<'a>(
         }
         Actor::Agent(agent) => agent,
     };
-    if agent.agent == author.agent() {
+    if author.belongs_to(&agent.agent) {
         return Err(PolicyDenied {
             code: codes::AUTHOR_CANNOT_REVIEW,
             message: "the author's agent cannot review its own proposal",
@@ -306,7 +318,7 @@ pub fn can_claim_review<'a>(
     author: &WorkerName,
 ) -> Result<&'a AgentActor, PolicyDenied> {
     match actor {
-        Actor::Agent(agent) if agent.agent == author.agent() => Err(PolicyDenied {
+        Actor::Agent(agent) if author.belongs_to(&agent.agent) => Err(PolicyDenied {
             code: codes::AUTHOR_CANNOT_REVIEW,
             message: "an agent cannot review its own proposal",
             hint: "ask another agent to call claim_review",
@@ -326,7 +338,7 @@ pub fn can_release_review<'a>(
     holder: &WorkerName,
 ) -> Result<&'a AgentActor, PolicyDenied> {
     match actor {
-        Actor::Agent(agent) if agent.agent == holder.agent() => Ok(agent),
+        Actor::Agent(agent) if holder.belongs_to(&agent.agent) => Ok(agent),
         Actor::Agent(_) | Actor::Human { .. } | Actor::System => Err(PolicyDenied {
             code: codes::NOT_CLAIM_HOLDER,
             message: "only the agent that holds the review claim can release it",
@@ -341,7 +353,7 @@ pub fn can_create_review_checkout<'a>(
     holder: Option<&WorkerName>,
 ) -> Result<&'a AgentActor, PolicyDenied> {
     match actor {
-        Actor::Agent(agent) if holder.is_some_and(|holder| agent.agent == holder.agent()) => {
+        Actor::Agent(agent) if holder.is_some_and(|holder| holder.belongs_to(&agent.agent)) => {
             Ok(agent)
         }
         Actor::Agent(_) | Actor::Human { .. } | Actor::System => Err(PolicyDenied {

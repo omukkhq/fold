@@ -2,6 +2,7 @@ import type { ProjectAgent } from "../api/agentBar";
 import { formatAsOfMinute } from "../format/time";
 import type { LiveStatus } from "../live/status";
 import { syncedAt } from "./streamStatus";
+import { projectPath, withQuery } from "@/routes/paths";
 
 /** The top bar has room for three chips beside the stream status and the Theme button. */
 export const MAX_CHIPS = 3;
@@ -59,5 +60,5 @@ export function chipAgents(agents: readonly ProjectAgent[]): ProjectAgent[] {
 
 /** The board filtered to the agent's tasks, through the board's `agent` search param. */
 export function agentBoardPath(slug: string, agent: string): string {
-  return `/p/${slug}/board?${new URLSearchParams({ agent }).toString()}`;
+  return withQuery(projectPath(slug, "board"), { agent });
 }

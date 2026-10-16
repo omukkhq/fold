@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use crate::time::Timestamp;
 
 /// The kind and state of a workspace as the stall rule sees it.
@@ -26,9 +24,7 @@ pub fn is_stalled(
     if !has_impl_claim || workspace != WorkspaceFact::Active {
         return false;
     }
-    let limit = Duration::from_secs(stall_minutes.saturating_mul(60));
-    now.duration_since(last_activity_at)
-        .is_some_and(|quiet| quiet >= limit)
+    crate::claims::is_stale(last_activity_at, now, stall_minutes)
 }
 
 #[cfg(test)]

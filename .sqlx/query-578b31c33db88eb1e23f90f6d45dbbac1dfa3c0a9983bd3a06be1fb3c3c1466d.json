@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "WITH RECURSIVE reach(id) AS (\n               SELECT id FROM tasks WHERE number = ?1\n               UNION\n               SELECT d.needs_task_id FROM dependencies d JOIN reach r ON d.task_id = r.id\n           )\n           SELECT EXISTS (\n               SELECT 1 FROM reach r JOIN tasks t ON t.id = r.id WHERE t.number = ?2\n           ) AS \"reached!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "reached!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "578b31c33db88eb1e23f90f6d45dbbac1dfa3c0a9983bd3a06be1fb3c3c1466d"
+}

@@ -822,6 +822,7 @@ async fn close_proposal_returns_task_to_in_progress_and_archives_review_checkout
         .list_proposals(ProposalFilter {
             state: Some(ProposalState::Open),
             unclaimed: false,
+            limit: None,
         })
         .await
         .unwrap();
@@ -894,7 +895,8 @@ async fn close_proposal_returns_task_to_in_progress_and_archives_review_checkout
         .workspaces
         .abandon_workspace(&by(&fx.frontend), ws(1), "start over")
         .await
-        .unwrap();
+        .unwrap()
+        .workspace;
     assert_eq!(view.state, WorkspaceState::Abandoned);
 }
 
@@ -1017,18 +1019,40 @@ async fn list_proposals_filters_by_state_and_review_claim() {
     let open = ProposalFilter {
         state: Some(ProposalState::Open),
         unclaimed: false,
+        limit: None,
     };
     assert_eq!(ids(open).await, [p(2), p(3)]);
     let unclaimed = ProposalFilter {
         state: Some(ProposalState::Open),
         unclaimed: true,
+        limit: None,
     };
     assert_eq!(ids(unclaimed).await, [p(2)]);
     let closed = ProposalFilter {
         state: Some(ProposalState::Closed),
         unclaimed: false,
+        limit: None,
     };
     assert_eq!(ids(closed).await, [p(1)]);
+    let newest = ProposalFilter {
+        state: None,
+        unclaimed: false,
+        limit: Some(2),
+    };
+    assert_eq!(
+        ids(newest).await,
+        [p(2), p(3)],
+        "a limit keeps the newest, in number order"
+    );
+    let none = fx
+        .reviews
+        .list_proposals(ProposalFilter {
+            limit: Some(0),
+            ..ProposalFilter::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(fold_core::FoldError::from(none).code(), "invalid_request");
 
     // A review claim whose lease has run out counts as unclaimed, since claim_review takes it over; the list still names its holder.
     let lease = Duration::from_secs(LEASE_MINUTES * 60);

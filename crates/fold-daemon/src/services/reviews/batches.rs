@@ -152,7 +152,7 @@ pub enum LeftOutReason {
     NewVersion,
     /// The proposal was integrated or closed meanwhile.
     NotOpen,
-    /// The batch's holder no longer holds the member's review claim.
+    /// The member's review claim is held by someone other than the batch's holder, or by nobody.
     ClaimLost,
 }
 
@@ -267,7 +267,7 @@ impl ReviewService {
         self.get_review_batch(batch).await
     }
 
-    /// Takes a proposal out of an open batch, by any worker of the holder's agent, and releases the holder's review claim on it as `removed_from_batch`, so the proposal can be reviewed on its own or in another batch. The batch's checkout no longer matches its members, so it is archived; `create_batch_checkout` makes a new one. When no member with an open proposal is left, the batch closes.
+    /// Takes a proposal out of an open batch, by any worker of the holder's agent, and releases the holder's review claim on it as `removed_from_batch`, so the proposal can be reviewed on its own or in another batch. The batch's checkout then holds a member the batch lacks, so it is archived; `create_batch_checkout` makes a new one. When no member with an open proposal is left, the batch closes.
     pub async fn remove_from_batch(
         &self,
         actor: &Actor,

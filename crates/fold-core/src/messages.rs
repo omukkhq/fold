@@ -8,9 +8,11 @@ use thiserror::Error;
 use crate::actor::Actor;
 use crate::agents::{AgentName, HumanName, Tag, WorkerName};
 use crate::error::{FoldError, codes};
+use crate::events::EventActor;
+use crate::text::{LineFault, one_line};
 
 const TAG_PREFIX: &str = "tag:";
-const HUMAN_PREFIX: &str = "human:";
+const HUMAN_PREFIX: &str = EventActor::HUMAN_PREFIX;
 pub(crate) const ALL: &str = "all";
 pub(crate) const HUMANS: &str = "humans";
 
@@ -384,9 +386,17 @@ impl Rows {
     }
 }
 
-/// The text of a message. It is never logged and never put in an event or an error.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The text of a message. It is never logged and never put in an event or an error, so its `Debug` form gives the length alone.
+#[derive(Clone, PartialEq, Eq)]
 pub struct MessageBody(String);
+
+impl std::fmt::Debug for MessageBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MessageBody")
+            .field("len", &self.0.len())
+            .finish_non_exhaustive()
+    }
+}
 
 impl MessageBody {
     /// A body with no visible text is `invalid_request` with `details.reason = "empty_message"`.
@@ -439,9 +449,7 @@ impl Choice {
 
 /// `text` trimmed when it is one line of at most `max` characters; `None` for empty, multi-line or too long text.
 pub fn short_line(text: &str, max: usize) -> Option<String> {
-    let text = text.trim();
-    (!text.is_empty() && !text.contains(['\n', '\r']) && text.chars().count() <= max)
-        .then(|| text.to_owned())
+    one_line(text, max).ok().map(str::to_owned)
 }
 
 /// The options of a multiple-choice question from an agent to a human: 2 to 6 options with distinct single-line labels, and an optional short header. The human answers with a normal reply that names one label, or with free text.
@@ -473,13 +481,15 @@ impl MessageChoices {
         let mut seen = HashSet::new();
         let mut kept = Vec::with_capacity(options.len());
         for option in options {
-            let label = option.label.trim();
-            if label.is_empty() || label.contains(['\n', '\r']) {
-                return Err(invalid("a choice is one line of text"));
-            }
-            if label.chars().count() > MAX_CHOICE_LEN {
-                return Err(invalid("a choice is at most 100 characters"));
-            }
+            let label = match one_line(&option.label, MAX_CHOICE_LEN) {
+                Ok(label) => label,
+                Err(LineFault::Empty | LineFault::NotOneLine) => {
+                    return Err(invalid("a choice is one line of text"));
+                }
+                Err(LineFault::TooLong) => {
+                    return Err(invalid("a choice is at most 100 characters"));
+                }
+            };
             if !seen.insert(label.to_lowercase()) {
                 return Err(invalid("the choices repeat a label"));
             }

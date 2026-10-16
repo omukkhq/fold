@@ -2,13 +2,13 @@ use std::collections::{BTreeSet, HashMap};
 
 use fold_core::merge::{Conflict, OriginRun, line_origins, merge_trees};
 use fold_core::object::{ObjectHash, ObjectKind};
-use fold_core::tree::{EntryKind, FlatEntry, FlatTree, flatten};
+use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
 use fold_core::{FoldError, codes};
 
+use crate::compare::load_flat;
 use crate::diff::is_binary;
 use crate::objects::ObjectStore;
 use crate::revision_store::write_initial_tree;
-use crate::snapshot::load_tree;
 
 /// One proposal version to merge: the tree of its base revision and its own tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,17 +45,16 @@ pub fn merge_batch(
     main: &ObjectHash,
     members: &[BatchMember],
 ) -> Result<BatchMerge, FoldError> {
-    let load = |hash: &ObjectHash| load_tree(objects, hash);
     let mut texts = Texts {
         objects,
         merged: HashMap::new(),
         cache: HashMap::new(),
     };
-    let mut steps: Vec<FlatTree> = vec![flatten(main, &load)?];
+    let mut steps: Vec<FlatTree> = vec![load_flat(objects, main)?];
     let mut versions: Vec<(FlatTree, FlatTree)> = Vec::with_capacity(members.len());
     for (index, member) in members.iter().enumerate() {
-        let base = flatten(&member.base, &load)?;
-        let ours = flatten(&member.tree, &load)?;
+        let base = load_flat(objects, &member.base)?;
+        let ours = load_flat(objects, &member.tree)?;
         let current = steps.last().cloned().unwrap_or_default();
         let next = if base == current {
             ours.clone()

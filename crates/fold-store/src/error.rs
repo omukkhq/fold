@@ -56,6 +56,11 @@ impl StoreError {
         }
     }
 
+    /// The code a log line names: the stable code, or `internal_error` for an internal failure.
+    pub fn log_code(&self) -> &'static str {
+        self.code().unwrap_or(codes::INTERNAL_ERROR)
+    }
+
     /// True when a `UNIQUE` constraint or a unique index refused the statement.
     pub fn unique_violation(&self) -> bool {
         self.database_error()

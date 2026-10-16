@@ -1,6 +1,7 @@
 import type { NeedsYouItem, NeedsYouKind } from "@/api/workers";
 import { messagesHref } from "@/features/messages/search";
 import { asksText } from "@/features/workers/permission";
+import { projectPath, withQuery } from "@/routes/paths";
 
 /** A line of the list: a person who asks, or an item chip, then the words and the screen it opens. */
 export interface NeedsYouLine {
@@ -85,7 +86,9 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         chip: null,
         text: asksText(item.tool ?? "a tool"),
         hint: "opens the permission panel",
-        href: `/p/${slug}/agents?question=${item.question ?? ""}`,
+        href: withQuery(projectPath(slug, "agents"), {
+          question: item.question ?? "",
+        }),
       };
     case "human_review":
       return {
@@ -94,7 +97,7 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         chip: item.proposal,
         text: "needs your review",
         hint: "opens the proposal",
-        href: `/p/${slug}/proposals/${item.proposal ?? ""}`,
+        href: projectPath(slug, "proposals", item.proposal ?? ""),
       };
     default:
       return {
@@ -103,7 +106,7 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         chip: item.request,
         text: "has a draft ready to approve",
         hint: "opens the request",
-        href: `/p/${slug}/requests/${item.request ?? ""}`,
+        href: projectPath(slug, "requests", item.request ?? ""),
       };
   }
 }

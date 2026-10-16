@@ -5,9 +5,10 @@ use fold_core::{
     RevisionId, Target, TaskId,
 };
 use fold_store::reviews::{self, IntegrationSubject, NewIntegration};
-use fold_store::{StoreError, counters, workspaces};
+use fold_store::{StoreError, agents, counters, workspaces};
 use serde_json::json;
 
+use super::integrate::{caller_facts, decide};
 use super::{ReviewError, ReviewService};
 use crate::services::events::EventBuffer;
 use crate::services::messages::send_from_fold_in_tx;
@@ -22,10 +23,13 @@ pub(super) struct FoundConflict<'a> {
     pub main: RevisionId,
     pub trees: ReportTrees,
     pub conflicts: &'a [Conflict],
+    /// The version the caller asked to integrate, and whether the daemon integrates on its own: the gates read both again.
+    pub expected_version: Option<u32>,
+    pub automatic: bool,
 }
 
 impl ReviewService {
-    /// Step 4 of the integration procedure, under the integration mutex. One write transaction records the `conflicted` integration with its report and `integration.conflicted`, sets the proposal's conflict flag, sends the author's worker a message from `fold` that names the paths, and recalculates the task, which returns to In Progress while the proposal stays open. Nothing is published: no revision, no move of main, no completion. False, with nothing written, when main moved or the proposal is no longer open at that version, so the procedure starts again.
+    /// Step 4 of the integration procedure, under the integration mutex. One write transaction records the `conflicted` integration with its report and `integration.conflicted`, sets the proposal's conflict flag, sends the author's worker a message from `fold` that names the paths, and recalculates the task, which returns to In Progress while the proposal stays open. Nothing is published: no revision, no move of main, no completion. False, with nothing written, when main moved, the proposal left that version or the gates refuse the caller, so the procedure starts again and its gate step reports why.
     pub(super) async fn record_conflict(
         &self,
         actor: &Actor,
@@ -38,6 +42,8 @@ impl ReviewService {
             main,
             trees,
             conflicts,
+            expected_version,
+            automatic,
         } = found;
         let label = actor.event_actor();
         let now = self.clock.now();
@@ -51,7 +57,16 @@ impl ReviewService {
                 let Some(row) = reviews::get_proposal(tx.conn(), proposal).await? else {
                     return Ok(None);
                 };
-                if row.current_version != version
+                if row.current_version != version {
+                    return Ok(None);
+                }
+                // The gates again, as the clean path reads them before it publishes: a conflict recorded for a caller the gates refuse would message the author for nothing.
+                let Some(facts) = reviews::integration_facts(tx.conn(), proposal).await? else {
+                    return Ok(None);
+                };
+                let standing = agents::standing_of(tx.conn(), actor).await?;
+                let caller = caller_facts(actor, standing, automatic)?;
+                if decide(&facts, &caller, expected_version).is_err()
                     || !reviews::mark_conflicted(tx, proposal, now).await?
                 {
                     return Ok(None);
@@ -107,14 +122,5 @@ impl ReviewService {
         self.bus.publish(buffer);
         tracing::info!(proposal = %proposal, version, revision = %main, integration = %integration, files, "proposal conflicts with main");
         Ok(true)
-    }
-
-    /// The report of the latest conflicted integration of `version` of `proposal`, read as stored.
-    pub(super) async fn conflict_report(
-        &self,
-        proposal: ProposalId,
-        version: u32,
-    ) -> Result<Option<ConflictReport>, ReviewError> {
-        Ok(reviews::conflict_report(self.store.read(), proposal, version).await?)
     }
 }

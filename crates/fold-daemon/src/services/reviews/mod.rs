@@ -32,10 +32,12 @@ pub use changes::{ChangeRange, ProposalChange};
 pub use checkouts::{CheckoutTarget, ListedCheckout, ReviewCheckout};
 pub use claims::ReviewClaimView;
 pub use comments::{CommentInput, CommentLocation, CommentView};
-pub use human_review::{AwaitingHumanReview, awaiting_human_review};
+pub use human_review::{AwaitingHumanReview, awaiting_human_review, awaiting_human_review_in};
 pub use integrate::{AutomaticIntegration, IntegrationOutcome, PullIntegration, PullOutcome};
+pub(crate) use proposals::proposal_missing;
 pub use proposals::{
-    ProposalDetail, ProposalFilter, ProposalSummary, Retirement, Turn, VersionView, retire_proposal,
+    DEFAULT_PROPOSAL_LIST, MAX_PROPOSAL_LIST, ProposalDetail, ProposalFilter, ProposalSummary,
+    Retirement, Turn, VersionView, retire_proposal,
 };
 pub use verdicts::SubmittedReview;
 pub use views::{
@@ -75,6 +77,11 @@ impl ReviewError {
             Self::Task(error) => error.code(),
             Self::Event(_) => None,
         }
+    }
+
+    /// The code a log line names: the stable code, or `internal_error` for an internal failure.
+    pub fn log_code(&self) -> &'static str {
+        self.code().unwrap_or(fold_core::codes::INTERNAL_ERROR)
     }
 }
 

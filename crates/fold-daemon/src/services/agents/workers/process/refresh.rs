@@ -83,7 +83,7 @@ impl Supervisor {
         let asked = self
             .inner
             .store
-            .write(async |tx| agents::set_handoff_asked(tx.conn(), row.id, row.turns, now).await)
+            .write(async |tx| agents::set_handoff_asked(tx, row.id, row.turns, now).await)
             .await?;
         if asked {
             let input = lock(&self.inner.running)
@@ -150,8 +150,7 @@ impl Supervisor {
                     return Ok(None);
                 }
                 if current.state == WorkerState::Stopping {
-                    agents::record_exit(tx.conn(), current.id, WorkerState::Stopped, None, now)
-                        .await?;
+                    agents::record_exit(tx, current.id, WorkerState::Stopped, None, now).await?;
                     buffer
                         .append(tx, &stopped_event(&current, None)?, now)
                         .await?;
@@ -160,7 +159,7 @@ impl Supervisor {
                 let note = agents::session_handoff(tx.conn(), &current.session_id)
                     .await?
                     .map(|note| note.body);
-                agents::refresh_session(tx.conn(), current.id, &session, now).await?;
+                agents::refresh_session(tx, current.id, &session, now).await?;
                 let event =
                     NewEvent::new(types::WORKER_REFRESHED, EventActor::fold())?.data(json!({
                         "agent": agent.as_str(),

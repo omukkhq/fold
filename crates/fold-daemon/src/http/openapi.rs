@@ -24,8 +24,11 @@ const HOST_NOT_ALLOWED: &str = "`host_not_allowed`: the `Host`, or the `Origin` 
 const CLIENT_HEADER_REQUIRED: &str =
     "`client_header_required`: a write over TCP lacks the `x-fold-client` header";
 const SESSION_REFUSED: &str = "`auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked";
+const WORKER_PEER_REFUSED: &str = "`worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started";
+/// Every route that takes a `Human` declares this code, which marks it for [`WORKER_PEER_REFUSED`].
+const HUMAN_NAME_REQUIRED: &str = "`human_name_required`";
 
-/// Declares the errors of the route layers, which answer before any handler and so are in no route's own declaration: `host_not_allowed` on every operation, `client_header_required` on every write, the session errors on every operation of `guarded`.
+/// Declares the errors that no route states itself: those of the route layers, which answer before any handler (`host_not_allowed` on every operation, `client_header_required` on every write, the session errors on every operation of `guarded`), and `worker_peer_refused` of the `Human` extractor on every operation that takes a human.
 pub fn declare_layer_errors(doc: &mut OpenApi, guarded: &OpenApi) {
     for (path, item) in &mut doc.paths.paths {
         for operation in [
@@ -42,11 +45,21 @@ pub fn declare_layer_errors(doc: &mut OpenApi, guarded: &OpenApi) {
         let session = guarded.paths.paths.contains_key(path);
         for operation in operations_mut(item) {
             add_error(operation, "403", HOST_NOT_ALLOWED);
+            if takes_human(operation) {
+                add_error(operation, "403", WORKER_PEER_REFUSED);
+            }
             if session {
                 add_error(operation, "401", SESSION_REFUSED);
             }
         }
     }
+}
+
+fn takes_human(operation: &Operation) -> bool {
+    matches!(
+        operation.responses.responses.get("401"),
+        Some(RefOr::T(response)) if response.description.starts_with(HUMAN_NAME_REQUIRED)
+    )
 }
 
 fn operations_mut(item: &mut PathItem) -> impl Iterator<Item = &mut Operation> {

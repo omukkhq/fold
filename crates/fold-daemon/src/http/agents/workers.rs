@@ -13,7 +13,7 @@ use utoipa_axum::routes;
 
 use super::super::Project;
 use super::super::actor::Human;
-use super::super::error::{ApiError, ApiJson, ErrorEnvelope};
+use super::super::error::{ApiError, ApiJson, ErrorEnvelope, fold};
 use crate::daemon::AppState;
 use crate::services::agents::StartWorker;
 
@@ -309,10 +309,6 @@ pub struct UpdateAreaBody {
     /// True gives the area's workers the role's MCP servers again.
     #[serde(default)]
     pub clear_mcp: bool,
-}
-
-fn fold<T, E: Into<FoldError>>(result: Result<T, E>) -> Result<T, ApiError> {
-    result.map_err(|error| ApiError::from(error.into()))
 }
 
 /// The areas and every worker of the project.

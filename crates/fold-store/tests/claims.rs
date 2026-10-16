@@ -42,24 +42,16 @@ async fn setup() -> (TestProject, [i64; 3]) {
                 .await?;
             }
             let frontend =
-                agents::insert_agent(tx.conn(), &AgentName::parse("frontend").unwrap(), now)
-                    .await?;
+                agents::insert_agent(tx, &AgentName::parse("frontend").unwrap(), now).await?;
             let main =
-                agents::insert_worker(tx.conn(), frontend, &worker_name("frontend"), None, now)
+                agents::insert_worker(tx, frontend, &worker_name("frontend"), None, now).await?;
+            let ui =
+                agents::insert_worker(tx, frontend, &worker_name("frontend/ui"), Some(main), now)
                     .await?;
-            let ui = agents::insert_worker(
-                tx.conn(),
-                frontend,
-                &worker_name("frontend/ui"),
-                Some(main),
-                now,
-            )
-            .await?;
             let backend =
-                agents::insert_agent(tx.conn(), &AgentName::parse("backend").unwrap(), now).await?;
+                agents::insert_agent(tx, &AgentName::parse("backend").unwrap(), now).await?;
             let other =
-                agents::insert_worker(tx.conn(), backend, &worker_name("backend"), None, now)
-                    .await?;
+                agents::insert_worker(tx, backend, &worker_name("backend"), None, now).await?;
             Ok::<_, StoreError>([main, ui, other])
         })
         .await

@@ -3,6 +3,7 @@ use fold_core::claims::stale_cutoff;
 use fold_core::events::types;
 use fold_core::merge::ConflictReport;
 use fold_core::object::ObjectHash;
+use fold_core::reviews::MAX_REASON_CHARS;
 use fold_core::reviews::{HumanReviewMark, ReviewFact, Verdict, human_approval_standing};
 use fold_core::status::ProposalFact;
 use fold_core::tree::ChangeCounts;
@@ -15,13 +16,14 @@ use fold_store::reviews::{
 };
 use fold_store::tasks::{TaskRow, claims};
 use fold_store::workspaces::{self, WorkspaceRow, WorkspaceState};
-use fold_store::{StoreError, WriteTx, agents, counters, tasks};
+use fold_store::{SqliteConnection, StoreError, WriteTx, agents, counters, tasks};
 use fold_vcs::restore::differs_from_latest;
 use serde_json::json;
 
 use super::batches::close_batch_of;
 use super::{ReviewError, ReviewService};
 use crate::services::events::EventBuffer;
+use crate::services::page_limit;
 use crate::services::tasks::{
     closed_refusal, proposal_kind_refusal, recompute, task_not_found, worker_row,
 };
@@ -31,9 +33,6 @@ use crate::services::workspaces::{
 
 /// The longest proposal title, in characters.
 const MAX_TITLE_CHARS: usize = 200;
-
-/// The longest close reason, in characters.
-const MAX_REASON_CHARS: usize = 500;
 
 /// Whose move it is on an open proposal. It follows the status rule, so a proposal `WithReviewer` is a task in Review.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,7 +49,7 @@ impl Turn {
         }
     }
 
-    /// `None` for a proposal that is no longer open.
+    /// `None` for a closed or integrated proposal.
     fn of(row: &ProposalRow) -> Option<Turn> {
         if row.state != ProposalState::Open {
             return None;
@@ -159,7 +158,15 @@ pub struct ProposalFilter {
     pub state: Option<ProposalState>,
     /// Only proposals that no reviewer holds: without an unreleased review claim, or with one whose lease has run out.
     pub unclaimed: bool,
+    /// Only the newest this many, lowered to [`MAX_PROPOSAL_LIST`]; 0 is `invalid_request` and `None` lists all.
+    pub limit: Option<u32>,
 }
+
+/// The most proposals one listing returns.
+pub const MAX_PROPOSAL_LIST: u32 = 200;
+
+/// The proposals an agent's listing returns when it names no limit.
+pub const DEFAULT_PROPOSAL_LIST: u32 = 50;
 
 /// How an open proposal ends. A closed or rejected proposal names why; an integrated one needs no reason.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -448,13 +455,18 @@ impl ReviewService {
         &self,
         filter: ProposalFilter,
     ) -> Result<Vec<ProposalSummary>, ReviewError> {
+        let limit = page_limit(filter.limit, MAX_PROPOSAL_LIST)?;
         let unclaimed_at = if filter.unclaimed {
             Some(stale_cutoff(self.clock.now(), self.lease_minutes().await?))
         } else {
             None
         };
         let mut tx = self.store.read().begin().await.map_err(StoreError::from)?;
-        let rows = reviews::list_proposals(&mut *tx, filter.state, unclaimed_at).await?;
+        let mut rows = reviews::list_proposals(&mut *tx, filter.state, unclaimed_at).await?;
+        if let Some(limit) = limit {
+            let keep = usize::try_from(limit).unwrap_or(usize::MAX);
+            rows.drain(..rows.len().saturating_sub(keep));
+        }
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
             let facts = match row.human_review {
@@ -473,39 +485,50 @@ impl ReviewService {
         proposal: ProposalId,
         version: Option<u32>,
     ) -> Result<ProposalDetail, ReviewError> {
-        let read = self.store.read();
-        let row = reviews::get_proposal(read, proposal)
-            .await?
-            .ok_or_else(|| proposal_not_found(proposal))?;
-        let versions: Vec<VersionView> = reviews::list_versions(read, proposal)
-            .await?
-            .into_iter()
-            .map(VersionView::from)
-            .collect();
-        let wanted = version.unwrap_or(row.current_version);
-        let selected = versions
-            .iter()
-            .find(|view| view.version == wanted)
-            .cloned()
-            .ok_or_else(|| version_not_found(proposal, wanted, row.current_version))?;
-        let conflict = self.conflict_report(proposal, selected.version).await?;
-        let task_status = tasks::get_by_number(read, row.task)
-            .await?
-            .ok_or(StoreError::Corrupt("proposals.task_id"))?
-            .status;
-        let facts = match row.human_review {
-            Some(_) => reviews::review_facts(read, row.id, row.current_version).await?,
-            None => Vec::new(),
-        };
-        let summary = ProposalSummary::new(row, &facts);
-        Ok(ProposalDetail {
-            summary,
-            versions,
-            selected,
-            conflict,
-            task_status,
-        })
+        let mut read = self.store.read().begin().await.map_err(StoreError::from)?;
+        let detail = proposal_detail(&mut read, proposal, version).await?;
+        read.commit().await.map_err(StoreError::from)?;
+        Ok(detail)
     }
+}
+
+/// [`ReviewService::get_proposal`] on `conn`, so a caller reads it in the same snapshot as the rest of its view.
+pub(super) async fn proposal_detail(
+    conn: &mut SqliteConnection,
+    proposal: ProposalId,
+    version: Option<u32>,
+) -> Result<ProposalDetail, ReviewError> {
+    let row = reviews::get_proposal(&mut *conn, proposal)
+        .await?
+        .ok_or_else(|| proposal_not_found(proposal))?;
+    let versions: Vec<VersionView> = reviews::list_versions(&mut *conn, proposal)
+        .await?
+        .into_iter()
+        .map(VersionView::from)
+        .collect();
+    let wanted = version.unwrap_or(row.current_version);
+    let selected = versions
+        .iter()
+        .find(|view| view.version == wanted)
+        .cloned()
+        .ok_or_else(|| version_not_found(proposal, wanted, row.current_version))?;
+    let conflict = reviews::conflict_report(&mut *conn, proposal, selected.version).await?;
+    let task_status = tasks::fetch(&mut *conn, row.task)
+        .await?
+        .ok_or(StoreError::Corrupt("proposals.task_id"))?
+        .status;
+    let facts = match row.human_review {
+        Some(_) => reviews::review_facts(&mut *conn, row.id, row.current_version).await?,
+        None => Vec::new(),
+    };
+    let summary = ProposalSummary::new(row, &facts);
+    Ok(ProposalDetail {
+        summary,
+        versions,
+        selected,
+        conflict,
+        task_status,
+    })
 }
 
 /// Ends an open proposal inside the caller's transaction: sets its state, close reason and `closed_at`, releases its review claim with the outcome as `release_reason` (`claim.released`), and archives every live review checkout of the proposal (`workspace.archived`), whose directories stay until garbage collection. Close, reject and integration share it; the caller appends its own `proposal.*` event and runs `recompute` for the returned task.
@@ -711,17 +734,15 @@ async fn record_in_tx(
 }
 
 fn check_title(title: &str) -> Result<&str, ReviewError> {
-    let title = title.trim();
-    if title.is_empty() || title.chars().count() > MAX_TITLE_CHARS || title.contains(['\n', '\r']) {
-        return Err(FoldError::new(
+    fold_core::text::one_line(title, MAX_TITLE_CHARS).map_err(|_| {
+        FoldError::new(
             codes::INVALID_REQUEST,
             format!("the title must be one line of 1 to {MAX_TITLE_CHARS} characters"),
         )
         .with_details([("field", json!("title"))])
         .with_hint("call create_proposal again with a short one-line title")
-        .into());
-    }
-    Ok(title)
+        .into()
+    })
 }
 
 /// Evidence with no visible text is no evidence.
@@ -759,12 +780,17 @@ pub(super) fn version_not_found(proposal: ProposalId, wanted: u32, current: u32)
 }
 
 pub(super) fn proposal_not_found(proposal: ProposalId) -> ReviewError {
+    proposal_missing(proposal).into()
+}
+
+/// The refusal of an unknown proposal, the same in every domain.
+pub(crate) fn proposal_missing(proposal: ProposalId) -> FoldError {
     FoldError::new(
         codes::PROPOSAL_NOT_FOUND,
         format!("{proposal} does not exist"),
     )
+    .with_details([("proposal", json!(proposal.to_string()))])
     .with_hint("call list_proposals to see the proposals")
-    .into()
 }
 
 fn not_open(row: &ProposalRow) -> ReviewError {

@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help setup build fmt dev dev-daemon dev-web seed-dev fmt-check-rust fmt-check-web fmt-check web-build check-inner-allow clippy test test-fast test-default-features test-web coverage check-rust check-web check acceptance clean clean-keep-cargo gen-api check-api release bench bench-smoke
+.PHONY: help setup build fmt dev dev-daemon dev-web seed-dev fmt-check-rust fmt-check-web fmt-check web-install web-build check-web-sources check-inner-allow clippy test test-fast test-default-features test-web coverage check-rust check-web check acceptance clean clean-keep-cargo gen-api check-api release bench bench-smoke
 
 help: ## List the targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-18s %s\n", $$1, $$2}'
@@ -42,8 +42,11 @@ seed-dev: ## Development only: build a throwaway demo project in .dev/projects/d
 	XDG_DATA_HOME=$(DEV_DIR)/data XDG_CONFIG_HOME=$(DEV_DIR)/config XDG_RUNTIME_DIR=$(DEV_DIR)/runtime FOLD_HUMAN=dev \
 		cargo run -p fold-cli --features dev-seed -- dev seed --socket $(DEV_DIR)/runtime/fold/fold.sock
 
-web-build: ## Build the web application into web/dist, which the binary embeds
-	cd web && bun install --frozen-lockfile
+# `make check` installs once and tells the second make so through WEB_INSTALLED.
+web-install:
+	$(if $(WEB_INSTALLED),@:,cd web && bun install --frozen-lockfile)
+
+web-build: web-install ## Build the web application into web/dist, which the binary embeds
 	cd web && bun run build
 
 dev-web: ## Run the Vite dev server on :5173
@@ -127,13 +130,13 @@ sqlx-prepare: sqlx-scratch ## Refresh the .sqlx query metadata after changing a 
 sqlx-check: sqlx-scratch ## Fail when the .sqlx query metadata is stale
 	SQLX_OFFLINE=false DATABASE_URL=$(SQLX_DB_URL) cargo sqlx prepare --workspace --check -- --all-targets
 
-check-web: ## Run the web install, typecheck, lint, format check, coverage and build
-	cd web && bun install --frozen-lockfile
+check-web-sources: web-install
 	cd web && bun run typecheck
 	cd web && bun run lint
 	cd web && bun run format:check
 	cd web && bun run coverage
-	cd web && bun run build
+
+check-web: check-web-sources web-build ## Run the web install, typecheck, lint, format check, coverage and build
 
 GEN_DIR := target/gen
 
@@ -163,7 +166,9 @@ release: web-build ## Build fld for x86_64 Linux into dist/ with the host toolch
 	scripts/release-smoke.sh dist/fld-x86_64-linux
 	cd dist && sha256sum fld-x86_64-linux > SHA256SUMS
 
-check: web-build check-api check-rust check-web ## Run every check, after the web build that the binary embeds
+# The web build comes first because the binary embeds web/dist; the second make runs the rest: the checks of the web sources, without a second install or build.
+check: web-build ## Run every check, after the web build that the binary embeds
+	$(MAKE) WEB_INSTALLED=1 check-api check-rust check-web-sources
 
 # cargo reports the directories it really builds into (the target directory and the build directory for intermediate files), whether they come from CARGO_TARGET_DIR, a config file or the default. Only when both are the repository's own target/, and target/ is not a symlink, does `cargo clean` delete it all; anywhere else the directory can be shared with other projects, so only fold's crates are cleaned there, for the dev and test profiles (debug/) and for release. When cargo cannot say, the shared branch is the safe one. The choice is made when make reads the file and only for the clean goal, so `make -n clean` shows just the branch that runs.
 ifneq ($(filter clean,$(MAKECMDGOALS)),)
@@ -179,7 +184,7 @@ else
 clean: clean-keep-cargo
 	@echo "Shared cargo target directory $(or $(CARGO_BUILD_DIRS),(cargo did not report it)): cleaning only fold's crates; other projects' builds stay."
 	rm -rf target/sqlx target/gen
-	for crate in $(FOLD_CRATES); do cargo clean -q -p $$crate && cargo clean -q --release -p $$crate || exit 1; done
+	for crate in $(FOLD_CRATES); do cargo clean -q -p $$crate && cargo clean -q --release -p $$crate && cargo clean -q --release --target $(RELEASE_TRIPLE) -p $$crate || exit 1; done
 endif
 
 clean-keep-cargo: ## Delete build output and dev projects, but keep the cargo target directory

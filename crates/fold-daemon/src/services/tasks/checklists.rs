@@ -1,7 +1,7 @@
 use fold_core::events::types;
 use fold_core::{
-    Actor, ChecklistItemId, ChecklistName, DependencyOrigin, IdKind, NewEvent, StepText, TaskId,
-    TaskStatus, Timestamp, codes,
+    Actor, ChecklistItemId, ChecklistName, DependencyOrigin, FoldError, IdKind, NewEvent, StepText,
+    TaskId, TaskStatus, Timestamp, codes,
 };
 use fold_store::tasks::checklists::{self, ItemRow, NewItem};
 use fold_store::tasks::{self, TaskRow};
@@ -13,6 +13,24 @@ pub use fold_store::tasks::checklists::ItemContent;
 use super::dependencies::refusal;
 use super::{TaskError, TaskService, add_edge_in_tx, recompute, task_not_found};
 use crate::services::events::EventBuffer;
+
+/// The content of a new item from what a caller sent: a plain step's text or the child task it links, exactly one of them. Every transport takes the rule and its refusal from here.
+pub fn item_content(
+    text: Option<&str>,
+    linked_task: Option<&str>,
+) -> Result<ItemContent, FoldError> {
+    match (text, linked_task) {
+        (Some(text), None) => Ok(ItemContent::Step(StepText::parse(text)?)),
+        (None, Some(child)) => Ok(ItemContent::Linked(
+            child.parse::<TaskId>().map_err(FoldError::from)?,
+        )),
+        _ => Err(
+            FoldError::new(codes::INVALID_REQUEST, "give text or linked_task, not both").with_hint(
+                "call add_checklist_item with text for a step or linked_task for a child task",
+            ),
+        ),
+    }
+}
 
 /// A new checklist item. Without a `checklist` it goes to the task's first checklist, and a task without one gets `Subtasks`.
 #[derive(Debug, Clone)]
@@ -120,14 +138,15 @@ impl TaskService {
         Ok(())
     }
 
-    /// Moves an item to `position`, counted from 0, in `checklist` (its own when `None`), which must belong to the same task; a checklist of that name that does not exist yet is created. A position past the end puts the item last. Both checklists end with dense positions. A move that changes nothing appends no event; any other appends one `checklist.item_updated` naming the item. Order is not a status input, so nothing is recomputed.
+    /// Moves an item to `position`, counted from 0, in `checklist` (its own when `None`), which must belong to the same task; a checklist of that name that does not exist yet is created. A position past the end, or none, puts the item last. Both checklists end with dense positions. A move that changes nothing appends no event; any other appends one `checklist.item_updated` naming the item. Order is not a status input, so nothing is recomputed.
     pub async fn move_checklist_item(
         &self,
         actor: &Actor,
         item: ChecklistItemId,
-        position: u32,
+        position: Option<u32>,
         checklist: Option<ChecklistName>,
     ) -> Result<ChecklistItemView, TaskError> {
+        let position = position.unwrap_or(u32::MAX);
         let now = self.clock.now();
         let mut buffer = EventBuffer::new();
         self.store

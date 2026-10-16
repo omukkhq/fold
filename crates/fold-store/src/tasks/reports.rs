@@ -1,6 +1,7 @@
 use fold_core::{AgentName, TaskId, Timestamp, WorkerName};
 use sqlx::{SqliteConnection, SqliteExecutor};
 
+use crate::columns::time;
 use crate::error::StoreError;
 use crate::store::WriteTx;
 
@@ -59,10 +60,6 @@ struct RawReport {
     resolved_by: Option<String>,
     resolved_at: Option<i64>,
     send_back_note: Option<String>,
-}
-
-fn time(millis: i64, column: &'static str) -> Result<Timestamp, StoreError> {
-    Timestamp::from_millis(millis).map_err(|_| StoreError::Corrupt(column))
 }
 
 impl RawReport {

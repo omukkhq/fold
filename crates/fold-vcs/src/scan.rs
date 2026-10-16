@@ -13,7 +13,7 @@ use crate::platform::{Capabilities, DirHandle, is_executable};
 
 pub const DEFAULT_MAX_FILE_BYTES: u64 = 52_428_800;
 const READ_BUFFER: usize = 64 * 1024;
-pub(crate) const READ_TRIES: usize = 3;
+const READ_TRIES: usize = 3;
 
 #[cfg(test)]
 type ReadHook = Option<Box<dyn FnMut(&[u8], &std::fs::File)>>;
@@ -119,14 +119,28 @@ pub fn rescan_paths(
     }
 }
 
-/// The paths a [`rescan_paths`] over `paths` looks at: each path itself, except that a touched `.gitignore` or `.foldignore` stands for its whole folder. `None` when an ignore file at the root makes it a full [`scan`].
+/// The paths a [`rescan_paths`] over `paths` looks at, in path order: each path itself, except that a touched `.gitignore` or `.foldignore` stands for its whole folder. A path at or below another target is left out, because looking at a directory covers everything below it, so a new directory's files are read once. `None` when an ignore file at the root makes it a full [`scan`].
 pub fn rescan_scope(paths: &[RepoPath]) -> Option<Vec<RepoPath>> {
-    let mut targets = Vec::with_capacity(paths.len());
+    let mut wanted = BTreeSet::new();
     for path in paths {
         match ignore_folder(path) {
-            None => targets.push(path.clone()),
-            Some(Some(folder)) => targets.push(folder),
+            None => wanted.insert(path.clone()),
+            Some(Some(folder)) => wanted.insert(folder),
             Some(None) => return None,
+        };
+    }
+    // A directory sorts before every path below it, so each ancestor is kept before its descendants are checked.
+    let mut targets: Vec<RepoPath> = Vec::with_capacity(wanted.len());
+    let mut kept: BTreeSet<&[u8]> = BTreeSet::new();
+    for path in &wanted {
+        let bytes = path.as_bytes();
+        let covered = bytes
+            .iter()
+            .enumerate()
+            .any(|(at, &byte)| byte == b'/' && kept.contains(&bytes[..at]));
+        if !covered {
+            kept.insert(bytes);
+            targets.push(path.clone());
         }
     }
     Some(targets)
@@ -216,6 +230,8 @@ struct Walk<'a, 'o> {
     opts: &'a ScanOptions<'o>,
     out: ScanResult,
     seen: BTreeSet<RepoPath>,
+    /// One read buffer for every file the walk hashes.
+    buffer: Vec<u8>,
 }
 
 pub(crate) enum Reading {
@@ -234,6 +250,7 @@ impl<'a, 'o> Walk<'a, 'o> {
             opts,
             out: ScanResult::default(),
             seen: BTreeSet::new(),
+            buffer: vec![0; READ_BUFFER],
         }
     }
 
@@ -244,6 +261,7 @@ impl<'a, 'o> Walk<'a, 'o> {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
             Err(error) => return Err(error.into()),
         };
+        let rules = self.opts.rules.dir_rules(prefix);
         for name in names {
             if is_reserved_name(&name) {
                 continue;
@@ -256,7 +274,7 @@ impl<'a, 'o> Walk<'a, 'o> {
                 Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
                 Err(error) => return Err(error.into()),
             };
-            if self.opts.rules.is_ignored_below(&path, meta.is_dir()) {
+            if rules.is_ignored(&path, meta.is_dir()) {
                 continue;
             }
             self.entry(dir, &name, &path, &meta)?;
@@ -275,33 +293,25 @@ impl<'a, 'o> Walk<'a, 'o> {
         if !meta.is_dir() {
             return Ok(self.file(parent, name, path, meta)?);
         }
-        for _ in 0..READ_TRIES {
-            match parent.child(name) {
-                Ok(Some(child)) => return self.dir(&child, Some(path)),
-                Ok(None) => {}
-                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-                Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
-                    self.seen.insert(path.clone());
-                    self.skip(path.clone(), SkipReason::Unreadable);
-                    return Ok(());
+        match enter_dir(parent, name)? {
+            Entered::Dir(child) => self.dir(&child, Some(path)),
+            Entered::Replaced(now) => {
+                if !self.opts.rules.is_ignored_below(path, false) {
+                    self.file(parent, name, path, &now)?;
                 }
-                Err(error) => return Err(error.into()),
+                Ok(())
             }
-            let now = match parent.metadata(name) {
-                Ok(now) => now,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-                Err(error) => return Err(error.into()),
-            };
-            if now.is_dir() {
-                continue;
+            Entered::Gone => Ok(()),
+            Entered::Denied => {
+                self.seen.insert(path.clone());
+                self.skip(path.clone(), SkipReason::Unreadable);
+                Ok(())
             }
-            if self.opts.rules.is_ignored_below(path, false) {
-                return Ok(());
+            Entered::Unstable => {
+                self.out.unstable.push(path.clone());
+                Ok(())
             }
-            return Ok(self.file(parent, name, path, &now)?);
         }
-        self.out.unstable.push(path.clone());
-        Ok(())
     }
 
     /// A missing path or parent is gone. A parent the scan cannot enter for another reason, such as one without search permission, is an error, so the caller can scan the whole workspace and keep what it knew there.
@@ -335,9 +345,8 @@ impl<'a, 'o> Walk<'a, 'o> {
     fn prune(&mut self, prefix: Option<&RepoPath>) {
         let stale: Vec<RepoPath> = self
             .index
-            .iter()
+            .at_or_below(prefix)
             .map(|(path, _)| path)
-            .filter(|path| prefix.is_none_or(|prefix| path.is_at_or_below(prefix)))
             .filter(|path| !self.seen.contains(*path))
             .cloned()
             .collect();
@@ -402,7 +411,13 @@ impl<'a, 'o> Walk<'a, 'o> {
             .and_then(|_| self.index.is_fresh(path, meta));
         let (hash, meta) = match cached {
             Some(hash) => (hash, meta.clone()),
-            None => match hash_stable(parent, name, self.opts.max_file_bytes)? {
+            None => match read_stable_into(
+                parent,
+                name,
+                self.opts.max_file_bytes,
+                None,
+                &mut self.buffer,
+            )? {
                 Reading::Hashed(hash, meta) => {
                     self.out.hashed += 1;
                     (hash, *meta)
@@ -488,9 +503,44 @@ impl<'a, 'o> Walk<'a, 'o> {
     }
 }
 
+/// What entering a listed directory found.
+pub(crate) enum Entered {
+    Dir(DirHandle),
+    /// Something other than a directory took its place since it was listed; its metadata now.
+    Replaced(Box<Metadata>),
+    Gone,
+    Denied,
+    /// It kept changing between a directory and something else over three tries.
+    Unstable,
+}
+
+/// Enters the directory `name` of `parent` through a handle opened without following a symlink, for the walks of a scan and an import. One swapped for something else since it was listed is reported as what is there now. Any other failure is returned for the walk to decide on.
+pub(crate) fn enter_dir(parent: &DirHandle, name: &[u8]) -> io::Result<Entered> {
+    for _ in 0..READ_TRIES {
+        match parent.child(name) {
+            Ok(Some(child)) => return Ok(Entered::Dir(child)),
+            Ok(None) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Entered::Gone),
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                return Ok(Entered::Denied);
+            }
+            Err(error) => return Err(error),
+        }
+        let now = match parent.metadata(name) {
+            Ok(now) => now,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Entered::Gone),
+            Err(error) => return Err(error),
+        };
+        if !now.is_dir() {
+            return Ok(Entered::Replaced(Box::new(now)));
+        }
+    }
+    Ok(Entered::Unstable)
+}
+
 /// Hashes the file `name` in `dir` as a blob, reading at most `max_bytes` bytes. The read counts only when the size and modification time are the same before and after it, and the name still holds the same regular file; otherwise it is read again, up to three times in all.
 pub(crate) fn hash_stable(dir: &DirHandle, name: &[u8], max_bytes: u64) -> io::Result<Reading> {
-    read_stable_into(dir, name, max_bytes, None)
+    read_stable_into(dir, name, max_bytes, None, &mut vec![0; READ_BUFFER])
 }
 
 /// What a stable read of one workspace file found.
@@ -510,7 +560,13 @@ pub enum StableRead {
 pub(crate) fn read_stable(dir: &DirHandle, name: &[u8], max_bytes: u64) -> io::Result<StableRead> {
     let mut content = Vec::new();
     Ok(
-        match read_stable_into(dir, name, max_bytes, Some(&mut content))? {
+        match read_stable_into(
+            dir,
+            name,
+            max_bytes,
+            Some(&mut content),
+            &mut vec![0; READ_BUFFER],
+        )? {
             Reading::Hashed(hash, _) => StableRead::Read(content, hash),
             Reading::Unstable => StableRead::Unstable,
             Reading::Gone => StableRead::Gone,
@@ -573,6 +629,7 @@ fn read_stable_into(
     name: &[u8],
     max_bytes: u64,
     mut content: Option<&mut Vec<u8>>,
+    buffer: &mut [u8],
 ) -> io::Result<Reading> {
     for _ in 0..READ_TRIES {
         if let Some(content) = content.as_deref_mut() {
@@ -588,12 +645,11 @@ fn read_stable_into(
             Err(error) => return Err(error),
         };
         let mut hasher = ObjectHasher::new(ObjectKind::Blob);
-        let mut buffer = vec![0u8; READ_BUFFER];
         let mut total = 0u64;
         // One byte past the limit is enough to know the file is too large.
         let mut limited = (&file).take(max_bytes.saturating_add(1));
         loop {
-            match limited.read(&mut buffer) {
+            match limited.read(buffer) {
                 Ok(0) => break,
                 Ok(read) => {
                     hasher.update(&buffer[..read]);
@@ -633,16 +689,8 @@ fn read_stable_into(
 
 /// Whether both describe the same file: an atomic replace can keep the size and modification time while the name now holds another inode. A side without an inode number matches anything, as in the stat index.
 fn same_identity(a: &Metadata, b: &Metadata) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        a.ino() == 0 || b.ino() == 0 || (a.dev() == b.dev() && a.ino() == b.ino())
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (a, b);
-        true
-    }
+    use std::os::unix::fs::MetadataExt;
+    a.ino() == 0 || b.ino() == 0 || (a.dev() == b.dev() && a.ino() == b.ino())
 }
 
 #[cfg(test)]
@@ -854,7 +902,6 @@ mod tests {
         assert_eq!(read("absent.txt"), WorkingFile::Missing);
         assert_eq!(read("absent/run.log"), WorkingFile::Missing);
         assert_eq!(read("logs"), WorkingFile::NotAFile);
-        #[cfg(unix)]
         {
             std::os::unix::fs::symlink(root.join("logs/run.log"), root.join("link")).unwrap();
             assert_eq!(read("link"), WorkingFile::NotAFile);

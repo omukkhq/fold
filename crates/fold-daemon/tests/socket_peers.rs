@@ -101,7 +101,7 @@ impl Host {
             .write(async |tx| {
                 let agent = agents::find_agent(tx.conn(), &name).await?.unwrap();
                 let id = agents::insert_worker_process(
-                    tx.conn(),
+                    tx,
                     &NewWorkerProcess {
                         agent_id: agent.id,
                         role: Role::BatchReviewer,
@@ -113,8 +113,8 @@ impl Host {
                     },
                 )
                 .await?;
-                agents::set_worker_pid(tx.conn(), id, Some(pid)).await?;
-                agents::set_worker_state(tx.conn(), id, WorkerState::Working, now).await?;
+                agents::set_worker_pid(tx, id, Some(pid)).await?;
+                agents::set_worker_state(tx, id, WorkerState::Working, now).await?;
                 Ok::<_, StoreError>(())
             })
             .await

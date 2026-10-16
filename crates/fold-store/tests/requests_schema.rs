@@ -1,5 +1,7 @@
 use crate::common::{count, exec, open};
 use fold_core::object::{ObjectKind, hash_object};
+use fold_core::{RequestId, TaskId};
+use fold_store::tasks::requests::set_task_request;
 use fold_store::testing::assert_append_only;
 use fold_store::workspaces::gc_roots;
 use fold_store::{Store, StoreError};
@@ -238,6 +240,33 @@ async fn a_task_keeps_the_request_that_made_it() {
     )
     .await
     .unwrap();
+}
+
+#[tokio::test]
+async fn set_task_request_refuses_an_unknown_request() {
+    let (_dir, store) = seeded().await;
+    let task = TaskId::from_number(1).unwrap();
+    let error = store
+        .write(async |tx| set_task_request(tx, task, RequestId::from_number(9).unwrap()).await)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, StoreError::Invalid(_)), "{error:?}");
+    assert_eq!(
+        count(
+            &store,
+            "SELECT COUNT(*) FROM tasks WHERE request_id IS NULL"
+        )
+        .await,
+        1
+    );
+    store
+        .write(async |tx| set_task_request(tx, task, RequestId::from_number(1).unwrap()).await)
+        .await
+        .unwrap();
+    assert_eq!(
+        count(&store, "SELECT COUNT(*) FROM tasks WHERE request_id = 1").await,
+        1
+    );
 }
 
 #[tokio::test]

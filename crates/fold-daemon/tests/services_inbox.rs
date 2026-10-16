@@ -532,6 +532,7 @@ async fn feedback_needs_a_task_or_a_reply_and_only_a_human_sends_it() {
             .unwrap_err(),
     );
     assert_eq!(error.code(), codes::INVALID_REQUEST);
+    assert!(error.hint().is_some(), "{error:?}");
     let error = refusal(
         fixture
             .messages
@@ -572,6 +573,39 @@ async fn feedback_needs_a_task_or_a_reply_and_only_a_human_sends_it() {
         .unwrap();
     assert_eq!(sent.recipients[0].name.to_string(), "frontend/ui");
     assert_eq!(sent.task, Some(t(1)));
+}
+
+#[tokio::test]
+async fn a_request_message_keeps_the_task_it_names_and_only_a_human_sends_it() {
+    let fixture = Fixture::new().await;
+    let request = fixture
+        .tasks
+        .create_request(&human("ana"), "Make the board faster.", Vec::new())
+        .await
+        .unwrap();
+    let feedback = Feedback {
+        body: body("It is the main board."),
+        task: Some(t(2)),
+        request: Some(request.id),
+        reply_to: None,
+        to: Some(Address::parse_all(&["backend"]).unwrap()),
+    };
+    let error = refusal(
+        fixture
+            .messages
+            .feedback(&agent("frontend"), feedback.clone())
+            .await
+            .unwrap_err(),
+    );
+    assert_eq!(error.code(), codes::HUMAN_REQUIRED);
+    let sent = fixture
+        .messages
+        .feedback(&human("tanim"), feedback)
+        .await
+        .unwrap();
+    assert_eq!(sent.request, Some(request.id));
+    assert_eq!(sent.task, Some(t(2)));
+    assert_eq!(sent.recipients[0].name.to_string(), "backend");
 }
 
 #[tokio::test]
@@ -791,6 +825,9 @@ async fn threads_list_newest_activity_first_with_filters_and_pages() {
     ] {
         let error = refusal(fixture.messages.threads(&bad).await.unwrap_err());
         assert_eq!(error.code(), code);
+        if code == codes::INVALID_REQUEST {
+            assert!(error.hint().is_some(), "{error:?}");
+        }
     }
     let view = fixture.messages.thread_view(reply).await.unwrap();
     assert_eq!(view.id, first);

@@ -1,6 +1,7 @@
 use fold_core::{HumanName, Timestamp, WebTokenId};
 use sqlx::{SqliteExecutor, SqlitePool};
 
+use crate::columns::{optional_time, time};
 use crate::error::StoreError;
 use crate::store::WriteTx;
 
@@ -203,20 +204,6 @@ pub async fn find_web_token(
         })
     })
     .transpose()
-}
-
-fn optional_time(
-    millis: Option<i64>,
-    column: &'static str,
-) -> Result<Option<Timestamp>, StoreError> {
-    millis
-        .map(Timestamp::from_millis)
-        .transpose()
-        .map_err(|_| StoreError::Corrupt(column))
-}
-
-fn time(millis: i64, column: &'static str) -> Result<Timestamp, StoreError> {
-    Timestamp::from_millis(millis).map_err(|_| StoreError::Corrupt(column))
 }
 
 /// What `fld token list` shows of a token: never its hash.

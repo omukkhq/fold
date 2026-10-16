@@ -12,7 +12,7 @@ use fold_vcs::paths::RepoPath;
 use fold_vcs::snapshot::Warning;
 use serde_json::json;
 
-use super::{WorkspaceError, WorkspaceService, blocking, capabilities, open_objects};
+use super::{WorkspaceError, WorkspaceService, blocking, capabilities, load_config, open_objects};
 
 /// A state of the project that can be compared. Working files and recorded states are different kinds, so a caller never mistakes live edits for history.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,9 +142,13 @@ enum Source {
 }
 
 impl WorkspaceService {
-    /// Reads the tree of a recorded state from its row, or scans the working files of a workspace. Unknown numbers give `revision_not_found`, `workspace_not_found`, or `not_found` naming the changeset or checkpoint; an archived, abandoned or missing workspace, or one whose directory is gone, is `workspace_not_active`.
+    /// Reads the tree of a recorded state from its row, or scans the working files of a workspace with the project's largest file. Unknown numbers give `revision_not_found`, `workspace_not_found`, or `not_found` naming the changeset or checkpoint; an archived, abandoned or missing workspace, or one whose directory is gone, is `workspace_not_active`.
     pub async fn resolve_state(&self, state: StateRef) -> Result<ResolvedState, WorkspaceError> {
         let (summary, source) = self.locate(state).await?;
+        let max_file_bytes = match &source {
+            Source::Working { .. } => load_config(&self.paths).await?.max_file_bytes,
+            Source::Tree(_) => 0,
+        };
         let paths = self.paths.clone();
         let probed = Arc::clone(&self.caps);
         let (tree, state, warnings) = blocking(move || {
@@ -165,7 +169,8 @@ impl WorkspaceService {
                     }
                     let caps = capabilities(&probed, &paths)?;
                     let index = paths.workspace_index(workspace);
-                    let working = vcs::working_state(&objects, &root, &index, &base, caps)?;
+                    let working =
+                        vcs::working_state(&objects, &root, &index, &base, caps, max_file_bytes)?;
                     Ok((None, working.state, working.warnings))
                 }
             }

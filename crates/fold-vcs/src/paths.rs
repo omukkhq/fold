@@ -1,8 +1,10 @@
+use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt;
 use std::io;
 use std::ops::Bound;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 
 use fold_core::tree::{TreeError, validate_name};
@@ -75,6 +77,13 @@ pub fn is_reserved_name(name: &[u8]) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RepoPath(Vec<u8>);
 
+/// The bytes order, compare and hash as the path does, so a map keyed by paths can be searched by byte ranges.
+impl Borrow<[u8]> for RepoPath {
+    fn borrow(&self) -> &[u8] {
+        &self.0
+    }
+}
+
 impl RepoPath {
     pub fn parse(bytes: &[u8]) -> Result<Self, WorkspaceError> {
         let valid = !bytes.is_empty()
@@ -137,23 +146,25 @@ impl RepoPath {
 }
 
 /// The entries of `map` at the path `prefix` and below it; an empty `prefix` is the workspace root and gives every entry. Keys sort bytewise, and a sibling such as `src-old`, `src.rs`, `src x` or `src+` sorts between `src` and `src/`, so the entries below are the range from `src/` up to `src0`, the byte after `/`.
-pub(crate) fn entries_at_or_below<'m, V>(
-    map: &'m BTreeMap<Vec<u8>, V>,
+pub(crate) fn entries_at_or_below<'m, K, V>(
+    map: &'m BTreeMap<K, V>,
     prefix: &[u8],
-) -> impl Iterator<Item = (&'m Vec<u8>, &'m V)> + use<'m, V> {
-    let (exact, bounds) = if prefix.is_empty() {
-        (None, (Bound::Unbounded, Bound::Unbounded))
-    } else {
-        let mut lower = prefix.to_vec();
-        lower.push(b'/');
-        let mut upper = prefix.to_vec();
-        upper.push(b'/' + 1);
-        (
-            map.get_key_value(prefix),
-            (Bound::Included(lower), Bound::Excluded(upper)),
-        )
-    };
-    exact.into_iter().chain(map.range::<Vec<u8>, _>(bounds))
+) -> impl Iterator<Item = (&'m K, &'m V)> + use<'m, K, V>
+where
+    K: Borrow<[u8]> + Ord,
+{
+    if prefix.is_empty() {
+        return None.into_iter().chain(map.range::<[u8], _>(..));
+    }
+    let mut lower = prefix.to_vec();
+    lower.push(b'/');
+    let mut upper = prefix.to_vec();
+    upper.push(b'/' + 1);
+    let below = map.range::<[u8], _>((
+        Bound::Included(lower.as_slice()),
+        Bound::Excluded(upper.as_slice()),
+    ));
+    map.get_key_value(prefix).into_iter().chain(below)
 }
 
 impl fmt::Display for RepoPath {
@@ -162,44 +173,21 @@ impl fmt::Display for RepoPath {
     }
 }
 
-#[cfg(unix)]
-fn os_component(name: &[u8]) -> Result<OsString, WorkspaceError> {
-    use std::os::unix::ffi::OsStringExt;
-    Ok(OsString::from_vec(name.to_vec()))
-}
-
-/// Platforms without byte-exact file names accept only UTF-8 components, and none that could name a drive or a separator.
-#[cfg(not(unix))]
-fn os_component(name: &[u8]) -> Result<OsString, WorkspaceError> {
-    match std::str::from_utf8(name) {
-        Ok(text) if !text.contains(['\\', ':']) => Ok(OsString::from(text)),
-        _ => Err(WorkspaceError::invalid(name)),
-    }
-}
-
 /// The path as relative OS components, with no check against the file system.
-pub(crate) fn os_path(path: &RepoPath) -> Result<PathBuf, WorkspaceError> {
+pub(crate) fn os_path(path: &RepoPath) -> PathBuf {
     path.components()
-        .map(os_component)
-        .collect::<Result<PathBuf, _>>()
+        .map(|name| OsString::from_vec(name.to_vec()))
+        .collect()
 }
 
-/// The bytes of one file name or link target, or `None` where the platform cannot name them as bytes.
+/// The bytes of one file name or link target. The `Option` lets callers treat a name they cannot use as absent.
 pub(crate) fn os_bytes(name: &std::ffi::OsStr) -> Option<Vec<u8>> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt;
-        Some(name.as_bytes().to_vec())
-    }
-    #[cfg(not(unix))]
-    {
-        name.to_str().map(|text| text.as_bytes().to_vec())
-    }
+    Some(name.as_bytes().to_vec())
 }
 
 /// Joins `path` under `root` and checks every parent that exists, as [`open_parent`] opens them. A parent that is a symlink or not a directory is refused. The last component may be a symlink; it is never followed here.
 pub fn resolve(root: &Path, path: &RepoPath) -> Result<PathBuf, WorkspaceError> {
-    let located = root.join(os_path(path)?);
+    let located = root.join(os_path(path));
     open_parent(root, path)?;
     Ok(located)
 }

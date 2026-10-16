@@ -471,7 +471,7 @@ async fn integration_columns_match_their_kind() {
     let (_dir, store) = seeded().await;
     let integration = |kind: &str, proposal: &str, version: &str, remote: &str| {
         format!(
-            "INSERT INTO integrations (number, kind, proposal_id, version_id, remote_commit, result, actor, created_at) VALUES ((SELECT MAX(number) + 1 FROM integrations), '{kind}', {proposal}, {version}, {remote}, 'succeeded', 'fold', 0)"
+            "INSERT INTO integrations (number, kind, proposal_id, version_id, remote_commit, result, actor, created_at) VALUES ((SELECT MAX(number) + 1 FROM integrations), '{kind}', {proposal}, {version}, {remote}, 'refused', 'fold', 0)"
         )
     };
     for sql in [

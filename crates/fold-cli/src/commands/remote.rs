@@ -2,7 +2,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand};
-use fold_cli::daemon_client::{self, ClientConfig, ClientError, DaemonClient, Response};
+use fold_cli::daemon_client::{self, ClientError, DaemonClient, Response};
 use fold_core::config::{
     GIT_SECTION, REMOTES_SECTION, UNNAMED_REMOTE, check_branch, check_remote, check_remote_name,
 };
@@ -88,8 +88,6 @@ pub enum RemoteError {
     },
     #[error("the daemon answered with a body fold cannot read")]
     Answer,
-    #[error("cannot find the fld binary: {0}")]
-    Exe(io::Error),
     #[error("cannot read the project directory: {0}")]
     Cwd(io::Error),
     #[error("cannot start the async runtime: {0}")]
@@ -107,12 +105,18 @@ impl RemoteError {
             Self::Serve(error) => error.code(),
             Self::Init(error) => error.code(),
             Self::Refused { code, .. } => Some(code),
-            Self::Client(_)
-            | Self::Answer
-            | Self::Exe(_)
-            | Self::Cwd(_)
-            | Self::Runtime(_)
-            | Self::Write(_) => None,
+            Self::Client(_) | Self::Answer | Self::Cwd(_) | Self::Runtime(_) | Self::Write(_) => {
+                None
+            }
+        }
+    }
+
+    /// The hint of a local refusal. A refusal by the daemon carries its hint in its message.
+    pub fn hint(&self) -> Option<&str> {
+        match self {
+            Self::Fold(error) | Self::Project(ProjectError::Fold(error)) => error.hint(),
+            Self::Init(error) => error.hint(),
+            _ => None,
         }
     }
 }
@@ -129,10 +133,7 @@ pub fn run_remote(args: &RemoteArgs, out: &mut impl Write) -> Result<(), RemoteE
 /// The nearest directory at or above `start` that holds a project database, or `start` itself when none does, so the error names the directory the user gave.
 pub(crate) fn find_project(start: &Path) -> PathBuf {
     let absolute = std::path::absolute(start).unwrap_or_else(|_| start.to_owned());
-    absolute
-        .ancestors()
-        .find(|dir| ProjectPaths::new(*dir).db().is_file())
-        .map_or(absolute.clone(), Path::to_owned)
+    init::project_root_at_or_above(&absolute).unwrap_or(absolute)
 }
 
 fn project_paths(project: Option<&Path>) -> Result<ProjectPaths, FoldError> {
@@ -408,18 +409,9 @@ fn post_project(args: &PushArgs, action: &str) -> Result<Response, RemoteError> 
     let host = init::host_paths(&dirs)?;
     let start = args.project.clone().unwrap_or_else(|| PathBuf::from("."));
     let dir = std::fs::canonicalize(&start).map_err(RemoteError::Cwd)?;
-    let socket =
-        serve::socket_path(args.socket.as_deref(), &dirs)?.ok_or(ClientError::RuntimeDirMissing)?;
-    let config = ClientConfig {
-        socket: std::path::absolute(&socket).map_err(RemoteError::Cwd)?,
-        runtime_dir: serve::runtime_dir(&dirs).ok(),
-        fold_exe: Some(std::env::current_exe().map_err(RemoteError::Exe)?),
-    };
+    let config = serve::client_config(args.socket.as_deref(), &dirs)?;
     let client = DaemonClient::new(config, daemon_client::human_from_env().ok());
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(RemoteError::Runtime)?;
+    let runtime = serve::current_thread_runtime().map_err(RemoteError::Runtime)?;
     runtime.block_on(async {
         let slug = slug_for_dir_on_host(&host, &dir).await?;
         let path = format!("/api/v1/projects/{slug}/{action}{query}");
@@ -429,15 +421,15 @@ fn post_project(args: &PushArgs, action: &str) -> Result<Response, RemoteError> 
 
 /// The error a refusal carries.
 fn refusal(response: &Response) -> Result<(), RemoteError> {
-    if (200..300).contains(&response.status) {
+    if response.is_success() {
         return Ok(());
     }
-    let error = &response.body["error"];
-    Err(match (error["code"].as_str(), error["message"].as_str()) {
+    let refusal = response.refusal();
+    Err(match (refusal.code, refusal.message) {
         (Some(code), Some(message)) => RemoteError::Refused {
-            code: code.to_owned(),
-            message: message.to_owned(),
-            hint: error["details"]["hint"].as_str().map(str::to_owned),
+            code,
+            message,
+            hint: refusal.hint,
         },
         _ => RemoteError::Answer,
     })
@@ -867,6 +859,20 @@ mod tests {
                 Err(RemoteError::Answer)
             ));
         }
+    }
+
+    #[test]
+    fn a_local_refusal_names_its_hint() {
+        let with_hint = FoldError::new(codes::GIT_FAILED, "x").with_hint("run git status");
+        assert_eq!(
+            RemoteError::from(with_hint.clone()).hint(),
+            Some("run git status")
+        );
+        assert_eq!(
+            RemoteError::from(ProjectError::Fold(with_hint)).hint(),
+            Some("run git status")
+        );
+        assert_eq!(RemoteError::Answer.hint(), None);
     }
 
     #[test]

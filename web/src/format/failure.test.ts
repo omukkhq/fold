@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "@/api/errors";
-import { failureText } from "./failure";
+import { commonText, failureText } from "./failure";
+import { describeFailure } from "@/features/requests/errors";
 
 describe("failureText", () => {
   it("words a known code", () => {
@@ -28,5 +29,21 @@ describe("failureText", () => {
     expect(failureText(null)).toBe(
       "The request did not reach the daemon. Try again.",
     );
+  });
+
+  it("words the shared codes the same on every screen", () => {
+    for (const code of [
+      "recipient_not_found",
+      "auth_required",
+      "human_name_required",
+      "project_unavailable",
+    ]) {
+      const error = new ApiError(code, "x");
+      const shared = commonText(code);
+      expect(shared).toBeDefined();
+      expect(failureText(error)).toBe(shared);
+      expect(describeFailure(error).text).toBe(shared);
+    }
+    expect(commonText("brand_new_code")).toBeUndefined();
   });
 });

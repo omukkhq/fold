@@ -4,7 +4,12 @@ use crate::common::roles::give_role;
 use fold_core::roles::Role;
 use std::time::Duration;
 
-use fold_core::{AgentName, WorkerState, codes};
+use fold_core::events::types;
+use fold_core::reviews::Verdict;
+use fold_core::{Actor, AgentName, HumanName, LiveEvent, WorkerState, codes};
+use fold_daemon::services::events::EventBus;
+use fold_daemon::services::reviews::ReviewService;
+use fold_daemon::services::workspaces::WorkspaceService;
 use fold_store::agents::WorkerProcessRow;
 use fold_store::testing::eventually;
 use serde_json::{Value, json};
@@ -359,6 +364,76 @@ async fn a_coder_stays_while_a_proposal_has_changes_requested_and_an_integrated_
     );
 }
 
+/// A supervisor whose watcher falls behind its bus still tells a running coder about changes requested while it fell behind, from the stored reviews.
+#[tokio::test]
+async fn a_running_coder_hears_of_changes_its_supervisor_missed() {
+    let fake = FakeClaude::new("result");
+    let harness = coder_for(
+        &fake,
+        &["Draw the page", "Draw the menu"],
+        WorkerState::Idle,
+    )
+    .await;
+    let page = harness.start_work(CODER, "T-1").await;
+    page.write(&[("page.html", "<p>page</p>\n")]);
+    assert_eq!(harness.propose(CODER, &page, "Draw the page").await, "P-1");
+    until_state(&harness, CODER, WorkerState::Idle).await;
+    harness
+        .project
+        .clock()
+        .advance(Duration::from_secs(1))
+        .unwrap();
+    let handle = &harness.handle;
+    let ana = HumanName::parse("ana").unwrap();
+    let now = harness.project.now();
+    harness
+        .state
+        .registry
+        .write(async |tx| fold_store::projects::ensure_human(tx, &ana, now).await)
+        .await
+        .unwrap();
+    // The review goes out on a bus of its own, so neither the supervisor nor the session push receives its event.
+    let reviews = ReviewService::new(
+        handle.store.clone(),
+        EventBus::new(),
+        handle.clock.clone(),
+        WorkspaceService::for_project(handle),
+        handle.integration.clone(),
+    )
+    .with_registry(harness.state.registry.clone());
+    reviews
+        .submit_review(
+            &Actor::human(ana),
+            "P-1".parse().unwrap(),
+            1,
+            Verdict::RequestChanges,
+            "Split the page.",
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    // More messages than the bus holds, sent while the watcher cannot run, so it falls behind.
+    for _ in 0..1100 {
+        handle
+            .bus
+            .publish_live(LiveEvent::new(types::WORKER_OUTPUT, None, json!({})).unwrap());
+    }
+    let runs = eventually(WAIT, async || {
+        let runs = fake.runs_of(CODER);
+        let told = runs[0]
+            .stdin
+            .iter()
+            .any(|line| line.contains("Split the page."));
+        if told {
+            Ok(runs)
+        } else {
+            Err(runs[0].stdin.len())
+        }
+    })
+    .await;
+    assert_eq!(runs.len(), 1, "a running coder gets a notice, not a resume");
+}
+
 #[tokio::test]
 async fn a_batch_review_resumes_the_coder_once_with_every_member_it_wrote() {
     let fake = FakeClaude::new("result");
@@ -605,7 +680,7 @@ async fn a_daemon_start_that_finds_a_leads_session_gone_starts_it_fresh_with_its
         .store
         .write(async |tx| {
             fold_store::agents::insert_handoff(
-                tx.conn(),
+                tx,
                 working.agent_id,
                 &working.session_id,
                 "Split the menu task next.",

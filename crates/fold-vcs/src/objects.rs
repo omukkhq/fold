@@ -1,14 +1,18 @@
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use fold_core::object::{ObjectHash, ObjectHasher, ObjectKind, hash_object, varint};
 use fold_core::{FoldError, codes};
 use thiserror::Error;
 
+use crate::lock;
 use crate::platform::sync_dir;
 
 const FORMAT_VERSION: u8 = 1;
@@ -21,6 +25,8 @@ const BUFFER_SIZE: usize = 64 * 1024;
 const MAX_VARINT_LEN: usize = 10;
 /// Caps the up-front allocation for a payload whose header length is untrusted.
 const MAX_PREALLOC: u64 = 64 * 1024 * 1024;
+/// A streamed blob up to this size is held in memory and stored with one write; a larger one goes through a scratch file first, because its hash, and so its name, is known only at its end. A larger blob is compressed only when this much of its start compresses.
+const IN_MEMORY_BLOB: u64 = 1024 * 1024;
 
 static SCRATCH_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -92,6 +98,8 @@ struct Header {
 pub struct ObjectStore {
     objects: PathBuf,
     scratch: PathBuf,
+    /// The fan directories, by device and inode, whose entry in `objects/` this store and its clones flushed. A writer that finds its fan here does not flush `objects/` again. Any other writer flushes it itself, also when another writer created the fan a moment before and has not flushed it yet, so no object is published into a fan whose own entry could still be lost. The set lives with the store and not with the process because a file system can give a new directory the inode of a removed one: a project removed and made again starts with an empty set.
+    flushed_fans: Arc<Mutex<BTreeSet<(u64, u64)>>>,
 }
 
 impl ObjectStore {
@@ -100,7 +108,11 @@ impl ObjectStore {
         let objects = dir.join("objects");
         let scratch = objects.join("tmp");
         fs::create_dir_all(&scratch)?;
-        Ok(Self { objects, scratch })
+        Ok(Self {
+            objects,
+            scratch,
+            flushed_fans: Arc::default(),
+        })
     }
 
     /// `objects/tmp/`, where writes are staged before their rename into place.
@@ -140,10 +152,22 @@ impl ObjectStore {
         Ok(hash)
     }
 
-    /// Streams `reader` through the hasher into a scratch file, so a large file never has to fit in memory.
+    /// Stores the blob `reader` gives. A small one is read into memory and written once; a large one streams through the hasher into a scratch file, so it never has to fit in memory.
     pub fn write_blob_from(&self, reader: &mut impl Read) -> Result<BlobWrite, ObjectError> {
+        let mut head = Vec::new();
+        reader
+            .by_ref()
+            .take(IN_MEMORY_BLOB + 1)
+            .read_to_end(&mut head)?;
+        if head.len() as u64 <= IN_MEMORY_BLOB {
+            let hash = self.write(ObjectKind::Blob, &head)?;
+            return Ok(BlobWrite {
+                hash,
+                size: head.len() as u64,
+            });
+        }
         let (mut raw, raw_path) = self.create_scratch()?;
-        let result = self.write_blob_streamed(reader, &mut raw);
+        let result = self.write_blob_streamed(&mut head.as_slice().chain(reader), &mut raw);
         drop(raw);
         let _ = fs::remove_file(&raw_path);
         result
@@ -368,7 +392,6 @@ impl ObjectStore {
     fn publish(&self, tmp: &Path, hash: &ObjectHash) -> Result<(), ObjectError> {
         let dest = self.path(hash);
         let fan = dest.parent().unwrap_or(&self.objects);
-        let created = !fan.exists();
         fs::create_dir_all(fan)?;
         if let Err(error) = fs::rename(tmp, &dest) {
             // Where rename refuses an existing target, a concurrent writer of the same hash got there first with identical content.
@@ -379,8 +402,12 @@ impl ObjectStore {
             return Err(error.into());
         }
         sync_dir(fan)?;
-        if created {
+        let meta = fs::metadata(fan)?;
+        let identity = (meta.dev(), meta.ino());
+        let mut flushed = lock(&self.flushed_fans);
+        if !flushed.contains(&identity) {
             sync_dir(&self.objects)?;
+            flushed.insert(identity);
         }
         Ok(())
     }
@@ -486,11 +513,11 @@ fn write_header(
     out.write_all(&header)
 }
 
-/// Writes header and payload of a blob held in `raw` (already rewound) into `file`, compressing only when it pays.
+/// Writes header and payload of a blob held in `raw` (already rewound) into `file`, compressing only when it pays. A blob whose start does not compress is written uncompressed at once, so only a blob that compresses at its start and not as a whole is written twice.
 fn store_blob_file(raw: &mut File, file: File, size: u64) -> io::Result<()> {
     let mut input = BufReader::with_capacity(BUFFER_SIZE, raw);
     let mut out = BufWriter::with_capacity(BUFFER_SIZE, file);
-    if size > COMPRESS_THRESHOLD {
+    if size > COMPRESS_THRESHOLD && start_compresses(&mut input)? {
         write_header(&mut out, ObjectKind::Blob, COMPRESSION_ZSTD, size)?;
         out.flush()?;
         let header_len = out.get_mut().stream_position()?;
@@ -513,6 +540,18 @@ fn store_blob_file(raw: &mut File, file: File, size: u64) -> io::Result<()> {
     out.into_inner()
         .map_err(io::IntoInnerError::into_error)?
         .sync_all()
+}
+
+/// Compresses the first [`IN_MEMORY_BLOB`] bytes in memory, then rewinds `input`.
+fn start_compresses(input: &mut BufReader<&mut File>) -> io::Result<bool> {
+    let mut sample = Vec::new();
+    input
+        .by_ref()
+        .take(IN_MEMORY_BLOB)
+        .read_to_end(&mut sample)?;
+    input.rewind()?;
+    let packed = zstd::bulk::compress(&sample, ZSTD_LEVEL)?;
+    Ok(saves_enough(packed.len() as u64, sample.len() as u64))
 }
 
 fn read_header(hash: &ObjectHash, reader: &mut impl Read) -> Result<Header, ObjectError> {

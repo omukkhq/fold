@@ -219,7 +219,7 @@ impl Supervisor {
                 let number = PermissionQuestionId::from_number(number)
                     .ok_or(StoreError::Corrupt("counters.next"))?;
                 let id = agents::insert_question(
-                    tx.conn(),
+                    tx,
                     &NewQuestion {
                         worker_process_id: process.id,
                         kind: QuestionKind::Tool,
@@ -318,7 +318,7 @@ impl Supervisor {
                     _ => None,
                 };
                 let id = agents::insert_question(
-                    tx.conn(),
+                    tx,
                     &NewQuestion {
                         worker_process_id: process.id,
                         kind: QuestionKind::Ask,
@@ -346,7 +346,7 @@ impl Supervisor {
                         },
                     )
                     .await?;
-                    agents::insert_question_message(tx.conn(), id, position, sent.id).await?;
+                    agents::insert_question_message(tx, id, position, sent.id).await?;
                 }
                 lock(&self.inner.pending)
                     .entry(id)
@@ -479,7 +479,7 @@ impl Supervisor {
         let now = self.inner.clock.now();
         self.inner
             .store
-            .write(async |tx| agents::restart_worker_process(tx.conn(), row.id, now).await)
+            .write(async |tx| agents::restart_worker_process(tx, row.id, now).await)
             .await?;
         self.replay(question);
         if let Some(watch) = self.launch(&row, true, Some(turn)).await? {
@@ -530,7 +530,7 @@ impl Supervisor {
         }
         self.inner
             .store
-            .write(async |tx| agents::set_worker_pid(tx.conn(), row.id, None).await)
+            .write(async |tx| agents::set_worker_pid(tx, row.id, None).await)
             .await?;
         for question in open {
             if question.kind == QuestionKind::Ask {
@@ -542,7 +542,7 @@ impl Supervisor {
 
     /// Reads a stored event for the question flow: a human message in the thread of an open `ask` question may complete its answers.
     pub(super) async fn on_event(&self, event: &Event) {
-        if event.event_type != types::MESSAGE_SENT || !event.actor.as_str().starts_with("human:") {
+        if event.event_type != types::MESSAGE_SENT || !event.actor.is_human() {
             return;
         }
         let Some(thread) = event
@@ -626,8 +626,7 @@ impl Supervisor {
         self.inner
             .store
             .write(async |tx| {
-                agents::insert_answer(tx.conn(), id, PermissionBehavior::Allow, &human, None, now)
-                    .await
+                agents::insert_answer(tx, id, PermissionBehavior::Allow, &human, None, now).await
             })
             .await?;
         let Some(answered) = agents::question_by_id(self.inner.store.read(), id).await? else {
@@ -680,8 +679,7 @@ impl AgentService {
                 if !row.is_open() {
                     return Err(question_closed(question).into());
                 }
-                agents::insert_answer(tx.conn(), row.id, behavior, name, message.as_deref(), now)
-                    .await?;
+                agents::insert_answer(tx, row.id, behavior, name, message.as_deref(), now).await?;
                 let event =
                     NewEvent::new(types::WORKER_PERMISSION_ANSWERED, EventActor::human(name))?
                         .data(json!({

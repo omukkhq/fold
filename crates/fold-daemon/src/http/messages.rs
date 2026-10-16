@@ -1,6 +1,5 @@
 use axum::Json;
-use axum::extract::rejection::QueryRejection;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use fold_core::{Address, Choice, FoldError, MessageBody, MessageId, RequestId, TaskId};
 use serde::{Deserialize, Serialize};
@@ -10,25 +9,15 @@ use utoipa_axum::routes;
 
 use super::Project;
 use super::actor::Human;
-use super::error::{ApiError, ApiJson, ErrorEnvelope};
+use super::error::{ApiError, ApiJson, ApiQuery, ErrorEnvelope};
 use crate::daemon::AppState;
-use crate::services::messages::{self as service, Feedback, MessageService, ThreadQuery};
+use crate::services::messages::{self as service, Feedback, ThreadQuery};
 
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_messages))
         .routes(routes!(show_thread))
         .routes(routes!(send_feedback))
-}
-
-fn service(state: &AppState, project: &Project) -> MessageService {
-    let handle = &project.0;
-    MessageService::new(
-        handle.store.clone(),
-        state.registry.clone(),
-        handle.bus.clone(),
-        handle.clock.clone(),
-    )
 }
 
 /// One recipient row. Names starting `human:` are humans.
@@ -235,11 +224,11 @@ pub struct FeedbackRequest {
 pub async fn list_messages(
     State(state): State<AppState>,
     project: Project,
-    params: Result<Query<ListMessagesParams>, QueryRejection>,
+    ApiQuery(params): ApiQuery<ListMessagesParams>,
 ) -> Result<Json<ThreadList>, ApiError> {
-    let Query(params) =
-        params.map_err(|_| ApiError::invalid_request("the query string is not valid"))?;
-    let page = service(&state, &project)
+    let page = project
+        .0
+        .messages(&state.registry)
         .threads(&ThreadQuery {
             agent: params.agent,
             task: params.task,
@@ -279,7 +268,7 @@ pub async fn show_thread(
     Path((_slug, id)): Path<(String, String)>,
 ) -> Result<Json<ThreadView>, ApiError> {
     let id = id.parse::<MessageId>().map_err(FoldError::from)?;
-    let thread = service(&state, &project).thread_view(id).await?;
+    let thread = project.0.messages(&state.registry).thread_view(id).await?;
     Ok(Json(thread.into()))
 }
 
@@ -334,7 +323,9 @@ pub async fn send_feedback(
             .transpose()
             .map_err(FoldError::from)?,
     };
-    let message = service(&state, &project)
+    let message = project
+        .0
+        .messages(&state.registry)
         .feedback(&human.actor(), feedback)
         .await?;
     Ok((StatusCode::CREATED, Json(message.into())))

@@ -14,7 +14,7 @@ use utoipa_axum::routes;
 
 use super::Project;
 use super::actor::Human;
-use super::error::{ApiError, ApiJson, ErrorEnvelope};
+use super::error::{ApiError, ApiJson, ErrorEnvelope, fold};
 use super::events::{CheckpointSummary, DurableEventType};
 use super::reviews::ReviewVerdict;
 use crate::daemon::AppState;
@@ -905,10 +905,6 @@ fn label_names(names: &[String]) -> Result<Vec<LabelName>, ApiError> {
         .collect()
 }
 
-fn fold<T, E: Into<FoldError>>(result: Result<T, E>) -> Result<T, ApiError> {
-    result.map_err(|error| ApiError(error.into()))
-}
-
 /// The board read model.
 #[utoipa::path(
     get,
@@ -1365,17 +1361,8 @@ pub async fn add_checklist_item(
     Path((_slug, task)): Path<(String, String)>,
     ApiJson(body): ApiJson<NewChecklistItemBody>,
 ) -> Result<(StatusCode, Json<ChecklistItemView>), ApiError> {
-    let content = match (body.text, body.linked_task) {
-        (Some(text), None) => ItemContent::Step(fold(StepText::parse(&text))?),
-        (None, Some(child)) => ItemContent::Linked(id(&child)?),
-        _ => {
-            return Err(ApiError::invalid_request(
-                "give text or linked_task, not both",
-            ));
-        }
-    };
     let item = service::NewChecklistItem {
-        content,
+        content: service::item_content(body.text.as_deref(), body.linked_task.as_deref())?,
         checklist: fold(
             body.checklist
                 .as_deref()
@@ -1435,9 +1422,8 @@ pub async fn update_checklist_item(
                     .map(ChecklistName::parse)
                     .transpose(),
             )?;
-            let position = body.position.unwrap_or(u32::MAX);
             tasks
-                .move_checklist_item(&actor, item, position, checklist)
+                .move_checklist_item(&actor, item, body.position, checklist)
                 .await?
         }
         (_, false) => {
@@ -1540,7 +1526,7 @@ mod tests {
     #[test]
     fn every_status_and_attention_kind_has_its_wire_name() {
         for status in fold_core::TaskStatus::ALL {
-            let wire = serde_json::to_value(TaskStatus::from(*status)).unwrap();
+            let wire = serde_json::to_value(TaskStatus::from(status)).unwrap();
             assert_eq!(wire, status.as_str());
         }
         for kind in [

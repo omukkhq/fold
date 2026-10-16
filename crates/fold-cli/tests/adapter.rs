@@ -43,6 +43,25 @@ async fn three_adapters_started_together_leave_one_daemon_and_read_the_same_stat
 }
 
 #[tokio::test]
+async fn an_adapter_connects_to_the_socket_in_fold_socket() {
+    let host = Host::new().await;
+    let socket = host.dir.path().join("by-hand.sock");
+    let mut command = host.fold(&["mcp"], &host.root);
+    command.env("FOLD_SOCKET", &socket);
+    let (client, mut child) = adapter(command).await;
+    let guard = DaemonGuard(daemons(&socket));
+    assert_eq!(
+        guard.0.len(),
+        1,
+        "the adapter started the daemon of FOLD_SOCKET"
+    );
+    assert!(daemons(&host.default_socket()).is_empty());
+    client.cancel().await.unwrap();
+    assert!(child.wait().await.unwrap().success());
+    guard.stop().await;
+}
+
+#[tokio::test]
 async fn an_adapter_outside_every_project_writes_one_line_and_exits_1() {
     let host = Host::new().await;
     let outside = host.dir.path().join("elsewhere");
@@ -59,7 +78,7 @@ async fn an_adapter_outside_every_project_writes_one_line_and_exits_1() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert_eq!(
         stderr,
-        "fld mcp: project_not_found: no registered project holds this directory (run fld init in the project root)\n"
+        "fld mcp: project_not_found: no registered project holds this directory (run the command inside a project directory, or fld init one)\n"
     );
     guard.stop().await;
 }

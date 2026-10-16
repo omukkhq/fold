@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
+import { useNow } from "@/live/useNow";
 import type { Comparison } from "@/api/diff";
 import { fileDiffQuery, workspaceQuery } from "@/api/queries";
 import { repositoryQuery } from "@/api/repositoryQueries";
@@ -112,7 +113,7 @@ export function DiffScreen({
   onSelectFile,
 }: DiffScreenProps) {
   const [selection, setSelection] = useState<DiffSelection | null>(null);
-  const [now] = useState(() => Date.now());
+  const now = useNow(true, 30_000);
   const files = comparison ? listedFiles(comparison.files) : [];
   const shown = shownEntry(files, comparison?.warnings ?? [], search.path);
   const file = shown?.kind === "file" ? shown.file : null;

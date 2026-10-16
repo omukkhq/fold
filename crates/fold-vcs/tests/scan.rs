@@ -15,7 +15,7 @@ use fold_vcs::paths::RepoPath;
 use fold_vcs::platform::Capabilities;
 use fold_vcs::scan::{
     ChangeKind, DEFAULT_MAX_FILE_BYTES, PathChange, ScanOptions, ScanResult, SkipReason, changes,
-    count_changes, rescan_paths, scan,
+    count_changes, rescan_paths, rescan_scope, scan,
 };
 
 use crate::common::*;
@@ -202,6 +202,20 @@ fn ignore_fixture() -> (tempfile::TempDir, std::path::PathBuf) {
         write(&root, path, b"x");
     }
     (dir, root)
+}
+
+#[test]
+fn an_ignore_file_starting_with_a_byte_order_mark_still_applies_and_a_linked_one_is_not_read() {
+    let (dir, root) = workspace();
+    write(&root, ".gitignore", "\u{feff}*.log\n".as_bytes());
+    write(&root, "a.log", b"x");
+    write(&root, "src/b.tmp", b"x");
+    write(dir.path(), "outside", b"*.tmp\n");
+    symlink(dir.path().join("outside"), root.join("src/.gitignore")).unwrap();
+    assert_eq!(
+        tracked(&root),
+        [".gitignore", "src/.gitignore", "src/b.tmp"]
+    );
 }
 
 #[test]
@@ -536,6 +550,38 @@ fn rescan_looks_at_the_touched_paths_only() {
     symlink("a.txt", root.join("via")).unwrap();
     let found = rescan_paths(&root, &mut index, &[rp("via/inner")], &opts).unwrap();
     assert!(found.entries.is_empty());
+}
+
+#[test]
+fn a_new_directory_touched_at_every_level_is_hashed_once() {
+    let (_dir, root) = workspace();
+    write(&root, "old.txt", b"old");
+    let mut index = StatIndex::empty(HOST);
+    run(&root, &mut index);
+    let rules = IgnoreRules::new(&root);
+    let opts = options(&rules, HOST, DEFAULT_MAX_FILE_BYTES);
+    write(&root, "new/a/b/f.txt", b"deep");
+    let touched = [rp("new/a/b/f.txt"), rp("new/a/b"), rp("new/a"), rp("new")];
+    let found = rescan_paths(&root, &mut index, &touched, &opts).unwrap();
+    assert_eq!(flat_paths(&found.entries), ["new/a/b/f.txt"]);
+    assert_eq!(found.hashed, 1);
+}
+
+#[test]
+fn the_rescan_scope_keeps_only_targets_no_other_target_covers() {
+    let touched = [
+        rp("a/b"),
+        rp("a-b/c"),
+        rp("a"),
+        rp("x/y/z"),
+        rp("x/.gitignore"),
+        rp("a/b"),
+    ];
+    assert_eq!(
+        rescan_scope(&touched).unwrap(),
+        [rp("a"), rp("a-b/c"), rp("x")]
+    );
+    assert_eq!(rescan_scope(&[rp("a"), rp(".foldignore")]), None);
 }
 
 #[test]

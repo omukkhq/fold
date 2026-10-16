@@ -1,11 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use fold_core::{TaskId, Timestamp};
+use fold_core::TaskId;
+use fold_store::SqliteConnection;
 use fold_store::tasks::claims;
 use fold_store::{Store, StoreError, messages};
 
 use crate::live::LiveState;
-use crate::services::reviews::awaiting_human_review;
+use crate::services::reviews::awaiting_human_review_in;
 
 /// Why a task needs a person. The daemon decides every kind; no client derives one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -36,20 +37,31 @@ pub struct AttentionItem {
     pub kind: AttentionKind,
 }
 
-/// The attention items of each task in `task_ids`, read from the read pool of `read` and decided at `now`; `stalled` holds the tasks whose workspace is stalled, from [`stalled_tasks`]. Every id gets an entry; an empty list means nothing needs a person.
+/// The attention items of each task in `task_ids`, read in one read transaction of `read`; `stalled` holds the tasks whose workspace is stalled, from [`stalled_tasks`]. No item depends on the time of the read: the lease sweeper marks a stale claim and the stall job sets the stalled flag. Every id gets an entry; an empty list means nothing needs a person.
 pub async fn attention(
     read: &Store,
     task_ids: &[TaskId],
     stalled: &BTreeSet<TaskId>,
-    _now: Timestamp,
 ) -> Result<BTreeMap<TaskId, Vec<AttentionItem>>, StoreError> {
-    let questions = messages::tasks_awaiting_human(read.read()).await?;
-    let human_review: BTreeSet<TaskId> = awaiting_human_review(read)
+    let mut tx = read.read().begin().await?;
+    let items = attention_in(&mut tx, task_ids, stalled).await?;
+    tx.commit().await?;
+    Ok(items)
+}
+
+/// [`attention`] on `conn`, so a caller reads it in the same snapshot as the rest of its view.
+pub async fn attention_in(
+    conn: &mut SqliteConnection,
+    task_ids: &[TaskId],
+    stalled: &BTreeSet<TaskId>,
+) -> Result<BTreeMap<TaskId, Vec<AttentionItem>>, StoreError> {
+    let questions = messages::tasks_awaiting_human(&mut *conn).await?;
+    let human_review: BTreeSet<TaskId> = awaiting_human_review_in(&mut *conn)
         .await?
         .into_iter()
         .map(|waiting| waiting.task)
         .collect();
-    let stale_claims = claims::tasks_with_stale_claims(read.read()).await?;
+    let stale_claims = claims::tasks_with_stale_claims(&mut *conn).await?;
     Ok(task_ids
         .iter()
         .map(|id| {

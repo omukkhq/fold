@@ -5,7 +5,7 @@ use std::os::unix::fs::PermissionsExt;
 
 use fold_core::tree::{EntryKind, FlatEntry};
 use fold_vcs::index::StatIndex;
-use fold_vcs::materialise::{Batch, Synced, fill_missing, materialise, remove_entry, write_entry};
+use fold_vcs::materialise::{Batch, Synced, materialise, remove_entry, write_entry};
 use fold_vcs::paths::{RepoPath, resolve};
 
 use crate::common::*;
@@ -54,51 +54,6 @@ fn a_tree_is_written_with_content_modes_and_links() {
         names(&root.join(".fold/tmp")).is_empty(),
         "no temp files remain"
     );
-}
-
-#[test]
-fn fill_missing_writes_only_the_entries_a_stopped_materialise_left_out() {
-    let (dir, store) = store();
-    let sampled = sample(&store);
-    let absent = dir.path().join("absent");
-    assert_eq!(
-        fill_missing(&store, &sampled, &absent, &opts(HOST, true)).unwrap(),
-        4
-    );
-    assert_eq!(
-        fs::read(absent.join("src/deep/run.sh")).unwrap(),
-        b"#!/bin/sh\n"
-    );
-    assert_eq!(mode(&absent.join("src/lib.rs")), 0o444);
-
-    let root = dir.path().join("ws");
-    materialise(&store, &sampled, &root, &opts(HOST, true)).unwrap();
-    fs::remove_file(root.join("src/lib.rs")).unwrap();
-    fs::remove_dir_all(root.join("src/deep")).unwrap();
-    fs::remove_file(root.join("empty")).unwrap();
-    fs::write(root.join("empty"), b"kept").unwrap();
-    assert_eq!(
-        fill_missing(&store, &sampled, &root, &opts(HOST, true)).unwrap(),
-        2
-    );
-    assert_eq!(
-        fs::read(root.join("src/lib.rs")).unwrap(),
-        b"pub fn x() {}\n"
-    );
-    assert_eq!(mode(&root.join("src/deep/run.sh")), 0o555);
-    assert_eq!(fs::read(root.join("empty")).unwrap(), b"kept");
-    assert_eq!(
-        fill_missing(&store, &sampled, &root, &opts(HOST, true)).unwrap(),
-        0
-    );
-
-    let empty = tree(&store, &[]);
-    let created = dir.path().join("created");
-    assert_eq!(
-        fill_missing(&store, &empty, &created, &opts(HOST, true)).unwrap(),
-        0
-    );
-    assert!(created.is_dir());
 }
 
 #[test]

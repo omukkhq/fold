@@ -88,7 +88,7 @@ impl WorkspaceService {
         })
     }
 
-    /// One write transaction that moves `row` to `active` (`present`) or `missing` with its event. False when the row was no longer in the other state.
+    /// One write transaction that moves `row` to `active` (`present`) or `missing` with its event. False when the row had already left the other state.
     async fn move_state(&self, row: &WorkspaceRow, present: bool) -> Result<bool, WorkspaceError> {
         let event_type = if present {
             types::WORKSPACE_RECOVERED
@@ -119,7 +119,7 @@ impl WorkspaceService {
         if let Some(live) = &self.live
             && let Err(error) = live.attach(workspace).await
         {
-            tracing::warn!(workspace = %workspace, code = error.code().unwrap_or("store_error"), "the live state did not start; the next read of its changes starts it");
+            tracing::warn!(workspace = %workspace, code = error.log_code(), "the live state did not start; the next read of its changes starts it");
         }
     }
 }

@@ -392,7 +392,7 @@ async fn move_checklist_item_keeps_positions_unique_and_dense() {
 
     let head = fx.head().await;
     fx.tasks
-        .move_checklist_item(&human(), ids[3], 0, None)
+        .move_checklist_item(&human(), ids[3], Some(0), None)
         .await
         .unwrap();
     assert_eq!(
@@ -412,7 +412,7 @@ async fn move_checklist_item_keeps_positions_unique_and_dense() {
     assert_eq!(events[0].data["fields"], json!(["position"]));
 
     fx.tasks
-        .move_checklist_item(&human(), ids[3], 99, None)
+        .move_checklist_item(&human(), ids[3], Some(99), None)
         .await
         .unwrap();
     assert_eq!(
@@ -431,7 +431,7 @@ async fn move_checklist_item_keeps_positions_unique_and_dense() {
         .move_checklist_item(
             &human(),
             ids[1],
-            0,
+            Some(0),
             Some(ChecklistName::parse("Later").unwrap()),
         )
         .await
@@ -452,7 +452,7 @@ async fn move_checklist_item_keeps_positions_unique_and_dense() {
 
     let head = fx.head().await;
     fx.tasks
-        .move_checklist_item(&human(), ids[0], 0, None)
+        .move_checklist_item(&human(), ids[0], Some(0), None)
         .await
         .unwrap();
     assert_eq!(
@@ -465,7 +465,7 @@ async fn move_checklist_item_keeps_positions_unique_and_dense() {
         .move_checklist_item(
             &human(),
             ids[2],
-            5,
+            None,
             Some(ChecklistName::parse("Done later").unwrap()),
         )
         .await
@@ -484,14 +484,19 @@ async fn move_checklist_item_keeps_positions_unique_and_dense() {
 
     let missing = fx
         .tasks
-        .move_checklist_item(&human(), ChecklistItemId::from_number(99).unwrap(), 0, None)
+        .move_checklist_item(
+            &human(),
+            ChecklistItemId::from_number(99).unwrap(),
+            Some(0),
+            None,
+        )
         .await
         .unwrap_err();
     assert_eq!(refusal(missing).0, codes::CHECKLIST_ITEM_NOT_FOUND);
     fx.tasks.archive_task(&human(), t(1)).await.unwrap();
     let closed = fx
         .tasks
-        .move_checklist_item(&human(), ids[0], 1, None)
+        .move_checklist_item(&human(), ids[0], Some(1), None)
         .await
         .unwrap_err();
     assert_eq!(refusal(closed).0, codes::TASK_CLOSED);

@@ -194,6 +194,40 @@ impl Git {
             .map_err(|error| wait_error(&error, what))
     }
 
+    /// The standard output of a command that exits 0, or `None` when it exits 1, which the queries that use it give for an answer of "none"; any other exit is a failure.
+    pub(crate) fn output_or_none<S: AsRef<OsStr>>(
+        &self,
+        repo: &Path,
+        args: &[S],
+        what: &'static str,
+    ) -> Result<Option<Vec<u8>>, FoldError> {
+        let mut command = self.command(repo);
+        command.args(args).stdout(Stdio::piped());
+        let output = Self::spawn(&mut command, what)?
+            .wait_with_output()
+            .map_err(|error| wait_error(&error, what))?;
+        match output.status.code() {
+            Some(0) => Ok(Some(output.stdout)),
+            Some(1) => Ok(None),
+            _ => Err(failed(what, output.status)),
+        }
+    }
+
+    /// True when a check exits 0 and false when it exits 1; any other exit is a failure.
+    pub(crate) fn check<S: AsRef<OsStr>>(
+        &self,
+        repo: &Path,
+        args: &[S],
+        what: &'static str,
+    ) -> Result<bool, FoldError> {
+        let status = self.status(repo, args, what)?;
+        match status.code() {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
+            _ => Err(failed(what, status)),
+        }
+    }
+
     /// Whether a command exits zero, for the queries whose failure is the answer.
     pub(crate) fn succeeds<S: AsRef<OsStr>>(
         &self,
@@ -225,45 +259,19 @@ impl Git {
     /// The commit `refname` points to, or `None` when the ref does not exist.
     pub fn ref_commit(&self, repo: &Path, refname: &str) -> Result<Option<CommitId>, FoldError> {
         check_rev(refname)?;
-        let mut command = self.command(repo);
-        command
-            .args(["rev-parse", "--verify", "--quiet", "--end-of-options"])
-            .arg(refname)
-            .stdout(Stdio::piped());
-        let output = Self::spawn(&mut command, "rev-parse")?
-            .wait_with_output()
-            .map_err(|error| wait_error(&error, "rev-parse"))?;
-        match output.status.code() {
-            Some(0) => parse_commit_line(&output.stdout, "rev-parse").map(Some),
-            Some(1) => Ok(None),
-            _ => Err(failed("rev-parse", output.status)),
-        }
-    }
-
-    /// Moves `refname` to `new` only while it points to `old`, or deletes it while it points to `old` when `new` is `None`.
-    pub fn update_ref(
-        &self,
-        repo: &Path,
-        refname: &str,
-        new: Option<&CommitId>,
-        old: &CommitId,
-    ) -> Result<(), FoldError> {
-        check_rev(refname)?;
-        let mut command = self.command(repo);
-        command.arg("update-ref");
-        match new {
-            Some(new) => command.arg(refname).arg(new.as_str()),
-            None => command.arg("-d").arg(refname),
-        };
-        command.arg(old.as_str());
-        let status = Self::spawn(&mut command, "update-ref")?
-            .wait()
-            .map_err(|error| wait_error(&error, "update-ref"))?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(failed("update-ref", status))
-        }
+        self.output_or_none(
+            repo,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "--end-of-options",
+                refname,
+            ],
+            "rev-parse",
+        )?
+        .map(|out| parse_commit_line(&out, "rev-parse"))
+        .transpose()
     }
 
     /// Whether `repo` holds `commit` as a commit object.

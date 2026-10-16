@@ -1,8 +1,9 @@
-use fold_core::{ProposalId, TaskId, TaskStatus, Timestamp};
-use sqlx::SqliteExecutor;
+use fold_core::{AgentName, ProposalId, TaskId, TaskStatus, Timestamp};
+use sqlx::{Acquire, SqliteExecutor};
 
-use super::time;
+use crate::columns::{count, time};
 use crate::error::StoreError;
+use crate::store::WriteTx;
 
 /// A stored hand-off note. The body is content: it goes to the worker's next session and to `list_workers`, never into a log or an event.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,12 +28,8 @@ pub struct OpenProposalRow {
     pub title: String,
 }
 
-fn count(value: i64, column: &'static str) -> Result<u64, StoreError> {
-    u64::try_from(value).map_err(|_| StoreError::Corrupt(column))
-}
-
 pub async fn insert_handoff(
-    executor: impl SqliteExecutor<'_>,
+    tx: &mut WriteTx,
     agent_id: i64,
     session_id: &str,
     body: &str,
@@ -47,7 +44,7 @@ pub async fn insert_handoff(
         body,
         now
     )
-    .fetch_one(executor)
+    .fetch_one(tx.conn())
     .await?)
 }
 
@@ -70,6 +67,32 @@ pub async fn latest_handoff(
         })
     })
     .transpose()
+}
+
+/// The newest note of every agent that wrote one, by agent name, read in one query.
+pub async fn latest_handoffs(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Vec<(AgentName, HandoffRow)>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT g.name AS "agent!: String", h.session_id, h.body, h.created_at
+           FROM handoffs h JOIN agents g ON g.id = h.agent_id
+           WHERE h.id = (SELECT MAX(x.id) FROM handoffs x WHERE x.agent_id = h.agent_id)
+           ORDER BY g.name"#
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok((
+                AgentName::parse(&row.agent).map_err(|_| StoreError::Corrupt("agents.name"))?,
+                HandoffRow {
+                    session_id: row.session_id,
+                    body: row.body,
+                    created_at: time(row.created_at, "handoffs.created_at")?,
+                },
+            ))
+        })
+        .collect()
 }
 
 /// The newest note that session `session_id` wrote.
@@ -112,7 +135,7 @@ pub async fn handoff_asked(
 
 /// Records that fold asked the row's session for a note after its `turns`-th turn. A row that was asked already keeps its first ask; returns whether this call asked.
 pub async fn set_handoff_asked(
-    executor: impl SqliteExecutor<'_>,
+    tx: &mut WriteTx,
     worker_process_id: i64,
     turns: u64,
     now: Timestamp,
@@ -126,14 +149,14 @@ pub async fn set_handoff_asked(
         now,
         turns
     )
-    .execute(executor)
+    .execute(tx.conn())
     .await?;
     Ok(result.rows_affected() == 1)
 }
 
 /// Starts the row again in the new session `session_id` with an empty context and no ask, for a fresh process of the same worker.
 pub async fn refresh_session(
-    executor: impl SqliteExecutor<'_>,
+    tx: &mut WriteTx,
     worker_process_id: i64,
     session_id: &str,
     now: Timestamp,
@@ -149,25 +172,26 @@ pub async fn refresh_session(
         session_id,
         now
     )
-    .execute(executor)
+    .execute(tx.conn())
     .await?;
     Ok(())
 }
 
-/// The first `limit` tasks that are neither done nor archived, in number order, with how many there are in all; with `label_id`, only the tasks with that label.
+/// The first `limit` tasks that are neither done nor archived, in number order, with how many there are in all; with `label_id`, only the tasks with that label. The count and the list are read in one transaction, so they agree.
 pub async fn open_area_tasks(
     conn: &mut sqlx::SqliteConnection,
     label_id: Option<i64>,
     limit: u64,
 ) -> Result<(Vec<OpenTaskRow>, u64), StoreError> {
     let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+    let mut tx = conn.begin().await?;
     let total = sqlx::query_scalar!(
         r#"SELECT COUNT(*) AS "count!: i64" FROM tasks t
            WHERE t.status <> 'done' AND t.archived_at IS NULL
              AND (?1 IS NULL OR EXISTS (SELECT 1 FROM task_labels l WHERE l.task_id = t.id AND l.label_id = ?1))"#,
         label_id
     )
-    .fetch_one(&mut *conn)
+    .fetch_one(&mut *tx)
     .await?;
     let rows = sqlx::query!(
         r#"SELECT t.number AS "number!: i64", t.status, t.title FROM tasks t
@@ -177,7 +201,7 @@ pub async fn open_area_tasks(
         label_id,
         limit
     )
-    .fetch_all(&mut *conn)
+    .fetch_all(&mut *tx)
     .await?;
     let tasks = rows
         .into_iter()
@@ -192,23 +216,25 @@ pub async fn open_area_tasks(
             })
         })
         .collect::<Result<_, StoreError>>()?;
+    tx.commit().await?;
     Ok((tasks, count(total, "tasks")?))
 }
 
-/// The first `limit` open proposals in number order, with how many there are in all; with `label_id`, only the proposals of tasks with that label.
+/// The first `limit` open proposals in number order, with how many there are in all; with `label_id`, only the proposals of tasks with that label. The count and the list are read in one transaction, so they agree.
 pub async fn open_area_proposals(
     conn: &mut sqlx::SqliteConnection,
     label_id: Option<i64>,
     limit: u64,
 ) -> Result<(Vec<OpenProposalRow>, u64), StoreError> {
     let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+    let mut tx = conn.begin().await?;
     let total = sqlx::query_scalar!(
         r#"SELECT COUNT(*) AS "count!: i64" FROM proposals p
            WHERE p.state = 'open'
              AND (?1 IS NULL OR EXISTS (SELECT 1 FROM task_labels l WHERE l.task_id = p.task_id AND l.label_id = ?1))"#,
         label_id
     )
-    .fetch_one(&mut *conn)
+    .fetch_one(&mut *tx)
     .await?;
     let rows = sqlx::query!(
         r#"SELECT p.number AS "number!: i64", t.number AS "task!: i64", p.title FROM proposals p
@@ -219,7 +245,7 @@ pub async fn open_area_proposals(
         label_id,
         limit
     )
-    .fetch_all(&mut *conn)
+    .fetch_all(&mut *tx)
     .await?;
     let proposals = rows
         .into_iter()
@@ -232,5 +258,6 @@ pub async fn open_area_proposals(
             })
         })
         .collect::<Result<_, StoreError>>()?;
+    tx.commit().await?;
     Ok((proposals, count(total, "proposals")?))
 }

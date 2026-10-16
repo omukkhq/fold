@@ -136,6 +136,86 @@ pub async fn edges_conn(conn: &mut SqliteConnection) -> Result<Vec<EdgeRow>, Sto
     .collect()
 }
 
+/// The edges in which `task` needs another task or another task needs it, in task number order.
+pub async fn edges_of(
+    conn: &mut SqliteConnection,
+    task: TaskId,
+) -> Result<Vec<EdgeRow>, StoreError> {
+    let number = task.to_db();
+    sqlx::query_as!(
+        RawEdge,
+        r#"SELECT t.number AS "task!: i64", n.number AS "needs!: i64", d.origin, d.created_by,
+                  d.created_at
+           FROM dependencies d
+           JOIN tasks t ON t.id = d.task_id
+           JOIN tasks n ON n.id = d.needs_task_id
+           WHERE t.number = ?1 OR n.number = ?1
+           ORDER BY t.number, n.number"#,
+        number
+    )
+    .fetch_all(conn)
+    .await?
+    .into_iter()
+    .map(RawEdge::into_row)
+    .collect()
+}
+
+/// The edges among `seeds` and every task that needs one of them, directly or not, as `(task, needs)` pairs: the part of the graph a recompute of `seeds` orders. Read on the writer's connection by the command that changes the graph.
+pub async fn dependent_edges(
+    conn: &mut SqliteConnection,
+    seeds: &[TaskId],
+) -> Result<Vec<(TaskId, TaskId)>, StoreError> {
+    let numbers = serde_json::Value::from(seeds.iter().map(|id| id.to_db()).collect::<Vec<i64>>())
+        .to_string();
+    let rows = sqlx::query!(
+        r#"WITH RECURSIVE reach(id) AS (
+               SELECT id FROM tasks WHERE number IN (SELECT value FROM json_each(?1))
+               UNION
+               SELECT d.task_id FROM dependencies d JOIN reach r ON d.needs_task_id = r.id
+           )
+           SELECT t.number AS "task!: i64", n.number AS "needs!: i64"
+           FROM dependencies d
+           JOIN reach r ON r.id = d.needs_task_id
+           JOIN tasks t ON t.id = d.task_id
+           JOIN tasks n ON n.id = d.needs_task_id
+           ORDER BY t.number, n.number"#,
+        numbers
+    )
+    .fetch_all(conn)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            let task = TaskId::try_from_db(row.task).ok_or(StoreError::Corrupt("tasks.number"))?;
+            let needs =
+                TaskId::try_from_db(row.needs).ok_or(StoreError::Corrupt("tasks.number"))?;
+            Ok((task, needs))
+        })
+        .collect()
+}
+
+/// Whether `from` is `to` or needs it, directly or through other tasks. A new edge "`to` needs `from`" would close a cycle exactly then.
+pub async fn needs_transitively(
+    conn: &mut SqliteConnection,
+    from: TaskId,
+    to: TaskId,
+) -> Result<bool, StoreError> {
+    let (from, to) = (from.to_db(), to.to_db());
+    Ok(sqlx::query_scalar!(
+        r#"WITH RECURSIVE reach(id) AS (
+               SELECT id FROM tasks WHERE number = ?1
+               UNION
+               SELECT d.needs_task_id FROM dependencies d JOIN reach r ON d.task_id = r.id
+           )
+           SELECT EXISTS (
+               SELECT 1 FROM reach r JOIN tasks t ON t.id = r.id WHERE t.number = ?2
+           ) AS "reached!: bool""#,
+        from,
+        to
+    )
+    .fetch_one(conn)
+    .await?)
+}
+
 /// The tasks `task` needs directly, by either origin, with their cached status, in task number order.
 pub async fn prerequisite_statuses(
     executor: impl SqliteExecutor<'_>,

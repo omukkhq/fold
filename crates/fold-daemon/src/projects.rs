@@ -11,12 +11,14 @@ use fold_vcs::platform::Capabilities;
 use crate::jobs::{self, AutoCommit};
 use crate::live::{LiveConfig, LiveState};
 use crate::push::{self, PushTargets, PushTask};
-use crate::services::agents::{AgentService, Launcher, SeenPresence, Supervisor};
+use crate::services::agents::{AgentService, Launcher, SeenPresence, Supervisor, code_of};
 use crate::services::events::EventBus;
+use crate::services::messages::MessageService;
 use crate::services::projects::{GitAttention, RemoteContext, load_config};
 use crate::services::reviews::ReviewService;
 use crate::services::tasks::TaskService;
 use crate::services::workspaces::{WorkspaceLocks, WorkspaceService};
+use crate::support::unpoisoned;
 
 /// An open project: its database, its clock and the live state shared by every request. Later domains add their state here.
 pub struct ProjectHandle {
@@ -29,7 +31,7 @@ pub struct ProjectHandle {
     pub bus: EventBus,
     /// What the calls and the presence job last saw of each agent's presence.
     pub presence: SeenPresence,
-    /// Reads the claim lease from the project's configuration on each use, so every transport applies the same lease.
+    /// Reads the claim lease from the project's configuration on each use, so every transport applies the same lease; the footer's near-stale count reads it again only when the file changed.
     pub tasks: TaskService,
     /// Held for the whole integration procedure, so a proposal integration and a pull integration never run at the same time. Every review service of the project shares it.
     pub integration: Arc<tokio::sync::Mutex<()>>,
@@ -106,11 +108,11 @@ impl ProjectHandle {
         }
         refuse_old_layout(&row.slug, &paths).await?;
         let config = load_config(&paths).await.unwrap_or_else(|error| {
-            tracing::warn!(project = %row.slug, code = error.code().unwrap_or("store_error"), "project configuration is invalid; the live state uses the defaults");
+            tracing::warn!(project = %row.slug, code = error.log_code(), "project configuration is invalid; the live state uses the defaults");
             ProjectConfig::default()
         });
         let store = Store::open_project(&paths).await.map_err(|error| {
-            tracing::warn!(project = %row.slug, code = error.code().unwrap_or("store_error"), %error, "project failed to open");
+            tracing::warn!(project = %row.slug, code = error.log_code(), "project failed to open");
             unavailable(&row.slug)
         })?;
         let bus = EventBus::new();
@@ -199,6 +201,16 @@ impl ProjectHandle {
             .with_workers(self.workers.clone())
     }
 
+    /// The message service of this project, which reaches the humans of `registry`.
+    pub fn messages(&self, registry: &Store) -> MessageService {
+        MessageService::new(
+            self.store.clone(),
+            registry.clone(),
+            self.bus.clone(),
+            self.clock.clone(),
+        )
+    }
+
     /// The review service of this project. Every transport builds it here, per request or session, so it always shares the project's integration mutex, object lock and workspace locks, and knows the humans of `registry`.
     pub fn reviews(&self, registry: &Store) -> ReviewService {
         ReviewService::new(
@@ -253,17 +265,11 @@ impl Projects {
     }
 
     pub fn slot(&self, slug: &str) -> Option<Slot> {
-        self.slots
-            .read()
-            .ok()
-            .and_then(|slots| slots.get(slug).cloned())
+        unpoisoned(self.slots.read()).get(slug).cloned()
     }
 
     pub fn handles(&self) -> Vec<Arc<ProjectHandle>> {
-        let Ok(slots) = self.slots.read() else {
-            return Vec::new();
-        };
-        slots
+        unpoisoned(self.slots.read())
             .values()
             .filter_map(|slot| match slot {
                 Slot::Open(handle) => Some(handle.clone()),
@@ -313,16 +319,14 @@ impl Projects {
             }
             jobs::reconcile_workspaces(handle).await;
             if let Err(error) = handle.agents().close_orphan_sessions().await {
-                tracing::error!(project = %row.slug, %error, "could not end orphan sessions");
+                tracing::error!(project = %row.slug, code = code_of(&error), "could not end orphan sessions");
             }
         }
         let slot = match &outcome {
             Ok(handle) => Slot::Open(handle.clone()),
             Err(_) => Slot::Unavailable,
         };
-        if let Ok(mut slots) = self.slots.write() {
-            slots.insert(row.slug.clone(), slot);
-        }
+        unpoisoned(self.slots.write()).insert(row.slug.clone(), slot);
         outcome.map(|handle| (handle, true))
     }
 }
@@ -330,6 +334,29 @@ impl Projects {
 /// Runs again every worker of `handle` that was working or idle when the last daemon stopped.
 pub async fn resume_workers(handle: &ProjectHandle) {
     if let Err(error) = handle.workers.resume_after_restart().await {
-        tracing::error!(project = %handle.slug, %error, "could not resume the workers");
+        tracing::error!(project = %handle.slug, code = code_of(&error), "could not resume the workers");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_poisoned_slot_map_keeps_its_slots() {
+        let projects = Projects::default();
+        projects
+            .slots
+            .write()
+            .unwrap()
+            .insert("web".to_owned(), Slot::Unavailable);
+        let poisoned = std::panic::catch_unwind(|| {
+            let _guard = projects.slots.write().unwrap();
+            panic!("poison the lock");
+        });
+        assert!(poisoned.is_err());
+        assert!(projects.slots.is_poisoned());
+        assert!(matches!(projects.slot("web"), Some(Slot::Unavailable)));
+        assert!(projects.handles().is_empty());
     }
 }

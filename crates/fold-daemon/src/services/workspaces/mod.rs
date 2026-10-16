@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use fold_core::{
     Clock, EventError, FoldError, ProjectConfig, ProjectPaths, ProposalId, RevisionId, WorkspaceId,
@@ -16,6 +16,7 @@ use super::projects::{Lease, ProjectError, load_config};
 use super::tasks::TaskError;
 use crate::live::LiveState;
 use crate::projects::ProjectHandle;
+use crate::support::{self, lock};
 
 mod adoption;
 mod attachments;
@@ -44,7 +45,8 @@ pub use changesets::RecordedChanges;
 pub use checkpoints::{CheckpointView, Restored};
 pub use compare::{ResolvedState, StateComparison, StateKind, StateRef, StateSummary};
 pub use lifecycle::{
-    ArchiveReason, CreatedWorkspace, WorkspaceDetails, WorkspaceRef, WorkspaceView, archive_in_tx,
+    Abandoned, ArchiveReason, CreatedWorkspace, WorkspaceDetails, WorkspaceRef, WorkspaceView,
+    archive_in_tx,
 };
 pub use reconcile::{Reconciled, Reconciliation};
 pub use repository::{
@@ -78,6 +80,11 @@ impl WorkspaceError {
             Self::Task(error) => error.code(),
             Self::Event(_) => None,
         }
+    }
+
+    /// The code a log line names: the stable code, or `internal_error` for an internal failure.
+    pub fn log_code(&self) -> &'static str {
+        self.code().unwrap_or(codes::INTERNAL_ERROR)
     }
 }
 
@@ -154,7 +161,7 @@ impl WorkspaceService {
     /// Reads the claim lease from the service's project `config.toml` on every command that takes a claim; an invalid file fails that command with `invalid_config`.
     #[must_use]
     pub fn with_project_config(mut self) -> Self {
-        self.lease = Lease::Config(self.paths.clone());
+        self.lease = Lease::config(self.paths.clone());
         self
     }
 
@@ -190,7 +197,7 @@ impl WorkspaceService {
         if let Some(live) = &self.live
             && let Err(error) = live.rescan(workspace).await
         {
-            tracing::debug!(workspace = %workspace, code = error.code().unwrap_or("store_error"), "the live state was not rescanned");
+            tracing::debug!(workspace = %workspace, code = error.log_code(), "the live state was not rescanned");
         }
     }
 
@@ -223,7 +230,7 @@ impl WorkspaceService {
             Err(error) => Err(error),
         };
         if let Err(error) = moved {
-            tracing::debug!(workspace = %workspace, code = error.code().unwrap_or("store_error"), "the live state did not take the new base");
+            tracing::debug!(workspace = %workspace, code = error.log_code(), "the live state did not take the new base");
         }
     }
 
@@ -269,7 +276,7 @@ impl WorkspaceLocks {
     /// Waits until no other operation runs on `workspace`. A lock that no guard or waiter holds any more is dropped from the map here.
     pub async fn lock(&self, workspace: WorkspaceId) -> OwnedMutexGuard<()> {
         let lock = {
-            let mut locks = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut locks = lock(&self.0);
             locks.retain(|_, lock| Arc::strong_count(lock) > 1);
             locks.entry(workspace).or_default().clone()
         };
@@ -279,7 +286,7 @@ impl WorkspaceLocks {
     /// The lock of `workspace` when no other operation holds it, for work that is skipped rather than queued behind a command.
     pub fn try_lock(&self, workspace: WorkspaceId) -> Option<OwnedMutexGuard<()>> {
         let lock = {
-            let mut locks = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut locks = lock(&self.0);
             locks.retain(|_, lock| Arc::strong_count(lock) > 1);
             locks.entry(workspace).or_default().clone()
         };
@@ -308,13 +315,5 @@ fn open_objects(paths: &ProjectPaths) -> Result<ObjectStore, FoldError> {
 async fn blocking<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, FoldError> + Send + 'static,
 ) -> Result<T, WorkspaceError> {
-    tokio::task::spawn_blocking(work)
-        .await
-        .unwrap_or_else(|error| {
-            Err(FoldError::new(
-                codes::INTERNAL_ERROR,
-                format!("blocking work stopped: {error}"),
-            ))
-        })
-        .map_err(WorkspaceError::from)
+    Ok(support::blocking(work).await?)
 }

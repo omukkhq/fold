@@ -485,3 +485,77 @@ async fn a_proposal_closed_before_the_conflict_is_recorded_records_nothing() {
     assert_eq!(fx.count("SELECT COUNT(*) FROM messages").await, 0);
     assert_eq!(detail(&fx, None).await.conflict, None);
 }
+
+/// Changes requested after the merge found the conflict and before it was recorded make the record step, which reads the gates again, write nothing, and the procedure starts again, whose gate step then refuses with `changes_requested`. No conflicted row, flag, message or event is left behind, and main stays where it was.
+#[cfg(feature = "failpoints")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn changes_requested_before_the_conflict_is_recorded_record_nothing() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    const FAILPOINT: &str = "integration_before_conflict_record";
+    let fx = Fixture::new().await;
+    let review = conflicting(&fx).await;
+    let before = head(&fx).await;
+    let scenario = fail::FailScenario::setup();
+    let reached = Arc::new(AtomicBool::new(false));
+    let open = Arc::new(AtomicBool::new(false));
+    let (held_reached, held_open) = (reached.clone(), open.clone());
+    fail::cfg_callback(FAILPOINT, move || {
+        held_reached.store(true, Ordering::SeqCst);
+        while !held_open.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    })
+    .unwrap();
+    let reviews = fx.reviews.clone();
+    let reviewer = review.clone();
+    let integrate =
+        tokio::spawn(async move { reviews.integrate_proposal(&review, p(1), None).await });
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while !reached.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    fx.reviews
+        .submit_review(
+            &reviewer,
+            p(1),
+            1,
+            Verdict::RequestChanges,
+            "one more change",
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let seq = fx.last_seq().await;
+    open.store(true, Ordering::SeqCst);
+    let error = refusal(integrate.await.unwrap());
+    fail::remove(FAILPOINT);
+    scenario.teardown();
+
+    assert_eq!(error.code(), codes::CHANGES_REQUESTED);
+    assert_eq!(fx.last_seq().await, seq + 1, "only the refusal is recorded");
+    let last: String = sqlx::query_scalar("SELECT type FROM events ORDER BY seq DESC LIMIT 1")
+        .fetch_one(fx.project.store().read())
+        .await
+        .unwrap();
+    assert_eq!(last, "integration.refused");
+    let after = head(&fx).await;
+    assert_eq!((after.number, after.hash), (before.number, before.hash));
+    assert_eq!(
+        fx.count("SELECT COUNT(*) FROM integrations WHERE result = 'conflicted'")
+            .await,
+        0
+    );
+    assert_eq!(
+        fx.count("SELECT COUNT(*) FROM proposals WHERE conflicted = 1")
+            .await,
+        0
+    );
+    assert_eq!(fx.count("SELECT COUNT(*) FROM messages").await, 0);
+    assert_eq!(detail(&fx, None).await.conflict, None);
+}

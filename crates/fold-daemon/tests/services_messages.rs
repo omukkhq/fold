@@ -16,6 +16,8 @@ use fold_store::{StoreError, events, projects};
 use serde_json::json;
 use sqlx::Row;
 
+use crate::common::awaiting_human;
+
 #[cfg(test)]
 fn t(number: u32) -> TaskId {
     TaskId::from_number(number).unwrap()
@@ -617,7 +619,7 @@ async fn awaiting_human_drops_a_question_once_a_human_replies() {
         .send(&human("ana"), message(&["human:tanim"], "human to human"))
         .await
         .unwrap();
-    let waiting = fixture.messages.awaiting_human().await.unwrap();
+    let waiting = awaiting_human(fixture.project.store()).await;
     let ids: Vec<MessageId> = waiting.iter().map(|view| view.id).collect();
     assert_eq!(ids, [question.id, broadcast.id]);
     assert_eq!(waiting[0].task, Some(t(1)));
@@ -634,13 +636,10 @@ async fn awaiting_human_drops_a_question_once_a_human_replies() {
         .await
         .unwrap();
     assert_eq!(follow_up.task, Some(t(1)));
-    let ids: Vec<MessageId> = fixture
-        .messages
-        .awaiting_human()
+    let ids: Vec<MessageId> = awaiting_human(fixture.project.store())
         .await
-        .unwrap()
         .iter()
-        .map(|view| view.id)
+        .map(|row| row.id)
         .collect();
     assert_eq!(
         ids,
@@ -659,13 +658,10 @@ async fn awaiting_human_drops_a_question_once_a_human_replies() {
         )
         .await
         .unwrap();
-    let ids: Vec<MessageId> = fixture
-        .messages
-        .awaiting_human()
+    let ids: Vec<MessageId> = awaiting_human(fixture.project.store())
         .await
-        .unwrap()
         .iter()
-        .map(|view| view.id)
+        .map(|row| row.id)
         .collect();
     assert_eq!(ids, [broadcast.id]);
 }

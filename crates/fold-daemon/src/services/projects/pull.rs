@@ -3,10 +3,10 @@ use std::sync::Arc;
 
 use fold_core::merge::ConflictKind;
 use fold_core::object::ObjectHash;
-use fold_core::{Actor, FoldError, ProjectPaths, RevisionId, TaskId, WorkspaceId, codes};
+use fold_core::{Actor, FoldError, ProjectPaths, RevisionId, TaskId, WorkspaceId, codes, policy};
 use fold_store::{Store, StoreError, tasks, workspaces};
 use fold_vcs::git::{CommitId, Git};
-use fold_vcs::git_import::{GitImportOptions, archive_tree};
+use fold_vcs::git_import::{GitImportOptions, import_commit};
 use fold_vcs::git_remote::{fetch_branch, is_ancestor, merge_base, prepare_mirror};
 use fold_vcs::git_sync_map::SyncMap;
 use fold_vcs::integrate::tree_merge;
@@ -75,14 +75,7 @@ pub async fn pull(
     git: &Git,
     remote: Option<&str>,
 ) -> Result<PullOutcome, ProjectError> {
-    if !actor.is_human() {
-        return Err(FoldError::new(
-            codes::HUMAN_REQUIRED,
-            "only a human brings the remote branch into main",
-        )
-        .with_hint("ask a human to run fld pull")
-        .into());
-    }
+    policy::can_pull(actor).map_err(FoldError::from)?;
     let (handle, actor, git) = (Arc::clone(handle), actor.clone(), git.clone());
     let remote = remote.map(str::to_owned);
     tokio::spawn(async move { run(&handle, &actor, &git, remote.as_deref()).await })
@@ -187,9 +180,11 @@ async fn run(
         blocking(move || {
             let _objects = objects_guard;
             let objects = ObjectStore::open(&fold_dir)?;
-            let remote = archive_tree(&objects, &git, &mirror, tip.as_str(), &opts)?.tree;
+            let remote = import_commit(&objects, &git, &mirror, tip.as_str(), &opts)?.tree;
             let base = match base_commit {
-                Some(commit) => archive_tree(&objects, &git, &mirror, commit.as_str(), &opts)?.tree,
+                Some(commit) => {
+                    import_commit(&objects, &git, &mirror, commit.as_str(), &opts)?.tree
+                }
                 None => first_tree,
             };
             Ok((remote, base))
@@ -367,7 +362,7 @@ async fn map_fast_forward<H: Send + 'static>(
     let row = match workspaces::get_by_number(handle.store.read(), revision).await {
         Ok(row) => row,
         Err(error) => {
-            tracing::warn!(revision = %revision, code = error.code().unwrap_or("store_error"), "the pulled revision could not be read for the sync map");
+            tracing::warn!(revision = %revision, code = error.log_code(), "the pulled revision could not be read for the sync map");
             return;
         }
     };
@@ -382,7 +377,7 @@ async fn map_fast_forward<H: Send + 'static>(
     })
     .await;
     if let Err(error) = appended {
-        tracing::warn!(revision = %revision, code = error.code().unwrap_or("store_error"), "the sync map did not gain the pulled revision");
+        tracing::warn!(revision = %revision, code = error.log_code(), "the sync map did not gain the pulled revision");
     }
 }
 

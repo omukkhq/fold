@@ -174,7 +174,7 @@ pub struct HumanList {
     )
 )]
 pub async fn list_humans(State(state): State<AppState>) -> Result<Json<HumanList>, ApiError> {
-    let humans = fold_store::projects::list_humans(state.registry.read()).await?;
+    let humans = projects::list_humans(&state.registry).await?;
     Ok(Json(HumanList {
         humans: humans.iter().map(ToString::to_string).collect(),
     }))
@@ -332,7 +332,7 @@ pub struct GcRequest {
 }
 
 /// The counts of one garbage collection run.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct GcCounts {
     /// True when nothing was changed and the counts are what a run would do.
     pub dry_run: bool,
@@ -411,12 +411,15 @@ pub struct PushResult {
     pub remote: String,
     /// The remote branch.
     pub branch: String,
-    /// The first revision of this push; absent when up to date.
+    /// The first revision of this push; null when up to date.
+    #[schema(required = true)]
     pub first: Option<String>,
     /// The newest revision on the remote.
+    #[schema(required = true)]
     pub last: Option<String>,
     pub commits: usize,
-    /// The commit the remote branch points to; absent when up to date.
+    /// The commit the remote branch points to; null when up to date.
+    #[schema(required = true)]
     pub head: Option<String>,
 }
 
@@ -465,7 +468,7 @@ impl From<PushOutcome> for PushResult {
     responses(
         (status = 200, description = "The remote branch holds main", body = PushResult),
         (status = 400, description = "The human name or the query is not valid, or the project has several remotes and the query names none", body = ErrorEnvelope),
-        (status = 401, description = "The request names no human", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
         (status = 404, description = "Not on the socket, or the slug is not registered", body = ErrorEnvelope),
         (status = 409, description = "No remote is set, the remote is ahead or diverged, or the config or sync map is invalid", body = ErrorEnvelope),
         (status = 502, description = "A Git command failed", body = ErrorEnvelope),
@@ -515,16 +518,17 @@ pub struct PullResult {
     pub remote: String,
     /// The remote branch.
     pub branch: String,
-    /// The fetched tip of the remote branch; absent when the remote has no such branch.
+    /// The fetched tip of the remote branch; null when the remote has no such branch.
+    #[schema(required = true)]
     pub remote_commit: Option<String>,
-    /// The revision the pull integration made; absent unless integrated.
-    #[schema(example = "r18")]
+    /// The revision the pull integration made; null unless integrated.
+    #[schema(required = true, example = "r18")]
     pub revision: Option<String>,
-    /// The sync task that resolves a conflict; absent unless conflicted.
-    #[schema(example = "T-12")]
+    /// The sync task that resolves a conflict; null unless conflicted.
+    #[schema(required = true, example = "T-12")]
     pub task: Option<String>,
-    /// The sync task's workspace; absent unless conflicted.
-    #[schema(example = "ws-9")]
+    /// The sync task's workspace; null unless conflicted.
+    #[schema(required = true, example = "ws-9")]
     pub workspace: Option<String>,
     /// In path order; empty unless conflicted.
     pub conflicted: Vec<PullConflict>,
@@ -604,7 +608,7 @@ impl From<PullOutcome> for PullResult {
     responses(
         (status = 200, description = "Main holds the remote branch, or a sync task resolves the conflict", body = PullResult),
         (status = 400, description = "The human name or the query is not valid, or the project has several remotes and the query names none", body = ErrorEnvelope),
-        (status = 401, description = "The request names no human", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
         (status = 404, description = "Not on the socket, or the slug is not registered", body = ErrorEnvelope),
         (status = 409, description = "No remote is set, main moved during every attempt, the mirror diverged, or the config or sync map is invalid", body = ErrorEnvelope),
         (status = 502, description = "A Git command failed", body = ErrorEnvelope),

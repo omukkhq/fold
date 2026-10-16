@@ -1,3 +1,4 @@
+import { projectPath, withQuery } from "@/routes/paths";
 function diffHref(
   slug: string,
   from: string,
@@ -8,7 +9,7 @@ function diffHref(
   if (path !== undefined) {
     search.set("path", path);
   }
-  return `/p/${slug}/diff?${search.toString()}`;
+  return withQuery(projectPath(slug, "diff"), search);
 }
 
 /** A working file: the workspace's base against its working files. */
@@ -31,5 +32,5 @@ export function checkpointHref(
 }
 
 export function taskHref(slug: string, task: string): string {
-  return `/p/${slug}/t/${task}`;
+  return projectPath(slug, "t", task);
 }

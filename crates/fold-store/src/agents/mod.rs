@@ -8,16 +8,21 @@ use fold_core::{
 };
 use sqlx::{SqliteConnection, SqliteExecutor};
 
+use crate::columns::{optional_time, time};
 use crate::error::StoreError;
+use crate::store::WriteTx;
 use crate::workspaces::WorkspaceState;
 
+mod activity;
 mod handoffs;
 mod questions;
 mod workers;
 
+pub use activity::agent_activity;
 pub use handoffs::{
     HandoffRow, OpenProposalRow, OpenTaskRow, handoff_asked, insert_handoff, latest_handoff,
-    open_area_proposals, open_area_tasks, refresh_session, session_handoff, set_handoff_asked,
+    latest_handoffs, open_area_proposals, open_area_tasks, refresh_session, session_handoff,
+    set_handoff_asked,
 };
 pub use questions::{
     AnswerRow, NewQuestion, QuestionKind, QuestionRow, asked_among, asker_answered_by,
@@ -25,11 +30,11 @@ pub use questions::{
     open_ask_of_thread, open_questions, question_by_id, question_messages, questions_of_worker,
 };
 pub use workers::{
-    AreaRow, NewWorkerProcess, TurnTotals, WorkerProcessRow, bind_proposal, bind_task,
+    AreaRow, BoundWorker, NewWorkerProcess, TurnTotals, WorkerProcessRow, bind_proposal, bind_task,
     coders_of_task, find_area, find_worker_process, insert_area, insert_worker_process, label_id,
     list_areas, list_worker_processes, mark_worker_working, proposals_without_verdict, record_exit,
-    record_turn, restart_worker_process, reviewers_of_proposal, running_counts, set_area_lead,
-    set_area_profile, set_worker_context, set_worker_pid, set_worker_state,
+    record_turn, restart_worker_process, review_lead, reviewers_of_proposal, running_counts,
+    set_area_lead, set_area_profile, set_worker_context, set_worker_pid, set_worker_state,
     tasks_awaiting_proposal,
 };
 pub use workers::{PendingResume, pending_resumes};
@@ -69,19 +74,8 @@ pub struct OpenSession {
     pub agent: AgentName,
 }
 
-fn time(millis: i64, column: &'static str) -> Result<Timestamp, StoreError> {
-    Timestamp::from_millis(millis).map_err(|_| StoreError::Corrupt(column))
-}
-
-fn optional_time(
-    millis: Option<i64>,
-    column: &'static str,
-) -> Result<Option<Timestamp>, StoreError> {
-    millis.map(|value| time(value, column)).transpose()
-}
-
 pub async fn insert_agent(
-    executor: impl SqliteExecutor<'_>,
+    tx: &mut WriteTx,
     name: &AgentName,
     now: Timestamp,
 ) -> Result<i64, StoreError> {
@@ -92,7 +86,7 @@ pub async fn insert_agent(
         name,
         created_at
     )
-    .fetch_one(executor)
+    .fetch_one(tx.conn())
     .await?)
 }
 
@@ -130,7 +124,7 @@ pub async fn agent_name(
 
 /// True when the tag was new. `granted_by` is the actor label of the granting human; a tag that is already present keeps its first granter.
 pub async fn add_tag(
-    executor: impl SqliteExecutor<'_>,
+    tx: &mut WriteTx,
     agent_id: i64,
     tag: &Tag,
     granted_by: Option<&str>,
@@ -146,7 +140,7 @@ pub async fn add_tag(
         created_at,
         granted_by
     )
-    .execute(executor)
+    .execute(tx.conn())
     .await?;
     Ok(result.rows_affected() == 1)
 }
@@ -167,7 +161,7 @@ pub async fn tags(
 }
 
 pub async fn insert_worker(
-    executor: impl SqliteExecutor<'_>,
+    tx: &mut WriteTx,
     agent_id: i64,
     name: &WorkerName,
     parent_id: Option<i64>,
@@ -183,7 +177,7 @@ pub async fn insert_worker(
         parent_id,
         created_at
     )
-    .fetch_one(executor)
+    .fetch_one(tx.conn())
     .await?)
 }
 
@@ -253,7 +247,7 @@ pub async fn main_worker(
 }
 
 pub async fn insert_session(
-    executor: impl SqliteExecutor<'_>,
+    tx: &mut WriteTx,
     pid: u32,
     cwd: Option<&str>,
     now: Timestamp,
@@ -268,7 +262,7 @@ pub async fn insert_session(
         started_at,
         cwd
     )
-    .fetch_one(executor)
+    .fetch_one(tx.conn())
     .await?)
 }
 
@@ -297,52 +291,40 @@ pub async fn find_session(
 }
 
 /// Binds a session that has no agent yet. False when it was already bound or does not exist.
-pub async fn bind_session(
-    executor: impl SqliteExecutor<'_>,
-    id: i64,
-    agent_id: i64,
-) -> Result<bool, StoreError> {
+pub async fn bind_session(tx: &mut WriteTx, id: i64, agent_id: i64) -> Result<bool, StoreError> {
     let result = sqlx::query!(
         "UPDATE sessions SET agent_id = ? WHERE id = ? AND agent_id IS NULL",
         agent_id,
         id
     )
-    .execute(executor)
+    .execute(tx.conn())
     .await?;
     Ok(result.rows_affected() == 1)
 }
 
 /// Sets `ended_at` once. False when the session was already ended or does not exist.
-pub async fn end_session(
-    executor: impl SqliteExecutor<'_>,
-    id: i64,
-    now: Timestamp,
-) -> Result<bool, StoreError> {
+pub async fn end_session(tx: &mut WriteTx, id: i64, now: Timestamp) -> Result<bool, StoreError> {
     let ended_at = now.as_millis();
     let result = sqlx::query!(
         "UPDATE sessions SET ended_at = ? WHERE id = ? AND ended_at IS NULL",
         ended_at,
         id
     )
-    .execute(executor)
+    .execute(tx.conn())
     .await?;
     Ok(result.rows_affected() == 1)
 }
 
-pub async fn touch_session(
-    executor: impl SqliteExecutor<'_>,
-    id: i64,
-    now: Timestamp,
-) -> Result<(), StoreError> {
+pub async fn touch_session(tx: &mut WriteTx, id: i64, now: Timestamp) -> Result<(), StoreError> {
     let at = now.as_millis();
     sqlx::query!("UPDATE sessions SET last_call_at = ? WHERE id = ?", at, id)
-        .execute(executor)
+        .execute(tx.conn())
         .await?;
     Ok(())
 }
 
 pub async fn touch_worker(
-    executor: impl SqliteExecutor<'_>,
+    tx: &mut WriteTx,
     id: i64,
     now: Timestamp,
     activity: &str,
@@ -354,7 +336,7 @@ pub async fn touch_worker(
         activity,
         id
     )
-    .execute(executor)
+    .execute(tx.conn())
     .await?;
     Ok(())
 }
@@ -382,16 +364,13 @@ pub async fn open_bound_sessions(
 }
 
 /// Ends every open session at `now` and returns how many ended.
-pub async fn end_open_sessions(
-    executor: impl SqliteExecutor<'_>,
-    now: Timestamp,
-) -> Result<u64, StoreError> {
+pub async fn end_open_sessions(tx: &mut WriteTx, now: Timestamp) -> Result<u64, StoreError> {
     let ended_at = now.as_millis();
     let result = sqlx::query!(
         "UPDATE sessions SET ended_at = ? WHERE ended_at IS NULL",
         ended_at
     )
-    .execute(executor)
+    .execute(tx.conn())
     .await?;
     Ok(result.rows_affected())
 }
@@ -489,18 +468,14 @@ pub async fn all_workers(executor: impl SqliteExecutor<'_>) -> Result<Vec<Worker
 }
 
 /// True when the tag was present.
-pub async fn remove_tag(
-    executor: impl SqliteExecutor<'_>,
-    agent_id: i64,
-    tag: &Tag,
-) -> Result<bool, StoreError> {
+pub async fn remove_tag(tx: &mut WriteTx, agent_id: i64, tag: &Tag) -> Result<bool, StoreError> {
     let tag = tag.as_str();
     let result = sqlx::query!(
         "DELETE FROM agent_tags WHERE agent_id = ? AND tag = ?",
         agent_id,
         tag
     )
-    .execute(executor)
+    .execute(tx.conn())
     .await?;
     Ok(result.rows_affected() == 1)
 }

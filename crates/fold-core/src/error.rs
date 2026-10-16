@@ -1,6 +1,6 @@
 use std::fmt;
 
-/// Every error code exists once, here. A shipped code never changes; a new code adds a constant and a line to `tests/error_codes.golden`.
+/// Every error code exists once, here. A shipped code never changes; a new code adds a constant and a line to `tests/error_codes.golden`. A new code names its subject first and the fault after, such as `task_not_found`, `worker_limit_reached` or `review_claim_required`; malformed input keeps the `invalid_<subject>` form of `invalid_id` and `invalid_task_title`. The shipped exceptions, such as `tree_invalid` and `not_claimed`, keep their names.
 macro_rules! define_codes {
     ($($name:ident = $value:literal),+ $(,)?) => {
         pub mod codes {
@@ -56,6 +56,7 @@ define_codes! {
     PROJECT_EXISTS = "project_exists",
     INVALID_HOST_PATHS = "invalid_host_paths",
     INVALID_CONFIG = "invalid_config",
+    // Nothing raises it: a sync at the head it already has reports `already_current` in its outcome and succeeds. It stays so that no other error reuses a shipped code.
     ALREADY_CURRENT = "already_current",
     WORKSPACE_CHANGED_DURING_SYNC = "workspace_changed_during_sync",
     PROTOCOL_VERSION_UNSUPPORTED = "protocol_version_unsupported",

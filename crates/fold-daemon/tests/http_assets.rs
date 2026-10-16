@@ -1,4 +1,3 @@
-use fold_daemon::http::host::CLIENT_HEADER;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -6,6 +5,7 @@ use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
 use axum::response::Response;
 use fold_core::ManualClock;
+use fold_daemon::http::host::CLIENT_HEADER;
 use fold_daemon::http::router;
 use fold_daemon::{Daemon, DaemonConfig, RunningDaemon};
 use http_body_util::BodyExt;

@@ -5,14 +5,15 @@ use std::path::Path;
 
 use fold_core::FoldError;
 use fold_core::object::ObjectHash;
-use fold_core::tree::{FlatEntry, FlatTree, flatten};
+use fold_core::tree::{FlatEntry, FlatTree};
 
+use crate::compare::load_flat;
 use crate::index::StatIndex;
 use crate::materialise::{Batch, MaterialiseOptions, Synced};
 use crate::objects::{ObjectError, ObjectStore};
 use crate::paths::{RepoPath, WorkspaceError, os_bytes, os_path};
 use crate::scan::{ChangeKind, ScanOptions, changes, scan};
-use crate::snapshot::{Snapshot, load_tree, snapshot};
+use crate::snapshot::{Snapshot, snapshot};
 
 #[derive(Debug, Clone, Copy)]
 pub struct RestoreOptions<'a> {
@@ -59,7 +60,7 @@ pub fn restore_tree(
     target_tree: &ObjectHash,
     opts: &RestoreOptions<'_>,
 ) -> Result<Restored, FoldError> {
-    let target = flatten(target_tree, &|hash| load_tree(objects, hash))?;
+    let target = load_flat(objects, target_tree)?;
     let scanned = scan(root, index, &opts.scan)?;
 
     let mut removals = Vec::new();
@@ -130,7 +131,7 @@ fn unrecorded(
         let recorded = match current.get(path.as_bytes()) {
             Some(entry) => objects.contains(&entry.hash)?,
             None if removing.contains(path) => false,
-            None => !occupied(root, path, &removing)?,
+            None => !occupied(root, path, &|found| removing.contains(found))?,
         };
         if !recorded {
             lost.push(path.clone());
@@ -140,34 +141,58 @@ fn unrecorded(
     Ok(lost)
 }
 
-/// Whether something the removals do not clear stands at `path` or at a parent of it, so writing there would replace or block it. Links are never followed.
-fn occupied(
+/// Whether something the removals do not clear stands at `path` or at a parent of it, so writing a path the recorded side does not have would replace or block it. Nothing there, or only a directory that holds nothing but removals and empty directories, is clear. Links are never followed. A sync and a restore both check a write with it.
+pub(crate) fn occupied(
     root: &Path,
     path: &RepoPath,
-    removing: &BTreeSet<&RepoPath>,
+    removing: &dyn Fn(&RepoPath) -> bool,
 ) -> Result<bool, WorkspaceError> {
+    if let Some(settled) = above(root, path, removing)? {
+        return Ok(settled);
+    }
+    let at = root.join(os_path(path));
+    match fs::symlink_metadata(&at) {
+        Ok(meta) if meta.is_dir() => Ok(!holds_only(&at, path, removing)),
+        Ok(_) => Ok(!removing(path)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// [`occupied`] for the parents of `path` alone.
+pub(crate) fn occupied_above(
+    root: &Path,
+    path: &RepoPath,
+    removing: &dyn Fn(&RepoPath) -> bool,
+) -> Result<bool, WorkspaceError> {
+    Ok(above(root, path, removing)?.unwrap_or(false))
+}
+
+/// Walks the parents of `path` from the root. `Some(false)` when one is missing, so nothing can stand at `path`; `Some(true)` when one is something other than a directory that the removals do not clear; `None` when every parent is a real directory.
+fn above(
+    root: &Path,
+    path: &RepoPath,
+    removing: &dyn Fn(&RepoPath) -> bool,
+) -> Result<Option<bool>, WorkspaceError> {
+    let (parents, _) = path.parents_and_name();
     let mut prefix: Option<RepoPath> = None;
-    for name in path.components() {
+    for name in parents {
         let here = RepoPath::child(prefix.as_ref(), name)?;
-        let at = root.join(os_path(&here)?);
-        let meta = match fs::symlink_metadata(&at) {
+        let meta = match fs::symlink_metadata(root.join(os_path(&here))) {
             Ok(meta) => meta,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Some(false)),
             Err(error) => return Err(error.into()),
         };
         if !meta.is_dir() {
-            return Ok(!removing.contains(&here));
-        }
-        if here == *path {
-            return Ok(!holds_only(&at, &here, removing));
+            return Ok(Some(!removing(&here)));
         }
         prefix = Some(here);
     }
-    Ok(false)
+    Ok(None)
 }
 
 /// Whether every file below `dir` is one of the removals, so only empty directories stay there once they are gone. An unreadable directory or a reserved name holds something that stays.
-fn holds_only(dir: &Path, prefix: &RepoPath, removing: &BTreeSet<&RepoPath>) -> bool {
+fn holds_only(dir: &Path, prefix: &RepoPath, removing: &dyn Fn(&RepoPath) -> bool) -> bool {
     let Ok(entries) = fs::read_dir(dir) else {
         return false;
     };
@@ -182,7 +207,7 @@ fn holds_only(dir: &Path, prefix: &RepoPath, removing: &BTreeSet<&RepoPath>) -> 
         };
         let cleared = match entry.file_type() {
             Ok(kind) if kind.is_dir() => holds_only(&entry.path(), &path, removing),
-            Ok(_) => removing.contains(&path),
+            Ok(_) => removing(&path),
             Err(_) => false,
         };
         if !cleared {

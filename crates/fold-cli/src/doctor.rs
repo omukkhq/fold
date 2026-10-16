@@ -7,20 +7,24 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use clap::Args;
-use fold_core::{Clock, FoldError, HostPaths, ProjectPaths, Timestamp, codes};
+use fold_core::events::types;
+use fold_core::{Clock, FoldError, ProjectPaths, Timestamp, codes};
 use fold_daemon::SystemClock;
 use fold_daemon::services::agents::claude::{AuthStatus, ClaudeVersion, MIN_CLAUDE_VERSION};
 use fold_vcs::git::Git;
 use fold_vcs::git_remote::folder_has_changes;
 use fold_vcs::git_sync_map::{SYNC_MAP_FILE, SyncMap};
+use fold_vcs::watch::DegradedReason;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection, Row, SqliteConnection};
 use thiserror::Error;
 
+use crate::init::host_paths;
 use crate::output;
 use crate::platform::{Host, Platform, on_path};
 use crate::serve::{self, DEFAULT_LISTEN, Dirs, FileConfig, read_file_config};
 use fold_cli::claude_files::{self, shadowing_files};
+use fold_daemon::config::{LOCK_FILE, SOCKET_FILE};
 
 const NOT_APPLICABLE: &str = "not applicable on this platform";
 const MIN_WATCHES: u64 = 65_536;
@@ -30,11 +34,10 @@ const DEGRADED_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 /// The first 16 bytes of every SQLite file.
 const SQLITE_MAGIC: &[u8] = b"SQLite format 3\0";
-/// The key in a `workspace.watch_degraded` event's data that names its cause, and the cause a raised inotify limit cures.
-const DEGRADED_REASON_KEY: &str = "reason";
-const WATCH_LIMIT_REASON: &str = "watch_limit";
 /// How long `claude --version` and `claude auth status` may run before doctor stops them.
 const CLAUDE_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long `run_briefly` still reads the output of a command that ended at its deadline.
+const OUTPUT_GRACE: Duration = Duration::from_millis(200);
 const CLAUDE_INSTALL: &str = "install Claude Code: curl -fsSL https://claude.ai/install.sh | bash";
 
 #[derive(Args, Debug)]
@@ -66,6 +69,14 @@ impl DoctorError {
             Self::HostPaths(error) => Some(error.code()),
             Self::ChecksFailed { .. } => Some(codes::DOCTOR_CHECKS_FAILED),
             Self::Runtime(_) | Self::Write(_) => None,
+        }
+    }
+
+    /// The hint that names the next step, when a refusal carries one.
+    pub fn hint(&self) -> Option<&str> {
+        match self {
+            Self::HostPaths(error) => error.hint(),
+            _ => None,
         }
     }
 }
@@ -155,10 +166,7 @@ fn write_report(sections: &[Section], out: &mut impl Write) -> io::Result<()> {
 pub fn run(args: &DoctorArgs, out: &mut impl Write) -> Result<(), DoctorError> {
     let host = Host::from_env();
     let now = SystemClock.now();
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(DoctorError::Runtime)?;
+    let runtime = serve::current_thread_runtime().map_err(DoctorError::Runtime)?;
     let sections = collect(args, &host, now, &runtime)?;
     write_report(&sections, out)?;
     match failed(&sections) {
@@ -233,7 +241,7 @@ fn host_checks(socket_flag: Option<&Path>, file: &FileConfig, host: &Host) -> Ve
     let socket = serve::socket_path(socket_flag, &host.dirs)
         .ok()
         .flatten()
-        .or_else(|| runtime.as_ref().map(|dir| dir.join("fold.sock")));
+        .or_else(|| runtime.as_ref().map(|dir| dir.join(SOCKET_FILE)));
     let state = socket
         .as_deref()
         .map(|path| inspect_socket(path, host.platform));
@@ -241,7 +249,7 @@ fn host_checks(socket_flag: Option<&Path>, file: &FileConfig, host: &Host) -> Ve
         state,
         Some(SocketState::Answers | SocketState::WrongMode { answers: true, .. })
     );
-    let lock = runtime.as_ref().map(|dir| dir.join("daemon.lock"));
+    let lock = serve::lock_path(&host.dirs);
     let listen = file.listen.unwrap_or(DEFAULT_LISTEN);
     vec![
         socket_check(socket.as_deref(), state),
@@ -343,7 +351,7 @@ pub(crate) fn inspect_lock(path: &Path) -> LockState {
 
 fn lock_check(path: Option<&Path>, socket_answers: bool) -> Check {
     let Some(path) = path else {
-        return Check::ok("locks", "no runtime directory, so no daemon.lock");
+        return Check::ok("locks", format!("no runtime directory, so no {LOCK_FILE}"));
     };
     match (inspect_lock(path), socket_answers) {
         (LockState::Held, false) => Check::fail(
@@ -355,8 +363,13 @@ fn lock_check(path: Option<&Path>, socket_answers: bool) -> Check {
                 path.display()
             ),
         ),
-        (LockState::Held, true) => Check::ok("locks", "daemon.lock is held by the running daemon"),
-        (LockState::Free | LockState::Absent, _) => Check::ok("locks", "daemon.lock is free"),
+        (LockState::Held, true) => Check::ok(
+            "locks",
+            format!("{LOCK_FILE} is held by the running daemon"),
+        ),
+        (LockState::Free | LockState::Absent, _) => {
+            Check::ok("locks", format!("{LOCK_FILE} is free"))
+        }
     }
 }
 
@@ -452,7 +465,7 @@ fn claude_check(host: &Host) -> Check {
     claude_verdict(facts)
 }
 
-/// The stdout of a command that ends within `timeout`, whatever its exit code, because the answer is read from stdout alone. A command that runs longer is killed.
+/// The stdout of a command that ends within `timeout`, whatever its exit code, because the answer is read from stdout alone. A command that runs longer is killed. The wait for its output ends at the deadline too, or [`OUTPUT_GRACE`] after the command ends when that is later, and gives what came by then: a descendant that keeps stdout open after the command ends cannot hold doctor.
 pub(crate) fn run_briefly(program: &Path, args: &[&str], timeout: Duration) -> Option<String> {
     let mut child = std::process::Command::new(program)
         .args(args)
@@ -462,9 +475,14 @@ pub(crate) fn run_briefly(program: &Path, args: &[&str], timeout: Duration) -> O
         .spawn()
         .ok()?;
     let mut stdout = child.stdout.take()?;
-    let reader = std::thread::spawn(move || {
-        let mut text = String::new();
-        stdout.read_to_string(&mut text).map(|_| text)
+    let (sender, receiver) = std::sync::mpsc::channel::<Vec<u8>>();
+    std::thread::spawn(move || {
+        let mut chunk = [0_u8; 4096];
+        while let Ok(read @ 1..) = stdout.read(&mut chunk) {
+            if sender.send(chunk[..read].to_vec()).is_err() {
+                break;
+            }
+        }
     });
     let deadline = std::time::Instant::now() + timeout;
     loop {
@@ -480,7 +498,15 @@ pub(crate) fn run_briefly(program: &Path, args: &[&str], timeout: Duration) -> O
             }
         }
     }
-    reader.join().ok()?.ok()
+    let until = deadline.max(std::time::Instant::now() + OUTPUT_GRACE);
+    let mut bytes = Vec::new();
+    // The reader drops its sender at the end of stdout, which ends the wait early.
+    while let Ok(chunk) =
+        receiver.recv_timeout(until.saturating_duration_since(std::time::Instant::now()))
+    {
+        bytes.extend(chunk);
+    }
+    String::from_utf8(bytes).ok()
 }
 
 fn systemd_available(host: &Host) -> bool {
@@ -586,12 +612,7 @@ fn registered_projects(
     dirs: &Dirs,
     runtime: &tokio::runtime::Runtime,
 ) -> Result<(Vec<Registered>, Option<Check>), DoctorError> {
-    let to_str = |path: &Option<PathBuf>| path.as_deref().and_then(Path::to_str).map(str::to_owned);
-    let host = HostPaths::new(
-        to_str(&dirs.data_home).as_deref(),
-        to_str(&dirs.home).as_deref(),
-    )
-    .map_err(DoctorError::HostPaths)?;
+    let host = host_paths(dirs).map_err(DoctorError::HostPaths)?;
     let registry = host.registry_db();
     if !registry.is_file() {
         return Ok((Vec::new(), None));
@@ -611,18 +632,14 @@ fn registered_projects(
 
 async fn read_registry(path: &Path) -> Result<Vec<Registered>, sqlx::Error> {
     let mut conn = connect_read_only(path).await?;
-    let rows = sqlx::query("SELECT slug, root FROM projects ORDER BY slug")
+    let rows = sqlx::query!("SELECT slug, root FROM projects ORDER BY slug")
         .fetch_all(&mut conn)
         .await?;
     let _ = conn.close().await;
-    rows.iter()
-        .map(|row| {
-            Ok((
-                row.try_get("slug")?,
-                PathBuf::from(row.try_get::<String, _>("root")?),
-            ))
-        })
-        .collect()
+    Ok(rows
+        .into_iter()
+        .map(|row| (row.slug, PathBuf::from(row.root)))
+        .collect())
 }
 
 /// A WAL database is normally read through `-wal` and `-shm` files, and a reader creates them when they are absent. With no `-wal` file no process has the database open, so it opens immutable and doctor leaves no file behind. An immutable reader takes no lock: a daemon that opens the database during the check writes to a new `-wal` and the check reads the state the file had when it started, unless that daemon checkpoints within the same moment.
@@ -734,30 +751,23 @@ async fn degraded_events(
     conn: &mut SqliteConnection,
     now: Timestamp,
 ) -> Result<Vec<Timestamp>, sqlx::Error> {
-    let rows = sqlx::query("SELECT created_at, data FROM events WHERE type = ? AND created_at > ?")
-        .bind(fold_core::events::types::WORKSPACE_WATCH_DEGRADED.as_str())
-        .bind(degraded_window_start(now))
-        .fetch_all(conn)
-        .await?;
+    let rows = sqlx::query_scalar!(
+        "SELECT created_at FROM events WHERE type = ? AND reason = ? AND created_at > ?",
+        types::WORKSPACE_WATCH_DEGRADED.as_str(),
+        DegradedReason::WatchLimit.as_str(),
+        degraded_window_start(now)
+    )
+    .fetch_all(conn)
+    .await?;
     Ok(rows
-        .iter()
-        .filter(|row| {
-            row.try_get::<String, _>(1)
-                .is_ok_and(|data| is_watch_limit(&data))
-        })
-        .filter_map(|row| row.try_get::<i64, _>(0).ok())
-        .filter_map(|millis| Timestamp::from_millis(millis).ok())
+        .into_iter()
+        .filter_map(|created_at| Timestamp::from_millis(created_at).ok())
         .collect())
 }
 
 /// The window holds the events created after this many milliseconds.
 pub(crate) fn degraded_window_start(now: Timestamp) -> i64 {
     now.as_millis().saturating_sub(DEGRADED_WINDOW_MS)
-}
-
-pub(crate) fn is_watch_limit(data: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(data)
-        .is_ok_and(|value| value[DEGRADED_REASON_KEY] == WATCH_LIMIT_REASON)
 }
 
 /// The issues the database check reports; empty means healthy.
@@ -928,6 +938,13 @@ fn runs_hook(settings: &serde_json::Value, event: &str, command: &str) -> bool {
 /// Every integration continues the commit `.fold/git-sync.map` names last, so a project repository without that commit leaves each new revision without its Git commit.
 fn git_history_check(paths: &ProjectPaths, host: &Host) -> Check {
     const NAME: &str = "git history";
+    if !paths.git_dir().is_dir() {
+        return Check::warn(
+            NAME,
+            "the project folder has no Git repository in .git, so new revisions get no Git commit",
+            "re-create the project with fld init",
+        );
+    }
     let fold_dir = paths.fold_dir();
     let last = match SyncMap::load(&fold_dir) {
         Ok(map) => map.last().cloned(),

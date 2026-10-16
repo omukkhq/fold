@@ -95,11 +95,7 @@ impl Host {
 
     /// `$XDG_CONFIG_HOME/systemd/user/fold.service`, or the same below `~/.config`.
     pub(crate) fn unit_path(&self) -> Option<PathBuf> {
-        let base = match (&self.dirs.config_home, &self.dirs.home) {
-            (Some(config), _) => config.clone(),
-            (None, Some(home)) => home.join(".config"),
-            (None, None) => return None,
-        };
+        let base = self.dirs.config_base().ok()?;
         Some(base.join("systemd").join("user").join("fold.service"))
     }
 }

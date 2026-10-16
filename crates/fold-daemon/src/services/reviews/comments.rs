@@ -5,7 +5,7 @@ use fold_store::reviews::{self, BatchCommentRef, CommentRow, LineRange, ReviewTa
 use fold_vcs::browse;
 use serde_json::json;
 
-use super::proposals::proposal_not_found;
+use super::proposals::{proposal_not_found, version_not_found};
 use super::{ReviewError, ReviewService};
 use crate::services::workspaces::WorkspaceService;
 
@@ -30,6 +30,33 @@ pub struct CommentLocation {
 }
 
 impl CommentLocation {
+    /// The location of a comment from the four fields a caller sent: all of them for a line comment, none for a comment on the whole version. Any other mix is `invalid_request` naming `field`. Every transport takes the rule and its refusal from here.
+    pub fn from_parts(
+        field: &str,
+        path: Option<String>,
+        side: Option<Side>,
+        start_line: Option<u32>,
+        end_line: Option<u32>,
+    ) -> Result<Option<CommentLocation>, FoldError> {
+        match (path, side, start_line, end_line) {
+            (None, None, None, None) => Ok(None),
+            (Some(path), Some(side), Some(start_line), Some(end_line)) => {
+                Ok(Some(CommentLocation {
+                    path,
+                    side,
+                    start_line,
+                    end_line,
+                }))
+            }
+            _ => Err(FoldError::new(
+                codes::INVALID_REQUEST,
+                format!("{field}: a line comment needs path, side, start_line and end_line"),
+            )
+            .with_details([("field", json!(field))])
+            .with_hint("give path, side, start_line and end_line together, or none of them")),
+        }
+    }
+
     pub(super) fn as_range(&self) -> LineRange<'_> {
         LineRange {
             path: &self.path,
@@ -123,17 +150,7 @@ impl ReviewService {
         if let Some(version) = version
             && (version == 0 || version > row.current_version)
         {
-            return Err(FoldError::new(
-                codes::PROPOSAL_NOT_FOUND,
-                format!("{proposal} has no v{version}"),
-            )
-            .with_details([
-                ("proposal", json!(proposal.to_string())),
-                ("version", json!(version)),
-                ("current_version", json!(row.current_version)),
-            ])
-            .with_hint("call get_proposal to see every version")
-            .into());
+            return Err(version_not_found(proposal, version, row.current_version));
         }
         reviews::list_comments(read, proposal, version)
             .await?

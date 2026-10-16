@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use fold_core::NewEvent;
 use fold_core::events::types;
-use fold_core::object::{ObjectHash, ObjectKind};
-use fold_core::tree::{FlatTree, Tree, flatten};
+use fold_core::object::ObjectHash;
+use fold_core::tree::FlatTree;
 use fold_core::{Actor, FoldError, RevisionId, Timestamp, WorkerName, WorkspaceId, codes, policy};
 use fold_store::WriteTx;
 use fold_store::workspaces::{
@@ -43,13 +43,7 @@ impl Files {
     }
 
     pub(super) fn flat_tree(&self, tree: &ObjectHash) -> Result<FlatTree, FoldError> {
-        flatten(tree, &|hash| {
-            let object = self
-                .objects
-                .read_expecting(hash, ObjectKind::Tree)
-                .map_err(FoldError::from)?;
-            Ok(Tree::decode(&object.payload)?)
-        })
+        fold_vcs::compare::load_flat(&self.objects, tree)
     }
 
     pub(super) fn root(&self) -> &std::path::Path {

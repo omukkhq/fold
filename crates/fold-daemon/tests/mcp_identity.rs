@@ -233,14 +233,66 @@ async fn any_other_tool_before_registration_names_register_agent() {
         assert_eq!(error["code"], "agent_not_registered", "{tool}");
         assert_eq!(error["hint"], "call register_agent", "{tool}");
     }
-    let error = call_err(&client, "list_agents", json!({"as": "frontend"})).await;
-    assert_eq!(error["code"], "agent_not_registered");
+    let listed = call(&client, "list_agents", json!({"as": "frontend"})).await;
+    assert_eq!(
+        listed["agents"],
+        json!([]),
+        "an unbound session has no worker to act as"
+    );
 
     call(&client, "register_agent", json!({"name": "frontend"})).await;
     let unknown = client
         .call_tool(CallToolRequestParams::new("no_such_tool"))
         .await;
-    assert!(unknown.is_err(), "an unknown tool is a protocol error");
+    let Err(rmcp::ServiceError::McpError(error)) = unknown else {
+        panic!("an unknown tool is a protocol error: {unknown:?}");
+    };
+    assert_eq!(error.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+    assert!(!error.message.contains("no_such_tool"));
+    assert_eq!(
+        error.data,
+        Some(json!({"hint": "call tools/list to see the tools of this server"}))
+    );
+}
+
+#[tokio::test]
+async fn register_agent_as_a_missing_worker_writes_nothing() {
+    let project = TestProject::new().await;
+    let client = connect(&project).await;
+    let error = call_err(
+        &client,
+        "register_agent",
+        json!({"name": "frontend", "as": "frontend/nope"}),
+    )
+    .await;
+    assert_eq!(error["code"], "worker_not_found");
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM agents")
+        .fetch_one(project.store().read())
+        .await
+        .unwrap();
+    assert_eq!(rows, 0);
+    let error = call_err(&client, "get_inbox", json!({})).await;
+    assert_eq!(
+        error["code"], "agent_not_registered",
+        "the session stays unbound"
+    );
+
+    let registered = call(
+        &client,
+        "register_agent",
+        json!({"name": "frontend", "as": "frontend"}),
+    )
+    .await;
+    assert_eq!(registered["created"], true);
+    call(&client, "register_worker", json!({"name": "ui"})).await;
+    let again = connect(&project).await;
+    let registered = call(
+        &again,
+        "register_agent",
+        json!({"name": "frontend", "as": "frontend/ui"}),
+    )
+    .await;
+    assert_eq!(registered["created"], false);
 }
 
 #[tokio::test]

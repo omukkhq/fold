@@ -28,6 +28,19 @@ describe("replySchema", () => {
   });
 });
 
+describe("the body limit", () => {
+  it("is the daemon's, counted in characters rather than UTF-16 units", () => {
+    expect(MAX_BODY).toBe(20_000);
+    // 10 001 emoji are 20 002 UTF-16 units but 10 001 characters.
+    expect(replySchema.safeParse({ body: "😀".repeat(10_001) }).success).toBe(
+      true,
+    );
+    expect(replySchema.safeParse({ body: "😀".repeat(20_001) }).success).toBe(
+      false,
+    );
+  });
+});
+
 describe("feedbackSchema", () => {
   it("accepts one task id and a body", () => {
     expect(

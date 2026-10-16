@@ -1,22 +1,14 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  CornerDownRight,
-  ShieldAlert,
-  Square,
-  UserPlus,
-  Users,
-} from "lucide-react";
+import { CornerDownRight, ShieldAlert, UserPlus, Users } from "lucide-react";
 import { Fragment, type ReactNode } from "react";
 import { HrefLink } from "@/app/HrefLink";
-import { keys } from "@/api/keys";
-import { stopWorker } from "@/api/workers";
 import { Button } from "@/components/button/Button";
 import { Label } from "@/components/label/Label";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { PersonName } from "@/people/PersonName";
-import { ErrorNote, StatePill, StepText } from "./parts";
-import { stopFailure } from "./startLead";
+import { projectPath } from "@/routes/paths";
+import { StatePill, StepText } from "./parts";
+import { StopWorker } from "./StopWorker";
 import { areaNote, type TeamGroup, type TeamRow } from "./team";
 
 const HEADS = [
@@ -57,7 +49,7 @@ function BoundCell({ slug, row }: { slug: string; row: TeamRow }) {
     text
   ) : (
     <HrefLink
-      href={`/p/${slug}/batches/${bound.batch}`}
+      href={projectPath(slug, "batches", bound.batch)}
       className={cn("rounded-s underline-offset-2 hover:underline", focusRing)}
     >
       {text}
@@ -74,31 +66,19 @@ function StopCell({
   row: TeamRow;
   human: string | null;
 }) {
-  const queryClient = useQueryClient();
-  const stop = useMutation({
-    mutationFn: () => stopWorker(slug, row.name),
-    // The row keeps its pending state until the list shows the daemon's new state.
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: keys.workers(slug) }),
-  });
   // Only a named human stops a worker.
   if (row.stop === null || human === null) return null;
-  const pending = stop.isPending || row.stop === "stopping";
   return (
-    <div className="flex flex-col items-start gap-6">
-      <Button
-        size="sm"
-        pending={pending}
-        icon={<Square aria-hidden="true" size={13} />}
-        aria-label={`Stop ${row.name}`}
-        onClick={() => {
-          stop.mutate();
-        }}
-      >
-        {pending ? "Stopping" : "Stop"}
-      </Button>
-      {stop.isError ? <ErrorNote failure={stopFailure(stop.error)} /> : null}
-    </div>
+    <StopWorker
+      slug={slug}
+      name={row.name}
+      control={row.stop}
+      size="sm"
+      idleLabel="Stop"
+      busyLabel="Stopping"
+      ariaLabel={`Stop ${row.name}`}
+      className="items-start"
+    />
   );
 }
 

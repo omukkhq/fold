@@ -350,7 +350,7 @@ mod tests {
             ),
             "agent" => (EventActor::parse("frontend").unwrap(), Approver::OtherAgent),
             human => {
-                let human = name(human.trim_start_matches("human:"));
+                let human = name(human.trim_start_matches(EventActor::HUMAN_PREFIX));
                 (EventActor::human(&human), Approver::Human(human))
             }
         };

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE checklist_items SET position = ?4, checklist_id = (\n                     SELECT c.id FROM checklists c JOIN tasks t ON t.id = c.task_id\n                     WHERE t.number = ?1 AND c.name = ?2)\n                 WHERE number = ?3 AND checklist_id IN (\n                     SELECT c.id FROM checklists c JOIN tasks t ON t.id = c.task_id WHERE t.number = ?1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "e93c851545ee081f9b037f331af5e08f1c4cfb641043883080e6411fdac7ef18"
+}

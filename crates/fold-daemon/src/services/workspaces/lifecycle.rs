@@ -42,6 +42,13 @@ const MAX_NAME_ATTEMPTS: u32 = 64;
 /// The longest abandon reason, in characters.
 const MAX_REASON_CHARS: usize = 500;
 
+/// An abandoned workspace and the status its task went back to, read in the transaction that abandoned it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Abandoned {
+    pub workspace: WorkspaceView,
+    pub task_status: TaskStatus,
+}
+
 /// A workspace with public ids only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceView {
@@ -107,7 +114,7 @@ pub enum ArchiveReason {
     ProposalClosed,
     /// A review checkout whose proposal was rejected.
     ProposalRejected,
-    /// A batch checkout whose batch lost a member, so its files no longer match the batch.
+    /// A batch checkout whose batch lost a member, so its files hold a member the batch does not.
     BatchChanged,
     /// A batch checkout whose batch was submitted.
     BatchSubmitted,
@@ -156,7 +163,7 @@ struct Placed {
 impl WorkspaceService {
     /// Creates the task workspace of `task` for the actor's worker: a copy of the current main revision under `.fold/ws/`, recorded with that revision as its base. A workspace belongs to the implementation claim, so `policy::can_claim` admits only an agent; its worker must hold the claim or the task must be unclaimed, and then the create takes it. The task moves to In Progress, also from Backlog, where it keeps its blocked indicator.
     ///
-    /// A task whose live workspace is orphaned, with no owner or an owner that no longer holds the claim, keeps that workspace: the create takes the claim, adopts it and makes nothing new. A live workspace whose owner holds the claim, or that is already the actor's own, is `workspace_exists`.
+    /// A task whose live workspace is orphaned, with no owner or an owner that does not hold the claim, keeps that workspace: the create takes the claim, adopts it and makes nothing new. A live workspace whose owner holds the claim, or that is already the actor's own, is `workspace_exists`.
     ///
     /// The files are written and renamed into place before the transaction that inserts the row, so no row ever names a directory that is not complete. When the transaction fails the directory is removed again: it has no row, and nobody was told its path.
     pub async fn create_workspace(
@@ -244,7 +251,7 @@ impl WorkspaceService {
         if let Some(live) = &self.live
             && let Err(error) = live.attach(id).await
         {
-            tracing::warn!(workspace = %id, code = error.code().unwrap_or("store_error"), "the live state did not start");
+            tracing::warn!(workspace = %id, code = error.log_code(), "the live state did not start");
         }
         Ok(CreatedWorkspace {
             workspace: self.get(WorkspaceRef::Workspace(id)).await?,
@@ -258,7 +265,7 @@ impl WorkspaceService {
         actor: &Actor,
         workspace: WorkspaceId,
         reason: &str,
-    ) -> Result<WorkspaceView, WorkspaceError> {
+    ) -> Result<Abandoned, WorkspaceError> {
         let reason = reason.trim();
         if reason.is_empty() || reason.chars().count() > MAX_REASON_CHARS {
             return Err(FoldError::new(
@@ -272,14 +279,18 @@ impl WorkspaceService {
         let _op = self.ops.lock(workspace).await;
         let now = self.clock.now();
         let mut buffer = EventBuffer::new();
-        self.store
+        let (row, task_status) = self
+            .store
             .write(async |tx| abandon_in_tx(tx, &mut buffer, actor, workspace, reason, now).await)
             .await?;
         self.bus.publish(buffer);
         if let Some(live) = &self.live {
             live.detach(workspace).await;
         }
-        self.get(WorkspaceRef::Workspace(workspace)).await
+        Ok(Abandoned {
+            workspace: row.into(),
+            task_status,
+        })
     }
 
     /// A workspace by id, or the workspace of a task: its live one, else its newest.
@@ -325,14 +336,6 @@ impl WorkspaceService {
             latest_checkpoint,
             latest_changeset,
         })
-    }
-
-    /// The status of `task` as `recompute` last wrote it.
-    pub async fn task_status(&self, task: TaskId) -> Result<TaskStatus, WorkspaceError> {
-        let row = tasks::get_by_number(self.store.read(), task)
-            .await?
-            .ok_or_else(|| task_not_found(task))?;
-        Ok(row.status)
     }
 
     /// Step 1 of a create: the refusals that need no files, read before anything is written, and whether an orphaned workspace is adopted instead. The transaction checks the claim and the live workspace again.
@@ -524,7 +527,7 @@ async fn abandon_in_tx(
     workspace: WorkspaceId,
     reason: &str,
     now: Timestamp,
-) -> Result<(), WorkspaceError> {
+) -> Result<(WorkspaceRow, TaskStatus), WorkspaceError> {
     let row = workspaces::get_workspace(tx.conn(), workspace)
         .await?
         .ok_or_else(|| {
@@ -578,7 +581,13 @@ async fn abandon_in_tx(
         .data(json!({"reason": reason}))?;
     buffer.append(tx, &event, now).await?;
     buffer.extend(recompute(tx, &[row.task], now).await?.events);
-    Ok(())
+    let task = tasks::fetch(tx.conn(), row.task)
+        .await?
+        .ok_or_else(|| task_not_found(row.task))?;
+    let closed = workspaces::get_workspace(tx.conn(), workspace)
+        .await?
+        .ok_or(StoreError::Corrupt("workspaces.number"))?;
+    Ok((closed, task.status))
 }
 
 pub(super) fn workspace_exists(live: &WorkspaceRow) -> FoldError {

@@ -50,18 +50,7 @@ pub async fn proposal_summaries(
         r#"SELECT p.number AS "number!: i64", t.number AS "task!: i64", p.state,
                   p.conflicted AS "conflicted: bool",
                   (SELECT MAX(v.version) FROM proposal_versions v WHERE v.proposal_id = p.id) AS "version?: i64",
-                  (
-                      SELECT r.verdict FROM reviews r
-                      WHERE r.version_id = (
-                                SELECT v.id FROM proposal_versions v
-                                WHERE v.proposal_id = p.id
-                                ORDER BY v.version DESC
-                                LIMIT 1
-                            )
-                        AND r.verdict <> 'comment'
-                      ORDER BY r.created_at DESC, r.id DESC
-                      LIMIT 1
-                  ) AS "verdict?: String",
+                  (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) AS "verdict?: String",
                   rev.number AS "revision?: i64",
                   i.actor AS "integrated_by?: String",
                   i.created_at AS "integrated_at?: i64",

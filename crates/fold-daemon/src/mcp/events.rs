@@ -12,7 +12,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use super::error::{from_agent, from_events};
-use super::identity::parse;
+use super::parse;
 use super::{FoldServer, FooterPart, FooterSource};
 use crate::services::agents::{AgentService, SessionContext};
 use crate::services::events::{EventPage, EventQuery, EventService, WaitQuery, WaitStep};

@@ -137,14 +137,20 @@ pub async fn add_edge_in_tx(
     actor: &Actor,
     now: Timestamp,
 ) -> Result<(), TaskError> {
-    // A task absent from the graph has no edges, so an unknown task never forms a cycle and still reaches task_not_found below.
-    let graph = Dag::from_edges(
-        tasks::edges_conn(tx.conn())
-            .await?
-            .into_iter()
-            .map(|edge| (edge.task, edge.needs)),
-    );
-    match graph.check_edge(task, needs) {
+    // An unknown task reaches nothing, so it never forms a cycle and still reaches task_not_found below. The whole graph is read only to name the path of a refused edge.
+    let closes = task == needs || tasks::needs_transitively(tx.conn(), needs, task).await?;
+    let checked = if closes {
+        Dag::from_edges(
+            tasks::edges_conn(tx.conn())
+                .await?
+                .into_iter()
+                .map(|edge| (edge.task, edge.needs)),
+        )
+        .check_edge(task, needs)
+    } else {
+        Ok(())
+    };
+    match checked {
         Ok(()) => {}
         Err(EdgeRefusal::SelfDependency) => {
             return Err(refusal(

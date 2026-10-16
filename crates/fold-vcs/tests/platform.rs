@@ -7,7 +7,7 @@ use fold_core::tree::EntryKind;
 use fold_vcs::materialise::materialise;
 use fold_vcs::paths::RepoPath;
 use fold_vcs::platform::{
-    Capabilities, SymlinkOutcome, create_symlink, file_identity, is_executable, set_mode,
+    Capabilities, SymlinkOutcome, create_symlink, file_identity, is_executable,
 };
 
 use crate::common::*;
@@ -80,29 +80,6 @@ fn read_only_without_a_mode_bit_uses_the_read_only_attribute() {
         let meta = fs::symlink_metadata(root.join(file)).unwrap();
         assert!(meta.permissions().readonly(), "{file}");
     }
-}
-
-#[test]
-fn set_mode_cases() {
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("f");
-    fs::write(&file, b"x").unwrap();
-    let mode = || fs::metadata(&file).unwrap().permissions().mode() & 0o7777;
-    set_mode(&file, true, false, &HOST).unwrap();
-    assert_eq!(mode(), 0o755);
-    set_mode(&file, false, true, &HOST).unwrap();
-    assert_eq!(mode(), 0o444);
-    set_mode(&file, true, true, &HOST).unwrap();
-    assert_eq!(mode(), 0o555);
-    let keep = Capabilities {
-        exec_bit: false,
-        ..HOST
-    };
-    set_mode(&file, true, false, &keep).unwrap();
-    assert_eq!(mode(), 0o555, "no executable bit leaves the mode alone");
-    fs::set_permissions(&file, fs::Permissions::from_mode(0o666)).unwrap();
-    set_mode(&file, false, true, &keep).unwrap();
-    assert_eq!(mode(), 0o444);
 }
 
 #[test]

@@ -338,6 +338,14 @@ fn the_sender_follows_the_actor() {
 }
 
 #[test]
+fn a_body_debug_form_holds_no_text() {
+    let body = MessageBody::parse("secret plan").unwrap();
+    let shown = format!("{body:?}");
+    assert!(!shown.contains("secret"), "{shown}");
+    assert!(shown.contains("11"), "{shown}");
+}
+
+#[test]
 fn a_blank_body_is_refused() {
     assert_eq!(MessageBody::parse("hello").unwrap().as_str(), "hello");
     for blank in ["", "  \n\t"] {

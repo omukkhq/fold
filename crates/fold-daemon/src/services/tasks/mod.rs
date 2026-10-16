@@ -33,9 +33,9 @@ mod views;
 pub use attention::{AttentionItem, AttentionKind, attention, stalled_tasks};
 pub use checklists::{
     ChecklistItemPatch, ChecklistItemView, ChecklistProgress, ChecklistView, ItemContent,
-    NewChecklistItem,
+    NewChecklistItem, item_content,
 };
-pub use claims::{ClaimView, Claimed, claim_view, renew_leases};
+pub use claims::{ClaimView, Claimed, renew_leases};
 pub(crate) use claims::{already_claimed, claim_in_tx, closed_refusal, worker_row};
 pub use dependencies::{Edge, add_edge_in_tx};
 pub use fold_core::reviews::HumanReviewMark;
@@ -46,10 +46,11 @@ pub use ready::ReadyTask;
 pub use recompute::{Recomputed, recompute};
 pub(crate) use requests::request_missing;
 pub use requests::{
-    ApprovedRequest, NewRequestAttachment, RequestAttachment, RequestComment, RequestDetail,
-    RequestDraft, RequestFilter, RequestThread, RequestView, SubmitDraft,
+    ApprovedRequest, DEFAULT_REQUEST_LIST, MAX_REQUEST_LIST, NewRequestAttachment,
+    RequestAttachment, RequestComment, RequestDetail, RequestDraft, RequestFilter, RequestThread,
+    RequestView, SubmitDraft,
 };
-/// Whether `actor` may turn the human review mark on, change it or clear it: the rule that governs the human-review routes, read for a task view.
+/// Whether `actor` may clear the human review mark, read for a task view. Any agent or human may turn the mark on, but only an actor that may clear it may also change what it says, so this one rule decides whether the view offers the human-review controls.
 pub fn can_change_human_review(actor: &Actor) -> bool {
     fold_core::policy::can_clear_human_review(actor).is_ok()
 }
@@ -89,6 +90,11 @@ impl TaskError {
             TaskError::Store(error) => error.code(),
             TaskError::Event(_) => None,
         }
+    }
+
+    /// The code a log line names: the stable code, or `internal_error` for an internal failure.
+    pub fn log_code(&self) -> &'static str {
+        self.code().unwrap_or(codes::INTERNAL_ERROR)
     }
 }
 
@@ -188,10 +194,10 @@ impl TaskService {
         self
     }
 
-    /// Reads the lease from the project's `.fold/config.toml` on every claim command and every read of a claim; an invalid file fails those calls with its configuration error and leaves every other task call working.
+    /// Reads the lease from the project's `.fold/config.toml` on every claim command and every read of a claim; an invalid file fails those calls with its configuration error and leaves every other task call working. The near-stale count of the tool-call footer reads it again only when the file changed (see [`Lease::recent_minutes`]).
     #[must_use]
     pub fn with_project_config(mut self, paths: ProjectPaths) -> Self {
-        self.lease = Lease::Config(paths);
+        self.lease = Lease::config(paths);
         self
     }
 
@@ -383,21 +389,19 @@ impl TaskService {
         Ok(view(row, labels))
     }
 
-    /// Tasks in number order; archived tasks only when `include_archived`.
+    /// Tasks in number order with their labels, read in one transaction; archived tasks only when `include_archived`.
     pub async fn list(&self, include_archived: bool) -> Result<Vec<TaskView>, TaskError> {
-        let rows = tasks::list(self.store.read(), include_archived).await?;
-        let mut conn = self
-            .store
-            .read()
-            .acquire()
-            .await
-            .map_err(StoreError::from)?;
-        let mut views = Vec::with_capacity(rows.len());
-        for row in rows {
-            let labels = tasks::labels_for_conn(&mut conn, row.id).await?;
-            views.push(view(row, labels));
-        }
-        Ok(views)
+        let mut tx = self.store.read().begin().await.map_err(StoreError::from)?;
+        let rows = tasks::list_conn(&mut tx, include_archived).await?;
+        let mut labels = tasks::labels_by_task(&mut tx, include_archived).await?;
+        tx.commit().await.map_err(StoreError::from)?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let own = labels.remove(&row.id).unwrap_or_default();
+                view(row, own)
+            })
+            .collect())
     }
 
     pub async fn labels(&self) -> Result<Vec<LabelView>, TaskError> {
@@ -427,10 +431,12 @@ fn view(row: tasks::TaskRow, labels: Vec<tasks::LabelRow>) -> TaskView {
 }
 
 pub(crate) fn task_not_found(id: TaskId) -> TaskError {
-    TaskError::Fold(
-        FoldError::new(codes::TASK_NOT_FOUND, format!("{id} does not exist"))
-            .with_hint("call get_task_graph to see the tasks"),
-    )
+    TaskError::Fold(task_missing(id))
+}
+
+pub(crate) fn task_missing(id: TaskId) -> FoldError {
+    FoldError::new(codes::TASK_NOT_FOUND, format!("{id} does not exist"))
+        .with_hint("call get_task_graph to see the tasks")
 }
 
 async fn require_labels(tx: &mut WriteTx, names: &[LabelName]) -> Result<(), TaskError> {
@@ -446,7 +452,7 @@ async fn require_labels(tx: &mut WriteTx, names: &[LabelName]) -> Result<(), Tas
     ))
 }
 
-/// Creates a task of `kind` and its label links inside the caller's transaction and appends `task.created`, whose data names the kind of a task without a proposal. The tool card calls this to create a task, its edges and its parent link in one transaction. The caller runs `recompute` on the new task before it commits, once every edge is in place.
+/// Creates a task of `kind` and its label links inside the caller's transaction and appends `task.created`, whose data names the kind of a task without a proposal. Task creation, request approval and the sync task of a conflicted pull call it, so each adds its edges and links in the same transaction. The caller runs `recompute` on the new task before it commits, once every edge is in place.
 pub(crate) async fn create_in_tx(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,
@@ -497,6 +503,7 @@ async fn update_in_tx(
     if row.archived_at.is_some() {
         return Err(TaskError::Fold(
             FoldError::new(codes::TASK_CLOSED, format!("{id} is archived"))
+                .with_details([("reason", json!("archived"))])
                 .with_hint("an archived task is read-only; call create_task for new work"),
         ));
     }

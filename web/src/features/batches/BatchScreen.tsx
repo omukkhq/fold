@@ -1,9 +1,7 @@
 import {
   skipToken,
-  useMutation,
   useQueries,
   useQuery,
-  useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query";
 import { useState } from "react";
@@ -15,7 +13,6 @@ import {
   Diff,
   GitMerge,
   Loader2,
-  Square,
   UserCheck,
   type LucideIcon,
 } from "lucide-react";
@@ -29,8 +26,8 @@ import {
   sessionQuery,
   workersQuery,
 } from "@/api/queries";
-import { stopWorker, type WorkerProcess } from "@/api/workers";
-import { Button, IconButton } from "@/components/button/Button";
+import type { WorkerProcess } from "@/api/workers";
+import { IconButton } from "@/components/button/Button";
 import {
   buttonClasses,
   buttonIconClass,
@@ -44,8 +41,8 @@ import { detailHref } from "@/features/proposals/view";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { PersonName } from "@/people/PersonName";
-import { ErrorNote, StatePill, StepText } from "@/features/workers/parts";
-import { stopFailure } from "@/features/workers/startLead";
+import { StatePill, StepText } from "@/features/workers/parts";
+import { StopWorker } from "@/features/workers/StopWorker";
 import { stopControl, workerPill, workerStep } from "@/features/workers/team";
 import type { WorkerSteps } from "@/live/apply";
 import {
@@ -65,6 +62,7 @@ import {
   type MemberRow,
   type VerdictKind,
 } from "./present";
+import { projectPath } from "@/routes/paths";
 
 const HEAD =
   "px-6 py-9 text-left text-label leading-snug font-semibold tracking-overline whitespace-nowrap text-text-muted uppercase first:pl-16 last:pr-16";
@@ -147,28 +145,18 @@ function StopReviewer({
   slug: string;
   worker: WorkerProcess;
 }) {
-  const queryClient = useQueryClient();
-  const stop = useMutation({
-    mutationFn: () => stopWorker(slug, worker.name),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: keys.workers(slug) }),
-  });
   const control = stopControl(worker.state);
   if (control === null) return null;
-  const pending = stop.isPending || control === "stopping";
   return (
-    <div className="flex flex-col items-end gap-6">
-      <Button
-        pending={pending}
-        icon={<Square aria-hidden="true" size={15} />}
-        onClick={() => {
-          stop.mutate();
-        }}
-      >
-        {pending ? "Stopping reviewer" : "Stop reviewer"}
-      </Button>
-      {stop.isError ? <ErrorNote failure={stopFailure(stop.error)} /> : null}
-    </div>
+    <StopWorker
+      slug={slug}
+      name={worker.name}
+      control={control}
+      size="md"
+      idleLabel="Stop reviewer"
+      busyLabel="Stopping reviewer"
+      className="items-end"
+    />
   );
 }
 
@@ -211,7 +199,7 @@ export function BatchScreen({ slug, id }: { slug: string; id: string }) {
         <div className="flex flex-col gap-4">
           <nav aria-label="Breadcrumb" className="flex items-center gap-8">
             <HrefLink
-              href={`/p/${slug}/proposals`}
+              href={projectPath(slug, "proposals")}
               className={cn(
                 "rounded-s text-bar text-text-muted hover:text-text",
                 focusRing,
@@ -277,7 +265,7 @@ export function BatchScreen({ slug, id }: { slug: string; id: string }) {
                 </p>
               </div>
               <HrefLink
-                href={`/p/${slug}/proposals/${proposal}`}
+                href={projectPath(slug, "proposals", proposal)}
                 className={cn(buttonClasses("secondary", "md"), focusRing)}
               >
                 <span className={buttonIconClass("secondary")}>

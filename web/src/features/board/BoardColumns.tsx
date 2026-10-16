@@ -7,6 +7,7 @@ import { Skeleton } from "@/components/states/Skeleton";
 import { Mono } from "@/components/mono/Mono";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
+import { projectPath } from "@/routes/paths";
 import { BoardCard } from "./BoardCard";
 import { newTaskPath } from "./card";
 import {
@@ -99,7 +100,7 @@ function MoreLink({ slug, text }: { slug: string; text: string | null }) {
   }
   return (
     <HrefLink
-      href={`/p/${encodeURIComponent(slug)}/repository`}
+      href={projectPath(slug, "repository")}
       className={cn(
         "self-start rounded-s text-meta font-medium text-primary-text hover:underline",
         focusRing,

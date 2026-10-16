@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE checkpoints SET pruned_at = ? WHERE number IN (SELECT value FROM json_each(?))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "81e95d5b0d4b0008c275b76921e5e55f88ee4ef94524e66d66e52c78a38440d8"
+}

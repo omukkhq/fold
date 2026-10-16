@@ -2,11 +2,12 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use fold_core::config::RoleSettings;
 use fold_core::events::types;
+use fold_core::layout::{AGENT_ENV, AGENT_TAGS_ENV, MCP_COMMAND, MCP_SERVER_NAME, MCP_SERVERS_KEY};
 use fold_core::roles::area_prompt;
 use fold_core::{
     AgentName, AreaName, Clock, EventActor, LiveEvent, NewEvent, ProjectPaths, WorkerState, codes,
@@ -14,7 +15,7 @@ use fold_core::{
 use fold_store::agents::{self, TurnTotals, WorkerProcessRow};
 use fold_store::{Store, StoreError};
 use serde_json::{Map, Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{mpsc, watch};
@@ -26,8 +27,11 @@ use crate::services::agents::AgentError;
 use crate::services::agents::claude::{ClaudeInput, ClaudeMessage, OutgoingRequest};
 use crate::services::events::{BusMessage, EventBuffer, EventBus};
 use crate::services::projects::load_config;
+use crate::support::lock;
+use lines::Lines;
 use questions::Waiter;
 
+mod lines;
 mod questions;
 mod refresh;
 mod resume;
@@ -154,10 +158,6 @@ impl Drop for Inner {
     }
 }
 
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
 /// What a row id and its agent are, for the tasks of one process.
 #[derive(Clone)]
 struct Process {
@@ -260,7 +260,7 @@ impl Supervisor {
                 }
                 Ok(None) => {}
                 Err(error) => {
-                    tracing::warn!(agent = %row.agent, code = error.code().unwrap_or("store_error"), "could not read the area profile for a worker");
+                    tracing::warn!(agent = %row.agent, code = error.log_code(), "could not read the area profile for a worker");
                     self.fail(row.id, &row.agent, "config").await?;
                     return Ok(None);
                 }
@@ -318,16 +318,18 @@ impl Supervisor {
         }
         let ttl = settings.cache_ttl.as_str();
         command
-            .env("FOLD_AGENT", row.agent.as_str())
+            .env(AGENT_ENV, row.agent.as_str())
             .env("CLAUDE_CODE_PROMPT_CACHE_TTL", ttl)
             .env("CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL", ttl)
             .envs(launcher.env.iter().map(|(key, value)| (key, value)))
             // A daemon that `fld claude`'s session started inherits its `main` tag request, which a worker never makes.
-            .env_remove("FOLD_AGENT_TAGS")
+            .env_remove(AGENT_TAGS_ENV)
             .current_dir(self.inner.paths.root())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            // The worker leads a process group of its own, so the signals of a stop reach the commands its tools started too.
+            .process_group(0)
             .kill_on_drop(true);
         #[cfg(feature = "failpoints")]
         fail::fail_point!("worker_launch_before_spawn");
@@ -387,9 +389,9 @@ impl Supervisor {
                         current.id == row.id && current.state == WorkerState::Starting
                     });
                 if starting {
-                    agents::set_worker_pid(tx.conn(), row.id, pid).await?;
+                    agents::set_worker_pid(tx, row.id, pid).await?;
                     if idle {
-                        agents::set_worker_state(tx.conn(), row.id, WorkerState::Idle, now).await?;
+                        agents::set_worker_state(tx, row.id, WorkerState::Idle, now).await?;
                     }
                 }
                 Ok::<_, StoreError>(starting)
@@ -399,7 +401,7 @@ impl Supervisor {
             Ok(starting) => starting,
             Err(error) => {
                 self.forget(&process);
-                tracing::warn!(agent = %row.agent, code = error.code().unwrap_or("store_error"), "could not record a worker's process");
+                tracing::warn!(agent = %row.agent, code = error.log_code(), "could not record a worker's process");
                 // Dropping the child on return kills the process.
                 self.fail(row.id, &row.agent, "record").await?;
                 return Ok(None);
@@ -457,7 +459,7 @@ impl Supervisor {
         )
     }
 
-    /// Records a worker whose process could not start. A row that is no longer the agent's current one, or that has ended already, is left as it is.
+    /// Records a worker whose process could not start. A row that another start replaced, or that has ended already, is left as it is.
     async fn fail(&self, id: i64, agent: &AgentName, reason: &str) -> Result<(), AgentError> {
         let now = self.inner.clock.now();
         let mut buffer = EventBuffer::new();
@@ -468,8 +470,8 @@ impl Supervisor {
                 if !current.is_some_and(|current| current.id == id && current.state.is_running()) {
                     return Ok(());
                 }
-                agents::record_exit(tx.conn(), id, WorkerState::Failed, None, now).await?;
-                agents::close_open_questions(tx.conn(), id, now).await?;
+                agents::record_exit(tx, id, WorkerState::Failed, None, now).await?;
+                agents::close_open_questions(tx, id, now).await?;
                 let event = NewEvent::new(types::WORKER_FAILED, EventActor::fold())?
                     .data(json!({"agent": agent.as_str(), "reason": reason}))?;
                 buffer.append(tx, &event, now).await?;
@@ -503,16 +505,16 @@ impl Supervisor {
                 let marked = self
                     .inner
                     .store
-                    .write(async |tx| agents::mark_worker_working(tx.conn(), process.id).await)
+                    .write(async |tx| agents::mark_worker_working(tx, process.id).await)
                     .await;
                 if let Err(error) = marked {
-                    tracing::warn!(agent = %process.agent, code = error.code().unwrap_or("store_error"), "could not mark a worker working");
+                    tracing::warn!(agent = %process.agent, code = error.log_code(), "could not mark a worker working");
                 }
             }
         }
     }
 
-    /// Reads the process's stdout line by line until it closes, then records the exit.
+    /// Reads the process's stdout line by line until it closes, then records the exit. A line that is not UTF-8 or is longer than [`lines::MAX_LINE_BYTES`] is skipped, so the reader keeps draining the pipe whatever the process writes.
     async fn drive(
         self,
         mut child: Child,
@@ -522,7 +524,7 @@ impl Supervisor {
         detached: Arc<AtomicBool>,
         reaped: Arc<AtomicBool>,
     ) {
-        let mut lines = BufReader::new(stdout).lines();
+        let mut lines = Lines::new(stdout);
         let status = loop {
             tokio::select! {
                 line = lines.next_line() => match line {
@@ -611,8 +613,8 @@ impl Supervisor {
                     .store
                     .write(async |tx| {
                         let model = (!model.is_empty()).then_some(model.as_str());
-                        agents::set_worker_context(tx.conn(), id, model, None).await?;
-                        agents::mark_worker_working(tx.conn(), id).await?;
+                        agents::set_worker_context(tx, id, model, None).await?;
+                        agents::mark_worker_working(tx, id).await?;
                         Ok::<_, StoreError>(())
                     })
                     .await
@@ -621,8 +623,7 @@ impl Supervisor {
                 self.inner
                     .store
                     .write(async |tx| {
-                        agents::set_worker_context(tx.conn(), id, model.as_deref(), Some(tokens))
-                            .await
+                        agents::set_worker_context(tx, id, model.as_deref(), Some(tokens)).await
                     })
                     .await
             }
@@ -639,12 +640,12 @@ impl Supervisor {
                 };
                 self.inner
                     .store
-                    .write(async |tx| agents::record_turn(tx.conn(), id, totals, now).await)
+                    .write(async |tx| agents::record_turn(tx, id, totals, now).await)
                     .await
             }
         };
         if let Err(error) = &written {
-            tracing::warn!(agent = %process.agent, code = error.code().unwrap_or("store_error"), "could not record a worker's output");
+            tracing::warn!(agent = %process.agent, code = error.log_code(), "could not record a worker's output");
         }
         if let Ok(event) = LiveEvent::new(
             types::WORKER_OUTPUT,
@@ -672,7 +673,7 @@ impl Supervisor {
         if detached {
             self.inner
                 .store
-                .write(async |tx| agents::set_worker_pid(tx.conn(), id, None).await)
+                .write(async |tx| agents::set_worker_pid(tx, id, None).await)
                 .await?;
             return Ok(());
         }
@@ -687,12 +688,12 @@ impl Supervisor {
                 if row.id != id || !row.state.is_running() {
                     return Ok(());
                 }
-                agents::close_open_questions(tx.conn(), id, now).await?;
+                agents::close_open_questions(tx, id, now).await?;
                 let event = if row.state == WorkerState::Stopping {
-                    agents::record_exit(tx.conn(), id, WorkerState::Stopped, code, now).await?;
+                    agents::record_exit(tx, id, WorkerState::Stopped, code, now).await?;
                     stopped_event(&row, code)?
                 } else {
-                    agents::record_exit(tx.conn(), id, WorkerState::Failed, code, now).await?;
+                    agents::record_exit(tx, id, WorkerState::Failed, code, now).await?;
                     NewEvent::new(types::WORKER_FAILED, EventActor::fold())?.data(json!({
                         "agent": agent.as_str(),
                         "reason": "exited",
@@ -730,7 +731,7 @@ impl Supervisor {
                     return Ok(None);
                 }
                 let working = row.state == WorkerState::Working;
-                agents::set_worker_state(tx.conn(), row.id, WorkerState::Stopping, now).await?;
+                agents::set_worker_state(tx, row.id, WorkerState::Stopping, now).await?;
                 Ok(Some((row, working)))
             })
             .await?;
@@ -755,7 +756,7 @@ impl Supervisor {
         });
     }
 
-    /// Ends a `stopping` row that has no process here. A process that a racing launch started and ended itself may have recorded the stop already, so a row that is no longer `stopping` is left as it is.
+    /// Ends a `stopping` row that has no process here. A process that a racing launch started and ended itself may have recorded the stop already, so a row that has left `stopping` is left as it is.
     async fn stopped_without_process(&self, row: &WorkerProcessRow) -> Result<(), AgentError> {
         let now = self.inner.clock.now();
         let mut buffer = EventBuffer::new();
@@ -770,8 +771,8 @@ impl Supervisor {
                 if !stopping {
                     return Ok(());
                 }
-                agents::record_exit(tx.conn(), row.id, WorkerState::Stopped, None, now).await?;
-                agents::close_open_questions(tx.conn(), row.id, now).await?;
+                agents::record_exit(tx, row.id, WorkerState::Stopped, None, now).await?;
+                agents::close_open_questions(tx, row.id, now).await?;
                 buffer.append(tx, &stopped_event(row, None)?, now).await?;
                 Ok::<_, AgentError>(())
             })
@@ -809,7 +810,7 @@ impl Supervisor {
                 .and_then(|pid| i32::try_from(pid).ok())
                 .and_then(rustix::process::Pid::from_raw)
             {
-                let _ = rustix::process::kill_process(pid, signal);
+                let _ = rustix::process::kill_process_group(pid, signal);
             }
         }
         // SIGKILL cannot be ignored, so only the reader's last lines and the recorded exit remain; the timeout guards against a pid that was never known.
@@ -842,7 +843,7 @@ impl Supervisor {
         }
     }
 
-    /// Ends every worker process the way a stop does, at the daemon's stop, but keeps each row's state, so the next start resumes the workers that were working or idle.
+    /// Ends every worker process the way a stop does, all at once, at the daemon's stop, but keeps each row's state, so the next start resumes the workers that were working or idle.
     pub async fn shutdown(&self) {
         let working: Vec<AgentName> = match self.inner.store.read().acquire().await {
             Ok(mut conn) => agents::list_worker_processes(&mut conn)
@@ -858,15 +859,20 @@ impl Supervisor {
             .iter()
             .map(|(agent, run)| (agent.clone(), run.clone()))
             .collect();
+        let mut stops = tokio::task::JoinSet::new();
         for (agent, run) in running {
             run.detached.store(true, Ordering::SeqCst);
-            self.terminate(&run, working.contains(&agent)).await;
+            let supervisor = self.clone();
+            let working = working.contains(&agent);
+            stops.spawn(async move { supervisor.terminate(&run, working).await });
         }
+        while stops.join_next().await.is_some() {}
     }
 
-    /// The short-lived workers whose work `event` finished: a task coder once no bound task awaits its work (see [`agents::tasks_awaiting_proposal`]), checked when it opens a proposal, sends a new version or reports a task without a proposal and when a bound task is archived; a batch reviewer once every bound proposal has a verdict or is no longer open.
+    /// The short-lived workers whose work `event` finished: a task coder once no bound task awaits its work (see [`agents::tasks_awaiting_proposal`]), checked when it opens a proposal, sends a new version or reports a task without a proposal and when a bound task is archived; a batch reviewer once every bound proposal has a verdict or is closed or integrated.
     async fn done_workers(&self, event: &fold_core::Event) -> Result<Vec<AgentName>, StoreError> {
         let kind = event.event_type;
+        let read = self.inner.store.read();
         let mut done = Vec::new();
         if (kind == types::PROPOSAL_OPENED
             || kind == types::PROPOSAL_VERSION_ADDED
@@ -874,52 +880,26 @@ impl Supervisor {
             || kind == types::TASK_REPORTED)
             && let Some(task) = event.task
         {
-            for coder in agents::coders_of_task(self.inner.store.read(), task).await? {
-                let mut conn = self
-                    .inner
-                    .store
-                    .read()
-                    .acquire()
-                    .await
-                    .map_err(StoreError::from)?;
-                if let Some(row) = agents::find_worker_process(&mut conn, &coder).await?
-                    && agents::tasks_awaiting_proposal(&mut *conn, row.id).await? == 0
-                {
-                    done.push(coder);
-                }
-            }
+            let coders = agents::coders_of_task(read, task).await?;
+            let ids: Vec<i64> = coders.iter().map(|coder| coder.id).collect();
+            let waiting = agents::tasks_awaiting_proposal(read, &ids).await?;
+            done.extend(
+                coders
+                    .into_iter()
+                    .filter(|coder| waiting.get(&coder.id) == Some(&0))
+                    .map(|coder| coder.agent),
+            );
         }
-        if (kind == types::REVIEW_SUBMITTED
+        let reviewers = if (kind == types::REVIEW_SUBMITTED
             || kind == types::PROPOSAL_CLOSED
             || kind == types::PROPOSAL_INTEGRATED)
             && let Some(proposal) = event.proposal
         {
-            for reviewer in agents::reviewers_of_proposal(self.inner.store.read(), proposal).await?
-            {
-                let mut conn = self
-                    .inner
-                    .store
-                    .read()
-                    .acquire()
-                    .await
-                    .map_err(StoreError::from)?;
-                if let Some(row) = agents::find_worker_process(&mut conn, &reviewer).await?
-                    && agents::proposals_without_verdict(&mut *conn, row.id).await? == 0
-                {
-                    done.push(reviewer);
-                }
-            }
-        }
-        // A batch review names its batch, not each member, so every running batch reviewer is checked.
-        if kind == types::REVIEW_BATCH_SUBMITTED {
-            let mut conn = self
-                .inner
-                .store
-                .read()
-                .acquire()
-                .await
-                .map_err(StoreError::from)?;
-            let reviewers: Vec<WorkerProcessRow> = agents::list_worker_processes(&mut conn)
+            agents::reviewers_of_proposal(read, proposal).await?
+        } else if kind == types::REVIEW_BATCH_SUBMITTED {
+            // A batch review names its batch, not each member, so every running batch reviewer is checked.
+            let mut conn = read.acquire().await.map_err(StoreError::from)?;
+            agents::list_worker_processes(&mut conn)
                 .await?
                 .into_iter()
                 .filter(|row| {
@@ -927,13 +907,19 @@ impl Supervisor {
                         && row.state.is_running()
                         && row.state != WorkerState::Stopping
                 })
-                .collect();
-            for row in reviewers {
-                if !done.contains(&row.agent)
-                    && agents::proposals_without_verdict(&mut *conn, row.id).await? == 0
-                {
-                    done.push(row.agent);
-                }
+                .map(|row| agents::BoundWorker {
+                    id: row.id,
+                    agent: row.agent,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let ids: Vec<i64> = reviewers.iter().map(|reviewer| reviewer.id).collect();
+        let missing = agents::proposals_without_verdict(read, &ids).await?;
+        for reviewer in reviewers {
+            if missing.get(&reviewer.id) == Some(&0) && !done.contains(&reviewer.agent) {
+                done.push(reviewer.agent);
             }
         }
         Ok(done)
@@ -1019,7 +1005,7 @@ impl Supervisor {
                 let now = self.inner.clock.now();
                 self.inner
                     .store
-                    .write(async |tx| agents::restart_worker_process(tx.conn(), row.id, now).await)
+                    .write(async |tx| agents::restart_worker_process(tx, row.id, now).await)
                     .await?;
                 if let Some(watch) = self.launch(row, true, turn).await? {
                     tokio::spawn(self.clone().restart_lost(row.agent.clone(), watch, None));
@@ -1032,42 +1018,49 @@ impl Supervisor {
         Ok(())
     }
 
-    /// Does from the stored state what the events the watcher missed would have done: answers each `ask` question whose messages all have their replies, stops each short-lived worker whose work is done, and serves the resumes and send-backs the limits held back.
+    /// Does from the stored state what the events the watcher missed would have done: answers each `ask` question whose messages all have their replies, stops each short-lived worker whose work is done, tells each running coder about changes requested of it, and serves the resumes and send-backs the limits held back.
     async fn recover(self) {
         self.answer_open_asks().await;
         self.stop_done_workers().await;
+        self.notify_running_authors().await;
         self.clone().resume_owed_send_backs().await;
         self.resume_pending().await;
     }
 
     async fn stop_done_workers(&self) {
         let rows = async {
-            let mut conn = self
-                .inner
-                .store
-                .read()
-                .acquire()
-                .await
-                .map_err(StoreError::from)?;
-            let mut done = Vec::new();
-            for row in agents::list_worker_processes(&mut conn).await? {
-                if !matches!(row.state, WorkerState::Working | WorkerState::Idle) {
-                    continue;
-                }
-                let finished = match row.role {
-                    fold_core::Role::TaskCoder => {
-                        agents::tasks_awaiting_proposal(&mut *conn, row.id).await? == 0
-                    }
-                    fold_core::Role::BatchReviewer => {
-                        agents::proposals_without_verdict(&mut *conn, row.id).await? == 0
-                    }
-                    fold_core::Role::AreaLead | fold_core::Role::ReviewLead => false,
-                };
-                if finished {
-                    done.push(row.agent);
-                }
-            }
-            Ok::<_, StoreError>(done)
+            let read = self.inner.store.read();
+            let mut conn = read.acquire().await.map_err(StoreError::from)?;
+            let rows: Vec<WorkerProcessRow> = agents::list_worker_processes(&mut conn)
+                .await?
+                .into_iter()
+                .filter(|row| matches!(row.state, WorkerState::Working | WorkerState::Idle))
+                .collect();
+            drop(conn);
+            let of_role = |role| -> Vec<i64> {
+                rows.iter()
+                    .filter(|row| row.role == role)
+                    .map(|row| row.id)
+                    .collect()
+            };
+            let waiting =
+                agents::tasks_awaiting_proposal(read, &of_role(fold_core::Role::TaskCoder)).await?;
+            let missing =
+                agents::proposals_without_verdict(read, &of_role(fold_core::Role::BatchReviewer))
+                    .await?;
+            Ok::<_, StoreError>(
+                rows.into_iter()
+                    .filter(|row| {
+                        let open = match row.role {
+                            fold_core::Role::TaskCoder => waiting.get(&row.id),
+                            fold_core::Role::BatchReviewer => missing.get(&row.id),
+                            fold_core::Role::AreaLead | fold_core::Role::ReviewLead => None,
+                        };
+                        open == Some(&0)
+                    })
+                    .map(|row| row.agent)
+                    .collect::<Vec<_>>(),
+            )
         }
         .await;
         match rows {
@@ -1236,11 +1229,11 @@ fn mcp_config(
 ) -> Value {
     let mut servers = Map::new();
     servers.insert(
-        crate::services::agents::workers::FOLD_SERVER.to_owned(),
+        MCP_SERVER_NAME.to_owned(),
         json!({
             "command": fold,
-            "args": ["mcp"],
-            "env": {"FOLD_AGENT": agent.as_str()},
+            "args": [MCP_COMMAND],
+            "env": {(AGENT_ENV): agent.as_str()},
         }),
     );
     if let Some(names) = limit {
@@ -1253,14 +1246,14 @@ fn mcp_config(
                 continue;
             }
             if let Some(entry) = project
-                .get("mcpServers")
+                .get(MCP_SERVERS_KEY)
                 .and_then(|servers| servers.get(name))
             {
                 servers.insert(name.clone(), entry.clone());
             }
         }
     }
-    json!({ "mcpServers": servers })
+    json!({ MCP_SERVERS_KEY: servers })
 }
 
 #[cfg(test)]

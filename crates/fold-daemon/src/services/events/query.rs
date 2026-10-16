@@ -150,7 +150,7 @@ fn page(events: Vec<Event>, start: u64) -> EventPage {
     EventPage { events, next }
 }
 
-/// Reads after the stored cursor, keeps at most `limit` matching events and moves the cursor to the last one kept. With `recipients_only`, a message event is kept only when a worker of the agent receives the message. The page is one read-pool query; the single writer is taken only to move the cursor, and only while the cursor still stands where the read started, so two reads of one agent never return the same event. A read that lost that race reads again from where the other one left the cursor.
+/// Reads after the stored cursor, keeps at most `limit` matching events and moves the cursor to the last one kept. With `recipients_only`, a sent message is kept only when a worker of the agent receives it, and an acknowledgement only when a worker of the agent made it: acknowledging changes only the acknowledging worker's inbox. The page is one read-pool query; the single writer is taken only to move the cursor, and only while the cursor still stands where the read started, so two reads of one agent never return the same event. A read that lost that race reads again from where the other one left the cursor.
 pub(super) async fn cursor_page(
     store: &Store,
     agent_id: i64,
@@ -166,7 +166,8 @@ pub(super) async fn cursor_page(
                 start,
                 filter,
                 agent_id,
-                &MESSAGE_EVENTS,
+                &[types::MESSAGE_SENT],
+                &[types::MESSAGE_ACKNOWLEDGED],
                 limit,
             )
             .await?
@@ -185,9 +186,6 @@ pub(super) async fn cursor_page(
         }
     }
 }
-
-/// The event types that reach an agent that waits only when one of its workers is a recipient of the message the event names.
-const MESSAGE_EVENTS: [EventType; 2] = [types::MESSAGE_SENT, types::MESSAGE_ACKNOWLEDGED];
 
 /// The most new events the footer counts; a larger number shows as `100+`.
 pub const NEW_EVENTS_CAP: u64 = 100;

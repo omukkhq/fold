@@ -14,4 +14,19 @@ disallowed-methods = [
     { path = "std::fs::read_to_string", reason = "fold-core is pure: it does no file I/O" },
     { path = "std::fs::write", reason = "fold-core is pure: it does no file I/O" },
     { path = "std::fs::File::open", reason = "fold-core is pure: it does no file I/O" },
+    { path = "std::fs::File::create", reason = "fold-core is pure: it does no file I/O" },
+    { path = "std::env::vars", reason = "fold-core is pure: it never reads the environment" },
+    { path = "std::env::vars_os", reason = "fold-core is pure: it never reads the environment" },
+    { path = "std::env::current_dir", reason = "fold-core is pure: it never reads the environment" },
+    { path = "std::thread::spawn", reason = "fold-core is pure: it starts no threads, so every decision is replayable" },
+]
+
+disallowed-types = [
+    { path = "std::fs::OpenOptions", reason = "fold-core is pure: it does no file I/O" },
+    { path = "std::process::Command", reason = "fold-core is pure: it starts no processes" },
+    { path = "std::net::TcpListener", reason = "fold-core is pure: it does no network I/O" },
+    { path = "std::net::TcpStream", reason = "fold-core is pure: it does no network I/O" },
+    { path = "std::net::UdpSocket", reason = "fold-core is pure: it does no network I/O" },
+    { path = "std::os::unix::net::UnixListener", reason = "fold-core is pure: it does no network I/O" },
+    { path = "std::os::unix::net::UnixStream", reason = "fold-core is pure: it does no network I/O" },
 ]

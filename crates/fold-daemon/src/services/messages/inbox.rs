@@ -1,7 +1,7 @@
 use fold_core::events::types;
 use fold_core::{
-    Actor, AddressedAs, Choice, FoldError, MessageId, NewEvent, ProposalId, RequestId, Sender,
-    TaskId, Timestamp, WorkerName, codes, policy,
+    Actor, AddressedAs, AgentActor, Choice, FoldError, MessageId, NewEvent, ProposalId, RequestId,
+    Sender, TaskId, Timestamp, WorkerName, policy,
 };
 use fold_store::agents::WorkerRow;
 use fold_store::messages::{self, InboxRow};
@@ -9,7 +9,10 @@ use fold_store::{Store, WriteTx, agents};
 use serde_json::json;
 
 use super::{MessageError, MessageService, message_not_found};
+use crate::services::agents::{actor_worker, worker_not_found};
 use crate::services::events::EventBuffer;
+#[cfg(feature = "failpoints")]
+use crate::services::fired;
 
 /// One unacknowledged message of a worker's inbox.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,10 +64,11 @@ impl MessageService {
         actor: &Actor,
         include_workers: bool,
     ) -> Result<Vec<InboxItem>, MessageError> {
+        let agent = policy::can_use_inbox(actor).map_err(FoldError::from)?;
         let now = self.clock.now();
         self.store
             .write(async |tx| {
-                let worker = acting_worker(tx, actor).await?;
+                let worker = acting_worker(tx, agent).await?;
                 let workers = if include_workers {
                     agents::worker_ids(tx.conn(), worker.agent_id).await?
                 } else {
@@ -78,12 +82,9 @@ impl MessageService {
                     .collect();
                 messages::mark_delivered(tx, &undelivered, now).await?;
                 #[cfg(feature = "failpoints")]
-                fail::fail_point!("inbox_after_delivery", |_| {
-                    Err(MessageError::from(FoldError::new(
-                        codes::FAILPOINT,
-                        "inbox_after_delivery fired",
-                    )))
-                });
+                fail::fail_point!("inbox_after_delivery", |_| Err(MessageError::from(fired(
+                    "inbox_after_delivery"
+                ))));
                 Ok(rows.into_iter().map(|row| item(row, now)).collect())
             })
             .await
@@ -96,16 +97,17 @@ impl MessageService {
         message: MessageId,
         up_to: bool,
     ) -> Result<Vec<MessageId>, MessageError> {
+        let agent = policy::can_use_inbox(actor).map_err(FoldError::from)?;
         let now = self.clock.now();
         let mut buffer = EventBuffer::new();
         let acknowledged = self
             .store
             .write(async |tx| {
-                let worker = acting_worker(tx, actor).await?;
+                let worker = acting_worker(tx, agent).await?;
                 let ids = messages::acknowledge(tx, worker.id, message, up_to, now)
                     .await?
                     .ok_or_else(|| message_not_found(message))?;
-                // The event names the newest message it covers, whose recipients include the acknowledging worker, so `wait_for_events` reaches that worker's agent.
+                // The event names the newest message it covers; `wait_for_events` returns it only to the acknowledging worker's agent, whose inbox it changed.
                 if let Some(newest) = ids.last() {
                     let event = NewEvent::new(types::MESSAGE_ACKNOWLEDGED, actor.event_actor())?
                         .message(*newest)
@@ -132,15 +134,8 @@ pub async fn unread_count(store: &Store, agent_id: i64) -> Result<u64, MessageEr
     Ok(messages::unread_count(store.read(), agent_id).await?)
 }
 
-async fn acting_worker(tx: &mut WriteTx, actor: &Actor) -> Result<WorkerRow, MessageError> {
-    let agent = policy::can_use_inbox(actor).map_err(FoldError::from)?;
-    let worker = match agents::find_agent(tx.conn(), &agent.agent).await? {
-        Some(row) => agents::find_worker(tx.conn(), row.id, &agent.worker).await?,
-        None => None,
-    };
-    worker.ok_or_else(|| {
-        FoldError::new(codes::WORKER_NOT_FOUND, "the worker does not exist")
-            .with_hint("call register_worker")
-            .into()
-    })
+async fn acting_worker(tx: &mut WriteTx, agent: &AgentActor) -> Result<WorkerRow, MessageError> {
+    Ok(actor_worker(tx.conn(), agent)
+        .await?
+        .ok_or_else(worker_not_found)?)
 }

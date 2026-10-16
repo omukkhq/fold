@@ -170,25 +170,10 @@ proptest! {
     fn closures_match_the_reference(edges in acyclic_edges(), seed in 0..NODES, other in 0..NODES) {
         let dag = build(&edges);
         let reach = closure(&edges);
-        let prerequisites: BTreeSet<TaskId> =
-            (0..NODES).filter(|&j| reach[seed][j]).map(t).collect();
-        prop_assert_eq!(dag.prerequisite_closure(t(seed)), prerequisites);
         let mut dependents: BTreeSet<TaskId> =
             (0..NODES).filter(|&i| reach[i][seed] || reach[i][other]).map(t).collect();
         dependents.insert(t(seed));
         dependents.insert(t(other));
         prop_assert_eq!(dag.dependent_closure([t(seed), t(other)]), dependents);
-    }
-
-    #[test]
-    fn independent_is_symmetric_and_matches_the_reference(
-        edges in acyclic_edges(),
-        a in 0..NODES,
-        b in 0..NODES,
-    ) {
-        let dag = build(&edges);
-        let reach = closure(&edges);
-        prop_assert_eq!(dag.independent(t(a), t(b)), dag.independent(t(b), t(a)));
-        prop_assert_eq!(dag.independent(t(a), t(b)), a != b && !reach[a][b] && !reach[b][a]);
     }
 }

@@ -1,5 +1,6 @@
 import type { ChangeRange, CommentSide, ProposalDetail } from "@/api/proposals";
 import { versionRef, versionVerdict } from "./present";
+import { projectPath, withQuery } from "@/routes/paths";
 
 /** The detail screen's address: the version on screen, an earlier version whose change since it the screen shows instead of the full change, and the file. */
 export interface DetailSearch {
@@ -149,8 +150,7 @@ export function detailHref(
     params.set("version", String(search.version));
   if (search.since !== undefined) params.set("since", String(search.since));
   if (search.path !== undefined) params.set("path", search.path);
-  const query = params.toString();
-  return `/p/${slug}/proposals/${id}${query ? `?${query}` : ""}`;
+  return withQuery(projectPath(slug, "proposals", id), params);
 }
 
 /** The version the screen's comments and composer belong to. */

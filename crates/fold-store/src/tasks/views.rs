@@ -3,7 +3,8 @@ use std::collections::BTreeMap;
 use fold_core::{TaskId, TaskStatus, TaskTitle, Timestamp, WorkerName, WorkspaceId};
 use sqlx::{SqliteConnection, SqlitePool};
 
-use super::{EdgeRow, LabelRow, RawTask, TaskRow, edges_conn, label_row, timestamp};
+use super::{EdgeRow, LabelRow, TaskRow, edges_conn, labels_by_task, list_conn, timestamp};
+use crate::columns::count;
 use crate::error::StoreError;
 use crate::reviews::{ProposalSummary, proposal_summaries};
 
@@ -52,10 +53,6 @@ fn task_id(number: i64) -> Result<TaskId, StoreError> {
     TaskId::try_from_db(number).ok_or(StoreError::Corrupt("tasks.number"))
 }
 
-fn count(value: i64, column: &'static str) -> Result<u32, StoreError> {
-    u32::try_from(value).map_err(|_| StoreError::Corrupt(column))
-}
-
 /// How many unarchived tasks hold each status; a status without tasks is absent.
 pub async fn status_counts(pool: &SqlitePool) -> Result<Vec<(TaskStatus, u32)>, StoreError> {
     let rows = sqlx::query!(
@@ -76,36 +73,9 @@ pub async fn status_counts(pool: &SqlitePool) -> Result<Vec<(TaskStatus, u32)>, 
 
 pub async fn board_snapshot(pool: &SqlitePool) -> Result<BoardSnapshot, StoreError> {
     let mut tx = pool.begin().await?;
-    let tasks = sqlx::query_as!(
-        RawTask,
-        r#"SELECT number, title, description, created_by, created_at, updated_at, archived_at,
-                  human_review AS "human_review: bool", human_reviewer, human_review_reason,
-                  human_review_set_by, status, blocked AS "blocked: bool", kind
-           FROM tasks WHERE archived_at IS NULL ORDER BY number"#
-    )
-    .fetch_all(&mut *tx)
-    .await?
-    .into_iter()
-    .map(RawTask::into_row)
-    .collect::<Result<Vec<_>, _>>()?;
+    let tasks = list_conn(&mut tx, false).await?;
 
-    let mut labels: BTreeMap<TaskId, Vec<LabelRow>> = BTreeMap::new();
-    let rows = sqlx::query!(
-        r#"SELECT t.number AS "number!: i64", l.name, l.color, l.created_at
-           FROM task_labels tl
-           JOIN tasks t ON t.id = tl.task_id
-           JOIN labels l ON l.id = tl.label_id
-           WHERE t.archived_at IS NULL
-           ORDER BY t.number, l.name"#
-    )
-    .fetch_all(&mut *tx)
-    .await?;
-    for row in rows {
-        labels
-            .entry(task_id(row.number)?)
-            .or_default()
-            .push(label_row(&row.name, &row.color, row.created_at)?);
-    }
+    let labels = labels_by_task(&mut tx, false).await?;
 
     let mut checklists = BTreeMap::new();
     let rows = sqlx::query!(

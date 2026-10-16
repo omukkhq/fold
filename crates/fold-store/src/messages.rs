@@ -7,6 +7,7 @@ use fold_core::{
 use sqlx::{SqliteConnection, SqliteExecutor};
 
 use crate::agents;
+use crate::columns::time;
 use crate::error::StoreError;
 use crate::store::WriteTx;
 
@@ -251,53 +252,23 @@ pub async fn thread(
     thread: MessageId,
 ) -> Result<Vec<MessageRow>, StoreError> {
     let number = thread.to_db();
-    let rows = sqlx::query_as!(
-        RawMessage,
-        r#"SELECT m.number, m.thread_id, m.reply_to, m.sender_kind, w.name AS "worker?: String",
-                  m.sender_human, t.number AS "task?: i64", p.number AS "proposal?: i64",
-                  rq.number AS "request?: i64", m.body, m.created_at
-           FROM messages m
-           LEFT JOIN workers w ON w.id = m.sender_worker_id
-           LEFT JOIN tasks t ON t.id = m.task_id
-           LEFT JOIN proposals p ON p.id = m.proposal_id
-           LEFT JOIN requests rq ON rq.id = m.request_id
-           WHERE m.thread_id = ?
-           ORDER BY m.number"#,
+    let numbers = sqlx::query_scalar!(
+        r#"SELECT number AS "number!: i64" FROM messages WHERE thread_id = ? ORDER BY number"#,
         number
     )
     .fetch_all(&mut *conn)
     .await?;
-    with_recipients(conn, rows).await
+    by_numbers(conn, &numbers).await
 }
 
 /// Messages from a worker to a human with no later message from a human in their thread, in number order.
 pub async fn awaiting_human(conn: &mut SqliteConnection) -> Result<Vec<MessageRow>, StoreError> {
-    let rows = sqlx::query_as!(
-        RawMessage,
-        r#"SELECT m.number, m.thread_id, m.reply_to, m.sender_kind, w.name AS "worker?: String",
-                  m.sender_human, t.number AS "task?: i64", p.number AS "proposal?: i64",
-                  rq.number AS "request?: i64", m.body, m.created_at
-           FROM messages m
-           LEFT JOIN workers w ON w.id = m.sender_worker_id
-           LEFT JOIN tasks t ON t.id = m.task_id
-           LEFT JOIN proposals p ON p.id = m.proposal_id
-           LEFT JOIN requests rq ON rq.id = m.request_id
-           WHERE m.sender_kind = 'worker'
-             AND EXISTS (
-                 SELECT 1 FROM message_recipients r
-                 WHERE r.message_id = m.id AND r.addressed_as IN ('human', 'humans')
-             )
-             AND NOT EXISTS (
-                 SELECT 1 FROM messages later
-                 WHERE later.thread_id = m.thread_id
-                   AND later.number > m.number
-                   AND later.sender_kind = 'human'
-             )
-           ORDER BY m.number"#
+    let numbers = sqlx::query_scalar!(
+        r#"SELECT number AS "number!: i64" FROM open_human_questions ORDER BY number"#
     )
     .fetch_all(&mut *conn)
     .await?;
-    with_recipients(conn, rows).await
+    by_numbers(conn, &numbers).await
 }
 
 /// One message with its recipients; an unknown number has none.
@@ -305,23 +276,7 @@ pub async fn get(
     conn: &mut SqliteConnection,
     message: MessageId,
 ) -> Result<Option<MessageRow>, StoreError> {
-    let number = message.to_db();
-    let rows = sqlx::query_as!(
-        RawMessage,
-        r#"SELECT m.number, m.thread_id, m.reply_to, m.sender_kind, w.name AS "worker?: String",
-                  m.sender_human, t.number AS "task?: i64", p.number AS "proposal?: i64",
-                  rq.number AS "request?: i64", m.body, m.created_at
-           FROM messages m
-           LEFT JOIN workers w ON w.id = m.sender_worker_id
-           LEFT JOIN tasks t ON t.id = m.task_id
-           LEFT JOIN proposals p ON p.id = m.proposal_id
-           LEFT JOIN requests rq ON rq.id = m.request_id
-           WHERE m.number = ?"#,
-        number
-    )
-    .fetch_all(&mut *conn)
-    .await?;
-    Ok(with_recipients(conn, rows).await?.pop())
+    Ok(by_numbers(conn, &[message.to_db()]).await?.pop())
 }
 
 /// One unacknowledged recipient row of a worker. `message` carries no recipients: the row itself is the one that matters to its reader.
@@ -343,43 +298,31 @@ pub async fn inbox(
     let ids = id_list(worker_ids)?;
     let rows = sqlx::query!(
         r#"SELECT r.id AS "row!: i64", rw.name AS recipient, r.addressed_as, r.delivered_at,
-                  m.number, m.thread_id, m.reply_to, m.sender_kind,
-                  w.name AS "worker?: String", m.sender_human, t.number AS "task?: i64",
-                  p.number AS "proposal?: i64", rq.number AS "request?: i64", m.body,
-                  m.created_at
+                  m.number
            FROM message_recipients r
            JOIN workers rw ON rw.id = r.worker_id
            JOIN messages m ON m.id = r.message_id
-           LEFT JOIN workers w ON w.id = m.sender_worker_id
-           LEFT JOIN tasks t ON t.id = m.task_id
-           LEFT JOIN proposals p ON p.id = m.proposal_id
-           LEFT JOIN requests rq ON rq.id = m.request_id
            WHERE r.worker_id IN (SELECT value FROM json_each(?)) AND r.acked_at IS NULL
            ORDER BY m.number, rw.id"#,
         ids
     )
     .fetch_all(&mut *conn)
     .await?;
-    let numbers = serde_json::to_string(&rows.iter().map(|row| row.number).collect::<Vec<_>>())
-        .map_err(|_| StoreError::Invalid("message numbers"))?;
+    let numbers = id_list(&rows.iter().map(|row| row.number).collect::<Vec<_>>())?;
+    let messages: HashMap<i64, RawMessage> = raw_by_numbers(&mut *conn, &numbers)
+        .await?
+        .into_iter()
+        .map(|message| (message.number, message))
+        .collect();
     let choices = choices_of(conn, &numbers).await?;
     rows.into_iter()
         .map(|row| {
             let asked = choices.get(&row.number).cloned().unwrap_or_default();
-            let message = RawMessage {
-                number: row.number,
-                thread_id: row.thread_id,
-                reply_to: row.reply_to,
-                sender_kind: row.sender_kind,
-                worker: row.worker,
-                sender_human: row.sender_human,
-                task: row.task,
-                proposal: row.proposal,
-                request: row.request,
-                body: row.body,
-                created_at: row.created_at,
-            }
-            .into_row(Vec::new(), asked)?;
+            let message = messages
+                .get(&row.number)
+                .cloned()
+                .ok_or(StoreError::Corrupt("message_recipients.message_id"))?
+                .into_row(Vec::new(), asked)?;
             Ok(InboxRow {
                 row: row.row,
                 worker: WorkerName::parse(&row.recipient)
@@ -548,17 +491,7 @@ pub async fn thread_page(
                      JOIN workers w ON w.id = r.worker_id
                      WHERE x.thread_id = m.thread_id AND w.name = ?4))
              AND (NOT ?5 OR EXISTS (
-                     SELECT 1 FROM messages q
-                     WHERE q.thread_id = m.thread_id
-                       AND q.sender_kind = 'worker'
-                       AND EXISTS (
-                           SELECT 1 FROM message_recipients r
-                           WHERE r.message_id = q.id AND r.addressed_as IN ('human', 'humans'))
-                       AND NOT EXISTS (
-                           SELECT 1 FROM messages later
-                           WHERE later.thread_id = q.thread_id
-                             AND later.number > q.number
-                             AND later.sender_kind = 'human')))
+                     SELECT 1 FROM open_human_questions q WHERE q.thread_id = m.thread_id))
            GROUP BY m.thread_id
            HAVING ?6 IS NULL OR MAX(m.number) < ?6
            ORDER BY MAX(m.number) DESC
@@ -588,24 +521,17 @@ pub async fn threads(
     conn: &mut SqliteConnection,
     threads: &[MessageId],
 ) -> Result<Vec<MessageRow>, StoreError> {
-    let numbers = id_list(&threads.iter().map(|id| id.to_db()).collect::<Vec<_>>())?;
-    let rows = sqlx::query_as!(
-        RawMessage,
-        r#"SELECT m.number, m.thread_id, m.reply_to, m.sender_kind, w.name AS "worker?: String",
-                  m.sender_human, t.number AS "task?: i64", p.number AS "proposal?: i64",
-                  rq.number AS "request?: i64", m.body, m.created_at
-           FROM messages m
-           LEFT JOIN workers w ON w.id = m.sender_worker_id
-           LEFT JOIN tasks t ON t.id = m.task_id
-           LEFT JOIN proposals p ON p.id = m.proposal_id
-           LEFT JOIN requests rq ON rq.id = m.request_id
-           WHERE m.thread_id IN (SELECT value FROM json_each(?))
-           ORDER BY m.thread_id, m.number"#,
-        numbers
+    let threads = id_list(&threads.iter().map(|id| id.to_db()).collect::<Vec<_>>())?;
+    let numbers = sqlx::query_scalar!(
+        r#"SELECT number AS "number!: i64" FROM messages
+           WHERE thread_id IN (SELECT value FROM json_each(?))"#,
+        threads
     )
     .fetch_all(&mut *conn)
     .await?;
-    with_recipients(conn, rows).await
+    let mut rows = by_numbers(conn, &numbers).await?;
+    rows.sort_by_key(|row| (row.thread, row.id));
+    Ok(rows)
 }
 
 /// The threads that hold a question from a worker to a human with no later human message, as `awaiting_human` decides.
@@ -613,19 +539,7 @@ pub async fn threads_awaiting_human(
     executor: impl SqliteExecutor<'_>,
 ) -> Result<BTreeSet<MessageId>, StoreError> {
     let rows = sqlx::query_scalar!(
-        r#"SELECT DISTINCT m.thread_id AS "thread!: i64"
-           FROM messages m
-           WHERE m.sender_kind = 'worker'
-             AND EXISTS (
-                 SELECT 1 FROM message_recipients r
-                 WHERE r.message_id = m.id AND r.addressed_as IN ('human', 'humans')
-             )
-             AND NOT EXISTS (
-                 SELECT 1 FROM messages later
-                 WHERE later.thread_id = m.thread_id
-                   AND later.number > m.number
-                   AND later.sender_kind = 'human'
-             )"#
+        r#"SELECT DISTINCT thread_id AS "thread!: i64" FROM open_human_questions"#
     )
     .fetch_all(executor)
     .await?;
@@ -634,25 +548,28 @@ pub async fn threads_awaiting_human(
         .collect()
 }
 
+/// Whether thread `thread` holds a question from a worker to a human with no later human message, as [`threads_awaiting_human`] decides for every thread.
+pub async fn thread_awaits_human(
+    executor: impl SqliteExecutor<'_>,
+    thread: MessageId,
+) -> Result<bool, StoreError> {
+    let thread = thread.to_db();
+    Ok(sqlx::query_scalar!(
+        r#"SELECT EXISTS (SELECT 1 FROM open_human_questions WHERE thread_id = ?) AS "awaiting!: bool""#,
+        thread
+    )
+    .fetch_one(executor)
+    .await?)
+}
+
 /// The tasks linked to a question from a worker to a human with no later human message in its thread: the source of the `question` attention kind.
 pub async fn tasks_awaiting_human(
     executor: impl SqliteExecutor<'_>,
 ) -> Result<BTreeSet<TaskId>, StoreError> {
     let rows = sqlx::query_scalar!(
         r#"SELECT DISTINCT t.number AS "task!: i64"
-           FROM messages m
-           JOIN tasks t ON t.id = m.task_id
-           WHERE m.sender_kind = 'worker'
-             AND EXISTS (
-                 SELECT 1 FROM message_recipients r
-                 WHERE r.message_id = m.id AND r.addressed_as IN ('human', 'humans')
-             )
-             AND NOT EXISTS (
-                 SELECT 1 FROM messages later
-                 WHERE later.thread_id = m.thread_id
-                   AND later.number > m.number
-                   AND later.sender_kind = 'human'
-             )"#
+           FROM open_human_questions q
+           JOIN tasks t ON t.id = q.task_id"#
     )
     .fetch_all(executor)
     .await?;
@@ -663,6 +580,7 @@ fn id_list(ids: &[i64]) -> Result<String, StoreError> {
     serde_json::to_string(ids).map_err(|_| StoreError::Invalid("row ids"))
 }
 
+#[derive(Clone)]
 struct RawMessage {
     number: i64,
     thread_id: i64,
@@ -712,6 +630,38 @@ impl RawMessage {
             header: asked.header,
         })
     }
+}
+
+/// The messages whose numbers are in `numbers`, with their recipients, in number order: the one read that builds a `MessageRow`.
+async fn by_numbers(
+    conn: &mut SqliteConnection,
+    numbers: &[i64],
+) -> Result<Vec<MessageRow>, StoreError> {
+    let rows = raw_by_numbers(&mut *conn, &id_list(numbers)?).await?;
+    with_recipients(conn, rows).await
+}
+
+/// The messages whose numbers are in the JSON list `numbers`, in number order.
+async fn raw_by_numbers(
+    conn: &mut SqliteConnection,
+    numbers: &str,
+) -> Result<Vec<RawMessage>, StoreError> {
+    Ok(sqlx::query_as!(
+        RawMessage,
+        r#"SELECT m.number, m.thread_id, m.reply_to, m.sender_kind, w.name AS "worker?: String",
+                  m.sender_human, t.number AS "task?: i64", p.number AS "proposal?: i64",
+                  rq.number AS "request?: i64", m.body, m.created_at
+           FROM messages m
+           LEFT JOIN workers w ON w.id = m.sender_worker_id
+           LEFT JOIN tasks t ON t.id = m.task_id
+           LEFT JOIN proposals p ON p.id = m.proposal_id
+           LEFT JOIN requests rq ON rq.id = m.request_id
+           WHERE m.number IN (SELECT value FROM json_each(?))
+           ORDER BY m.number"#,
+        numbers
+    )
+    .fetch_all(conn)
+    .await?)
 }
 
 async fn with_recipients(
@@ -852,8 +802,4 @@ fn proposal_id(number: i64) -> Result<ProposalId, StoreError> {
 
 fn request_id(number: i64) -> Result<RequestId, StoreError> {
     RequestId::try_from_db(number).ok_or(StoreError::Corrupt("requests.number"))
-}
-
-fn time(millis: i64, column: &'static str) -> Result<Timestamp, StoreError> {
-    Timestamp::from_millis(millis).map_err(|_| StoreError::Corrupt(column))
 }

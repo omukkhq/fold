@@ -1,4 +1,6 @@
 use crate::common::{count, exec, open};
+use fold_core::{ProposalId, ReviewBatchId, WorkspaceId};
+use fold_store::reviews::batches::{NewLineOrigin, insert_line_origins};
 use fold_store::testing::assert_append_only;
 use fold_store::{Store, StoreError};
 
@@ -221,4 +223,45 @@ async fn a_member_row_of_a_batch_comment_leaves_its_body_to_the_batch_comment() 
         );
     }
     exec(&store, &row(3, 1, "")).await.unwrap();
+}
+
+#[tokio::test]
+async fn line_origins_go_only_to_a_checkout_of_their_batch() {
+    let (_dir, store) = seeded().await;
+    let origin = [NewLineOrigin {
+        proposal: ProposalId::from_number(1).unwrap(),
+        path: "b.rs",
+        start_line: 1,
+        end_line: 3,
+        member_start_line: 1,
+    }];
+    let batch = ReviewBatchId::from_number(1).unwrap();
+    let insert = |workspace: u32| {
+        let origin = &origin;
+        let store = &store;
+        async move {
+            store
+                .write(async |tx| {
+                    insert_line_origins(
+                        tx,
+                        WorkspaceId::from_number(workspace).unwrap(),
+                        batch,
+                        origin,
+                    )
+                    .await
+                })
+                .await
+        }
+    };
+    let error = insert(1).await.unwrap_err();
+    assert!(matches!(error, StoreError::Invalid(_)), "{error:?}");
+    insert(3).await.unwrap();
+    assert_eq!(
+        count(
+            &store,
+            "SELECT COUNT(*) FROM review_batch_lines WHERE path = 'b.rs'"
+        )
+        .await,
+        1
+    );
 }

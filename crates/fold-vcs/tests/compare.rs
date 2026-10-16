@@ -145,6 +145,26 @@ fn copies_of_one_blob_pair_in_path_order_and_the_rest_stay_adds() {
 }
 
 #[test]
+fn a_rename_pairs_only_the_same_kind_and_never_empty_files() {
+    let (_dir, objects) = store();
+    let from = flat(&objects, &[("a.txt", FILE, b"target"), ("e1", FILE, b"")]);
+    let to = flat(
+        &objects,
+        &[("link", EntryKind::Symlink, b"target"), ("e2", FILE, b"")],
+    );
+    let result = compare(&objects, &State::recorded(from), &State::recorded(to)).unwrap();
+    assert_eq!(
+        summary(&result.files),
+        [
+            ("a.txt".into(), None, ChangeKind::Deleted, 0, 1),
+            ("e1".into(), None, ChangeKind::Deleted, 0, 0),
+            ("e2".into(), None, ChangeKind::Added, 0, 0),
+            ("link".into(), None, ChangeKind::Added, 1, 0),
+        ]
+    );
+}
+
+#[test]
 fn binary_files_have_no_hunks_and_no_line_counts() {
     let (_dir, objects) = store();
     let from = flat(&objects, &[("img.png", FILE, b"\x89PNG\0\x01")]);

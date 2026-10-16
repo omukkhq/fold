@@ -143,6 +143,7 @@ fn flat_paths_list_one_directory_with_derived_folders() {
         "src/b.rs",
         "src/deep/c.rs",
         "src/deep/d.rs",
+        "src-old",
         "srcx",
     ]
     .iter()
@@ -169,6 +170,7 @@ fn flat_paths_list_one_directory_with_derived_folders() {
         [
             ("a.txt".into(), EntryKind::File),
             ("src".into(), EntryKind::Directory),
+            ("src-old".into(), EntryKind::File),
             ("srcx".into(), EntryKind::File),
         ]
     );

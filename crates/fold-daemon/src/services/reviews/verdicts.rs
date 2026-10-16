@@ -230,7 +230,7 @@ async fn insert_comments(
                 ("comment", json!(reply.to_string())),
                 ("proposal", json!(proposal.to_string())),
             ])
-            .with_hint("call list_comments to see the comments of the proposal")
+            .with_hint("call get_review_comments to see the comments of the proposal")
             .into());
         }
         let number = counters::allocate(tx, IdKind::Comment).await?;

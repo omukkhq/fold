@@ -575,7 +575,7 @@ pub struct NewLineOrigin<'a> {
     pub member_start_line: u32,
 }
 
-/// Records the line origins of the batch checkout `workspace`, in the caller's write. Each names an open member of `batch`; another proposal inserts nothing and fails with `StoreError::Invalid`.
+/// Records the line origins of the batch checkout `workspace`, in the caller's write. Each names an open member of `batch`; another proposal, or a workspace that is not a checkout of `batch`, inserts nothing and fails with `StoreError::Invalid`.
 pub async fn insert_line_origins(
     tx: &mut WriteTx,
     workspace: WorkspaceId,
@@ -596,7 +596,8 @@ pub async fn insert_line_origins(
              FROM workspaces w, review_batch_members m
              JOIN review_batches b ON b.id = m.batch_id
              JOIN proposals p ON p.id = m.proposal_id
-             WHERE w.number = ?1 AND b.number = ?2 AND p.number = ?3 AND m.released_at IS NULL",
+             WHERE w.number = ?1 AND w.review_batch_id = b.id AND b.number = ?2 AND p.number = ?3
+               AND m.released_at IS NULL",
             workspace,
             batch,
             proposal,

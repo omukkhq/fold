@@ -113,6 +113,22 @@ fn streamed_write_matches_buffered_write() {
 }
 
 #[test]
+fn a_large_streamed_blob_that_does_not_compress_is_stored_plain() {
+    let (dir, store) = store();
+    let noise = incompressible(3 << 20);
+    let written = store.write_blob_from(&mut Cursor::new(&noise)).unwrap();
+    assert_eq!(written.hash, hash_object(ObjectKind::Blob, &noise));
+    assert_eq!(flag(&store, &written.hash), 0);
+    assert_eq!(store.read(&written.hash).unwrap().payload, noise);
+    assert_eq!(
+        fs::read_dir(dir.path().join("objects/tmp"))
+            .unwrap()
+            .count(),
+        0
+    );
+}
+
+#[test]
 fn streamed_write_stores_each_shape() {
     let (dir, store) = store();
     for data in [

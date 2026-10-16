@@ -6,10 +6,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Args;
+use fold_cli::daemon_client::{ClientConfig, ClientError};
+use fold_daemon::config::{LOCK_FILE, SOCKET_FILE};
 use fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME;
 use fold_daemon::{Daemon, DaemonConfig, DaemonError, SystemClock, shutdown_signal};
 use serde::Deserialize;
 use thiserror::Error;
+
+/// The variable through which `fld claude --socket` hands its socket to the session's `fld mcp` and hooks.
+pub(crate) const SOCKET_ENV: &str = "FOLD_SOCKET";
 
 pub(crate) const DEFAULT_LISTEN: SocketAddr =
     SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::LOCALHOST), 7420);
@@ -44,6 +49,8 @@ pub enum ServeError {
     Runtime(io::Error),
     #[error("cannot listen for signals: {0}")]
     Signals(io::Error),
+    #[error(transparent)]
+    Client(#[from] ClientError),
 }
 
 impl ServeError {
@@ -91,8 +98,12 @@ impl Dirs {
     }
 
     pub(crate) fn config_file(&self) -> Result<PathBuf, ServeError> {
-        let base = self.base(&self.config_home, ".config")?;
-        Ok(base.join("fold").join("daemon.toml"))
+        Ok(self.config_base()?.join("fold").join("daemon.toml"))
+    }
+
+    /// `$XDG_CONFIG_HOME`, else `~/.config`.
+    pub(crate) fn config_base(&self) -> Result<PathBuf, ServeError> {
+        self.base(&self.config_home, ".config")
     }
 
     fn base(&self, xdg: &Option<PathBuf>, fallback: &str) -> Result<PathBuf, ServeError> {
@@ -111,6 +122,28 @@ pub(crate) fn runtime_dir(dirs: &Dirs) -> Result<PathBuf, ServeError> {
         .clone()
         .ok_or(DaemonError::RuntimeDirMissing)?;
     Ok(base.join("fold"))
+}
+
+/// The current-thread runtime that runs the one async exchange of a command.
+pub(crate) fn current_thread_runtime() -> io::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+}
+
+/// The daemon lock in the runtime directory.
+pub(crate) fn lock_path(dirs: &Dirs) -> Option<PathBuf> {
+    runtime_dir(dirs).ok().map(|dir| dir.join(LOCK_FILE))
+}
+
+/// Where a command finds the daemon, and how it starts one: the socket of [`socket_path`] made absolute, the runtime directory for the start lock, and this binary as the daemon to start.
+pub(crate) fn client_config(flag: Option<&Path>, dirs: &Dirs) -> Result<ClientConfig, ServeError> {
+    let socket = socket_path(flag, dirs)?.ok_or(ClientError::RuntimeDirMissing)?;
+    Ok(ClientConfig {
+        socket: std::path::absolute(&socket).map_err(ClientError::io("resolve the socket path"))?,
+        runtime_dir: runtime_dir(dirs).ok(),
+        fold_exe: Some(std::env::current_exe().map_err(ClientError::io("find the fld binary"))?),
+    })
 }
 
 /// The socket of every command: the `--socket` flag, else `socket` from `daemon.toml`, else `fold.sock` in the runtime directory. `None` when none of the three is known, so no daemon can be listening.
@@ -136,7 +169,7 @@ fn resolve_socket(
 ) -> Option<PathBuf> {
     flag.map(Path::to_path_buf)
         .or_else(|| file.socket.clone())
-        .or_else(|| runtime_dir.map(|dir| dir.join("fold.sock")))
+        .or_else(|| runtime_dir.map(|dir| dir.join(SOCKET_FILE)))
 }
 
 /// Flags win over the file, the file wins over the defaults.
@@ -149,7 +182,7 @@ fn build_config(
     let data_dir = dirs.base(&dirs.data_home, ".local/share")?.join("fold");
     let listen = args.listen.or(file.listen).unwrap_or(DEFAULT_LISTEN);
     let socket = resolve_socket(args.socket.as_deref(), file, Some(&runtime_dir))
-        .unwrap_or_else(|| runtime_dir.join("fold.sock"));
+        .unwrap_or_else(|| runtime_dir.join(SOCKET_FILE));
     Ok(DaemonConfig {
         listen,
         socket,

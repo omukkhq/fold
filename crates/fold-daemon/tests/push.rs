@@ -1,4 +1,3 @@
-use fold_daemon::http::host::CLIENT_HEADER;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -12,6 +11,7 @@ use fold_core::{
     Actor, EventFilter, HostPaths, HumanName, IntegrationId, ManualClock, ProjectPaths, RevisionId,
     Timestamp, codes, events::types,
 };
+use fold_daemon::http::host::CLIENT_HEADER;
 use fold_daemon::http::socket_router;
 use fold_daemon::projects::ProjectHandle;
 use fold_daemon::services::events::BusMessage;

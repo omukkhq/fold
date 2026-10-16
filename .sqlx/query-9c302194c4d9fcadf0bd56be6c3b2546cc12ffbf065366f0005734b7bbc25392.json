@@ -1,0 +1,33 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT b.worker_process_id AS \"worker!: i64\", COUNT(*) AS \"count!: i64\"\n           FROM worker_proposals b\n           JOIN proposals p ON p.id = b.proposal_id\n           WHERE b.worker_process_id IN (SELECT value FROM json_each(?1)) AND p.state = 'open'\n             AND (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) IS NULL\n           GROUP BY b.worker_process_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "worker!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "worker_proposals",
+            "name": "worker_process_id"
+          }
+        }
+      },
+      {
+        "name": "count!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "9c302194c4d9fcadf0bd56be6c3b2546cc12ffbf065366f0005734b7bbc25392"
+}

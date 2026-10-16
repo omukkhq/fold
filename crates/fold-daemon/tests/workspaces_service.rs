@@ -12,7 +12,7 @@ use fold_daemon::services::agents::AgentService;
 use fold_daemon::services::events::{BusMessage, EventBuffer, EventBus};
 use fold_daemon::services::tasks::{self, CreateTask, TaskError, TaskService};
 use fold_daemon::services::workspaces::{
-    self, ArchiveReason, WorkspaceError, WorkspaceRef, WorkspaceService, WorkspaceView,
+    self, Abandoned, ArchiveReason, WorkspaceError, WorkspaceRef, WorkspaceService, WorkspaceView,
 };
 use fold_store::agents::WorkerRow;
 use fold_store::tasks::claims;
@@ -132,7 +132,7 @@ impl Fixture {
         &self,
         worker: &WorkerRow,
         workspace: u32,
-    ) -> Result<WorkspaceView, WorkspaceError> {
+    ) -> Result<Abandoned, WorkspaceError> {
         self.workspaces
             .abandon_workspace(&by(worker), ws(workspace), "the approach does not work")
             .await
@@ -424,9 +424,11 @@ async fn abandon_returns_the_task_to_todo_and_leaves_the_directory() {
         .advance(std::time::Duration::from_secs(60))
         .unwrap();
 
-    let view = fx.abandon(&fx.frontend, 1).await.unwrap();
+    let abandoned = fx.abandon(&fx.frontend, 1).await.unwrap();
+    let view = abandoned.workspace;
     assert_eq!(view.state, WorkspaceState::Abandoned);
     assert_eq!(view.closed_at, Some(fx.project.now()));
+    assert_eq!(abandoned.task_status, TaskStatus::Todo);
     assert_eq!(fx.status(1).await, (TaskStatus::Todo, false));
     assert_eq!(std::fs::read(&edited).unwrap(), b"draft");
     assert_eq!(
@@ -477,7 +479,7 @@ async fn a_missing_workspace_keeps_the_task_in_progress() {
     assert_eq!(fx.status(1).await, (TaskStatus::InProgress, false));
     let error = refusal(fx.create(&fx.frontend, 1).await.unwrap_err());
     assert_eq!(error.code(), "workspace_exists");
-    let view = fx.abandon(&fx.frontend, 1).await.unwrap();
+    let view = fx.abandon(&fx.frontend, 1).await.unwrap().workspace;
     assert_eq!(view.state, WorkspaceState::Abandoned);
     assert_eq!(fx.status(1).await, (TaskStatus::Todo, false));
 }
@@ -560,7 +562,7 @@ async fn abandon_with_an_open_proposal_changes_nothing_until_it_is_closed() {
     fx.execute("UPDATE proposals SET state = 'closed', close_reason = 'replaced'")
         .await;
     fx.recompute(1).await;
-    let view = fx.abandon(&fx.frontend, 1).await.unwrap();
+    let view = fx.abandon(&fx.frontend, 1).await.unwrap().workspace;
     assert_eq!(view.state, WorkspaceState::Abandoned);
     assert_eq!(fx.status(1).await, (TaskStatus::Todo, false));
 }

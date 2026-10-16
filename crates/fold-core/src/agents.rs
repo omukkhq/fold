@@ -4,7 +4,7 @@ use thiserror::Error;
 
 use crate::error::{FoldError, codes};
 
-const MAX_NAME_LEN: usize = 32;
+pub(crate) const MAX_NAME_LEN: usize = 32;
 const MAX_WORKER_NAME_LEN: usize = 128;
 
 /// Agent names that an agent cannot take. `fold` is the event actor label of the daemon itself, so an agent with that name would be indistinguishable from it in the history. `all` and `humans` are message addresses, so an agent with either name could not be addressed by name.
@@ -148,6 +148,11 @@ impl WorkerName {
         AgentName(first.to_owned())
     }
 
+    /// Whether this is a worker of `agent`, without building the agent's name.
+    pub fn belongs_to(&self, agent: &AgentName) -> bool {
+        self.0.split('/').next() == Some(agent.as_str())
+    }
+
     /// The worker one level up, or `None` for a main worker.
     pub fn parent(&self) -> Option<WorkerName> {
         self.0
@@ -159,5 +164,18 @@ impl WorkerName {
 impl fmt::Display for WorkerName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_worker_belongs_to_the_agent_of_its_first_segment() {
+        let worker = WorkerName::parse("frontend/ui").unwrap();
+        assert!(worker.belongs_to(&AgentName::parse("frontend").unwrap()));
+        assert!(!worker.belongs_to(&AgentName::parse("front").unwrap()));
+        assert!(!worker.belongs_to(&AgentName::parse("ui").unwrap()));
     }
 }

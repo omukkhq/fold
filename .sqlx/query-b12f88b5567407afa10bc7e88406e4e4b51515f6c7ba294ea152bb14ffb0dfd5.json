@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT w.worker_process_id AS \"worker!: i64\", p.number AS \"number!: i64\"\n           FROM worker_proposals w JOIN proposals p ON p.id = w.proposal_id\n           WHERE w.worker_process_id IN (SELECT value FROM json_each(?1))\n           ORDER BY w.worker_process_id, p.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "worker!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "worker_proposals",
+            "name": "worker_process_id"
+          }
+        }
+      },
+      {
+        "name": "number!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "b12f88b5567407afa10bc7e88406e4e4b51515f6c7ba294ea152bb14ffb0dfd5"
+}

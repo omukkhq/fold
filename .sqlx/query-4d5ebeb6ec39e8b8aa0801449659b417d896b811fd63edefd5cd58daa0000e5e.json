@@ -1,0 +1,225 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT p.number AS \"number!: i64\",\n                      t.number AS \"task!: i64\",\n                      p.author_worker_id,\n                      w.name AS author,\n                      p.title,\n                      p.state,\n                      p.conflicted AS \"conflicted: bool\",\n                      p.close_reason,\n                      (SELECT MAX(v.version) FROM proposal_versions v WHERE v.proposal_id = p.id) AS \"current_version?: i64\",\n                      (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) AS \"verdict?: String\",\n                      (\n                          SELECT k.name FROM claims c JOIN workers k ON k.id = c.worker_id\n                          WHERE c.proposal_id = p.id AND c.kind = 'review' AND c.released_at IS NULL\n                      ) AS \"review_claim?: String\",\n                      t.human_review AS \"human_review: bool\",\n                      t.human_reviewer,\n                      t.human_review_reason,\n                      t.human_review_set_by,\n                      p.created_at,\n                      p.updated_at,\n                      p.closed_at\n               FROM proposals p\n               JOIN tasks t ON t.id = p.task_id\n               JOIN workers w ON w.id = p.author_worker_id\n               WHERE (?1 IS NULL OR p.state = ?1)\n           AND (?2 IS NULL OR NOT EXISTS (\n                   SELECT 1 FROM claims c\n                   WHERE c.proposal_id = p.id AND c.kind = 'review' AND c.released_at IS NULL\n                     AND c.renewed_at > ?2\n               ))\n         ORDER BY p.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "task!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "author_worker_id",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "author_worker_id"
+          }
+        }
+      },
+      {
+        "name": "author",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workers",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "title",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "name": "state",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "name": "conflicted: bool",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "conflicted"
+          }
+        }
+      },
+      {
+        "name": "close_reason",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "close_reason"
+          }
+        }
+      },
+      {
+        "name": "current_version?: i64",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "verdict?: String",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "reviews",
+            "name": "verdict"
+          }
+        }
+      },
+      {
+        "name": "review_claim?: String",
+        "ordinal": 10,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workers",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "human_review: bool",
+        "ordinal": 11,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "human_review"
+          }
+        }
+      },
+      {
+        "name": "human_reviewer",
+        "ordinal": 12,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "human_reviewer"
+          }
+        }
+      },
+      {
+        "name": "human_review_reason",
+        "ordinal": 13,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "human_review_reason"
+          }
+        }
+      },
+      {
+        "name": "human_review_set_by",
+        "ordinal": 14,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "human_review_set_by"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 15,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "updated_at",
+        "ordinal": 16,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "name": "closed_at",
+        "ordinal": 17,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "closed_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "4d5ebeb6ec39e8b8aa0801449659b417d896b811fd63edefd5cd58daa0000e5e"
+}

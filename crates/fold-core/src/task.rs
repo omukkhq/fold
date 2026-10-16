@@ -4,6 +4,7 @@ use std::str::FromStr;
 use thiserror::Error;
 
 use crate::error::{FoldError, codes};
+use crate::text::one_line;
 
 /// The messages never repeat the rejected text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -45,8 +46,7 @@ impl From<TaskValueError> for FoldError {
 }
 
 fn single_line(text: &str) -> Option<String> {
-    let trimmed = text.trim();
-    (!trimmed.is_empty() && !trimmed.contains(['\n', '\r'])).then(|| trimmed.to_owned())
+    one_line(text, usize::MAX).ok().map(str::to_owned)
 }
 
 /// A label name is a path segment of the label routes, and URL normalisation removes the segments `.` and `..` before a request is sent.
@@ -132,48 +132,59 @@ impl TaskDescription {
     }
 }
 
+/// A closed set of names: the enum, `ALL` in declaration order, `as_str`, `parse` and `Display`, all from one list, so a new variant cannot miss its text or its place in `ALL`. With `error = …` it also implements `FromStr` with that error.
 macro_rules! define_names {
-    ($(#[$meta:meta])* $name:ident, $error:expr, { $($variant:ident = $text:literal),+ $(,)? }) => {
+    (
+        $(#[$meta:meta])*
+        $vis:vis enum $name:ident { $($(#[$vmeta:meta])* $variant:ident = $text:literal),+ $(,)? }
+        $(, error = $error:expr)? $(,)?
+    ) => {
         $(#[$meta])*
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-        pub enum $name {
-            $($variant),+
+        $vis enum $name {
+            $($(#[$vmeta])* $variant),+
         }
 
         impl $name {
-            pub const ALL: &'static [$name] = &[$($name::$variant),+];
+            pub const ALL: [$name; [$($text),+].len()] = [$($name::$variant),+];
 
             pub fn as_str(self) -> &'static str {
                 match self {
                     $($name::$variant => $text),+
                 }
             }
-        }
 
-        impl FromStr for $name {
-            type Err = TaskValueError;
-
-            fn from_str(text: &str) -> Result<Self, Self::Err> {
+            pub fn parse(text: &str) -> Option<$name> {
                 match text {
-                    $($text => Ok($name::$variant),)+
-                    _ => Err($error),
+                    $($text => Some($name::$variant),)+
+                    _ => None,
                 }
             }
         }
 
-        impl fmt::Display for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        impl ::std::fmt::Display for $name {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
                 f.write_str(self.as_str())
             }
         }
+
+        $(
+            impl ::std::str::FromStr for $name {
+                type Err = $crate::task::TaskValueError;
+
+                fn from_str(text: &str) -> Result<Self, Self::Err> {
+                    $name::parse(text).ok_or($error)
+                }
+            }
+        )?
     };
 }
 
+pub(crate) use define_names;
+
 define_names!(
     /// The closed set of label colours. The web tokens `label-<name>` and `label-<name>-soft` use the same names.
-    LabelColor,
-    TaskValueError::InvalidLabelColor,
-    {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum LabelColor {
         Sage = "sage",
         Slate = "slate",
         Teal = "teal",
@@ -182,50 +193,28 @@ define_names!(
         Moss = "moss",
         Plum = "plum",
         Stone = "stone",
-    }
+    },
+    error = TaskValueError::InvalidLabelColor
 );
 
 define_names!(
     /// How a task's work reaches Done. A `proposal` task is done when its proposal integrates; a `no_proposal` task changes no project file, such as design work done through an MCP server, so its coder reports the work and a lead check completes it.
-    TaskKind,
-    TaskValueError::InvalidKind,
-    {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum TaskKind {
         Proposal = "proposal",
         NoProposal = "no_proposal",
-    }
+    },
+    error = TaskValueError::InvalidKind
 );
 
-/// How an edge came to exist. A checklist edge belongs to a linked checklist item and goes away only with that item.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum DependencyOrigin {
-    Direct,
-    Checklist,
-}
-
-impl DependencyOrigin {
-    pub const ALL: &'static [DependencyOrigin] =
-        &[DependencyOrigin::Direct, DependencyOrigin::Checklist];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            DependencyOrigin::Direct => "direct",
-            DependencyOrigin::Checklist => "checklist",
-        }
+define_names!(
+    /// How an edge came to exist. A checklist edge belongs to a linked checklist item and goes away only with that item.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum DependencyOrigin {
+        Direct = "direct",
+        Checklist = "checklist",
     }
-
-    pub fn parse(text: &str) -> Option<DependencyOrigin> {
-        Self::ALL
-            .iter()
-            .copied()
-            .find(|origin| origin.as_str() == text)
-    }
-}
-
-impl fmt::Display for DependencyOrigin {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
+);
 
 #[cfg(test)]
 mod tests {
@@ -289,7 +278,7 @@ mod tests {
     fn every_colour_round_trips_and_others_are_refused() {
         assert_eq!(LabelColor::ALL.len(), 8);
         for color in LabelColor::ALL {
-            assert_eq!(color.as_str().parse::<LabelColor>(), Ok(*color));
+            assert_eq!(color.as_str().parse::<LabelColor>(), Ok(color));
             assert_eq!(color.to_string(), color.as_str());
         }
         for other in ["green", "red", "black-ish", "Sage", "", "lime"] {
@@ -303,7 +292,7 @@ mod tests {
     #[test]
     fn task_kinds_round_trip() {
         for kind in TaskKind::ALL {
-            assert_eq!(kind.as_str().parse::<TaskKind>(), Ok(*kind));
+            assert_eq!(kind.as_str().parse::<TaskKind>(), Ok(kind));
             assert_eq!(kind.to_string(), kind.as_str());
         }
         assert_eq!(TaskKind::NoProposal.as_str(), "no_proposal");
@@ -316,7 +305,7 @@ mod tests {
     #[test]
     fn dependency_origins_round_trip() {
         for origin in DependencyOrigin::ALL {
-            assert_eq!(DependencyOrigin::parse(origin.as_str()), Some(*origin));
+            assert_eq!(DependencyOrigin::parse(origin.as_str()), Some(origin));
             assert_eq!(origin.to_string(), origin.as_str());
         }
         assert_eq!(DependencyOrigin::Checklist.as_str(), "checklist");
@@ -328,7 +317,7 @@ mod tests {
     fn statuses_round_trip() {
         assert_eq!(TaskStatus::ALL.len(), 5);
         for status in TaskStatus::ALL {
-            assert_eq!(status.as_str().parse::<TaskStatus>(), Ok(*status));
+            assert_eq!(status.as_str().parse::<TaskStatus>(), Ok(status));
             assert_eq!(status.to_string(), status.as_str());
         }
         assert_eq!(TaskStatus::InProgress.as_str(), "in_progress");

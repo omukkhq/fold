@@ -23,3 +23,10 @@ pub mod scan;
 pub mod snapshot;
 pub mod sync;
 pub mod watch;
+
+/// The guard of `mutex`, also when an earlier holder panicked: the caches and sets behind fold-vcs's mutexes stay valid after a panic.
+pub(crate) fn lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}

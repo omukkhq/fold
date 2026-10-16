@@ -7,6 +7,36 @@ use super::columns::{number, timestamp};
 use crate::error::StoreError;
 use crate::store::WriteTx;
 
+/// The columns of [`RawWorkspace`] and the joins that give them, followed by the tail of each read: every workspace row maps the same way.
+macro_rules! select_workspaces {
+    ($tail:literal $(, $arg:expr)* $(,)?) => {
+        sqlx::query_as!(
+            RawWorkspace,
+            r#"SELECT w.number AS "number!: i64",
+                      t.number AS "task!: i64",
+                      w.worker_id,
+                      k.name AS "worker?: String",
+                      w.kind,
+                      w.path,
+                      r.number AS "base!: i64",
+                      p.number AS "proposal?: i64",
+                      w.state,
+                      w.changed_files,
+                      (SELECT COUNT(*) FROM workspace_conflicts c WHERE c.workspace_id = w.id) AS "conflicted!: i64",
+                      w.last_activity_at,
+                      w.created_at,
+                      w.closed_at
+               FROM workspaces w
+               JOIN tasks t ON t.id = w.task_id
+               JOIN revisions r ON r.id = w.base_revision_id
+               LEFT JOIN workers k ON k.id = w.worker_id
+               LEFT JOIN proposals p ON p.id = w.proposal_id
+               "# + $tail
+            $(, $arg)*
+        )
+    };
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkspaceKind {
     Task,
@@ -151,7 +181,10 @@ pub async fn get_workspace(
     executor: impl SqliteExecutor<'_>,
     workspace: WorkspaceId,
 ) -> Result<Option<WorkspaceRow>, StoreError> {
-    select(executor, Some(workspace), None, false).await
+    let number = workspace.to_db();
+    one(select_workspaces!("WHERE w.number = ?1", number)
+        .fetch_optional(executor)
+        .await?)
 }
 
 /// The task workspace of `task` in state `active` or `missing`; the partial unique index allows at most one.
@@ -159,7 +192,15 @@ pub async fn live_task_workspace(
     executor: impl SqliteExecutor<'_>,
     task: TaskId,
 ) -> Result<Option<WorkspaceRow>, StoreError> {
-    select(executor, None, Some(task), true).await
+    let number = task.to_db();
+    one(select_workspaces!(
+        "WHERE t.number = ?1 AND w.kind = 'task' AND w.state IN ('active', 'missing')
+         ORDER BY w.number DESC
+         LIMIT 1",
+        number
+    )
+    .fetch_optional(executor)
+    .await?)
 }
 
 /// The newest task workspace of `task` in any state.
@@ -167,7 +208,13 @@ pub async fn latest_task_workspace(
     executor: impl SqliteExecutor<'_>,
     task: TaskId,
 ) -> Result<Option<WorkspaceRow>, StoreError> {
-    select(executor, None, Some(task), false).await
+    let number = task.to_db();
+    one(select_workspaces!(
+        "WHERE t.number = ?1 AND w.kind = 'task' ORDER BY w.number DESC LIMIT 1",
+        number
+    )
+    .fetch_optional(executor)
+    .await?)
 }
 
 /// The directories of every task workspace `task` has had, in any state. Their count gives the next workspace's directory name, and a create skips each of them, so a name is never handed out twice, also after a closed workspace's directory is gone.
@@ -249,7 +296,7 @@ pub async fn set_worker(
     Ok(changed == 1)
 }
 
-/// A workspace row as both reads select it, before its columns are checked.
+/// A workspace row as the reads select it, before its columns are checked.
 struct RawWorkspace {
     number: i64,
     task: i64,
@@ -267,47 +314,8 @@ struct RawWorkspace {
     closed_at: Option<i64>,
 }
 
-/// One statement serves every single-row read so the rows always map the same way. `task` with `live_only` reads the live task workspace; `task` alone the newest task workspace.
-async fn select(
-    executor: impl SqliteExecutor<'_>,
-    workspace: Option<WorkspaceId>,
-    task: Option<TaskId>,
-    live_only: bool,
-) -> Result<Option<WorkspaceRow>, StoreError> {
-    let workspace = workspace.map(WorkspaceId::to_db);
-    let task = task.map(TaskId::to_db);
-    let row = sqlx::query_as!(
-        RawWorkspace,
-        r#"SELECT w.number AS "number!: i64",
-                  t.number AS "task!: i64",
-                  w.worker_id,
-                  k.name AS "worker?: String",
-                  w.kind,
-                  w.path,
-                  r.number AS "base!: i64",
-                  p.number AS "proposal?: i64",
-                  w.state,
-                  w.changed_files,
-                  (SELECT COUNT(*) FROM workspace_conflicts c WHERE c.workspace_id = w.id) AS "conflicted!: i64",
-                  w.last_activity_at,
-                  w.created_at,
-                  w.closed_at
-           FROM workspaces w
-           JOIN tasks t ON t.id = w.task_id
-           JOIN revisions r ON r.id = w.base_revision_id
-           LEFT JOIN workers k ON k.id = w.worker_id
-           LEFT JOIN proposals p ON p.id = w.proposal_id
-           WHERE (?1 IS NULL OR w.number = ?1)
-             AND (?2 IS NULL OR (t.number = ?2 AND w.kind = 'task'))
-             AND (NOT ?3 OR w.state IN ('active', 'missing'))
-           ORDER BY w.number DESC
-           LIMIT 1"#,
-        workspace,
-        task,
-        live_only
-    )
-    .fetch_optional(executor)
-    .await?;
+/// The one workspace a `select_workspaces!` read found, mapped.
+fn one(row: Option<RawWorkspace>) -> Result<Option<WorkspaceRow>, StoreError> {
     row.map(workspace_row).transpose()
 }
 
@@ -315,29 +323,8 @@ async fn select(
 pub async fn list_live_task_workspaces(
     executor: impl SqliteExecutor<'_>,
 ) -> Result<Vec<WorkspaceRow>, StoreError> {
-    let rows = sqlx::query_as!(
-        RawWorkspace,
-        r#"SELECT w.number AS "number!: i64",
-                  t.number AS "task!: i64",
-                  w.worker_id,
-                  k.name AS "worker?: String",
-                  w.kind,
-                  w.path,
-                  r.number AS "base!: i64",
-                  p.number AS "proposal?: i64",
-                  w.state,
-                  w.changed_files,
-                  (SELECT COUNT(*) FROM workspace_conflicts c WHERE c.workspace_id = w.id) AS "conflicted!: i64",
-                  w.last_activity_at,
-                  w.created_at,
-                  w.closed_at
-           FROM workspaces w
-           JOIN tasks t ON t.id = w.task_id
-           JOIN revisions r ON r.id = w.base_revision_id
-           LEFT JOIN workers k ON k.id = w.worker_id
-           LEFT JOIN proposals p ON p.id = w.proposal_id
-           WHERE w.kind = 'task' AND w.state IN ('active', 'missing')
-           ORDER BY w.number"#
+    let rows = select_workspaces!(
+        "WHERE w.kind = 'task' AND w.state IN ('active', 'missing') ORDER BY w.number"
     )
     .fetch_all(executor)
     .await?;
@@ -558,7 +545,7 @@ pub async fn sync_checkpoint(
         .transpose()
 }
 
-/// Sets or clears the checkpoint of a sync or a restore in progress. False when the workspace or the checkpoint does not exist, and then nothing changes.
+/// Sets or clears the checkpoint of a sync or a restore in progress. False when the workspace does not exist or the checkpoint is not one of its own, and then nothing changes.
 pub async fn set_sync_checkpoint(
     tx: &mut WriteTx,
     workspace: WorkspaceId,
@@ -569,7 +556,8 @@ pub async fn set_sync_checkpoint(
     let changed = sqlx::query!(
         "UPDATE workspaces
          SET sync_checkpoint_id = (SELECT id FROM checkpoints WHERE number = ?2)
-         WHERE number = ?1 AND (?2 IS NULL OR EXISTS (SELECT 1 FROM checkpoints WHERE number = ?2))",
+         WHERE number = ?1
+           AND (?2 IS NULL OR EXISTS (SELECT 1 FROM checkpoints WHERE number = ?2 AND workspace_id = workspaces.id))",
         workspace,
         checkpoint
     )

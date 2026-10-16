@@ -1,4 +1,3 @@
-use fold_daemon::http::host::CLIENT_HEADER;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -10,10 +9,11 @@ use fold_core::{
 };
 use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
+use fold_daemon::http::host::CLIENT_HEADER;
 use fold_daemon::http::router;
 use fold_daemon::projects::{ProjectHandle, Projects};
 use fold_daemon::services::agents::AgentService;
-use fold_daemon::services::messages::{MessageService, SendMessage, tasks_awaiting_human};
+use fold_daemon::services::messages::{MessageService, SendMessage};
 use fold_daemon::services::tasks::{CreateTask, TaskService};
 use fold_store::projects::ProjectRow;
 use fold_store::testing::TestProject;
@@ -133,7 +133,9 @@ impl Fixture {
     }
 
     async fn questions(&self) -> BTreeSet<TaskId> {
-        tasks_awaiting_human(&self.handle.store).await.unwrap()
+        fold_store::messages::tasks_awaiting_human(self.handle.store.read())
+            .await
+            .unwrap()
     }
 
     /// The attention kinds of each task card on `GET /board`, by task id.

@@ -1,6 +1,7 @@
 import type { RequestState, RequestSummary } from "@/api/requests";
 import { isRequester } from "./actions";
 import { kindOf, type KindKey } from "./present";
+import { projectPath, withQuery } from "@/routes/paths";
 
 export const STATES: readonly RequestState[] = [
   "open",
@@ -104,8 +105,7 @@ export function listHref(slug: string, search: ListSearch): string {
   if (search.state) params.set("state", search.state);
   if (search.kind) params.set("kind", search.kind);
   if (search.mine) params.set("mine", "true");
-  const query = params.toString();
-  return `/p/${slug}/requests${query ? `?${query}` : ""}`;
+  return withQuery(projectPath(slug, "requests"), params);
 }
 
 /** Pressing the active kind clears it; pressing another replaces it. */

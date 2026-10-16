@@ -1,14 +1,11 @@
-use fold_daemon::http::host::CLIENT_HEADER;
 use std::fs::{self, OpenOptions};
-
-use axum::body::Body;
-use axum::http::{Method, Request};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tower::ServiceExt;
 
+use axum::body::Body;
+use axum::http::{Method, Request};
 use fold_core::events::types;
 use fold_core::object::ObjectKind;
 use fold_core::reviews::Verdict;
@@ -21,6 +18,7 @@ use fold_core::{
 use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
 use fold_daemon::http::events::{ChangeKind, LiveWorkspace};
+use fold_daemon::http::host::CLIENT_HEADER;
 use fold_daemon::http::router;
 use fold_daemon::jobs::{JobProgress, spawn_live};
 use fold_daemon::live::{LiveConfig, LiveState, WatchMode, WorkspaceLive};
@@ -46,6 +44,7 @@ use fold_vcs::watch::{WatchBackend, WatchConfig, WatchRefused};
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::error::TryRecvError;
 use tokio::sync::watch;
+use tower::ServiceExt;
 
 const LEASE_MINUTES: u64 = 5;
 const WAIT: Duration = Duration::from_secs(20);

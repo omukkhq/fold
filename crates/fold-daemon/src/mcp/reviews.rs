@@ -13,12 +13,13 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::FoldServer;
-use super::error::{from_agent, from_review};
-use super::identity::parse;
+use super::error::from_review;
+use super::parse;
 use super::workspaces::{file_diff_value, file_line};
 use crate::services::reviews::{
-    ChangeRange, CommentInput, CommentLocation, CommentView, IntegrationOutcome, ProposalDetail,
-    ProposalFilter, ProposalSummary, ProposalView, ReviewService, integration_conflicted,
+    ChangeRange, CommentInput, CommentLocation, CommentView, DEFAULT_PROPOSAL_LIST,
+    IntegrationOutcome, ProposalDetail, ProposalFilter, ProposalSummary, ProposalView,
+    ReviewService, integration_conflicted,
 };
 
 pub mod batches;
@@ -61,6 +62,9 @@ pub struct ListProposalsInput {
     /// Only proposals that no reviewer has claimed.
     #[serde(default)]
     pub unclaimed: bool,
+    /// The most proposals to return, the newest ones, in number order: 1 to 200, 50 when left out.
+    #[serde(default)]
+    pub limit: Option<u32>,
     /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
     #[serde(rename = "as", default)]
     pub as_worker: Option<String>,
@@ -297,15 +301,7 @@ pub async fn call(
     let Some(reviews) = &server.reviews else {
         return Ok(None);
     };
-    if !tools().iter().any(|known| known.name == tool) {
-        return Ok(None);
-    }
-    let session = server.session().await;
-    let actor = server
-        .agents
-        .actor(&session, as_worker)
-        .await
-        .map_err(from_agent)?;
+    let actor = server.actor(as_worker).await?;
     let value = match tool {
         CREATE_PROPOSAL => create_proposal(reviews, &actor, arguments).await?,
         LIST_PROPOSALS => list_proposals(reviews, arguments).await?,
@@ -516,25 +512,23 @@ fn comment_json(comment: &CommentView) -> Value {
 }
 
 fn comment_input(index: usize, input: ReviewCommentInput) -> Result<CommentInput, FoldError> {
-    let invalid = |message: &str| {
-        FoldError::new(codes::INVALID_REQUEST, format!("comments[{index}]: {message}"))
-            .with_details([("field", json!(format!("comments[{index}]")))])
-            .with_hint("give path, start_line, end_line and side together, or none of them, then call submit_review again")
-    };
-    let location = match (input.path, input.start_line, input.end_line, input.side) {
-        (None, None, None, None) => None,
-        (Some(path), Some(start_line), Some(end_line), Some(side)) => Some(CommentLocation {
-            path,
-            side: Side::parse(&side).ok_or_else(|| invalid("side is old or new"))?,
-            start_line,
-            end_line,
-        }),
-        _ => {
-            return Err(invalid(
-                "a line comment needs path, start_line, end_line and side",
-            ));
-        }
-    };
+    let field = format!("comments[{index}]");
+    let side = input
+        .side
+        .as_deref()
+        .map(|side| {
+            Side::parse(side).ok_or_else(|| {
+                FoldError::new(
+                    codes::INVALID_REQUEST,
+                    format!("{field}: side is old or new"),
+                )
+                .with_details([("field", json!(field))])
+                .with_hint("give side as old or new, then call submit_review again")
+            })
+        })
+        .transpose()?;
+    let location =
+        CommentLocation::from_parts(&field, input.path, side, input.start_line, input.end_line)?;
     let reply_to = input
         .reply_to
         .as_deref()
@@ -588,6 +582,7 @@ async fn list_proposals(
         .list_proposals(ProposalFilter {
             state,
             unclaimed: input.unclaimed,
+            limit: Some(input.limit.unwrap_or(DEFAULT_PROPOSAL_LIST)),
         })
         .await
         .map_err(from_review)?;

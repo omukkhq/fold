@@ -49,6 +49,7 @@ import {
   versionRef,
 } from "./present";
 import type { DetailView } from "./view";
+import { projectPath, idHref } from "@/routes/paths";
 
 const OVERLINE =
   "text-overline leading-snug font-semibold text-primary-text uppercase";
@@ -262,7 +263,7 @@ function HumanActions({
           takes no verdict.
         </p>
         <HrefLink
-          href={`/p/${slug}/proposals/${proposal.summary.id}`}
+          href={projectPath(slug, "proposals", proposal.summary.id)}
           className={cn(
             "text-code font-semibold text-primary-text hover:underline",
             focusRing,
@@ -457,7 +458,7 @@ export function SidePanel({
               <GitMerge aria-hidden="true" size={14} />
               Integrated as{" "}
               <HrefLink
-                href={`/p/${slug}/repository?revision=${integration.revision}`}
+                href={idHref(slug, "revision", integration.revision)}
                 className={cn("font-mono underline", focusRing)}
               >
                 {integration.revision}

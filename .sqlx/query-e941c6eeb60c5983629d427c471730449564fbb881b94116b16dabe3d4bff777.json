@@ -1,0 +1,64 @@
+{
+  "db_name": "SQLite",
+  "query": "WITH owed AS (\n               SELECT w.id AS worker, g.name AS agent, p.number AS proposal, v.version AS version,\n                      COALESCE((\n                          SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id\n                      ), '') = 'request_changes'\n                      AND EXISTS (\n                          SELECT 1 FROM reviews r\n                          WHERE r.version_id = v.id AND r.verdict = 'request_changes' AND r.created_at > w.started_at\n                      ) AS changes,\n                      p.conflicted AND EXISTS (\n                          SELECT 1 FROM integrations i\n                          WHERE i.version_id = v.id AND i.result = 'conflicted' AND i.created_at > w.started_at\n                      ) AS conflict\n               FROM worker_processes w\n               JOIN agents g ON g.id = w.agent_id\n               JOIN worker_tasks b ON b.worker_process_id = w.id\n               JOIN proposals p ON p.task_id = b.task_id AND p.state = 'open'\n               JOIN workers k ON k.id = p.author_worker_id AND k.agent_id = w.agent_id\n               JOIN proposal_versions v ON v.proposal_id = p.id\n               WHERE w.role = 'task_coder' AND w.state IN (SELECT value FROM json_each(?1))\n                 AND v.version = (SELECT MAX(x.version) FROM proposal_versions x WHERE x.proposal_id = p.id)\n           )\n           SELECT agent AS \"agent!: String\", proposal AS \"proposal!: i64\", version AS \"version!: i64\",\n                  changes AS \"changes!: bool\", conflict AS \"conflict!: bool\"\n           FROM owed WHERE changes OR conflict\n           ORDER BY worker, proposal",
+  "describe": {
+    "columns": [
+      {
+        "name": "agent!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "proposal!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "version!: i64",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "name": "changes!: bool",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "conflict!: bool",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "e941c6eeb60c5983629d427c471730449564fbb881b94116b16dabe3d4bff777"
+}

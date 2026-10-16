@@ -238,7 +238,7 @@ async fn an_answer_between_the_question_read_and_the_join_reaches_the_waiting_ca
         .write(async |tx| {
             let number = counters::allocate(tx, IdKind::PermissionQuestion).await?;
             agents::insert_question(
-                tx.conn(),
+                tx,
                 &NewQuestion {
                     worker_process_id: row.id,
                     kind: QuestionKind::Tool,

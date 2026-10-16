@@ -1,14 +1,16 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+use fold_core::layout::MCP_COMMAND;
 use fold_core::{FoldError, codes};
 use serde_json::{Map, Value, json};
 use thiserror::Error;
 
 pub const MCP_FILE: &str = ".mcp.json";
-pub const MCP_SERVERS_KEY: &str = "mcpServers";
-/// The fold server's key below `mcpServers`.
-pub const MCP_SERVER_NAME: &str = "fold";
+pub use fold_core::layout::{AGENT_ENV, AGENT_TAGS_ENV, MCP_SERVER_NAME, MCP_SERVERS_KEY};
+
+/// The folders of Claude Code files that fold's files sit in, each one inside the one before.
+pub const FOLDERS: [&str; 3] = [".claude", ".claude/skills", ".claude/skills/fold"];
 
 pub const SETTINGS_FILE: &str = ".claude/settings.json";
 /// The `permissions.allow` entry that allows every fold MCP tool; `mcp__fold__*` does the same.
@@ -173,8 +175,8 @@ fn merge_mcp(object: &mut Map<String, Value>) -> Result<(), &'static str> {
         MCP_SERVER_NAME.to_owned(),
         json!({
             "command": "fld",
-            "args": ["mcp"],
-            "env": {"FOLD_AGENT": "${FOLD_AGENT:-}"},
+            "args": [MCP_COMMAND],
+            "env": {(AGENT_ENV): format!("${{{AGENT_ENV}:-}}")},
         }),
     );
     Ok(())
@@ -279,7 +281,7 @@ pub fn agents_md(existing: Option<&str>, section: &str) -> Result<String, &'stat
     }
 }
 
-/// Atomic through `write_atomic`; an existing file keeps its permissions.
+/// Atomic through `write_atomic`; an existing file keeps its permissions. A symbolic link stays a link, also one whose file does not exist yet: the file it points to is the one that changes, because the user put the link there to keep the content elsewhere.
 fn replace(path: &Path, content: &[u8]) -> Result<(), ClaudeFileError> {
     let io_error = |source| ClaudeFileError::Io {
         path: path.to_owned(),
@@ -288,7 +290,31 @@ fn replace(path: &Path, content: &[u8]) -> Result<(), ClaudeFileError> {
     if read(path)?.as_deref() == Some(content) {
         return Ok(());
     }
-    fold_vcs::atomic::write_atomic(path, content).map_err(io_error)
+    let target = link_end(path).map_err(io_error)?;
+    fold_vcs::atomic::write_atomic(&target, content).map_err(io_error)
+}
+
+/// How many symbolic links [`link_end`] follows, as Linux does for one path.
+const MAX_LINKS: usize = 40;
+
+/// The path at the end of the chain of symbolic links that starts at `path`, or `path` itself when it is no link. The end need not exist.
+fn link_end(path: &Path) -> io::Result<PathBuf> {
+    let mut end = path.to_owned();
+    for _ in 0..MAX_LINKS {
+        match std::fs::symlink_metadata(&end) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                let target = std::fs::read_link(&end)?;
+                end = match end.parent() {
+                    Some(parent) => parent.join(target),
+                    None => target,
+                };
+            }
+            Ok(_) => return Ok(end),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(end),
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::other("too many levels of symbolic links"))
 }
 
 /// The files that make Claude Code skip `AGENTS.md`, from the project root upwards. `root` must be absolute, or the walk stops at the current directory. `home` is the canonical `HOME`, whose `.claude/CLAUDE.md` is the user's own and is skipped.
@@ -317,6 +343,67 @@ pub fn shadowing_warning(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_symlinked_file_stays_a_link_and_its_target_changes() {
+        let root = tempfile::tempdir().unwrap();
+        let elsewhere = root.path().join("shared");
+        std::fs::create_dir(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("rules.md"), "# mine\n").unwrap();
+        let link = root.path().join(AGENTS_FILE);
+        std::os::unix::fs::symlink(elsewhere.join("rules.md"), &link).unwrap();
+        write(root.path()).unwrap();
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        let text = std::fs::read_to_string(elsewhere.join("rules.md")).unwrap();
+        assert!(text.starts_with("# mine\n") && text.contains(AGENTS_BEGIN));
+    }
+
+    #[test]
+    fn a_dangling_link_stays_a_link_and_its_file_is_created() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("shared")).unwrap();
+        let link = root.path().join(AGENTS_FILE);
+        std::os::unix::fs::symlink("shared/rules.md", &link).unwrap();
+        write(root.path()).unwrap();
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        let text = std::fs::read_to_string(root.path().join("shared/rules.md")).unwrap();
+        assert!(text.contains(AGENTS_BEGIN));
+    }
+
+    #[test]
+    fn a_link_loop_is_an_error_and_both_links_stay() {
+        let root = tempfile::tempdir().unwrap();
+        let link = root.path().join(AGENTS_FILE);
+        std::os::unix::fs::symlink("other.md", &link).unwrap();
+        std::os::unix::fs::symlink(AGENTS_FILE, root.path().join("other.md")).unwrap();
+        assert!(link_end(&link).is_err());
+        assert!(replace(&link, b"x").is_err());
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[test]
+    fn the_files_sit_in_the_folders() {
+        let parent = |file: &str| Path::new(file).parent().map(Path::to_owned);
+        assert_eq!(parent(SETTINGS_FILE), Some(PathBuf::from(FOLDERS[0])));
+        assert_eq!(parent(SKILL_FILE), Some(PathBuf::from(FOLDERS[2])));
+        assert_eq!(parent(FOLDERS[2]), Some(PathBuf::from(FOLDERS[1])));
+        assert_eq!(parent(FOLDERS[1]), Some(PathBuf::from(FOLDERS[0])));
+    }
 
     #[test]
     fn a_refresh_drops_the_old_deny_rules_and_hooks_the_file_tools() {

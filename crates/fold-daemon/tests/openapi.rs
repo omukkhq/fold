@@ -132,6 +132,39 @@ fn document_is_openapi_3_1_with_the_error_envelope() {
 }
 
 #[test]
+fn every_route_that_takes_a_human_declares_the_worker_peer_refusal() {
+    let doc = doc_json();
+    let mut human_routes = 0;
+    for (path, item) in doc["paths"].as_object().unwrap() {
+        for (method, operation) in item.as_object().unwrap() {
+            let names_human = operation["responses"]["401"]["description"]
+                .as_str()
+                .is_some_and(|text| text.starts_with("`human_name_required`"));
+            let refused = operation["responses"]["403"]["description"]
+                .as_str()
+                .is_some_and(|text| text.contains("`worker_peer_refused`"));
+            assert!(!names_human || refused, "{method} {path}");
+            human_routes += usize::from(names_human);
+        }
+    }
+    assert!(human_routes > 30, "{human_routes}");
+    let push = &doc["paths"]["/api/v1/projects/{slug}/push"]["post"]["responses"]["403"];
+    assert!(
+        push["description"]
+            .as_str()
+            .unwrap()
+            .contains("`worker_peer_refused`")
+    );
+    let board = &doc["paths"]["/api/v1/projects/{slug}/board"]["get"]["responses"]["403"];
+    assert!(
+        !board["description"]
+            .as_str()
+            .unwrap()
+            .contains("`worker_peer_refused`")
+    );
+}
+
+#[test]
 fn base_document_holds_both_envelopes_without_any_route() {
     let doc = serde_json::to_value(base()).unwrap();
     assert!(

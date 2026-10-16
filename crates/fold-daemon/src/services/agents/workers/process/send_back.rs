@@ -27,7 +27,7 @@ impl Supervisor {
         let report = match reports::latest_for_task(self.inner.store.read(), task).await {
             Ok(report) => report,
             Err(error) => {
-                tracing::warn!(task = %task, code = error.code().unwrap_or("store_error"), "could not read a report to resume its coder");
+                tracing::warn!(task = %task, code = error.log_code(), "could not read a report to resume its coder");
                 return;
             }
         };
@@ -46,7 +46,7 @@ impl Supervisor {
             Ok(owed) => owed,
             Err(error) => {
                 tracing::warn!(
-                    code = error.code().unwrap_or("store_error"),
+                    code = error.log_code(),
                     "could not read the owed send-backs"
                 );
                 return;

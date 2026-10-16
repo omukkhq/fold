@@ -9,7 +9,7 @@ use fold_core::object::ObjectHash;
 use fold_core::tree::{EntryKind, flatten};
 use fold_core::{FoldError, codes};
 use fold_vcs::git::Git;
-use fold_vcs::git_import::{GitImportOptions, archive_tree};
+use fold_vcs::git_import::{GitImportOptions, import_commit};
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::paths::RepoPath;
 use fold_vcs::scan::{DEFAULT_MAX_FILE_BYTES, SkipReason, Skipped};
@@ -86,7 +86,7 @@ fn head_imports_exactly_the_committed_files() {
     let (dir, store) = store();
     let repo = dir.path().join("repo");
     sample_repo(&repo);
-    let result = archive_tree(&store, &Git::default(), &repo, "HEAD", &OPTS).unwrap();
+    let result = import_commit(&store, &Git::default(), &repo, "HEAD", &OPTS).unwrap();
     let found = contents(&store, &result.tree);
     let expected: BTreeMap<String, (EntryKind, Vec<u8>)> = [
         (".gitignore", EntryKind::File, &b"*.log\nbuild/\n"[..]),
@@ -112,12 +112,33 @@ fn head_imports_exactly_the_committed_files() {
 }
 
 #[test]
+fn a_blob_listed_at_several_paths_imports_at_each_of_them() {
+    let (dir, store) = store();
+    let repo = dir.path().join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "--quiet", "--initial-branch=main"]);
+    write(&repo, "a/copy.txt", b"same\n");
+    write(&repo, "b/copy.txt", b"same\n");
+    write(&repo, "c.sh", b"same\n");
+    fs::set_permissions(repo.join("c.sh"), fs::Permissions::from_mode(0o755)).unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "--quiet", "-m", "copies"]);
+    let result = import_commit(&store, &Git::default(), &repo, "HEAD", &OPTS).unwrap();
+    let found = contents(&store, &result.tree);
+    assert_eq!(found["a/copy.txt"], (EntryKind::File, b"same\n".to_vec()));
+    assert_eq!(found["b/copy.txt"], (EntryKind::File, b"same\n".to_vec()));
+    assert_eq!(found["c.sh"], (EntryKind::Executable, b"same\n".to_vec()));
+    assert_eq!(result.files, 3);
+    assert_eq!(result.bytes, 15);
+}
+
+#[test]
 fn another_commit_gives_that_commits_tree() {
     let (dir, store) = store();
     let repo = dir.path().join("repo");
     let first = sample_repo(&repo);
     let git_program = Git::default();
-    let result = archive_tree(&store, &git_program, &repo, &first, &OPTS).unwrap();
+    let result = import_commit(&store, &git_program, &repo, &first, &OPTS).unwrap();
     let found = contents(&store, &result.tree);
     assert_eq!(found.len(), 1);
     assert_eq!(found["README.md"], (EntryKind::File, b"first\n".to_vec()));
@@ -136,7 +157,7 @@ fn files_over_the_limit_are_skipped_and_listed() {
     let repo = dir.path().join("repo");
     sample_repo(&repo);
     let opts = GitImportOptions { max_file_bytes: 10 };
-    let result = archive_tree(&store, &Git::default(), &repo, "HEAD", &opts).unwrap();
+    let result = import_commit(&store, &Git::default(), &repo, "HEAD", &opts).unwrap();
     let found = contents(&store, &result.tree);
     assert_eq!(
         found.keys().collect::<Vec<_>>(),
@@ -155,7 +176,7 @@ fn files_over_the_limit_are_skipped_and_listed() {
         ]
     );
     let tiny = GitImportOptions { max_file_bytes: 2 };
-    let result = archive_tree(&store, &Git::default(), &repo, "HEAD", &tiny).unwrap();
+    let result = import_commit(&store, &Git::default(), &repo, "HEAD", &tiny).unwrap();
     assert!(result.skipped.contains(&skipped("link")));
 }
 
@@ -163,20 +184,20 @@ fn files_over_the_limit_are_skipped_and_listed() {
 fn a_missing_git_program_is_git_not_found() {
     let (dir, store) = store();
     let missing = Git::new(dir.path().join("bin/git"));
-    let error = archive_tree(&store, &missing, dir.path(), "HEAD", &OPTS).unwrap_err();
+    let error = import_commit(&store, &missing, dir.path(), "HEAD", &OPTS).unwrap_err();
     assert_eq!(error.code(), codes::GIT_NOT_FOUND);
 }
 
 #[test]
 fn a_failing_listing_is_git_failed_with_its_status_only() {
     let (dir, store) = store();
-    let error = archive_tree(&store, &Git::default(), dir.path(), "HEAD", &OPTS).unwrap_err();
+    let error = import_commit(&store, &Git::default(), dir.path(), "HEAD", &OPTS).unwrap_err();
     assert_eq!(error.code(), codes::GIT_FAILED);
     let details = error.details().unwrap();
     assert_eq!(details["command"], "ls-tree");
     assert_eq!(details["status"], 128);
     assert!(!error.message().contains("fatal"));
-    let refused = archive_tree(&store, &Git::default(), dir.path(), "--output=x", &OPTS);
+    let refused = import_commit(&store, &Git::default(), dir.path(), "--output=x", &OPTS);
     assert_eq!(refused.unwrap_err().code(), codes::INVALID_REQUEST);
 }
 
@@ -206,13 +227,13 @@ fn a_committed_path_that_leaves_the_tree_or_repeats_fails_with_invalid_path() {
         .trim()
         .to_owned();
     let escape = crafted_commit(&repo, &format!("100644 blob {blob}\t..\n"));
-    let error = archive_tree(&store, &Git::default(), &repo, &escape, &OPTS).unwrap_err();
+    let error = import_commit(&store, &Git::default(), &repo, &escape, &OPTS).unwrap_err();
     assert_eq!(error.code(), codes::INVALID_PATH);
     let twice = crafted_commit(
         &repo,
         &format!("100644 blob {blob}\ta\n100644 blob {blob}\ta\n"),
     );
-    let error = archive_tree(&store, &Git::default(), &repo, &twice, &OPTS).unwrap_err();
+    let error = import_commit(&store, &Git::default(), &repo, &twice, &OPTS).unwrap_err();
     assert_eq!(error.code(), codes::INVALID_PATH);
     assert_eq!(error.details().unwrap()["path"], "a");
 }
@@ -226,7 +247,7 @@ fn a_blob_the_repository_lacks_is_git_failed() {
         &repo,
         "100644 blob 1111111111111111111111111111111111111111\tlost.txt\n",
     );
-    let error = archive_tree(&store, &Git::default(), &repo, &lost, &OPTS).unwrap_err();
+    let error = import_commit(&store, &Git::default(), &repo, &lost, &OPTS).unwrap_err();
     assert_eq!(error.code(), codes::GIT_FAILED);
     assert_eq!(error.details().unwrap()["command"], "ls-tree");
 }
@@ -248,7 +269,7 @@ fn export_attributes_do_not_change_what_imports() {
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "--quiet", "-m", "attributes"]);
     // From a subdirectory too, the whole committed tree imports.
-    let result = archive_tree(&store, &Git::default(), &repo.join("src"), "HEAD", &OPTS).unwrap();
+    let result = import_commit(&store, &Git::default(), &repo.join("src"), "HEAD", &OPTS).unwrap();
     let found = contents(&store, &result.tree);
     assert_eq!(
         found.keys().collect::<Vec<_>>(),
@@ -281,7 +302,7 @@ fn a_broken_blob_stream_is_git_failed() {
         ("dies", "exit 3", Some(3)),
     ] {
         let git = fake_git(dir.path(), name, reply);
-        let error = archive_tree(&store, &git, dir.path(), "HEAD", &OPTS).unwrap_err();
+        let error = import_commit(&store, &git, dir.path(), "HEAD", &OPTS).unwrap_err();
         assert_eq!(error.code(), codes::GIT_FAILED, "{name}");
         let details = error.details().unwrap();
         assert_eq!(details["command"], "cat-file", "{name}");

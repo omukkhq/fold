@@ -1,3 +1,5 @@
+use std::collections::{BTreeMap, HashSet};
+
 use fold_core::reviews::HumanReviewMark;
 use fold_core::{
     EventActor, HumanName, LabelColor, LabelName, TaskDescription, TaskId, TaskKind, TaskStatus,
@@ -5,6 +7,7 @@ use fold_core::{
 };
 use sqlx::{SqliteConnection, SqliteExecutor, SqlitePool};
 
+use crate::columns::time as timestamp;
 use crate::error::StoreError;
 use crate::store::WriteTx;
 
@@ -21,7 +24,8 @@ pub mod requests;
 mod views;
 
 pub use dependencies::{
-    EdgeRow, delete_edge, edges, edges_conn, fetch_edge, insert_edge, prerequisite_statuses,
+    EdgeRow, delete_edge, dependent_edges, edges, edges_conn, edges_of, fetch_edge, insert_edge,
+    needs_transitively, prerequisite_statuses,
 };
 pub use human_review::{
     MarkedProposal, clear_human_review, marked_open_proposals, set_human_review,
@@ -86,6 +90,21 @@ struct RawTask {
     status: String,
     blocked: bool,
     kind: String,
+}
+
+/// The columns of [`RawTask`], followed by the tail of each read: every task row maps the same way.
+macro_rules! select_tasks {
+    ($tail:literal $(, $arg:expr)* $(,)?) => {
+        sqlx::query_as!(
+            RawTask,
+            r#"SELECT number, title, description, created_by, created_at, updated_at, archived_at,
+                      human_review AS "human_review: bool", human_reviewer, human_review_reason,
+                      human_review_set_by, status, blocked AS "blocked: bool", kind
+               FROM tasks
+               "# + $tail
+            $(, $arg)*
+        )
+    };
 }
 
 impl RawTask {
@@ -153,10 +172,6 @@ fn label_row(name: &str, color: &str, created_at: i64) -> Result<LabelRow, Store
             .map_err(|_| StoreError::Corrupt("labels.color"))?,
         created_at: timestamp(created_at, "labels.created_at")?,
     })
-}
-
-fn timestamp(millis: i64, column: &'static str) -> Result<Timestamp, StoreError> {
-    Timestamp::from_millis(millis).map_err(|_| StoreError::Corrupt(column))
 }
 
 /// Inserts a task at `status = backlog`, `blocked = 0`. A number that already exists fails on `tasks.number`.
@@ -286,31 +301,29 @@ pub async fn fetch(
     task: TaskId,
 ) -> Result<Option<TaskRow>, StoreError> {
     let number = task.to_db();
-    sqlx::query_as!(
-        RawTask,
-        r#"SELECT number, title, description, created_by, created_at, updated_at, archived_at,
-                  human_review AS "human_review: bool", human_reviewer, human_review_reason,
-                  human_review_set_by, status, blocked AS "blocked: bool", kind
-           FROM tasks WHERE number = ?"#,
-        number
-    )
-    .fetch_optional(conn)
-    .await?
-    .map(RawTask::into_row)
-    .transpose()
+    select_tasks!("WHERE number = ?", number)
+        .fetch_optional(conn)
+        .await?
+        .map(RawTask::into_row)
+        .transpose()
 }
 
 /// Tasks in number order. Archived tasks are left out unless `include_archived`.
 pub async fn list(pool: &SqlitePool, include_archived: bool) -> Result<Vec<TaskRow>, StoreError> {
-    sqlx::query_as!(
-        RawTask,
-        r#"SELECT number, title, description, created_by, created_at, updated_at, archived_at,
-                  human_review AS "human_review: bool", human_reviewer, human_review_reason,
-                  human_review_set_by, status, blocked AS "blocked: bool", kind
-           FROM tasks WHERE ?1 OR archived_at IS NULL ORDER BY number"#,
+    let mut conn = pool.acquire().await?;
+    list_conn(&mut conn, include_archived).await
+}
+
+/// The same read on the given connection, so a caller reads it inside its transaction.
+pub async fn list_conn(
+    conn: &mut SqliteConnection,
+    include_archived: bool,
+) -> Result<Vec<TaskRow>, StoreError> {
+    select_tasks!(
+        "WHERE ?1 OR archived_at IS NULL ORDER BY number",
         include_archived
     )
-    .fetch_all(pool)
+    .fetch_all(conn)
     .await?
     .into_iter()
     .map(RawTask::into_row)
@@ -343,20 +356,25 @@ pub async fn missing_labels(
     conn: &mut SqliteConnection,
     names: &[LabelName],
 ) -> Result<Vec<LabelName>, StoreError> {
-    let mut missing = Vec::new();
-    for name in names {
-        let text = name.as_str();
-        let found = sqlx::query_scalar!(
-            r#"SELECT COUNT(*) AS "count!: i64" FROM labels WHERE name = ?"#,
-            text
-        )
-        .fetch_one(&mut *conn)
-        .await?;
-        if found == 0 {
-            missing.push(name.clone());
-        }
-    }
-    Ok(missing)
+    let list = name_list(names)?;
+    let known: HashSet<String> = sqlx::query_scalar!(
+        r#"SELECT name FROM labels WHERE name IN (SELECT value FROM json_each(?))"#,
+        list
+    )
+    .fetch_all(conn)
+    .await?
+    .into_iter()
+    .collect();
+    Ok(names
+        .iter()
+        .filter(|name| !known.contains(name.as_str()))
+        .cloned()
+        .collect())
+}
+
+fn name_list(names: &[LabelName]) -> Result<String, StoreError> {
+    serde_json::to_string(&names.iter().map(LabelName::as_str).collect::<Vec<_>>())
+        .map_err(|_| StoreError::Invalid("label names"))
 }
 
 /// Makes the label set of `task` exactly `names`. Every name must exist.
@@ -372,17 +390,16 @@ pub async fn replace_labels(
     )
     .execute(tx.conn())
     .await?;
-    for name in names {
-        let text = name.as_str();
-        sqlx::query!(
-            "INSERT OR IGNORE INTO task_labels (task_id, label_id)
-             SELECT t.id, l.id FROM tasks t, labels l WHERE t.number = ? AND l.name = ?",
-            number,
-            text
-        )
-        .execute(tx.conn())
-        .await?;
-    }
+    let list = name_list(names)?;
+    sqlx::query!(
+        "INSERT OR IGNORE INTO task_labels (task_id, label_id)
+         SELECT t.id, l.id FROM tasks t, labels l
+         WHERE t.number = ? AND l.name IN (SELECT value FROM json_each(?))",
+        number,
+        list
+    )
+    .execute(tx.conn())
+    .await?;
     Ok(())
 }
 
@@ -411,6 +428,33 @@ pub async fn labels_for_conn(
     rows.into_iter()
         .map(|row| label_row(&row.name, &row.color, row.created_at))
         .collect()
+}
+
+/// The labels of every task by task, each list in name order; archived tasks only when `include_archived`. One read serves a whole list of tasks.
+pub async fn labels_by_task(
+    conn: &mut SqliteConnection,
+    include_archived: bool,
+) -> Result<BTreeMap<TaskId, Vec<LabelRow>>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT t.number AS "number!: i64", l.name, l.color, l.created_at
+           FROM task_labels tl
+           JOIN tasks t ON t.id = tl.task_id
+           JOIN labels l ON l.id = tl.label_id
+           WHERE ?1 OR t.archived_at IS NULL
+           ORDER BY t.number, l.name"#,
+        include_archived
+    )
+    .fetch_all(conn)
+    .await?;
+    let mut labels: BTreeMap<TaskId, Vec<LabelRow>> = BTreeMap::new();
+    for row in rows {
+        let task = TaskId::try_from_db(row.number).ok_or(StoreError::Corrupt("tasks.number"))?;
+        labels
+            .entry(task)
+            .or_default()
+            .push(label_row(&row.name, &row.color, row.created_at)?);
+    }
+    Ok(labels)
 }
 
 /// Every label in name order.

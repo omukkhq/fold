@@ -5,14 +5,16 @@ use fold_core::{
     Actor, Address, AgentName, FoldError, MessageBody, MessageId, ProposalId, RequestId, Sender,
     TaskId, Timestamp, WorkerName, codes, policy,
 };
+use fold_store::SqliteConnection;
+use fold_store::StoreError;
 use fold_store::messages::{self, MessageRow, ThreadFilter};
 use fold_store::tasks::requests;
-use fold_store::{Store, StoreError};
 use serde_json::json;
 
 use super::{
     MessageError, MessageService, MessageView, SendMessage, message_not_found, message_view,
 };
+use crate::services::page_limit;
 
 /// The page size when a listing names no `limit`.
 pub const DEFAULT_THREAD_LIMIT: u32 = 50;
@@ -105,22 +107,22 @@ impl MessageService {
             .await?
             .ok_or_else(|| message_not_found(message))?;
         let rows = messages::thread(&mut tx, head.thread).await?;
-        let awaiting = messages::threads_awaiting_human(&mut *tx).await?;
+        let awaiting = awaiting_set(&mut tx, head.thread).await?;
         tx.commit().await.map_err(StoreError::from)?;
         Ok(thread_view(head.thread, rows, &awaiting))
     }
 
-    /// A human's feedback (`task`), message in a request's clarification thread (`request`) or reply (`reply_to`). A reply joins the parent's thread and inherits its task unless `task` names another, and its request; it answers a question to humans, which clears the task's `question` attention.
+    /// A human's feedback (`task`), message in a request's clarification thread (`request`, linked to `task` when given) or reply (`reply_to`). A reply joins the parent's thread and inherits its task unless `task` names another, and its request; it answers a question to humans, which clears the task's `question` attention.
     pub async fn feedback(
         &self,
         actor: &Actor,
         input: Feedback,
     ) -> Result<MessageView, MessageError> {
-        policy::can_send_feedback(actor).map_err(FoldError::from)?;
         let Some(parent) = input.reply_to else {
             if let Some(request) = input.request {
+                policy::can_send_feedback(actor).map_err(FoldError::from)?;
                 return self
-                    .request_feedback(actor, request, input.body, input.to)
+                    .request_feedback(actor, request, input.task, input.body, input.to)
                     .await;
             }
             let task = input.task.ok_or_else(|| {
@@ -128,9 +130,12 @@ impl MessageService {
                     codes::INVALID_REQUEST,
                     "feedback needs a task, a request or reply_to",
                 )
+                .with_hint("name the task, the request or the message the feedback answers")
             })?;
+            // `send_feedback` checks the policy itself.
             return self.send_feedback(actor, task, input.body, input.to).await;
         };
+        policy::can_send_feedback(actor).map_err(FoldError::from)?;
         let to = match input.to {
             Some(to) => to,
             None => self.reply_default(actor, parent).await?,
@@ -162,45 +167,33 @@ impl MessageService {
             return Ok(None);
         };
         let rows = messages::thread(&mut tx, thread).await?;
-        let awaiting = messages::threads_awaiting_human(&mut *tx).await?;
+        let awaiting = awaiting_set(&mut tx, thread).await?;
         tx.commit().await.map_err(StoreError::from)?;
         Ok(Some(thread_view(thread, rows, &awaiting)))
     }
 
-    /// A named human's message in the request's clarification thread. It goes to `to` when given, otherwise to the request's drafter; with neither it is `recipient_not_found`.
+    /// A named human's message in the request's clarification thread, linked to `task` when given. It goes to `to` when given, otherwise to the request's drafter; with neither it is `recipient_not_found`.
     async fn request_feedback(
         &self,
         actor: &Actor,
         request: RequestId,
+        task: Option<TaskId>,
         body: MessageBody,
         to: Option<Vec<Address>>,
     ) -> Result<MessageView, MessageError> {
-        let to = match to {
-            Some(to) => to,
-            None => {
-                let mut conn = self
-                    .store
-                    .read()
-                    .acquire()
-                    .await
-                    .map_err(StoreError::from)?;
-                let row = requests::fetch(&mut conn, request)
-                    .await?
-                    .ok_or_else(|| crate::services::tasks::request_missing(request))?;
-                let drafter = row.drafter.ok_or_else(|| no_drafter(request))?;
-                vec![Address::of_worker(&drafter.worker)]
-            }
-        };
-        self.send_linked(
+        let to_drafter = to.is_none();
+        self.send_inner(
             actor,
             SendMessage {
-                to,
+                to: to.unwrap_or_default(),
                 body,
-                task: None,
+                task,
                 proposal: None,
                 reply_to: None,
             },
             Some(request),
+            None,
+            to_drafter,
         )
         .await
     }
@@ -232,12 +225,7 @@ impl MessageService {
     }
 }
 
-/// The tasks with an unanswered question to a human, the source of the `question` attention kind. A human reply in the thread removes the task.
-pub async fn tasks_awaiting_human(store: &Store) -> Result<BTreeSet<TaskId>, StoreError> {
-    messages::tasks_awaiting_human(store.read()).await
-}
-
-fn no_drafter(request: RequestId) -> FoldError {
+pub(super) fn no_drafter(request: RequestId) -> FoldError {
     FoldError::new(
         codes::RECIPIENT_NOT_FOUND,
         format!("{request} has no drafter to receive the message"),
@@ -252,16 +240,7 @@ fn parse_query(query: &ThreadQuery) -> Result<(ThreadFilter, u32), FoldError> {
         Some(name) if name.contains('/') => (None, Some(WorkerName::parse(name)?)),
         Some(name) => (Some(AgentName::parse(name)?), None),
     };
-    let limit = match query.limit {
-        Some(0) => {
-            return Err(FoldError::new(
-                codes::INVALID_REQUEST,
-                "limit must be at least 1",
-            ));
-        }
-        Some(limit) => limit.min(MAX_THREAD_LIMIT),
-        None => DEFAULT_THREAD_LIMIT,
-    };
+    let limit = page_limit(query.limit, MAX_THREAD_LIMIT)?.unwrap_or(DEFAULT_THREAD_LIMIT);
     Ok((
         ThreadFilter {
             agent,
@@ -304,6 +283,20 @@ fn last_number(thread: &ThreadView) -> Option<MessageId> {
 }
 
 /// `rows` are the messages of thread `id` in number order.
+/// The one thread a single-thread read shows, as the set [`thread_view`] takes: holding `thread` when it waits for a human.
+async fn awaiting_set(
+    conn: &mut SqliteConnection,
+    thread: MessageId,
+) -> Result<BTreeSet<MessageId>, StoreError> {
+    Ok(
+        if messages::thread_awaits_human(&mut *conn, thread).await? {
+            BTreeSet::from([thread])
+        } else {
+            BTreeSet::new()
+        },
+    )
+}
+
 fn thread_view(id: MessageId, rows: Vec<MessageRow>, awaiting: &BTreeSet<MessageId>) -> ThreadView {
     let mut seen = HashSet::new();
     let mut participants = Vec::new();

@@ -1,16 +1,17 @@
 import type { BoardCard, BoardProposal, CardProposalState } from "@/api/board";
+import { projectPath } from "@/routes/paths";
 
 /**
  * The task dialog's path; the dialog route renders the board beneath itself. `search` is the board's filters as a
  * query string, which the dialog route takes as its own, so the board beneath it and after it keep them.
  */
 export function taskPath(slug: string, task: string, search = ""): string {
-  return `/p/${encodeURIComponent(slug)}/t/${encodeURIComponent(task)}${search}`;
+  return `${projectPath(slug, "t", task)}${search}`;
 }
 
 /** The task dialog's create form, over the board. */
 export function newTaskPath(slug: string): string {
-  return `/p/${encodeURIComponent(slug)}/t/new`;
+  return projectPath(slug, "t", "new");
 }
 
 /** Plain steps and linked items counted together, `2/5`; null for a task with neither. */

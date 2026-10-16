@@ -10,9 +10,10 @@ use serde_json::{Value, json};
 
 use super::super::FoldServer;
 use super::super::error::{from_task, from_workspace};
-use super::super::identity::parse;
+use super::super::parse;
 use crate::services::tasks::{
-    NewRequestAttachment, RequestDetail, RequestFilter, RequestView, SubmitDraft,
+    DEFAULT_REQUEST_LIST, NewRequestAttachment, RequestDetail, RequestFilter, RequestView,
+    SubmitDraft,
 };
 
 pub const CREATE_REQUEST: &str = "create_request";
@@ -54,6 +55,9 @@ pub struct ListRequestsInput {
     /// Only the requests your agent created.
     #[serde(default)]
     pub mine: bool,
+    /// The most requests to return, newest first: 1 to 200, 50 when left out.
+    #[serde(default)]
+    pub limit: Option<u32>,
     /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
     #[serde(rename = "as", default)]
     pub as_worker: Option<String>,
@@ -256,10 +260,6 @@ pub fn tools() -> Vec<Tool> {
     ]
 }
 
-pub fn is_request_tool(tool: &str) -> bool {
-    tools().iter().any(|known| known.name == tool)
-}
-
 /// Runs a request tool acting as `actor`. `None` when `tool` is not a request tool.
 pub async fn run(
     server: &FoldServer,
@@ -291,7 +291,7 @@ fn kind(text: &str) -> Result<RequestKind, FoldError> {
     RequestKind::parse(text).ok_or_else(|| {
         FoldError::new(
             codes::INVALID_REQUEST,
-            format!("{text} is not a request kind"),
+            "the kind is not a known request kind",
         )
         .with_details([("reason", json!("kind"))])
         .with_hint(
@@ -302,10 +302,7 @@ fn kind(text: &str) -> Result<RequestKind, FoldError> {
 
 fn state(text: &str) -> Result<RequestState, FoldError> {
     RequestState::parse(text).ok_or_else(|| {
-        FoldError::new(
-            codes::INVALID_REQUEST,
-            format!("{text} is not a request state"),
-        )
+        FoldError::new(codes::INVALID_REQUEST, "the state is not a known request state")
         .with_details([("reason", json!("state"))])
         .with_hint(
             "give state as open, drafting, draft_ready, changes_requested, approved or closed; call list_requests to see each request with its state",
@@ -438,24 +435,18 @@ async fn create_request(
     arguments: &JsonObject,
 ) -> Result<Value, FoldError> {
     let input: CreateRequestInput = parse(arguments)?;
-    let attachments = if input.attachments.is_empty() {
-        Vec::new()
-    } else {
-        let ws = input.ws.as_deref().ok_or_else(|| {
-            FoldError::new(codes::INVALID_REQUEST, "attachments need your workspace ws")
-                .with_details([("reason", json!("attachments_need_ws"))])
-                .with_hint("call create_request again with ws, the workspace that holds the files")
-        })?;
-        let ws: WorkspaceId = ws.parse()?;
-        server
-            .workspaces
-            .read_own_files(actor, ws, &input.attachments, MAX_ATTACHMENT_BYTES)
-            .await
-            .map_err(from_workspace)?
-            .into_iter()
-            .map(|file| NewRequestAttachment::named(file.name, file.bytes))
-            .collect()
+    let ws = match input.ws.as_deref() {
+        Some(ws) if !input.attachments.is_empty() => Some(ws.parse::<WorkspaceId>()?),
+        _ => None,
     };
+    let attachments = server
+        .workspaces
+        .read_own_files(actor, ws, &input.attachments, MAX_ATTACHMENT_BYTES)
+        .await
+        .map_err(from_workspace)?
+        .into_iter()
+        .map(|file| NewRequestAttachment::named(file.name, file.bytes))
+        .collect();
     let view = server
         .tasks
         .create_request(actor, &input.body, attachments)
@@ -482,6 +473,7 @@ async fn list_requests(
         } else {
             None
         },
+        limit: Some(input.limit.unwrap_or(DEFAULT_REQUEST_LIST)),
     };
     let requests = server
         .tasks

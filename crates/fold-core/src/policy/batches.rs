@@ -10,7 +10,7 @@ pub fn can_review_batch<'a>(
     holder: &WorkerName,
 ) -> Result<&'a AgentActor, PolicyDenied> {
     match actor {
-        Actor::Agent(agent) if agent.agent == holder.agent() => Ok(agent),
+        Actor::Agent(agent) if holder.belongs_to(&agent.agent) => Ok(agent),
         Actor::Agent(_) | Actor::Human { .. } | Actor::System => Err(PolicyDenied {
             code: codes::NOT_CLAIM_HOLDER,
             message: "only the agent that holds the review batch can change, check out or submit it",

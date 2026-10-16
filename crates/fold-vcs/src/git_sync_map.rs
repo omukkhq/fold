@@ -85,10 +85,12 @@ impl SyncMap {
         self.entries.last()
     }
 
+    /// Entries are sorted by revision, so the revision is found by a binary search.
     pub fn commit_of(&self, revision: RevisionId) -> Option<&CommitId> {
         self.entries
-            .iter()
-            .find(|(number, _)| *number == revision)
+            .binary_search_by_key(&revision, |(number, _)| *number)
+            .ok()
+            .and_then(|at| self.entries.get(at))
             .map(|(_, commit)| commit)
     }
 

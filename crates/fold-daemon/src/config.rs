@@ -32,7 +32,10 @@ impl DaemonConfig {
     }
 }
 
-const LOCK_FILE: &str = "daemon.lock";
+/// The lock file in the runtime directory that the one running daemon holds.
+pub const LOCK_FILE: &str = "daemon.lock";
+/// The default socket in the runtime directory.
+pub const SOCKET_FILE: &str = "fold.sock";
 
 #[cfg(test)]
 mod tests {

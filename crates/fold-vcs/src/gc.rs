@@ -253,11 +253,15 @@ struct OpenDir {
 #[cfg(target_os = "linux")]
 fn open_dir(path: &Path) -> io::Result<Option<OpenDir>> {
     use std::os::fd::AsRawFd;
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-    let fd = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_PATH | libc::O_NOFOLLOW)
-        .open(path)?;
+    use std::os::unix::fs::PermissionsExt;
+
+    use rustix::fs::{Mode, OFlags};
+    // An `O_PATH` descriptor opens a directory its owner may not list, but it takes no `fchmod`, so the change goes through the descriptor's `/proc/self/fd` link.
+    let fd = fs::File::from(rustix::fs::open(
+        path,
+        OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?);
     let meta = fd.metadata()?;
     if !meta.is_dir() {
         return Ok(None);

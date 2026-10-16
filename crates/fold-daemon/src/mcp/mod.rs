@@ -9,7 +9,8 @@ pub mod reviews;
 pub mod tasks;
 pub mod workspaces;
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock};
 
 use fold_core::{FoldError, WorkerName, codes};
 use fold_store::agents::WorkerRow;
@@ -19,6 +20,7 @@ use rmcp::model::{
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData, RoleServer, ServerHandler};
+use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::Mutex;
 
@@ -113,82 +115,33 @@ impl FoldServer {
         let arguments = request.arguments.clone().unwrap_or_default();
         let as_worker = as_worker(&arguments)?;
         let before = self.session().await;
-        if !identity::is_identity_tool(tool) {
-            self.agents
-                .require_agent(&before)
-                .await
-                .map_err(from_agent)?;
-        }
-        // `register_agent` binds the session, so its `as` can only be resolved after the call. Every other tool needs an agent, so its worker is known before it runs.
-        let resolved = match &as_worker {
-            Some(name) if before.agent.is_some() || tool != identity::REGISTER_AGENT => {
-                Some(self.resolve(&before, Some(name)).await?)
-            }
-            None if !identity::is_identity_tool(tool) => Some(self.resolve(&before, None).await?),
-            _ => None,
+        // Every tool but the identity tools needs an agent, so its worker is known before it runs. An identity tool on an unbound session has no agent to resolve `as` against: `register_agent` checks it as it binds, and the others need no worker.
+        let resolved = if !identity::is_identity_tool(tool)
+            || (before.agent.is_some() && as_worker.is_some())
+        {
+            Some(self.resolve(&before, as_worker.as_ref()).await?)
+        } else {
+            None
         };
-        let value = match (tool, &resolved) {
-            (identity::REGISTER_AGENT, _) => identity::register_agent(self, &arguments).await?,
-            (identity::REGISTER_WORKER, _) => identity::register_worker(self, &arguments).await?,
-            (agents::LIST_AGENTS, _) => agents::list_agents(self, &arguments).await?,
-            (agents::GET_ACTIVITY, Some(_)) => agents::get_activity(self, &arguments).await?,
-            (agents::DEFINE_AREA, Some(_)) => {
-                agents::define_area(self, as_worker.as_ref(), &arguments).await?
-            }
-            (agents::UPDATE_AREA, Some(_)) => {
-                agents::update_area(self, as_worker.as_ref(), &arguments).await?
-            }
-            (agents::START_WORKER, Some(_)) => {
-                agents::start_worker(self, as_worker.as_ref(), &arguments).await?
-            }
-            (agents::STOP_WORKER, Some(_)) => {
-                agents::stop_worker(self, as_worker.as_ref(), &arguments).await?
-            }
-            (agents::LIST_WORKERS, Some(_)) => agents::list_workers(self, &arguments).await?,
-            (agents::SET_WORKER_LIMITS, Some(_)) => {
-                agents::set_worker_limits(self, as_worker.as_ref(), &arguments).await?
-            }
-            (agents::WRITE_HANDOFF, Some(_)) => {
-                agents::write_handoff(self, as_worker.as_ref(), &arguments).await?
-            }
-            (events::GET_EVENTS, Some(worker)) => {
-                events::get_events(self, worker, &arguments).await?
-            }
-            (events::WAIT_FOR_EVENTS, Some(worker)) => {
-                events::wait_for_events(self, worker, &arguments, context).await?
-            }
-            (messages::ACKNOWLEDGE_MESSAGE, Some(worker)) => {
-                messages::acknowledge_message(self, worker, &arguments).await?
-            }
-            (messages::GET_INBOX, Some(worker)) => {
-                messages::get_inbox(self, worker, &arguments).await?
-            }
-            (messages::GET_THREAD, Some(_)) => messages::get_thread(self, &arguments).await?,
-            (messages::SEND_MESSAGE, Some(worker)) => {
-                messages::send_message(self, worker, &arguments).await?
-            }
-            (workspaces::GET_REPOSITORY_STATE, _) => {
-                workspaces::get_repository_state(self, &arguments).await?
-            }
-            (workspaces::GET_REVISION, _) => workspaces::get_revision(self, &arguments).await?,
-            (workspaces::COMPARE_REVISIONS, _) => {
-                workspaces::compare_revisions(self, &arguments).await?
-            }
-            (_, Some(_)) => {
-                let mut value =
-                    workspaces::call(self, tool, as_worker.as_ref(), &arguments).await?;
-                if value.is_none() {
-                    value = tasks::call(self, tool, as_worker.as_ref(), &arguments).await?;
-                }
-                if value.is_none() {
-                    value = reviews::call(self, tool, as_worker.as_ref(), &arguments).await?;
-                }
-                match value {
-                    Some(value) => value,
-                    None => return Ok(None),
-                }
-            }
-            _ => return Ok(None),
+        let call = Call {
+            as_worker: as_worker.clone(),
+            worker: resolved.clone(),
+            actor: Arc::default(),
+        };
+        let value = CALL
+            .scope(
+                call,
+                self.dispatch(
+                    tool,
+                    as_worker.as_ref(),
+                    resolved.as_ref(),
+                    &arguments,
+                    context,
+                ),
+            )
+            .await?;
+        let Some(value) = value else {
+            return Ok(None);
         };
         let after = self.session().await;
         if after.agent.is_some() {
@@ -199,7 +152,7 @@ impl FoldServer {
             if let Err(error) = self.agents.record_call(&after, &worker, tool, None).await {
                 tracing::warn!(
                     tool,
-                    code = from_agent(error).code(),
+                    code = error.log_code(),
                     "could not record a tool call"
                 );
             }
@@ -207,12 +160,107 @@ impl FoldServer {
         Ok(Some(value))
     }
 
-    /// The acting agent of the current call, its worker resolved from `as`.
+    async fn dispatch(
+        &self,
+        tool: &str,
+        as_worker: Option<&WorkerName>,
+        resolved: Option<&WorkerRow>,
+        arguments: &JsonObject,
+        context: &RequestContext<RoleServer>,
+    ) -> Result<Option<Value>, FoldError> {
+        let value = match (tool, resolved) {
+            (identity::REGISTER_AGENT, _) => identity::register_agent(self, arguments).await?,
+            (identity::REGISTER_WORKER, _) => identity::register_worker(self, arguments).await?,
+            (agents::LIST_AGENTS, _) => agents::list_agents(self, arguments).await?,
+            (agents::GET_ACTIVITY, Some(_)) => agents::get_activity(self, arguments).await?,
+            (agents::DEFINE_AREA, Some(_)) => {
+                agents::define_area(self, as_worker, arguments).await?
+            }
+            (agents::UPDATE_AREA, Some(_)) => {
+                agents::update_area(self, as_worker, arguments).await?
+            }
+            (agents::START_WORKER, Some(_)) => {
+                agents::start_worker(self, as_worker, arguments).await?
+            }
+            (agents::STOP_WORKER, Some(_)) => {
+                agents::stop_worker(self, as_worker, arguments).await?
+            }
+            (agents::LIST_WORKERS, Some(_)) => agents::list_workers(self, arguments).await?,
+            (agents::SET_WORKER_LIMITS, Some(_)) => {
+                agents::set_worker_limits(self, as_worker, arguments).await?
+            }
+            (agents::WRITE_HANDOFF, Some(_)) => {
+                agents::write_handoff(self, as_worker, arguments).await?
+            }
+            (events::GET_EVENTS, Some(worker)) => {
+                events::get_events(self, worker, arguments).await?
+            }
+            (events::WAIT_FOR_EVENTS, Some(worker)) => {
+                events::wait_for_events(self, worker, arguments, context).await?
+            }
+            (messages::ACKNOWLEDGE_MESSAGE, Some(worker)) => {
+                messages::acknowledge_message(self, worker, arguments).await?
+            }
+            (messages::GET_INBOX, Some(worker)) => {
+                messages::get_inbox(self, worker, arguments).await?
+            }
+            (messages::GET_THREAD, Some(_)) => messages::get_thread(self, arguments).await?,
+            (messages::SEND_MESSAGE, Some(worker)) => {
+                messages::send_message(self, worker, arguments).await?
+            }
+            (workspaces::GET_REPOSITORY_STATE, Some(_)) => {
+                workspaces::get_repository_state(self, arguments).await?
+            }
+            (workspaces::GET_REVISION, Some(_)) => {
+                workspaces::get_revision(self, arguments).await?
+            }
+            (workspaces::COMPARE_REVISIONS, Some(_)) => {
+                workspaces::compare_revisions(self, arguments).await?
+            }
+            (_, Some(_)) => {
+                let value = match domain_of(tool) {
+                    Some(Domain::Workspaces) => {
+                        workspaces::call(self, tool, as_worker, arguments).await?
+                    }
+                    Some(Domain::Tasks) => tasks::call(self, tool, as_worker, arguments).await?,
+                    Some(Domain::Reviews) => {
+                        reviews::call(self, tool, as_worker, arguments).await?
+                    }
+                    None => None,
+                };
+                match value {
+                    Some(value) => value,
+                    None => return Ok(None),
+                }
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(value))
+    }
+
+    /// The acting agent of the current call, its worker resolved from `as`. The call resolved its worker before the tool ran, so only the agent's tags are read here, once per call.
     async fn actor(&self, as_worker: Option<&WorkerName>) -> Result<fold_core::Actor, FoldError> {
-        let session = self.session().await;
-        self.agents
-            .actor(&session, as_worker)
+        let cached = CALL
+            .try_with(|call| {
+                call.worker
+                    .clone()
+                    .filter(|_| call.serves(as_worker))
+                    .map(|worker| (worker, Arc::clone(&call.actor)))
+            })
+            .ok()
+            .flatten();
+        let Some((worker, actor)) = cached else {
+            let session = self.session().await;
+            return self
+                .agents
+                .actor(&session, as_worker)
+                .await
+                .map_err(from_agent);
+        };
+        actor
+            .get_or_try_init(async || self.agents.actor_of(&worker).await)
             .await
+            .cloned()
             .map_err(from_agent)
     }
 
@@ -240,6 +288,68 @@ impl FoldServer {
         }
         counts
     }
+}
+
+tokio::task_local! {
+    /// The worker the current tool call acts as. The tool modules ask for their actor by `as`, so it is scoped to the call's task instead of passed through every tool's signature.
+    static CALL: Call;
+}
+
+struct Call {
+    as_worker: Option<WorkerName>,
+    /// `None` for an identity tool on an unbound session.
+    worker: Option<WorkerRow>,
+    /// The agent's tags are read the first time a tool asks for its actor.
+    actor: Arc<tokio::sync::OnceCell<fold_core::Actor>>,
+}
+
+impl Call {
+    /// True when `as_worker` names the worker this call resolved: the same `as`, or that worker by its full name.
+    fn serves(&self, as_worker: Option<&WorkerName>) -> bool {
+        as_worker == self.as_worker.as_ref()
+            || self
+                .worker
+                .as_ref()
+                .is_some_and(|worker| as_worker == Some(&worker.name))
+    }
+}
+
+/// The module that serves a tool which the dispatch does not name itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Domain {
+    Workspaces,
+    Tasks,
+    Reviews,
+}
+
+/// Built once from the modules' tool lists, so a call looks its tool up instead of building every list.
+fn domain_of(tool: &str) -> Option<Domain> {
+    static DOMAINS: LazyLock<HashMap<String, Domain>> = LazyLock::new(|| {
+        [
+            (Domain::Workspaces, workspaces::tools()),
+            (Domain::Tasks, tasks::tools()),
+            (Domain::Tasks, tasks::requests::tools()),
+            (Domain::Reviews, reviews::tools()),
+        ]
+        .into_iter()
+        .flat_map(|(domain, tools)| {
+            tools
+                .into_iter()
+                .map(move |tool| (tool.name.into_owned(), domain))
+        })
+        .collect()
+    });
+    DOMAINS.get(tool).copied()
+}
+
+/// The arguments as the tool's input type. The message never repeats the arguments.
+pub(crate) fn parse<T: for<'de> Deserialize<'de>>(arguments: &JsonObject) -> Result<T, FoldError> {
+    serde_json::from_value(Value::Object(arguments.clone())).map_err(|_| {
+        FoldError::new(
+            codes::INVALID_REQUEST,
+            "the arguments do not match the tool's input schema",
+        )
+    })
 }
 
 fn as_worker(arguments: &JsonObject) -> Result<Option<WorkerName>, FoldError> {
@@ -286,10 +396,13 @@ impl ServerHandler for FoldServer {
         let arrived = self.counts(true, FooterCounts::default()).await;
         let mut result = match self.run(&request, &context).await {
             Ok(Some(value)) => CallToolResult::success(vec![ContentBlock::text(value.to_string())]),
+            // The specification answers an unknown tool with a JSON-RPC error; its data carries the hint a tool error would.
             Ok(None) => {
                 return Err(ErrorData::invalid_params(
-                    format!("there is no tool named {}", request.name),
-                    None,
+                    "there is no tool with this name",
+                    Some(serde_json::json!({
+                        "hint": "call tools/list to see the tools of this server"
+                    })),
                 ));
             }
             Err(error) => tool_error(&error),

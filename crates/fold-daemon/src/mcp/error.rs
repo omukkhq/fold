@@ -1,5 +1,4 @@
 use fold_core::{FoldError, codes};
-use fold_store::StoreError;
 use rmcp::model::{CallToolResult, ContentBlock};
 use serde::{Deserialize, Serialize};
 
@@ -11,7 +10,7 @@ use crate::services::reviews::ReviewError;
 use crate::services::tasks::TaskError;
 use crate::services::workspaces::WorkspaceError;
 
-/// The next step for the codes an agent can fix itself. A code in this table always gets this hint, whatever the error carried, so every transport names the same next step.
+/// The next step for the codes an agent can fix itself, for an error that carries no hint of its own. A hint the service gave names the step for its case, so it wins.
 const HINTS: &[(&str, &str)] = &[
     (codes::AGENT_NOT_REGISTERED, "call register_agent"),
     (codes::INVALID_EVENT_FILTER, "call get_events"),
@@ -65,7 +64,7 @@ pub struct ErrorBody {
 
 impl From<&FoldError> for ErrorBody {
     fn from(error: &FoldError) -> Self {
-        let hint = hint_for(error.code()).or(error.hint()).map(str::to_owned);
+        let hint = error.hint().or(hint_for(error.code())).map(str::to_owned);
         Self {
             code: error.code().to_owned(),
             message: error.message().to_owned(),
@@ -75,87 +74,32 @@ impl From<&FoldError> for ErrorBody {
     }
 }
 
-/// A store failure without a code is internal: the agent gets `internal_error` and the log gets the cause, which names tables and constraints, never values.
-pub fn from_store(error: StoreError) -> FoldError {
-    match error.code() {
-        Some(code) => FoldError::new(code, error.to_string()),
-        None => {
-            tracing::error!(%error, "tool call failed in the store");
-            FoldError::new(codes::INTERNAL_ERROR, "internal error")
-        }
-    }
-}
-
 pub fn from_agent(error: AgentError) -> FoldError {
-    match error {
-        AgentError::Fold(error) => error,
-        AgentError::Store(error) => from_store(error),
-        AgentError::Event(error) => {
-            tracing::error!(%error, "tool call failed to build an event");
-            FoldError::new(codes::INTERNAL_ERROR, "internal error")
-        }
-    }
+    error.into()
 }
 
 pub fn from_events(error: EventsError) -> FoldError {
-    match error {
-        EventsError::Fold(error) => error,
-        EventsError::Store(error) => from_store(error),
-    }
+    error.into()
 }
 
 pub fn from_workspace(error: WorkspaceError) -> FoldError {
-    match error {
-        WorkspaceError::Fold(error) => error,
-        WorkspaceError::Store(error) => from_store(error),
-        WorkspaceError::Task(TaskError::Fold(error)) => error,
-        WorkspaceError::Task(TaskError::Store(error)) => from_store(error),
-        WorkspaceError::Task(TaskError::Event(error)) | WorkspaceError::Event(error) => {
-            tracing::error!(%error, "tool call failed to build an event");
-            FoldError::new(codes::INTERNAL_ERROR, "internal error")
-        }
-    }
+    error.into()
 }
 
 pub fn from_task(error: TaskError) -> FoldError {
-    match error {
-        TaskError::Fold(error) => error,
-        TaskError::Store(error) => from_store(error),
-        TaskError::Event(error) => {
-            tracing::error!(%error, "tool call failed to build an event");
-            FoldError::new(codes::INTERNAL_ERROR, "internal error")
-        }
-    }
+    error.into()
 }
 
 pub fn from_message(error: MessageError) -> FoldError {
-    match error {
-        MessageError::Fold(error) => error,
-        MessageError::Store(error) => from_store(error),
-        MessageError::Event(error) => {
-            tracing::error!(%error, "tool call failed to build an event");
-            FoldError::new(codes::INTERNAL_ERROR, "internal error")
-        }
-    }
+    error.into()
 }
 
 pub fn from_project(error: ProjectError) -> FoldError {
-    match error {
-        ProjectError::Fold(error) => error,
-        ProjectError::Store(error) => from_store(error),
-    }
+    error.into()
 }
 
 pub fn from_review(error: ReviewError) -> FoldError {
-    match error {
-        ReviewError::Fold(error) => error,
-        ReviewError::Store(error) => from_store(error),
-        ReviewError::Task(error) => from_task(error),
-        ReviewError::Event(error) => {
-            tracing::error!(%error, "tool call failed to build an event");
-            FoldError::new(codes::INTERNAL_ERROR, "internal error")
-        }
-    }
+    error.into()
 }
 
 /// A tool-level error result: MCP clients show its content to the agent, while a protocol error would reach the agent as an opaque failure.
@@ -166,13 +110,20 @@ pub fn tool_error(error: &FoldError) -> CallToolResult {
 
 #[cfg(test)]
 mod tests {
+    use fold_store::StoreError;
+
     use super::*;
 
     #[test]
-    fn the_table_beats_the_hint_the_error_carried() {
-        let error = FoldError::new(codes::WORKER_NOT_FOUND, "gone").with_hint("look elsewhere");
+    fn the_hint_the_error_carried_beats_the_table() {
+        let error = FoldError::new(codes::REVISION_NOT_FOUND, "r9").with_hint("run fld init");
         assert_eq!(
             ErrorBody::from(&error).hint.as_deref(),
+            Some("run fld init")
+        );
+        let bare = FoldError::new(codes::WORKER_NOT_FOUND, "gone");
+        assert_eq!(
+            ErrorBody::from(&bare).hint.as_deref(),
             Some("call register_worker")
         );
         let own = FoldError::new(codes::HUMAN_REQUIRED, "no").with_hint("ask a human");

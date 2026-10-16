@@ -4,14 +4,15 @@ use fold_core::{
     Actor, AgentActor, EventActor, FoldError, NewEvent, TaskId, TaskStatus, Timestamp, WorkerName,
     WorkspaceId, codes, policy,
 };
-use fold_store::agents::{self, WorkerRow};
+use fold_store::agents::WorkerRow;
 use fold_store::tasks::TaskRow;
 use fold_store::tasks::claims::{self, ClaimRow, ReleaseReason};
-use fold_store::{Store, StoreError, WriteTx, tasks, workspaces};
+use fold_store::{StoreError, WriteTx, tasks, workspaces};
 use serde_json::json;
 use tokio::sync::OwnedMutexGuard;
 
 use super::{TaskError, TaskService, recompute, task_not_found};
+use crate::services::agents::{actor_worker, worker_not_found};
 use crate::services::events::EventBuffer;
 use crate::services::workspaces::{AdoptReason, adopt_if_orphaned, hand_over_proposal};
 
@@ -198,21 +199,6 @@ impl TaskService {
     }
 }
 
-/// The unreleased implementation claim on `task` read from the read pool, with `stale` decided at `now`.
-pub async fn claim_view(
-    store: &Store,
-    task: TaskId,
-    now: Timestamp,
-    lease_minutes: u64,
-) -> Result<Option<ClaimView>, TaskError> {
-    if tasks::get_by_number(store.read(), task).await?.is_none() {
-        return Err(task_not_found(task));
-    }
-    Ok(claims::unreleased_for_task(store.read(), task)
-        .await?
-        .map(|row| claim_view_of(row, now, lease_minutes)))
-}
-
 /// Renews every unreleased claim held by `worker_ids` inside the caller's transaction. The session touch calls it with every worker of the calling agent, so a lease and the agent's last call never disagree.
 pub async fn renew_leases(
     tx: &mut WriteTx,
@@ -274,18 +260,9 @@ pub(crate) async fn worker_row(
     tx: &mut WriteTx,
     claimant: &AgentActor,
 ) -> Result<WorkerRow, TaskError> {
-    let not_found = || {
-        TaskError::Fold(
-            FoldError::new(codes::WORKER_NOT_FOUND, "the worker does not exist")
-                .with_hint("call register_worker"),
-        )
-    };
-    let agent = agents::find_agent(tx.conn(), &claimant.agent)
+    Ok(actor_worker(tx.conn(), claimant)
         .await?
-        .ok_or_else(not_found)?;
-    agents::find_worker(tx.conn(), agent.id, &claimant.worker)
-        .await?
-        .ok_or_else(not_found)
+        .ok_or_else(worker_not_found)?)
 }
 
 /// `task_closed` for a Done or archived task, which takes no claim; `None` for an open task.

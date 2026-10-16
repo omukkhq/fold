@@ -1,4 +1,3 @@
-use fold_daemon::http::host::CLIENT_HEADER;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
@@ -7,6 +6,7 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use fold_core::{Clock, ManualClock, Timestamp};
+use fold_daemon::http::host::CLIENT_HEADER;
 use fold_daemon::http::{router, socket_router};
 use fold_daemon::{Daemon, DaemonConfig, DaemonError, RunningDaemon};
 use fold_store::projects::{self, ProjectRow};

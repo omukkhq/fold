@@ -1,16 +1,12 @@
 import { ApiError, apiErrorCode } from "@/api/errors";
 import { REQUEST_TOO_LARGE } from "@/api/requests";
+import { commonText } from "@/format/failure";
+import { MAX_TEXT_CHARS } from "@/format/text";
 
 type Details = Readonly<Record<string, unknown>>;
 
 export const MAX_CARDS = 20;
 export const MAX_TITLE_CHARS = 200;
-export const MAX_TEXT_CHARS = 20_000;
-
-/** Characters as the daemon counts them: Unicode scalar values, so a surrogate pair is one. */
-export function charCount(text: string): number {
-  return text.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, "_").length;
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -99,10 +95,6 @@ const TEXTS: Record<string, string | ((details: Details) => string)> = {
   },
   [REQUEST_TOO_LARGE]:
     "The files are larger than fold takes in one request. Remove a file, then try once more.",
-  recipient_not_found: "No agent can receive this message yet.",
-  human_name_required: "Tell fold your name first, then try once more.",
-  auth_required: "Sign in again, then try once more.",
-  project_unavailable: "The project is not available now.",
 };
 
 export interface Failure {
@@ -117,7 +109,7 @@ export function describeFailure(error: unknown): Failure {
   if (code === null) {
     return { text: "The request did not reach the daemon. Try again.", code };
   }
-  const entry = TEXTS[code];
+  const entry = TEXTS[code] ?? commonText(code);
   const details: Details = error instanceof ApiError ? error.details : {};
   if (entry === undefined) {
     const message =

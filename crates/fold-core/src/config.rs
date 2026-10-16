@@ -114,8 +114,8 @@ impl Default for GitConfig {
     }
 }
 
-/// One `[remotes.<name>]` section: a Git repository that `fld push` and `fld pull` sync main with.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// One `[remotes.<name>]` section: a Git repository that `fld push` and `fld pull` sync main with. Its `Debug` form leaves the URL out.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RemoteConfig {
     /// A URL or path, which can hold credentials, so it never goes in a log line or an error.
@@ -125,6 +125,15 @@ pub struct RemoteConfig {
     /// Whether fold pushes to this remote after each integration.
     #[serde(default)]
     pub push_on_integrate: bool,
+}
+
+impl std::fmt::Debug for RemoteConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RemoteConfig")
+            .field("branch", &self.branch)
+            .field("push_on_integrate", &self.push_on_integrate)
+            .finish_non_exhaustive()
+    }
 }
 
 /// The section names in `config.toml`.
@@ -777,6 +786,9 @@ mod tests {
             }
         );
         assert!(!config.remotes["backup"].push_on_integrate);
+        let shown = format!("{:?}", config.remotes["origin"]);
+        assert!(!shown.contains("app.git"), "{shown}");
+        assert!(shown.contains("release/1.0"), "{shown}");
         let defaults = ProjectConfig::from_toml("[git]\n").unwrap();
         assert_eq!(defaults.git, GitConfig::default());
         assert_eq!(defaults.git.branch, "main");

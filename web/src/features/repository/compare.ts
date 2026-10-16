@@ -1,11 +1,12 @@
 import { parseId } from "../../format/ids";
+import { projectPath, withQuery } from "@/routes/paths";
 
-export interface ComparePair {
+export type ComparePair = {
   /** The older revision, for example `r3`. */
   from: string;
   /** The newer revision, for example `r8`. */
   to: string;
-}
+};
 
 export type CompareResult =
   | { ok: true; pair: ComparePair }
@@ -39,7 +40,7 @@ export function normalizeCompare(a: string, b: string): CompareResult {
 
 /** The diff route for a pair. */
 export function comparePath(slug: string, pair: ComparePair): string {
-  return `/p/${slug}/diff?from=${pair.from}&to=${pair.to}`;
+  return withQuery(projectPath(slug, "diff"), pair);
 }
 
 /** The other end of the comparison a revision opens with: the revision just before it, or just after it when it is the oldest. `revisions` is newest first; null when there is nothing to compare. */

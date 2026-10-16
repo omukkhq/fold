@@ -1,14 +1,14 @@
 use std::collections::BTreeSet;
 use std::fs::{File, TryLockError};
 use std::io;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::SystemTime;
 
 use fold_core::config::GIT_SECTION;
-use fold_core::object::{ObjectHash, ObjectKind};
 use fold_core::projects::find_root;
-use fold_core::tree::Tree;
 use fold_core::{
     AgentName, CONFIG_TEMPLATE, Clock, FoldError, GitConfig, HostPaths, HumanName, Presence,
     ProjectConfig, ProjectPaths, RevisionId, SessionFact, TaskStatus, Timestamp, choose_slug,
@@ -19,7 +19,7 @@ use fold_store::workspaces::{RevisionRow, create_initial_revision, head, initial
 use fold_store::{Store, StoreError};
 use fold_vcs::gc::mark;
 use fold_vcs::git::{CommitId, Git};
-use fold_vcs::git_import::{GitImportOptions, archive_tree};
+use fold_vcs::git_import::{GitImportOptions, import_commit};
 use fold_vcs::git_remote::{checked_out_branch, exclude_fold_dir, folder_clean};
 use fold_vcs::git_sync_map::SyncMap;
 use fold_vcs::ignore::{FOLDIGNORE, GITIGNORE, IgnoreRules};
@@ -31,6 +31,8 @@ use thiserror::Error;
 
 use crate::daemon::DaemonState;
 use crate::projects::{ProjectHandle, Slot};
+#[cfg(feature = "failpoints")]
+use crate::services::fired;
 
 mod commits;
 mod gc;
@@ -48,8 +50,9 @@ pub(crate) use remote::push_with;
 pub use remote::{PushOutcome, RemoteContext, push};
 pub use web_auth::{
     DEFAULT_SESSION_LIFETIME, SignedIn, WEB_TOUCH_INTERVAL, check_web_session, create_web_session,
-    create_web_token, create_web_token_on_host, end_web_session, list_web_tokens,
-    list_web_tokens_on_host, revoke_web_token, revoke_web_token_on_host,
+    create_web_token, create_web_token_on_host, end_web_session, list_humans, list_web_tokens,
+    list_web_tokens_on_host, purge_expired_web_sessions, revoke_web_token,
+    revoke_web_token_on_host,
 };
 
 #[derive(Debug, Error)]
@@ -67,6 +70,11 @@ impl ProjectError {
             Self::Fold(error) => Some(error.code()),
             Self::Store(error) => error.code(),
         }
+    }
+
+    /// The code a log line names: the stable code, or `internal_error` for an internal failure.
+    pub fn log_code(&self) -> &'static str {
+        self.code().unwrap_or(codes::INTERNAL_ERROR)
     }
 }
 
@@ -388,7 +396,8 @@ async fn populate_and_register(
     #[cfg(feature = "failpoints")]
     fail::fail_point!("init_before_register", |_| Err(fired(
         "init_before_register"
-    )));
+    )
+    .into()));
     let row = register(registry, root_text, name, now).await?;
     Ok(InitializedProject {
         slug: row.slug,
@@ -499,11 +508,7 @@ fn stored_contents(
     if read_revision(objects, &row.hash)?.tree != row.tree_hash {
         return Ok(None);
     }
-    let load = |hash: &ObjectHash| -> Result<Tree, FoldError> {
-        let object = objects.read_expecting(hash, ObjectKind::Tree)?;
-        Ok(Tree::decode(&object.payload)?)
-    };
-    let entries = fold_core::tree::flatten(&row.tree_hash, &load)?;
+    let entries = fold_vcs::compare::load_flat(objects, &row.tree_hash)?;
     let mut bytes = 0u64;
     for entry in entries.values() {
         bytes = bytes.saturating_add(objects.blob_size(&entry.hash).map_err(FoldError::from)?);
@@ -514,12 +519,6 @@ fn stored_contents(
         bytes,
         skipped: Vec::new(),
     }))
-}
-
-/// The error a fired failpoint returns, as a crash at that point would stop the init.
-#[cfg(feature = "failpoints")]
-fn fired(name: &str) -> ProjectError {
-    FoldError::new(codes::FAILPOINT, format!("{name} fired")).into()
 }
 
 /// The ignore file init writes when the folder has no `.gitignore`; `.gitignore` becomes a symlink to it, so fold and Git read the same rules.
@@ -560,7 +559,7 @@ async fn create_first_revision(
             Some(head) => {
                 exclude_fold_dir(&paths.git_dir())?;
                 let opts = GitImportOptions { max_file_bytes };
-                archive_tree(&objects, &git, root, head.as_str(), &opts)?
+                import_commit(&objects, &git, root, head.as_str(), &opts)?
             }
             None => {
                 let caps = Capabilities::probe(&fold_dir).map_err(|error| io_error(&error))?;
@@ -570,7 +569,9 @@ async fn create_first_revision(
                 };
                 let imported = import_dir(&objects, root, &IgnoreRules::new(root), &opts)?;
                 #[cfg(feature = "failpoints")]
-                fail::fail_point!("init_after_import", |_| Err(fired("init_after_import")));
+                fail::fail_point!("init_after_import", |_| Err(
+                    fired("init_after_import").into()
+                ));
                 imported
             }
         };
@@ -622,34 +623,109 @@ fn write_ignore_files(root: &Path) -> Result<Vec<PathBuf>, ProjectError> {
     Ok(written)
 }
 
+/// [`crate::support::blocking`] for work that fails with a [`ProjectError`]: a panic on the blocking pool is an `internal_error`, never a layout failure.
 async fn blocking<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, ProjectError> + Send + 'static,
 ) -> Result<T, ProjectError> {
-    tokio::task::spawn_blocking(work)
-        .await
-        .unwrap_or_else(|error| Err(io_error(&io::Error::other(error))))
+    crate::support::blocking(move || Ok(work())).await?
 }
 
-/// Where a service takes the claim lease from: a fixed length, or the project's `.fold/config.toml` read on each use. Reading on use means an edit applies without a restart and an invalid file fails only the calls that need the lease, never a session or a whole project.
+/// Where a service takes the claim lease from: a fixed length, or the project's `.fold/config.toml` read on each use, except for the footer count of [`Lease::recent_minutes`]. Reading on use means an edit applies without a restart and an invalid file fails only the calls that need the lease, never a session or a whole project.
 #[derive(Debug, Clone)]
 pub enum Lease {
     Minutes(u64),
-    Config(ProjectPaths),
+    Config(ConfigLease),
+}
+
+/// The configuration file a lease is read from, with the last valid lease parsed from it for [`Lease::recent_minutes`]. Clones share that parse.
+#[derive(Debug, Clone)]
+pub struct ConfigLease {
+    paths: ProjectPaths,
+    parsed: Arc<std::sync::Mutex<Option<(FileStamp, u64)>>>,
+}
+
+/// What a stat shows of the configuration file. A rewrite changes its size or its modification time, and an editor that replaces the file changes its inode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileStamp {
+    len: u64,
+    modified: Option<SystemTime>,
+    inode: u64,
 }
 
 impl Lease {
+    /// The lease of the project at `paths`, read from its configuration file.
+    pub fn config(paths: ProjectPaths) -> Self {
+        Self::Config(ConfigLease {
+            paths,
+            parsed: Arc::default(),
+        })
+    }
+
     /// The lease length now. An invalid file is its `invalid_config` refusal with a hint to fix it.
     pub async fn minutes(&self) -> Result<u64, ProjectError> {
         match self {
             Lease::Minutes(minutes) => Ok(*minutes),
-            Lease::Config(paths) => match load_config(paths).await {
-                Ok(config) => Ok(config.lease_minutes),
-                Err(ProjectError::Fold(error)) => Err(ProjectError::Fold(
-                    error.with_hint("ask a human to fix .fold/config.toml"),
-                )),
-                Err(error) => Err(error),
-            },
+            Lease::Config(config) => with_fix_hint(config.read().await),
         }
+    }
+
+    /// [`Lease::minutes`] for a count that every tool call shows: while a stat finds the file as it was at the last valid parse, that parse answers and the file is not read again. A rewrite that keeps the size, the modification time and the inode keeps the old lease here until the file changes again; commands read the file through [`Lease::minutes`].
+    pub async fn recent_minutes(&self) -> Result<u64, ProjectError> {
+        match self {
+            Lease::Minutes(minutes) => Ok(*minutes),
+            Lease::Config(config) => with_fix_hint(config.recent().await),
+        }
+    }
+}
+
+impl ConfigLease {
+    pub fn paths(&self) -> &ProjectPaths {
+        &self.paths
+    }
+
+    async fn read(&self) -> Result<u64, ProjectError> {
+        Ok(load_config(&self.paths).await?.lease_minutes)
+    }
+
+    async fn recent(&self) -> Result<u64, ProjectError> {
+        let path = self.paths.config();
+        let stamp = tokio::task::spawn_blocking(move || std::fs::metadata(path))
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .map(|meta| FileStamp {
+                len: meta.len(),
+                modified: meta.modified().ok(),
+                inode: meta.ino(),
+            });
+        // A missing or unreadable file is read every time: `load_config` decides its defaults or its error.
+        let Some(stamp) = stamp else {
+            return self.read().await;
+        };
+        if let Some(minutes) = self.parsed_for(stamp) {
+            return Ok(minutes);
+        }
+        let minutes = self.read().await?;
+        if let Ok(mut parsed) = self.parsed.lock() {
+            *parsed = Some((stamp, minutes));
+        }
+        Ok(minutes)
+    }
+
+    fn parsed_for(&self, stamp: FileStamp) -> Option<u64> {
+        let parsed = self.parsed.lock().ok()?;
+        parsed
+            .filter(|(seen, _)| *seen == stamp)
+            .map(|(_, minutes)| minutes)
+    }
+}
+
+fn with_fix_hint(lease: Result<u64, ProjectError>) -> Result<u64, ProjectError> {
+    match lease {
+        Err(ProjectError::Fold(error)) => Err(ProjectError::Fold(
+            error.with_hint("ask a human to fix .fold/config.toml"),
+        )),
+        other => other,
     }
 }
 
@@ -924,7 +1000,7 @@ pub async fn list(state: &DaemonState) -> Result<Vec<ProjectEntry>, ProjectError
             Some(Slot::Open(handle)) => match self::overview(&handle).await {
                 Ok(overview) => (true, Some(overview)),
                 Err(error) => {
-                    tracing::warn!(project = %row.slug, %error, "project overview could not be read");
+                    tracing::warn!(project = %row.slug, code = error.log_code(), "project overview could not be read");
                     (true, None)
                 }
             },
@@ -1016,6 +1092,17 @@ pub async fn ensure_human(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_panic_on_the_blocking_pool_is_an_internal_error() {
+        let stopped = blocking(|| -> Result<(), ProjectError> { panic!("the work panics") }).await;
+        assert_eq!(
+            stopped.unwrap_err().code(),
+            Some(codes::INTERNAL_ERROR),
+            "never workspace_io"
+        );
+        assert_eq!(blocking(|| Ok(3)).await.unwrap(), 3);
+    }
 
     #[test]
     fn each_change_of_the_git_attention_is_reported_once() {

@@ -230,7 +230,7 @@ fn line_view(line: DiffLine) -> DiffLineView {
         (status = 200, description = "The file list, or one file's hunks", body = DiffView),
         (status = 400, description = "A reference or the path is not valid (`invalid_state_ref`, `invalid_path`)", body = ErrorEnvelope),
         (status = 404, description = "A state, the path in the comparison or the slug does not exist (`revision_not_found`, `workspace_not_found`, `not_found`, `path_not_in_comparison`)", body = ErrorEnvelope),
-        (status = 409, description = "A workspace is missing or closed (`workspace_not_active`)", body = ErrorEnvelope),
+        (status = 409, description = "A workspace is missing or closed (`workspace_not_active`), or a workspace side meets an invalid project configuration (`invalid_config`)", body = ErrorEnvelope),
         (status = 503, description = "The project failed to open", body = ErrorEnvelope),
         (status = 500, description = "A working file could not be read (`workspace_io`), or an internal error", body = ErrorEnvelope),
     )

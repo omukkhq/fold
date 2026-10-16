@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use fold_core::{ProposalId, TaskId, Timestamp, WorkerName};
 use sqlx::SqliteExecutor;
 
+use crate::columns::time;
 use crate::error::StoreError;
 use crate::store::WriteTx;
 
@@ -42,10 +43,6 @@ pub struct ClaimRow {
     pub acquired_at: Timestamp,
     pub renewed_at: Timestamp,
     pub stale_at: Option<Timestamp>,
-}
-
-fn time(millis: i64, column: &'static str) -> Result<Timestamp, StoreError> {
-    Timestamp::from_millis(millis).map_err(|_| StoreError::Corrupt(column))
 }
 
 /// Inserts an implementation claim on `task` for `worker_id`, acquired and renewed at `now`. An unreleased claim on the task fails on `claims.task_id`, so the unique index decides between two workers. A task number that does not exist inserts nothing and fails with `StoreError::Invalid`.

@@ -182,6 +182,11 @@ pub async fn create_web_session(
     Ok(human.map(|human| SignedIn { session, human }))
 }
 
+/// Every human the host registry knows, ordered by name.
+pub async fn list_humans(registry: &Store) -> Result<Vec<HumanName>, StoreError> {
+    projects::list_humans(registry.read()).await
+}
+
 /// The human that the session `session` signs in, or `None` when the registry holds no such session, its token is revoked, or it has expired. It touches `last_used_at` of the session and its token at most once per [`WEB_TOUCH_INTERVAL`].
 pub async fn check_web_session(
     registry: &Store,
@@ -208,6 +213,16 @@ pub async fn check_web_session(
             .await?;
     }
     Ok(Some(row.human))
+}
+
+/// Deletes every session that expired by `now`, for the daily job, so a session nobody signs in after still leaves the registry. Returns how many went.
+pub async fn purge_expired_web_sessions(
+    registry: &Store,
+    now: Timestamp,
+) -> Result<u64, StoreError> {
+    registry
+        .write(async |tx| projects::delete_expired_web_sessions(tx, now).await)
+        .await
 }
 
 /// Deletes the session `session`. True when it existed; an unknown id costs one read and no write.

@@ -5,18 +5,15 @@ use similar::{ChangeTag, DiffOp, TextDiff};
 /// How many unchanged lines a hunk shows around each change.
 pub const DEFAULT_CONTEXT: usize = 3;
 
-/// How far into a file the zero-byte check looks.
-pub const BINARY_PROBE_BYTES: usize = 8192;
-
 /// The largest file whose content a read answers with or whose hunks a diff builds. A larger file is answered with its size only, as a binary file is, so one request never carries megabytes of text.
 pub const MAX_INLINE_BYTES: usize = 1024 * 1024;
 
 /// How long one line diff may search for the smallest edit. Past it `similar` stops and reports the rest of the pair as replaced, so an unusual pair of large texts gives a coarser diff, never a slow one; the hunks still turn the old text into the new.
 pub const DIFF_TIMEOUT: Duration = Duration::from_millis(500);
 
-/// A file is binary when its first 8 KB hold a zero byte or the whole content is not valid UTF-8. A binary file is compared by hash only and has no hunks.
+/// A file is binary when merge would not take it as text ([`fold_core::text::as_text`]). A binary file is compared by hash only and has no hunks.
 pub fn is_binary(bytes: &[u8]) -> bool {
-    bytes[..bytes.len().min(BINARY_PROBE_BYTES)].contains(&0) || std::str::from_utf8(bytes).is_err()
+    fold_core::text::as_text(bytes).is_none()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

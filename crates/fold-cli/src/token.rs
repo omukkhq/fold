@@ -10,7 +10,7 @@ use thiserror::Error;
 
 use crate::init::host_paths;
 use crate::output;
-use crate::serve::Dirs;
+use crate::serve::{Dirs, current_thread_runtime};
 
 #[derive(Args, Debug)]
 pub struct TokenArgs {
@@ -64,15 +64,20 @@ impl TokenError {
             Self::Runtime(_) | Self::Write(_) => None,
         }
     }
+
+    /// The hint that names the next step, when a refusal carries one.
+    pub fn hint(&self) -> Option<&str> {
+        match self {
+            Self::Fold(error) | Self::Project(ProjectError::Fold(error)) => error.hint(),
+            _ => None,
+        }
+    }
 }
 
 /// Reads and writes the registry directly, the way `fld init` does, so every command works while the daemon is down; a running daemon reads `web_tokens` and `web_sessions` on every check, so a new token signs in and a revoked one stops at once.
 pub fn run(args: &TokenArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), TokenError> {
     let host = host_paths(dirs)?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(TokenError::Runtime)?;
+    let runtime = current_thread_runtime().map_err(TokenError::Runtime)?;
     runtime.block_on(command(&args.command, &host, &SystemClock, out))
 }
 

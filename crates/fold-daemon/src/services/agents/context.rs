@@ -2,6 +2,7 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use fold_core::text::shorten;
 use fold_core::{AgentName, FoldError, TaskId, Timestamp, WorkerName, codes};
 use fold_store::agents::{self, ClaimKind};
 use fold_store::messages;
@@ -160,16 +161,6 @@ pub fn render(facts: &SessionFacts) -> String {
         }
     }
     shorten(text.trim_end(), MAX_SESSION_CONTEXT)
-}
-
-/// `text` cut to `limit` characters, the last one an ellipsis when anything was cut.
-fn shorten(text: &str, limit: usize) -> String {
-    if text.chars().count() <= limit {
-        return text.to_owned();
-    }
-    let mut short: String = text.chars().take(limit.saturating_sub(1)).collect();
-    short.push('…');
-    short
 }
 
 impl AgentService {

@@ -8,7 +8,7 @@ use fold_core::{
     ProjectConfig, ProjectPaths, Tag, TaskId, Timestamp, WorkerName, codes, policy, presence_of,
 };
 use fold_store::agents::{self, AgentRow, WorkerRow};
-use fold_store::{Store, StoreError, WriteTx};
+use fold_store::{SqliteConnection, Store, StoreError, WriteTx};
 use serde_json::json;
 use thiserror::Error;
 
@@ -40,7 +40,8 @@ pub use overview::{
 };
 pub use presence::SeenPresence;
 pub use workers::{
-    FOLD_SERVER, Launcher, RESTART_TURN, StartWorker, StopTimeouts, Supervisor, WorkerLimitsChanged,
+    Launcher, RESTART_TURN, StartWorker, StopTimeouts, Supervisor, WorkerLimitsChanged,
+    new_session_id,
 };
 pub(crate) use workers::{code_of, starter_of};
 
@@ -69,6 +70,17 @@ impl From<ProjectError> for AgentError {
         match error {
             ProjectError::Fold(error) => Self::Fold(error),
             ProjectError::Store(error) => Self::Store(error),
+        }
+    }
+}
+
+impl AgentError {
+    /// The code a log line names: the stable code, or `internal_error` for an internal failure.
+    pub fn log_code(&self) -> &'static str {
+        match self {
+            Self::Fold(error) => error.code(),
+            Self::Store(error) => error.log_code(),
+            Self::Event(_) => codes::INTERNAL_ERROR,
         }
     }
 }
@@ -141,7 +153,7 @@ impl AgentService {
     /// Reads the lease from the project's `.fold/config.toml` on every overview; an invalid file fails the overview with its configuration error.
     #[must_use]
     pub fn with_project_config(mut self, paths: ProjectPaths) -> Self {
-        self.lease = Lease::Config(paths);
+        self.lease = Lease::config(paths);
         self
     }
 
@@ -198,7 +210,7 @@ impl AgentService {
         let now = self.clock.now();
         let session_id = self
             .store
-            .write(async |tx| agents::insert_session(tx.conn(), pid, cwd, now).await)
+            .write(async |tx| agents::insert_session(tx, pid, cwd, now).await)
             .await?;
         Ok(SessionContext {
             session_id,
@@ -215,17 +227,6 @@ impl AgentService {
         tags: &[Tag],
     ) -> Result<Registered, AgentError> {
         self.register(ctx, name, tags, TagOrigin::Handshake).await
-    }
-
-    /// [`AgentService::register_agent`] for the `register_agent` tool, whose tags the session names itself: it never gives the `main` tag to an agent that lacks it (`policy::can_take_main_tag`).
-    pub async fn register_agent_from_tool(
-        &self,
-        ctx: &mut SessionContext,
-        name: &AgentName,
-        tags: &[Tag],
-    ) -> Result<Registered, AgentError> {
-        self.register(ctx, name, tags, TagOrigin::RegisterTool)
-            .await
     }
 
     async fn register(
@@ -251,6 +252,31 @@ impl AgentService {
         self.bus.publish(buffer);
         ctx.agent = Some(name.clone());
         Ok(registered)
+    }
+
+    /// [`AgentService::register_agent`] for the `register_agent` tool, whose tags the session names itself: it never gives the `main` tag to an agent that lacks it (`policy::can_take_main_tag`). A call that acts as `as_worker` names one of `name`'s workers that exists, or the agent's main worker, which the registration creates; anything else is `worker_not_found` before anything is written.
+    pub async fn register_agent_from_tool(
+        &self,
+        ctx: &mut SessionContext,
+        name: &AgentName,
+        tags: &[Tag],
+        as_worker: Option<&WorkerName>,
+    ) -> Result<Registered, AgentError> {
+        if let Some(worker) = as_worker
+            && *worker != WorkerName::main(name)
+        {
+            let found = match agents::find_agent(self.store.read(), name).await? {
+                Some(agent) => agents::find_worker(self.store.read(), agent.id, worker)
+                    .await?
+                    .is_some(),
+                None => false,
+            };
+            if !found {
+                return Err(worker_not_found().into());
+            }
+        }
+        self.register(ctx, name, tags, TagOrigin::RegisterTool)
+            .await
     }
 
     async fn refuse_bind(&self, ctx: &SessionContext, name: &AgentName) -> Result<(), AgentError> {
@@ -299,8 +325,7 @@ impl AgentService {
                         created: false,
                     });
                 }
-                let id =
-                    agents::insert_worker(tx.conn(), agent.id, &name, Some(parent.id), now).await?;
+                let id = agents::insert_worker(tx, agent.id, &name, Some(parent.id), now).await?;
                 let event = NewEvent::new(types::WORKER_REGISTERED, main_actor(&agent.name))?
                     .data(json!({
                         "agent": agent.name.as_str(),
@@ -348,10 +373,15 @@ impl AgentService {
         as_worker: Option<&WorkerName>,
     ) -> Result<Actor, AgentError> {
         let worker = self.resolve_worker(ctx, as_worker).await?;
+        self.actor_of(&worker).await
+    }
+
+    /// The acting agent of a call whose worker is already resolved, with the agent's tags as they are now.
+    pub async fn actor_of(&self, worker: &WorkerRow) -> Result<Actor, AgentError> {
         let tags = agents::tags(self.store.read(), worker.agent_id).await?;
         Ok(Actor::Agent(AgentActor {
             agent: worker.name.agent(),
-            worker: worker.name,
+            worker: worker.name.clone(),
             tags,
         }))
     }
@@ -387,8 +417,8 @@ impl AgentService {
             .store
             .write(async |tx| {
                 let before = agents::open_session_calls(tx.conn(), worker.agent_id).await?;
-                agents::touch_session(tx.conn(), ctx.session_id, now).await?;
-                agents::touch_worker(tx.conn(), worker.id, now, &activity).await?;
+                agents::touch_session(tx, ctx.session_id, now).await?;
+                agents::touch_worker(tx, worker.id, now, &activity).await?;
                 let after = agents::open_session_calls(tx.conn(), worker.agent_id).await?;
                 let workers = agents::worker_ids(tx.conn(), worker.agent_id).await?;
                 renew_leases(tx, &workers, now).await?;
@@ -414,7 +444,7 @@ impl AgentService {
                 let Some(session) = agents::find_session(tx.conn(), ctx.session_id).await? else {
                     return Ok::<_, AgentError>(None);
                 };
-                if !agents::end_session(tx.conn(), ctx.session_id, now).await? {
+                if !agents::end_session(tx, ctx.session_id, now).await? {
                     return Ok(None);
                 }
                 let Some(agent_id) = session.agent_id else {
@@ -454,7 +484,7 @@ impl AgentService {
             .store
             .write(async |tx| {
                 let bound = agents::open_bound_sessions(tx.conn()).await?;
-                let ended = agents::end_open_sessions(tx.conn(), now).await?;
+                let ended = agents::end_open_sessions(tx, now).await?;
                 for session in bound {
                     let event = NewEvent::new(types::SESSION_ENDED, EventActor::fold())?
                         .data(json!({"agent": session.agent.as_str(), "reason": reason}))?;
@@ -499,9 +529,9 @@ async fn register_agent_in(
     let (agent_id, created) = match existing {
         Some(agent) => (agent.id, false),
         None => {
-            let id = agents::insert_agent(tx.conn(), name, now).await?;
+            let id = agents::insert_agent(tx, name, now).await?;
             let main = WorkerName::main(name);
-            agents::insert_worker(tx.conn(), id, &main, None, now).await?;
+            agents::insert_worker(tx, id, &main, None, now).await?;
             let registered = NewEvent::new(types::AGENT_REGISTERED, actor.clone())?
                 .data(json!({"agent": name.as_str()}))?;
             buffer.append(tx, &registered, now).await?;
@@ -527,10 +557,10 @@ async fn register_agent_in(
             .map_err(FoldError::from)?;
     }
     for tag in tags {
-        agents::add_tag(tx.conn(), agent_id, tag, None, now).await?;
+        agents::add_tag(tx, agent_id, tag, None, now).await?;
     }
     if session.agent_id.is_none() {
-        agents::bind_session(tx.conn(), session_id, agent_id).await?;
+        agents::bind_session(tx, session_id, agent_id).await?;
         let started = NewEvent::new(types::SESSION_STARTED, actor)?
             .data(json!({"agent": name.as_str(), "pid": session.pid}))?;
         buffer.append(tx, &started, now).await?;
@@ -547,7 +577,18 @@ fn main_actor(agent: &AgentName) -> EventActor {
     EventActor::worker(&WorkerName::main(agent))
 }
 
-fn worker_not_found() -> FoldError {
+pub(crate) fn worker_not_found() -> FoldError {
     FoldError::new(codes::WORKER_NOT_FOUND, "the worker does not exist")
         .with_hint("call register_worker")
+}
+
+/// The worker row of `actor`, read on `conn`: a command's transaction, or the read pool for a check before one; `None` when its agent or the worker does not exist.
+pub(crate) async fn actor_worker(
+    conn: &mut SqliteConnection,
+    actor: &AgentActor,
+) -> Result<Option<WorkerRow>, StoreError> {
+    match agents::find_agent(&mut *conn, &actor.agent).await? {
+        Some(agent) => agents::find_worker(&mut *conn, agent.id, &actor.worker).await,
+        None => Ok(None),
+    }
 }

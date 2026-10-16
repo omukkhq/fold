@@ -1,8 +1,11 @@
+use std::collections::HashMap;
+
 use fold_core::object::ObjectHash;
 use fold_core::requests::{Draft, DraftCard, DraftEdge, RequestKind, RequestState, Requester};
 use fold_core::{LabelName, RequestId, TaskId, Timestamp, WorkerName};
 use sqlx::SqliteConnection;
 
+use crate::columns::{count, time};
 use crate::error::StoreError;
 use crate::store::WriteTx;
 
@@ -69,6 +72,8 @@ pub struct RequestFilter {
     pub state: Option<RequestState>,
     pub kind: Option<RequestKind>,
     pub requester: Option<Requester>,
+    /// At most this many of the newest; every match when `None`.
+    pub limit: Option<u32>,
 }
 
 /// One stored draft version with its cards in position order and its edges in insertion order.
@@ -90,6 +95,24 @@ pub struct CommentRow {
     pub created_at: Timestamp,
 }
 
+/// The columns of [`RawRequest`] and the join that gives them, followed by the tail of each read: every request row maps the same way.
+macro_rules! select_requests {
+    ($tail:literal $(, $arg:expr)* $(,)?) => {
+        sqlx::query_as!(
+            RawRequest,
+            r#"SELECT r.number, r.kind, r.title, r.body, r.state, r.requester,
+                      r.drafter_worker_id, w.agent_id AS "drafter_agent_id?: i64",
+                      w.name AS "drafter_name?: String", r.drafter_since,
+                      r.close_reason, r.created_at, r.updated_at,
+                      (SELECT MAX(d.version) FROM request_drafts d WHERE d.request_id = r.id) AS "latest_version?: i64"
+               FROM requests r
+               LEFT JOIN workers w ON w.id = r.drafter_worker_id
+               "# + $tail
+            $(, $arg)*
+        )
+    };
+}
+
 struct RawRequest {
     number: i64,
     kind: Option<String>,
@@ -105,14 +128,6 @@ struct RawRequest {
     created_at: i64,
     updated_at: i64,
     latest_version: Option<i64>,
-}
-
-fn time(millis: i64, column: &'static str) -> Result<Timestamp, StoreError> {
-    Timestamp::from_millis(millis).map_err(|_| StoreError::Corrupt(column))
-}
-
-fn version(value: i64, column: &'static str) -> Result<u32, StoreError> {
-    u32::try_from(value).map_err(|_| StoreError::Corrupt(column))
 }
 
 impl RawRequest {
@@ -151,7 +166,7 @@ impl RawRequest {
             updated_at: time(self.updated_at, "requests.updated_at")?,
             latest_version: self
                 .latest_version
-                .map(|value| version(value, "request_drafts.version"))
+                .map(|value| count(value, "request_drafts.version"))
                 .transpose()?,
         })
     }
@@ -221,7 +236,7 @@ pub async fn attachments(
     .into_iter()
     .map(|row| {
         Ok(AttachmentRow {
-            position: version(row.position, "request_attachments.position")?,
+            position: count(row.position, "request_attachments.position")?,
             name: row.name,
             media_type: row.media_type,
             size: u64::try_from(row.size)
@@ -242,22 +257,11 @@ pub async fn fetch(
     request: RequestId,
 ) -> Result<Option<RequestRow>, StoreError> {
     let number = request.to_db();
-    sqlx::query_as!(
-        RawRequest,
-        r#"SELECT r.number, r.kind, r.title, r.body, r.state, r.requester,
-                  r.drafter_worker_id, w.agent_id AS "drafter_agent_id?: i64",
-                  w.name AS "drafter_name?: String", r.drafter_since,
-                  r.close_reason, r.created_at, r.updated_at,
-                  (SELECT MAX(d.version) FROM request_drafts d WHERE d.request_id = r.id) AS "latest_version?: i64"
-           FROM requests r
-           LEFT JOIN workers w ON w.id = r.drafter_worker_id
-           WHERE r.number = ?"#,
-        number
-    )
-    .fetch_optional(conn)
-    .await?
-    .map(RawRequest::into_row)
-    .transpose()
+    select_requests!("WHERE r.number = ?", number)
+        .fetch_optional(conn)
+        .await?
+        .map(RawRequest::into_row)
+        .transpose()
 }
 
 /// The requests `filter` selects, newest first.
@@ -268,22 +272,18 @@ pub async fn list(
     let state = filter.state.map(RequestState::as_str);
     let kind = filter.kind.map(RequestKind::as_str);
     let requester = filter.requester.as_ref().map(Requester::label);
-    sqlx::query_as!(
-        RawRequest,
-        r#"SELECT r.number, r.kind, r.title, r.body, r.state, r.requester,
-                  r.drafter_worker_id, w.agent_id AS "drafter_agent_id?: i64",
-                  w.name AS "drafter_name?: String", r.drafter_since,
-                  r.close_reason, r.created_at, r.updated_at,
-                  (SELECT MAX(d.version) FROM request_drafts d WHERE d.request_id = r.id) AS "latest_version?: i64"
-           FROM requests r
-           LEFT JOIN workers w ON w.id = r.drafter_worker_id
-           WHERE (?1 IS NULL OR r.state = ?1)
-             AND (?2 IS NULL OR r.kind = ?2)
-             AND (?3 IS NULL OR r.requester = ?3)
-           ORDER BY r.number DESC"#,
+    // SQLite reads a negative LIMIT as no limit.
+    let limit = filter.limit.map_or(-1, i64::from);
+    select_requests!(
+        "WHERE (?1 IS NULL OR r.state = ?1)
+           AND (?2 IS NULL OR r.kind = ?2)
+           AND (?3 IS NULL OR r.requester = ?3)
+         ORDER BY r.number DESC
+         LIMIT ?4",
         state,
         kind,
-        requester
+        requester,
+        limit
     )
     .fetch_all(conn)
     .await?
@@ -503,50 +503,57 @@ pub async fn drafts(
     )
     .fetch_all(&mut *conn)
     .await?;
-    let mut drafts = Vec::with_capacity(heads.len());
-    for head in heads {
-        let cards = sqlx::query!(
-            r#"SELECT c.key, c.title, c.description, l.name AS "label?: String"
-               FROM request_draft_cards c LEFT JOIN labels l ON l.id = c.label_id
-               WHERE c.draft_id = ? ORDER BY c.position"#,
-            head.id
-        )
-        .fetch_all(&mut *conn)
-        .await?
-        .into_iter()
-        .map(|row| {
-            let label = row
-                .label
-                .map(|name| LabelName::parse(&name))
-                .transpose()
-                .map_err(|_| StoreError::Corrupt("labels.name"))?;
-            Ok(DraftCard {
-                key: row.key,
-                title: row.title,
-                description: row.description,
-                label,
-            })
-        })
-        .collect::<Result<_, StoreError>>()?;
-        let edges = sqlx::query!(
-            "SELECT prerequisite_key, dependent_key FROM request_draft_edges WHERE draft_id = ? ORDER BY id",
-            head.id
-        )
-        .fetch_all(&mut *conn)
-        .await?
-        .into_iter()
-        .map(|row| DraftEdge {
+    let mut cards: HashMap<i64, Vec<DraftCard>> = HashMap::new();
+    for row in sqlx::query!(
+        r#"SELECT c.draft_id, c.key, c.title, c.description, l.name AS "label?: String"
+           FROM request_draft_cards c
+           JOIN request_drafts d ON d.id = c.draft_id
+           JOIN requests r ON r.id = d.request_id
+           LEFT JOIN labels l ON l.id = c.label_id
+           WHERE r.number = ? ORDER BY c.draft_id, c.position"#,
+        number
+    )
+    .fetch_all(&mut *conn)
+    .await?
+    {
+        let label = row
+            .label
+            .map(|name| LabelName::parse(&name))
+            .transpose()
+            .map_err(|_| StoreError::Corrupt("labels.name"))?;
+        cards.entry(row.draft_id).or_default().push(DraftCard {
+            key: row.key,
+            title: row.title,
+            description: row.description,
+            label,
+        });
+    }
+    let mut edges: HashMap<i64, Vec<DraftEdge>> = HashMap::new();
+    for row in sqlx::query!(
+        "SELECT e.draft_id, e.prerequisite_key, e.dependent_key
+         FROM request_draft_edges e
+         JOIN request_drafts d ON d.id = e.draft_id
+         JOIN requests r ON r.id = d.request_id
+         WHERE r.number = ? ORDER BY e.draft_id, e.id",
+        number
+    )
+    .fetch_all(&mut *conn)
+    .await?
+    {
+        edges.entry(row.draft_id).or_default().push(DraftEdge {
             prerequisite: row.prerequisite_key,
             dependent: row.dependent_key,
-        })
-        .collect();
+        });
+    }
+    let mut drafts = Vec::with_capacity(heads.len());
+    for head in heads {
         drafts.push(DraftRow {
-            version: version(head.version, "request_drafts.version")?,
+            version: count(head.version, "request_drafts.version")?,
             author: head.author,
             note: head.note,
             created_at: time(head.created_at, "request_drafts.created_at")?,
-            cards,
-            edges,
+            cards: cards.remove(&head.id).unwrap_or_default(),
+            edges: edges.remove(&head.id).unwrap_or_default(),
         });
     }
     Ok(drafts)
@@ -594,7 +601,7 @@ pub async fn comments(
     .into_iter()
     .map(|row| {
         Ok(CommentRow {
-            version: version(row.version, "request_comments.version")?,
+            version: count(row.version, "request_comments.version")?,
             author: row.author,
             body: row.body,
             created_at: time(row.created_at, "request_comments.created_at")?,
@@ -603,7 +610,7 @@ pub async fn comments(
     .collect()
 }
 
-/// Marks a task created in this transaction as made by the request's approval. A trigger keeps the link once it is set.
+/// Marks a task created in this transaction as made by the request's approval. A trigger keeps the link once it is set. An unknown task or request changes nothing and fails with `StoreError::Invalid`.
 pub async fn set_task_request(
     tx: &mut WriteTx,
     task: TaskId,
@@ -612,7 +619,8 @@ pub async fn set_task_request(
     let task = task.to_db();
     let number = request.to_db();
     let result = sqlx::query!(
-        "UPDATE tasks SET request_id = (SELECT id FROM requests WHERE number = ?2) WHERE number = ?1",
+        "UPDATE tasks SET request_id = (SELECT id FROM requests WHERE number = ?2)
+         WHERE number = ?1 AND EXISTS (SELECT 1 FROM requests WHERE number = ?2)",
         task,
         number
     )
@@ -637,23 +645,4 @@ pub async fn tasks_of(
     .into_iter()
     .map(|number| TaskId::try_from_db(number).ok_or(StoreError::Corrupt("tasks.number")))
     .collect()
-}
-
-/// Whether the agent has an open session, and when its last ended session ended: what decides whether its drafter may be replaced.
-pub async fn agent_activity(
-    conn: &mut SqliteConnection,
-    agent_id: i64,
-) -> Result<(bool, Option<Timestamp>), StoreError> {
-    let row = sqlx::query!(
-        r#"SELECT EXISTS (SELECT 1 FROM sessions WHERE agent_id = ?1 AND ended_at IS NULL) AS "open!: bool",
-                  (SELECT MAX(ended_at) FROM sessions WHERE agent_id = ?1) AS "last_end?: i64""#,
-        agent_id
-    )
-    .fetch_one(conn)
-    .await?;
-    let last_end = row
-        .last_end
-        .map(|millis| time(millis, "sessions.ended_at"))
-        .transpose()?;
-    Ok((row.open, last_end))
 }

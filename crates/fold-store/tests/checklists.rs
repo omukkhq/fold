@@ -348,3 +348,25 @@ async fn linked_items_tick_once_their_child_is_done() {
     assert_eq!(item.done_by.as_deref(), Some("fold"));
     assert_eq!(checklists::progress(&mut conn, t(1)).await.unwrap(), (1, 3));
 }
+
+#[tokio::test]
+async fn arrange_refuses_an_item_of_another_task() {
+    let project = project_with_tasks(2).await;
+    let store = project.store();
+    add(&project, 1, "Steps", 1, step("one")).await;
+    add(&project, 2, "Steps", 2, step("two")).await;
+    let steps = name("Steps");
+    let error = store
+        .write(async |tx| checklists::arrange(tx, t(1), &[(&steps, &[ci(1), ci(2)][..])]).await)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, StoreError::Invalid(_)), "{error:?}");
+    let moved: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM checklist_items i JOIN checklists c ON c.id = i.checklist_id
+         JOIN tasks t ON t.id = c.task_id WHERE t.number = 2",
+    )
+    .fetch_one(store.read())
+    .await
+    .unwrap();
+    assert_eq!(moved, 1, "the item of T-2 stays on T-2");
+}

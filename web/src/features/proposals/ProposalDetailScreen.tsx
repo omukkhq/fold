@@ -60,6 +60,7 @@ import {
   type DetailSearch,
   type DetailView,
 } from "./view";
+import { projectPath } from "@/routes/paths";
 
 interface ProposalDetailScreenProps {
   slug: string;
@@ -293,7 +294,7 @@ export function ProposalDetailScreen({
           title={`No proposal ${id}`}
           action={
             <HrefLink
-              href={`/p/${slug}/proposals`}
+              href={projectPath(slug, "proposals")}
               className={cn(buttonClasses("secondary", "md"), focusRing)}
             >
               Open the proposals

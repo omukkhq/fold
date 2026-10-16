@@ -1,5 +1,7 @@
+import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2, Send } from "lucide-react";
 import { useState } from "react";
+import { useForm, useWatch } from "react-hook-form";
 import type { MessageView, ThreadView } from "@/api/messages";
 import { apiErrorCode } from "@/api/errors";
 import { Button } from "@/components/button/Button";
@@ -7,6 +9,7 @@ import { controlClasses } from "@/components/form/Field";
 import { failureText } from "@/format/failure";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
+import { replySchema, type ReplyValues } from "./compose";
 import { answerPending, questionState } from "./question";
 
 /** The badge above a question, waiting or answered. */
@@ -57,7 +60,11 @@ export function QuestionChoices({
   const [sending, setSending] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
   const [failure, setFailure] = useState<unknown>(null);
-  const [text, setText] = useState("");
+  const { register, handleSubmit, reset, control } = useForm<ReplyValues>({
+    resolver: zodResolver(replySchema),
+    defaultValues: { body: "" },
+  });
+  const text = useWatch({ control, name: "body" });
   const pending = answerPending(sending !== null, sent, state);
   const answered = state.answer !== null;
 
@@ -67,7 +74,7 @@ export function QuestionChoices({
     try {
       await onReply(question.id, body);
       setSent(true);
-      setText("");
+      reset();
     } catch (error) {
       setFailure(error);
     } finally {
@@ -121,19 +128,15 @@ export function QuestionChoices({
         <form
           className="flex items-center gap-8"
           onSubmit={(event) => {
-            event.preventDefault();
-            if (text.trim() !== "") void answer(text.trim());
+            void handleSubmit((values) => answer(values.body.trim()))(event);
           }}
         >
           <input
             aria-label="Your own answer"
             placeholder="Or write your own answer…"
-            value={text}
             readOnly={pending}
-            onChange={(event) => {
-              setText(event.target.value);
-            }}
             className={cn(controlClasses, focusRing, "py-7")}
+            {...register("body")}
           />
           <Button
             type="submit"

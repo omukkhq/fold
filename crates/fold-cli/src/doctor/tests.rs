@@ -155,6 +155,7 @@ fn seed_event(root: &Path, reason: &str, created: Timestamp) {
         let store = Store::open_project(&ProjectPaths::new(root)).await.unwrap();
         let mut event =
             NewEvent::new(WORKSPACE_WATCH_DEGRADED, EventActor::parse("fold").unwrap()).unwrap();
+        event = event.reason(reason);
         event.data = serde_json::json!({ "reason": reason });
         store
             .write::<_, StoreError>(async |tx| {
@@ -646,6 +647,51 @@ fn a_git_history_without_the_last_mapped_commit_names_the_repair() {
 }
 
 #[test]
+fn a_missing_git_repository_is_not_reported_as_a_missing_commit() {
+    let fixture = Fixture::new();
+    let mut host = fixture.bare_host();
+    host.path = std::env::var_os("PATH");
+    let root = fixture.project("demo");
+    std::fs::write(
+        root.join(".fold").join(SYNC_MAP_FILE),
+        format!("r1 {}\n", "a".repeat(40)),
+    )
+    .unwrap();
+    std::fs::remove_dir_all(root.join(".git")).unwrap();
+    let checks = project_report(&host, &root, at(1_000));
+    let check = find(&checks, "git history");
+    assert_eq!(check.status, Status::Warn);
+    assert!(check.message.contains("no Git repository"), "{check:?}");
+    assert!(check.fix.as_deref().unwrap().contains("fld init"));
+}
+
+#[test]
+fn a_registry_path_that_is_not_utf8_is_refused_not_replaced_by_the_default() {
+    use std::os::unix::ffi::OsStrExt;
+    let dirs = Dirs {
+        data_home: Some(PathBuf::from(std::ffi::OsStr::from_bytes(b"/data/\xff"))),
+        home: Some(PathBuf::from("/home/ana")),
+        ..Dirs::default()
+    };
+    let error = registered_projects(&dirs, &rt()).unwrap_err();
+    assert_eq!(error.code(), Some("invalid_host_paths"));
+}
+
+#[test]
+fn a_descendant_that_keeps_stdout_open_does_not_hold_the_command_nor_hide_its_output() {
+    let fixture = Fixture::new();
+    let leaky = fixture.path("leaky");
+    std::fs::write(&leaky, "#!/bin/sh\nsleep 5 &\necho early\n").unwrap();
+    mode(&leaky, 0o755);
+    let started = std::time::Instant::now();
+    assert_eq!(
+        run_briefly(&leaky, &[], Duration::from_millis(300)).as_deref(),
+        Some("early\n")
+    );
+    assert!(started.elapsed() < Duration::from_secs(4));
+}
+
+#[test]
 fn a_project_folder_with_changes_that_are_not_committed_is_a_warning() {
     let fixture = Fixture::new();
     let mut host = fixture.bare_host();
@@ -858,14 +904,6 @@ fn the_degraded_query_starts_where_the_window_does() {
     assert_eq!(within_degraded_window(&[at(start)], now), 0);
     assert_eq!(within_degraded_window(&[at(start + 1)], now), 1);
     assert_eq!(degraded_window_start(at(0)), -24 * HOUR_MS);
-}
-
-#[test]
-fn only_the_watch_limit_reason_counts() {
-    assert!(is_watch_limit(r#"{"reason":"watch_limit"}"#));
-    assert!(!is_watch_limit(r#"{"reason":"no_native_watcher"}"#));
-    assert!(!is_watch_limit(r#"{"cause":"watch_limit"}"#));
-    assert!(!is_watch_limit("not json"));
 }
 
 #[test]
@@ -1300,9 +1338,13 @@ fn a_database_in_use_by_a_daemon_is_read_through_its_wal() {
         let mut event =
             NewEvent::new(WORKSPACE_WATCH_DEGRADED, EventActor::parse("fold").unwrap()).unwrap();
         event.data = serde_json::json!({ "reason": "watch_limit" });
+        // A row from before the reason column: only `data` names the cause, so the check does not count it.
+        let untagged = event.clone();
+        event = event.reason("watch_limit");
         store
             .write::<_, StoreError>(async |tx| {
                 events::append(tx, &event, at(5)).await?;
+                events::append(tx, &untagged, at(5)).await?;
                 Ok(())
             })
             .await

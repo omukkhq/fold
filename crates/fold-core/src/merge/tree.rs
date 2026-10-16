@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use crate::error::FoldError;
 use crate::object::{ObjectHash, ObjectKind, hash_object};
+use crate::text::as_text;
 use crate::tree::{EntryKind, FlatEntry, FlatTree};
 
 use super::{ConflictHunk, merge3};
@@ -83,6 +84,7 @@ pub fn merge_trees(
         new_blobs: Vec::new(),
         conflicts: Vec::new(),
     };
+    let mut stored: BTreeSet<ObjectHash> = BTreeSet::new();
     for path in paths {
         let triple = Triple {
             base: base.get(path).copied(),
@@ -93,7 +95,7 @@ pub fn merge_trees(
             Resolved::Entry(entry, blob) => {
                 result.merged.insert(path.clone(), entry);
                 if let Some(blob) = blob
-                    && !result.new_blobs.iter().any(|(hash, _)| *hash == blob.0)
+                    && stored.insert(blob.0)
                 {
                     result.new_blobs.push(blob);
                 }
@@ -240,15 +242,6 @@ fn merge_path(triple: &Triple, load: BlobLoader<'_>) -> Result<Resolved, FoldErr
     Ok(Resolved::Conflict(ConflictKind::BothModifiedText, hunks))
 }
 
-/// Text means no zero byte in the first 8 KiB and valid UTF-8 throughout.
-fn as_text(bytes: &[u8]) -> Option<&str> {
-    let head = &bytes[..bytes.len().min(8192)];
-    if head.contains(&0) {
-        return None;
-    }
-    std::str::from_utf8(bytes).ok()
-}
-
 /// Conflict files are written beside their path, and a merged file is written at its path, so a path and one of its parent directories can never both be a file. Whichever resolved file sits on the other side of such a clash becomes a `TypeChange` conflict, until no merged path is a parent or a child of another merged path or of a conflict path. Demoting is the only direction a path moves, so the loop ends.
 fn resolve_file_directory_clashes(
     base: &FlatTree,
@@ -298,10 +291,8 @@ fn resolve_file_directory_clashes(
         return;
     }
     result.conflicts.sort_by(|a, b| a.path.cmp(&b.path));
-    let merged = &result.merged;
-    result
-        .new_blobs
-        .retain(|(hash, _)| merged.values().any(|entry| entry.hash == *hash));
+    let kept: BTreeSet<ObjectHash> = result.merged.values().map(|entry| entry.hash).collect();
+    result.new_blobs.retain(|(hash, _)| kept.contains(hash));
 }
 
 /// A conflict keeps the workspace's side at its path and writes main's side beside it, so a conflict below another conflict would have to be written inside the other's file. Only the top conflict of a nested set stays: it becomes a `TypeChange`, since one side has a file there and another a directory, and every conflict carries main's whole side of its path.
@@ -676,17 +667,6 @@ mod tests {
             [(b"b".as_slice(), ConflictKind::BothModifiedBinary)]
         );
         assert!(merge.conflicts[0].hunks.is_empty());
-    }
-
-    #[test]
-    fn invalid_utf8_and_a_zero_byte_past_the_probe_decide_text() {
-        assert!(as_text(b"plain\n").is_some());
-        assert!(as_text(&[0xff, 0xfe]).is_none());
-        let mut late = vec![b'a'; 8192];
-        late.push(0);
-        assert!(as_text(&late).is_some());
-        late.insert(0, 0);
-        assert!(as_text(&late).is_none());
     }
 
     #[test]

@@ -97,7 +97,7 @@ pub async fn checklists(
     .collect()
 }
 
-/// Creates the checklist `name` on `task` after its last checklist and returns true, or returns false when the task already has a checklist of that name. The task must exist.
+/// Creates the checklist `name` on `task` after its last checklist and returns true, or returns false when the task already has a checklist of that name. A task that does not exist also returns false with nothing inserted, so the caller checks the task first.
 pub async fn ensure_checklist(
     tx: &mut WriteTx,
     task: TaskId,
@@ -304,7 +304,7 @@ pub async fn progress(conn: &mut SqliteConnection, task: TaskId) -> Result<(u32,
     Ok((count(row.done)?, count(row.total)?))
 }
 
-/// Gives every item in `lists` its checklist (by name, on `task`) and its index in the list as its position. `checklist_items_one_per_position` is checked row by row, so a plain renumbering would collide midway: the items first take distinct negative positions, which no stored item holds, and then their final ones. Each list must name every item its checklist keeps, so the positions end dense from 0.
+/// Gives every item in `lists` its checklist (by name, on `task`) and its index in the list as its position. An item that is not on a checklist of `task` changes nothing and fails with `StoreError::Invalid`. `checklist_items_one_per_position` is checked row by row, so a plain renumbering would collide midway: the items first take distinct negative positions, which no stored item holds, and then their final ones. Each list must name every item its checklist keeps, so the positions end dense from 0.
 pub async fn arrange(
     tx: &mut WriteTx,
     task: TaskId,
@@ -321,7 +321,8 @@ pub async fn arrange(
                 "UPDATE checklist_items SET position = ?4, checklist_id = (
                      SELECT c.id FROM checklists c JOIN tasks t ON t.id = c.task_id
                      WHERE t.number = ?1 AND c.name = ?2)
-                 WHERE number = ?3",
+                 WHERE number = ?3 AND checklist_id IN (
+                     SELECT c.id FROM checklists c JOIN tasks t ON t.id = c.task_id WHERE t.number = ?1)",
                 number,
                 name,
                 item,
@@ -330,7 +331,9 @@ pub async fn arrange(
             .execute(tx.conn())
             .await?;
             if result.rows_affected() != 1 {
-                return Err(StoreError::Invalid("the checklist item does not exist"));
+                return Err(StoreError::Invalid(
+                    "the checklist item does not exist on this task",
+                ));
             }
         }
     }

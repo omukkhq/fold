@@ -12,6 +12,12 @@ describe("linkify", () => {
       { text: "m-210", href: "/p/demo/messages?thread=m-210" },
     ]);
   });
+  it("links a request id to the request", () => {
+    expect(linkify("see RQ-7", "demo")).toEqual([
+      { text: "see " },
+      { text: "RQ-7", href: "/p/demo/requests/RQ-7" },
+    ]);
+  });
   it("keeps the text between ids and rebuilds the body", () => {
     const body = "a T-1 b P-2";
     const segments = linkify(body, "demo");

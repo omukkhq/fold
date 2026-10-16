@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::http::{Method, StatusCode};
-use fold_core::{Actor, AgentName, Clock, HumanName, WorkerState, codes};
+use fold_core::{Actor, AgentActor, AgentName, Clock, HumanName, WorkerName, WorkerState, codes};
 use fold_daemon::services::agents::RESTART_TURN;
 use fold_daemon::services::events::BusMessage;
 use fold_store::agents::WorkerProcessRow;
@@ -348,10 +348,27 @@ async fn an_idle_coder_stops_after_its_idle_minutes_and_resumes_with_a_turn() {
         "a lead never stops for being idle"
     );
 
+    let itself = Actor::Agent(AgentActor {
+        agent: name("web-coder"),
+        worker: WorkerName::parse("web-coder").unwrap(),
+        tags: Vec::new(),
+    });
+    let denied = harness
+        .handle
+        .agents()
+        .resume_worker(&itself, &name("web-coder"), "go on".to_owned())
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&denied, fold_daemon::services::agents::AgentError::Fold(error) if error.code() == codes::WORKER_STOP_DENIED),
+        "only whoever may stop a worker resumes it: {denied:?}"
+    );
+    let human = Actor::human(HumanName::parse("ana").unwrap());
     let resumed = harness
         .handle
         .agents()
         .resume_worker(
+            &human,
             &name("web-coder"),
             "Your proposal needs a second look.".to_owned(),
         )
@@ -368,7 +385,7 @@ async fn an_idle_coder_stops_after_its_idle_minutes_and_resumes_with_a_turn() {
     let running = harness
         .handle
         .agents()
-        .resume_worker(&name("web-coder"), "again".to_owned())
+        .resume_worker(&human, &name("web-coder"), "again".to_owned())
         .await
         .unwrap_err();
     assert!(
@@ -659,6 +676,93 @@ async fn a_stop_escalates_to_signals_on_the_projects_clock() {
         Some(143),
         "SIGTERM ends the stand-in after SIGINT was ignored"
     );
+}
+
+/// Whether `pid` is gone or only waits to be reaped.
+fn ended(pid: u32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/stat")).map_or(true, |stat| {
+        stat.rsplit_once(')')
+            .is_some_and(|(_, rest)| rest.trim_start().starts_with('Z'))
+    })
+}
+
+#[tokio::test]
+async fn a_stop_signals_every_process_the_worker_started() {
+    let fake = FakeClaude::new("result").stubborn().with_child();
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    let lead = start_lead(&mut harness, "web").await;
+    until_state(&harness, &lead, WorkerState::Idle).await;
+    let run = fake.runs_of(&lead).remove(0);
+    let child = eventually(WAIT, async || fake.child_of(&run).ok_or("no child yet")).await;
+    assert!(!ended(child));
+    let agents = harness.handle.agents();
+    let human = Actor::human(HumanName::parse("ana").unwrap());
+    let target = name(&lead);
+    let stop = tokio::spawn(async move { agents.stop_worker(&human, &target).await });
+    let clock = harness.project.clock().clone();
+    eventually(WAIT, async || {
+        if stop.is_finished() {
+            Ok(())
+        } else {
+            clock.advance(Duration::from_secs(6)).unwrap();
+            Err(clock.now())
+        }
+    })
+    .await;
+    eventually(WAIT, async || {
+        if ended(child) {
+            Ok(())
+        } else {
+            Err("the child still runs")
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn shutdown_ends_every_worker_at_once() {
+    let fake = FakeClaude::new("result").stubborn();
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    let web = start_lead(&mut harness, "web").await;
+    let api = start_lead(&mut harness, "api").await;
+    until_state(&harness, &web, WorkerState::Idle).await;
+    until_state(&harness, &api, WorkerState::Idle).await;
+    let workers = harness.handle.workers.clone();
+    let shutdown = tokio::spawn(async move { workers.shutdown().await });
+    // The stand-ins ignore a closed stdin and SIGINT, and the clock stands still, so a shutdown that ended one worker before the next would close only the first one's stdin.
+    eventually(WAIT, async || {
+        let closed = [&web, &api]
+            .iter()
+            .filter(|lead| fake.saw_eof(&fake.runs_of(lead).remove(0)))
+            .count();
+        if closed == 2 { Ok(()) } else { Err(closed) }
+    })
+    .await;
+    let clock = harness.project.clock().clone();
+    eventually(WAIT, async || {
+        if shutdown.is_finished() {
+            Ok(())
+        } else {
+            clock.advance(Duration::from_secs(6)).unwrap();
+            Err(clock.now())
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_line_that_is_not_utf8_or_too_long_does_not_stop_the_reader() {
+    let fake = FakeClaude::new("result").noisy();
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    let lead = start_lead(&mut harness, "web").await;
+    let idle = until_state(&harness, &lead, WorkerState::Idle).await;
+    assert_eq!(idle.turns, 1, "the turn after the noise is still recorded");
 }
 
 #[tokio::test]

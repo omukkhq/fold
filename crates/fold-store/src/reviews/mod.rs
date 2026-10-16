@@ -9,6 +9,7 @@ use fold_core::{
 };
 use sqlx::SqliteExecutor;
 
+use crate::columns::time;
 use crate::error::StoreError;
 use crate::store::WriteTx;
 use crate::workspaces::parse_stats;
@@ -357,7 +358,7 @@ pub async fn get_proposal(
     executor: impl SqliteExecutor<'_>,
     proposal: ProposalId,
 ) -> Result<Option<ProposalRow>, StoreError> {
-    Ok(select(executor, Some(proposal), None, None).await?.pop())
+    Ok(select_one(executor, proposal).await?.pop())
 }
 
 /// Proposals in number order, only those in `state` when it is given. With `unclaimed_at`, only those that no reviewer holds at that cutoff: no unreleased review claim, or one last renewed at or before it. The caller passes the time a lease renewed then would have run out, so a stale claim, which `claim_review` takes over, counts as unclaimed.
@@ -366,108 +367,140 @@ pub async fn list_proposals(
     state: Option<ProposalState>,
     unclaimed_at: Option<Timestamp>,
 ) -> Result<Vec<ProposalRow>, StoreError> {
-    select(executor, None, state, unclaimed_at).await
+    select(executor, state, unclaimed_at).await
 }
 
-/// One statement serves every read so the rows always map the same way.
+/// One proposal row as the reads select it, before its columns are checked.
+struct RawProposal {
+    number: i64,
+    task: i64,
+    author_worker_id: i64,
+    author: String,
+    title: String,
+    state: String,
+    conflicted: bool,
+    close_reason: Option<String>,
+    current_version: Option<i64>,
+    verdict: Option<String>,
+    review_claim: Option<String>,
+    human_review: bool,
+    human_reviewer: Option<String>,
+    human_review_reason: Option<String>,
+    human_review_set_by: Option<String>,
+    created_at: i64,
+    updated_at: i64,
+    closed_at: Option<i64>,
+}
+
+impl RawProposal {
+    fn into_row(self) -> Result<ProposalRow, StoreError> {
+        let row = self;
+        let worker =
+            |name: &str| WorkerName::parse(name).map_err(|_| StoreError::Corrupt("workers.name"));
+        let current_version = row
+            .current_version
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or(StoreError::Corrupt("proposal_versions.version"))?;
+        Ok(ProposalRow {
+            id: ProposalId::try_from_db(row.number)
+                .ok_or(StoreError::Corrupt("proposals.number"))?,
+            task: TaskId::try_from_db(row.task).ok_or(StoreError::Corrupt("tasks.number"))?,
+            author_worker_id: row.author_worker_id,
+            author: worker(&row.author)?,
+            title: row.title,
+            state: ProposalState::parse(&row.state)
+                .ok_or(StoreError::Corrupt("proposals.state"))?,
+            conflicted: row.conflicted,
+            close_reason: row.close_reason,
+            current_version,
+            changes_requested: row.verdict.as_deref() == Some("request_changes"),
+            latest_verdict: row.verdict.as_deref().map(parse_verdict).transpose()?,
+            review_claim: row.review_claim.as_deref().map(worker).transpose()?,
+            human_review: crate::tasks::mark(
+                row.human_review,
+                row.human_reviewer,
+                row.human_review_reason,
+                row.human_review_set_by,
+            )?,
+            created_at: time(row.created_at, "proposals.created_at")?,
+            updated_at: time(row.updated_at, "proposals.updated_at")?,
+            closed_at: row
+                .closed_at
+                .map(|millis| time(millis, "proposals.closed_at"))
+                .transpose()?,
+        })
+    }
+}
+
+/// The columns of [`RawProposal`] and the joins that give them, followed by the tail of each read: every proposal row maps the same way.
+macro_rules! select_proposals {
+    ($tail:literal $(, $arg:expr)* $(,)?) => {
+        sqlx::query_as!(
+            RawProposal,
+            r#"SELECT p.number AS "number!: i64",
+                      t.number AS "task!: i64",
+                      p.author_worker_id,
+                      w.name AS author,
+                      p.title,
+                      p.state,
+                      p.conflicted AS "conflicted: bool",
+                      p.close_reason,
+                      (SELECT MAX(v.version) FROM proposal_versions v WHERE v.proposal_id = p.id) AS "current_version?: i64",
+                      (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) AS "verdict?: String",
+                      (
+                          SELECT k.name FROM claims c JOIN workers k ON k.id = c.worker_id
+                          WHERE c.proposal_id = p.id AND c.kind = 'review' AND c.released_at IS NULL
+                      ) AS "review_claim?: String",
+                      t.human_review AS "human_review: bool",
+                      t.human_reviewer,
+                      t.human_review_reason,
+                      t.human_review_set_by,
+                      p.created_at,
+                      p.updated_at,
+                      p.closed_at
+               FROM proposals p
+               JOIN tasks t ON t.id = p.task_id
+               JOIN workers w ON w.id = p.author_worker_id
+               "# + $tail
+            $(, $arg)*
+        )
+    };
+}
+
+/// The proposal with this number.
+async fn select_one(
+    executor: impl SqliteExecutor<'_>,
+    proposal: ProposalId,
+) -> Result<Vec<ProposalRow>, StoreError> {
+    let proposal = proposal.to_db();
+    let rows = select_proposals!("WHERE p.number = ?1", proposal)
+        .fetch_all(executor)
+        .await?;
+    rows.into_iter().map(RawProposal::into_row).collect()
+}
+
+/// Proposals in number order, filtered as [`list_proposals`] says.
 async fn select(
     executor: impl SqliteExecutor<'_>,
-    proposal: Option<ProposalId>,
     state: Option<ProposalState>,
     unclaimed_at: Option<Timestamp>,
 ) -> Result<Vec<ProposalRow>, StoreError> {
-    let proposal = proposal.map(ProposalId::to_db);
     let state = state.map(ProposalState::as_str);
     let unclaimed_at = unclaimed_at.map(Timestamp::as_millis);
-    let rows = sqlx::query!(
-        r#"SELECT p.number AS "number!: i64",
-                  t.number AS "task!: i64",
-                  p.author_worker_id,
-                  w.name AS author,
-                  p.title,
-                  p.state,
-                  p.conflicted AS "conflicted: bool",
-                  p.close_reason,
-                  (SELECT MAX(v.version) FROM proposal_versions v WHERE v.proposal_id = p.id) AS "current_version?: i64",
-                  (
-                      SELECT r.verdict FROM reviews r
-                      WHERE r.version_id = (
-                                SELECT v.id FROM proposal_versions v
-                                WHERE v.proposal_id = p.id
-                                ORDER BY v.version DESC
-                                LIMIT 1
-                            )
-                        AND r.verdict <> 'comment'
-                      ORDER BY r.created_at DESC, r.id DESC
-                      LIMIT 1
-                  ) AS "verdict?: String",
-                  (
-                      SELECT k.name FROM claims c JOIN workers k ON k.id = c.worker_id
-                      WHERE c.proposal_id = p.id AND c.kind = 'review' AND c.released_at IS NULL
-                  ) AS "review_claim?: String",
-                  t.human_review AS "human_review: bool",
-                  t.human_reviewer,
-                  t.human_review_reason,
-                  t.human_review_set_by,
-                  p.created_at,
-                  p.updated_at,
-                  p.closed_at
-           FROM proposals p
-           JOIN tasks t ON t.id = p.task_id
-           JOIN workers w ON w.id = p.author_worker_id
-           WHERE (?1 IS NULL OR p.number = ?1)
-             AND (?2 IS NULL OR p.state = ?2)
-             AND (?3 IS NULL OR NOT EXISTS (
-                     SELECT 1 FROM claims c
-                     WHERE c.proposal_id = p.id AND c.kind = 'review' AND c.released_at IS NULL
-                       AND c.renewed_at > ?3
-                 ))
-           ORDER BY p.number"#,
-        proposal,
+    let rows = select_proposals!(
+        "WHERE (?1 IS NULL OR p.state = ?1)
+           AND (?2 IS NULL OR NOT EXISTS (
+                   SELECT 1 FROM claims c
+                   WHERE c.proposal_id = p.id AND c.kind = 'review' AND c.released_at IS NULL
+                     AND c.renewed_at > ?2
+               ))
+         ORDER BY p.number",
         state,
         unclaimed_at
     )
     .fetch_all(executor)
     .await?;
-    rows.into_iter()
-        .map(|row| {
-            let worker = |name: &str| {
-                WorkerName::parse(name).map_err(|_| StoreError::Corrupt("workers.name"))
-            };
-            let current_version = row
-                .current_version
-                .and_then(|value| u32::try_from(value).ok())
-                .ok_or(StoreError::Corrupt("proposal_versions.version"))?;
-            Ok(ProposalRow {
-                id: ProposalId::try_from_db(row.number)
-                    .ok_or(StoreError::Corrupt("proposals.number"))?,
-                task: TaskId::try_from_db(row.task).ok_or(StoreError::Corrupt("tasks.number"))?,
-                author_worker_id: row.author_worker_id,
-                author: worker(&row.author)?,
-                title: row.title,
-                state: ProposalState::parse(&row.state)
-                    .ok_or(StoreError::Corrupt("proposals.state"))?,
-                conflicted: row.conflicted,
-                close_reason: row.close_reason,
-                current_version,
-                changes_requested: row.verdict.as_deref() == Some("request_changes"),
-                latest_verdict: row.verdict.as_deref().map(parse_verdict).transpose()?,
-                review_claim: row.review_claim.as_deref().map(worker).transpose()?,
-                human_review: crate::tasks::mark(
-                    row.human_review,
-                    row.human_reviewer,
-                    row.human_review_reason,
-                    row.human_review_set_by,
-                )?,
-                created_at: time(row.created_at, "proposals.created_at")?,
-                updated_at: time(row.updated_at, "proposals.updated_at")?,
-                closed_at: row
-                    .closed_at
-                    .map(|millis| time(millis, "proposals.closed_at"))
-                    .transpose()?,
-            })
-        })
-        .collect()
+    rows.into_iter().map(RawProposal::into_row).collect()
 }
 
 /// The versions of the proposal, oldest first.
@@ -509,10 +542,6 @@ pub async fn list_versions(
             })
         })
         .collect()
-}
-
-fn time(millis: i64, column: &'static str) -> Result<Timestamp, StoreError> {
-    Timestamp::from_millis(millis).map_err(|_| StoreError::Corrupt(column))
 }
 
 /// The current version of a proposal with the two trees its line comments read: `base_tree` is the tree of the version's base revision (side `old`) and `tree` the version's own (side `new`). `version_id` is a row id and stays inside the daemon.

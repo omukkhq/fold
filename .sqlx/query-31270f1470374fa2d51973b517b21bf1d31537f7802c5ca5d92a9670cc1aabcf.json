@@ -1,0 +1,33 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT b.worker_process_id AS \"worker!: i64\", COUNT(*) AS \"count!: i64\"\n           FROM worker_tasks b JOIN tasks t ON t.id = b.task_id\n           WHERE b.worker_process_id IN (SELECT value FROM json_each(?1)) AND t.status <> 'done' AND t.archived_at IS NULL\n             AND NOT EXISTS (SELECT 1 FROM proposals p WHERE p.task_id = b.task_id AND p.state = 'integrated')\n             AND NOT EXISTS (SELECT 1 FROM task_reports r WHERE r.task_id = b.task_id AND r.resolution IS NULL)\n             AND NOT EXISTS (\n                 SELECT 1 FROM proposals p\n                 WHERE p.task_id = b.task_id AND p.state = 'open' AND NOT p.conflicted\n                   AND COALESCE((\n                       SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id\n                   ), '') <> 'request_changes'\n             )\n           GROUP BY b.worker_process_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "worker!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "worker_tasks",
+            "name": "worker_process_id"
+          }
+        }
+      },
+      {
+        "name": "count!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "31270f1470374fa2d51973b517b21bf1d31537f7802c5ca5d92a9670cc1aabcf"
+}

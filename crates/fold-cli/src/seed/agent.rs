@@ -1,11 +1,11 @@
 use std::path::Path;
 
-use fold_daemon::mcp::handshake::{Answer, Hello, MAX_LINE, PROTOCOL_VERSION};
+use fold_cli::daemon_client;
+use fold_daemon::mcp::handshake::{Hello, PROTOCOL_VERSION};
 use rmcp::model::CallToolRequestParams;
 use rmcp::service::RunningService;
 use rmcp::{RoleClient, ServiceExt};
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
 use super::SeedError;
@@ -35,7 +35,6 @@ impl Agent {
                 path: socket.to_owned(),
                 source,
             })?;
-        let (read, mut write) = stream.into_split();
         let hello = Hello {
             fold: PROTOCOL_VERSION,
             cwd: root.to_owned(),
@@ -43,26 +42,13 @@ impl Agent {
             agent: Some(name.to_owned()),
             tags: tags.iter().map(|tag| (*tag).to_owned()).collect(),
         };
-        let mut line = serde_json::to_vec(&hello).map_err(|_| SeedError::Handshake)?;
-        line.push(b'\n');
-        write
-            .write_all(&line)
+        let (read, write) = daemon_client::handshake(stream, &hello)
             .await
-            .map_err(|_| SeedError::Handshake)?;
-        let mut read = BufReader::new(read);
-        let mut answer = Vec::new();
-        (&mut read)
-            .take(MAX_LINE as u64)
-            .read_until(b'\n', &mut answer)
-            .await
-            .map_err(|_| SeedError::Handshake)?;
-        let answer: Answer = serde_json::from_slice(&answer).map_err(|_| SeedError::Handshake)?;
-        if !answer.ok {
-            return Err(SeedError::Refused {
-                code: answer.error.map(|error| error.code).unwrap_or_default(),
-            });
-        }
-        let client = ().serve((read, write)).await.map_err(|_| SeedError::Handshake)?;
+            .map_err(SeedError::from)?;
+        let client =
+            ().serve((read, write))
+                .await
+                .map_err(|_| SeedError::Transport { tool: "connect" })?;
         let agent = Self { name, client };
         agent.call("register_agent", json!({"name": name})).await?;
         Ok(agent)

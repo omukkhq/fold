@@ -1,4 +1,5 @@
 import { ApiError, apiErrorCode } from "@/api/errors";
+import { commonText } from "@/format/failure";
 import { atName } from "@/people/names";
 
 /** `inline` shows on the control whose write failed: the actions or the form. `banner` shows above the screen. */
@@ -127,24 +128,17 @@ const ENTRIES: Record<string, Entry> = {
     place: "banner",
     text: "fold has no proposal with this id.",
   },
-  human_name_required: {
-    place: "banner",
-    text: "Tell fold your name first, then try once more.",
-  },
-  auth_required: {
-    place: "banner",
-    text: "Sign in again, then try once more.",
-  },
-  project_unavailable: {
-    place: "banner",
-    text: "The project is not available now.",
-  },
 };
 
-/** Where and how the screen shows a failed write. It branches on the error code; the message shows only for a code without an entry. */
+/** Where and how the screen shows a failed write. It branches on the error code; a code every screen words the same way shows its shared sentence as a banner, and the message shows only for a code without an entry. */
 export function describeFailure(error: unknown): Failure {
   const code = apiErrorCode(error);
-  const entry = code === null ? undefined : ENTRIES[code];
+  const common = code === null ? undefined : commonText(code);
+  const entry: Entry | undefined =
+    code === null
+      ? undefined
+      : (ENTRIES[code] ??
+        (common === undefined ? undefined : { place: "banner", text: common }));
   if (!entry) {
     const message =
       error instanceof Error && error.message ? error.message : "";

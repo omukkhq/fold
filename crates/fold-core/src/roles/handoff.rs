@@ -6,6 +6,7 @@ use crate::error::{FoldError, codes};
 use crate::ids::{ProposalId, TaskId};
 use crate::status::TaskStatus;
 use crate::task::LabelName;
+use crate::text::shorten;
 
 /// How many turns of a lead, counted from the turn that asks for its hand-off note, may end without a note before fold starts the lead fresh with the fold summary alone.
 pub const HANDOFF_TURNS: u64 = 3;
@@ -170,16 +171,6 @@ fn list(text: &mut String, heading: &str, count: u64, lines: impl Iterator<Item 
     if more > 0 {
         let _ = writeln!(text, "- and {more} more");
     }
-}
-
-/// `text` cut to `limit` characters, the last one an ellipsis when anything was cut.
-fn shorten(text: &str, limit: usize) -> String {
-    if text.chars().count() <= limit {
-        return text.to_owned();
-    }
-    let mut short: String = text.chars().take(limit.saturating_sub(1)).collect();
-    short.push('…');
-    short
 }
 
 #[cfg(test)]

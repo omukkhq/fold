@@ -789,23 +789,13 @@ pub struct CommentBody {
 
 impl CommentBody {
     fn into_input(self, field: &str) -> Result<CommentInput, ApiError> {
-        let location = match (self.path, self.side, self.start_line, self.end_line) {
-            (None, None, None, None) => None,
-            (Some(path), Some(side), Some(start_line), Some(end_line)) => Some(CommentLocation {
-                path,
-                side: side.into(),
-                start_line,
-                end_line,
-            }),
-            _ => {
-                return Err(FoldError::new(
-                    fold_core::codes::INVALID_REQUEST,
-                    "a line comment needs path, side, start_line and end_line",
-                )
-                .with_details([("field", serde_json::json!(field))])
-                .into());
-            }
-        };
+        let location = CommentLocation::from_parts(
+            field,
+            self.path,
+            self.side.map(Side::from),
+            self.start_line,
+            self.end_line,
+        )?;
         Ok(CommentInput {
             location,
             reply_to: self.reply_to.as_deref().map(id).transpose()?,
@@ -944,6 +934,7 @@ pub async fn list_proposals(
     let filter = ProposalFilter {
         state: query.state.map(ProposalState::from),
         unclaimed: query.unclaimed.unwrap_or(false),
+        limit: None,
     };
     let rows = service(&state, &project).list_proposals(filter).await?;
     Ok(Json(ProposalList {

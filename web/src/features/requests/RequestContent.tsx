@@ -44,6 +44,7 @@ import {
   versionText,
 } from "./present";
 import { KindBadge, StatePill } from "./RequestPills";
+import { projectPath } from "@/routes/paths";
 
 export const OVERLINE =
   "text-overline leading-snug font-semibold tracking-overline text-primary-text uppercase";
@@ -55,7 +56,7 @@ export function Crumb({ slug, id }: { slug: string; id: string }) {
       className="flex items-center gap-8 text-bar text-text-muted"
     >
       <HrefLink
-        href={`/p/${slug}/requests`}
+        href={projectPath(slug, "requests")}
         className={cn("rounded-s hover:text-text", focusRing)}
       >
         Requests

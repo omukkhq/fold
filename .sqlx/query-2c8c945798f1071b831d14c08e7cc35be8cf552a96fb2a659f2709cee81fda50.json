@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE tasks SET request_id = (SELECT id FROM requests WHERE number = ?2)\n         WHERE number = ?1 AND EXISTS (SELECT 1 FROM requests WHERE number = ?2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "2c8c945798f1071b831d14c08e7cc35be8cf552a96fb2a659f2709cee81fda50"
+}

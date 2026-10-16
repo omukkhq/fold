@@ -1,5 +1,6 @@
 use fold_core::claims::is_stale;
 use fold_core::events::types;
+use fold_core::reviews::MAX_REASON_CHARS;
 use fold_core::{
     Actor, EventActor, FoldError, NewEvent, ProposalId, Timestamp, WorkerName, codes, policy,
 };
@@ -18,9 +19,6 @@ const TAKEN_OVER: &str = "taken_over";
 
 /// The `release_reason` of a release that names no reason.
 const RELEASED: &str = "released";
-
-/// The longest release reason, in characters.
-const MAX_REASON_CHARS: usize = 500;
 
 /// The review claim on a proposal as callers see it. `stale` is computed at read time from the project's lease.
 #[derive(Debug, Clone, PartialEq, Eq)]

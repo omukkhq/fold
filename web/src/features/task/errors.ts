@@ -1,4 +1,5 @@
 import { ApiError, apiErrorCode } from "@/api/errors";
+import { commonText } from "@/format/failure";
 import { cyclePath, cycleText } from "./dependencies";
 
 /** The form field a refusal belongs to. */
@@ -80,8 +81,10 @@ export function describeError(error: unknown): ErrorView | null {
           (reason !== null ? TASK_CLOSED[reason] : undefined) ??
           "The task is closed and takes no more changes.",
       };
-    default:
-      return null;
+    default: {
+      const text = commonText(apiErrorCode(error) ?? "");
+      return text === undefined ? null : { field: null, text };
+    }
   }
 }
 

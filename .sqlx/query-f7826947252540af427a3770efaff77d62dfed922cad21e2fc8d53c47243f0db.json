@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT c.draft_id, c.key, c.title, c.description, l.name AS \"label?: String\"\n           FROM request_draft_cards c\n           JOIN request_drafts d ON d.id = c.draft_id\n           JOIN requests r ON r.id = d.request_id\n           LEFT JOIN labels l ON l.id = c.label_id\n           WHERE r.number = ? ORDER BY c.draft_id, c.position",
+  "describe": {
+    "columns": [
+      {
+        "name": "draft_id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "request_draft_cards",
+            "name": "draft_id"
+          }
+        }
+      },
+      {
+        "name": "key",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "request_draft_cards",
+            "name": "key"
+          }
+        }
+      },
+      {
+        "name": "title",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "request_draft_cards",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "name": "description",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "request_draft_cards",
+            "name": "description"
+          }
+        }
+      },
+      {
+        "name": "label?: String",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "labels",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "f7826947252540af427a3770efaff77d62dfed922cad21e2fc8d53c47243f0db"
+}

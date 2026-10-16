@@ -481,7 +481,7 @@ async fn comment_covers_a_single_line_and_a_range() {
             .await,
     );
     assert_eq!(error.code(), codes::INVALID_REQUEST);
-    assert!(error.hint().unwrap().contains("list_comments"));
+    assert!(error.hint().unwrap().contains("get_review_comments"));
 }
 
 #[tokio::test]

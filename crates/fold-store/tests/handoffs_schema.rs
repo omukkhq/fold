@@ -26,7 +26,7 @@ async fn seeded() -> (tempfile::TempDir, Store, i64) {
     let id = store
         .write(async |tx| {
             agents::insert_worker_process(
-                tx.conn(),
+                tx,
                 &NewWorkerProcess {
                     agent_id: 1,
                     role: Role::AreaLead,
@@ -58,7 +58,7 @@ async fn notes_are_kept_per_session_and_never_change() {
         ("s-2", "third", 40),
     ] {
         store
-            .write(async |tx| agents::insert_handoff(tx.conn(), 1, session, body, at(time)).await)
+            .write(async |tx| agents::insert_handoff(tx, 1, session, body, at(time)).await)
             .await
             .unwrap();
     }
@@ -104,11 +104,11 @@ async fn a_session_is_asked_once_and_a_refresh_starts_a_new_one() {
     let (_dir, store, id) = seeded().await;
     assert_eq!(agents::handoff_asked(store.read(), id).await.unwrap(), None);
     let first = store
-        .write(async |tx| agents::set_handoff_asked(tx.conn(), id, 4, at(20)).await)
+        .write(async |tx| agents::set_handoff_asked(tx, id, 4, at(20)).await)
         .await
         .unwrap();
     let again = store
-        .write(async |tx| agents::set_handoff_asked(tx.conn(), id, 6, at(30)).await)
+        .write(async |tx| agents::set_handoff_asked(tx, id, 6, at(30)).await)
         .await
         .unwrap();
     assert!(first && !again);
@@ -120,7 +120,7 @@ async fn a_session_is_asked_once_and_a_refresh_starts_a_new_one() {
         .await
         .unwrap();
     store
-        .write(async |tx| agents::refresh_session(tx.conn(), id, "s-2", at(50)).await)
+        .write(async |tx| agents::refresh_session(tx, id, "s-2", at(50)).await)
         .await
         .unwrap();
     let mut conn = store.read().acquire().await.unwrap();

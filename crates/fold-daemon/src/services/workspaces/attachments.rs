@@ -14,14 +14,22 @@ pub struct WorkspaceFile {
 }
 
 impl WorkspaceService {
-    /// The files at `paths` in the actor's own active workspace, in order, so an agent can attach what it has at hand. More paths than a request holds are refused before anything is read. Each path must be relative and normalised, and each file a regular file of at most `max_bytes` bytes, read one directory handle at a time with no symlink followed. A file larger than the limit is `invalid_request` with `details.reason = "attachment_too_large"` and its 1-based `position`.
+    /// The files at `paths` in the actor's own active workspace, in order, so an agent can attach what it has at hand. No paths read nothing; paths without a workspace are `invalid_request` with `details.reason = "attachments_need_ws"`. More paths than a request holds are refused before anything is read. Each path must be relative and normalised, and each file a regular file of at most `max_bytes` bytes, read one directory handle at a time with no symlink followed. A file larger than the limit is `invalid_request` with `details.reason = "attachment_too_large"` and its 1-based `position`.
     pub async fn read_own_files(
         &self,
         actor: &Actor,
-        workspace: WorkspaceId,
+        workspace: Option<WorkspaceId>,
         paths: &[String],
         max_bytes: u64,
     ) -> Result<Vec<WorkspaceFile>, WorkspaceError> {
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+        let workspace = workspace.ok_or_else(|| {
+            FoldError::new(codes::INVALID_REQUEST, "attachments need your workspace ws")
+                .with_details([("reason", json!("attachments_need_ws"))])
+                .with_hint("call create_request again with ws, the workspace that holds the files")
+        })?;
         check_attachment_count(paths.len())?;
         let parsed = paths
             .iter()

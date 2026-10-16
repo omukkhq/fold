@@ -1,5 +1,6 @@
 import { parseId } from "@/format/ids";
 import type { ThreadFilter } from "./filters";
+import { projectPath, withQuery } from "@/routes/paths";
 
 export interface MessagesSearch extends ThreadFilter {
   /** A thread id, or the id of a message in it. */
@@ -38,6 +39,5 @@ export function messagesHref(slug: string, search: MessagesSearch): string {
     const value = search[key];
     if (value !== undefined) params.set(key, value);
   }
-  const query = params.toString();
-  return `/p/${slug}/messages${query ? `?${query}` : ""}`;
+  return withQuery(projectPath(slug, "messages"), params);
 }

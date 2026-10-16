@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use fold_core::object::{ObjectHash, ObjectKind};
 use fold_core::tree::{EntryKind, FlatTree, Tree, TreeEntry};
 use fold_core::{FoldError, codes};
@@ -160,7 +162,8 @@ pub fn list_flat_dir(
     if path.is_some() {
         prefix.push(b'/');
     }
-    let mut listed: Vec<FlatDirEntry> = Vec::new();
+    // Flat keys put `a-b` before `a/x`, so the names are sorted again into the name order of a tree, where `a` comes before `a-b`.
+    let mut names: BTreeMap<&[u8], EntryKind> = BTreeMap::new();
     for (key, entry) in entries.range(prefix.clone()..) {
         let Some(rest) = key.strip_prefix(prefix.as_slice()) else {
             break;
@@ -169,13 +172,15 @@ pub fn list_flat_dir(
             Some(at) => (&rest[..at], EntryKind::Directory),
             None => (rest, entry.kind),
         };
-        if listed.last().is_none_or(|last| last.name != name) {
-            listed.push(FlatDirEntry {
-                name: name.to_vec(),
-                kind,
-            });
-        }
+        names.insert(name, kind);
     }
+    let listed: Vec<FlatDirEntry> = names
+        .into_iter()
+        .map(|(name, kind)| FlatDirEntry {
+            name: name.to_vec(),
+            kind,
+        })
+        .collect();
     if let Some(path) = path
         && listed.is_empty()
     {

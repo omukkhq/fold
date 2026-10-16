@@ -1,6 +1,7 @@
+use std::collections::HashMap;
+
 use fold_core::roles::check_handoff;
 use fold_core::{Actor, AgentName, FoldError, WorkerState, codes, policy};
-use fold_store::StoreError;
 use fold_store::agents::{self, HandoffRow};
 
 use super::not_supervised;
@@ -29,7 +30,7 @@ impl AgentService {
                 let row = agents::find_worker_process(tx.conn(), agent)
                     .await?
                     .ok_or_else(|| not_supervised(agent))?;
-                agents::insert_handoff(tx.conn(), row.agent_id, &row.session_id, body, now).await?;
+                agents::insert_handoff(tx, row.agent_id, &row.session_id, body, now).await?;
                 Ok::<_, AgentError>(row)
             })
             .await?;
@@ -39,20 +40,11 @@ impl AgentService {
         Ok(())
     }
 
-    /// The newest hand-off note of `agent`, for `list_workers`.
-    pub async fn latest_handoff(
-        &self,
-        agent: &AgentName,
-    ) -> Result<Option<HandoffRow>, AgentError> {
-        let mut conn = self
-            .store
-            .read()
-            .acquire()
-            .await
-            .map_err(StoreError::from)?;
-        let Some(row) = agents::find_agent(&mut *conn, agent).await? else {
-            return Ok(None);
-        };
-        Ok(agents::latest_handoff(&mut *conn, row.id).await?)
+    /// The newest hand-off note of every agent that wrote one, for `list_workers`.
+    pub async fn latest_handoffs(&self) -> Result<HashMap<AgentName, HandoffRow>, AgentError> {
+        Ok(agents::latest_handoffs(self.store.read())
+            .await?
+            .into_iter()
+            .collect())
     }
 }

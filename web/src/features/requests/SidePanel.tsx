@@ -39,6 +39,7 @@ import { changesSchema, type ChangesValues } from "./compose";
 import type { Failure } from "./errors";
 import { drafterLine, type CreatedTask } from "./present";
 import { OVERLINE } from "./RequestContent";
+import { projectPath } from "@/routes/paths";
 
 function Block({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -338,7 +339,7 @@ export function CreatedTasksPanel({
           return (
             <li key={t.task}>
               <HrefLink
-                href={`/p/${slug}/t/${t.task}`}
+                href={projectPath(slug, "t", t.task)}
                 className={cn(
                   "flex flex-col gap-4 rounded-m bg-surface px-10 py-8 inset-ring inset-ring-border-subtle hover:bg-bg",
                   focusRing,
@@ -370,7 +371,7 @@ export function CreatedTasksPanel({
         })}
       </ul>
       <HrefLink
-        href={`/p/${slug}/board`}
+        href={projectPath(slug, "board")}
         className={cn(buttonClasses("secondary", "md"), focusRing)}
       >
         <span className={buttonIconClass("secondary")}>

@@ -6,9 +6,7 @@ use axum::extract::State;
 use axum::http::request::Parts;
 use axum::response::sse::{self, KeepAlive, Sse};
 use fold_core::events::{Event, EventType, types};
-use fold_core::{
-    CheckpointId, LiveEvent, Presence, ProposalId, RevisionId, TaskId, Timestamp, WorkspaceId,
-};
+use fold_core::{LiveEvent, Presence, ProposalId, RevisionId, TaskId, Timestamp, WorkspaceId};
 use futures_util::{Stream, StreamExt as _};
 use serde::{Deserialize, Serialize};
 use utoipa::openapi::schema::{ObjectBuilder, SchemaType, Type};
@@ -23,6 +21,7 @@ use super::auth::SESSION_COOKIE;
 use super::error::{ApiError, ApiQuery, ErrorEnvelope};
 use super::{Project, Transport};
 use crate::daemon::AppState;
+pub use crate::live::{ChangeKind, ChangedFile, CheckpointSummary, LiveWorkspace};
 use crate::services::events::{self, Feed, FeedItem, HistoryPage, parse_last_event_id};
 use crate::services::projects;
 
@@ -77,7 +76,7 @@ pub async fn stream_events(
                 }
                 Err(error) => {
                     tracing::warn!(
-                        code = error.code().unwrap_or("store_error"),
+                        code = error.log_code(),
                         "the event stream could not read the events and ends"
                     );
                     return None;
@@ -101,7 +100,7 @@ async fn session_ended(state: AppState, session: Option<String>) {
             Ok(None) => return,
             Err(error) => {
                 tracing::warn!(
-                    code = error.code().unwrap_or("store_error"),
+                    code = error.log_code(),
                     "the event stream could not check its session and ends"
                 );
                 return;
@@ -167,42 +166,64 @@ fn frame(item: FeedItem) -> Option<Result<sse::Event, axum::Error>> {
             sse::Event::default()
                 .event(event.event_type.as_str())
                 .id(event.seq.to_string())
-                .json_data(EventEnvelope::Event(Event::clone(&event))),
+                .json_data(Frame::Event(&event)),
         ),
-        FeedItem::Snapshot { seq, workspaces } => {
-            let workspaces = workspaces.iter().map(|state| state.view.clone()).collect();
-            Some(
-                sse::Event::default()
-                    .event("snapshot")
-                    .json_data(EventEnvelope::Snapshot(Snapshot { seq, workspaces })),
-            )
-        }
-        FeedItem::Live(event) => live_envelope(&event).map(|envelope| {
+        FeedItem::Snapshot { seq, workspaces } => Some(
+            sse::Event::default()
+                .event("snapshot")
+                .json_data(Frame::Snapshot {
+                    seq,
+                    workspaces: workspaces.iter().map(|state| &state.view).collect(),
+                }),
+        ),
+        FeedItem::Live(event) => live_frame(&event).map(|frame| {
             sse::Event::default()
                 .event(event.event_type.as_str())
-                .json_data(envelope)
+                .json_data(frame)
         }),
     }
 }
 
-fn live_envelope(event: &LiveEvent) -> Option<EventEnvelope> {
-    let envelope = if event.event_type == types::WORKSPACE_CHANGED {
-        serde_json::from_value(event.data.clone()).map(EventEnvelope::WorkspaceChanged)
+/// [`EventEnvelope`] as it is sent, borrowing the event every subscriber shares instead of a copy of it.
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum Frame<'a> {
+    Event(&'a Event),
+    WorkspaceChanged(&'a serde_json::Value),
+    AgentPresenceChanged(&'a serde_json::Value),
+    WorkerOutput(&'a serde_json::Value),
+    Snapshot {
+        seq: u64,
+        workspaces: Vec<&'a LiveWorkspace>,
+    },
+}
+
+/// A workspace change is the serialised `LiveWorkspace` itself. The other live events are built from fields, so their data is checked against the envelope first.
+fn live_frame(event: &LiveEvent) -> Option<Frame<'_>> {
+    let data = &event.data;
+    let (frame, matches) = if event.event_type == types::WORKSPACE_CHANGED {
+        (Frame::WorkspaceChanged(data), true)
     } else if event.event_type == types::AGENT_PRESENCE_CHANGED {
-        serde_json::from_value(event.data.clone()).map(EventEnvelope::AgentPresenceChanged)
+        (
+            Frame::AgentPresenceChanged(data),
+            PresenceChange::deserialize(data).is_ok(),
+        )
     } else if event.event_type == types::WORKER_OUTPUT {
-        serde_json::from_value(event.data.clone()).map(EventEnvelope::WorkerOutput)
+        (
+            Frame::WorkerOutput(data),
+            WorkerOutput::deserialize(data).is_ok(),
+        )
     } else {
         return None;
     };
-    envelope
-        .inspect_err(|_| {
-            tracing::error!(
-                event_type = event.event_type.as_str(),
-                "a live event does not match its envelope"
-            );
-        })
-        .ok()
+    if !matches {
+        tracing::error!(
+            event_type = event.event_type.as_str(),
+            "a live event does not match its envelope"
+        );
+        return None;
+    }
+    Some(frame)
 }
 
 /// One frame of a project's event stream, told apart by `kind`: a stored event, a live workspace change, a live presence change, a live worker step, or the snapshot sent after a replay.
@@ -307,64 +328,72 @@ pub struct Snapshot {
     pub workspaces: Vec<LiveWorkspace>,
 }
 
-/// What an active workspace holds right now. These are working changes, never history.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-pub struct LiveWorkspace {
-    #[schema(value_type = String, example = "ws-9")]
-    pub workspace: WorkspaceId,
-    #[schema(value_type = String, example = "T-12")]
-    pub task: TaskId,
-    /// The worker label, `agent` or `agent/worker`.
-    #[schema(example = "frontend/ui")]
-    pub worker: String,
-    /// The revision the workspace is based on.
-    #[schema(value_type = String, example = "r17")]
-    pub base: RevisionId,
-    pub files: Vec<ChangedFile>,
-    /// A one-line change summary, such as `3 files: 2 modified, 1 added (+40 -5)`, or `no changes`.
-    pub summary: String,
-    /// UTC milliseconds.
-    #[schema(value_type = i64)]
-    pub last_activity_at: Timestamp,
-    pub checkpoints: Vec<CheckpointSummary>,
-    #[schema(value_type = Option<String>, required = true, example = "P-3")]
-    pub proposal: Option<ProposalId>,
-    /// The worker holds the task's implementation claim and nothing in the workspace changed for `stall_minutes`. Calls do not count, so a stalled worker can hold a fresh lease.
-    pub stalled: bool,
-}
+#[cfg(test)]
+mod tests {
+    use fold_core::EventActor;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-pub struct ChangedFile {
-    /// Relative to the workspace root.
-    pub path: String,
-    /// The path before a rename; null for every other change.
-    #[schema(required = true)]
-    pub previous_path: Option<String>,
-    pub change: ChangeKind,
-    pub added_lines: u32,
-    pub removed_lines: u32,
-    /// A binary file is compared by hash only, so its line counts are 0.
-    pub binary: bool,
-}
+    use super::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ChangeKind {
-    Added,
-    Modified,
-    Deleted,
-    Renamed,
-}
+    fn same(frame: &Frame<'_>, envelope: &EventEnvelope) {
+        assert_eq!(
+            serde_json::to_value(frame).unwrap(),
+            serde_json::to_value(envelope).unwrap()
+        );
+    }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-pub struct CheckpointSummary {
-    #[schema(value_type = String, example = "ck-88")]
-    pub id: CheckpointId,
-    #[schema(required = true)]
-    pub label: Option<String>,
-    /// False for a checkpoint an agent recorded explicitly.
-    pub automatic: bool,
-    /// UTC milliseconds.
-    #[schema(value_type = i64)]
-    pub created_at: Timestamp,
+    #[test]
+    fn a_frame_serialises_as_its_envelope() {
+        let event = Event {
+            seq: 7,
+            event_type: types::TASK_CREATED,
+            actor: EventActor::fold(),
+            task: None,
+            proposal: None,
+            workspace: None,
+            revision: None,
+            data: serde_json::json!({"title": "x"}),
+            created_at: Timestamp::from_millis(5).unwrap(),
+        };
+        same(&Frame::Event(&event), &EventEnvelope::Event(event.clone()));
+        let presence = PresenceChange {
+            agent: "frontend".into(),
+            presence: Presence::Active,
+        };
+        let data = serde_json::to_value(&presence).unwrap();
+        same(
+            &Frame::AgentPresenceChanged(&data),
+            &EventEnvelope::AgentPresenceChanged(presence),
+        );
+        same(
+            &Frame::Snapshot {
+                seq: 3,
+                workspaces: Vec::new(),
+            },
+            &EventEnvelope::Snapshot(Snapshot {
+                seq: 3,
+                workspaces: Vec::new(),
+            }),
+        );
+    }
+
+    #[test]
+    fn a_live_event_that_does_not_match_its_envelope_is_not_sent() {
+        let bad =
+            LiveEvent::new(types::AGENT_PRESENCE_CHANGED, None, serde_json::json!({})).unwrap();
+        assert!(live_frame(&bad).is_none());
+        let output = WorkerOutput {
+            agent: "web-coder".into(),
+            step: "text".into(),
+            tool: None,
+            text_length: Some(4),
+        };
+        let good = LiveEvent::new(
+            types::WORKER_OUTPUT,
+            None,
+            serde_json::to_value(&output).unwrap(),
+        )
+        .unwrap();
+        let frame = live_frame(&good).unwrap();
+        same(&frame, &EventEnvelope::WorkerOutput(output));
+    }
 }

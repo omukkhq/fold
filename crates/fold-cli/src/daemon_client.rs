@@ -13,10 +13,14 @@ use hyper::{Method, Request};
 use hyper_util::rt::TokioIo;
 use serde_json::Value;
 use thiserror::Error;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
+use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 
 pub use fold_daemon::http::actor::HUMAN_HEADER;
+use fold_daemon::mcp::handshake::{Answer, Hello, MAX_LINE};
 
+const START_LOCK_FILE: &str = "start.lock";
 const START_TIMEOUT: Duration = Duration::from_secs(10);
 const FIRST_BACKOFF: Duration = Duration::from_millis(10);
 const MAX_BACKOFF: Duration = Duration::from_millis(200);
@@ -49,18 +53,36 @@ pub enum ClientError {
     Body,
 }
 
+impl ClientError {
+    /// Wraps an I/O error with what the client was doing, for `map_err`.
+    pub fn io(context: &'static str) -> impl FnOnce(io::Error) -> Self {
+        move |source| Self::Io { context, source }
+    }
+}
+
 fn io_error(context: &'static str) -> impl FnOnce(io::Error) -> ClientError {
-    move |source| ClientError::Io { context, source }
+    ClientError::io(context)
 }
 
 /// Where the daemon is, and how to start it when it is not running.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientConfig {
     pub socket: PathBuf,
-    /// `$XDG_RUNTIME_DIR/fold`, which holds `start.lock`. Without it a client reaches a running daemon but cannot start one.
+    /// `$XDG_RUNTIME_DIR/fold`, which holds the start lock. Without it a client reaches a running daemon but cannot start one.
     pub runtime_dir: Option<PathBuf>,
     /// The binary started as `fld serve --socket <socket>`. `None` makes a client that never starts a daemon: an absent socket is [`ClientError::NoDaemon`].
     pub fold_exe: Option<PathBuf>,
+}
+
+impl ClientConfig {
+    /// A client that only reaches a daemon that already runs.
+    pub fn running(socket: PathBuf) -> Self {
+        Self {
+            socket,
+            runtime_dir: None,
+            fold_exe: None,
+        }
+    }
 }
 
 /// The first of `FOLD_HUMAN`, `USER` and `LOGNAME` that is set and not empty.
@@ -154,7 +176,7 @@ fn start_and_connect(
         .write(true)
         .truncate(false)
         .mode(0o600)
-        .open(runtime_dir.join("start.lock"))
+        .open(runtime_dir.join(START_LOCK_FILE))
         .map_err(io_error("open the start lock"))?;
     lock.lock().map_err(io_error("take the start lock"))?;
     if let Some(stream) = try_connect(config)? {
@@ -207,9 +229,53 @@ fn try_connect(
     }
 }
 
-/// The daemon outlives this process; a thread waits for it so it never stays a zombie while this process runs.
+/// The daemon outlives this process; a thread waits for it so it is not a zombie while this process runs. `fld claude` replaces itself with `claude`, which ends that thread: a daemon that stops during that session is a zombie of `claude` until the session ends and init reaps it, one at most, because the session starts no second daemon this way. An intermediate starter process would avoid it, but then the client could not tell a daemon that failed at start from one that is slow to listen.
 fn reap(mut daemon: Child) {
     std::thread::spawn(move || daemon.wait());
+}
+
+#[derive(Debug, Error)]
+pub enum HandshakeError {
+    #[error("the handshake with the daemon failed: {0}")]
+    Io(io::Error),
+    #[error("the daemon sent no valid handshake answer")]
+    NoAnswer,
+    #[error("{code}: {message}{}", hint.as_ref().map(|hint| format!(" ({hint})")).unwrap_or_default())]
+    Refused {
+        code: String,
+        message: String,
+        hint: Option<String>,
+    },
+}
+
+/// Sends `hello` as the first line of a daemon socket that speaks MCP and reads the daemon's one-line answer. The halves it returns carry the MCP session that follows; the read half may already hold bytes of it.
+pub async fn handshake(
+    stream: UnixStream,
+    hello: &Hello,
+) -> Result<(BufReader<OwnedReadHalf>, OwnedWriteHalf), HandshakeError> {
+    let (read, mut write) = stream.into_split();
+    let mut line = serde_json::to_vec(hello).map_err(|_| HandshakeError::NoAnswer)?;
+    line.push(b'\n');
+    write.write_all(&line).await.map_err(HandshakeError::Io)?;
+    let mut read = BufReader::new(read);
+    let mut answer = Vec::new();
+    (&mut read)
+        .take(MAX_LINE as u64)
+        .read_until(b'\n', &mut answer)
+        .await
+        .map_err(HandshakeError::Io)?;
+    let answer: Answer = serde_json::from_slice(&answer).map_err(|_| HandshakeError::NoAnswer)?;
+    if answer.ok {
+        return Ok((read, write));
+    }
+    Err(match answer.error {
+        Some(error) => HandshakeError::Refused {
+            code: error.code,
+            message: error.message,
+            hint: error.hint,
+        },
+        None => HandshakeError::NoAnswer,
+    })
 }
 
 /// An answer from the daemon's HTTP API.
@@ -218,6 +284,32 @@ pub struct Response {
     pub status: u16,
     /// `Value::Null` for an empty body.
     pub body: Value,
+}
+
+/// What the error envelope `{"error": {"code", "message", "details": {"hint"}}}` of a refused request holds. A field is `None` when the body lacks it, as it does for an answer that is not from fold.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Refusal {
+    pub code: Option<String>,
+    pub message: Option<String>,
+    pub hint: Option<String>,
+}
+
+impl Response {
+    /// Whether the status is in the 2xx range.
+    pub fn is_success(&self) -> bool {
+        (200..300).contains(&self.status)
+    }
+
+    /// The error envelope of the body, whatever the status.
+    pub fn refusal(&self) -> Refusal {
+        let error = &self.body["error"];
+        let text = |value: &Value| value.as_str().map(str::to_owned);
+        Refusal {
+            code: text(&error["code"]),
+            message: text(&error["message"]),
+            hint: text(&error["details"]["hint"]),
+        }
+    }
 }
 
 /// Sends the CLI's HTTP/1.1 requests over the socket, one connection per request.
@@ -295,6 +387,31 @@ mod tests {
             human_from(None, None, os("")),
             Err(ClientError::HumanUnknown)
         ));
+    }
+
+    #[test]
+    fn a_refusal_reads_code_message_and_the_hint_below_details() {
+        let refused = Response {
+            status: 409,
+            body: serde_json::json!({"error": {
+                "code": "main_tag_denied", "message": "taken", "details": {"hint": "run fld claude"},
+            }}),
+        };
+        assert!(!refused.is_success());
+        assert_eq!(
+            refused.refusal(),
+            Refusal {
+                code: Some("main_tag_denied".to_owned()),
+                message: Some("taken".to_owned()),
+                hint: Some("run fld claude".to_owned()),
+            }
+        );
+        let bare = Response {
+            status: 200,
+            body: Value::Null,
+        };
+        assert!(bare.is_success());
+        assert_eq!(bare.refusal(), Refusal::default());
     }
 
     #[test]

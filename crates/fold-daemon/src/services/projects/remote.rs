@@ -286,13 +286,5 @@ pub(crate) fn select_remote(
 pub(super) async fn blocking<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, FoldError> + Send + 'static,
 ) -> Result<T, ProjectError> {
-    tokio::task::spawn_blocking(work)
-        .await
-        .unwrap_or_else(|error| {
-            Err(FoldError::new(
-                codes::INTERNAL_ERROR,
-                format!("blocking work stopped: {error}"),
-            ))
-        })
-        .map_err(ProjectError::from)
+    Ok(crate::support::blocking(work).await?)
 }

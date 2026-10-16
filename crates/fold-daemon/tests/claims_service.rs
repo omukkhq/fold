@@ -513,11 +513,7 @@ async fn the_default_lease_is_thirty_minutes() {
     fixture.advance(minutes(29));
     assert!(!fixture.tasks.claim_view(t(1)).await.unwrap().unwrap().stale);
     fixture.advance(minutes(1));
-    let view = tasks::claim_view(fixture.project.store(), t(1), fixture.project.now(), 30)
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(view.stale);
+    assert!(fixture.tasks.claim_view(t(1)).await.unwrap().unwrap().stale);
 }
 
 #[tokio::test]

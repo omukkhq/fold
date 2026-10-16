@@ -1,6 +1,9 @@
+use std::ffi::OsStr;
 use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{self, Write};
 use std::os::fd::OwnedFd;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -76,53 +79,18 @@ const ALL_BITS: Capabilities = Capabilities {
     read_only_bit: true,
 };
 
-#[cfg(unix)]
 fn probe_mode(file: &Path, mode: u32, holds: fn(u32) -> bool) -> io::Result<bool> {
-    use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(file, fs::Permissions::from_mode(mode))?;
     Ok(holds(fs::metadata(file)?.permissions().mode()))
 }
 
-#[cfg(not(unix))]
-fn probe_mode(_file: &Path, _mode: u32, _holds: fn(u32) -> bool) -> io::Result<bool> {
-    Ok(false)
-}
-
-/// Sets the file's permissions: `0o755` or `0o644` regardless of umask when the platform has an executable bit, and no write bit (or the platform's read-only attribute) when `read_only`. Without an executable bit the mode is otherwise left alone.
-pub fn set_mode(
-    path: &Path,
-    executable: bool,
-    read_only: bool,
-    caps: &Capabilities,
-) -> io::Result<()> {
-    let mut permissions = fs::metadata(path)?.permissions();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = entry_mode(
-            permissions.mode(),
-            executable,
-            read_only && caps.read_only_bit,
-            caps,
-        );
-        permissions.set_mode(mode);
-    }
-    #[cfg(not(unix))]
-    let _ = executable;
-    if read_only && !caps.read_only_bit {
-        permissions.set_readonly(true);
-    }
-    fs::set_permissions(path, permissions)
-}
-
-/// [`set_mode`] on an open file, so the change reaches the file that was written and nothing a path could be swapped to. Without the read-only bit the write bits are cleared all the same, which is what the platform's read-only attribute does on Linux.
+/// Sets the permissions of an open file, so the change reaches the file that was written and nothing a path could be swapped to: `0o755` or `0o644` regardless of umask when the platform has an executable bit, and no write bit when `read_only`. Without an executable bit the mode is otherwise left alone. Without the read-only bit the write bits are cleared all the same, which is what the platform's read-only attribute does on Linux.
 pub(crate) fn set_file_mode(
     file: &File,
     executable: bool,
     read_only: bool,
     caps: &Capabilities,
 ) -> io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
     let current = file.metadata()?.permissions().mode();
     let mode = entry_mode(current, executable, read_only, caps);
     file.set_permissions(fs::Permissions::from_mode(mode))
@@ -147,45 +115,18 @@ pub fn clear_read_only(path: &Path) -> io::Result<()> {
         return Ok(());
     }
     let mut permissions = meta.permissions();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let wanted = if meta.is_dir() { 0o700 } else { 0o200 };
-        let mode = permissions.mode();
-        if mode & wanted == wanted {
-            return Ok(());
-        }
-        permissions.set_mode(mode | wanted);
+    let wanted = if meta.is_dir() { 0o700 } else { 0o200 };
+    let mode = permissions.mode();
+    if mode & wanted == wanted {
+        return Ok(());
     }
-    #[cfg(not(unix))]
-    {
-        if !permissions.readonly() {
-            return Ok(());
-        }
-        #[expect(
-            clippy::permissions_set_readonly_false,
-            reason = "without mode bits the read-only attribute is the only permission"
-        )]
-        permissions.set_readonly(false);
-    }
+    permissions.set_mode(mode | wanted);
     fs::set_permissions(path, permissions)
 }
 
-/// The permission bits the stat index compares. Platforms without mode bits report the read-only attribute alone.
+/// The permission bits the stat index compares.
 pub fn file_mode(meta: &Metadata) -> u32 {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        meta.permissions().mode() & 0o7777
-    }
-    #[cfg(not(unix))]
-    {
-        if meta.permissions().readonly() {
-            0o444
-        } else {
-            0o644
-        }
-    }
+    meta.permissions().mode() & 0o7777
 }
 
 /// Without an executable bit the recorded entry decides.
@@ -197,18 +138,9 @@ pub fn is_executable(meta: &Metadata, recorded: EntryKind, caps: &Capabilities) 
     }
 }
 
-/// `0` when the platform or the capabilities give no inode.
+/// `0` when the capabilities give no inode.
 pub fn file_identity(meta: &Metadata, caps: &Capabilities) -> u64 {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if caps.inodes { meta.ino() } else { 0 }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (meta, caps);
-        0
-    }
+    if caps.inodes { meta.ino() } else { 0 }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -224,15 +156,10 @@ pub fn create_symlink(
     link: &Path,
     caps: &Capabilities,
 ) -> io::Result<SymlinkOutcome> {
-    #[cfg(unix)]
     if caps.symlinks {
-        use std::ffi::OsStr;
-        use std::os::unix::ffi::OsStrExt;
         std::os::unix::fs::symlink(OsStr::from_bytes(target), link)?;
         return Ok(SymlinkOutcome::Created);
     }
-    #[cfg(not(unix))]
-    let _ = caps;
     let mut file = OpenOptions::new().write(true).create_new(true).open(link)?;
     file.write_all(target)?;
     Ok(SymlinkOutcome::Emulated)
@@ -405,6 +332,30 @@ pub fn tolerate_sync_error(error: io::Error) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_modes_ignore_the_umask_and_a_missing_executable_bit_keeps_the_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f");
+        fs::write(&path, b"x").unwrap();
+        let file = File::open(&path).unwrap();
+        let mode = || fs::metadata(&path).unwrap().permissions().mode() & 0o7777;
+        set_file_mode(&file, true, false, &ALL_BITS).unwrap();
+        assert_eq!(mode(), 0o755);
+        set_file_mode(&file, false, true, &ALL_BITS).unwrap();
+        assert_eq!(mode(), 0o444);
+        set_file_mode(&file, true, true, &ALL_BITS).unwrap();
+        assert_eq!(mode(), 0o555);
+        let keep = Capabilities {
+            exec_bit: false,
+            ..ALL_BITS
+        };
+        set_file_mode(&file, true, false, &keep).unwrap();
+        assert_eq!(mode(), 0o555, "no executable bit leaves the mode alone");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap();
+        set_file_mode(&file, false, true, &keep).unwrap();
+        assert_eq!(mode(), 0o444);
+    }
 
     #[test]
     fn syncs_a_real_directory() {

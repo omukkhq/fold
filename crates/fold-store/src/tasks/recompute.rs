@@ -91,18 +91,7 @@ pub async fn load_facts(
                       SELECT 1 FROM workspaces w WHERE w.task_id = t.id AND w.kind = 'task'
                   ) AS "ever_had_workspace!: bool",
                   p.conflicted AS "conflicted?: bool",
-                  (
-                      SELECT r.verdict FROM reviews r
-                      WHERE r.version_id = (
-                                SELECT v.id FROM proposal_versions v
-                                WHERE v.proposal_id = p.id
-                                ORDER BY v.version DESC
-                                LIMIT 1
-                            )
-                        AND r.verdict <> 'comment'
-                      ORDER BY r.created_at DESC, r.id DESC
-                      LIMIT 1
-                  ) AS "verdict?: String"
+                  (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) AS "verdict?: String"
            FROM tasks t
            LEFT JOIN proposals p ON p.task_id = t.id AND p.state = 'open'
            WHERE t.number IN (SELECT value FROM json_each(?1))

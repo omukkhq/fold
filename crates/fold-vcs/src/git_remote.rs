@@ -8,7 +8,7 @@ use fold_core::config::{check_branch, check_remote, check_remote_name};
 use fold_core::{FoldError, ProjectPaths, codes};
 use serde_json::json;
 
-use crate::git::{CommitId, Git, failed, unexpected_output, wait_error};
+use crate::git::{CommitId, Git, failed, unexpected_output};
 
 /// The ref fold writes its commits to. The `[git]` branch, which the project folder has checked out, moves to this ref's commit only by fast-forward, so a branch tip that is not an ancestor of it is a commit made outside fold, also after a stop between the write and the move.
 pub const FOLD_HEAD_REF: &str = "refs/fold/head";
@@ -129,20 +129,12 @@ pub fn index_to(git: &Git, paths: &ProjectPaths, commit: &CommitId) -> Result<()
 
 /// The branch `HEAD` of `repo` names, or `None` when `HEAD` is detached. Blocking.
 pub fn checked_out_branch(git: &Git, repo: &Path) -> Result<Option<String>, FoldError> {
-    let mut command = git.command(repo);
-    command
-        .args(["symbolic-ref", "-q", "HEAD"])
-        .stdout(Stdio::piped());
-    let output = Git::spawn(&mut command, "symbolic-ref")?
-        .wait_with_output()
-        .map_err(|error| wait_error(&error, "symbolic-ref"))?;
-    match output.status.code() {
-        Some(0) => {}
-        // `-q` exits 1, with nothing on stderr, for a detached `HEAD`; any other code is a failure.
-        Some(1) => return Ok(None),
-        _ => return Err(failed("symbolic-ref", output.status)),
-    }
-    let text = String::from_utf8(output.stdout).map_err(|_| unexpected_output("symbolic-ref"))?;
+    // `-q` exits 1, with nothing on stderr, for a detached `HEAD`.
+    let Some(out) = git.output_or_none(repo, &["symbolic-ref", "-q", "HEAD"], "symbolic-ref")?
+    else {
+        return Ok(None);
+    };
+    let text = String::from_utf8(out).map_err(|_| unexpected_output("symbolic-ref"))?;
     Ok(text
         .trim_end()
         .strip_prefix("refs/heads/")
@@ -152,14 +144,7 @@ pub fn checked_out_branch(git: &Git, repo: &Path) -> Result<Option<String>, Fold
 /// Whether the index and the tracked files of the project folder match `commit`, as Git checks before `updateInstead` updates a working tree; untracked files do not count. Blocking.
 pub fn folder_clean(git: &Git, paths: &ProjectPaths, commit: &CommitId) -> Result<bool, FoldError> {
     let root = paths.root();
-    let quiet = |args: &[&str], what: &'static str| -> Result<bool, FoldError> {
-        let status = git.status(root, &in_folder(paths, args), what)?;
-        match status.code() {
-            Some(0) => Ok(true),
-            Some(1) => Ok(false),
-            _ => Err(failed(what, status)),
-        }
-    };
+    let quiet = |args: &[&str], what: &'static str| git.check(root, &in_folder(paths, args), what);
     // Refreshing the stats first keeps a file whose stats alone changed from counting as changed; its exit code is what the two checks below answer.
     git.status(
         root,
@@ -333,25 +318,16 @@ pub fn merge_base(
     a: &CommitId,
     b: &CommitId,
 ) -> Result<Option<CommitId>, FoldError> {
-    let mut command = git.command(repo);
-    command
-        .args(["merge-base", a.as_str(), b.as_str()])
-        .stdout(Stdio::piped());
-    let output = Git::spawn(&mut command, "merge-base")?
-        .wait_with_output()
-        .map_err(|error| wait_error(&error, "merge-base"))?;
-    match output.status.code() {
-        Some(0) => {
-            let text =
-                String::from_utf8(output.stdout).map_err(|_| unexpected_output("merge-base"))?;
-            text.trim_end()
-                .parse()
-                .map(Some)
-                .map_err(|_| unexpected_output("merge-base"))
-        }
-        Some(1) => Ok(None),
-        _ => Err(failed("merge-base", output.status)),
-    }
+    let Some(out) =
+        git.output_or_none(repo, &["merge-base", a.as_str(), b.as_str()], "merge-base")?
+    else {
+        return Ok(None);
+    };
+    let text = String::from_utf8(out).map_err(|_| unexpected_output("merge-base"))?;
+    text.trim_end()
+        .parse()
+        .map(Some)
+        .map_err(|_| unexpected_output("merge-base"))
 }
 
 /// Whether `ancestor` is `descendant` or one of its ancestors. Blocking.
@@ -361,7 +337,7 @@ pub fn is_ancestor(
     ancestor: &CommitId,
     descendant: &CommitId,
 ) -> Result<bool, FoldError> {
-    let status = git.status(
+    git.check(
         mirror,
         &[
             "merge-base",
@@ -370,12 +346,7 @@ pub fn is_ancestor(
             descendant.as_str(),
         ],
         "merge-base",
-    )?;
-    match status.code() {
-        Some(0) => Ok(true),
-        Some(1) => Ok(false),
-        _ => Err(failed("merge-base", status)),
-    }
+    )
 }
 
 /// Points `refname` at `commit`, or deletes it for `None`. Blocking.

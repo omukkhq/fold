@@ -3,7 +3,7 @@ use std::fmt::Write as _;
 
 use fold_core::events::types;
 use fold_core::reviews::Verdict;
-use fold_core::roles::{StartFacts, check_limits, first_turn};
+use fold_core::roles::{StartFacts, first_turn};
 use fold_core::{
     AgentName, AreaName, Event, EventActor, FoldError, NewEvent, ProposalId, Role, TaskId,
     WorkerState, WorkspaceId, codes,
@@ -17,6 +17,7 @@ use tokio::sync::watch;
 use super::{Input, Supervisor, lock};
 use crate::services::agents::AgentError;
 use crate::services::agents::claude::{ClaudeMessage, SystemMessage};
+use crate::services::agents::workers::limits::check_running;
 use crate::services::agents::workers::{new_session, not_supervised};
 use crate::services::events::EventBuffer;
 use crate::services::projects::load_config;
@@ -210,17 +211,10 @@ impl Supervisor {
                     .with_hint("call list_workers")
                     .into());
                 }
-                let (running, in_area) =
-                    agents::running_counts(tx.conn(), row.role, row.area_id).await?;
-                check_limits(
-                    limits,
-                    row.role,
-                    running,
-                    row.area.as_ref().map(|area| (area, in_area)),
-                )?;
-                agents::restart_worker_process(tx.conn(), row.id, now).await?;
+                check_running(tx, limits, row.role, row.area_id.zip(row.area.as_ref())).await?;
+                agents::restart_worker_process(tx, row.id, now).await?;
                 for task in bind {
-                    agents::bind_task(tx.conn(), row.id, *task).await?;
+                    agents::bind_task(tx, row.id, *task).await?;
                 }
                 let event =
                     NewEvent::new(types::WORKER_STARTED, EventActor::fold())?.data(json!({
@@ -240,7 +234,7 @@ impl Supervisor {
         self.launch(&row, true, Some(turn)).await
     }
 
-    /// Hands each proposal version back to the task coder that wrote it. A stale item (the proposal moved on or is no longer open) and an author that is not a supervised task coder are left alone: an interactive author and a running coder get the push notice on their own.
+    /// Hands each proposal version back to the task coder that wrote it. A stale item (the proposal moved on, was closed or integrated) and an author that is not a supervised task coder are left alone: an interactive author and a running coder get the push notice on their own.
     pub(super) async fn resume_authors(self, items: Vec<ResumeItem>) {
         let mut by_author: BTreeMap<AgentName, Vec<ResumeItem>> = BTreeMap::new();
         for item in items {
@@ -252,7 +246,7 @@ impl Supervisor {
                 }
                 Ok(_) => {}
                 Err(error) => {
-                    tracing::warn!(proposal = %item.proposal, code = error.code().unwrap_or("store_error"), "could not read a proposal to resume its author");
+                    tracing::warn!(proposal = %item.proposal, code = error.log_code(), "could not read a proposal to resume its author");
                 }
             }
         }
@@ -265,11 +259,16 @@ impl Supervisor {
 
     /// Resumes the authors of every requested change and conflict that no start of theirs has served yet, such as one the worker limits refused.
     pub(super) async fn resume_pending(self) {
-        let pending = match agents::pending_resumes(self.inner.store.read()).await {
+        let pending = match agents::pending_resumes(
+            self.inner.store.read(),
+            &[WorkerState::Stopped, WorkerState::Failed],
+        )
+        .await
+        {
             Ok(pending) => pending,
             Err(error) => {
                 tracing::warn!(
-                    code = error.code().unwrap_or("store_error"),
+                    code = error.log_code(),
                     "could not read the pending resumes"
                 );
                 return;
@@ -292,6 +291,60 @@ impl Supervisor {
         }
         if !items.is_empty() {
             self.resume_authors(items).await;
+        }
+    }
+
+    /// Tells each running task coder about the requested changes and conflicts recorded since its process started, from the stored reviews and integrations. The watcher calls it after it fell behind the bus, when the events that would have reached the coder as notices may be lost.
+    pub(super) async fn notify_running_authors(&self) {
+        let pending = match agents::pending_resumes(
+            self.inner.store.read(),
+            &[WorkerState::Working, WorkerState::Idle],
+        )
+        .await
+        {
+            Ok(pending) => pending,
+            Err(error) => {
+                tracing::warn!(
+                    code = error.log_code(),
+                    "could not read the changes owed to running coders"
+                );
+                return;
+            }
+        };
+        let mut by_author: BTreeMap<AgentName, Vec<ResumeItem>> = BTreeMap::new();
+        for owed in pending {
+            for (reason, due) in [
+                (Reason::Changes, owed.changes),
+                (Reason::Conflict, owed.conflict),
+            ] {
+                if due {
+                    by_author
+                        .entry(owed.agent.clone())
+                        .or_default()
+                        .push(ResumeItem {
+                            proposal: owed.proposal,
+                            version: owed.version,
+                            reason,
+                        });
+                }
+            }
+        }
+        for (agent, items) in by_author {
+            let mut found = Vec::with_capacity(items.len());
+            for item in items {
+                match self.load(item).await {
+                    Ok(one) => found.push(one),
+                    Err(error) => {
+                        tracing::warn!(%agent, code = crate::services::agents::code_of(&error), "could not read the work owed by a running coder");
+                    }
+                }
+            }
+            if found.is_empty() {
+                continue;
+            }
+            if let Some(run) = lock(&self.inner.running).get(&agent) {
+                let _ = run.input.send(Input::Turn(notice_turn(&found)));
+            }
         }
     }
 
@@ -480,15 +533,14 @@ impl Supervisor {
                 if row.state != WorkerState::Failed {
                     return Ok(None);
                 }
-                let (running, in_area) =
-                    agents::running_counts(tx.conn(), row.role, row.area_id).await?;
-                check_limits(
+                check_running(
+                    tx,
                     limits,
                     row.role,
-                    running,
-                    row.area.as_ref().map(|area| (area, in_area)),
-                )?;
-                agents::refresh_session(tx.conn(), row.id, &session, now).await?;
+                    row.area_id.zip(row.area.as_ref()),
+                )
+                .await?;
+                agents::refresh_session(tx, row.id, &session, now).await?;
                 let event =
                     NewEvent::new(types::WORKER_STARTED, EventActor::fold())?.data(json!({
                         "agent": agent.as_str(),
@@ -568,6 +620,14 @@ fn found_turn_parts(found: &[Found]) -> String {
 fn resume_turn(found: &[Found]) -> String {
     format!(
         "fold resumed you because work you proposed needs you again.\n\n{}\n\n{STOP_LINE}",
+        found_turn_parts(found)
+    )
+}
+
+/// The turn a running coder gets for work it proposed that needs it again.
+fn notice_turn(found: &[Found]) -> String {
+    format!(
+        "Work you proposed needs you again.\n\n{}\n\n{STOP_LINE}",
         found_turn_parts(found)
     )
 }

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE workspaces\n         SET sync_checkpoint_id = (SELECT id FROM checkpoints WHERE number = ?2)\n         WHERE number = ?1\n           AND (?2 IS NULL OR EXISTS (SELECT 1 FROM checkpoints WHERE number = ?2 AND workspace_id = workspaces.id))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "51f4215c11179f8618bc7ef4d9e79d69829d109dd6edf99f957bb7cc14b51f8d"
+}

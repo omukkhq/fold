@@ -42,10 +42,9 @@ async fn setup() -> (TestProject, i64) {
                 .await?;
             }
             let agent =
-                agents::insert_agent(tx.conn(), &AgentName::parse("designer").unwrap(), now)
-                    .await?;
+                agents::insert_agent(tx, &AgentName::parse("designer").unwrap(), now).await?;
             agents::insert_worker(
-                tx.conn(),
+                tx,
                 agent,
                 &WorkerName::parse("designer").unwrap(),
                 None,

@@ -15,13 +15,14 @@ use tokio::task::{JoinHandle, JoinSet};
 
 use crate::daemon::AppState;
 use crate::projects::ProjectHandle;
-use crate::services::agents::AgentError;
 use crate::services::events::{BusMessage, EventBuffer};
 use crate::services::projects::{self, AttentionChange, ProjectAttention, RemoteContext};
 use crate::services::tasks::sweep_leases;
 use crate::services::workspaces::{
     QuietCheckpoint, Reconciliation, WorkspaceService, check_stalls,
 };
+use crate::support::lock;
+use crate::support::unpoisoned;
 
 /// How often a running daemon's jobs look at the clock.
 pub const JOB_TICK: Duration = Duration::from_secs(60);
@@ -58,7 +59,7 @@ pub async fn reconcile_workspaces(handle: &ProjectHandle) -> Vec<Reconciliation>
     let rows = match workspaces::list_live_task_workspaces(handle.store.read()).await {
         Ok(rows) => rows,
         Err(error) => {
-            tracing::error!(project = %handle.slug, code = error.code().unwrap_or("store_error"), "the workspaces were not reconciled");
+            tracing::error!(project = %handle.slug, code = error.log_code(), "the workspaces were not reconciled");
             return Vec::new();
         }
     };
@@ -78,7 +79,7 @@ pub async fn reconcile_workspaces(handle: &ProjectHandle) -> Vec<Reconciliation>
             Ok((workspace, Err(error))) => tracing::error!(
                 project = %handle.slug,
                 workspace = %workspace,
-                code = error.code().unwrap_or(codes::INTERNAL_ERROR),
+                code = error.log_code(),
                 "a workspace was not reconciled"
             ),
             Err(_) => tracing::error!(project = %handle.slug, "a workspace reconciliation stopped"),
@@ -225,7 +226,7 @@ impl QuietCheckpoints {
         let config = match projects::load_config(&project.paths).await {
             Ok(config) => config,
             Err(error) => {
-                tracing::warn!(project = %project.slug, code = error.code().unwrap_or(codes::INTERNAL_ERROR), "quiet checkpoints skipped; the next tick tries again");
+                tracing::warn!(project = %project.slug, code = error.log_code(), "quiet checkpoints skipped; the next tick tries again");
                 return 0;
             }
         };
@@ -266,7 +267,7 @@ impl QuietCheckpoints {
                 }
                 Err(error) => {
                     handled.insert(workspace, activity);
-                    tracing::warn!(project = %project.slug, workspace = %workspace, code = error.code().unwrap_or(codes::INTERNAL_ERROR), "a quiet checkpoint was not taken; the next editing burst tries again");
+                    tracing::warn!(project = %project.slug, workspace = %workspace, code = error.log_code(), "a quiet checkpoint was not taken; the next editing burst tries again");
                 }
             }
         }
@@ -424,14 +425,14 @@ async fn integrate_ready(
             match handle.reviews(&state.registry).integrate_ready().await {
                 Ok(done) => done.len(),
                 Err(error) => {
-                    tracing::warn!(project = %handle.slug, code = error.code().unwrap_or(codes::INTERNAL_ERROR), "the automatic integration failed; the next event tries again");
+                    tracing::warn!(project = %handle.slug, code = error.log_code(), "the automatic integration failed; the next event tries again");
                     0
                 }
             }
         }
         Ok(_) => 0,
         Err(error) => {
-            tracing::warn!(project = %handle.slug, code = error.code().unwrap_or(codes::INTERNAL_ERROR), "the automatic integration skipped a run; the configuration is invalid");
+            tracing::warn!(project = %handle.slug, code = error.log_code(), "the automatic integration skipped a run; the configuration is invalid");
             0
         }
     };
@@ -460,7 +461,7 @@ async fn lease_sweeper(
                 Ok(claims) => marked += claims.len(),
                 Err(error) => tracing::warn!(
                     project = %handle.slug,
-                    code = error.code().unwrap_or(codes::INTERNAL_ERROR),
+                    code = error.log_code(),
                     "the lease sweep failed; the next tick tries again"
                 ),
             }
@@ -491,7 +492,7 @@ async fn stalls(
                 Ok(count) => changed += count,
                 Err(error) => tracing::warn!(
                     project = %handle.slug,
-                    code = error.code().unwrap_or(codes::INTERNAL_ERROR),
+                    code = error.log_code(),
                     "the stall check failed; the next tick tries again"
                 ),
             }
@@ -548,7 +549,7 @@ async fn presence(
                 Ok(count) => sent += count,
                 Err(error) => tracing::warn!(
                     project = %handle.slug,
-                    code = presence_code(&error),
+                    code = error.log_code(),
                     "presence check failed; the next tick tries again"
                 ),
             }
@@ -557,14 +558,6 @@ async fn presence(
             seen.checks += 1;
             seen.cycles += u64::from(sent > 0);
         });
-    }
-}
-
-fn presence_code(error: &AgentError) -> &'static str {
-    match error {
-        AgentError::Fold(error) => error.code(),
-        AgentError::Store(error) => error.code().unwrap_or(codes::INTERNAL_ERROR),
-        AgentError::Event(_) => codes::INTERNAL_ERROR,
     }
 }
 
@@ -594,6 +587,13 @@ async fn gc_daily(
 }
 
 async fn collect_all(state: &AppState) {
+    match projects::purge_expired_web_sessions(&state.registry, state.clock.now()).await {
+        Ok(purged) => tracing::info!(purged, "expired web sessions purged"),
+        Err(error) => tracing::error!(
+            code = error.log_code(),
+            "expired web sessions could not be purged"
+        ),
+    }
     for handle in state.projects.handles() {
         match projects::gc(&handle, false).await {
             Ok(report) => tracing::info!(
@@ -611,7 +611,7 @@ async fn collect_all(state: &AppState) {
             ),
             Err(error) => tracing::error!(
                 project = %handle.slug,
-                code = error.code().unwrap_or(codes::INTERNAL_ERROR),
+                code = error.log_code(),
                 "daily garbage collection failed"
             ),
         }
@@ -629,11 +629,7 @@ impl ProjectTask {
 
     /// Waits up to `timeout` for the task to end after the project's bus closed, then aborts it, so the task never outlives the project's database. A second call returns at once.
     pub async fn stopped(&self, timeout: Duration) {
-        let task = self
-            .0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
+        let task = lock(&self.0).take();
         if let Some(task) = task {
             let abort = task.abort_handle();
             if tokio::time::timeout(timeout, task).await.is_err() {
@@ -645,11 +641,7 @@ impl ProjectTask {
 
 impl Drop for ProjectTask {
     fn drop(&mut self) {
-        let task = self
-            .0
-            .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
+        let task = unpoisoned(self.0.get_mut()).take();
         if let Some(task) = task {
             task.abort();
         }
@@ -769,7 +761,7 @@ async fn push_after_integration(context: &RemoteContext, git: &Git) {
     let remotes = match projects::load_config(&context.paths).await {
         Ok(config) => config.remotes,
         Err(error) => {
-            tracing::warn!(project = %context.slug, code = error.code().unwrap_or(codes::INTERNAL_ERROR), "the automatic push skipped an integration; the configuration is invalid");
+            tracing::warn!(project = %context.slug, code = error.log_code(), "the automatic push skipped an integration; the configuration is invalid");
             return;
         }
     };
@@ -814,7 +806,7 @@ async fn record_failed_push(
     match recorded {
         Ok(buffer) => context.bus.publish(buffer),
         Err(error) => {
-            tracing::warn!(project = %context.slug, event = "remote.push_failed", code = error.code().unwrap_or(codes::INTERNAL_ERROR), "an event was not recorded");
+            tracing::warn!(project = %context.slug, event = "remote.push_failed", code = error.log_code(), "an event was not recorded");
         }
     }
 }
@@ -840,7 +832,7 @@ async fn record_failure(
     match recorded {
         Ok(buffer) => context.bus.publish(buffer),
         Err(error) => {
-            tracing::warn!(project = %context.slug, event = name, code = error.code().unwrap_or(codes::INTERNAL_ERROR), "an event was not recorded");
+            tracing::warn!(project = %context.slug, event = name, code = error.log_code(), "an event was not recorded");
         }
     }
 }

@@ -1,8 +1,8 @@
 use fold_core::events::types;
 use fold_core::policy::{self, Starter};
 use fold_core::roles::{
-    AreaProfile, AreaProfileChange, StartFacts, check_limits, check_model, default_worker_name,
-    first_turn, outside_area, session_uuid,
+    AreaProfile, AreaProfileChange, StartFacts, check_model, default_worker_name, first_turn,
+    outside_area, session_uuid,
 };
 use fold_core::{
     Actor, AgentName, AreaName, FoldError, LabelName, NewEvent, ProjectConfig, ProposalId, Role,
@@ -25,9 +25,6 @@ mod process;
 pub use limits::WorkerLimitsChanged;
 pub use process::{Launcher, RESTART_TURN, StopTimeouts, Supervisor};
 
-/// The name of fold's own server in a worker's MCP configuration and in a role's `mcp` list.
-pub const FOLD_SERVER: &str = "fold";
-
 /// The most default names tried for one start before the start gives up.
 const MAX_NAME_ATTEMPTS: u32 = 100;
 
@@ -46,15 +43,16 @@ pub struct StartWorker {
 
 /// The stable code of an agent error for a log line.
 pub(crate) fn code_of(error: &AgentError) -> &'static str {
-    match error {
-        AgentError::Fold(error) => error.code(),
-        AgentError::Store(error) => error.code().unwrap_or("store_error"),
-        AgentError::Event(_) => codes::INTERNAL_ERROR,
-    }
+    error.log_code()
 }
 
 /// A fresh Claude Code session id for a new worker, a lead's fresh context or a worker whose session is gone.
 fn new_session() -> Result<String, AgentError> {
+    Ok(new_session_id()?)
+}
+
+/// A random Claude Code session id, for every session fold starts: a worker's, and a human's main session that `fld claude` starts.
+pub fn new_session_id() -> Result<String, FoldError> {
     let mut bytes = [0_u8; 16];
     getrandom::fill(&mut bytes).map_err(|_| {
         FoldError::new(
@@ -161,10 +159,9 @@ impl AgentService {
                     .with_hint("call list_workers to see the areas")
                     .into());
                 }
-                let area_id =
-                    agents::insert_area(tx.conn(), name, label_id, by.as_str(), now).await?;
+                let area_id = agents::insert_area(tx, name, label_id, by.as_str(), now).await?;
                 if !profile.is_empty() {
-                    agents::set_area_profile(tx.conn(), area_id, profile).await?;
+                    agents::set_area_profile(tx, area_id, profile).await?;
                 }
                 let event = NewEvent::new(types::AREA_DEFINED, by.clone())?
                     .data(json!({"area": name.as_str(), "label": label.as_str()}))?;
@@ -197,7 +194,7 @@ impl AgentService {
                 let area = agents::find_area(tx.conn(), name)
                     .await?
                     .ok_or_else(|| area_not_found(name))?;
-                agents::set_area_profile(tx.conn(), area.id, &change.apply(&area.profile)).await?;
+                agents::set_area_profile(tx, area.id, &change.apply(&area.profile)).await?;
                 let event = NewEvent::new(types::AREA_UPDATED, by.clone())?
                     .data(json!({"area": name.as_str(), "fields": change.fields()}))?;
                 buffer.append(tx, &event, now).await?;
@@ -292,13 +289,8 @@ impl AgentService {
                         }
                     }
                     Role::ReviewLead => {
-                        let leads: Vec<WorkerProcessRow> = agents::list_worker_processes(tx.conn())
-                            .await?
-                            .into_iter()
-                            .filter(|row| row.role == Role::ReviewLead)
-                            .collect();
-                        if let Some(lead) = leads.into_iter().next() {
-                            return existing_lead(tx, lead.agent).await;
+                        if let Some(lead) = agents::review_lead(tx.conn()).await? {
+                            return existing_lead(tx, lead).await;
                         }
                     }
                     Role::TaskCoder => {
@@ -309,12 +301,9 @@ impl AgentService {
                         let mut facts = Vec::new();
                         for task in &request.tasks {
                             if tasks::fetch(tx.conn(), *task).await?.is_none() {
-                                return Err(FoldError::new(
-                                    codes::TASK_NOT_FOUND,
-                                    format!("task {task} does not exist"),
-                                )
-                                .with_details([("task", json!(task.to_string()))])
-                                .into());
+                                return Err(crate::services::tasks::task_missing(*task)
+                                    .with_details([("task", json!(task.to_string()))])
+                                    .into());
                             }
                             let labels = tasks::labels_for_conn(tx.conn(), *task)
                                 .await?
@@ -335,14 +324,13 @@ impl AgentService {
                     }
                     Role::BatchReviewer => {}
                 }
-                let area_id = area_row.as_ref().map(|area| area.id);
-                let (running, in_area) = agents::running_counts(tx.conn(), role, area_id).await?;
-                check_limits(
+                limits::check_running(
+                    tx,
                     limits,
                     role,
-                    running,
-                    area_row.as_ref().map(|area| (&area.name, in_area)),
-                )?;
+                    area_row.as_ref().map(|area| (area.id, &area.name)),
+                )
+                .await?;
                 let name = match &request.name {
                     Some(name) => {
                         if agents::find_agent(tx.conn(), name).await?.is_some() {
@@ -358,9 +346,9 @@ impl AgentService {
                     }
                     None => free_name(tx, role, area.as_ref()).await?,
                 };
-                let agent_id = agents::insert_agent(tx.conn(), &name, now).await?;
+                let agent_id = agents::insert_agent(tx, &name, now).await?;
                 let main = WorkerName::main(&name);
-                agents::insert_worker(tx.conn(), agent_id, &main, None, now).await?;
+                agents::insert_worker(tx, agent_id, &main, None, now).await?;
                 for (kind, data) in [
                     (types::AGENT_REGISTERED, json!({"agent": name.as_str()})),
                     (
@@ -372,11 +360,11 @@ impl AgentService {
                     buffer.append(tx, &event, now).await?;
                 }
                 let id = agents::insert_worker_process(
-                    tx.conn(),
+                    tx,
                     &NewWorkerProcess {
                         agent_id,
                         role,
-                        area_id,
+                        area_id: area_row.as_ref().map(|area| area.id),
                         model: model.as_deref(),
                         session_id: &session,
                         started_by: by.as_str(),
@@ -385,22 +373,17 @@ impl AgentService {
                 )
                 .await?;
                 for task in &request.tasks {
-                    agents::bind_task(tx.conn(), id, *task).await?;
+                    agents::bind_task(tx, id, *task).await?;
                 }
                 for proposal in &request.proposals {
-                    if !agents::bind_proposal(tx.conn(), id, *proposal).await? {
-                        return Err(FoldError::new(
-                            codes::PROPOSAL_NOT_FOUND,
-                            format!("proposal {proposal} does not exist"),
-                        )
-                        .with_details([("proposal", json!(proposal.to_string()))])
-                        .into());
+                    if !agents::bind_proposal(tx, id, *proposal).await? {
+                        return Err(crate::services::reviews::proposal_missing(*proposal).into());
                     }
                 }
                 if role == Role::AreaLead
                     && let Some(area) = &area_row
                 {
-                    agents::set_area_lead(tx.conn(), area.id, agent_id).await?;
+                    agents::set_area_lead(tx, area.id, agent_id).await?;
                 }
                 let event = NewEvent::new(types::WORKER_STARTED, by.clone())?.data(json!({
                     "agent": name.as_str(),
@@ -469,13 +452,17 @@ impl AgentService {
         self.get_worker(agent).await
     }
 
-    /// Starts a stopped or failed worker again in the same agent and session with `--resume`, and sends it `turn`. The worker counts against the limits again. A running worker is refused with `worker_exists`.
+    /// Starts a stopped or failed worker again in the same agent and session with `--resume`, and sends it `turn`. Whoever may stop the worker may resume it. The worker counts against the limits again. A running worker is refused with `worker_exists`.
     pub async fn resume_worker(
         &self,
+        actor: &Actor,
         agent: &AgentName,
         turn: String,
     ) -> Result<WorkerProcessRow, AgentError> {
         let supervisor = self.supervisor()?.clone();
+        let row = self.get_worker(agent).await?;
+        let starter = self.starter(actor).await?;
+        policy::can_stop_worker(&starter, row.role, row.area.as_ref()).map_err(FoldError::from)?;
         supervisor.resume(agent, turn, &[]).await?;
         self.get_worker(agent).await
     }

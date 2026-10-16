@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT r.id AS \"row!: i64\", rw.name AS recipient, r.addressed_as, r.delivered_at,\n                  m.number\n           FROM message_recipients r\n           JOIN workers rw ON rw.id = r.worker_id\n           JOIN messages m ON m.id = r.message_id\n           WHERE r.worker_id IN (SELECT value FROM json_each(?)) AND r.acked_at IS NULL\n           ORDER BY m.number, rw.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "row!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "message_recipients",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "recipient",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workers",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "addressed_as",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "message_recipients",
+            "name": "addressed_as"
+          }
+        }
+      },
+      {
+        "name": "delivered_at",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "message_recipients",
+            "name": "delivered_at"
+          }
+        }
+      },
+      {
+        "name": "number",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "a1592194b7645405598c56cac7f9f9464c1f6579f506c44f45d561996dfe7628"
+}

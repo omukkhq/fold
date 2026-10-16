@@ -250,12 +250,7 @@ async fn open(
     let agents = handle.agents();
     let events = EventService::new(handle.store.clone(), handle.bus.clone());
     let workspaces = WorkspaceService::for_project(&handle);
-    let messages = MessageService::new(
-        handle.store.clone(),
-        state.registry.clone(),
-        handle.bus.clone(),
-        handle.clock.clone(),
-    );
+    let messages = handle.messages(&state.registry);
     let worker = peers::peer_worker(&state.projects, peer.pid)
         .await
         .map_err(from_agent)?;

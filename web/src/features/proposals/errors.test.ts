@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "@/api/errors";
+import { commonText } from "@/format/failure";
 import { describeFailure, reloadsProposal } from "./errors";
 
 const refusal = (code: string, details: Record<string, unknown> = {}) =>
@@ -115,6 +116,14 @@ describe("describeFailure", () => {
         mapped: true,
       });
     }
+    expect(describeFailure(refusal("project_unavailable")).text).toBe(
+      commonText("project_unavailable"),
+    );
+    expect(describeFailure(refusal("recipient_not_found"))).toEqual({
+      place: "banner",
+      text: commonText("recipient_not_found"),
+      mapped: true,
+    });
   });
 
   it("shows a code without an entry in the generic banner with the server's message", () => {

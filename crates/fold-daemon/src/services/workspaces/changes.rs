@@ -55,7 +55,7 @@ impl WorkspaceService {
     ) -> Result<Vec<WorkspaceEntry>, WorkspaceError> {
         let task_ids: Vec<TaskId> = views.iter().map(|view| view.task).collect();
         let stalled = stalled_tasks(self.live.as_ref());
-        let items = attention(&self.store, &task_ids, &stalled, self.clock.now()).await?;
+        let items = attention(&self.store, &task_ids, &stalled).await?;
         let mut read = self
             .store
             .read()

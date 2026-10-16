@@ -2,8 +2,8 @@ use fold_core::object::{ObjectHash, ObjectKind, hash_object};
 use fold_core::revision::Revision;
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree, Tree, apply_changes};
 use fold_core::{RevisionId, Timestamp, codes};
-use fold_vcs::objects::{ObjectError, ObjectStore};
-use fold_vcs::revision_store::{read_revision, require_stored, write_initial_tree, write_revision};
+use fold_vcs::objects::ObjectStore;
+use fold_vcs::revision_store::{read_revision, write_initial_tree, write_revision};
 
 #[cfg(test)]
 mod support {
@@ -59,17 +59,6 @@ fn writing_a_stored_revision_again_succeeds() {
     let first = write_revision(&objects, &original).unwrap();
     let second = write_revision(&objects, &original).unwrap();
     assert_eq!(first, second);
-}
-
-#[test]
-fn a_hash_missing_from_the_object_store_is_refused() {
-    let (_dir, objects) = store();
-    let original = revision(empty_tree_hash());
-    let refused = require_stored(&objects, &original).unwrap_err();
-    assert!(matches!(refused, ObjectError::Missing(hash) if hash == original.hash()));
-    assert_eq!(refused.code(), codes::OBJECT_MISSING);
-    let written = write_revision(&objects, &original).unwrap();
-    assert_eq!(require_stored(&objects, &original).unwrap(), written);
 }
 
 #[test]

@@ -140,12 +140,13 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
         item.title = request.title;
         items.push(item);
     }
-    for waiting in awaiting_human_review(store).await? {
+    let waiting_reviews = awaiting_human_review(store).await?;
+    let mut conn = store.read().acquire().await?;
+    for waiting in waiting_reviews {
         let mut item = NeedsYouItem::new(NeedsYouKind::HumanReview, waiting.since);
         item.task = Some(waiting.task);
         item.proposal = Some(waiting.proposal);
         item.human = waiting.reviewer;
-        let mut conn = store.read().acquire().await?;
         item.title = reviews::get_proposal(&mut *conn, waiting.proposal)
             .await?
             .map(|proposal| proposal.title);

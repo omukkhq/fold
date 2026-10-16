@@ -5,7 +5,7 @@ use fold_core::{
     Actor, AgentActor, EventActor, FoldError, IdKind, NewEvent, ProposalId, WorkspaceId, codes,
     policy,
 };
-use fold_store::agents::{self, WorkerRow};
+use fold_store::agents::WorkerRow;
 use fold_store::reviews::{self, ProposalRow, ReviewClaimRow};
 use fold_store::workspaces::{self, NewReviewCheckout};
 use fold_store::{Store, StoreError, counters};
@@ -16,6 +16,7 @@ pub use fold_store::workspaces::CheckoutTarget;
 use super::proposals::require_open;
 use super::verdicts::require_version;
 use super::{ReviewError, ReviewService};
+use crate::services::agents::{actor_worker, worker_not_found};
 use crate::services::events::EventBuffer;
 use crate::services::tasks::worker_row;
 use crate::services::workspaces::{WorkspaceError, WorkspaceRef, WorkspaceView};
@@ -190,19 +191,10 @@ fn checkout_checks<'a>(
 
 /// The actor's worker read on the read pool, for the lookup of an existing checkout before any file is written. The transaction reads it again.
 async fn find_worker(store: &Store, actor: &AgentActor) -> Result<WorkerRow, ReviewError> {
-    let read = store.read();
-    let not_found = || {
-        ReviewError::Fold(
-            FoldError::new(codes::WORKER_NOT_FOUND, "the worker does not exist")
-                .with_hint("call register_worker"),
-        )
-    };
-    let agent = agents::find_agent(read, &actor.agent)
+    let mut conn = store.read().acquire().await.map_err(StoreError::from)?;
+    Ok(actor_worker(&mut conn, actor)
         .await?
-        .ok_or_else(not_found)?;
-    agents::find_worker(read, agent.id, &actor.worker)
-        .await?
-        .ok_or_else(not_found)
+        .ok_or_else(worker_not_found)?)
 }
 
 /// `checkout_failed` with the code of what stopped the write. A refusal that is not about the files keeps its own code.

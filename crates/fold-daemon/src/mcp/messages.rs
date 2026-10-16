@@ -2,8 +2,8 @@ use std::future::Future;
 use std::pin::Pin;
 
 use fold_core::{
-    Actor, Address, Choice, FoldError, MessageBody, MessageChoices, MessageId, ProposalId,
-    RequestId, TaskId, Timestamp, codes,
+    Address, Choice, FoldError, MessageBody, MessageChoices, MessageId, ProposalId, RequestId,
+    TaskId, Timestamp, codes,
 };
 use fold_store::agents::WorkerRow;
 use rmcp::handler::server::common::schema_for_type;
@@ -13,7 +13,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use super::error::{from_agent, from_message};
-use super::identity::parse;
+use super::parse;
 use super::{FoldServer, FooterPart, FooterSource};
 use crate::services::agents::{AgentService, SessionContext};
 use crate::services::messages::{InboxItem, MessageService, MessageView, SendMessage};
@@ -57,6 +57,7 @@ pub struct SendMessageInput {
 pub enum ChoiceInput {
     /// A short single-line label, such as "Recharts".
     Label(String),
+    /// A label with a description the human sees under it, such as {"label": "Recharts", "description": "Ready-made bar components; adds about 90 kB"}.
     Described {
         /// A short single-line label, such as "Recharts".
         label: String,
@@ -149,16 +150,6 @@ pub fn tools() -> Vec<Tool> {
             schema_for_type::<AcknowledgeMessageInput>(),
         ),
     ]
-}
-
-/// The acting agent of a call, with its tags as they are now.
-async fn actor(server: &FoldServer, worker: &WorkerRow) -> Result<Actor, FoldError> {
-    let session = server.session().await;
-    server
-        .agents
-        .actor(&session, Some(&worker.name))
-        .await
-        .map_err(from_agent)
 }
 
 fn message_id(text: &str) -> Result<MessageId, FoldError> {
@@ -276,7 +267,7 @@ pub async fn send_message(
             MessageChoices::parse(&options, None)
         })
         .transpose()?;
-    let actor = actor(server, worker).await?;
+    let actor = server.actor(Some(&worker.name)).await?;
     let sent = server
         .messages
         .send_with_choices(&actor, message, request, choices)
@@ -299,7 +290,7 @@ pub async fn get_inbox(
     arguments: &JsonObject,
 ) -> Result<Value, FoldError> {
     let input: GetInboxInput = parse(arguments)?;
-    let actor = actor(server, worker).await?;
+    let actor = server.actor(Some(&worker.name)).await?;
     let items = server
         .messages
         .inbox(&actor, input.include_workers)
@@ -342,7 +333,7 @@ pub async fn acknowledge_message(
 ) -> Result<Value, FoldError> {
     let input: AcknowledgeMessageInput = parse(arguments)?;
     let id = message_id(&input.id)?;
-    let actor = actor(server, worker).await?;
+    let actor = server.actor(Some(&worker.name)).await?;
     let acknowledged = server
         .messages
         .acknowledge(&actor, id, input.up_to)

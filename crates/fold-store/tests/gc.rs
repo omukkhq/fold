@@ -10,7 +10,7 @@ use fold_core::{Timestamp, WorkspaceId};
 use fold_store::testing::{TestProject, execute};
 use fold_store::workspaces::{
     ChangesetStats, CheckpointReason, closed_workspaces_due, gc_roots, insert_changeset,
-    insert_checkpoint, prune_auto, workspaces_over_auto_limit,
+    insert_checkpoint, mark_directory_removed, prune_auto, workspaces_over_auto_limit,
 };
 use fold_store::{Store, StoreError};
 
@@ -187,4 +187,34 @@ async fn closed_workspaces_are_due_after_their_retention() {
     assert_eq!(ids_after(12).await, 4);
     assert_eq!(ids_after(25).await, 0);
     assert_eq!(ids_after(u64::MAX).await, 0);
+}
+
+#[tokio::test]
+async fn a_removed_directory_is_not_due_again() {
+    let project = TestProject::new().await;
+    let store = project.store();
+    let one = seed::workspace(store, 1).await.workspace;
+    let two = seed::workspace(store, 2).await.workspace;
+    let now = project.now();
+    let closed = now.checked_sub(DAY * 30).unwrap().as_millis();
+    execute(
+        store,
+        &format!("UPDATE workspaces SET state = 'archived', closed_at = {closed} WHERE number = 1"),
+    )
+    .await;
+    let mark = |workspace| async move {
+        store
+            .write(async |tx| mark_directory_removed(tx, workspace, now).await)
+            .await
+            .unwrap()
+    };
+    assert!(!mark(two).await, "a live workspace is not marked");
+    assert!(mark(one).await);
+    assert!(!mark(one).await, "the first mark stays");
+    assert!(
+        closed_workspaces_due(store.read(), now, 14)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }

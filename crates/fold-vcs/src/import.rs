@@ -8,10 +8,10 @@ use fold_core::{FoldError, codes};
 
 use crate::ignore::IgnoreRules;
 use crate::objects::{ObjectError, ObjectStore};
-use crate::paths::RepoPath;
+use crate::paths::{RepoPath, is_reserved_name};
 use crate::platform::{Capabilities, DirHandle, is_executable};
 use crate::revision_store::write_initial_tree;
-use crate::scan::{READ_TRIES, SkipReason, Skipped};
+use crate::scan::{Entered, SkipReason, Skipped, enter_dir};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ImportOptions {
@@ -79,7 +79,11 @@ impl Walk<'_> {
             }
             Err(error) => return Err(source_error(&error)),
         };
+        let rules = self.rules.dir_rules(prefix);
         for name in names {
+            if is_reserved_name(&name) {
+                continue;
+            }
             let Ok(path) = RepoPath::child(prefix, &name) else {
                 continue;
             };
@@ -91,7 +95,7 @@ impl Walk<'_> {
                     continue;
                 }
             };
-            if self.rules.is_ignored_below(&path, meta.is_dir()) {
+            if rules.is_ignored(&path, meta.is_dir()) {
                 continue;
             }
             if meta.is_dir() {
@@ -103,42 +107,27 @@ impl Walk<'_> {
         Ok(())
     }
 
-    /// A directory is entered through a handle opened without following a symlink. One swapped for something else since it was listed imports as what is there now, unless that is ignored; one that keeps changing between a directory and something else is skipped as unreadable.
+    /// A directory is entered as a scan enters it. One swapped for something else since it was listed imports as what is there now, unless that is ignored; one that cannot be entered, or keeps changing between a directory and something else, is skipped as unreadable.
     fn subdir(
         &mut self,
         parent: &DirHandle,
         name: &[u8],
         path: &RepoPath,
     ) -> Result<(), FoldError> {
-        for _ in 0..READ_TRIES {
-            match parent.child(name) {
-                Ok(Some(child)) => return self.dir(&child, Some(path)),
-                Ok(None) => {}
-                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-                Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
-                    self.skip(path, SkipReason::Unreadable);
+        match enter_dir(parent, name) {
+            Ok(Entered::Dir(child)) => self.dir(&child, Some(path)),
+            Ok(Entered::Replaced(now)) => {
+                if self.rules.is_ignored_below(path, false) {
                     return Ok(());
                 }
-                Err(error) => return Err(source_error(&error)),
+                self.entry(parent, name, path, &now)
             }
-            let now = match parent.metadata(name) {
-                Ok(now) => now,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-                Err(_) => {
-                    self.skip(path, SkipReason::Unreadable);
-                    return Ok(());
-                }
-            };
-            if now.is_dir() {
-                continue;
+            Ok(Entered::Gone) => Ok(()),
+            Ok(Entered::Denied | Entered::Unstable) | Err(_) => {
+                self.skip(path, SkipReason::Unreadable);
+                Ok(())
             }
-            if self.rules.is_ignored_below(path, false) {
-                return Ok(());
-            }
-            return self.entry(parent, name, path, &now);
         }
-        self.skip(path, SkipReason::Unreadable);
-        Ok(())
     }
 
     fn entry(
@@ -373,8 +362,7 @@ mod tests {
         )
         .unwrap();
 
-        let load = |hash: &ObjectHash| crate::snapshot::load_tree(&objects, hash);
-        let entries = fold_core::tree::flatten(&imported.tree, &load).unwrap();
+        let entries = crate::compare::load_flat(&objects, &imported.tree).unwrap();
         let paths: Vec<&[u8]> = entries.keys().map(Vec::as_slice).collect();
         assert_eq!(paths, [b"sub".as_slice(), b"top"]);
         assert_eq!(entries[b"sub".as_slice()].kind, EntryKind::Symlink);

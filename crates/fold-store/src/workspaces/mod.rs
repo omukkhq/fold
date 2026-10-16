@@ -19,7 +19,10 @@ pub use checkpoints::{
 };
 pub use commits::{insert_revision_commits, uncommitted_revisions};
 pub use conflicts::{ConflictRow, clear_conflict, list_conflicts, set_conflicts};
-pub use gc::{ClosedWorkspace, closed_workspaces_due, gc_roots, workspaces_over_auto_limit};
+pub use gc::{
+    ClosedWorkspace, closed_workspaces_due, gc_roots, mark_directory_removed,
+    workspaces_over_auto_limit,
+};
 pub use lifecycle::{
     CheckoutTarget, ClosedState, NewReviewCheckout, NewTaskWorkspace, ReviewCheckoutRow,
     WorkspaceKind, WorkspaceRow, WorkspaceState, active_review_checkout, close, get_workspace,

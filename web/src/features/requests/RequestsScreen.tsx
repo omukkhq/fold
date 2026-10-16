@@ -31,6 +31,7 @@ import {
   listSummary,
 } from "./present";
 import { KIND_ICONS, KindBadge, StatePill } from "./RequestPills";
+import { projectPath } from "@/routes/paths";
 
 interface RequestsScreenProps {
   slug: string;
@@ -289,7 +290,7 @@ export function RequestsScreen({
                   </td>
                   <td className={cn(CELL, "max-w-0")}>
                     <HrefLink
-                      href={`/p/${slug}/requests/${r.id}`}
+                      href={projectPath(slug, "requests", r.id)}
                       className={cn(
                         "block truncate rounded-s text-body leading-snug hover:underline",
                         heading.muted

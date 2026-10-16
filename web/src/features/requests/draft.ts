@@ -4,13 +4,8 @@ import type {
   NewDraft,
   RequestDraft,
 } from "@/api/requests";
-import {
-  MAX_CARDS,
-  MAX_TEXT_CHARS,
-  MAX_TITLE_CHARS,
-  charCount,
-  draftReasonText,
-} from "./errors";
+import { MAX_TEXT_CHARS, charCount } from "@/format/text";
+import { MAX_CARDS, MAX_TITLE_CHARS, draftReasonText } from "./errors";
 
 /** The requester's working copy of a draft in edit mode. */
 export interface DraftForm {

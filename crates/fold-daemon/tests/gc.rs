@@ -1,6 +1,5 @@
 #![cfg(test)]
 
-use fold_daemon::http::host::CLIENT_HEADER;
 use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::os::unix::fs::PermissionsExt;
@@ -16,10 +15,11 @@ use fold_core::tree::{EntryKind, Tree, TreeEntry};
 use fold_core::{EventFilter, ManualClock, RevisionId, TaskId, Timestamp, WorkspaceId};
 use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
+use fold_daemon::http::host::CLIENT_HEADER;
 use fold_daemon::http::{router, socket_router};
 use fold_daemon::jobs::{JobProgress, spawn_gc_daily};
 use fold_daemon::projects::{ProjectHandle, Projects};
-use fold_daemon::services::projects::{GcReport, gc};
+use fold_daemon::services::projects::{GcReport, create_web_session, create_web_token, gc};
 use fold_store::events::read_after;
 use fold_store::projects::ProjectRow;
 use fold_store::testing::{TestProject, eventually, execute};
@@ -641,6 +641,43 @@ async fn gc_daily_runs_every_24_hours_of_the_clock_and_never_at_start() {
     })
     .await;
 
+    stop.send(true).unwrap();
+    job.stopped(WAIT).await;
+}
+
+/// A session nobody signs in after still leaves the registry: the daily job purges every expired one and keeps the live ones.
+#[tokio::test]
+async fn gc_daily_purges_expired_web_sessions() {
+    let fixture = Fixture::new("p0").await;
+    let clock = fixture.project.clock().clone();
+    let registry = fixture.project.registry().clone();
+    let ana = fold_core::HumanName::parse("ana").unwrap();
+    let token = create_web_token(&registry, &ana, None, fixture.project.now())
+        .await
+        .unwrap();
+    create_web_session(&registry, &clock, Duration::from_secs(60 * 60), &token)
+        .await
+        .unwrap()
+        .unwrap();
+    create_web_session(&registry, &clock, 2 * DAY, &token)
+        .await
+        .unwrap()
+        .unwrap();
+    let sessions = async || -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM web_sessions")
+            .fetch_one(registry.read())
+            .await
+            .unwrap()
+    };
+    assert_eq!(sessions().await, 2);
+    let state = state_with(&[&fixture], &clock).await;
+    let (stop, stopped) = watch::channel(false);
+    let job = spawn_gc_daily(state, Duration::from_millis(5), stopped);
+    let mut progress = job.progress();
+    wait_for(&mut progress, |seen| seen.checks >= 1).await;
+    clock.advance(DAY).unwrap();
+    wait_for(&mut progress, |seen| seen.cycles == 1).await;
+    assert_eq!(sessions().await, 1, "only the expired session went");
     stop.send(true).unwrap();
     job.stopped(WAIT).await;
 }

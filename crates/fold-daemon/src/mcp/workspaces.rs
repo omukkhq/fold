@@ -1,8 +1,6 @@
 use std::str::FromStr;
 
-use fold_core::{
-    Actor, CheckpointId, FoldError, RevisionId, TaskId, WorkerName, WorkspaceId, codes,
-};
+use fold_core::{CheckpointId, FoldError, RevisionId, TaskId, WorkerName, WorkspaceId, codes};
 use fold_vcs::compare::{FileChange, FileDiff};
 use fold_vcs::diff::{DiffLine, Hunk, LineKind};
 use rmcp::handler::server::common::schema_for_type;
@@ -11,8 +9,8 @@ use rmcp::schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::FoldServer;
-use super::error::{from_agent, from_workspace};
+use super::error::from_workspace;
+use super::{FoldServer, parse};
 use crate::services::workspaces::{
     RevisionSummary, StateRef, StateSummary, WorkspaceChanges, WorkspaceRef,
 };
@@ -228,15 +226,6 @@ pub fn tools() -> Vec<Tool> {
             schema_for_type::<AbandonWorkspaceInput>(),
         ),
     ]
-}
-
-fn parse<T: for<'de> Deserialize<'de>>(arguments: &JsonObject) -> Result<T, FoldError> {
-    serde_json::from_value(Value::Object(arguments.clone())).map_err(|_| {
-        FoldError::new(
-            codes::INVALID_REQUEST,
-            "the arguments do not match the tool's input schema",
-        )
-    })
 }
 
 fn revision_line(summary: &RevisionSummary) -> Value {
@@ -455,7 +444,7 @@ pub async fn call(
         CREATE_WORKSPACE => {
             let input: CreateWorkspaceInput = parse(arguments)?;
             let task = id::<TaskId>(&input.task, "task", "T-12")?;
-            let actor = actor(server, as_worker).await?;
+            let actor = server.actor(as_worker).await?;
             let created = server
                 .workspaces
                 .create_workspace(&actor, task)
@@ -516,7 +505,7 @@ pub async fn call(
         RECORD_CHECKPOINT => {
             let input: RecordCheckpointInput = parse(arguments)?;
             let workspace = id::<WorkspaceId>(&input.ws, "ws", "ws-9")?;
-            let actor = actor(server, as_worker).await?;
+            let actor = server.actor(as_worker).await?;
             let checkpoint = server
                 .workspaces
                 .record_checkpoint(&actor, workspace, input.label.as_deref())
@@ -549,7 +538,7 @@ pub async fn call(
         RESTORE_CHECKPOINT => {
             let input: RestoreCheckpointInput = parse(arguments)?;
             let checkpoint = id::<CheckpointId>(&input.ck, "ck", "ck-88")?;
-            let actor = actor(server, as_worker).await?;
+            let actor = server.actor(as_worker).await?;
             let restored = server
                 .workspaces
                 .restore_checkpoint(&actor, checkpoint)
@@ -564,7 +553,7 @@ pub async fn call(
         RECORD_CHANGES => {
             let input: RecordChangesInput = parse(arguments)?;
             let workspace = id::<WorkspaceId>(&input.ws, "ws", "ws-9")?;
-            let actor = actor(server, as_worker).await?;
+            let actor = server.actor(as_worker).await?;
             let recorded = server
                 .workspaces
                 .record_changes(&actor, workspace, &input.message)
@@ -578,7 +567,7 @@ pub async fn call(
         SYNC_WORKSPACE => {
             let input: SyncWorkspaceInput = parse(arguments)?;
             let workspace = id::<WorkspaceId>(&input.ws, "ws", "ws-9")?;
-            let actor = actor(server, as_worker).await?;
+            let actor = server.actor(as_worker).await?;
             let synced = server
                 .workspaces
                 .sync_workspace(&actor, workspace)
@@ -593,34 +582,20 @@ pub async fn call(
         ABANDON_WORKSPACE => {
             let input: AbandonWorkspaceInput = parse(arguments)?;
             let workspace = id::<WorkspaceId>(&input.ws, "ws", "ws-9")?;
-            let actor = actor(server, as_worker).await?;
-            let view = server
+            let actor = server.actor(as_worker).await?;
+            let abandoned = server
                 .workspaces
                 .abandon_workspace(&actor, workspace, &input.reason)
                 .await
                 .map_err(from_workspace)?;
-            let status = server
-                .workspaces
-                .task_status(view.task)
-                .await
-                .map_err(from_workspace)?;
             json!({
-                "workspace": view.id.to_string(),
-                "task_status": status.as_str(),
+                "workspace": abandoned.workspace.id.to_string(),
+                "task_status": abandoned.task_status.as_str(),
             })
         }
         _ => return Ok(None),
     };
     Ok(Some(value))
-}
-
-async fn actor(server: &FoldServer, as_worker: Option<&WorkerName>) -> Result<Actor, FoldError> {
-    let session = server.session().await;
-    server
-        .agents
-        .actor(&session, as_worker)
-        .await
-        .map_err(from_agent)
 }
 
 fn id<T: FromStr>(text: &str, field: &'static str, example: &str) -> Result<T, FoldError> {

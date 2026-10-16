@@ -1,13 +1,14 @@
 import { z } from "zod";
 import { parseId } from "@/format/ids";
+import { MAX_TEXT_CHARS, charCount } from "@/format/text";
 
-export const MAX_BODY = 4000;
+export const MAX_BODY = MAX_TEXT_CHARS;
 
 const body = z
   .string()
   .refine((value) => value.trim().length > 0, "Write a message first.")
   .refine(
-    (value) => value.trim().length <= MAX_BODY,
+    (value) => charCount(value.trim()) <= MAX_BODY,
     `A message holds at most ${String(MAX_BODY)} characters.`,
   );
 

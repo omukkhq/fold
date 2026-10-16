@@ -5,8 +5,8 @@ use std::time::{Duration, SystemTime};
 use fold_core::object::ObjectHash;
 use fold_core::{CheckpointId, FoldError, Timestamp, WorkspaceId, codes};
 use fold_store::workspaces::{
-    ClosedWorkspace, closed_workspaces_due, gc_roots, prune_auto, prune_workspace,
-    workspaces_over_auto_limit,
+    ClosedWorkspace, closed_workspaces_due, gc_roots, mark_directory_removed, prune_auto,
+    prune_workspace, workspaces_over_auto_limit,
 };
 use fold_store::{StoreError, WriteTx};
 pub use fold_vcs::gc::GcReport;
@@ -119,6 +119,7 @@ async fn prune(
                 let mut buffer = EventBuffer::new();
                 let ids = prune_workspace(tx, workspace.id, now).await?;
                 let pruned = append_pruned(tx, &mut buffer, workspace.id, &ids, now).await?;
+                mark_directory_removed(tx, workspace.id, now).await?;
                 Ok((buffer, pruned))
             })
             .await?;

@@ -1,8 +1,6 @@
 use fold_core::claims::is_stale;
 use fold_core::merge::{Conflict, ReportFile};
-use fold_core::policy::{
-    AgentStanding, CallerFacts, GateRefusal, GateState, IntegrateInput, ProposalFacts, gate_report,
-};
+use fold_core::policy::{GateState, IntegrateInput, ProposalFacts, gate_report};
 use fold_core::reviews::{deciding_approval, last_verdict_version};
 use fold_core::{
     Actor, FoldError, ProposalId, TaskDescription, TaskId, TaskStatus, TaskTitle, codes,
@@ -16,7 +14,8 @@ use serde_json::json;
 pub use fold_store::reviews::ReviewRow as ReviewView;
 
 use super::claims::ReviewClaimView;
-use super::proposals::{ProposalDetail, proposal_not_found};
+use super::integrate::caller_facts;
+use super::proposals::{ProposalDetail, proposal_detail, proposal_not_found};
 use super::{ReviewError, ReviewService};
 use crate::services::workspaces::StateRef;
 
@@ -69,11 +68,11 @@ impl ReviewService {
         proposal: ProposalId,
         version: Option<u32>,
     ) -> Result<ProposalView, ReviewError> {
-        let standing = agents::standing_of(self.store.read(), caller).await?;
-        let caller = caller_facts(caller, standing)?;
-        let detail = self.get_proposal(proposal, version).await?;
         let now = self.clock.now();
         let mut read = self.store.read().begin().await.map_err(StoreError::from)?;
+        let standing = agents::standing_of(&mut *read, caller).await?;
+        let caller = caller_facts(caller, standing, false)?;
+        let detail = proposal_detail(&mut read, proposal, version).await?;
         let facts = reviews::integration_facts(&mut read, proposal)
             .await?
             .ok_or_else(|| proposal_not_found(proposal))?;
@@ -149,18 +148,6 @@ impl ReviewService {
             files: comparison.files,
             totals: comparison.totals,
         })
-    }
-}
-
-/// The gates read a caller with the acting agent's `standing`; only an agent or a named human can integrate, so the system has no report.
-fn caller_facts(actor: &Actor, standing: AgentStanding) -> Result<CallerFacts, ReviewError> {
-    match actor {
-        Actor::Agent(agent) => Ok(CallerFacts::Agent {
-            agent: agent.agent.clone(),
-            standing,
-        }),
-        Actor::Human { name } => Ok(CallerFacts::Human(name.clone())),
-        Actor::System => Err(FoldError::from(GateRefusal::IntegratorRequired).into()),
     }
 }
 

@@ -12,6 +12,7 @@ use serde_json::{Map, Value};
 use utoipa::ToSchema;
 
 use crate::services::agents::AgentError;
+use crate::services::error::from_store;
 use crate::services::events::EventsError;
 use crate::services::messages::MessageError;
 use crate::services::projects::ProjectError;
@@ -155,92 +156,34 @@ impl From<FoldError> for ApiError {
 
 impl From<StoreError> for ApiError {
     fn from(error: StoreError) -> Self {
-        let fold = match error.code() {
-            Some(code) => FoldError::new(code, error.to_string()),
-            None => FoldError::new(codes::INTERNAL_ERROR, error.to_string()),
-        };
-        Self(fold)
+        Self(from_store(error))
     }
 }
 
-impl From<ProjectError> for ApiError {
-    fn from(error: ProjectError) -> Self {
-        match error {
-            ProjectError::Fold(error) => error.into(),
-            ProjectError::Store(error) => error.into(),
-        }
-    }
-}
-
-impl From<AgentError> for ApiError {
-    fn from(error: AgentError) -> Self {
-        match error {
-            AgentError::Fold(error) => error.into(),
-            AgentError::Store(error) => error.into(),
-            AgentError::Event(error) => {
-                Self(FoldError::new(codes::INTERNAL_ERROR, error.to_string()))
+/// Each service error maps to the `FoldError` the MCP tools answer with too.
+macro_rules! service_errors {
+    ($($error:ty),*) => {
+        $(impl From<$error> for ApiError {
+            fn from(error: $error) -> Self {
+                Self(error.into())
             }
-        }
-    }
+        })*
+    };
 }
 
-impl From<EventsError> for ApiError {
-    fn from(error: EventsError) -> Self {
-        match error {
-            EventsError::Fold(error) => error.into(),
-            EventsError::Store(error) => error.into(),
-        }
-    }
-}
+service_errors!(
+    AgentError,
+    EventsError,
+    MessageError,
+    ProjectError,
+    ReviewError,
+    TaskError,
+    WorkspaceError
+);
 
-impl From<TaskError> for ApiError {
-    fn from(error: TaskError) -> Self {
-        match error {
-            TaskError::Fold(error) => error.into(),
-            TaskError::Store(error) => error.into(),
-            TaskError::Event(error) => {
-                Self(FoldError::new(codes::INTERNAL_ERROR, error.to_string()))
-            }
-        }
-    }
-}
-
-impl From<ReviewError> for ApiError {
-    fn from(error: ReviewError) -> Self {
-        match error {
-            ReviewError::Fold(error) => error.into(),
-            ReviewError::Store(error) => error.into(),
-            ReviewError::Task(error) => error.into(),
-            ReviewError::Event(error) => {
-                Self(FoldError::new(codes::INTERNAL_ERROR, error.to_string()))
-            }
-        }
-    }
-}
-
-impl From<WorkspaceError> for ApiError {
-    fn from(error: WorkspaceError) -> Self {
-        match error {
-            WorkspaceError::Fold(error) => error.into(),
-            WorkspaceError::Store(error) => error.into(),
-            WorkspaceError::Task(error) => error.into(),
-            WorkspaceError::Event(error) => {
-                Self(FoldError::new(codes::INTERNAL_ERROR, error.to_string()))
-            }
-        }
-    }
-}
-
-impl From<MessageError> for ApiError {
-    fn from(error: MessageError) -> Self {
-        match error {
-            MessageError::Fold(error) => error.into(),
-            MessageError::Store(error) => error.into(),
-            MessageError::Event(error) => {
-                Self(FoldError::new(codes::INTERNAL_ERROR, error.to_string()))
-            }
-        }
-    }
+/// A refusal of a fold-core parse, such as `TaskTitle::parse`, in the envelope.
+pub fn fold<T, E: Into<FoldError>>(result: Result<T, E>) -> Result<T, ApiError> {
+    result.map_err(|error| ApiError(error.into()))
 }
 
 impl ApiError {

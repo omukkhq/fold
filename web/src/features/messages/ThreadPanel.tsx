@@ -25,6 +25,7 @@ import {
   QuestionHeader,
 } from "./QuestionChoices";
 import { threadTitle } from "./title";
+import { projectPath } from "@/routes/paths";
 
 interface ThreadPanelProps {
   slug: string;
@@ -79,7 +80,7 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
         </div>
         {thread.task ? (
           <HrefLink
-            href={`/p/${slug}/t/${thread.task}`}
+            href={projectPath(slug, "t", thread.task)}
             className={cn(buttonClasses("secondary", "md"), focusRing)}
           >
             <span className={buttonIconClass("secondary")}>

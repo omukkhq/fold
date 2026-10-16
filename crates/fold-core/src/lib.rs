@@ -25,6 +25,7 @@ pub mod roles;
 pub mod stall;
 pub mod status;
 pub mod task;
+pub mod text;
 pub mod time;
 pub mod tree;
 

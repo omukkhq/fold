@@ -77,21 +77,16 @@ impl Dag {
             .unwrap_or_default()
     }
 
-    /// Every task `task` needs, directly or not. `task` itself is included only when a cycle leads back to it.
-    pub fn prerequisite_closure(&self, task: TaskId) -> BTreeSet<TaskId> {
-        reach(&self.needs, [task], false)
-    }
-
     /// The seeds and every task that needs one of them, directly or not.
     pub fn dependent_closure(&self, seeds: impl IntoIterator<Item = TaskId>) -> BTreeSet<TaskId> {
-        reach(&self.needed_by, seeds, true)
+        reach(&self.needed_by, seeds)
     }
 
     /// Orders `subset` so that a task comes after every subset member it needs, directly or through tasks outside the subset. Ties go to the lower task number. Tasks on or behind a cycle, which a checked graph never has, come last in id order.
     pub fn topological_order(&self, subset: impl IntoIterator<Item = TaskId>) -> Vec<TaskId> {
         let subset: BTreeSet<TaskId> = subset.into_iter().collect();
         // Every prerequisite of a task in this set is in the set too, so a task waits on all of its needs edges.
-        let mut waiting: BTreeMap<TaskId, usize> = reach(&self.needs, subset.iter().copied(), true)
+        let mut waiting: BTreeMap<TaskId, usize> = reach(&self.needs, subset.iter().copied())
             .into_iter()
             .map(|task| (task, self.needs.get(&task).map_or(0, BTreeSet::len)))
             .collect();
@@ -136,26 +131,17 @@ impl Dag {
         }
         order
     }
-
-    /// True when neither task reaches the other. A task is never independent of itself.
-    pub fn independent(&self, a: TaskId, b: TaskId) -> bool {
-        a != b
-            && !self.prerequisite_closure(a).contains(&b)
-            && !self.prerequisite_closure(b).contains(&a)
-    }
 }
 
+/// The seeds and every task reachable from one of them over `edges`.
 fn reach(
     edges: &BTreeMap<TaskId, BTreeSet<TaskId>>,
     seeds: impl IntoIterator<Item = TaskId>,
-    include_seeds: bool,
 ) -> BTreeSet<TaskId> {
     let mut found = BTreeSet::new();
     let mut stack: Vec<TaskId> = Vec::new();
     for seed in seeds {
-        if include_seeds {
-            found.insert(seed);
-        }
+        found.insert(seed);
         stack.push(seed);
     }
     while let Some(node) = stack.pop() {
@@ -236,12 +222,9 @@ mod tests {
         assert_eq!(g.check_edge(t(1), t(2)), Ok(()));
         assert!(g.prerequisites(t(1)).is_empty());
         assert!(g.dependents(t(1)).is_empty());
-        assert!(g.prerequisite_closure(t(1)).is_empty());
         assert_eq!(g.dependent_closure([t(1)]), BTreeSet::from([t(1)]));
         assert!(g.topological_order([]).is_empty());
         assert_eq!(g.topological_order([t(2), t(1)]), vec![t(1), t(2)]);
-        assert!(!g.independent(t(1), t(1)));
-        assert!(g.independent(t(1), t(2)));
     }
 
     #[test]
@@ -254,13 +237,10 @@ mod tests {
     #[test]
     fn closures_follow_edges_transitively() {
         let g = dag(&[(1, 2), (2, 3), (4, 3)]);
-        assert_eq!(g.prerequisite_closure(t(1)), BTreeSet::from([t(2), t(3)]));
         assert_eq!(
             g.dependent_closure([t(3)]),
             BTreeSet::from([t(1), t(2), t(3), t(4)])
         );
-        assert!(g.independent(t(1), t(4)));
-        assert!(!g.independent(t(1), t(3)));
     }
 
     #[test]
@@ -295,9 +275,7 @@ mod tests {
         let mut path = vec![t(1)];
         path.extend((1..=n).rev().map(t));
         assert_eq!(g.check_edge(t(1), t(n)), Err(EdgeRefusal::Cycle(path)));
-        assert_eq!(g.prerequisite_closure(t(n)).len(), n as usize - 1);
         assert_eq!(g.dependent_closure([t(1)]).len(), n as usize);
-        assert!(!g.independent(t(1), t(n)));
         assert_eq!(g.topological_order([t(n), t(1)]), vec![t(1), t(n)]);
     }
 }

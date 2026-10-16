@@ -10,6 +10,8 @@ use serde_json::json;
 use super::files::{Files, checkpoint_in_tx, not_found, owned_in_tx, set_base};
 use super::{WorkspaceError, WorkspaceService, blocking};
 use crate::services::events::EventBuffer;
+#[cfg(feature = "failpoints")]
+use crate::services::fired;
 
 /// The longest checkpoint label, in characters.
 const MAX_LABEL_CHARS: usize = 200;
@@ -78,7 +80,8 @@ impl WorkspaceService {
         #[cfg(feature = "failpoints")]
         fail::fail_point!("checkpoint_after_objects", |_| Err(fired(
             "checkpoint_after_objects"
-        )));
+        )
+        .into()));
         let now = self.clock.now();
         let mut buffer = EventBuffer::new();
         let checkpoint = self
@@ -99,7 +102,8 @@ impl WorkspaceService {
                 #[cfg(feature = "failpoints")]
                 fail::fail_point!("checkpoint_in_transaction", |_| Err(fired(
                     "checkpoint_in_transaction"
-                )));
+                )
+                .into()));
                 Ok::<_, WorkspaceError>(checkpoint)
             })
             .await?;
@@ -261,12 +265,6 @@ pub(super) fn retry_hint(error: WorkspaceError, hint: &str) -> WorkspaceError {
         }
         other => other,
     }
-}
-
-/// The error a fired failpoint returns, as a crash at that point would stop the command.
-#[cfg(feature = "failpoints")]
-fn fired(name: &str) -> WorkspaceError {
-    FoldError::new(codes::FAILPOINT, format!("{name} fired")).into()
 }
 
 #[cfg(test)]
