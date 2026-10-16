@@ -3,6 +3,7 @@
 use crate::proposal_tools_support::{Fixture, human, t};
 use axum::body::Body;
 use axum::http::{HeaderMap, Method, Request, StatusCode};
+use fold_daemon::http::host::CLIENT_HEADER;
 use fold_daemon::http::{openapi, router};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
@@ -34,7 +35,10 @@ async fn send_to(
     body: Option<Value>,
     headers: &[(&str, &str)],
 ) -> Answer {
-    let mut request = Request::builder().method(method).uri(uri);
+    let mut request = Request::builder()
+        .header(CLIENT_HEADER, "test")
+        .method(method)
+        .uri(uri);
     for (name, value) in headers {
         request = request.header(*name, *value);
     }

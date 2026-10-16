@@ -2,6 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use fold_core::events::types;
+use fold_core::policy::SessionPeer;
 use fold_core::{
     Actor, AgentActor, AgentName, Clock, EventActor, EventError, FoldError, INTEGRATOR_TAG,
     NewEvent, ProjectConfig, ProjectPaths, Tag, TaskId, Timestamp, WorkerName, codes, policy,
@@ -23,6 +24,8 @@ pub mod claude;
 mod context;
 mod needs_you;
 mod overview;
+/// The kernel's view of a socket peer: whether a worker that fold started is the peer or one of its ancestors.
+pub mod peers;
 mod presence;
 mod push;
 mod workers;
@@ -76,6 +79,8 @@ impl From<ProjectError> for AgentError {
 pub struct SessionContext {
     pub session_id: i64,
     pub agent: Option<AgentName>,
+    /// The worker process tree the session runs in, resolved once when the socket connection opens; [`AgentService::register_agent`] binds it to no other agent.
+    pub peer: SessionPeer,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -206,16 +211,21 @@ impl AgentService {
         Ok(SessionContext {
             session_id,
             agent: None,
+            peer: SessionPeer::Unsupervised,
         })
     }
 
-    /// Creates the agent and its main worker on first use, merges `tags` and binds the session. A repeat call changes nothing except the tags it adds. It keeps the session context instead of an `Actor` because it binds that session; the registering agent is the actor that `policy::can_set_tag` checks for each tag.
+    /// Creates the agent and its main worker on first use, merges `tags` and binds the session. A repeat call changes nothing except the tags it adds. It keeps the session context instead of an `Actor` because it binds that session; the registering agent is the actor that `policy::can_set_tag` checks for each tag. A session under a worker's process tree binds only to that worker's agent; any other name appends `session.bind_refused` and fails.
     pub async fn register_agent(
         &self,
         ctx: &mut SessionContext,
         name: &AgentName,
         tags: &[Tag],
     ) -> Result<Registered, AgentError> {
+        if let Err(denied) = policy::can_bind_agent(&ctx.peer, name) {
+            self.refuse_bind(ctx, name).await?;
+            return Err(FoldError::from(denied).into());
+        }
         let current = match agents::find_agent(self.store.read(), name).await? {
             Some(agent) => agents::tags(self.store.read(), agent.id).await?,
             None => Vec::new(),
@@ -238,6 +248,27 @@ impl AgentService {
         self.bus.publish(buffer);
         ctx.agent = Some(name.clone());
         Ok(registered)
+    }
+
+    async fn refuse_bind(&self, ctx: &SessionContext, name: &AgentName) -> Result<(), AgentError> {
+        let now = self.clock.now();
+        let mut buffer = EventBuffer::new();
+        let session_id = ctx.session_id;
+        let worker = ctx.peer.worker().map(AgentName::as_str);
+        self.store
+            .write(async |tx| {
+                let pid = agents::find_session(tx.conn(), session_id)
+                    .await?
+                    .map(|session| session.pid);
+                let event = NewEvent::new(types::SESSION_BIND_REFUSED, EventActor::fold())?
+                    .data(json!({"agent": name.as_str(), "worker": worker, "pid": pid}))?;
+                buffer.append(tx, &event, now).await?;
+                Ok::<_, AgentError>(())
+            })
+            .await?;
+        self.bus.publish(buffer);
+        tracing::warn!(agent = %name, worker, "refused a bind from a worker's process tree");
+        Ok(())
     }
 
     /// Creates the child worker `<parent>/<segment>` of the caller's agent. `parent` defaults to the main worker. A repeat call returns the existing worker.

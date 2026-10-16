@@ -1,5 +1,6 @@
 #![cfg(test)]
 
+use fold_daemon::http::host::CLIENT_HEADER;
 use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::os::unix::fs::PermissionsExt;
@@ -520,6 +521,7 @@ async fn state_with(fixtures: &[&Fixture], clock: &ManualClock) -> AppState {
 
 async fn call(router: axum::Router, path: &str, body: &str) -> (StatusCode, Value) {
     let request = Request::builder()
+        .header(CLIENT_HEADER, "test")
         .method(Method::POST)
         .uri(path)
         .header("content-type", "application/json")

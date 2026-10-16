@@ -1,6 +1,11 @@
 import createClient from "openapi-fetch";
 import { describe, expect, it, vi } from "vitest";
-import { api, authRequiredMiddleware } from "./client";
+import {
+  api,
+  authRequiredMiddleware,
+  CLIENT_HEADER,
+  eventStreamRequest,
+} from "./client";
 import type { paths } from "./schema";
 import { apiErrorCode } from "./errors";
 import { expectOk, unwrap } from "./result";
@@ -47,6 +52,25 @@ describe("api", () => {
     expect(stub.requests[0]?.url).toBe(
       "http://fold.test/api/v1/projects/ghost",
     );
+  });
+});
+
+describe("the client header", () => {
+  it("goes with every request, a write and the event stream included", async () => {
+    const stub = respond(200, null);
+    await api.DELETE("/api/v1/session", {
+      baseUrl: "http://fold.test/",
+      fetch: stub.fetch,
+    });
+    expect(stub.requests[0]?.method).toBe("DELETE");
+    expect(stub.requests[0]?.headers.get(CLIENT_HEADER)).toBe("web");
+    const stream = eventStreamRequest(
+      "fold",
+      null,
+      new AbortController().signal,
+      "http://fold.test/",
+    );
+    expect(stream.headers.get(CLIENT_HEADER)).toBe("web");
   });
 });
 

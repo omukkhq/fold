@@ -83,7 +83,9 @@ fn status_of(code: &str) -> Option<StatusCode> {
         | codes::AUTHOR_CANNOT_INTEGRATE
         | codes::REQUESTER_REQUIRED
         | codes::DRAFTER_REQUIRED
-        | codes::ORCHESTRATOR_REQUIRED => Some(StatusCode::FORBIDDEN),
+        | codes::ORCHESTRATOR_REQUIRED
+        | codes::WORKER_PEER_REFUSED
+        | codes::CLIENT_HEADER_REQUIRED => Some(StatusCode::FORBIDDEN),
         codes::PROJECT_UNAVAILABLE | codes::GIT_NOT_FOUND | codes::DAEMON_UNREACHABLE => {
             Some(StatusCode::SERVICE_UNAVAILABLE)
         }
@@ -347,6 +349,8 @@ mod tests {
             (codes::AUTH_REQUIRED, StatusCode::UNAUTHORIZED),
             (codes::INVALID_TOKEN, StatusCode::UNAUTHORIZED),
             (codes::HOST_NOT_ALLOWED, StatusCode::FORBIDDEN),
+            (codes::CLIENT_HEADER_REQUIRED, StatusCode::FORBIDDEN),
+            (codes::WORKER_PEER_REFUSED, StatusCode::FORBIDDEN),
             (codes::HUMAN_REQUIRED, StatusCode::FORBIDDEN),
             (codes::ACTOR_CANNOT_CLAIM, StatusCode::FORBIDDEN),
             (codes::GIT_NOT_FOUND, StatusCode::SERVICE_UNAVAILABLE),

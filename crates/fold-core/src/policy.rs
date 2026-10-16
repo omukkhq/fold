@@ -10,6 +10,7 @@ mod human_review;
 mod integrate;
 mod questions;
 mod requests;
+mod sessions;
 mod workers;
 
 pub use batches::can_review_batch;
@@ -20,6 +21,7 @@ pub use integrate::{
 };
 pub use questions::can_answer_worker_permission;
 pub use requests::{can_claim_request, can_create_request, is_drafter, is_requester};
+pub use sessions::{SessionPeer, can_bind_agent, can_name_human};
 pub use workers::{
     Starter, can_define_area, can_set_worker_limits, can_start_worker, can_stop_worker,
     can_write_handoff,

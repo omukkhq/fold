@@ -1,6 +1,8 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { useRouter } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import { openEventStream } from "../api/events";
+import { redirectToSignIn } from "../app/authRedirect";
 import { connectProject } from "./connect";
 import { LiveRetryContext } from "./retry";
 import { liveStatusStore } from "./status";
@@ -15,6 +17,7 @@ export function LiveProvider({
   children: ReactNode;
 }) {
   const queryClient = useQueryClient();
+  const router = useRouter();
   const stream = useRef<StreamHandle | null>(null);
   useEffect(() => {
     const handle = connectProject(
@@ -22,6 +25,12 @@ export function LiveProvider({
       slug,
       openEventStream(slug),
       liveStatusStore,
+      Date.now,
+      () => {
+        redirectToSignIn(queryClient, router.state.location, (href) => {
+          void router.navigate({ href, replace: true });
+        });
+      },
     );
     stream.current = handle;
     return () => {
@@ -30,7 +39,7 @@ export function LiveProvider({
         stream.current = null;
       }
     };
-  }, [queryClient, slug]);
+  }, [queryClient, router, slug]);
   const retry = useCallback(() => {
     stream.current?.retry();
   }, []);

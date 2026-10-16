@@ -226,6 +226,7 @@ Every error has a stable `code`, a message and a hint that names the next tool. 
 | `area_has_lead` | The area's lead runs already. Send it a message instead. |
 | `worker_limit_reached` | Call `list_workers`. Wait until a worker stops, or stop one with `stop_worker`. |
 | `handoff_denied` | Only an area lead or the review lead writes a hand-off note. As the main agent, send yourself the note and run `/clear`. |
+| `worker_peer_refused` | A command in a worker's Bash acts only as that worker's own agent and never as a human. Use the fold tools of your own session. |
 
 ## Never
 

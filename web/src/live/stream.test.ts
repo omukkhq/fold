@@ -156,6 +156,7 @@ function harness(opts: { failOpens?: number; failWith?: Error } = {}) {
         delays.push(delayMs);
       },
       onResync: () => log.push("resync"),
+      onAuthRequired: () => log.push("auth required"),
     },
   });
   return { pipes, cursors, log, events, delays, handle };
@@ -439,6 +440,39 @@ describe("startStream", () => {
     await vi.advanceTimersByTimeAsync(1000);
     expect(h.cursors).toEqual([null, null]);
     h.handle.stop();
+  });
+
+  it("stops for good and asks for sign-in when the daemon answers auth_required", async () => {
+    const h = harness({
+      failOpens: 5,
+      failWith: new ApiError("auth_required", "signed out"),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.log).toEqual(["auth required"]);
+    await vi.advanceTimersByTimeAsync(60_000);
+    h.handle.retry();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.cursors).toEqual([null]);
+    expect(h.log).toEqual(["auth required"]);
+  });
+
+  it("stops quietly on auth_required without a sign-in handler", async () => {
+    const transport: Transport = () =>
+      Promise.reject(new ApiError("auth_required", "signed out"));
+    const opens = vi.fn(transport);
+    const onDrop = vi.fn();
+    startStream({
+      transport: opens,
+      handlers: {
+        onOpen: () => undefined,
+        onEvent: () => undefined,
+        onDrop,
+        onResync: () => undefined,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(opens).toHaveBeenCalledOnce();
+    expect(onDrop).not.toHaveBeenCalled();
   });
 
   it("keeps the cursor and asks for no resync when an open fails for any other reason", async () => {

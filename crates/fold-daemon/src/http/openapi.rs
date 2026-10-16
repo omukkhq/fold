@@ -21,11 +21,24 @@ pub fn base() -> OpenApi {
 }
 
 const HOST_NOT_ALLOWED: &str = "`host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on";
+const CLIENT_HEADER_REQUIRED: &str =
+    "`client_header_required`: a write over TCP lacks the `x-fold-client` header";
 const SESSION_REFUSED: &str = "`auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked";
 
-/// Declares the errors of the route layers, which answer before any handler and so are in no route's own declaration: `host_not_allowed` on every operation, the session errors on every operation of `guarded`.
+/// Declares the errors of the route layers, which answer before any handler and so are in no route's own declaration: `host_not_allowed` on every operation, `client_header_required` on every write, the session errors on every operation of `guarded`.
 pub fn declare_layer_errors(doc: &mut OpenApi, guarded: &OpenApi) {
     for (path, item) in &mut doc.paths.paths {
+        for operation in [
+            &mut item.put,
+            &mut item.post,
+            &mut item.delete,
+            &mut item.patch,
+        ]
+        .into_iter()
+        .filter_map(Option::as_mut)
+        {
+            add_error(operation, "403", CLIENT_HEADER_REQUIRED);
+        }
         let session = guarded.paths.paths.contains_key(path);
         for operation in operations_mut(item) {
             add_error(operation, "403", HOST_NOT_ALLOWED);

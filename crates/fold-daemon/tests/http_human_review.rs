@@ -1,3 +1,4 @@
+use fold_daemon::http::host::CLIENT_HEADER;
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -81,6 +82,7 @@ impl Fixture {
         headers: &[(&str, &str)],
     ) -> (StatusCode, Value) {
         let mut request = Request::builder()
+            .header(CLIENT_HEADER, "test")
             .method(method)
             .uri(format!("{BASE}{path}"));
         for (name, value) in headers {

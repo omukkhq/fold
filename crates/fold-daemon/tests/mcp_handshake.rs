@@ -113,7 +113,7 @@ impl Host {
 #[cfg(test)]
 async fn handshake_raw(state: AppState, bytes: &[u8]) -> (Answer, Rest) {
     let (client, server) = tokio::io::duplex(64 * 1024);
-    tokio::spawn(handshake::accept(state, server));
+    tokio::spawn(handshake::accept(state, server, Default::default()));
     let (read, mut write) = tokio::io::split(client);
     write.write_all(bytes).await.unwrap();
     let mut read = BufReader::new(read);
@@ -438,7 +438,7 @@ async fn a_silent_client_is_refused_after_five_seconds() {
     let host = Host::start().await;
     let (client, server) = tokio::io::duplex(1024);
     tokio::time::pause();
-    let accept = tokio::spawn(handshake::accept(host.state(), server));
+    let accept = tokio::spawn(handshake::accept(host.state(), server, Default::default()));
     let (read, _write) = tokio::io::split(client);
     let mut line = String::new();
     BufReader::new(read).read_line(&mut line).await.unwrap();

@@ -525,6 +525,7 @@ async fn ending_the_agents_last_session_clears_its_targets() {
         .end_session(&SessionContext {
             session_id: first,
             agent: Some(name("backend")),
+            peer: Default::default(),
         })
         .await
         .unwrap();
@@ -576,6 +577,7 @@ async fn ending_an_older_session_keeps_a_newer_sessions_target() {
         .end_session(&SessionContext {
             session_id: session,
             agent: Some(name("backend")),
+            peer: Default::default(),
         })
         .await
         .unwrap();

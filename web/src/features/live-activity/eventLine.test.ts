@@ -94,6 +94,18 @@ describe("eventLine", () => {
     ).toBe("commented on P-4");
   });
 
+  it("names the agent and the worker of a refused session", () => {
+    const line = (data: DurableEvent["data"]) =>
+      eventLine(event("session.bind_refused", { data })).text;
+    expect(line({ agent: "main", worker: "web-coder", pid: 4242 })).toBe(
+      "refused a session as main from a process of web-coder",
+    );
+    expect(line({ agent: "main", worker: null })).toBe(
+      "refused a session as main from a worker's process",
+    );
+    expect(line({})).toBe("refused a session from a worker's process");
+  });
+
   it("reads the data a kind carries and falls back without it", () => {
     const line = (type: string, data: DurableEvent["data"] = {}) =>
       eventLine(event(type, { data })).text;

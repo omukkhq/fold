@@ -1,3 +1,4 @@
+use fold_daemon::http::host::CLIENT_HEADER;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -162,7 +163,10 @@ async fn send_with(
     headers: &[(&str, &str)],
     body: Option<Value>,
 ) -> Answer {
-    let mut request = Request::builder().method(method).uri(path);
+    let mut request = Request::builder()
+        .header(CLIENT_HEADER, "test")
+        .method(method)
+        .uri(path);
     for (name, value) in headers {
         request = request.header(*name, *value);
     }
@@ -510,6 +514,7 @@ async fn off_loopback_a_socket_request_passes_without_a_cookie() {
     let answer = send(socket.clone(), Method::GET, "/api/v1/projects", None, None).await;
     assert_eq!(answer.status, StatusCode::OK);
     let request = Request::builder()
+        .header(CLIENT_HEADER, "test")
         .method(Method::GET)
         .uri(SESSION)
         .header("x-fold-human", "tanim")
@@ -734,7 +739,7 @@ async fn raw_sign_in(addr: std::net::SocketAddr, token: &str) -> String {
     let mut stream = TcpStream::connect(addr).await.unwrap();
     let body = json!({"token": token}).to_string();
     let request = format!(
-        "POST {SESSION} HTTP/1.1\r\nhost: 127.0.0.1\r\nconnection: close\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+        "POST {SESSION} HTTP/1.1\r\nhost: 127.0.0.1\r\nconnection: close\r\n{CLIENT_HEADER}: test\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
         body.len()
     );
     stream.write_all(request.as_bytes()).await.unwrap();
@@ -916,4 +921,133 @@ async fn the_humans_route_lists_the_registered_names_in_order() {
     }
     let answer = send(fixture.http(), Method::GET, "/api/v1/humans", None, None).await;
     assert_eq!(answer.body, json!({"humans": ["ana", "tanim"]}));
+}
+
+#[tokio::test]
+async fn a_cross_origin_bodiless_write_without_the_client_header_is_refused() {
+    let fixture = Fixture::new(false).await;
+    let page = Request::post(SESSION)
+        .header(header::HOST, "127.0.0.1:7420")
+        .header(header::ORIGIN, "http://localhost:3000")
+        .body(Body::empty())
+        .unwrap();
+    let response = fixture.http().oneshot(page).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["error"]["code"], "client_header_required");
+
+    let preflight = Request::builder()
+        .method(Method::OPTIONS)
+        .uri(SESSION)
+        .header(header::ORIGIN, "http://localhost:3000")
+        .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+        .header(header::ACCESS_CONTROL_REQUEST_HEADERS, CLIENT_HEADER)
+        .body(Body::empty())
+        .unwrap();
+    let response = fixture.http().oneshot(preflight).await.unwrap();
+    assert!(
+        response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .is_none(),
+        "the daemon grants no preflight"
+    );
+
+    let answer = send(
+        fixture.http(),
+        Method::POST,
+        SESSION,
+        None,
+        Some(json!({"name": "ana"})),
+    )
+    .await;
+    assert_eq!(
+        answer.status,
+        StatusCode::NO_CONTENT,
+        "the web client sends the header"
+    );
+
+    let cli = Request::post(SESSION)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({"name": "ana"}).to_string()))
+        .unwrap();
+    let response = socket_router(fixture.state.clone())
+        .oneshot(cli)
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::NO_CONTENT,
+        "the socket needs no header"
+    );
+}
+
+/// Reads the body of an open event stream until it ends; false when it sends more chunks than a few keep-alive periods hold.
+#[cfg(test)]
+async fn stream_ends(body: &mut Body) -> bool {
+    for _ in 0..8 {
+        match body.frame().await {
+            Some(Ok(_)) => {}
+            Some(Err(_)) | None => return true,
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+async fn open_stream(fixture: &Fixture, cookie: &str) -> Body {
+    let request = Request::get("/api/v1/projects/demo/events")
+        .header(header::COOKIE, cookie)
+        .body(Body::empty())
+        .unwrap();
+    let response = fixture.http().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut body = response.into_body();
+    let snapshot = body.frame().await.unwrap().unwrap().into_data().unwrap();
+    assert!(String::from_utf8_lossy(&snapshot).contains("snapshot"));
+    body
+}
+
+#[tokio::test]
+async fn signing_out_ends_an_open_event_stream() {
+    let fixture = Fixture::new(true).await;
+    let cookie = fixture.sign_in("ana").await;
+    let mut body = open_stream(&fixture, &cookie).await;
+    let answer = send(fixture.http(), Method::DELETE, SESSION, Some(&cookie), None).await;
+    assert_eq!(answer.status, StatusCode::NO_CONTENT);
+    tokio::time::pause();
+    assert!(stream_ends(&mut body).await);
+}
+
+#[tokio::test]
+async fn an_expired_or_revoked_session_ends_its_event_stream() {
+    let fixture = Fixture::new(true).await;
+    let cookie = fixture.sign_in("ana").await;
+    let mut expiring = open_stream(&fixture, &cookie).await;
+    fixture
+        .project
+        .clock()
+        .advance(DEFAULT_SESSION_LIFETIME)
+        .unwrap();
+    tokio::time::pause();
+    assert!(stream_ends(&mut expiring).await);
+    tokio::time::resume();
+
+    let fixture = Fixture::new(true).await;
+    let cookie = fixture.sign_in("tanim").await;
+    let mut revoked = open_stream(&fixture, &cookie).await;
+    let token = list_web_tokens(fixture.project.registry())
+        .await
+        .unwrap()
+        .remove(0);
+    revoke_web_token(
+        fixture.project.registry(),
+        token.id,
+        fixture.project.clock().now(),
+    )
+    .await
+    .unwrap();
+    tokio::time::pause();
+    assert!(stream_ends(&mut revoked).await);
 }

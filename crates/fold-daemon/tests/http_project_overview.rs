@@ -1,3 +1,4 @@
+use fold_daemon::http::host::CLIENT_HEADER;
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -27,6 +28,7 @@ async fn call(
     body: Option<Value>,
 ) -> (StatusCode, Value) {
     let mut request = Request::builder()
+        .header(CLIENT_HEADER, "test")
         .method(method)
         .uri(path)
         .header("cookie", "fold_human=ana");

@@ -125,6 +125,7 @@ define_event_types! {
     WORKER_PERMISSION_ASKED = "worker.permission_asked",
     WORKER_PERMISSION_ANSWERED = "worker.permission_answered",
     WORKERS_LIMITS_CHANGED = "workers.limits_changed",
+    SESSION_BIND_REFUSED = "session.bind_refused",
 }
 
 impl EventType {

@@ -1,5 +1,6 @@
 import { QueryClient } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiError } from "../api/errors";
 import { keys } from "../api/keys";
 import { connectProject } from "./connect";
 import { createLiveStatusStore } from "./status";
@@ -132,6 +133,34 @@ describe("connectProject", () => {
     expect(
       prefixes.filter((key) => JSON.stringify(key) === '["demo"]'),
     ).toHaveLength(1);
+    handle.stop();
+  });
+
+  it("hands auth_required to the sign-in callback once", async () => {
+    const onAuthRequired = vi.fn();
+    const handle = connectProject(
+      new QueryClient(),
+      "demo",
+      () => Promise.reject(new ApiError("auth_required", "signed out")),
+      createLiveStatusStore(),
+      Date.now,
+      onAuthRequired,
+    );
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(onAuthRequired).toHaveBeenCalledOnce();
+    handle.stop();
+  });
+
+  it("ignores auth_required without a sign-in callback", async () => {
+    const status = createLiveStatusStore();
+    const handle = connectProject(
+      new QueryClient(),
+      "demo",
+      () => Promise.reject(new ApiError("auth_required", "signed out")),
+      status,
+    );
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(status.getSnapshot().state).not.toBe("live");
     handle.stop();
   });
 });

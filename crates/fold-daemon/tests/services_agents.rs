@@ -164,6 +164,7 @@ async fn a_bound_session_cannot_register_another_agent() {
     let mut stale = SessionContext {
         session_id: ctx.session_id,
         agent: None,
+        peer: Default::default(),
     };
     let error = fold_error(
         service
@@ -181,6 +182,7 @@ async fn an_unknown_or_ended_session_cannot_register() {
     let mut ghost = SessionContext {
         session_id: 999,
         agent: None,
+        peer: Default::default(),
     };
     assert!(matches!(
         service.register_agent(&mut ghost, &agent("a"), &[]).await,
@@ -334,6 +336,7 @@ async fn require_agent_fails_before_binding() {
     let dangling = SessionContext {
         session_id: ctx.session_id,
         agent: Some(agent("ghost")),
+        peer: Default::default(),
     };
     let error = fold_error(service.require_agent(&dangling).await.unwrap_err());
     assert_eq!(error.code(), codes::AGENT_NOT_REGISTERED);
@@ -403,6 +406,7 @@ async fn end_session_is_safe_twice_and_stores_one_event() {
         .end_session(&SessionContext {
             session_id: 999,
             agent: None,
+            peer: Default::default(),
         })
         .await
         .unwrap();

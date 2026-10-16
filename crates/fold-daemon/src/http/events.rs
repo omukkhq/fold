@@ -2,13 +2,14 @@ use std::borrow::Cow;
 use std::time::Duration;
 
 use axum::Json;
-use axum::http::HeaderMap;
+use axum::extract::State;
+use axum::http::request::Parts;
 use axum::response::sse::{self, KeepAlive, Sse};
 use fold_core::events::{Event, EventType, types};
 use fold_core::{
     CheckpointId, LiveEvent, Presence, ProposalId, RevisionId, TaskId, Timestamp, WorkspaceId,
 };
-use futures_util::Stream;
+use futures_util::{Stream, StreamExt as _};
 use serde::{Deserialize, Serialize};
 use utoipa::openapi::schema::{ObjectBuilder, SchemaType, Type};
 use utoipa::openapi::{RefOr, Schema};
@@ -16,11 +17,14 @@ use utoipa::{IntoParams, PartialSchema, ToSchema};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
-use super::Project;
+use super::actor::cookie;
 use super::agents::PresenceState;
+use super::auth::SESSION_COOKIE;
 use super::error::{ApiError, ApiQuery, ErrorEnvelope};
+use super::{Project, Transport};
 use crate::daemon::AppState;
 use crate::services::events::{self, Feed, FeedItem, HistoryPage, parse_last_event_id};
+use crate::services::projects;
 
 /// A comment line this often keeps proxies from closing a quiet stream; the web client counts the stream dead after three missed periods.
 const KEEP_ALIVE: Duration = Duration::from_secs(15);
@@ -31,7 +35,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(list_event_history))
 }
 
-/// The project's events as Server-Sent Events: every stored event after `Last-Event-ID`, then one `snapshot` of the live workspaces, then each stored and live event as it happens. A stored event's frame carries its `seq` as the SSE `id`; live and snapshot frames carry none, so the browser keeps the last stored `seq`. Live frames a client has not read yet collapse to the newest per workspace and per agent. A client that falls more than the bus capacity behind has its stream ended and reconnects with its last id.
+/// The project's events as Server-Sent Events: every stored event after `Last-Event-ID`, then one `snapshot` of the live workspaces, then each stored and live event as it happens. A stored event's frame carries its `seq` as the SSE `id`; live and snapshot frames carry none, so the browser keeps the last stored `seq`. Live frames a client has not read yet collapse to the newest per workspace and per agent. A client that falls more than the bus capacity behind has its stream ended and reconnects with its last id. Off loopback the stream ends at the first keep-alive period after its session is signed out, revoked or expired, and the reconnect gets `auth_required`.
 #[utoipa::path(
     get,
     path = "/api/v1/projects/{slug}/events",
@@ -49,9 +53,15 @@ pub fn routes() -> OpenApiRouter<AppState> {
     )
 )]
 pub async fn stream_events(
+    State(state): State<AppState>,
     Project(handle): Project,
-    headers: HeaderMap,
+    parts: Parts,
 ) -> Result<Sse<impl Stream<Item = Result<sse::Event, axum::Error>>>, ApiError> {
+    let headers = &parts.headers;
+    let session = (state.auth_required()
+        && parts.extensions.get::<Transport>() != Some(&Transport::Socket))
+    .then(|| cookie(headers, SESSION_COOKIE))
+    .flatten();
     let last_event_id = headers
         .get("last-event-id")
         .map(|value| parse_last_event_id(value.as_bytes()))
@@ -75,7 +85,29 @@ pub async fn stream_events(
             }
         }
     });
+    let frames = frames.take_until(session_ended(state, session));
     Ok(Sse::new(frames).keep_alive(KeepAlive::new().interval(KEEP_ALIVE)))
+}
+
+/// Resolves once the web session `session` no longer signs anyone in, checked once per keep-alive period; never for a stream without a session. A failed check ends the stream too, so a stream never outlives a session it cannot confirm.
+async fn session_ended(state: AppState, session: Option<String>) {
+    let Some(session) = session else {
+        return std::future::pending().await;
+    };
+    loop {
+        tokio::time::sleep(KEEP_ALIVE).await;
+        match projects::check_web_session(&state.registry, state.clock.as_ref(), &session).await {
+            Ok(Some(_)) => {}
+            Ok(None) => return,
+            Err(error) => {
+                tracing::warn!(
+                    code = error.code().unwrap_or("store_error"),
+                    "the event stream could not check its session and ends"
+                );
+                return;
+            }
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, IntoParams)]

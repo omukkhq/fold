@@ -1,3 +1,4 @@
+use fold_daemon::http::host::CLIENT_HEADER;
 use std::sync::Arc;
 
 use axum::Router;
@@ -101,7 +102,10 @@ async fn call(
     path: &str,
     headers: &[(&str, &str)],
 ) -> (StatusCode, Value) {
-    let mut request = Request::builder().method(method).uri(path);
+    let mut request = Request::builder()
+        .header(CLIENT_HEADER, "test")
+        .method(method)
+        .uri(path);
     for (name, value) in headers {
         request = request.header(*name, *value);
     }
@@ -230,6 +234,7 @@ async fn an_invalid_name_gets_invalid_name() {
         assert_eq!(code(&body), "invalid_name");
     }
     let request = Request::builder()
+        .header(CLIENT_HEADER, "test")
         .method(Method::PUT)
         .uri(PATH)
         .header("x-fold-human", &b"t\xffm"[..])

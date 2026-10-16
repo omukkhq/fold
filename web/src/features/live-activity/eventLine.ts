@@ -109,6 +109,16 @@ function workerOf(event: DurableEvent): string {
   return text(event.data.agent) ?? "a worker";
 }
 
+function bindRefusedText(event: DurableEvent): string {
+  const agent = text(event.data.agent);
+  const worker = text(event.data.worker);
+  const from =
+    worker === null ? "a worker's process" : `a process of ${worker}`;
+  return agent === null
+    ? `refused a session from ${from}`
+    : `refused a session as ${agent} from ${from}`;
+}
+
 function startedText(event: DurableEvent): string {
   const worker = workerOf(event);
   if (event.data.resumed === true) {
@@ -197,6 +207,7 @@ const SPECS: Record<EventType, Spec> = {
   "worker.registered": { icon: Bot, text: fixed("registered as a worker") },
   "session.started": { icon: Play, text: fixed("started a session") },
   "session.ended": { icon: Play, text: fixed("ended a session") },
+  "session.bind_refused": { icon: TriangleAlert, text: bindRefusedText },
   "agent.tag_added": { icon: Tag, text: fixed("added an agent tag") },
   "agent.tag_removed": { icon: Tag, text: fixed("removed an agent tag") },
   "task.created": {

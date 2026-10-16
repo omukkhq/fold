@@ -12,7 +12,10 @@ use super::Transport;
 use super::error::ApiError;
 use crate::daemon::AppState;
 
-/// The layer on every `/api` route of the TCP listener. A DNS-rebinding page reaches the daemon under its own domain name, so a `Host`, or on a write an `Origin`, that names anything but this listener is refused with `host_not_allowed`. A request without the header comes from a client that is not a browser and passes; so does a request over the Unix socket.
+/// The header the web client sends on every request. A page of another origin, such as an app on another localhost port, can send a form or a bodiless request without a CORS preflight, but not a custom header; the daemon answers no preflight, so a write without the header did not come from the web client.
+pub const CLIENT_HEADER: &str = "x-fold-client";
+
+/// The layer on every `/api` route of the TCP listener. A DNS-rebinding page reaches the daemon under its own domain name, so a `Host`, or on a write an `Origin`, that names anything but this listener is refused with `host_not_allowed`. A request without those headers comes from a client that is not a browser and passes that check; so does a request over the Unix socket. A write without [`CLIENT_HEADER`] is refused with `client_header_required`.
 pub async fn require_listen_host(
     State(state): State<AppState>,
     request: Request,
@@ -20,6 +23,16 @@ pub async fn require_listen_host(
 ) -> Response {
     if request.extensions().get::<Transport>() == Some(&Transport::Socket) {
         return next.run(request).await;
+    }
+    if is_write(request.method()) && !request.headers().contains_key(CLIENT_HEADER) {
+        return ApiError(
+            FoldError::new(
+                codes::CLIENT_HEADER_REQUIRED,
+                format!("a write needs the {CLIENT_HEADER} header"),
+            )
+            .with_hint("send the request from the fold web interface"),
+        )
+        .into_response();
     }
     match refusal(state.listen, request.method(), request.headers()) {
         None => next.run(request).await,
@@ -46,8 +59,7 @@ fn refusal(listen: IpAddr, method: &Method, headers: &HeaderMap) -> Option<&'sta
             return Some("Host");
         }
     }
-    let write = !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS);
-    if let Some(origin) = headers.get(ORIGIN).filter(|_| write) {
+    if let Some(origin) = headers.get(ORIGIN).filter(|_| is_write(method)) {
         let allowed = origin
             .to_str()
             .ok()
@@ -59,6 +71,10 @@ fn refusal(listen: IpAddr, method: &Method, headers: &HeaderMap) -> Option<&'sta
         }
     }
     None
+}
+
+fn is_write(method: &Method) -> bool {
+    !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
 }
 
 /// `localhost`, or an IP literal this listener can be reached at: any loopback address on loopback, the bound address on a specific one, any address on `0.0.0.0` or `::`. A domain name other than `localhost` is refused, because that is what a rebinding page uses. The port is not compared: the Vite dev server forwards its own `Host` and `Origin`.

@@ -1,3 +1,4 @@
+use fold_daemon::http::host::CLIENT_HEADER;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -459,7 +460,10 @@ async fn call(
     cookie: Option<&str>,
     body: Option<String>,
 ) -> Sent {
-    let mut request = Request::builder().method(method).uri(path);
+    let mut request = Request::builder()
+        .header(CLIENT_HEADER, "test")
+        .method(method)
+        .uri(path);
     if let Some(cookie) = cookie {
         request = request.header(header::COOKIE, cookie);
     }

@@ -4,6 +4,7 @@ use std::process::Output;
 use std::sync::Arc;
 
 use fold_core::{HumanName, ManualClock};
+use fold_daemon::http::host::CLIENT_HEADER;
 use fold_daemon::{Daemon, DaemonConfig};
 use fold_store::Store;
 use fold_store::projects;
@@ -69,7 +70,7 @@ async fn sign_in(addr: SocketAddr, token: &str) -> (u16, Option<String>) {
     let mut stream = TcpStream::connect(addr).await.unwrap();
     let body = format!("{{\"token\":\"{token}\"}}");
     let request = format!(
-        "POST /api/v1/session HTTP/1.1\r\nhost: 127.0.0.1\r\nconnection: close\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+        "POST /api/v1/session HTTP/1.1\r\nhost: 127.0.0.1\r\nconnection: close\r\n{CLIENT_HEADER}: test\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
         body.len()
     );
     stream.write_all(request.as_bytes()).await.unwrap();

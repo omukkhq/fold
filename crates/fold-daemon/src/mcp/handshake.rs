@@ -14,14 +14,14 @@ use tokio::net::UnixStream;
 use super::FoldServer;
 use super::error::{ErrorBody, from_agent, from_project};
 use crate::daemon::AppState;
-use crate::services::agents::{AgentService, SessionContext};
+use crate::services::agents::{AgentService, SessionContext, peers};
 use crate::services::events::EventService;
 use crate::services::messages::MessageService;
 use crate::services::projects;
 use crate::services::reviews::ReviewService;
 use crate::services::tasks::TaskService;
 use crate::services::workspaces::WorkspaceService;
-use crate::socket::HandshakeHandler;
+use crate::socket::{HandshakeHandler, SocketPeer};
 
 /// The value of `fold` in the adapter's line. A daemon answers any other value with `protocol_version_unsupported`.
 pub const PROTOCOL_VERSION: u64 = 1;
@@ -37,6 +37,7 @@ pub struct Hello {
     pub fold: u64,
     /// The canonical working directory of the session.
     pub cwd: PathBuf,
+    /// The adapter's own pid. The session records the kernel's peer pid instead whenever the transport reports one.
     pub pid: u32,
     /// `FOLD_AGENT`; an empty name counts as unset.
     pub agent: Option<String>,
@@ -82,17 +83,19 @@ impl Answer {
 
 /// The handler the socket server runs for a connection that starts with `{`.
 pub fn handler(state: AppState) -> HandshakeHandler {
-    Arc::new(move |stream: UnixStream| Box::pin(accept(state.clone(), stream)))
+    Arc::new(move |stream: UnixStream, peer: SocketPeer| {
+        Box::pin(accept(state.clone(), stream, peer))
+    })
 }
 
-/// Serves one adapter connection: reads the handshake line, opens the session, answers, serves MCP on the rest of the stream and ends the session when the stream closes.
-pub async fn accept<S>(state: AppState, stream: S)
+/// Serves one adapter connection: reads the handshake line, opens the session, answers, serves MCP on the rest of the stream and ends the session when the stream closes. `peer` is the kernel's view of the client, which decides the agents the session may bind to.
+pub async fn accept<S>(state: AppState, stream: S, peer: SocketPeer)
 where
     S: AsyncRead + AsyncWrite + Send + 'static,
 {
     let (mut read, mut write) = tokio::io::split(stream);
     let opened = match tokio::time::timeout(LINE_TIMEOUT, read_line(&mut read)).await {
-        Ok(Ok((line, rest))) => open(&state, &line).await.map(|opened| (opened, rest)),
+        Ok(Ok((line, rest))) => open(&state, &line, peer).await.map(|opened| (opened, rest)),
         Ok(Err(error)) => Err(error),
         Err(_) => Err(invalid("no handshake line arrived within 5 seconds")),
     };
@@ -220,6 +223,7 @@ pub fn parse_hello(line: &[u8]) -> Result<Hello, FoldError> {
 async fn open(
     state: &AppState,
     line: &[u8],
+    peer: SocketPeer,
 ) -> Result<
     (
         AgentService,
@@ -252,10 +256,15 @@ async fn open(
         handle.bus.clone(),
         handle.clock.clone(),
     );
-    let mut session = agents
-        .start_session_in(hello.pid, &hello.cwd)
+    let worker = peers::peer_worker(&state.projects, peer.pid)
         .await
         .map_err(from_agent)?;
+    // The kernel's pid when the transport has one; an in-process stream has no peer and records the pid it sent.
+    let mut session = agents
+        .start_session_in(peer.pid.unwrap_or(hello.pid), &hello.cwd)
+        .await
+        .map_err(from_agent)?;
+    session.peer = peers::session_peer(worker, &handle.slug);
     if let Some(agent) = agent
         && let Err(error) = agents.register_agent(&mut session, &agent, &tags).await
     {

@@ -4,6 +4,9 @@ import type { paths } from "./schema";
 
 export const API_BASE = "/api/v1";
 
+/** The daemon refuses a write over TCP without this header. A page of another origin cannot send it without a CORS preflight, which the daemon never answers. */
+export const CLIENT_HEADER = "x-fold-client";
+
 /** The event stream request for one project; the cursor travels in `Last-Event-ID`. `Request` needs an absolute URL, so the path resolves against the page. */
 export function eventStreamRequest(
   slug: string,
@@ -11,7 +14,10 @@ export function eventStreamRequest(
   signal: AbortSignal,
   base: string = location.href,
 ): Request {
-  const headers = new Headers({ Accept: "text/event-stream" });
+  const headers = new Headers({
+    Accept: "text/event-stream",
+    [CLIENT_HEADER]: "web",
+  });
   if (lastSeq !== null) {
     headers.set("Last-Event-ID", String(lastSeq));
   }
@@ -83,6 +89,7 @@ function pageOrigin(): string {
 export const api = createClient<paths>({
   baseUrl: pageOrigin(),
   credentials: "same-origin",
+  headers: { [CLIENT_HEADER]: "web" },
   fetch: (request) => fetch(request),
 });
 

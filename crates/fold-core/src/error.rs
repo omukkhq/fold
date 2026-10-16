@@ -152,6 +152,8 @@ define_codes! {
     HANDOFF_DENIED = "handoff_denied",
     PERMISSION_QUESTION_NOT_FOUND = "permission_question_not_found",
     PERMISSION_QUESTION_CLOSED = "permission_question_closed",
+    WORKER_PEER_REFUSED = "worker_peer_refused",
+    CLIENT_HEADER_REQUIRED = "client_header_required",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

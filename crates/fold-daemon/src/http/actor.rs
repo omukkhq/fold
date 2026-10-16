@@ -2,20 +2,22 @@ use axum::extract::FromRequestParts;
 use axum::http::HeaderMap;
 use axum::http::header::COOKIE;
 use axum::http::request::Parts;
-use fold_core::{Actor, FoldError, HumanName, codes};
+use fold_core::{Actor, FoldError, HumanName, codes, policy};
 
 use super::Transport;
 use super::auth::SessionHuman;
 use super::error::ApiError;
 use crate::daemon::AppState;
+use crate::services::agents::peers;
 use crate::services::projects;
+use crate::socket::SocketPeer;
 
 /// The header every CLI command sends over the Unix socket.
 pub const HUMAN_HEADER: &str = "x-fold-human";
 /// The loopback cookie that `POST /api/v1/session` sets. The web application never reads it in script.
 pub const HUMAN_COOKIE: &str = "fold_human";
 
-/// The named human behind a request, registered in the host registry on first use. Over the socket the name comes only from `x-fold-human`. Over HTTP off loopback it comes only from the session that `fold_session` names, and on loopback only from the `fold_human` cookie, so a browser page cannot claim a name with a header and a signed-in human cannot claim another name with a cookie. The loopback cookie is trusted because every `/api` route of the TCP listener refuses a `Host`, or a write's `Origin`, that names another host, so a page under a foreign domain cannot act through it.
+/// The named human behind a request, registered in the host registry on first use. Over the socket the name comes only from `x-fold-human`, and never from a process under a worker that fold started. Over HTTP off loopback it comes only from the session that `fold_session` names, and on loopback only from the `fold_human` cookie, so a browser page cannot claim a name with a header and a signed-in human cannot claim another name with a cookie. The loopback cookie is trusted because every `/api` route of the TCP listener refuses a `Host`, or a write's `Origin`, that names another host, and a write without `x-fold-client`, so neither a page under a foreign domain nor a page on another local port can act through it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Human(pub HumanName);
 
@@ -30,7 +32,13 @@ impl FromRequestParts<AppState> for Human {
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
         let raw = match parts.extensions.get::<Transport>() {
-            Some(Transport::Socket) => header_name(parts)?,
+            Some(Transport::Socket) => {
+                let name = header_name(parts)?;
+                if name.is_some() {
+                    refuse_worker_peer(parts, state).await?;
+                }
+                name
+            }
             None => match parts.extensions.get::<SessionHuman>() {
                 Some(SessionHuman(name)) => Some(name.to_string()),
                 None if state.auth_required() => None,
@@ -48,6 +56,24 @@ impl FromRequestParts<AppState> for Human {
         projects::ensure_human(&state.registry, state.clock.as_ref(), &name).await?;
         Ok(Self(name))
     }
+}
+
+/// A worker's Bash runs as the host's user and can set `FOLD_HUMAN`, so the kernel's peer pid decides instead.
+async fn refuse_worker_peer(parts: &Parts, state: &AppState) -> Result<(), ApiError> {
+    let pid = parts
+        .extensions
+        .get::<SocketPeer>()
+        .and_then(|peer| peer.pid);
+    let worker = peers::peer_worker(&state.projects, pid).await?;
+    if let Some(worker) = &worker {
+        tracing::warn!(
+            project = worker.project,
+            worker = %worker.agent,
+            "refused x-fold-human from a worker's process tree"
+        );
+    }
+    policy::can_name_human(worker.is_some()).map_err(FoldError::from)?;
+    Ok(())
 }
 
 fn header_name(parts: &Parts) -> Result<Option<String>, ApiError> {

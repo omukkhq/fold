@@ -1,3 +1,4 @@
+use fold_daemon::http::host::CLIENT_HEADER;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -156,6 +157,7 @@ impl Fixture {
 #[cfg(test)]
 async fn post(router: Router, path: &str, body: &Value) -> (StatusCode, Value) {
     let request = Request::builder()
+        .header(CLIENT_HEADER, "test")
         .method(Method::POST)
         .uri(path)
         .header("content-type", "application/json")

@@ -1,3 +1,4 @@
+use fold_daemon::http::host::CLIENT_HEADER;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -660,7 +661,10 @@ async fn the_push_route_is_socket_only_and_names_the_human() {
     let state = daemon.state().clone();
     let path = format!("/api/v1/projects/{}/push", project.slug);
     let call = |router: axum::Router, human: Option<&str>| {
-        let mut request = Request::builder().method(Method::POST).uri(&path);
+        let mut request = Request::builder()
+            .header(CLIENT_HEADER, "test")
+            .method(Method::POST)
+            .uri(&path);
         if let Some(human) = human {
             request = request.header("x-fold-human", human);
         }

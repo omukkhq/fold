@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT w.pid AS \"pid!: i64\", g.name\n           FROM worker_processes w JOIN agents g ON g.id = w.agent_id\n           WHERE w.pid IS NOT NULL AND w.state NOT IN ('stopped', 'failed')",
+  "describe": {
+    "columns": [
+      {
+        "name": "pid!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "worker_processes",
+            "name": "pid"
+          }
+        }
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "7a16ef4b8957be1f1ba8c296f685c380e03bf285ce2cc59330afb2104b64869d"
+}

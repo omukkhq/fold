@@ -1,3 +1,4 @@
+use fold_daemon::http::host::CLIENT_HEADER;
 use std::sync::Arc;
 
 use axum::Router;
@@ -186,7 +187,10 @@ async fn call(
     headers: &[(&str, &str)],
     body: Option<Value>,
 ) -> (StatusCode, Value) {
-    let mut request = Request::builder().method(method).uri(path);
+    let mut request = Request::builder()
+        .header(CLIENT_HEADER, "test")
+        .method(method)
+        .uri(path);
     for (name, value) in headers {
         request = request.header(*name, *value);
     }

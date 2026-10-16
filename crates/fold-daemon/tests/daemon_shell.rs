@@ -1,3 +1,4 @@
+use fold_daemon::http::host::CLIENT_HEADER;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
@@ -90,7 +91,10 @@ async fn call(
     path: &str,
     body: Option<&str>,
 ) -> (StatusCode, Value) {
-    let mut request = Request::builder().method(method).uri(path);
+    let mut request = Request::builder()
+        .header(CLIENT_HEADER, "test")
+        .method(method)
+        .uri(path);
     if body.is_some() {
         request = request.header("content-type", "application/json");
     }
@@ -110,7 +114,7 @@ where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
 {
     let request = format!(
-        "{method} {path} HTTP/1.1\r\nhost: 127.0.0.1\r\nconnection: close\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+        "{method} {path} HTTP/1.1\r\nhost: 127.0.0.1\r\nconnection: close\r\n{CLIENT_HEADER}: test\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
         body.len()
     );
     stream.write_all(request.as_bytes()).await.unwrap();
@@ -306,6 +310,7 @@ async fn opening_a_project_works_over_the_socket_only_and_is_idempotent() {
         (StatusCode::BAD_REQUEST, "invalid_request")
     );
     let request = Request::builder()
+        .header(CLIENT_HEADER, "test")
         .method(Method::POST)
         .uri("/api/v1/projects")
         .body(Body::from(open))
@@ -462,7 +467,7 @@ async fn the_socket_tells_a_handshake_from_http_by_the_first_byte() {
     assert_eq!(status, 200);
     assert_eq!(body, json!({"projects": []}));
 
-    daemon.socket().on_handshake(Arc::new(|mut stream| {
+    daemon.socket().on_handshake(Arc::new(|mut stream, _peer| {
         Box::pin(async move {
             let mut first = [0_u8; 1];
             // The handler sees the connection from its first byte.

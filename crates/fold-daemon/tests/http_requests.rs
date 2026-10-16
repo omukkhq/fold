@@ -1,6 +1,7 @@
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use fold_core::requests::MAX_ATTACHMENT_BYTES;
+use fold_daemon::http::host::CLIENT_HEADER;
 use fold_daemon::http::router;
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
@@ -20,7 +21,10 @@ async fn send(
     body: Vec<u8>,
     human: Option<&str>,
 ) -> axum::response::Response {
-    let mut request = Request::builder().method(method).uri(path);
+    let mut request = Request::builder()
+        .header(CLIENT_HEADER, "test")
+        .method(method)
+        .uri(path);
     if let Some(human) = human {
         request = request.header("cookie", format!("fold_human={human}"));
     }

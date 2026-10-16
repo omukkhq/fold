@@ -1,3 +1,4 @@
+use fold_daemon::http::host::CLIENT_HEADER;
 use std::fs::{self, OpenOptions};
 
 use axum::body::Body;
@@ -932,6 +933,7 @@ async fn archiving_a_task_through_the_routes_detaches_its_workspace() {
         .workspace;
     assert!(handle.live.get(view.id).is_some());
     let request = Request::builder()
+        .header(CLIENT_HEADER, "test")
         .method(Method::POST)
         .uri("/api/v1/projects/demo/tasks/T-1/archive")
         .header("cookie", "fold_human=ana")

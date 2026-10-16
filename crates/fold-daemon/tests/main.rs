@@ -114,6 +114,7 @@ mod services_inbox;
 mod services_messages;
 mod session_context;
 mod session_push;
+mod socket_peers;
 mod sse_stream;
 mod takeover;
 mod task_read;

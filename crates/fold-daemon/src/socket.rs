@@ -5,7 +5,7 @@ use std::pin::Pin;
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
-use axum::Router;
+use axum::{Extension, Router};
 use hyper::server::conn::http1;
 use hyper_util::rt::TokioIo;
 use hyper_util::service::TowerToHyperService;
@@ -17,7 +17,26 @@ use tokio::task::{JoinHandle, JoinSet};
 
 /// Takes over a connection whose first byte is `{`. The stream is untouched: the handler reads the handshake line itself.
 pub type HandshakeHandler =
-    Arc<dyn Fn(UnixStream) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+    Arc<dyn Fn(UnixStream, SocketPeer) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+
+/// The process at the other end of a socket connection, as the kernel reports it when the connection is accepted. A pid the peer writes itself is never trusted. Every HTTP request of the connection carries it as an extension.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SocketPeer {
+    /// `None` when the platform reports no pid; such a peer counts as outside every worker.
+    pub pid: Option<u32>,
+}
+
+impl SocketPeer {
+    fn of(stream: &UnixStream) -> Self {
+        let pid = stream
+            .peer_cred()
+            .ok()
+            .and_then(|cred| cred.pid())
+            .and_then(|pid| u32::try_from(pid).ok())
+            .filter(|pid| *pid != 0);
+        Self { pid }
+    }
+}
 
 const ACCEPT_BACKOFF: Duration = Duration::from_millis(50);
 
@@ -93,9 +112,10 @@ async fn accept_loop(
 }
 
 async fn serve_connection(stream: UnixStream, router: Router, handler: HandshakeHandler) {
+    let peer = SocketPeer::of(&stream);
     match first_byte(&stream).await {
-        Some(b'{') => handler(stream).await,
-        Some(_) => serve_http(stream, router).await,
+        Some(b'{') => handler(stream, peer).await,
+        Some(_) => serve_http(stream, router.layer(Extension(peer))).await,
         None => {}
     }
 }

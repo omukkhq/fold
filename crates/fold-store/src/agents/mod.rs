@@ -763,3 +763,25 @@ pub async fn open_proposals(
         })
         .collect()
 }
+
+/// The pid of every worker process that runs or may run now, with its agent's name. A socket peer under one of these processes acts only as that agent.
+pub async fn live_worker_pids(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Vec<(u32, AgentName)>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT w.pid AS "pid!: i64", g.name
+           FROM worker_processes w JOIN agents g ON g.id = w.agent_id
+           WHERE w.pid IS NOT NULL AND w.state NOT IN ('stopped', 'failed')"#
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            let pid =
+                u32::try_from(row.pid).map_err(|_| StoreError::Corrupt("worker_processes.pid"))?;
+            let name =
+                AgentName::parse(&row.name).map_err(|_| StoreError::Corrupt("agents.name"))?;
+            Ok((pid, name))
+        })
+        .collect()
+}

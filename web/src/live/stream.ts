@@ -20,6 +20,8 @@ export interface StreamHandlers {
   onDrop(delayMs: number): void;
   /** Stored events may be missing from what was applied: a sequence number was skipped, or the daemon refused the cursor. */
   onResync(): void;
+  /** The daemon answered `auth_required`: the session ended off loopback. The stream stops and makes no further attempt. */
+  onAuthRequired?(): void;
 }
 
 export interface StreamOptions {
@@ -128,7 +130,10 @@ export function startStream(options: StreamOptions): StreamHandle {
         void iterator.return?.().catch(() => undefined);
       }
     } catch (error) {
-      if (isApiError(error, "invalid_last_event_id") && !isStopped()) {
+      if (isApiError(error, "auth_required") && !isStopped()) {
+        stopped = true;
+        handlers.onAuthRequired?.();
+      } else if (isApiError(error, "invalid_last_event_id") && !isStopped()) {
         lastSeq = null;
         handlers.onResync();
       }

@@ -1,3 +1,4 @@
+use fold_daemon::http::host::CLIENT_HEADER;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -186,7 +187,11 @@ impl Harness {
         );
         self.next_pid += 1;
         let (client_end, server_end) = tokio::io::duplex(256 * 1024);
-        let server = tokio::spawn(handshake::accept(self.state.clone(), server_end));
+        let server = tokio::spawn(handshake::accept(
+            self.state.clone(),
+            server_end,
+            Default::default(),
+        ));
         let (read, mut write) = tokio::io::split(client_end);
         let hello = json!({"fold": PROTOCOL_VERSION, "cwd": self.root(), "pid": self.next_pid, "agent": agent, "tags": tags});
         write
@@ -379,6 +384,7 @@ impl Harness {
         body: Option<&Value>,
     ) -> (StatusCode, Value) {
         let request = Request::builder()
+            .header(CLIENT_HEADER, "test")
             .method(method)
             .uri(path)
             .header("x-fold-human", HUMAN);
@@ -413,6 +419,7 @@ impl Harness {
         human: Option<&str>,
     ) -> (StatusCode, Value) {
         let mut request = Request::builder()
+            .header(CLIENT_HEADER, "test")
             .method(Method::POST)
             .uri(format!("/api/v1/projects/{SLUG}/requests"))
             .header(
@@ -438,6 +445,7 @@ impl Harness {
         human: &str,
     ) -> (StatusCode, Value) {
         let request = Request::builder()
+            .header(CLIENT_HEADER, "test")
             .method(method)
             .uri(path)
             .header("cookie", format!("fold_human={human}"));

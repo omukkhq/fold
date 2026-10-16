@@ -1,3 +1,4 @@
+use fold_daemon::http::host::CLIENT_HEADER;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -138,6 +139,7 @@ impl Fixture {
     /// The attention kinds of each task card on `GET /board`, by task id.
     async fn board(&self) -> BTreeMap<String, Vec<String>> {
         let request = Request::builder()
+            .header(CLIENT_HEADER, "test")
             .method(Method::GET)
             .uri("/api/v1/projects/demo/board")
             .body(Body::empty())
@@ -175,6 +177,7 @@ impl Fixture {
 
     async fn reply(&self, to: &str) -> (StatusCode, Value) {
         let request = Request::builder()
+            .header(CLIENT_HEADER, "test")
             .method(Method::POST)
             .uri("/api/v1/projects/demo/feedback")
             .header("cookie", "fold_human=tanim")

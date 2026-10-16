@@ -1,3 +1,4 @@
+use fold_daemon::http::host::CLIENT_HEADER;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -53,7 +54,10 @@ impl Site {
     }
 
     async fn send(&self, method: Method, uri: &str, etag: Option<&str>) -> Response {
-        let mut request = Request::builder().method(method).uri(uri);
+        let mut request = Request::builder()
+            .header(CLIENT_HEADER, "test")
+            .method(method)
+            .uri(uri);
         if let Some(etag) = etag {
             request = request.header(header::IF_NONE_MATCH, etag);
         }

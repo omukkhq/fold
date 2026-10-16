@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use axum::Json;
 use axum::extract::State;
+use axum::{Extension, Json};
 use fold_core::{AgentName, FoldError};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -11,7 +11,9 @@ use utoipa_axum::routes;
 use super::SocketOnly;
 use super::error::{ApiError, ApiJson, ErrorEnvelope};
 use crate::daemon::AppState;
+use crate::services::agents::peers;
 use crate::services::projects;
+use crate::socket::SocketPeer;
 
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -52,7 +54,7 @@ pub struct StopUnread {
     pub unread: u64,
 }
 
-/// The Claude Code session-start hook of an agent: stores the session's inbox socket for the session push when `socket` and `token` are both present, then returns the session's context. Socket only.
+/// The Claude Code session-start hook of an agent: stores the session's inbox socket for the session push when `socket` and `token` are both present, then returns the session's context. Socket only. A process under a worker names only that worker's own agent.
 #[utoipa::path(
     post,
     path = "/api/v1/hooks/session-start",
@@ -61,6 +63,7 @@ pub struct StopUnread {
     responses(
         (status = 200, description = "The session's context", body = SessionStartContext),
         (status = 400, description = "The body, the agent name or the push target is not valid", body = ErrorEnvelope),
+        (status = 403, description = "`worker_peer_refused`: a process under a worker names another agent", body = ErrorEnvelope),
         (status = 404, description = "Not on the socket, or no registered project holds `cwd`", body = ErrorEnvelope),
         (status = 503, description = "The project failed to open", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
@@ -69,10 +72,12 @@ pub struct StopUnread {
 pub async fn session_start(
     _socket: SocketOnly,
     State(state): State<AppState>,
+    peer: Option<Extension<SocketPeer>>,
     ApiJson(request): ApiJson<SessionStartHook>,
 ) -> Result<Json<SessionStartContext>, ApiError> {
     let agent = AgentName::parse(&request.agent).map_err(FoldError::from)?;
     let handle = projects::open_for_dir(&state, Path::new(&request.cwd)).await?;
+    peers::require_peer_agent(&state.projects, pid(peer), &handle.slug, &agent).await?;
     let push = match (request.socket, request.token.as_deref()) {
         (Some(socket), Some(token)) => Some((PathBuf::from(socket), token)),
         _ => None,
@@ -84,7 +89,7 @@ pub async fn session_start(
     Ok(Json(SessionStartContext { context }))
 }
 
-/// The Claude Code stop hook of an agent: how many messages the agent has not acknowledged. Socket only.
+/// The Claude Code stop hook of an agent: how many messages the agent has not acknowledged. Socket only. A process under a worker names only that worker's own agent.
 #[utoipa::path(
     post,
     path = "/api/v1/hooks/stop",
@@ -93,6 +98,7 @@ pub async fn session_start(
     responses(
         (status = 200, description = "The agent's unread count", body = StopUnread),
         (status = 400, description = "The body or the agent name is not valid", body = ErrorEnvelope),
+        (status = 403, description = "`worker_peer_refused`: a process under a worker names another agent", body = ErrorEnvelope),
         (status = 404, description = "Not on the socket, no registered project holds `cwd`, or the agent is not registered (`agent_not_registered`)", body = ErrorEnvelope),
         (status = 503, description = "The project failed to open", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
@@ -101,10 +107,16 @@ pub async fn session_start(
 pub async fn stop(
     _socket: SocketOnly,
     State(state): State<AppState>,
+    peer: Option<Extension<SocketPeer>>,
     ApiJson(request): ApiJson<StopHook>,
 ) -> Result<Json<StopUnread>, ApiError> {
     let agent = AgentName::parse(&request.agent).map_err(FoldError::from)?;
     let handle = projects::open_for_dir(&state, Path::new(&request.cwd)).await?;
+    peers::require_peer_agent(&state.projects, pid(peer), &handle.slug, &agent).await?;
     let unread = handle.agents().unread_of(&agent).await?;
     Ok(Json(StopUnread { unread }))
+}
+
+fn pid(peer: Option<Extension<SocketPeer>>) -> Option<u32> {
+    peer.and_then(|Extension(peer)| peer.pid)
 }
