@@ -8,11 +8,11 @@ pub mod fixture;
 #[path = "../../fold-daemon/tests/common/invariants.rs"]
 pub mod invariants;
 #[cfg(test)]
-#[path = "../benches/support/limits.rs"]
-pub mod limits;
-#[cfg(test)]
 #[path = "../benches/support/report.rs"]
 pub mod report;
+#[cfg(test)]
+#[path = "../benches/support/targets.rs"]
+pub mod targets;
 
 mod adapter;
 mod agents_section;

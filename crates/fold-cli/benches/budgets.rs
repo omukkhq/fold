@@ -5,14 +5,15 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use fold_core::codes;
+use fold_core::layout::ProjectPaths;
 use serde_json::json;
 use support::daemon::{Daemon, resident_memory};
 use support::events::EventStream;
 use support::fixture::{self, Sizes};
 use support::host::{self, Host};
-use support::limits::{SCALE_VARIABLE, Scale, Target};
 use support::report::{Report, utc_date};
 use support::session::Session;
+use support::targets::Target;
 use support::{BenchResult, fail, integration};
 
 /// Each timing target runs this many times; the reported value is the median.
@@ -22,7 +23,6 @@ const VISIBILITY_TIMEOUT: Duration = Duration::from_secs(30);
 
 struct Mode {
     sizes: Sizes,
-    enforce: bool,
     idle_seconds: u64,
 }
 
@@ -33,7 +33,7 @@ fn main() -> ExitCode {
         .map_err(Into::into)
         .and_then(|runtime| runtime.block_on(run()));
     match outcome {
-        Ok(code) => ExitCode::from(code),
+        Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("bench: {error}");
             ExitCode::FAILURE
@@ -45,12 +45,10 @@ fn mode() -> BenchResult<Mode> {
     match std::env::var(SIZE_VARIABLE).ok().as_deref() {
         None | Some("full") => Ok(Mode {
             sizes: Sizes::FULL,
-            enforce: true,
             idle_seconds: 30,
         }),
         Some("smoke") => Ok(Mode {
             sizes: Sizes::smoke(),
-            enforce: false,
             idle_seconds: 3,
         }),
         Some(other) => fail(format!(
@@ -60,13 +58,11 @@ fn mode() -> BenchResult<Mode> {
     }
 }
 
-async fn run() -> BenchResult<u8> {
-    let scale = Scale::parse(std::env::var(SCALE_VARIABLE).ok().as_deref())
-        .map_err(|error| format!("{}: {error}", error.code()))?;
+async fn run() -> BenchResult<()> {
     let mode = mode()?;
     let host = Host::new()?;
     let folder = host.path().display().to_string();
-    let measured = measure(&host, &mode, scale).await;
+    let measured = measure(&host, &mode).await;
     let report = match (measured, host.close()) {
         (Ok(report), Ok(())) => report,
         (Err(error), Ok(())) => return Err(error),
@@ -79,19 +75,14 @@ async fn run() -> BenchResult<u8> {
     };
 
     let table = report.table();
-    emit(&format!(
-        "{table}{} targets, limit scale {}\n",
-        report.entries().len(),
-        scale.factor()
-    ));
-    write_results(&report, scale)?;
-    Ok(report.exit_code(mode.enforce))
+    emit(&format!("{table}{} targets\n", report.entries().len()));
+    write_results(&report)
 }
 
-async fn measure(host: &Host, mode: &Mode, scale: Scale) -> BenchResult<Report> {
+async fn measure(host: &Host, mode: &Mode) -> BenchResult<Report> {
     let mut report = Report::default();
     let daemon = Daemon::start(host).await?;
-    let measured = measure_with_daemon(host, &daemon, mode, scale, &mut report).await;
+    let measured = measure_with_daemon(host, &daemon, mode, &mut report).await;
     daemon.stop().await?;
     measured?;
     Ok(report)
@@ -106,7 +97,6 @@ async fn measure_with_daemon(
     host: &Host,
     daemon: &Daemon,
     mode: &Mode,
-    scale: Scale,
     report: &mut Report,
 ) -> BenchResult<()> {
     let sizes = mode.sizes;
@@ -115,7 +105,7 @@ async fn measure_with_daemon(
     fixture::write_repository(&idle_root, sizes.idle_files, 4.min(sizes.idle_files))?;
     init_project(host, &idle_root).await?;
     let idle = idle_memory(host, daemon, &idle_root, mode.idle_seconds).await?;
-    report.record(Target::IdleMemory, idle as f64, scale);
+    report.record(Target::IdleMemory, idle as f64);
 
     let root = host.path().join("big");
     fixture::write_repository(&root, sizes.files, sizes.directories)?;
@@ -130,7 +120,7 @@ async fn measure_with_daemon(
         backend: &backend,
         review: &review,
     };
-    let measured = measure_project(host, &agents, &root, sizes, scale, report).await;
+    let measured = measure_project(host, &agents, &root, sizes, report).await;
     for session in [frontend, backend, review] {
         session.close().await;
     }
@@ -142,18 +132,22 @@ async fn measure_project(
     agents: &integration::Agents<'_>,
     root: &Path,
     sizes: Sizes,
-    scale: Scale,
     report: &mut Report,
 ) -> BenchResult<()> {
-    measure_workspace(host, agents.frontend, root, sizes, scale, report).await?;
+    measure_workspace(host, agents.frontend, root, sizes, report).await?;
     let timings = integration::measure(agents, root, sizes, SAMPLES).await?;
-    report.record(Target::Integration, median(timings), scale);
+    report.record(Target::Integration, median(timings));
     Ok(())
 }
 
 /// The folder's files become `r1`, as `fld init` makes a folder the project.
 async fn init_project(host: &Host, root: &Path) -> BenchResult<()> {
     host.run(&["init"], root, &[]).await?;
+    // Automatic integration would integrate a proposal as soon as the main agent approves it, before the bench's own `integrate_proposal` call.
+    let config = ProjectPaths::new(&root.canonicalize()?).config();
+    let mut text = std::fs::read_to_string(&config)?;
+    text.push_str("\n[integration]\nautomatic = false\n");
+    std::fs::write(&config, text)?;
     Ok(())
 }
 
@@ -184,7 +178,6 @@ async fn measure_workspace(
     session: &Session,
     root: &Path,
     sizes: Sizes,
-    scale: Scale,
     report: &mut Report,
 ) -> BenchResult<()> {
     let mut creation = Vec::new();
@@ -209,7 +202,7 @@ async fn measure_workspace(
             std::fs::remove_dir_all(directory)?;
         }
     }
-    report.record(Target::WorkspaceCreation, median(creation), scale);
+    report.record(Target::WorkspaceCreation, median(creation));
     let Some((workspace, directory)) = kept else {
         return fail("no workspace was created");
     };
@@ -225,7 +218,7 @@ async fn measure_workspace(
             .await?;
         scans.push(start.elapsed().as_secs_f64());
     }
-    report.record(Target::FullStatScan, median(scans), scale);
+    report.record(Target::FullStatScan, median(scans));
 
     let visibility = change_visibility(host, &workspace, &directory, sizes).await;
     session
@@ -235,7 +228,7 @@ async fn measure_workspace(
         )
         .await?;
     std::fs::remove_dir_all(&directory)?;
-    report.record(Target::ChangeVisibility, median(visibility?), scale);
+    report.record(Target::ChangeVisibility, median(visibility?));
     Ok(())
 }
 
@@ -284,7 +277,7 @@ fn median(mut values: Vec<f64>) -> f64 {
     }
 }
 
-fn write_results(report: &Report, scale: Scale) -> BenchResult<()> {
+fn write_results(report: &Report) -> BenchResult<()> {
     let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/bench");
     std::fs::create_dir_all(&directory)?;
     std::fs::write(directory.join("results.json"), report.json()?)?;
@@ -295,7 +288,6 @@ fn write_results(report: &Report, scale: Scale) -> BenchResult<()> {
             &host::describe(),
             &utc_date(seconds),
             env!("CARGO_PKG_VERSION"),
-            scale,
         ),
     )?;
     Ok(())

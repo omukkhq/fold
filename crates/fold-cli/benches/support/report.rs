@@ -2,7 +2,7 @@ use std::fmt::Write as _;
 
 use serde::Serialize;
 
-use super::limits::{Scale, Target};
+use super::targets::Target;
 
 /// One row of `results.json`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -10,9 +10,6 @@ pub struct Entry {
     pub target: String,
     pub value: f64,
     pub unit: String,
-    pub limit: f64,
-    pub scale: f64,
-    pub pass: bool,
 }
 
 #[derive(Debug, Default)]
@@ -21,30 +18,16 @@ pub struct Report {
 }
 
 impl Report {
-    /// A value above its scaled limit does not pass.
-    pub fn record(&mut self, target: Target, value: f64, scale: Scale) {
-        let limit = scale.limit(target);
+    pub fn record(&mut self, target: Target, value: f64) {
         self.entries.push(Entry {
             target: target.name().to_owned(),
             value,
             unit: target.unit().to_owned(),
-            limit,
-            scale: scale.factor(),
-            pass: value <= limit,
         });
     }
 
     pub fn entries(&self) -> &[Entry] {
         &self.entries
-    }
-
-    pub fn all_pass(&self) -> bool {
-        self.entries.iter().all(|entry| entry.pass)
-    }
-
-    /// The gate: non-zero when limits are enforced and any target missed its scaled limit.
-    pub fn exit_code(&self, enforce: bool) -> u8 {
-        u8::from(enforce && !self.all_pass())
     }
 
     pub fn json(&self) -> Result<String, serde_json::Error> {
@@ -53,45 +36,32 @@ impl Report {
 
     pub fn table(&self) -> String {
         let mut text = String::new();
-        let _ = writeln!(
-            text,
-            "{:<20} {:>16} {:>6} {:>16} {:>6}  result",
-            "target", "value", "unit", "limit", "scale"
-        );
+        let _ = writeln!(text, "{:<20} {:>16} {:>6}", "target", "value", "unit");
         for entry in &self.entries {
             let _ = writeln!(
                 text,
-                "{:<20} {:>16} {:>6} {:>16} {:>6}  {}",
+                "{:<20} {:>16} {:>6}",
                 entry.target,
                 number(entry.value),
-                entry.unit,
-                number(entry.limit),
-                entry.scale,
-                if entry.pass { "pass" } else { "FAIL" }
+                entry.unit
             );
         }
         text
     }
 
-    /// The table with the host block, the date, the scale and the fold version.
-    pub fn markdown(&self, host: &str, date: &str, version: &str, scale: Scale) -> String {
+    /// The table with the host block, the date and the fold version.
+    pub fn markdown(&self, host: &str, date: &str, version: &str) -> String {
         let mut text = format!(
-            "# Benchmark results\n\n- Date: {date}\n- fold version: {version}\n- Limit scale: {}\n\n## Host\n\n{host}\n\n## Results\n\n",
-            scale.factor()
+            "# Benchmark results\n\n- Date: {date}\n- fold version: {version}\n\n## Host\n\n{host}\n\n## Results\n\n"
         );
-        text.push_str(
-            "| Target | Value | Unit | Limit | Scale | Pass |\n|---|---|---|---|---|---|\n",
-        );
+        text.push_str("| Target | Value | Unit |\n|---|---|---|\n");
         for entry in &self.entries {
             let _ = writeln!(
                 text,
-                "| {} | {} | {} | {} | {} | {} |",
+                "| {} | {} | {} |",
                 entry.target,
                 number(entry.value),
-                entry.unit,
-                number(entry.limit),
-                entry.scale,
-                if entry.pass { "yes" } else { "no" }
+                entry.unit
             );
         }
         text

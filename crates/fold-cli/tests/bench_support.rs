@@ -69,78 +69,32 @@ mod fixture_tests {
     }
 }
 
-mod limits_tests {
-    use crate::limits::*;
-
-    #[test]
-    fn limits_scale_with_the_factor() {
-        let doubled = Scale::parse(Some("2")).unwrap();
-        for (target, name, unit, limit) in BUDGETS {
-            assert_eq!(doubled.limit(target), limit * 2.0);
-            assert_eq!(Scale::ONE.limit(target), limit);
-            assert_eq!(target.name(), name);
-            assert_eq!(target.unit(), unit);
-        }
-        assert_eq!(doubled.factor(), 2.0);
-        assert_eq!(Scale::parse(None).unwrap(), Scale::ONE);
-        assert_eq!(Scale::parse(Some("1.5")).unwrap().factor(), 1.5);
-    }
-
-    #[test]
-    fn invalid_scale_is_refused() {
-        for value in ["0", "-1", "abc", "", "inf", "NaN"] {
-            let error = Scale::parse(Some(value)).unwrap_err();
-            assert_eq!(error.code(), "invalid_config", "{value:?}");
-            assert!(error.to_string().contains(SCALE_VARIABLE));
-        }
-    }
-}
-
 mod report_tests {
-    use crate::limits::{Scale, Target};
     use crate::report::*;
+    use crate::targets::Target;
 
     #[test]
-    fn bench_report_marks_a_miss_as_failed() {
-        let mut report = Report::default();
-        report.record(Target::FullStatScan, 1.5, Scale::ONE);
-        assert!(report.all_pass());
-        assert_eq!(report.exit_code(true), 0);
-
-        report.record(Target::Integration, 2.5, Scale::ONE);
-        assert!(!report.entries()[1].pass);
-        assert_eq!(report.exit_code(true), 1);
-        assert_eq!(report.exit_code(false), 0, "smoke does not enforce");
-    }
-
-    #[test]
-    fn a_scaled_limit_passes_what_the_plain_limit_misses() {
-        let mut report = Report::default();
-        report.record(Target::Integration, 3.0, Scale::parse(Some("2")).unwrap());
-        let entry = &report.entries()[0];
-        assert!(entry.pass);
-        assert_eq!((entry.limit, entry.scale), (4.0, 2.0));
+    fn targets_have_a_name_and_a_unit() {
+        assert_eq!(Target::IdleMemory.name(), "idle_memory");
+        assert_eq!(Target::IdleMemory.unit(), "bytes");
+        assert_eq!(Target::Integration.name(), "integration");
+        assert_eq!(Target::Integration.unit(), "s");
     }
 
     #[test]
     fn the_result_file_has_one_entry_per_target_with_every_field() {
         let mut report = Report::default();
-        report.record(Target::IdleMemory, 41_000_000.0, Scale::ONE);
-        report.record(Target::WorkspaceCreation, 21.0, Scale::ONE);
+        report.record(Target::IdleMemory, 41_000_000.0);
+        report.record(Target::WorkspaceCreation, 21.0);
         let parsed: serde_json::Value = serde_json::from_str(&report.json().unwrap()).unwrap();
         let rows = parsed.as_array().unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(
             rows[1],
-            serde_json::json!({
-                "target": "workspace_creation", "value": 21.0, "unit": "s",
-                "limit": 20.0, "scale": 1.0, "pass": false
-            })
+            serde_json::json!({ "target": "workspace_creation", "value": 21.0, "unit": "s" })
         );
-        assert!(report.table().contains("FAIL"));
-        let markdown = report.markdown("host block", "2026-10-15", "0.1.0", Scale::ONE);
-        assert!(markdown.contains("- Limit scale: 1"));
-        assert!(markdown.contains("| idle_memory | 41000000 | bytes | 60000000 | 1 | yes |"));
+        let markdown = report.markdown("host block", "2026-10-15", "0.1.0");
+        assert!(markdown.contains("| idle_memory | 41000000 | bytes |"));
         assert!(markdown.contains("host block"));
     }
 

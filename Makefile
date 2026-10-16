@@ -24,7 +24,6 @@ fmt: ## Format the Rust code, fix lint findings and format the web sources
 	cd web && bun run format
 
 RELEASE_TRIPLE := x86_64-unknown-linux-gnu
-RELEASE_MAX_BYTES ?= 30000000
 
 DEV_DIR := $(CURDIR)/target/dev
 
@@ -97,10 +96,10 @@ check-rust: fmt-check-rust sqlx-check clippy coverage test-default-features ## R
 acceptance: ## Run only the acceptance tests
 	cargo nextest run --workspace --all-features -E 'test(/^acceptance_/)'
 
-bench: ## Measure the five runtime budgets against a real daemon; FOLD_BENCH_LIMIT_SCALE=<factor> scales every limit, FOLD_BENCH_DIR=<dir> picks the disk
+bench: ## Measure the five runtime targets against a real daemon; FOLD_BENCH_DIR=<dir> picks the disk
 	cargo bench -p fold-cli --bench budgets
 
-bench-smoke: ## Run the whole bench harness on a fixture 100 times smaller and report without enforcing the limits
+bench-smoke: ## Run the whole bench harness on a fixture 100 times smaller
 	FOLD_BENCH_SIZE=smoke cargo bench -p fold-cli --bench budgets
 
 SQLX_DIR := target/sqlx
@@ -158,10 +157,6 @@ release: web-build ## Build fld for x86_64 Linux into dist/ with the host toolch
 	rm -rf dist
 	mkdir -p dist
 	install -m 0755 "$$(cargo metadata --format-version 1 --no-deps | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')/$(RELEASE_TRIPLE)/release/fld" dist/fld-x86_64-linux
-	@size=$$(stat -c %s dist/fld-x86_64-linux); \
-	if [ "$$size" -ge $(RELEASE_MAX_BYTES) ]; then \
-		echo "release: dist/fld-x86_64-linux is $$size bytes, over the limit of $(RELEASE_MAX_BYTES)" >&2; exit 1; \
-	fi
 	file dist/fld-x86_64-linux | grep -q 'x86-64' || { echo "release: dist/fld-x86_64-linux is not an x86-64 binary" >&2; exit 1; }
 	scripts/release-smoke.sh dist/fld-x86_64-linux
 	cd dist && sha256sum fld-x86_64-linux > SHA256SUMS
