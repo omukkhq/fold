@@ -153,7 +153,7 @@ struct Placed {
 }
 
 impl WorkspaceService {
-    /// Creates the task workspace of `task` for the actor's worker: a copy of the current main revision under `ws/`, recorded with that revision as its base. A workspace belongs to the implementation claim, so `policy::can_claim` admits only an agent; its worker must hold the claim or the task must be unclaimed, and then the create takes it. The task moves to In Progress, also from Backlog, where it keeps its blocked indicator.
+    /// Creates the task workspace of `task` for the actor's worker: a copy of the current main revision under `.fold/ws/`, recorded with that revision as its base. A workspace belongs to the implementation claim, so `policy::can_claim` admits only an agent; its worker must hold the claim or the task must be unclaimed, and then the create takes it. The task moves to In Progress, also from Backlog, where it keeps its blocked indicator.
     ///
     /// A task whose live workspace is orphaned, with no owner or an owner that no longer holds the claim, keeps that workspace: the create takes the claim, adopts it and makes nothing new. A live workspace whose owner holds the claim, or that is already the actor's own, is `workspace_exists`.
     ///
@@ -370,7 +370,7 @@ impl WorkspaceService {
         Ok(CreatePlan::Create { base, taken })
     }
 
-    /// Step 2 of a create: materialises `tree` into a staging directory under `ws/` and renames it to the task's next directory name. A name that `taken` lists for an earlier workspace of the task, or that some directory already holds, such as one left by a create that stopped before its row, is skipped, so a name is never shared.
+    /// Step 2 of a create: materialises `tree` into a staging directory under `.fold/ws/` and renames it to the task's next directory name. A name that `taken` lists for an earlier workspace of the task, or that some directory already holds, such as one left by a create that stopped before its row, is skipped, so a name is never shared.
     async fn place(
         &self,
         task: TaskId,
@@ -596,7 +596,7 @@ pub(super) fn io_error(error: io::Error) -> FoldError {
     VcsError::from(error).into()
 }
 
-/// A new empty directory `ws/.new-<pid>-<n>`. A name that exists, from an earlier daemon with the same process id, is skipped rather than reused.
+/// A new empty directory `.fold/ws/.new-<pid>-<n>`. A name that exists, from an earlier daemon with the same process id, is skipped rather than reused.
 pub(super) fn staging_dir(ws_dir: &Path) -> Result<PathBuf, FoldError> {
     loop {
         let number = STAGING_COUNTER.fetch_add(1, Ordering::Relaxed);

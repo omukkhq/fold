@@ -72,7 +72,7 @@ pub struct ReviewBatchVerdict {
 pub struct ReviewBatchCheckout {
     #[schema(value_type = String, example = "ws-12")]
     pub workspace: WorkspaceId,
-    /// Relative to the project root, such as `ws/review-rb-3`.
+    /// Relative to the project root, such as `.fold/ws/review-rb-3`.
     pub path: String,
     /// The revision of main the members were merged onto.
     #[schema(value_type = String, example = "r17")]

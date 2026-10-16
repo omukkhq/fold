@@ -16,7 +16,7 @@ use crate::{Store, StoreError};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 
-/// A temporary project: the layout on disk, a migrated project database and a manual clock. Dropping it deletes the directory.
+/// A temporary project: the layout on disk with the project folder's own Git repository, a migrated project database and a manual clock. Dropping it deletes the directory.
 #[derive(Debug)]
 pub struct TestProject {
     _dir: TempDir,
@@ -28,7 +28,7 @@ pub struct TestProject {
 }
 
 impl Drop for TestProject {
-    /// `main/` keeps its directories without write access, which would stop the temporary directory from being removed.
+    /// Review checkouts keep their directories without write access, which would stop the temporary directory from being removed.
     fn drop(&mut self) {
         restore_write_access(self._dir.path());
     }
@@ -56,6 +56,22 @@ fn restore_write_access(dir: &Path) {
 #[cfg(not(unix))]
 fn restore_write_access(_dir: &Path) {}
 
+/// `git init` in the project folder with `main` as its branch, as `fld init` leaves a new project, so the commit writer has its repository. The user's and the system's Git configuration are left out, so no template or hook of theirs reaches the test.
+fn init_repository(root: &Path) {
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["init", "--quiet", "--initial-branch=main"])
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .status()
+        .expect("run git init");
+    assert!(status.success(), "git init in the test project");
+}
+
 impl TestProject {
     pub async fn new() -> Self {
         let dir = TempDir::new().expect("create the project directory");
@@ -63,6 +79,7 @@ impl TestProject {
         let store = Store::open_project(&paths)
             .await
             .expect("open the project database");
+        init_repository(paths.root());
         // The host registry lives in its own directory so host-level tests never share state with a project.
         let registry_dir = TempDir::new().expect("create the registry directory");
         let registry = Store::open_registry(&registry_dir.path().join("registry.db"))

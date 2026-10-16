@@ -103,8 +103,26 @@ impl Fixture {
         std::fs::write(root.join(MCP_FILE), good_mcp()).unwrap();
         std::fs::write(root.join(SETTINGS_FILE), good_settings()).unwrap();
         std::fs::write(root.join(AGENTS_FILE), good_agents()).unwrap();
+        git(&root, &["init", "--quiet"]);
         root
     }
+}
+
+/// `git` in `dir` without the user's configuration.
+fn git(dir: &Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_AUTHOR_NAME", "a")
+        .env("GIT_AUTHOR_EMAIL", "a@b")
+        .env("GIT_COMMITTER_NAME", "a")
+        .env("GIT_COMMITTER_EMAIL", "a@b")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{args:?}");
 }
 
 fn good_mcp() -> String {
@@ -563,6 +581,7 @@ fn a_healthy_project_is_all_ok_and_nothing_changes_on_disk() {
             "database",
             "objects",
             "git history",
+            "project folder",
             "inotify watches",
             "claude files",
             "claude md"
@@ -580,7 +599,7 @@ fn a_git_history_without_the_last_mapped_commit_names_the_repair() {
     let mut host = fixture.bare_host();
     host.path = std::env::var_os("PATH");
     let root = fixture.project("demo");
-    let mirror = root.join(".fold/git");
+    let mirror = root.join(".git");
     let run = |args: &[&str]| {
         let out = std::process::Command::new("git")
             .arg("-C")
@@ -624,6 +643,44 @@ fn a_git_history_without_the_last_mapped_commit_names_the_repair() {
     std::fs::write(&map, format!("r1 {commit}\n")).unwrap();
     let checks = project_report(&host, &root, at(1_000));
     assert_eq!(find(&checks, "git history").message, NOT_APPLICABLE);
+}
+
+#[test]
+fn a_project_folder_with_changes_that_are_not_committed_is_a_warning() {
+    let fixture = Fixture::new();
+    let mut host = fixture.bare_host();
+    host.path = std::env::var_os("PATH");
+    let root = fixture.project("demo");
+    let folder = |host: &Host| {
+        let checks = project_report(host, &root, at(1_000));
+        find(&checks, "project folder").clone()
+    };
+    assert_eq!(folder(&host).status, Status::Ok);
+    std::fs::write(root.join(".git/info/exclude"), "/.fold/\n").unwrap();
+    std::fs::write(root.join("app.txt"), "one\n").unwrap();
+    git(&root, &["add", "app.txt"]);
+    git(&root, &["commit", "--quiet", "-m", "one"]);
+    let index = std::fs::read(root.join(".git/index")).unwrap();
+    assert_eq!(folder(&host).status, Status::Ok);
+    // An untracked file does not hold the folder back; a change to a tracked one does.
+    std::fs::write(root.join("new.txt"), "x\n").unwrap();
+    assert_eq!(folder(&host).status, Status::Ok);
+    std::fs::write(root.join("app.txt"), "two\n").unwrap();
+    let check = folder(&host);
+    assert_eq!(check.status, Status::Warn);
+    assert!(
+        check.fix.as_deref().unwrap().contains("commit or stash"),
+        "{check:?}"
+    );
+    // The check reads the folder and never writes the index.
+    assert_eq!(std::fs::read(root.join(".git/index")).unwrap(), index);
+    host.path = None;
+    assert_eq!(folder(&host).message, NOT_APPLICABLE);
+    host.path = std::env::var_os("PATH");
+    std::fs::remove_dir_all(root.join(".git")).unwrap();
+    let missing = folder(&host);
+    assert_eq!(missing.status, Status::Warn);
+    assert!(missing.fix.as_deref().unwrap().contains("fld init"));
 }
 
 #[test]

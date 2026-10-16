@@ -154,7 +154,7 @@ impl Fixture {
     }
 
     fn write(&self, path: &str, content: &str) {
-        let file = self.project.paths().root().join("ws/t-1").join(path);
+        let file = self.project.paths().root().join(".fold/ws/t-1").join(path);
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(file, content).unwrap();
     }
@@ -543,7 +543,13 @@ async fn create_proposal_refuses_with_conflict_markers_listed() {
     assert_eq!(fx.status(1).await, TaskStatus::InProgress);
 
     fx.write("src/lib.rs", "pub fn merged() {}\n");
-    std::fs::remove_file(fx.project.paths().root().join("ws/t-1/README.md.fold-main")).unwrap();
+    std::fs::remove_file(
+        fx.project
+            .paths()
+            .root()
+            .join(".fold/ws/t-1/README.md.fold-main"),
+    )
+    .unwrap();
     fx.create(&fx.frontend).await.unwrap();
     assert_eq!(
         fx.count("SELECT COUNT(*) FROM workspace_conflicts").await,
@@ -800,7 +806,7 @@ async fn close_proposal_returns_task_to_in_progress_and_archives_review_checkout
     fx.execute(&format!(
         "INSERT INTO claims (kind, proposal_id, worker_id, acquired_at, renewed_at) VALUES ('review', 1, {0}, 0, 0);
          INSERT INTO workspaces (number, task_id, worker_id, kind, path, base_revision_id, proposal_id, state, created_at)
-         VALUES (2, 1, {0}, 'review', 'ws/r-1', 1, 1, 'active', 0), (3, 1, {0}, 'review', 'ws/r-2', 1, 1, 'abandoned', 0)",
+         VALUES (2, 1, {0}, 'review', '.fold/ws/r-1', 1, 1, 'active', 0), (3, 1, {0}, 'review', '.fold/ws/r-2', 1, 1, 'abandoned', 0)",
         fx.backend.id
     ))
     .await;
@@ -1029,7 +1035,7 @@ async fn retire_proposal_ends_a_proposal_for_reject_and_integration() {
         .unwrap();
     fx.execute(&format!(
         "INSERT INTO workspaces (number, task_id, worker_id, kind, path, base_revision_id, proposal_id, state, created_at)
-         VALUES (3, 1, {0}, 'review', 'ws/r-1', 1, 1, 'active', 0), (4, 2, {0}, 'review', 'ws/r-2', 1, 2, 'missing', 0);
+         VALUES (3, 1, {0}, 'review', '.fold/ws/r-1', 1, 1, 'active', 0), (4, 2, {0}, 'review', '.fold/ws/r-2', 1, 2, 'missing', 0);
          INSERT INTO claims (kind, proposal_id, worker_id, acquired_at, renewed_at) VALUES ('review', 2, {0}, 0, 0)",
         fx.frontend.id
     ))

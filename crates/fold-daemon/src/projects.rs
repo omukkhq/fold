@@ -7,12 +7,12 @@ use fold_store::projects::ProjectRow;
 use fold_vcs::git::Git;
 use fold_vcs::platform::Capabilities;
 
-use crate::jobs::{self, AutoCommit, MainMaterialiser, MainQueue};
+use crate::jobs::{self, AutoCommit};
 use crate::live::{LiveConfig, LiveState};
 use crate::push::{self, PushTargets, PushTask};
 use crate::services::agents::{AgentService, SeenPresence};
 use crate::services::events::EventBus;
-use crate::services::projects::{RemoteContext, load_config};
+use crate::services::projects::{GitAttention, RemoteContext, load_config};
 use crate::services::reviews::ReviewService;
 use crate::services::tasks::TaskService;
 use crate::services::workspaces::{WorkspaceLocks, WorkspaceService};
@@ -38,6 +38,8 @@ pub struct ProjectHandle {
     pub objects: Arc<tokio::sync::RwLock<()>>,
     /// Held for a whole push or pull, so two of them never run together in one project; a pull takes the integration mutex after it. It is an `Arc` so the guard can move into the blocking Git work and outlive an aborted caller.
     pub remote_lock: Arc<tokio::sync::Mutex<()>>,
+    /// What the commit writer last found that needs a person: commits made outside fold, or changes in the project folder that keep it from following main.
+    pub git_attention: Arc<GitAttention>,
     /// One restore, sync or record per workspace at a time, across every session of the project.
     pub workspace_locks: Arc<WorkspaceLocks>,
     /// What the file system under `.fold/` supports, probed by the first workspace command of any session or the first live attach.
@@ -47,9 +49,7 @@ pub struct ProjectHandle {
     /// The Claude Code inbox sockets of the project's agents. They live in memory only, so a restarted daemon has none until the session-start hooks run again.
     pub push: PushTargets,
     _push_task: PushTask,
-    /// Keeps `main/` on the head after each integration. It is the only writer of `main/` after `fld init`.
-    pub main_view: MainMaterialiser,
-    /// Commits each integration to `.fold/git` and pushes it when the configuration asks.
+    /// Commits each integration to the project's repository, moves the project folder to it and pushes it when the configuration asks.
     _auto_commit: AutoCommit,
 }
 
@@ -61,6 +61,28 @@ impl std::fmt::Debug for ProjectHandle {
     }
 }
 
+/// Files only the old layout had: a `main/` copy of main with its marker, and a Git repository inside `.fold/`.
+const OLD_LAYOUT: [&str; 2] = ["main-materialised", "git"];
+
+/// A project made when fold kept main in `main/`, the workspaces in `ws/` and its Git repository in `.fold/git` is refused: fold does not move it to the layout where the project folder is main.
+async fn refuse_old_layout(slug: &str, paths: &ProjectPaths) -> Result<(), FoldError> {
+    for name in OLD_LAYOUT {
+        if tokio::fs::symlink_metadata(paths.fold_dir().join(name))
+            .await
+            .is_ok()
+        {
+            tracing::warn!(project = %slug, "project has the old layout with main/ and ws/");
+            return Err(FoldError::new(
+                codes::PROJECT_UNAVAILABLE,
+                format!("project {slug} has the old layout with main/ and ws/, which this fold cannot open"),
+            )
+            .with_hint("re-create it with fld init in a new folder, or with fld init --from-git in a Git repository of its code")
+            .with_details([("reason", serde_json::json!("old_layout"))]));
+        }
+    }
+    Ok(())
+}
+
 impl ProjectHandle {
     /// Opens the project database, which applies its pending migrations. A missing database is not created: the registry only lists projects that `fld init` set up. The live state takes its intervals from the configuration read here; an invalid configuration gives it the defaults, and the commands that read the configuration report the error.
     pub async fn open(row: &ProjectRow, clock: Arc<dyn Clock>) -> Result<Self, FoldError> {
@@ -70,6 +92,7 @@ impl ProjectHandle {
             tracing::warn!(project = %row.slug, "project database is missing");
             return Err(unavailable(&row.slug));
         }
+        refuse_old_layout(&row.slug, &paths).await?;
         let config = load_config(&paths).await.unwrap_or_else(|error| {
             tracing::warn!(project = %row.slug, code = error.code().unwrap_or("store_error"), "project configuration is invalid; the live state uses the defaults");
             ProjectConfig::default()
@@ -102,14 +125,8 @@ impl ProjectHandle {
         .with_objects(&paths, objects.clone());
         let push = PushTargets::new();
         let push_task = push::run(store.clone(), &bus, push.clone());
-        let main_view = jobs::spawn_main_materialiser(
-            store.clone(),
-            &bus,
-            paths.clone(),
-            Arc::clone(&capabilities),
-            MainQueue::new(),
-        );
         let remote_lock = Arc::new(tokio::sync::Mutex::new(()));
+        let git_attention = Arc::new(GitAttention::default());
         let auto_commit = jobs::auto_commit(
             RemoteContext {
                 slug: row.slug.clone(),
@@ -118,6 +135,7 @@ impl ProjectHandle {
                 clock: clock.clone(),
                 bus: bus.clone(),
                 remote_lock: remote_lock.clone(),
+                git_attention: git_attention.clone(),
             },
             Git::default(),
         );
@@ -134,12 +152,12 @@ impl ProjectHandle {
             gc: tokio::sync::Mutex::new(()),
             objects,
             remote_lock,
+            git_attention,
             workspace_locks,
             capabilities,
             live,
             push,
             _push_task: push_task,
-            main_view,
             _auto_commit: auto_commit,
         })
     }
@@ -210,7 +228,7 @@ impl Projects {
             .collect()
     }
 
-    /// Opens `row` unless it is already open, in which case the same handle comes back. A new handle runs its start-up sequence before any request can reach it: the database opens with SQLite's own WAL recovery, the workspaces are reconciled with their directories, and every session a previous run left open ends at the start time with its `session.ended`, so presence shows offline until the adapters reconnect. The handle's `main/` materialiser queues the head revision as it starts, which repairs `main/` after an integration cut off after its commit or a rewrite stopped part-way and changes nothing otherwise. No session of this run can exist yet, because a session starts only through an open handle. The daemon's jobs start after its projects are open.
+    /// Opens `row` unless it is already open, in which case the same handle comes back. A new handle runs its start-up sequence before any request can reach it: the database opens with SQLite's own WAL recovery, the workspaces are reconciled with their directories, and every session a previous run left open ends at the start time with its `session.ended`, so presence shows offline until the adapters reconnect. The handle's commit writer runs as it starts, which writes the commit of a revision an integration cut off after its own commit never got and brings the project folder to it, and changes nothing otherwise. No session of this run can exist yet, because a session starts only through an open handle. The daemon's jobs start after its projects are open.
     pub async fn open(
         &self,
         row: &ProjectRow,

@@ -86,7 +86,7 @@ fn a_blob_a_snapshot_reuses_during_the_run_survives() {
     let marked = mark(&objects, [base_tree]).unwrap();
     assert!(!marked.contains(&reused));
 
-    let root = dir.path().join("ws").join("t-1");
+    let root = dir.path().join(".fold/ws").join("t-1");
     common::write(&root, "notes.txt", b"written long ago, then again");
     let rules = IgnoreRules::new(&root);
     let opts = ScanOptions {
@@ -208,7 +208,7 @@ struct Layout {
 fn layout() -> Layout {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("project");
-    fs::create_dir_all(root.join("ws")).unwrap();
+    fs::create_dir_all(root.join(".fold/ws")).unwrap();
     let outside = dir.path().join("outside");
     fs::create_dir_all(&outside).unwrap();
     fs::write(outside.join("keep.txt"), b"keep").unwrap();
@@ -226,7 +226,7 @@ fn mode(path: &Path) -> u32 {
 #[test]
 fn a_read_only_checkout_is_removed_without_following_its_links() {
     let layout = layout();
-    let checkout = layout.root.join("ws").join("review-p-1");
+    let checkout = layout.root.join(".fold/ws").join("review-p-1");
     common::write(&checkout, "src/lib.rs", b"code");
     common::write(&checkout, "README", b"text");
     symlink(&layout.outside, checkout.join("src").join("out")).unwrap();
@@ -241,7 +241,7 @@ fn a_read_only_checkout_is_removed_without_following_its_links() {
     fs::set_permissions(checkout.join("src"), fs::Permissions::from_mode(0o555)).unwrap();
     let outside_mode = mode(&layout.outside);
 
-    let relative = Path::new("ws/review-p-1");
+    let relative = Path::new(".fold/ws/review-p-1");
     assert_eq!(
         locate_workspace_dir(&layout.root, relative).unwrap(),
         Some(checkout.canonicalize().unwrap())
@@ -262,7 +262,7 @@ fn a_symlink_to_a_read_only_directory_outside_ws_leaves_it_alone() {
     let locked = layout.outside.join("locked");
     fs::create_dir_all(locked.join("inner")).unwrap();
     fs::write(locked.join("inner").join("file"), b"keep").unwrap();
-    let checkout = layout.root.join("ws").join("t-1");
+    let checkout = layout.root.join(".fold/ws").join("t-1");
     common::write(&checkout, "deep/lib.rs", b"code");
     symlink(&locked, checkout.join("locked")).unwrap();
     symlink(locked.join("inner"), checkout.join("deep").join("inner")).unwrap();
@@ -271,7 +271,7 @@ fn a_symlink_to_a_read_only_directory_outside_ws_leaves_it_alone() {
     }
     fs::set_permissions(checkout.join("deep"), fs::Permissions::from_mode(0o500)).unwrap();
 
-    assert!(remove_workspace_dir(&layout.root, Path::new("ws/t-1")).unwrap());
+    assert!(remove_workspace_dir(&layout.root, Path::new(".fold/ws/t-1")).unwrap());
     assert!(!checkout.exists());
     assert_eq!(mode(&locked), 0o555);
     assert_eq!(mode(&locked.join("inner")), 0o555);
@@ -284,7 +284,7 @@ fn a_symlink_to_a_read_only_directory_outside_ws_leaves_it_alone() {
 #[test]
 fn an_absolute_path_inside_ws_is_accepted() {
     let layout = layout();
-    let dir = layout.root.join("ws").join("t-2");
+    let dir = layout.root.join(".fold/ws").join("t-2");
     fs::create_dir(&dir).unwrap();
     assert!(remove_workspace_dir(&layout.root, &dir).unwrap());
     assert!(!dir.exists());
@@ -293,25 +293,25 @@ fn an_absolute_path_inside_ws_is_accepted() {
 #[test]
 fn paths_outside_ws_are_invalid() {
     let layout = layout();
-    fs::create_dir_all(layout.root.join("ws").join("t-1").join("deep")).unwrap();
-    fs::write(layout.root.join("ws").join("file"), b"x").unwrap();
-    symlink(&layout.outside, layout.root.join("ws").join("escape")).unwrap();
+    fs::create_dir_all(layout.root.join(".fold/ws").join("t-1").join("deep")).unwrap();
+    fs::write(layout.root.join(".fold/ws").join("file"), b"x").unwrap();
+    symlink(&layout.outside, layout.root.join(".fold/ws").join("escape")).unwrap();
     symlink(
-        layout.root.join("ws").join("t-1"),
-        layout.root.join("ws").join("alias"),
+        layout.root.join(".fold/ws").join("t-1"),
+        layout.root.join(".fold/ws").join("alias"),
     )
     .unwrap();
     let refused = [
-        PathBuf::from("ws/../.."),
-        PathBuf::from("ws/t-1/.."),
-        PathBuf::from("ws/../ws/t-1"),
+        PathBuf::from(".fold/ws/../.."),
+        PathBuf::from(".fold/ws/t-1/.."),
+        PathBuf::from(".fold/ws/../ws/t-1"),
         PathBuf::from(""),
         layout.root.clone(),
-        PathBuf::from("ws"),
-        PathBuf::from("ws/t-1/deep"),
-        PathBuf::from("ws/file"),
-        PathBuf::from("ws/escape"),
-        PathBuf::from("ws/alias"),
+        PathBuf::from(".fold/ws"),
+        PathBuf::from(".fold/ws/t-1/deep"),
+        PathBuf::from(".fold/ws/file"),
+        PathBuf::from(".fold/ws/escape"),
+        PathBuf::from(".fold/ws/alias"),
         PathBuf::from("elsewhere/t-1"),
         layout.outside.clone(),
     ];
@@ -320,7 +320,14 @@ fn paths_outside_ws_are_invalid() {
         assert_eq!(error.code(), "invalid_path", "{}", path.display());
     }
     assert!(layout.outside.join("keep.txt").exists());
-    assert!(layout.root.join("ws").join("t-1").join("deep").is_dir());
+    assert!(
+        layout
+            .root
+            .join(".fold/ws")
+            .join("t-1")
+            .join("deep")
+            .is_dir()
+    );
 }
 
 #[test]
@@ -328,7 +335,7 @@ fn without_ws_a_workspace_directory_is_already_gone() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("project");
     fs::create_dir(&root).unwrap();
-    assert!(!remove_workspace_dir(&root, Path::new("ws/t-1")).unwrap());
+    assert!(!remove_workspace_dir(&root, Path::new(".fold/ws/t-1")).unwrap());
     let error = remove_workspace_dir(&root, Path::new("other/t-1")).unwrap_err();
     assert_eq!(error.code(), "invalid_path");
 }

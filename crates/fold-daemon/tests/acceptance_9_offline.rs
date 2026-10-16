@@ -19,7 +19,7 @@ const NAMESPACE_VAR: &str = "FOLD_TEST_OFFLINE_NAMESPACE";
 const PROOF: &str = "offline proof:";
 const PUBLIC_ADDRESS: &str = "1.1.1.1:443";
 
-/// The directory `fld init --from` reads: `r1` holds exactly these files.
+/// The folder `fld init` makes the project: `r1` holds exactly these files.
 const SOURCE: [(&str, &str); 3] = [
     ("README.md", "# demo\n"),
     ("src/app.txt", "start the app\n"),
@@ -230,9 +230,9 @@ async fn flow() {
     };
     let watched_from = snapshot.seq;
 
-    // 1. History: init made r1 from the source directory.
+    // 1. History: init made r1 from the folder's files and the ignore files it wrote beside them.
     assert_eq!(initialized.revision.to_string(), "r1");
-    assert_eq!(initialized.imported.files, 3);
+    assert_eq!(initialized.imported.files, 5);
     let repository = harness
         .call("review", "get_repository_state", json!({}))
         .await;
@@ -244,13 +244,18 @@ async fn flow() {
     let mut listed: Vec<String> = changes(&r1).into_iter().map(|(path, _)| path).collect();
     listed.sort();
     let mut expected: Vec<String> = SOURCE.iter().map(|(path, _)| (*path).to_owned()).collect();
+    expected.extend([".foldignore".to_owned(), ".gitignore".to_owned()]);
     expected.sort();
     assert_eq!(listed, expected, "{r1}");
     let source_tree: BTreeMap<String, Vec<u8>> = SOURCE
         .iter()
         .map(|(path, content)| ((*path).to_owned(), content.as_bytes().to_vec()))
         .collect();
-    assert_eq!(read_tree(&harness.project.paths().main_dir()), source_tree);
+    // The project folder is main, ignore files included.
+    let mut folder = read_tree(harness.project.paths().root());
+    assert!(folder.remove(".foldignore").is_some());
+    assert!(folder.remove(".gitignore").is_some());
+    assert_eq!(folder, source_tree);
 
     // 2. Task changes: the screen needs the endpoint, so it waits in Backlog.
     let endpoint = harness

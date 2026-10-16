@@ -19,7 +19,7 @@ const SYNC_AHEAD: usize = 256;
 
 #[derive(Debug, Clone, Copy)]
 pub struct MaterialiseOptions {
-    /// Clears the write bits of every file, for `main/` and review checkouts.
+    /// Clears the write bits of every file, for review checkouts.
     pub read_only: bool,
     pub caps: Capabilities,
 }

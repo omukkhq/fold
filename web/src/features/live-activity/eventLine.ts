@@ -415,6 +415,23 @@ const SPECS: Record<EventType, Spec> = {
         ? "writing the Git commit failed"
         : `writing the Git commit of ${e.revision} failed`,
   },
+  "git.outside_commits": {
+    icon: TriangleAlert,
+    text: fixed("the Git branch has commits fold did not write; run fld pull"),
+  },
+  "git.uncommitted_changes": {
+    icon: TriangleAlert,
+    text: fixed(
+      "the project folder has changes that are not committed; commit or stash them",
+    ),
+  },
+  "git.attention_cleared": {
+    icon: GitCommitHorizontal,
+    text: (e) =>
+      e.data.kind === "outside_commits"
+        ? "the Git branch has no commits fold did not write"
+        : "the project folder follows main again",
+  },
   "message.sent": {
     icon: MessageSquare,
     text: (e) => {

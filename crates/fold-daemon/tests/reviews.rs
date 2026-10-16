@@ -147,7 +147,7 @@ impl Fixture {
     }
 
     fn write(&self, path: &str, content: &str) {
-        let file = self.project.paths().root().join("ws/t-1").join(path);
+        let file = self.project.paths().root().join(".fold/ws/t-1").join(path);
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(file, content).unwrap();
     }

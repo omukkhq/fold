@@ -13,7 +13,6 @@ mod git_remote;
 mod import;
 mod index;
 mod integrate;
-mod main_view;
 mod materialise;
 mod objects;
 mod paths;

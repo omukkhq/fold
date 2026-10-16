@@ -75,7 +75,7 @@ async fn an_active_checkout_lists_its_worker_path_and_version() {
     assert_eq!(rows.len(), 1);
     let row = &rows[0];
     assert_eq!(row["workspace"], checkout.workspace.id.to_string());
-    assert_eq!(row["path"], "ws/review-p-1");
+    assert_eq!(row["path"], ".fold/ws/review-p-1");
     assert_eq!(row["proposal"], "P-1");
     assert_eq!(row["version"], 1);
     assert_eq!(row["worker"], "review");

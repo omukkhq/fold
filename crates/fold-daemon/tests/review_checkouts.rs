@@ -53,7 +53,7 @@ async fn checkout_materialises_the_current_version_tree() {
     let view = &checkout.workspace;
     assert_eq!(checkout.version, 1);
     assert_eq!(view.id, ws(2));
-    assert_eq!(view.path, "ws/review-p-1");
+    assert_eq!(view.path, ".fold/ws/review-p-1");
     assert_eq!(view.kind, WorkspaceKind::Review);
     assert_eq!(view.task, t(1));
     assert_eq!(view.proposal, Some(p(1)));
@@ -88,7 +88,7 @@ async fn checkout_materialises_the_current_version_tree() {
     assert_eq!(created.revision, RevisionId::from_number(1));
     assert_eq!(
         created.data,
-        json!({"kind": "review", "path": "ws/review-p-1", "worker": "backend", "version": 1})
+        json!({"kind": "review", "path": ".fold/ws/review-p-1", "worker": "backend", "version": 1})
     );
 
     fx.write("src/lib.rs", "pub fn v2() {}\n");
@@ -98,7 +98,7 @@ async fn checkout_materialises_the_current_version_tree() {
         .unwrap();
     let second = fx.checkout_by(&fx.backend.worker).await;
     assert_eq!(second.version, 2);
-    assert_eq!(second.workspace.path, "ws/review-p-1-2");
+    assert_eq!(second.workspace.path, ".fold/ws/review-p-1-2");
     assert_eq!(
         fx.read(&second.workspace.path, "src/lib.rs"),
         "pub fn v2() {}\n"
@@ -201,7 +201,10 @@ async fn concurrent_checkouts_keep_one_row_and_remove_the_other_directory() {
     assert_eq!(
         fx.ws_entries(),
         [
-            left.workspace.path.trim_start_matches("ws/").to_owned(),
+            left.workspace
+                .path
+                .trim_start_matches(".fold/ws/")
+                .to_owned(),
             "t-1".to_owned()
         ]
     );
@@ -400,7 +403,7 @@ async fn subagent_worker_gets_its_own_checkout_with_as() {
     let own = fx.checkout_by(&sub).await;
 
     assert_ne!(own.workspace.id, main.workspace.id);
-    assert_eq!(own.workspace.path, "ws/review-p-1-2");
+    assert_eq!(own.workspace.path, ".fold/ws/review-p-1-2");
     assert_eq!(own.workspace.worker, Some(sub.name.clone()));
     assert_eq!(own.version, 1);
     assert_eq!(fx.checkout_by(&sub).await, own);
@@ -434,7 +437,11 @@ async fn checkout_directory_name_never_uses_the_worker_name() {
 
     assert_eq!(
         paths,
-        ["ws/review-p-1", "ws/review-p-1-2", "ws/review-p-1-3"]
+        [
+            ".fold/ws/review-p-1",
+            ".fold/ws/review-p-1-2",
+            ".fold/ws/review-p-1-3"
+        ]
     );
     assert_eq!(
         fx.ws_entries(),
@@ -453,7 +460,7 @@ async fn checkout_skips_a_name_a_directory_already_holds() {
 
     let checkout = fx.checkout_by(&fx.backend.worker).await;
 
-    assert_eq!(checkout.workspace.path, "ws/review-p-1-2");
+    assert_eq!(checkout.workspace.path, ".fold/ws/review-p-1-2");
     assert_eq!(
         std::fs::read_to_string(stray.join("left.txt")).unwrap(),
         "left"
@@ -487,7 +494,7 @@ async fn checkout_failed_leaves_no_row_and_no_directory() {
         0
     );
     let checkout = fx.checkout_by(&fx.backend.worker).await;
-    assert_eq!(checkout.workspace.path, "ws/review-p-1");
+    assert_eq!(checkout.workspace.path, ".fold/ws/review-p-1");
 }
 
 #[tokio::test]

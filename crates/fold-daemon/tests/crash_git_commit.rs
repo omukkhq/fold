@@ -10,6 +10,7 @@ use fold_core::events::types;
 use fold_daemon::services::events::BusMessage;
 use fold_daemon::services::projects::commit_main;
 use fold_vcs::git::Git;
+use fold_vcs::git_remote::FOLD_HEAD_REF;
 use fold_vcs::git_sync_map::SYNC_MAP_FILE;
 
 /// `P-1` integrated as `r2`, with no Git commit written yet.
@@ -29,7 +30,7 @@ async fn commit(fx: &Fixture) -> Result<usize, Option<&'static str>> {
         fx.project.clock(),
     )
     .await
-    .map(|added| added.len())
+    .map(|committed| committed.added.len())
     .map_err(|error| error.code())
 }
 
@@ -69,14 +70,14 @@ async fn a_stop_before_the_git_write_is_caught_up_after_the_restart() {
     let _job = start_job(&fx, Git::default());
     wait_for_rows(&fx, 2).await;
     assert_map_matches_rows(&fx, 2).await;
-    let mirror = fx.project.paths().fold_dir().join("git");
+    let mirror = fx.project.paths().git_dir();
     assert_eq!(git(&mirror, &["rev-list", "--count", "main"]).trim(), "2");
     assert_eq!(commit(&fx).await, Ok(0));
     assert_map_matches_rows(&fx, 2).await;
     scenario.teardown();
 }
 
-/// fast-import moved the branch and the map never got the lines: the next run writes the same commits again.
+/// fast-import moved fold's ref and the map never got the lines: the next run writes the same commits again.
 #[tokio::test]
 async fn a_stop_before_the_map_writes_the_same_commits_on_the_next_run() {
     let scenario = fail::FailScenario::setup();
@@ -85,8 +86,10 @@ async fn a_stop_before_the_map_writes_the_same_commits_on_the_next_run() {
     fail::cfg("git_commit_before_map", "return").unwrap();
     assert_eq!(commit(&fx).await, Err(Some("failpoint")));
     fail::remove("git_commit_before_map");
-    let mirror = fx.project.paths().fold_dir().join("git");
-    let written = git(&mirror, &["rev-parse", "main"]).trim().to_owned();
+    let mirror = fx.project.paths().git_dir();
+    let written = git(&mirror, &["rev-parse", FOLD_HEAD_REF])
+        .trim()
+        .to_owned();
     assert_eq!(map(&fx), "");
     assert_eq!(fx.count("SELECT COUNT(*) FROM revision_commits").await, 0);
 
@@ -112,5 +115,34 @@ async fn a_stop_before_the_rows_fills_them_from_the_map() {
     fx.restart().await;
     assert_eq!(commit(&fx).await, Ok(0));
     assert_map_matches_rows(&fx, 2).await;
+    scenario.teardown();
+}
+
+/// The map has the commit and the branch never moved: the next run moves the branch and the project folder with it.
+#[tokio::test]
+async fn a_stop_before_the_branch_move_is_finished_by_the_next_run() {
+    let scenario = fail::FailScenario::setup();
+    let mut fx = Fixture::new().await;
+    assert_eq!(commit(&fx).await, Ok(1));
+    let root = fx.project.paths().root().to_owned();
+    let first = git(&root, &["rev-parse", "main"]).trim().to_owned();
+    assert_eq!(first, commit_of(&fx, 1).await);
+    integrated(&fx).await;
+    fail::cfg("git_commit_before_branch", "return").unwrap();
+    assert_eq!(commit(&fx).await, Err(Some("failpoint")));
+    fail::remove("git_commit_before_branch");
+    assert_eq!(map(&fx).lines().count(), 2);
+    assert_eq!(git(&root, &["rev-parse", "main"]).trim(), first);
+    assert!(!root.join("src/new.rs").exists());
+
+    fx.restart().await;
+    assert_eq!(commit(&fx).await, Ok(0));
+    assert_map_matches_rows(&fx, 2).await;
+    assert_eq!(
+        git(&root, &["rev-parse", "main"]).trim(),
+        commit_of(&fx, 2).await
+    );
+    assert!(root.join("src/new.rs").is_file());
+    assert_eq!(git(&root, &["status", "--porcelain"]), "");
     scenario.teardown();
 }

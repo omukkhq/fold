@@ -608,7 +608,10 @@ async fn a_conflict_becomes_a_sync_task_that_reaches_the_remote() {
         .get(WorkspaceRef::Workspace(workspace.unwrap()))
         .await
         .unwrap();
-    assert_eq!(ws.path, format!("ws/{}", task.to_string().to_lowercase()));
+    assert_eq!(
+        ws.path,
+        format!(".fold/ws/{}", task.to_string().to_lowercase())
+    );
     assert_eq!(ws.worker, None);
     assert_eq!(ws.base, r(3));
     let markers = fs::read_to_string(project.paths.root().join(&ws.path).join("a.txt")).unwrap();
@@ -732,8 +735,8 @@ async fn push_on_integrate_pushes_after_an_integration_and_records_a_failure() {
     );
     assert_eq!(project.head().await, second);
     assert_eq!(
-        project.files(second).await,
-        [("a.txt".to_owned(), "two\n".to_owned())]
+        project.files(second).await.last(),
+        Some(&("a.txt".to_owned(), "two\n".to_owned()))
     );
     assert_eq!(project.count("SELECT COUNT(*) FROM completions").await, 2);
     let task = TaskId::from_number(2).unwrap();

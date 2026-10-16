@@ -21,7 +21,7 @@ async fn released_workspace(fx: &Fixture) {
         .create_workspace(&by(&fx.frontend), t(1))
         .await
         .unwrap();
-    let dir = fx.dir("ws/t-1");
+    let dir = fx.dir(".fold/ws/t-1");
     fs::write(dir.join("src/lib.rs"), EDITED).unwrap();
     fx.workspaces
         .record_checkpoint(&by(&fx.frontend), ws(1), Some("halfway"))
@@ -49,7 +49,7 @@ async fn the_next_claimant_adopts_the_released_workspace_as_it_is() {
         .details(WorkspaceRef::Task(t(1)))
         .await
         .unwrap();
-    let files = snapshot(&fx.dir("ws/t-1"));
+    let files = snapshot(&fx.dir(".fold/ws/t-1"));
     let seq = fx.last_seq().await;
 
     let claimed = fx.tasks.claim_task(&by(&fx.backend), t(1)).await.unwrap();
@@ -79,13 +79,13 @@ async fn the_next_claimant_adopts_the_released_workspace_as_it_is() {
     let mut expected = before.clone();
     expected.workspace.worker = Some(fx.backend.name.clone());
     assert_eq!(after, expected);
-    assert_eq!(after.workspace.path, "ws/t-1");
+    assert_eq!(after.workspace.path, ".fold/ws/t-1");
     assert_eq!(after.workspace.base, r(1));
     assert_eq!(after.conflicted, vec!["README.md"]);
     assert!(after.latest_checkpoint.is_some());
-    assert_eq!(snapshot(&fx.dir("ws/t-1")), files);
+    assert_eq!(snapshot(&fx.dir(".fold/ws/t-1")), files);
     assert_eq!(
-        fs::read(fx.dir("ws/t-1/src/lib.rs")).unwrap(),
+        fs::read(fx.dir(".fold/ws/t-1/src/lib.rs")).unwrap(),
         EDITED,
         "main moved on, and nothing synced the adopted workspace"
     );
@@ -118,7 +118,7 @@ async fn the_next_claimant_adopts_the_released_workspace_as_it_is() {
 async fn create_workspace_adopts_an_orphaned_workspace_and_creates_nothing() {
     let fx = Fixture::new().await;
     released_workspace(&fx).await;
-    let files = snapshot(&fx.dir("ws/t-1"));
+    let files = snapshot(&fx.dir(".fold/ws/t-1"));
     let seq = fx.last_seq().await;
 
     let created = fx
@@ -128,7 +128,7 @@ async fn create_workspace_adopts_an_orphaned_workspace_and_creates_nothing() {
         .unwrap();
     assert!(created.adopted);
     assert_eq!(created.workspace.id, ws(1));
-    assert_eq!(created.workspace.path, "ws/t-1");
+    assert_eq!(created.workspace.path, ".fold/ws/t-1");
     assert_eq!(created.workspace.base, r(1));
     assert_eq!(created.workspace.worker, Some(fx.backend.name.clone()));
     assert_eq!(created.workspace.conflicted, 1);
@@ -137,7 +137,7 @@ async fn create_workspace_adopts_an_orphaned_workspace_and_creates_nothing() {
         vec!["claim.acquired", "workspace.adopted"]
     );
     assert_eq!(fx.count("SELECT COUNT(*) FROM workspaces").await, 1);
-    assert_eq!(snapshot(&fx.dir("ws/t-1")), files);
+    assert_eq!(snapshot(&fx.dir(".fold/ws/t-1")), files);
     let entries: Vec<_> = fs::read_dir(fx.project.paths().ws_dir())
         .unwrap()
         .map(|entry| entry.unwrap().file_name())
@@ -173,7 +173,7 @@ async fn an_abandoned_workspace_is_not_adopted() {
     assert!(!created.adopted);
     assert_eq!(
         (created.workspace.id, created.workspace.path.as_str()),
-        (ws(2), "ws/t-1-2")
+        (ws(2), ".fold/ws/t-1-2")
     );
     let abandoned = fx
         .workspaces
@@ -310,7 +310,7 @@ async fn an_adoption_recomputes_the_task() {
         appended[2].data,
         json!({"from": "todo", "to": "in_progress"})
     );
-    assert_eq!(fs::read(fx.dir("ws/t-1/src/lib.rs")).unwrap(), LIB);
+    assert_eq!(fs::read(fx.dir(".fold/ws/t-1/src/lib.rs")).unwrap(), LIB);
 }
 
 /// The orphan closes while the create waits for its operation lock, as a close that takes no lock does. The create then takes no claim for the orphan and makes a new workspace.
@@ -335,7 +335,7 @@ async fn a_create_whose_orphan_closes_before_the_adoption_creates_a_new_workspac
     assert!(!created.adopted);
     assert_eq!(
         (created.workspace.id, created.workspace.path.as_str()),
-        (ws(2), "ws/t-1-2")
+        (ws(2), ".fold/ws/t-1-2")
     );
     assert_eq!(created.workspace.worker, Some(fx.backend.name.clone()));
     let appended = fx.events_after(seq).await;
@@ -354,7 +354,7 @@ async fn a_create_whose_orphan_closes_before_the_adoption_creates_a_new_workspac
         .unwrap();
     assert_eq!(orphan.worker, Some(fx.frontend.name.clone()));
     assert_eq!(
-        fs::read(fx.dir("ws/t-1/src/lib.rs")).unwrap(),
+        fs::read(fx.dir(".fold/ws/t-1/src/lib.rs")).unwrap(),
         EDITED,
         "the closed orphan keeps its files"
     );

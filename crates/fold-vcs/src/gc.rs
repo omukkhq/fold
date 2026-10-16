@@ -177,7 +177,7 @@ pub fn remove_workspace_dir(project_root: &Path, path: &Path) -> Result<bool, Wo
     }
 }
 
-/// The canonical directory [`remove_workspace_dir`] would delete, or `None` when it is already gone. The path must name a direct child of the project's `ws/` directory once its parent is resolved, must hold no `..`, and must not be a symlink itself; anything else is `invalid_path`.
+/// The canonical directory [`remove_workspace_dir`] would delete, or `None` when it is already gone. The path must name a direct child of the project's workspace directory `.fold/ws/` once its parent is resolved, must hold no `..`, and must not be a symlink itself; anything else is `invalid_path`.
 pub fn locate_workspace_dir(
     project_root: &Path,
     path: &Path,

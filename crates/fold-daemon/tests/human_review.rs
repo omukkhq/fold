@@ -151,7 +151,7 @@ impl Fixture {
             .unwrap();
         let author = agent("frontend", &[]);
         workspaces.create_workspace(&author, t(1)).await.unwrap();
-        let file = project.paths().root().join("ws/t-1/src/lib.rs");
+        let file = project.paths().root().join(".fold/ws/t-1/src/lib.rs");
         std::fs::write(file, "pub fn y() {}\n").unwrap();
         reviews
             .create_proposal(&author, t(1), "Add auth", None)

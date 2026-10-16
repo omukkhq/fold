@@ -8,6 +8,7 @@ function overview(over: Partial<ProjectOverview>): ProjectOverview {
     agents: [],
     head: null,
     last_change_at: null,
+    attention: [],
     ...over,
   };
 }

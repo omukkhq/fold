@@ -162,8 +162,9 @@ fn init_without_a_daemon_skips_the_call() {
     assert_eq!(
         stdout(&output),
         format!(
-            "initialised project scratch at {}\nr1: 0 files, 0 bytes\n{}",
+            "initialised project scratch at {}\n{}\n{}",
             project.canonicalize().unwrap().display(),
+            crate::common::r1_line(&project, 0, 0),
             machine_warnings(&project)
         )
     );
@@ -336,27 +337,16 @@ fn an_init_the_registry_does_not_know_is_finished_with_its_claude_files() {
     std::fs::remove_dir_all(sandbox.path("data")).unwrap();
     std::fs::remove_file(project.join(claude_files::MCP_FILE)).unwrap();
 
-    let source = sandbox.path("source");
-    std::fs::create_dir_all(&source).unwrap();
-    std::fs::write(source.join("new.txt"), "not read\n").unwrap();
+    std::fs::write(project.join("new.txt"), "not read\n").unwrap();
 
-    let second = sandbox.fold_in(
-        &project,
-        &[
-            "init",
-            "--name",
-            "Again",
-            "--from",
-            source.to_str().unwrap(),
-        ],
-        &[],
-    );
+    let second = sandbox.fold_in(&project, &["init", "--name", "Again"], &[]);
     assert!(second.status.success(), "{second:?}");
     assert_eq!(
         stdout(&second),
         format!(
-            "initialised project again at {}\nfinished an init that had stopped before it registered the project\nr1 keeps the files that the stopped init imported; the source given now is not read\nr1: 0 files, 0 bytes\n{}",
+            "initialised project again at {}\nfinished an init that had stopped before it registered the project\nr1 keeps the files that the stopped init recorded\n{}\n{}",
             project.canonicalize().unwrap().display(),
+            crate::common::r1_line(&project, 0, 0),
             machine_warnings(&project)
         )
     );
@@ -365,11 +355,11 @@ fn an_init_the_registry_does_not_know_is_finished_with_its_claude_files() {
 }
 
 #[test]
-fn name_sets_the_slug_and_no_ignore_files_are_written() {
+fn name_sets_the_slug_and_a_new_folder_gets_the_ignore_files() {
     let sandbox = Sandbox::new();
     let project = sandbox.path("dir");
     let output = sandbox.fold(&["init", project.to_str().unwrap(), "--name", "Big Shop"]);
     assert!(stdout(&output).starts_with("initialised project big-shop at "));
-    assert!(!project.join(".gitignore").exists());
-    assert!(!project.join(".foldignore").exists());
+    assert!(project.join(".foldignore").is_file());
+    assert!(project.join(".gitignore").is_symlink());
 }

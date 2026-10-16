@@ -19,12 +19,12 @@ fn numbers(revisions: &[RevisionSummary]) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn the_state_names_the_head_the_main_directory_and_the_recent_revisions() {
+async fn the_state_names_the_head_the_project_folder_and_the_recent_revisions() {
     let project = TestProject::new().await;
     three_revisions(&project).await;
     let state = service(&project).get_repository_state().await.unwrap();
     assert_eq!(state.head, Some(id(3)));
-    assert_eq!(state.main_path, project.paths().main_dir());
+    assert_eq!(state.main_path, project.paths().root());
     assert_eq!(numbers(&state.recent), ["r3", "r2", "r1"]);
 
     let [r3, r2, r1] = &state.recent[..] else {

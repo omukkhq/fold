@@ -32,7 +32,7 @@ enum Inserted {
 }
 
 impl ReviewService {
-    /// A read-only copy of the current version of an open proposal for the actor's worker, under `ws/review-p-<n>`, so a review worker can read, build and test it without a task workspace. `policy::can_create_review_checkout` admits any worker of the agent that holds the review claim, and the checkout belongs to that worker. A repeat call for the same version and worker returns the active checkout; any other checkout of the proposal takes the next directory name. A checkout is never recorded, synced or restored and never moves the task.
+    /// A read-only copy of the current version of an open proposal for the actor's worker, under `.fold/ws/review-p-<n>`, so a review worker can read, build and test it without a task workspace. `policy::can_create_review_checkout` admits any worker of the agent that holds the review claim, and the checkout belongs to that worker. A repeat call for the same version and worker returns the active checkout; any other checkout of the proposal takes the next directory name. A checkout is never recorded, synced or restored and never moves the task.
     ///
     /// The files are written and renamed into place before the transaction that inserts the row, so no row ever names a directory that is not complete; a failure to write them is `checkout_failed`. The transaction looks for the active checkout again before it takes a workspace number, so a repeat that finished second takes none; the partial unique index on active checkouts backs that rule. When the transaction fails, or finds the checkout another call inserted first, the new directory is removed again: no row names it.
     pub async fn create_review_checkout(
@@ -202,7 +202,7 @@ fn checkout_failed(proposal: ProposalId, error: WorkspaceError) -> ReviewError {
             ("proposal", json!(proposal.to_string())),
             ("cause", json!(cause.code())),
         ])
-        .with_hint("check the disk space and the permissions of ws/, then call create_review_checkout again")
+        .with_hint("check the disk space and the permissions of .fold/ws/, then call create_review_checkout again")
         .into(),
         other => other.into(),
     }

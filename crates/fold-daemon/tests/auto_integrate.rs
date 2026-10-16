@@ -207,9 +207,10 @@ async fn an_approved_proposal_integrates_with_no_tool_call_and_gets_its_git_comm
     })
     .await
     .expect("the integration gets its Git commit");
-    let repository = fx.project.paths().fold_dir().join("git");
+    // The fixture's folder does not hold r1's files, so its branch stays; fold's commits are on its own ref.
+    let repository = fx.project.paths().git_dir();
     assert_eq!(
-        git(&repository, &["show", "main:src/lib.rs"]),
+        git(&repository, &["show", "refs/fold/head:src/lib.rs"]),
         "pub fn y() {}\n"
     );
     job.stop().await;
@@ -472,9 +473,15 @@ async fn a_batch_review_integrates_its_approved_members_in_dependency_order() {
     })
     .await
     .expect("each integration gets its Git commit");
-    let repository = fx.project.paths().fold_dir().join("git");
-    assert_eq!(git(&repository, &["show", "main:src/one.rs"]), "one\n");
-    assert_eq!(git(&repository, &["show", "main~1:src/two.rs"]), "two\n");
+    let repository = fx.project.paths().git_dir();
+    assert_eq!(
+        git(&repository, &["show", "refs/fold/head:src/one.rs"]),
+        "one\n"
+    );
+    assert_eq!(
+        git(&repository, &["show", "refs/fold/head~1:src/two.rs"]),
+        "two\n"
+    );
 
     assert_eq!(state_of(&fx, 3).await, "open", "T-3 waits for the human");
     assert_eq!(fx.reviews().awaiting_human_review().await.unwrap().len(), 1);

@@ -81,6 +81,9 @@ fn all_equals_the_plans_event_types() {
         "request.approved",
         "request.closed",
         "git.commit_failed",
+        "git.outside_commits",
+        "git.uncommitted_changes",
+        "git.attention_cleared",
         "agent.presence_changed",
     ]);
     assert_eq!(declared, expected);

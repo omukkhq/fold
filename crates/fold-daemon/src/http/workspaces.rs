@@ -53,7 +53,7 @@ pub struct RepositoryView {
     /// The revision `main` names; null only before `r1` exists.
     #[schema(value_type = Option<String>, required = true, example = "r17")]
     pub head: Option<RevisionId>,
-    /// The project's read-only copy of main.
+    /// The project folder, whose files follow main through its own Git repository.
     pub main_path: String,
     /// The newest 10 revisions, newest first.
     pub recent: Vec<RevisionView>,
@@ -92,7 +92,7 @@ pub struct RevisionView {
     /// The remote commit a pull brought in.
     #[schema(required = true)]
     pub pull: Option<String>,
-    /// The Git commit the revision became in the project's repository `.fold/git`; null until it is written, just after the integration.
+    /// The Git commit the revision became in the project folder's repository `.git`; null until it is written, just after the integration.
     #[schema(required = true)]
     pub commit: Option<String>,
 }

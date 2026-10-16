@@ -178,3 +178,35 @@ fn zombie(pid: i32) -> bool {
         })
         .unwrap_or(false)
 }
+
+/// The files `fld init` writes into a new project's folder that are there now, and their bytes as `r1` counts them: a symlink by its target. A `.gitignore` counts only as the symlink init makes, never as the folder's own file.
+pub fn init_files(project: &Path) -> (usize, u64) {
+    let written = [
+        ".mcp.json",
+        "AGENTS.md",
+        ".claude/settings.json",
+        ".claude/skills/fold/SKILL.md",
+        ".foldignore",
+        ".gitignore",
+    ];
+    let mut found = (0, 0);
+    for relative in written {
+        let path = project.join(relative);
+        let bytes = match std::fs::symlink_metadata(&path) {
+            Ok(meta) if meta.is_symlink() => {
+                std::fs::read_link(&path).unwrap().as_os_str().len() as u64
+            }
+            Ok(_) if relative == ".gitignore" => continue,
+            Ok(meta) => meta.len(),
+            Err(_) => continue,
+        };
+        found = (found.0 + 1, found.1 + bytes);
+    }
+    found
+}
+
+/// The `r1:` line `fld init` prints for a folder whose own files are `files` with `bytes`, with what init writes beside them.
+pub fn r1_line(project: &Path, files: usize, bytes: u64) -> String {
+    let (made, made_bytes) = init_files(project);
+    format!("r1: {} files, {} bytes", files + made, bytes + made_bytes)
+}

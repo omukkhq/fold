@@ -1,5 +1,3 @@
-use std::path::{Path, PathBuf};
-
 use fold_core::reviews::standing_approvers;
 use fold_core::{Clock, EventActor, FoldError, ProjectPaths, RevisionId, Timestamp, codes};
 use fold_store::workspaces::{
@@ -9,7 +7,10 @@ use fold_store::workspaces::{
 use fold_store::{Store, StoreError, reviews};
 use fold_vcs::git::{CommitId, Git};
 use fold_vcs::git_export::{ExportBase, ExportRevision, ExportTarget, Signature, write_commits};
-use fold_vcs::git_remote::{MIRROR_DIR, branch_ref, ensure_mirror, fetch_imported, set_ref};
+use fold_vcs::git_remote::{
+    FOLD_HEAD_REF, Followed, branch_ref, follow_main, index_to, is_ancestor, move_branch,
+    project_repository, set_ref,
+};
 use fold_vcs::git_sync_map::SyncMap;
 use fold_vcs::objects::ObjectStore;
 use serde_json::json;
@@ -17,24 +18,35 @@ use serde_json::json;
 use super::remote::blocking;
 use super::{ProjectError, load_config};
 
-/// Writes the commit of every main revision that `.fold/git-sync.map` does not name yet into the project's Git repository `.fold/git`, on the `[git]` branch, and records each in `revision_commits`. The project's Git sync lock is held throughout, so this, a push and a pull run one after the other, in this process or another. Running it again with nothing new changes nothing. Returns the revisions it wrote commits for, oldest first.
+/// What one run of the commit writer did.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Committed {
+    /// The revisions it wrote commits for, oldest first.
+    pub added: Vec<(RevisionId, CommitId)>,
+    /// The tip of the `[git]` branch when it holds commits fold did not write: the commits are recorded, the branch and the project folder stay. `fld pull` brings them in.
+    pub outside: Option<CommitId>,
+    /// The project folder has changes that are not committed, or an untracked file in the way, so the branch and the folder stay on the older commit until the next run finds the folder clean.
+    pub uncommitted: bool,
+}
+
+/// Writes the commit of every main revision that `.fold/git-sync.map` does not name yet into the project's Git repository at [`ProjectPaths::git_dir`], records each in `revision_commits`, and brings the `[git]` branch and the project folder to the newest. The project's Git sync lock is held throughout, so this, a push and a pull run one after the other, in this process or another. Running it again with nothing new changes nothing.
 pub async fn commit_main(
     store: &Store,
     paths: &ProjectPaths,
     git: &Git,
     clock: &dyn Clock,
-) -> Result<Vec<(RevisionId, CommitId)>, ProjectError> {
+) -> Result<Committed, ProjectError> {
     let branch = load_config(paths).await?.git.branch;
     let fold_dir = paths.fold_dir();
     let (held, map) = blocking(move || SyncMap::lock(&fold_dir)).await?;
-    let (_held, _map, added) =
+    let (_held, _map, committed) =
         commit_locked(store, paths, git, &branch, held, map, clock.now()).await?;
-    Ok(added)
+    Ok(committed)
 }
 
 /// [`commit_main`] for a caller that holds the Git sync lock (`held`) and read `map` under it; both come back for the caller's next step.
 ///
-/// The map is the record of which revision is which commit, so `refs/heads/<branch>` in `.fold/git` is first put on the map's last commit: a branch a stopped write moved past it is written again, to the same commits, because a commit's id depends only on the revision. Then `git fast-import` writes the new commits, the map gains their lines, and one transaction adds a `revision_commits` row for every mapped revision that has none, which also covers a map line whose row a stop cut off.
+/// The map is the record of which revision is which commit, so [`FOLD_HEAD_REF`] is first put on the map's last commit: a ref a stopped write moved past it is written again, to the same commits, because a commit's id depends only on the revision. `git fast-import` writes the new commits there, and the map gains their lines. The `[git]` branch is checked out in the project folder and moves only by fast-forward, after the map: an unborn branch is created on `r1`'s commit, whose tree the folder holds as `fld init` leaves it, with the index set to it, and then follows as any branch does; a tip that is not an ancestor of fold's newest commit holds commits someone made outside fold, so nothing moves and the tip is returned in [`Committed::outside`]; otherwise the folder follows as [`follow_main`] describes, or stays when it has changes of its own. A stop between the map and the move leaves a branch that the next run moves. Then one transaction adds a `revision_commits` row for every mapped revision that has none, which also covers a map line whose row a stop cut off.
 pub(crate) async fn commit_locked<H: Send + 'static>(
     store: &Store,
     paths: &ProjectPaths,
@@ -43,39 +55,35 @@ pub(crate) async fn commit_locked<H: Send + 'static>(
     held: H,
     map: SyncMap,
     now: Timestamp,
-) -> Result<(H, SyncMap, Vec<(RevisionId, CommitId)>), ProjectError> {
+) -> Result<(H, SyncMap, Committed), ProjectError> {
     let last = map.last().cloned();
     let (rows, base) = unsynced(store, last.as_ref()).await?;
     if rows.is_empty() && last.is_none() {
-        return Ok((held, map, Vec::new()));
+        return Ok((held, map, Committed::default()));
     }
     let revisions = export_revisions(store, &rows).await?;
-    let import_source = match &last {
-        Some(_) => import_source(store).await?,
-        None => None,
-    };
-    let (git, fold_dir, refname) = (git.clone(), paths.fold_dir(), branch_ref(branch));
-    let (held, map, added) = blocking(move || {
+    let (git, paths_owned, branch_owned) = (git.clone(), paths.clone(), branch.to_owned());
+    let (held, map, committed) = blocking(move || {
+        let (paths, branch) = (paths_owned, branch_owned);
         #[cfg(feature = "failpoints")]
         fail::fail_point!("git_commit_before_write", |_| Err(fired(
             "git_commit_before_write"
         )));
-        let mirror = fold_dir.join(MIRROR_DIR);
-        ensure_mirror(&git, &mirror)?;
+        let repo = project_repository(&paths)?;
+        let fold_dir = paths.fold_dir();
         if let Some((number, commit)) = &last
-            && !git.has_commit(&mirror, commit)?
-            && !fetch_from_import(&git, &mirror, import_source.as_deref(), commit)?
+            && !git.has_commit(&repo, commit)?
         {
             return Err(history_missing(*number, commit));
         }
         let wanted = base.as_ref().map(|base| &base.commit);
-        if git.ref_commit(&mirror, &refname)?.as_ref() != wanted {
-            set_ref(&git, &mirror, &refname, wanted)?;
+        if git.ref_commit(&repo, FOLD_HEAD_REF)?.as_ref() != wanted {
+            set_ref(&git, &repo, FOLD_HEAD_REF, wanted)?;
         }
         let objects = ObjectStore::open(&fold_dir).map_err(FoldError::from)?;
         let target = ExportTarget {
-            repo: &mirror,
-            refname: &refname,
+            repo: &repo,
+            refname: FOLD_HEAD_REF,
         };
         let added = write_commits(
             &objects,
@@ -85,13 +93,46 @@ pub(crate) async fn commit_locked<H: Send + 'static>(
             &revisions,
             &fold_dir,
         )?;
+        let newest = added.last().map(|(_, commit)| commit).or(wanted).cloned();
         #[cfg(feature = "failpoints")]
         fail::fail_point!("git_commit_before_map", |_| Err(fired(
             "git_commit_before_map"
         )));
         let mut map = map;
         map.append(&added)?;
-        Ok((held, map, added))
+        #[cfg(feature = "failpoints")]
+        fail::fail_point!("git_commit_before_branch", |_| Err(fired(
+            "git_commit_before_branch"
+        )));
+        let mut committed = Committed {
+            added,
+            ..Committed::default()
+        };
+        let Some(newest) = newest else {
+            return Ok((held, map, committed));
+        };
+        let tip = match git.ref_commit(&repo, &branch_ref(&branch))? {
+            Some(tip) => tip,
+            None => {
+                // The folder's files are r1's when its branch is born, as `fld init` leaves them.
+                let first = map
+                    .entries()
+                    .first()
+                    .map_or_else(|| newest.clone(), |(_, commit)| commit.clone());
+                move_branch(&git, &repo, &branch, &first, None)?;
+                index_to(&git, &paths, &first)?;
+                first
+            }
+        };
+        match tip {
+            tip if tip == newest => {}
+            tip if is_ancestor(&git, &repo, &tip, &newest)? => {
+                committed.uncommitted =
+                    follow_main(&git, &paths, &branch, &tip, &newest)? == Followed::Dirty;
+            }
+            tip => committed.outside = Some(tip),
+        }
+        Ok((held, map, committed))
     })
     .await?;
     #[cfg(feature = "failpoints")]
@@ -110,46 +151,18 @@ pub(crate) async fn commit_locked<H: Send + 'static>(
             .write(async |tx| insert_revision_commits(tx, &branch, &missing, now).await)
             .await?;
     }
-    Ok((held, map, added))
+    Ok((held, map, committed))
 }
 
-/// The Git repository `r1` was imported from, when it was.
-async fn import_source(store: &Store) -> Result<Option<PathBuf>, StoreError> {
-    let first = RevisionId::from_number(1).ok_or(StoreError::Corrupt("revision number 1"))?;
-    Ok(get_by_number(store.read(), first)
-        .await?
-        .import_source
-        .map(PathBuf::from))
-}
-
-/// A project made with `--from-git` maps `r1` to the source's `HEAD`; when `.fold/git` lacks that commit, it is fetched from `source`, the import source, if that repository still holds it. Returns whether the mirror holds `commit` afterwards. Blocking.
-fn fetch_from_import(
-    git: &Git,
-    mirror: &Path,
-    source: Option<&Path>,
-    commit: &CommitId,
-) -> Result<bool, FoldError> {
-    let Some(source) = source else {
-        return Ok(false);
-    };
-    // A source that moved, was deleted or cannot be read only leaves the commit missing.
-    let holds = matches!(git.repository(source), Ok(Some(_)))
-        && git.has_commit(source, commit).unwrap_or(false);
-    if !holds || fetch_imported(git, mirror, source, commit).is_err() {
-        return Ok(false);
-    }
-    git.has_commit(mirror, commit)
-}
-
-/// The map names `commit` as the commit of `revision`, and the mirror cannot get it, so the commits after it have no parent to continue.
+/// The map names `commit` as the commit of `revision`, and the repository cannot get it, so the commits after it have no parent to continue.
 fn history_missing(revision: RevisionId, commit: &CommitId) -> FoldError {
     FoldError::new(
         codes::EXPORT_DIVERGED,
         format!(
-            "the project's Git repository .fold/git does not hold {commit}, the commit of {revision}, so the commits of the revisions after it cannot be written"
+            "the project's Git repository does not hold {commit}, the commit of {revision}, so the commits of the revisions after it cannot be written"
         ),
     )
-    .with_hint("run fld remote set <name> <url> with a repository that holds that commit, such as the one the project was imported from or pushed to, then fld pull <name>")
+    .with_hint("run fld remote set <name> <url> with a repository that holds that commit, such as one the project was pushed to, then fld pull <name>")
     .with_details([
         ("revision", json!(revision.to_string())),
         ("commit", json!(commit.as_str())),

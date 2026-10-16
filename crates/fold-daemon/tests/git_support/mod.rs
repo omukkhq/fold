@@ -33,6 +33,11 @@ pub fn git(dir: &Path, args: &[&str]) -> String {
 
 /// Starts the project's Git job over the fixture's bus, as an open project does.
 pub fn start_job(fx: &Fixture, git: Git) -> AutoCommit {
+    start_watched_job(fx, git).0
+}
+
+/// [`start_job`], with the job's context, whose attention a test reads.
+pub fn start_watched_job(fx: &Fixture, git: Git) -> (AutoCommit, RemoteContext) {
     let context = RemoteContext::new(
         "app".to_owned(),
         fx.project.paths().clone(),
@@ -40,7 +45,7 @@ pub fn start_job(fx: &Fixture, git: Git) -> AutoCommit {
         Arc::new(fx.project.clock().clone()),
         fx.bus.clone(),
     );
-    auto_commit(context, git)
+    (auto_commit(context.clone(), git), context)
 }
 
 /// `P-1` approved by `review`, which carries `integrator` and acts with the returned actor.

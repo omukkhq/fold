@@ -124,7 +124,7 @@ impl Fixture {
             .project
             .paths()
             .root()
-            .join(format!("ws/t-{task}"))
+            .join(format!(".fold/ws/t-{task}"))
             .join(path);
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(file, content).unwrap();

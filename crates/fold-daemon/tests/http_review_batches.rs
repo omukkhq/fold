@@ -70,7 +70,7 @@ async fn a_batch_reads_with_its_members_and_checkout() {
     assert_eq!(members[0]["current_version"], 1);
     assert_eq!(members[0]["proposal_state"], "open");
     assert_eq!(members[0]["in_batch"], true);
-    assert_eq!(body["checkout"]["path"], "ws/review-rb-1");
+    assert_eq!(body["checkout"]["path"], ".fold/ws/review-rb-1");
     assert_eq!(body["checkout"]["base"], "r1");
     assert_eq!(body["verdicts"], serde_json::json!([]));
 }

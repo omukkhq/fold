@@ -26,7 +26,7 @@ async fn status(harness: &Harness, task: &str) -> Value {
         .clone()
 }
 
-/// Acceptance 5: backend opens a proposal and its task moves to Review; review finds it, claims the review, reads a checkout of the version, approves and integrates. The task reaches Done through the integration alone, main moves to `r2` with the file, `main/` shows the file, the workspace is archived, and the events tell the story in order.
+/// Acceptance 5: backend opens a proposal and its task moves to Review; review finds it, claims the review, reads a checkout of the version, approves and integrates. The task reaches Done through the integration alone, main moves to `r2` with the file, the project folder shows the file, the workspace is archived, and the events tell the story in order.
 #[tokio::test]
 async fn acceptance_5_backend_proposal_is_reviewed_and_integrated_with_no_card_moved_by_hand() {
     let harness = Harness::start().await;
@@ -77,7 +77,7 @@ async fn acceptance_5_backend_proposal_is_reviewed_and_integrated_with_no_card_m
     assert_eq!(harness.completions(&task).await, 1);
     let head = harness.head().await;
     assert_eq!(head.number.to_string(), "r2");
-    let shown = harness.project.paths().main_dir().join(ENDPOINT.0);
+    let shown = harness.project.paths().root().join(ENDPOINT.0);
     let content = eventually(WAIT, async || {
         std::fs::read_to_string(&shown).map_err(|error| error.kind())
     })

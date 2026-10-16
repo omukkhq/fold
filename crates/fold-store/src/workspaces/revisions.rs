@@ -21,7 +21,7 @@ pub struct RevisionRow {
     /// Where `r1` came from; `None` on every other revision.
     pub import_source: Option<String>,
     pub integration: Option<IntegrationInfo>,
-    /// The Git commit the revision became in `.fold/git`; `None` until it is written.
+    /// The Git commit the revision became in the project folder's repository `.git`; `None` until it is written.
     pub commit: Option<String>,
 }
 

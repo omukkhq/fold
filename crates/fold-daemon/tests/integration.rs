@@ -166,7 +166,11 @@ async fn approved(fx: &Fixture) -> Actor {
 async fn second_proposal(fx: &Fixture) {
     let author = by(&fx.backend.worker);
     fx.workspaces.create_workspace(&author, t(2)).await.unwrap();
-    let path = fx.project.paths().root().join("ws/t-2/docs/second.md");
+    let path = fx
+        .project
+        .paths()
+        .root()
+        .join(".fold/ws/t-2/docs/second.md");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, "second\n").unwrap();
     fx.reviews

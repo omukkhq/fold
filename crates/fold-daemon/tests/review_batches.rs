@@ -204,16 +204,22 @@ async fn a_batch_takes_every_claim_and_its_checkout_merges_the_members_in_depend
         .create_batch_checkout(&scene.review, batch.id)
         .await
         .unwrap();
-    assert_eq!(checkout.workspace.path, "ws/review-rb-1");
+    assert_eq!(checkout.workspace.path, ".fold/ws/review-rb-1");
     assert_eq!(checkout.members, [(p(2), 1), (p(3), 1), (p(1), 1)]);
     assert_eq!(
-        scene.read("ws/review-rb-1/README.md"),
+        scene.read(".fold/ws/review-rb-1/README.md"),
         "top one\n# demo\nfrom two\n"
     );
-    assert_eq!(scene.read("ws/review-rb-1/src/one.rs"), "one a\none b\n");
-    assert_eq!(scene.read("ws/review-rb-1/src/two.rs"), "two\n");
-    assert_eq!(scene.read("ws/review-rb-1/src/three.rs"), "three\n");
-    assert_eq!(scene.read("ws/review-rb-1/src/lib.rs"), "pub fn x() {}\n");
+    assert_eq!(
+        scene.read(".fold/ws/review-rb-1/src/one.rs"),
+        "one a\none b\n"
+    );
+    assert_eq!(scene.read(".fold/ws/review-rb-1/src/two.rs"), "two\n");
+    assert_eq!(scene.read(".fold/ws/review-rb-1/src/three.rs"), "three\n");
+    assert_eq!(
+        scene.read(".fold/ws/review-rb-1/src/lib.rs"),
+        "pub fn x() {}\n"
+    );
 
     let again = scene
         .fx
@@ -254,7 +260,7 @@ async fn a_member_that_conflicts_is_refused_with_both_ids_until_it_is_removed() 
             .project
             .paths()
             .root()
-            .join("ws/review-rb-1")
+            .join(".fold/ws/review-rb-1")
             .exists()
     );
 

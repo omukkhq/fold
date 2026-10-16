@@ -110,26 +110,21 @@ fn repo(sandbox: &Sandbox) -> (PathBuf, String) {
 fn init_from_git_prints_r1_and_its_commit() {
     let sandbox = Sandbox::new();
     let (repo, head) = repo(&sandbox);
-    let project = sandbox.path("app");
-    let output = sandbox.fold(&[
-        "init",
-        project.to_str().unwrap(),
-        "--from-git",
-        repo.to_str().unwrap(),
-    ]);
+    let output = sandbox.fold_in(&repo, &system_path(), &["init", "--from-git"]);
     assert!(output.status.success(), "{output:?}");
-    let canonical = project.canonicalize().unwrap();
+    let canonical = repo.canonicalize().unwrap();
     assert_eq!(
         stdout(&output),
         format!(
-            "initialised project app at {}\nr1: 2 files, 70 bytes\nr1 is Git commit {head}\n{}",
+            "initialised project repo at {}\nr1: 2 files, 70 bytes\nr1 is Git commit {head}\n{}",
             canonical.display(),
-            machine_warnings(&project)
+            machine_warnings(&repo)
         )
     );
-    let map = fs::read_to_string(project.join(".fold/git-sync.map")).unwrap();
+    let map = fs::read_to_string(repo.join(".fold/git-sync.map")).unwrap();
     assert_eq!(map, format!("r1 {head}\n"));
-    let both = sandbox.fold(&["init", "x", "--from", "a", "--from-git", "b"]);
+    assert_eq!(git(&repo, &["rev-parse", "HEAD"]).trim(), head);
+    let both = sandbox.fold(&["init", "x", "--from-git", "b"]);
     assert!(!both.status.success());
 }
 
@@ -137,20 +132,10 @@ fn init_from_git_prints_r1_and_its_commit() {
 fn init_from_git_without_git_on_path_is_git_not_found() {
     let sandbox = Sandbox::new();
     let (repo, _) = repo(&sandbox);
-    let project = sandbox.path("app");
     fs::create_dir_all(sandbox.path("empty-bin")).unwrap();
     let empty_path = sandbox.path("empty-bin");
-    let output = sandbox.fold_in(
-        sandbox.dir.path(),
-        empty_path.to_str().unwrap(),
-        &[
-            "init",
-            project.to_str().unwrap(),
-            "--from-git",
-            repo.to_str().unwrap(),
-        ],
-    );
+    let output = sandbox.fold_in(&repo, empty_path.to_str().unwrap(), &["init", "--from-git"]);
     assert!(!output.status.success());
     assert!(stderr(&output).contains("git_not_found"), "{output:?}");
-    assert!(!project.join(".fold").exists());
+    assert!(!repo.join(".fold").exists());
 }

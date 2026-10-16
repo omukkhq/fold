@@ -70,14 +70,14 @@ impl ProjectPaths {
         self.fold_dir().join("config.toml")
     }
 
-    /// The read-only copy of the current main revision.
-    pub fn main_dir(&self) -> PathBuf {
-        self.root.join("main")
+    /// The project's own Git repository: one commit per integration on the `[git]` branch, which the project folder has checked out, so the folder's files are main. Every reader and writer of the repository takes its place from here.
+    pub fn git_dir(&self) -> PathBuf {
+        self.root.join(".git")
     }
 
-    /// The parent of every workspace and review checkout directory.
+    /// The parent of every workspace and review checkout directory: [`WS_DIR`] below the root, inside fold's data folder, so the project's Git repository never sees a workspace.
     pub fn ws_dir(&self) -> PathBuf {
-        self.root.join("ws")
+        self.root.join(WS_DIR)
     }
 
     /// The stat index of one workspace. It is named by the public id, which never repeats, rather than by the directory.
@@ -86,30 +86,33 @@ impl ProjectPaths {
     }
 }
 
-/// The directory of a task workspace relative to the project root, as `workspaces.path` stores it. `earlier` counts the task workspaces the task had before this one: none gives `ws/t-12`, one gives `ws/t-12-2`. The name carries no worker, so it never changes when the workspace changes hands.
+/// The parent of every workspace directory relative to the project root.
+pub const WS_DIR: &str = ".fold/ws";
+
+/// The directory of a task workspace relative to the project root, as `workspaces.path` stores it. `earlier` counts the task workspaces the task had before this one: none gives `.fold/ws/t-12`, one gives `.fold/ws/t-12-2`. The name carries no worker, so it never changes when the workspace changes hands.
 pub fn task_workspace_path(task: TaskId, earlier: u32) -> String {
     let name = task.to_string().to_ascii_lowercase();
     match earlier {
-        0 => format!("ws/{name}"),
-        _ => format!("ws/{name}-{}", u64::from(earlier) + 1),
+        0 => format!("{WS_DIR}/{name}"),
+        _ => format!("{WS_DIR}/{name}-{}", u64::from(earlier) + 1),
     }
 }
 
-/// The directory of a review checkout relative to the project root. `earlier` counts the review checkouts the proposal had before this one: none gives `ws/review-p-4`, one gives `ws/review-p-4-2`. Like a task workspace's name it carries no worker and no version, so it never changes when the checkout changes hands.
+/// The directory of a review checkout relative to the project root. `earlier` counts the review checkouts the proposal had before this one: none gives `.fold/ws/review-p-4`, one gives `.fold/ws/review-p-4-2`. Like a task workspace's name it carries no worker and no version, so it never changes when the checkout changes hands.
 pub fn review_checkout_path(proposal: ProposalId, earlier: u32) -> String {
     let name = proposal.to_string().to_ascii_lowercase();
     match earlier {
-        0 => format!("ws/review-{name}"),
-        _ => format!("ws/review-{name}-{}", u64::from(earlier) + 1),
+        0 => format!("{WS_DIR}/review-{name}"),
+        _ => format!("{WS_DIR}/review-{name}-{}", u64::from(earlier) + 1),
     }
 }
 
-/// The directory of a review batch's checkout, relative to the project root: `ws/review-rb-3`, then `ws/review-rb-3-2` when `earlier` checkouts of the batch exist, by the naming rule of a proposal's checkout.
+/// The directory of a review batch's checkout, relative to the project root: `.fold/ws/review-rb-3`, then `.fold/ws/review-rb-3-2` when `earlier` checkouts of the batch exist, by the naming rule of a proposal's checkout.
 pub fn review_batch_checkout_path(batch: ReviewBatchId, earlier: u32) -> String {
     let name = batch.to_string();
     match earlier {
-        0 => format!("ws/review-{name}"),
-        _ => format!("ws/review-{name}-{}", u64::from(earlier) + 1),
+        0 => format!("{WS_DIR}/review-{name}"),
+        _ => format!("{WS_DIR}/review-{name}-{}", u64::from(earlier) + 1),
     }
 }
 
@@ -145,8 +148,8 @@ mod tests {
         assert_eq!(paths.objects(), Path::new("/srv/demo/.fold/objects"));
         assert_eq!(paths.index(), Path::new("/srv/demo/.fold/index"));
         assert_eq!(paths.config(), Path::new("/srv/demo/.fold/config.toml"));
-        assert_eq!(paths.main_dir(), Path::new("/srv/demo/main"));
-        assert_eq!(paths.ws_dir(), Path::new("/srv/demo/ws"));
+        assert_eq!(paths.git_dir(), Path::new("/srv/demo/.git"));
+        assert_eq!(paths.ws_dir(), Path::new("/srv/demo/.fold/ws"));
         let workspace = WorkspaceId::from_number(9).unwrap();
         assert_eq!(
             paths.workspace_index(workspace),
@@ -157,31 +160,34 @@ mod tests {
     #[test]
     fn task_workspace_paths_count_the_earlier_workspaces() {
         let task = TaskId::from_number(12).unwrap();
-        assert_eq!(task_workspace_path(task, 0), "ws/t-12");
-        assert_eq!(task_workspace_path(task, 1), "ws/t-12-2");
-        assert_eq!(task_workspace_path(task, 2), "ws/t-12-3");
+        assert_eq!(task_workspace_path(task, 0), ".fold/ws/t-12");
+        assert_eq!(task_workspace_path(task, 1), ".fold/ws/t-12-2");
+        assert_eq!(task_workspace_path(task, 2), ".fold/ws/t-12-3");
         assert_eq!(
             task_workspace_path(task, u32::MAX),
-            format!("ws/t-12-{}", u64::from(u32::MAX) + 1)
+            format!(".fold/ws/t-12-{}", u64::from(u32::MAX) + 1)
         );
     }
 
     #[test]
     fn review_batch_checkout_paths_count_the_earlier_checkouts() {
         let batch = ReviewBatchId::from_number(3).unwrap();
-        assert_eq!(review_batch_checkout_path(batch, 0), "ws/review-rb-3");
-        assert_eq!(review_batch_checkout_path(batch, 1), "ws/review-rb-3-2");
+        assert_eq!(review_batch_checkout_path(batch, 0), ".fold/ws/review-rb-3");
+        assert_eq!(
+            review_batch_checkout_path(batch, 1),
+            ".fold/ws/review-rb-3-2"
+        );
     }
 
     #[test]
     fn review_checkout_paths_count_the_earlier_checkouts() {
         let proposal = ProposalId::from_number(4).unwrap();
-        assert_eq!(review_checkout_path(proposal, 0), "ws/review-p-4");
-        assert_eq!(review_checkout_path(proposal, 1), "ws/review-p-4-2");
-        assert_eq!(review_checkout_path(proposal, 2), "ws/review-p-4-3");
+        assert_eq!(review_checkout_path(proposal, 0), ".fold/ws/review-p-4");
+        assert_eq!(review_checkout_path(proposal, 1), ".fold/ws/review-p-4-2");
+        assert_eq!(review_checkout_path(proposal, 2), ".fold/ws/review-p-4-3");
         assert_eq!(
             review_checkout_path(proposal, u32::MAX),
-            format!("ws/review-p-4-{}", u64::from(u32::MAX) + 1)
+            format!(".fold/ws/review-p-4-{}", u64::from(u32::MAX) + 1)
         );
     }
 }

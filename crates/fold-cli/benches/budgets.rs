@@ -111,18 +111,15 @@ async fn measure_with_daemon(
 ) -> BenchResult<()> {
     let sizes = mode.sizes;
 
-    let idle_source = host.path().join("idle-source");
-    fixture::write_repository(&idle_source, sizes.idle_files, 4.min(sizes.idle_files))?;
     let idle_root = host.path().join("idle");
-    init_project(host, &idle_root, &idle_source).await?;
+    fixture::write_repository(&idle_root, sizes.idle_files, 4.min(sizes.idle_files))?;
+    init_project(host, &idle_root).await?;
     let idle = idle_memory(host, daemon, &idle_root, mode.idle_seconds).await?;
     report.record(Target::IdleMemory, idle as f64, scale);
 
-    let source = host.path().join("source");
-    fixture::write_repository(&source, sizes.files, sizes.directories)?;
     let root = host.path().join("big");
-    init_project(host, &root, &source).await?;
-    std::fs::remove_dir_all(&source)?;
+    fixture::write_repository(&root, sizes.files, sizes.directories)?;
+    init_project(host, &root).await?;
 
     let frontend = Session::open(host, &root, "frontend").await?;
     let backend = Session::open(host, &root, "backend").await?;
@@ -160,15 +157,9 @@ async fn measure_project(
     Ok(())
 }
 
-async fn init_project(host: &Host, root: &Path, source: &Path) -> BenchResult<()> {
-    let root_text = root.to_string_lossy();
-    let source_text = source.to_string_lossy();
-    host.run(
-        &["init", &root_text, "--from", &source_text],
-        host.path(),
-        &[],
-    )
-    .await?;
+/// The folder's files become `r1`, as `fld init` makes a folder the project.
+async fn init_project(host: &Host, root: &Path) -> BenchResult<()> {
+    host.run(&["init"], root, &[]).await?;
     Ok(())
 }
 

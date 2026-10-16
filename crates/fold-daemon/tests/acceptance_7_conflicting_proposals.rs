@@ -29,12 +29,12 @@ async fn status(harness: &Harness, task: &str) -> Value {
         .clone()
 }
 
-/// Waits until `main/` holds only `README.md` with `readme`.
+/// Waits until the project folder holds only `README.md` with `readme`.
 async fn main_shows(harness: &Harness, readme: &str) {
-    let main = harness.project.paths().main_dir();
+    let main = harness.project.paths().root();
     let wanted = BTreeMap::from([("README.md".to_owned(), readme.as_bytes().to_vec())]);
     eventually(WAIT, async || {
-        let shown = read_tree(&main);
+        let shown = read_tree(main);
         if shown == wanted { Ok(()) } else { Err(shown) }
     })
     .await;

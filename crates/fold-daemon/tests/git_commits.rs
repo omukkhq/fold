@@ -45,7 +45,7 @@ async fn a_proposal_integration_becomes_one_commit_with_its_identity_and_trailer
         .unwrap();
     wait_for_rows(&fx, 2).await;
 
-    let mirror = fx.project.paths().fold_dir().join("git");
+    let mirror = fx.project.paths().git_dir();
     let (first, second) = (commit_of(&fx, 1).await, commit_of(&fx, 2).await);
     assert_eq!(git(&mirror, &["rev-parse", "main"]).trim(), second);
     assert_eq!(git(&mirror, &["rev-list", "--count", "main"]).trim(), "2");
@@ -117,7 +117,7 @@ async fn a_failed_commit_is_recorded_and_the_next_start_writes_it_on_the_configu
 
     let _job = start_job(&fx, Git::default());
     wait_for_rows(&fx, 1).await;
-    let mirror = fx.project.paths().fold_dir().join("git");
+    let mirror = fx.project.paths().git_dir();
     assert_eq!(
         git(
             &mirror,

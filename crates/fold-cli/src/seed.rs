@@ -116,16 +116,12 @@ fn seed(args: &SeedArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), SeedEr
     let socket = serve::socket_path(args.socket.as_deref(), dirs)?.ok_or(SeedError::NoSocket)?;
     let socket = std::path::absolute(socket)?;
 
-    let source = dir.with_file_name(".demo-source");
-    if source.exists() {
-        std::fs::remove_dir_all(&source)?;
-    }
-    sample::write(&source)?;
+    // The sample's files are in the folder before init, so they become r1.
+    sample::write(&dir)?;
     let init = InitArgs {
         dir: Some(dir.clone()),
         name: Some("Demo".to_owned()),
-        from: Some(source),
-        from_git: None,
+        from_git: false,
         socket: Some(socket.clone()),
         refresh: false,
     };

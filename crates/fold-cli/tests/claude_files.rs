@@ -27,10 +27,6 @@ const SETTINGS_GOLDEN: &str = r#"{
   "permissions": {
     "allow": [
       "mcp__fold"
-    ],
-    "deny": [
-      "Edit(/main/**)",
-      "Write(/main/**)"
     ]
   },
   "hooks": {
@@ -50,6 +46,17 @@ const SETTINGS_GOLDEN: &str = r#"{
           {
             "type": "command",
             "command": "fld hook stop"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "fld hook pre-tool-use"
           }
         ]
       }
@@ -126,7 +133,7 @@ fn a_refresh_keeps_foreign_entries_in_their_order_and_replaces_stale_fold_ones()
     std::fs::create_dir_all(root.join(".claude")).unwrap();
     let mcp = r#"{"other": 1, "mcpServers": {"zeta": {"command": "z-mcp"}, "fold": {"command": "fold", "args": ["serve"]}, "alpha": {"command": "a-mcp", "env": {"Z": "1", "A": "2"}}}}"#;
     std::fs::write(root.join(MCP_FILE), mcp).unwrap();
-    let settings = r#"{"model": "opus", "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo bye"}]}, {"hooks": [{"type": "command", "command": "fold hook stop"}]}], "SessionStart": [{"hooks": [{"type": "command", "command": "fold hook old-start"}, {"type": "command", "command": "notify-send hi"}]}, {"matcher": "resume", "hooks": [{"type": "command", "command": "fld hook session-start"}]}], "PreToolUse": [{"matcher": "Bash", "hooks": [{"command": "guard", "type": "command"}]}]}, "permissions": {"deny": ["Read(.env)"], "allow": ["Bash(ls)", "mcp__fold"]}, "env": {"B": "2", "A": "1"}}"#;
+    let settings = r#"{"model": "opus", "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo bye"}]}, {"hooks": [{"type": "command", "command": "fold hook stop"}]}], "SessionStart": [{"hooks": [{"type": "command", "command": "fold hook old-start"}, {"type": "command", "command": "notify-send hi"}]}, {"matcher": "resume", "hooks": [{"type": "command", "command": "fld hook session-start"}]}], "PreToolUse": [{"matcher": "Bash", "hooks": [{"command": "guard", "type": "command"}]}]}, "permissions": {"deny": ["Read(.env)", "Edit(/main/**)", "Write(/main/**)"], "allow": ["Bash(ls)", "mcp__fold"]}, "env": {"B": "2", "A": "1"}}"#;
     std::fs::write(root.join(SETTINGS_FILE), settings).unwrap();
     claude_files::write(root).unwrap();
 
@@ -204,14 +211,21 @@ fn a_refresh_keeps_foreign_entries_in_their_order_and_replaces_stale_fold_ones()
             "type": "command"
           }
         ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "fld hook pre-tool-use"
+          }
+        ]
       }
     ]
   },
   "permissions": {
     "deny": [
-      "Read(.env)",
-      "Edit(/main/**)",
-      "Write(/main/**)"
+      "Read(.env)"
     ],
     "allow": [
       "Bash(ls)",
@@ -533,36 +547,19 @@ fn tree(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
 }
 
 #[test]
-fn init_and_refresh_never_touch_main_or_the_workspaces() {
+fn refresh_never_touches_the_workspaces() {
     let sandbox = Sandbox::new();
-    let source = sandbox.path("source");
-    std::fs::create_dir_all(source.join("src")).unwrap();
-    std::fs::write(source.join("AGENTS.md"), "repository rules\n").unwrap();
-    std::fs::write(source.join("CLAUDE.md"), "repository claude rules\n").unwrap();
-    std::fs::write(source.join("src/lib.rs"), "pub fn f() {}\n").unwrap();
     let project = sandbox.path("project");
-    let output = sandbox.fold(&[
-        "init",
-        project.to_str().unwrap(),
-        "--from",
-        source.to_str().unwrap(),
-    ]);
+    let output = sandbox.fold(&["init", project.to_str().unwrap()]);
     assert!(output.status.success(), "{output:?}");
-    assert_eq!(tree(&project.join("main")), tree(&source));
-    assert!(
-        sandbox.warnings(&output).is_empty(),
-        "a CLAUDE.md inside main/ does not hide the root AGENTS.md"
-    );
 
-    let workspace = project.join("ws").join("t-1");
+    let workspace = project.join(".fold/ws/t-1");
     std::fs::create_dir_all(&workspace).unwrap();
     std::fs::write(workspace.join("AGENTS.md"), "workspace copy\n").unwrap();
-    let main = tree(&project.join("main"));
-    let ws = tree(&project.join("ws"));
+    let ws = tree(&project.join(".fold/ws"));
     let output = sandbox.fold_in(&["init", "--refresh"], &workspace);
     assert!(output.status.success(), "{output:?}");
-    assert_eq!(tree(&project.join("main")), main);
-    assert_eq!(tree(&project.join("ws")), ws);
+    assert_eq!(tree(&project.join(".fold/ws")), ws);
     assert_eq!(read(&project, MCP_FILE), MCP_GOLDEN);
 }
 

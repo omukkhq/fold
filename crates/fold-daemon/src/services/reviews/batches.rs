@@ -293,7 +293,7 @@ impl ReviewService {
         self.get_review_batch(batch).await
     }
 
-    /// A read-only checkout of the batch for the actor's worker under `ws/review-rb-<n>`: main's head with each member's batched version merged onto it in merge order, by the three-way tree merge an integration uses, so the checks run once for all members. Only the holder's agent creates it, and a repeat call returns the active checkout. fold records which member brought each changed run of lines, so a line comment on the checkout is stored on that member's version.
+    /// A read-only checkout of the batch for the actor's worker under `.fold/ws/review-rb-<n>`: main's head with each member's batched version merged onto it in merge order, by the three-way tree merge an integration uses, so the checks run once for all members. Only the holder's agent creates it, and a repeat call returns the active checkout. fold records which member brought each changed run of lines, so a line comment on the checkout is stored on that member's version.
     ///
     /// A member that conflicts is `batch_conflict` naming it and the earlier member it conflicts with, or `main` when it conflicts with main itself, and the paths; no checkout is made. The objects are merged and the files written and renamed into place under the project's object lock before the transaction that inserts the row; a failure to write them is `checkout_failed`, and a directory no row names is removed again.
     pub async fn create_batch_checkout(

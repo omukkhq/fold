@@ -1111,7 +1111,7 @@ pub async fn integrate_proposal(
 pub struct ReviewCheckoutView {
     #[schema(value_type = String, example = "ws-12")]
     pub workspace: WorkspaceId,
-    /// Relative to the project root, such as `ws/review-p-4`.
+    /// Relative to the project root, such as `.fold/ws/review-p-4`.
     pub path: String,
     #[schema(value_type = String, example = "P-4")]
     pub proposal: ProposalId,

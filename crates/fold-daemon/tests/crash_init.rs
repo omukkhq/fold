@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::common::invariants::assert_store_consistent;
 use fold_core::object::{ObjectKind, hash_object};
 use fold_core::{HostPaths, ManualClock, ProjectPaths};
-use fold_daemon::services::projects::{InitializedProject, ProjectError, init_project_from};
+use fold_daemon::services::projects::{InitializedProject, ProjectError, init_project};
 use fold_store::{Store, projects};
 use fold_vcs::objects::ObjectStore;
 use tempfile::TempDir;
@@ -17,23 +17,21 @@ struct Host {
     dir: TempDir,
     paths: HostPaths,
     clock: ManualClock,
-    source: PathBuf,
 }
 
 impl Host {
-    /// A host registry and a source holding `src/lib.rs` and `README.md`.
+    /// A host registry and a project folder holding `src/lib.rs` and `README.md`.
     fn new() -> Self {
         let dir = TempDir::new().unwrap();
         let paths = HostPaths::new(dir.path().join("data").to_str(), None).unwrap();
-        let source = dir.path().join("source");
-        std::fs::create_dir_all(source.join("src")).unwrap();
-        std::fs::write(source.join("src/lib.rs"), LIB).unwrap();
-        std::fs::write(source.join("README.md"), README).unwrap();
+        let app = dir.path().join("app");
+        std::fs::create_dir_all(app.join("src")).unwrap();
+        std::fs::write(app.join("src/lib.rs"), LIB).unwrap();
+        std::fs::write(app.join("README.md"), README).unwrap();
         Self {
             dir,
             paths,
             clock: ManualClock::new(),
-            source,
         }
     }
 
@@ -45,16 +43,9 @@ impl Host {
         ProjectPaths::new(self.root().canonicalize().unwrap())
     }
 
-    /// `fld init app --from source`.
+    /// `fld init` in `app`.
     async fn init(&self) -> Result<InitializedProject, ProjectError> {
-        init_project_from(
-            &self.paths,
-            &self.root(),
-            None,
-            Some(&self.source),
-            &self.clock,
-        )
-        .await
+        init_project(&self.paths, &self.root(), None, &self.clock).await
     }
 
     /// Runs the init with `failpoint` firing, which stops it there as a crash would.
@@ -109,22 +100,31 @@ async fn an_init_stopped_before_the_registry_insert_finishes_on_the_next_run() {
     let paths = host.project_paths();
     assert!(paths.db().is_file());
     assert!(host.registered().await.is_empty());
-    // The stopped run filled `main/`; one file taken out stands for a run that stopped while it wrote them.
-    std::fs::remove_file(paths.main_dir().join("src/lib.rs")).unwrap();
+    // The stopped run recorded r1, and the next run makes the repository it had not made yet.
+    std::fs::remove_dir_all(paths.git_dir()).unwrap();
 
     let project = host.init().await.unwrap();
     assert!(project.resumed);
     assert_eq!(project.slug, "app");
     assert_eq!(project.root, paths.root());
     assert_eq!(project.revision.to_string(), "r1");
-    assert_eq!(project.imported.files, 2);
-    assert_eq!(project.imported.bytes, (LIB.len() + README.len()) as u64);
+    // The folder's two files and the `.foldignore` and `.gitignore` link init wrote beside them.
+    assert_eq!(project.imported.files, 4);
+    let ignore_files = std::fs::metadata(paths.root().join(".foldignore"))
+        .unwrap()
+        .len()
+        + ".foldignore".len() as u64;
+    assert_eq!(
+        project.imported.bytes,
+        (LIB.len() + README.len()) as u64 + ignore_files
+    );
     assert!(project.imported.skipped.is_empty());
     assert_eq!(project.git_commit, None);
     assert_eq!(
-        std::fs::read_to_string(paths.main_dir().join("src/lib.rs")).unwrap(),
+        std::fs::read_to_string(paths.root().join("src/lib.rs")).unwrap(),
         LIB
     );
+    assert!(paths.git_dir().join("HEAD").is_file());
     assert_eq!(host.registered().await, ["app"]);
     assert_project_consistent(&paths).await;
 

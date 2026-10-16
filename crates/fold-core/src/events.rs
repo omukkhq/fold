@@ -110,6 +110,9 @@ define_event_types! {
     REQUEST_APPROVED = "request.approved",
     REQUEST_CLOSED = "request.closed",
     GIT_COMMIT_FAILED = "git.commit_failed",
+    GIT_OUTSIDE_COMMITS = "git.outside_commits",
+    GIT_UNCOMMITTED_CHANGES = "git.uncommitted_changes",
+    GIT_ATTENTION_CLEARED = "git.attention_cleared",
     AGENT_PRESENCE_CHANGED = "agent.presence_changed",
 }
 

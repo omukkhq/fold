@@ -115,13 +115,13 @@ async fn a_reviewer_batches_checks_out_and_reviews_two_proposals_through_the_too
     assert_eq!(created["checkout"], Value::Null);
 
     let checkout = ok(&review, "create_batch_checkout", json!({"id": "rb-1"})).await;
-    assert_eq!(checkout["path"], "ws/review-rb-1");
+    assert_eq!(checkout["path"], ".fold/ws/review-rb-1");
     assert_eq!(
         checkout["members"],
         json!([{"proposal": "P-1", "version": "v1"}, {"proposal": "P-2", "version": "v1"}])
     );
     let read = ok(&review, "get_review_batch", json!({"id": "rb-1"})).await;
-    assert_eq!(read["checkout"]["path"], "ws/review-rb-1");
+    assert_eq!(read["checkout"]["path"], ".fold/ws/review-rb-1");
     let listed = ok(&review, "list_review_batches", json!({"open": true})).await;
     assert_eq!(listed["batches"].as_array().unwrap().len(), 1);
 

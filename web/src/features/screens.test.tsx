@@ -66,6 +66,7 @@ describe("Projects screen", () => {
                 agents: [{ name: "frontend", presence: "active" }],
                 head: "r5",
                 last_change_at: Date.now() - 12_000,
+                attention: [],
               },
             },
             { slug: "archive", name: "Archive", available: false },
@@ -197,7 +198,7 @@ function stubRepository(revisions = REVISIONS): StubRequest[] {
     "GET /api/v1/projects/demo/repository": {
       body: {
         head: revisions[0]?.id ?? null,
-        main_path: "/srv/demo/main",
+        main_path: "/srv/demo",
         recent: revisions,
       },
     },
@@ -293,7 +294,7 @@ describe("Repository screen", () => {
     renderRepository("r3");
     expect(
       await screen.findByText(
-        /main\/ on disk always matches r5 and is read-only/,
+        /The project folder \/srv\/demo shows r5 while it has no changes that are not committed/,
       ),
     ).toBeTruthy();
   });

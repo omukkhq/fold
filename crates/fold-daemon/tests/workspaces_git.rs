@@ -87,7 +87,7 @@ fn write(root: &Path, path: &str, bytes: &[u8]) {
     fs::write(path, bytes).unwrap();
 }
 
-/// A repository on `main` with a file, an executable, a symlink and a committed `.fold/`; returns its `HEAD`.
+/// A repository on `main` with a file, an executable and a symlink; returns its `HEAD`.
 #[cfg(test)]
 fn source_repo(repo: &Path) -> String {
     fs::create_dir_all(repo).unwrap();
@@ -96,8 +96,7 @@ fn source_repo(repo: &Path) -> String {
     write(repo, "bin/run", b"#!/bin/sh\n");
     fs::set_permissions(repo.join("bin/run"), fs::Permissions::from_mode(0o755)).unwrap();
     symlink("README.md", repo.join("link")).unwrap();
-    write(repo, ".fold/fold.db", b"not a database\n");
-    git(repo, &["add", "--force", "."]);
+    git(repo, &["add", "."]);
     git(repo, &["commit", "--quiet", "-m", "start"]);
     git(repo, &["rev-parse", "HEAD"]).trim().to_owned()
 }
@@ -164,7 +163,7 @@ async fn add_revision(
     number
 }
 
-/// Writes the project's missing commits into `.fold/git`, as its Git job does.
+/// Writes the project's missing commits into its repository, as its Git job does.
 #[cfg(test)]
 async fn commit(root: &Path) {
     let paths = ProjectPaths::new(root);
@@ -176,15 +175,15 @@ async fn commit(root: &Path) {
 }
 
 #[tokio::test]
-async fn from_git_imports_head_and_records_the_first_sync_point() {
+async fn from_git_makes_the_repository_the_project_and_head_its_first_commit() {
     let host = Host::new();
     let repo = host.path("repo");
     let head = source_repo(&repo);
-    let root = host.path("app");
-    let project =
-        init_project_from_git(&host.paths, &root, None, &repo, Git::default(), &host.clock)
-            .await
-            .unwrap();
+    git(&repo, &["checkout", "--quiet", "-b", "trunk"]);
+    let project = init_project_from_git(&host.paths, &repo, None, Git::default(), &host.clock)
+        .await
+        .unwrap();
+    assert_eq!(project.root, repo.canonicalize().unwrap());
     assert_eq!(project.git_commit.as_ref().unwrap().as_str(), head);
     assert_eq!(project.imported.files, 3);
     assert!(project.imported.skipped.is_empty());
@@ -193,67 +192,57 @@ async fn from_git_imports_head_and_records_the_first_sync_point() {
     let store = Store::open_project(&paths).await.unwrap();
     let r1 = workspaces::head(store.read()).await.unwrap().unwrap();
     store.close().await.unwrap();
-    let canonical = repo.canonicalize().unwrap();
-    assert_eq!(r1.import_source.as_deref(), canonical.to_str());
+    assert_eq!(
+        r1.import_source.as_deref(),
+        repo.canonicalize().unwrap().to_str()
+    );
     let map = fs::read_to_string(paths.fold_dir().join(SYNC_MAP_FILE)).unwrap();
     assert_eq!(map, format!("r1 {head}\n"));
-    // The commits after r1 name the imported commit as their parent, so the project's repository holds it.
-    assert_eq!(
-        git(
-            &paths.fold_dir().join("git"),
-            &["rev-parse", "refs/fold/imported"]
-        )
-        .trim(),
-        head
+    // The history stays, the checked-out branch is the `[git]` branch, and `.fold/` stays out of Git.
+    assert_eq!(git(&repo, &["rev-list", "--count", "trunk"]).trim(), "1");
+    assert!(
+        fs::read_to_string(paths.config())
+            .unwrap()
+            .ends_with("[git]\nbranch = \"trunk\"\n")
     );
-    assert_eq!(
-        fs::read(paths.main_dir().join("README.md")).unwrap(),
-        b"# app\n"
-    );
-    assert!(!paths.main_dir().join(".fold/fold.db").exists());
+    assert_eq!(git(&repo, &["status", "--porcelain"]), "");
+    assert!(!repo.join(".foldignore").exists());
+    assert_eq!(fs::read(repo.join("README.md")).unwrap(), b"# app\n");
+    assert!(paths.db().is_file());
     assert_eq!(host.registered().await, 1);
 }
 
-/// A repository whose `main` holds a tree built by `git mktree` from `lines`, so it can name paths that `git add` would refuse.
-#[cfg(test)]
-fn crafted_repo(repo: &Path, lines: &str) {
-    source_repo(repo);
-    let blob = git(repo, &["rev-parse", "HEAD:README.md"])
-        .trim()
-        .to_owned();
-    let mut child = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .arg("mktree")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    std::io::Write::write_all(
-        &mut child.stdin.take().unwrap(),
-        lines.replace("BLOB", &blob).as_bytes(),
-    )
-    .unwrap();
-    let tree = String::from_utf8(child.wait_with_output().unwrap().stdout).unwrap();
-    let commit = git(repo, &["commit-tree", "-m", "crafted", tree.trim()]);
-    git(repo, &["update-ref", "refs/heads/main", commit.trim()]);
-}
-
 #[tokio::test]
-async fn a_committed_dot_dot_entry_fails_and_creates_no_revision() {
+async fn from_git_refuses_a_dirty_tree_and_a_detached_head() {
     let host = Host::new();
     let repo = host.path("repo");
-    crafted_repo(&repo, "100644 blob BLOB\tok.txt\n100644 blob BLOB\t..\n");
-    let root = host.path("app");
-    let error = init_project_from_git(&host.paths, &root, None, &repo, Git::default(), &host.clock)
+    let head = source_repo(&repo);
+    write(&repo, "README.md", b"# changed\n");
+    let refused = |error: ProjectError| {
+        let ProjectError::Fold(error) = error else {
+            panic!("a fold error");
+        };
+        assert_eq!(error.code(), codes::INVALID_REQUEST);
+        error.details().unwrap()["reason"].clone()
+    };
+    let error = init_project_from_git(&host.paths, &repo, None, Git::default(), &host.clock)
         .await
         .unwrap_err();
-    assert_eq!(error.code(), Some(codes::INVALID_PATH));
-    assert!(!root.join(".fold").exists());
-    assert!(!root.join("main").exists());
+    assert_eq!(refused(error), "uncommitted_changes");
+    git(&repo, &["checkout", "--quiet", "--", "README.md"]);
+    git(&repo, &["checkout", "--quiet", "--detach", &head]);
+    let error = init_project_from_git(&host.paths, &repo, None, Git::default(), &host.clock)
+        .await
+        .unwrap_err();
+    assert_eq!(refused(error), "detached_head");
+    let empty = host.path("empty");
+    fs::create_dir(&empty).unwrap();
+    git(&empty, &["init", "--quiet", "--initial-branch=main"]);
+    let error = init_project_from_git(&host.paths, &empty, None, Git::default(), &host.clock)
+        .await
+        .unwrap_err();
+    assert_eq!(refused(error), "no_commit");
+    assert!(!repo.join(".fold").exists() && !empty.join(".fold").exists());
     assert_eq!(host.registered().await, 0);
 }
 
@@ -262,36 +251,22 @@ async fn only_the_top_of_a_sha1_repository_imports() {
     let host = Host::new();
     let repo = host.path("repo");
     source_repo(&repo);
-    let root = host.path("app");
     for source in [repo.join("bin"), host.path("plain")] {
         fs::create_dir_all(&source).unwrap();
-        let error = init_project_from_git(
-            &host.paths,
-            &root,
-            None,
-            &source,
-            Git::default(),
-            &host.clock,
-        )
-        .await
-        .unwrap_err();
+        let error = init_project_from_git(&host.paths, &source, None, Git::default(), &host.clock)
+            .await
+            .unwrap_err();
         assert_eq!(error.code(), Some(codes::INVALID_REQUEST));
+        assert!(!source.join(".fold").exists());
     }
     let sha256 = host.path("sha256");
     fs::create_dir(&sha256).unwrap();
     git(&sha256, &["init", "--quiet", "--object-format=sha256"]);
-    let error = init_project_from_git(
-        &host.paths,
-        &root,
-        None,
-        &sha256,
-        Git::default(),
-        &host.clock,
-    )
-    .await
-    .unwrap_err();
+    let error = init_project_from_git(&host.paths, &sha256, None, Git::default(), &host.clock)
+        .await
+        .unwrap_err();
     assert_eq!(error.code(), Some(codes::INVALID_REQUEST));
-    assert!(!root.exists());
+    assert!(!sha256.join(".fold").exists());
     assert_eq!(host.registered().await, 0);
 }
 
@@ -300,18 +275,28 @@ async fn a_missing_git_program_fails_init_with_git_not_found() {
     let host = Host::new();
     let repo = host.path("repo");
     fs::create_dir(&repo).unwrap();
-    let root = host.path("app");
     let missing = Git::new(host.path("bin/git"));
-    let error = init_project_from_git(&host.paths, &root, None, &repo, missing, &host.clock)
+    let error = init_project_from_git(&host.paths, &repo, None, missing.clone(), &host.clock)
         .await
         .unwrap_err();
     assert_eq!(error.code(), Some(codes::GIT_NOT_FOUND));
-    assert!(!root.join(".fold").exists());
+    assert!(!repo.join(".fold").exists());
+    let error = fold_daemon::services::projects::init_new_project(
+        &host.paths,
+        &repo,
+        None,
+        missing,
+        None,
+        &host.clock,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code(), Some(codes::GIT_NOT_FOUND));
+    assert!(!repo.join(".fold").exists());
     let not_a_dir: Result<_, ProjectError> = init_project_from_git(
         &host.paths,
-        &root,
-        None,
         &host.path("absent"),
+        None,
         Git::default(),
         &host.clock,
     )
@@ -323,7 +308,7 @@ const PARENTS: &str = "
 INSERT INTO agents (id, name, created_at) VALUES (1, 'backend', 0);
 INSERT INTO workers (id, agent_id, name, created_at) VALUES (1, 1, 'worker-a', 0);
 INSERT INTO tasks (id, number, title, created_by, created_at, updated_at) VALUES (1, 3, 'three', 'backend', 0, 0);
-INSERT INTO workspaces (id, number, task_id, worker_id, kind, path, base_revision_id, state, created_at) VALUES (1, 1, 1, 1, 'task', 'ws/t-3', 1, 'active', 0);
+INSERT INTO workspaces (id, number, task_id, worker_id, kind, path, base_revision_id, state, created_at) VALUES (1, 1, 1, 1, 'task', '.fold/ws/t-3', 1, 'active', 0);
 INSERT INTO changesets (id, number, workspace_id, task_id, base_revision_id, tree_hash, message, created_by, created_at) VALUES (1, 1, 1, 1, 1, 't', 'm', 'backend', 0);
 INSERT INTO proposals (id, number, task_id, author_worker_id, title, created_at, updated_at) VALUES (1, 4, 1, 1, 'Database schema for reports', 0, 0);
 INSERT INTO proposal_versions (id, proposal_id, version, base_revision_id, tree_hash, head_changeset_id, created_by, created_at) VALUES (1, 1, 1, 1, 't', 1, 'frontend', 0);
@@ -336,26 +321,17 @@ INSERT INTO reviews (id, version_id, reviewer_human, verdict, body, created_at) 
 #[tokio::test]
 async fn commits_carry_the_revision_messages() {
     let host = Host::new();
-    let source = host.path("source");
-    write(&source, "notes.txt", b"imported\n");
     let root = host.path("app");
-    fold_daemon::services::projects::init_project_from(
-        &host.paths,
-        &root,
-        None,
-        Some(&source),
-        &host.clock,
-    )
-    .await
-    .unwrap();
+    write(&root, "notes.txt", b"imported\n");
+    fold_daemon::services::projects::init_project(&host.paths, &root, None, &host.clock)
+        .await
+        .unwrap();
     let store = Store::open_project(&ProjectPaths::new(&root))
         .await
         .unwrap();
-    // The pulled commit sits in the mirror, as a fetch leaves it.
+    // The pulled commit sits in the project's repository, as a fetch leaves it.
     let pulled = source_repo(&host.path("remote"));
-    let mirror = root.join(".fold/git");
-    fs::create_dir_all(&mirror).unwrap();
-    git(&mirror, &["init", "--quiet", "--bare"]);
+    let mirror = root.join(".git");
     let remote = host.path("remote");
     git(
         &mirror,
@@ -386,9 +362,8 @@ async fn commits_carry_the_revision_messages() {
     add_revision(&root, &[("a.txt", b"plain\n")], None).await;
 
     commit(&root).await;
-    let target = root.join(".fold/git");
+    let target = root.join(".git");
     let commits = log(&target);
-    let canonical = source.canonicalize().unwrap();
     let expected = [
         "fold r4\n\nFold-Revision: r4\n\n".to_owned(),
         format!(
@@ -396,7 +371,7 @@ async fn commits_carry_the_revision_messages() {
             &pulled[..12]
         ),
         "Database schema for reports\n\nthree\n\nFold-Proposal: P-4\nFold-Version: 1\nFold-Task: T-3\nFold-Revision: r2\nReviewed-by: worker-a\nReviewed-by: human:ana\nIntegrated-by: backend.worker-a\n\n".to_owned(),
-        format!("Import {}\n\nFold-Revision: r1\n\n", canonical.display()),
+        "fold r1\n\nFold-Revision: r1\n\n".to_owned(),
     ];
     let found: Vec<String> = commits
         .iter()

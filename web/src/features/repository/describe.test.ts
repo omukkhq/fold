@@ -164,11 +164,11 @@ describe("symlinkLabel", () => {
 });
 
 describe("mainCopyText", () => {
-  it("names the head the repository route sends", () => {
+  it("names the head and the folder the repository route sends", () => {
     expect(
-      mainCopyText({ head: "r17", main_path: "/srv/demo/main", recent: [] }),
+      mainCopyText({ head: "r17", main_path: "/srv/demo", recent: [] }),
     ).toBe(
-      "main/ on disk always matches r17 and is read-only. Agents read it; builds run in workspaces.",
+      "The project folder /srv/demo shows r17 while it has no changes that are not committed. Agents read it; builds run in workspaces.",
     );
   });
 

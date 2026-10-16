@@ -262,9 +262,9 @@ async fn an_agent_works_in_its_workspace_from_create_to_abandon() {
     let created = call(&frontend, "create_workspace", json!({"task": "T-1"})).await;
     assert_eq!(
         created,
-        json!({"workspace": "ws-1", "path": "ws/t-1", "base": "r1", "task": "T-1", "adopted": false})
+        json!({"workspace": "ws-1", "path": ".fold/ws/t-1", "base": "r1", "task": "T-1", "adopted": false})
     );
-    let lib = fx.file("ws/t-1", "src/lib.rs");
+    let lib = fx.file(".fold/ws/t-1", "src/lib.rs");
     assert_eq!(fs::read(&lib).unwrap(), BASE);
     fs::write(&lib, MINE).unwrap();
 
@@ -306,7 +306,7 @@ async fn an_agent_works_in_its_workspace_from_create_to_abandon() {
     let got = call(&frontend, "get_workspace", json!({"task": "T-1"})).await;
     assert_eq!(got["workspace"], "ws-1");
     assert_eq!(got["state"], "active");
-    assert_eq!(got["path"], "ws/t-1");
+    assert_eq!(got["path"], ".fold/ws/t-1");
     assert_eq!(got["base"], "r2");
     assert_eq!(got["task"], "T-1");
     assert_eq!(got["worker"], "frontend");
@@ -419,7 +419,7 @@ async fn record_changes_waits_until_every_marker_is_gone() {
     let fx = Fixture::new().await;
     let frontend = fx.connect("frontend").await;
     call(&frontend, "create_workspace", json!({"task": "T-1"})).await;
-    let lib = fx.file("ws/t-1", "src/lib.rs");
+    let lib = fx.file(".fold/ws/t-1", "src/lib.rs");
     fs::write(&lib, MINE).unwrap();
     fx.move_main(THEIRS).await;
     call(&frontend, "sync_workspace", json!({"ws": "ws-1"})).await;
@@ -563,7 +563,7 @@ async fn a_stale_claim_and_a_released_workspace_move_to_the_next_agent() {
     let backend = fx.connect("backend").await;
 
     call(&frontend, "create_workspace", json!({"task": "T-1"})).await;
-    let lib = fx.file("ws/t-1", "src/lib.rs");
+    let lib = fx.file(".fold/ws/t-1", "src/lib.rs");
     fs::write(&lib, MINE).unwrap();
     fx.project
         .clock()
@@ -583,7 +583,7 @@ async fn a_stale_claim_and_a_released_workspace_move_to_the_next_agent() {
     call(&frontend, "release_task", json!({"id": "T-2"})).await;
     assert_eq!(
         call(&backend, "create_workspace", json!({"task": "T-2"})).await,
-        json!({"workspace": "ws-2", "path": "ws/t-2", "base": "r1", "task": "T-2", "adopted": true})
+        json!({"workspace": "ws-2", "path": ".fold/ws/t-2", "base": "r1", "task": "T-2", "adopted": true})
     );
     assert!(
         fx.event_types()

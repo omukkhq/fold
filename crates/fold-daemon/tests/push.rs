@@ -15,8 +15,7 @@ use fold_daemon::http::socket_router;
 use fold_daemon::projects::ProjectHandle;
 use fold_daemon::services::events::BusMessage;
 use fold_daemon::services::projects::{
-    ProjectError, PushOutcome, commit_main, commit_message, init_project, init_project_from_git,
-    push,
+    PushOutcome, commit_main, commit_message, init_project, init_project_from_git, push,
 };
 use fold_daemon::{Daemon, DaemonConfig};
 use fold_store::StoreError;
@@ -254,7 +253,7 @@ INSERT INTO agents (id, name, created_at) VALUES (1, 'frontend', 0);
 INSERT INTO workers (id, agent_id, name, created_at) VALUES (1, 1, 'frontend', 0);
 INSERT INTO workers (id, agent_id, name, parent_worker_id, created_at) VALUES (2, 1, 'frontend/ui', 1, 0);
 INSERT INTO tasks (id, number, title, created_by, created_at, updated_at) VALUES (1, 3, 'three', 'frontend', 0, 0);
-INSERT INTO workspaces (id, number, task_id, worker_id, kind, path, base_revision_id, state, created_at) VALUES (1, 1, 1, 2, 'task', 'ws/t-3', 1, 'active', 0);
+INSERT INTO workspaces (id, number, task_id, worker_id, kind, path, base_revision_id, state, created_at) VALUES (1, 1, 1, 2, 'task', '.fold/ws/t-3', 1, 'active', 0);
 INSERT INTO changesets (id, number, workspace_id, task_id, base_revision_id, tree_hash, message, created_by, created_at) VALUES (1, 1, 1, 1, 1, 't', 'm', 'frontend/ui', 0);
 INSERT INTO proposals (id, number, task_id, author_worker_id, title, created_at, updated_at) VALUES (1, 4, 1, 2, 'Login form', 0, 0);
 INSERT INTO proposal_versions (id, proposal_id, version, base_revision_id, tree_hash, head_changeset_id, created_by, created_at) VALUES (1, 1, 1, 1, 't', 1, 'frontend', 0);
@@ -275,9 +274,9 @@ async fn three_revisions_become_three_commits_and_later_ones_go_on_top() {
         .add_revision(&[("a.txt", b"two\n"), ("src/b.rs", b"fn b() {}\n")], None)
         .await;
 
-    // The commits every integration writes into `.fold/git` are the ones the push sends and an export copies.
+    // The commits every integration writes into the project's repository are the ones the push sends.
     project.committed().await;
-    let mirror = project.paths.fold_dir().join("git");
+    let mirror = project.paths.git_dir();
     let written = log(&mirror);
     let outcome = project.push().await.unwrap();
     let commits = log(&remote);
@@ -295,8 +294,8 @@ async fn three_revisions_become_three_commits_and_later_ones_go_on_top() {
             head: commits[0].parse().unwrap(),
         }
     );
-    // Newest first: r3, r2, r1.
-    let trees = ["a.txt\nsrc/b.rs\n", "a.txt\n", ""];
+    // Newest first: r3, r2, r1, which holds the ignore files init wrote.
+    let trees = ["a.txt\nsrc/b.rs\n", "a.txt\n", ".foldignore\n.gitignore\n"];
     for (index, commit) in commits.iter().enumerate() {
         let files = git(&remote, &["ls-tree", "-r", "--name-only", commit]);
         assert_eq!(files, trees[index]);
@@ -356,10 +355,14 @@ async fn three_revisions_become_three_commits_and_later_ones_go_on_top() {
     assert_eq!(after[2..], commits[..]);
     assert_eq!(project.map().lines().count(), 5);
     assert_eq!(project.pushed_events().await.len(), 2);
-    // The mirror holds what it fetched and wrote, with no working tree.
+    // The project's repository is the folder's own, and the folder shows main.
     assert_eq!(
         git(&mirror, &["rev-parse", "--is-bare-repository"]),
-        "true\n"
+        "false\n"
+    );
+    assert_eq!(
+        fs::read(project.paths.root().join("a.txt")).unwrap(),
+        b"four\n"
     );
 }
 
@@ -369,7 +372,7 @@ async fn a_push_to_a_new_local_path_creates_it_with_the_commits_of_main() {
     let project = host.plain_project().await;
     project.add_revision(&[("a.txt", b"one\n")], None).await;
     project.committed().await;
-    let written = log(&project.paths.fold_dir().join("git"));
+    let written = log(&project.paths.git_dir());
     let config = project.paths.config();
     let mut text = fs::read_to_string(&config).unwrap();
     let backup = host.path("new/backup.git");
@@ -430,7 +433,7 @@ async fn a_commit_from_another_clone_makes_the_push_remote_ahead() {
     project.add_revision(&[("a.txt", b"two\n")], None).await;
     assert_eq!(project.push().await, Err(Some(codes::REMOTE_AHEAD)));
     assert_eq!(log(&remote), remote_log);
-    // The commit of r3 is written in `.fold/git` all the same; only the remote refused it.
+    // The commit of r3 is written in the project's repository all the same; only the remote refused it.
     assert_eq!(project.map().lines().count(), 3);
     assert_eq!(project.pushed_events().await.len(), 1);
 }
@@ -553,7 +556,7 @@ async fn lost_map_lines_are_written_again_as_the_same_commits() {
 }
 
 #[tokio::test]
-async fn a_project_imported_from_git_pushes_on_top_of_the_imported_head() {
+async fn a_project_made_from_a_git_repository_pushes_on_top_of_its_head() {
     let host = Host::new();
     let work = host.path("work");
     fs::create_dir(&work).unwrap();
@@ -567,16 +570,9 @@ async fn a_project_imported_from_git_pushes_on_top_of_the_imported_head() {
     );
     let source = host.path("source.git");
     let head = log(&source)[0].clone();
-    let imported = init_project_from_git(
-        &host.paths,
-        &host.path("app"),
-        None,
-        &source,
-        Git::default(),
-        &host.clock,
-    )
-    .await
-    .unwrap();
+    let imported = init_project_from_git(&host.paths, &work, None, Git::default(), &host.clock)
+        .await
+        .unwrap();
     let project = Project::open(&imported.slug, &imported.root, &host.clock).await;
     project.set_remote(&source);
     assert_eq!(
@@ -602,62 +598,7 @@ async fn a_project_imported_from_git_pushes_on_top_of_the_imported_head() {
         git(&source, &["show", &format!("{}:README.md", commits[0])]),
         "# app v3\n"
     );
-}
-
-/// A project made with `--from-git` whose `.fold/git` lacks the imported commit: the commit comes from the source while the source holds it, and a clear refusal names the repair while it does not.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_imported_commit_missing_from_the_project_repository_is_fetched_from_its_source() {
-    let host = Host::new();
-    let work = host.path("work");
-    fs::create_dir(&work).unwrap();
-    git(&work, &["init", "--quiet", "--initial-branch=main"]);
-    fs::write(work.join("README.md"), b"# app\n").unwrap();
-    git(&work, &["add", "."]);
-    git(&work, &["commit", "--quiet", "-m", "start"]);
-    let head = git(&work, &["rev-parse", "HEAD"]).trim().to_owned();
-    let imported = init_project_from_git(
-        &host.paths,
-        &host.path("app"),
-        None,
-        &work,
-        Git::default(),
-        &host.clock,
-    )
-    .await
-    .unwrap();
-    let mirror = imported.root.join(".fold/git");
-    fs::remove_dir_all(&mirror).unwrap();
-    let moved = host.path("moved");
-    fs::rename(&work, &moved).unwrap();
-    let project = Project::open(&imported.slug, &imported.root, &host.clock).await;
-    project
-        .add_revision(&[("README.md", b"# app v2\n")], None)
-        .await;
-    let system_git = Git::default();
-    let commit = || {
-        commit_main(
-            &project.handle.store,
-            &project.paths,
-            &system_git,
-            project.handle.clock.as_ref(),
-        )
-    };
-    let refused = commit().await.unwrap_err();
-    assert_eq!(refused.code(), Some(codes::EXPORT_DIVERGED));
-    let ProjectError::Fold(refused) = refused else {
-        panic!("expected a refusal");
-    };
-    assert!(refused.hint().unwrap().contains("fld pull"));
-    assert_eq!(project.map(), format!("r1 {head}\n"));
-
-    fs::rename(&moved, &work).unwrap();
-    commit().await.unwrap();
-    assert_eq!(project.map().lines().count(), 2);
-    assert_eq!(
-        git(&mirror, &["rev-parse", "main^"]).trim(),
-        head,
-        "r2 continues the imported commit"
-    );
+    assert_eq!(fs::read(work.join("README.md")).unwrap(), b"# app v3\n");
 }
 
 #[tokio::test]
@@ -674,8 +615,12 @@ async fn a_remote_the_map_does_not_continue_is_export_diverged() {
         .unwrap()
         .replace(first.to_str().unwrap(), other.to_str().unwrap());
     fs::write(&config, text).unwrap();
-    // The mirror was made for `first` and still holds its commits, so the fetch from an empty `other` finds them there.
-    fs::remove_dir_all(project.paths.fold_dir().join("git")).unwrap();
+    // A new repository in the folder holds none of main's commits, so new commits have nothing to continue.
+    fs::remove_dir_all(project.paths.git_dir()).unwrap();
+    git(
+        project.paths.root(),
+        &["init", "--quiet", "--initial-branch=main"],
+    );
     assert_eq!(project.push().await, Err(Some(codes::EXPORT_DIVERGED)));
     assert!(log_is_empty(&other));
     assert_eq!(project.map().lines().count(), 1);

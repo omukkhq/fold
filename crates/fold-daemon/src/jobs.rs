@@ -1,19 +1,12 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use fold_core::checkpoint_policy::quiet_checkpoint_due;
 use fold_core::events::{EventType, types};
-use fold_core::object::ObjectHash;
-use fold_core::{
-    Actor, FoldError, NewEvent, ProjectPaths, RevisionId, Timestamp, WorkspaceId, codes,
-};
-use fold_store::{Store, StoreError, workspaces};
-use fold_vcs::git::Git;
-use fold_vcs::main_view;
-use fold_vcs::objects::ObjectStore;
-use fold_vcs::paths::WorkspaceError;
-use fold_vcs::platform::Capabilities;
+use fold_core::{Actor, NewEvent, Timestamp, WorkspaceId, codes};
+use fold_store::{StoreError, workspaces};
+use fold_vcs::git::{CommitId, Git};
 use serde_json::json;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio::sync::{Semaphore, broadcast, watch};
@@ -22,11 +15,11 @@ use tokio::task::{JoinHandle, JoinSet};
 use crate::daemon::AppState;
 use crate::projects::ProjectHandle;
 use crate::services::agents::AgentError;
-use crate::services::events::{BusMessage, EventBuffer, EventBus};
-use crate::services::projects::{self, RemoteContext};
+use crate::services::events::{BusMessage, EventBuffer};
+use crate::services::projects::{self, AttentionChange, ProjectAttention, RemoteContext};
 use crate::services::tasks::sweep_leases;
 use crate::services::workspaces::{
-    QuietCheckpoint, Reconciliation, WorkspaceService, capabilities, check_stalls,
+    QuietCheckpoint, Reconciliation, WorkspaceService, check_stalls,
 };
 
 /// How often a running daemon's jobs look at the clock.
@@ -580,198 +573,6 @@ async fn collect_all(state: &AppState) {
     }
 }
 
-/// The revisions waiting for `main/`. Queuing a revision older than the one waiting changes nothing, so several queued revisions collapse to the newest.
-#[derive(Debug, Clone)]
-pub struct MainQueue(Arc<watch::Sender<Option<RevisionId>>>);
-
-impl Default for MainQueue {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl MainQueue {
-    pub fn new() -> Self {
-        Self(Arc::new(watch::channel(None).0))
-    }
-
-    pub fn queue(&self, revision: RevisionId) {
-        self.0.send_if_modified(|newest| {
-            if newest.is_some_and(|newest| newest >= revision) {
-                return false;
-            }
-            *newest = Some(revision);
-            true
-        });
-    }
-}
-
-/// The running `main_materialiser` of one project. Dropping it stops the task; a rewrite already in its blocking work finishes first.
-#[derive(Debug)]
-pub struct MainMaterialiser {
-    queue: MainQueue,
-    task: JoinHandle<()>,
-    progress: watch::Receiver<JobProgress>,
-}
-
-impl MainMaterialiser {
-    pub fn queue(&self) -> &MainQueue {
-        &self.queue
-    }
-
-    /// A check is a queued revision the job looked at; a cycle is a rewrite that finished and moved the marker.
-    pub fn progress(&self) -> watch::Receiver<JobProgress> {
-        self.progress.clone()
-    }
-}
-
-impl Drop for MainMaterialiser {
-    fn drop(&mut self) {
-        self.task.abort();
-    }
-}
-
-/// Starts the `main_materialiser` of one project: it queues the revision of each committed `main.advanced` on `bus`, a proposal integration and a pull alike, and rewrites `main/` to the newest queued revision with [`main_view::update`]. At start it queues the current head, so a revision committed before a crash or a stop that never reached `main/` is written then. A project without a marker shows `r1`, which `fld init` wrote. A failed or cut-off rewrite is logged and leaves the marker on the revision `main/` last finished showing, with the rewrite it began noted, so the next queued revision, or the head at the next start, starts from what `main/` holds.
-pub fn spawn_main_materialiser(
-    store: Store,
-    bus: &EventBus,
-    paths: ProjectPaths,
-    caps: Arc<OnceLock<Capabilities>>,
-    queue: MainQueue,
-) -> MainMaterialiser {
-    let (progress, watcher) = watch::channel(JobProgress::default());
-    let run = MainRun {
-        store,
-        paths,
-        caps,
-        queue: queue.clone(),
-        progress,
-    };
-    let task = tokio::spawn(run.run(bus.subscribe()));
-    MainMaterialiser {
-        queue,
-        task,
-        progress: watcher,
-    }
-}
-
-struct MainRun {
-    store: Store,
-    paths: ProjectPaths,
-    caps: Arc<OnceLock<Capabilities>>,
-    queue: MainQueue,
-    progress: watch::Sender<JobProgress>,
-}
-
-impl MainRun {
-    async fn run(self, mut events: broadcast::Receiver<BusMessage>) {
-        let mut queued = self.queue.0.subscribe();
-        queued.mark_changed();
-        self.queue_head().await;
-        loop {
-            tokio::select! {
-                received = events.recv() => match received {
-                    Ok(BusMessage::Durable(event)) if event.event_type == types::MAIN_ADVANCED => {
-                        if let Some(revision) = event.revision {
-                            self.queue.queue(revision);
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(RecvError::Lagged(_)) => self.queue_head().await,
-                    Err(RecvError::Closed) => return,
-                },
-                changed = queued.changed() => {
-                    if changed.is_err() {
-                        return;
-                    }
-                    let target = *queued.borrow_and_update();
-                    if let Some(target) = target {
-                        self.materialise(target).await;
-                    }
-                }
-            }
-        }
-    }
-
-    async fn queue_head(&self) {
-        match workspaces::head(self.store.read()).await {
-            Ok(Some(head)) => self.queue.queue(head.number),
-            Ok(None) => {}
-            Err(error) => tracing::warn!(
-                code = error.code().unwrap_or(codes::INTERNAL_ERROR),
-                "main view could not read the head; the next integration tries again"
-            ),
-        }
-    }
-
-    async fn materialise(&self, target: RevisionId) {
-        let rewrote = self.rewrite(target).await;
-        self.progress.send_modify(|seen| {
-            seen.checks += 1;
-            seen.cycles += u64::from(rewrote.as_ref().is_ok_and(|done| *done));
-        });
-        if let Err(code) = rewrote {
-            tracing::warn!(revision = %target, code, "main view rewrite failed; the next integration tries again");
-        }
-    }
-
-    /// False when `main/` already shows `target` or a later revision and no rewrite stopped part-way.
-    async fn rewrite(&self, target: RevisionId) -> Result<bool, &'static str> {
-        let fold_dir = self.paths.fold_dir();
-        let marker = tokio::task::spawn_blocking(move || main_view::read_state(&fold_dir))
-            .await
-            .map_err(|_| codes::INTERNAL_ERROR)?
-            .map_err(|error| FoldError::from(WorkspaceError::from(error)).code())?;
-        let shown = marker.shown.or_else(|| RevisionId::from_number(1));
-        if marker.rewriting.is_none() && shown.is_some_and(|shown| shown >= target) {
-            return Ok(false);
-        }
-        let from = match shown {
-            Some(shown) => match workspaces::get_by_number(self.store.read(), shown).await {
-                Ok(row) => Some(row.tree_hash),
-                Err(StoreError::RevisionNotFound(_)) => None,
-                Err(error) => return Err(error.code().unwrap_or(codes::INTERNAL_ERROR)),
-            },
-            None => None,
-        };
-        let to = workspaces::get_by_number(self.store.read(), target)
-            .await
-            .map_err(|error| error.code().unwrap_or(codes::INTERNAL_ERROR))?
-            .tree_hash;
-        let (paths, caps) = (self.paths.clone(), Arc::clone(&self.caps));
-        tokio::task::spawn_blocking(move || rewrite_main(&paths, &caps, from, to, target))
-            .await
-            .map_err(|_| codes::INTERNAL_ERROR)?
-            .map_err(|error| error.code())?;
-        tracing::info!(revision = %target, "main view rewritten");
-        Ok(true)
-    }
-}
-
-fn rewrite_main(
-    paths: &ProjectPaths,
-    caps: &OnceLock<Capabilities>,
-    from: Option<ObjectHash>,
-    to: ObjectHash,
-    target: RevisionId,
-) -> Result<(), FoldError> {
-    let caps = capabilities(caps, paths)?;
-    let objects = ObjectStore::open(&paths.fold_dir()).map_err(FoldError::from)?;
-    let done = main_view::update(
-        &objects,
-        &paths.main_dir(),
-        &paths.fold_dir(),
-        from.as_ref(),
-        &to,
-        target,
-        caps,
-    )?;
-    if !done.degraded.is_empty() {
-        tracing::warn!(revision = %target, links = done.degraded.len(), "main view wrote symlinks as regular files; the platform cannot create symlinks");
-    }
-    Ok(())
-}
-
 /// The Git job of one project. Dropping it stops the task; a push already started finishes in its own task.
 #[derive(Debug)]
 pub struct AutoCommit(JoinHandle<()>);
@@ -782,7 +583,7 @@ impl Drop for AutoCommit {
     }
 }
 
-/// Starts `auto_commit` for one project. It writes the commit of every revision that has none into `.fold/git` once at the start, which catches up an integration a stopped daemon never committed, and again after every committed integration of either kind, which the bus carries only after its commit. After an integration it then runs the push of `fld push` as `fold` to each remote whose `push_on_integrate` is true, read at that moment. A commit covers every revision so far, so the integrations that arrive while one runs need one more run at most. A failed commit appends `git.commit_failed` and a failed push `remote.push_failed`, each in its own transaction, and logs the project and the code only; the integration stands either way.
+/// Starts `auto_commit` for one project. It writes the commit of every revision that has none into the project's repository, and brings the project folder to it, once at the start, which catches up an integration a stopped daemon never committed, and again after every committed integration of either kind, which the bus carries only after its commit. After an integration it then runs the push of `fld push` as `fold` to each remote whose `push_on_integrate` is true, read at that moment. A commit covers every revision so far, so the integrations that arrive while one runs need one more run at most. A failed commit appends `git.commit_failed` and a failed push `remote.push_failed`, each in its own transaction, and logs the project and the code only; the integration stands either way.
 pub fn auto_commit(context: RemoteContext, git: Git) -> AutoCommit {
     let receiver = context.bus.subscribe();
     AutoCommit(tokio::spawn(run_auto_commit(context, git, receiver)))
@@ -813,12 +614,21 @@ async fn run_auto_commit(
     }
 }
 
-/// Whether every revision has its commit now.
+/// Whether every revision has its commit now. What the run found that needs a person goes to the project's Git attention, and each change of it appends an event in its own transaction: `git.outside_commits` with the branch and its tip, `git.uncommitted_changes` with the branch, or `git.attention_cleared` with the kind that ended. The first run after the project opens compares with nothing found, so it appends the events of what it finds again.
 async fn commit_after_integration(context: &RemoteContext, git: &Git) -> bool {
     let committed =
         projects::commit_main(&context.store, &context.paths, git, context.clock.as_ref()).await;
-    let Err(error) = committed else {
-        return true;
+    let error = match committed {
+        Ok(committed) => {
+            let change = context
+                .git_attention
+                .set(committed.outside.is_some(), committed.uncommitted);
+            if change != AttentionChange::default() {
+                record_attention(context, &change, committed.outside.as_ref()).await;
+            }
+            return true;
+        }
+        Err(error) => error,
     };
     let code = projects::error_code(&error);
     tracing::warn!(project = %context.slug, code, "the Git commit of main failed");
@@ -835,6 +645,39 @@ async fn commit_after_integration(context: &RemoteContext, git: &Git) -> bool {
         });
     record_failure(context, event, "git.commit_failed").await;
     false
+}
+
+async fn record_attention(
+    context: &RemoteContext,
+    change: &AttentionChange,
+    tip: Option<&CommitId>,
+) {
+    let branch = projects::load_config(&context.paths)
+        .await
+        .map(|config| config.git.branch)
+        .unwrap_or_default();
+    let actor = Actor::System.event_actor();
+    for kind in &change.raised {
+        let event = match kind {
+            ProjectAttention::OutsideCommits => {
+                tracing::warn!(project = %context.slug, "the Git branch of main has commits fold did not write; the project folder waits for fld pull");
+                NewEvent::new(types::GIT_OUTSIDE_COMMITS, actor.clone()).and_then(|event| {
+                    event.data(json!({"branch": branch, "commit": tip.map(CommitId::as_str)}))
+                })
+            }
+            ProjectAttention::UncommittedChanges => {
+                tracing::info!(project = %context.slug, "the project folder has changes that are not committed; it follows main once they are committed or stashed");
+                NewEvent::new(types::GIT_UNCOMMITTED_CHANGES, actor.clone())
+                    .and_then(|event| event.data(json!({"branch": branch})))
+            }
+        };
+        record_failure(context, event, "git attention").await;
+    }
+    for kind in &change.cleared {
+        let event = NewEvent::new(types::GIT_ATTENTION_CLEARED, actor.clone())
+            .and_then(|event| event.data(json!({"branch": branch, "kind": kind.as_str()})));
+        record_failure(context, event, "git.attention_cleared").await;
+    }
 }
 
 /// Pushes to every remote whose `push_on_integrate` is true, one after the other.
@@ -864,7 +707,7 @@ async fn push_after_integration(context: &RemoteContext, git: &Git) {
     }
 }
 
-/// Appends a failure event in its own transaction and publishes it.
+/// Appends a failure or attention event in its own transaction and publishes it.
 async fn record_failure(
     context: &RemoteContext,
     event: Result<NewEvent, fold_core::EventError>,

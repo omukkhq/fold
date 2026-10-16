@@ -29,25 +29,12 @@ const WAIT: Duration = Duration::from_secs(20);
 const SLUG: &str = "crash";
 const HUMAN: &str = "tanim";
 
-/// `fld init crash` with one file in `r1`, then, in this process, the agent `frontend` takes `T-1`, adds `src/new.rs` in its workspace and opens `P-1`.
+/// `fld init` in a folder `crash` with one file, which becomes `r1`, then, in this process, the agent `frontend` takes `T-1`, adds `src/new.rs` in its workspace and opens `P-1`.
 async fn project(host: &Host) -> ProjectPaths {
-    let source = host.dir.path().join("source");
-    std::fs::create_dir_all(source.join("src")).unwrap();
-    std::fs::write(source.join("src/lib.rs"), "pub fn x() {}\n").unwrap();
     let root = host.dir.path().join(SLUG);
-    let init = host
-        .fold(
-            &[
-                "init",
-                root.to_str().unwrap(),
-                "--from",
-                source.to_str().unwrap(),
-            ],
-            host.dir.path(),
-        )
-        .output()
-        .await
-        .unwrap();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("src/lib.rs"), "pub fn x() {}\n").unwrap();
+    let init = host.fold(&["init"], &root).output().await.unwrap();
     assert!(init.status.success(), "{init:?}");
     let paths = ProjectPaths::new(root.canonicalize().unwrap());
 
@@ -76,7 +63,7 @@ async fn project(host: &Host) -> ProjectPaths {
     let workspaces =
         WorkspaceService::new(store.clone(), bus.clone(), clock.clone(), paths.clone(), 5);
     workspaces.create_workspace(&author, task).await.unwrap();
-    std::fs::write(paths.root().join("ws/t-1/src/new.rs"), "pub fn z() {}\n").unwrap();
+    std::fs::write(paths.ws_dir().join("t-1/src/new.rs"), "pub fn z() {}\n").unwrap();
     ReviewService::new(
         store.clone(),
         bus,

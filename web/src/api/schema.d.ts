@@ -1446,7 +1446,7 @@ export interface components {
             workspace: string | null;
         };
         /** @enum {string} */
-        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed";
+        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared";
         /**
          * @description `needs`: this task needs the other task. `needed_by`: the other task needs this one.
          * @enum {string}
@@ -1787,6 +1787,11 @@ export interface components {
             name: string;
             presence: components["schemas"]["PresenceState"];
         };
+        /**
+         * @description Why the project, rather than one of its tasks, needs a person. The daemon decides every kind. `outside_commits`: the Git branch of main has commits fold did not write, so the project folder stops following main until a human runs `fld pull`. `uncommitted_changes`: the project folder has changes that are not committed, so it follows main again once the human commits or stashes them.
+         * @enum {string}
+         */
+        ProjectAttentionKind: "outside_commits" | "uncommitted_changes";
         ProjectList: {
             projects: components["schemas"]["ProjectSummary"][];
         };
@@ -1794,6 +1799,8 @@ export interface components {
         ProjectOverview: {
             /** @description Agents with a connected session, by name. */
             agents: components["schemas"]["ProjectAgent"][];
+            /** @description What needs a person in the project as a whole, beside the attention items of its tasks; empty when nothing does. */
+            attention: components["schemas"]["ProjectAttentionKind"][];
             /** @description Unarchived tasks per board column. */
             counts: components["schemas"]["BoardCounts"];
             /**
@@ -2037,7 +2044,7 @@ export interface components {
              * @example r17
              */
             head: string | null;
-            /** @description The project's read-only copy of main. */
+            /** @description The project folder, whose files follow main through its own Git repository. */
             main_path: string;
             /** @description The newest 10 revisions, newest first. */
             recent: components["schemas"]["RevisionView"][];
@@ -2201,7 +2208,7 @@ export interface components {
              * @example r17
              */
             base: string;
-            /** @description Relative to the project root, such as `ws/review-rb-3`. */
+            /** @description Relative to the project root, such as `.fold/ws/review-rb-3`. */
             path: string;
             /** @example ws-12 */
             workspace: string;
@@ -2293,7 +2300,7 @@ export interface components {
              * @description UTC milliseconds.
              */
             created_at: number;
-            /** @description Relative to the project root, such as `ws/review-p-4`. */
+            /** @description Relative to the project root, such as `.fold/ws/review-p-4`. */
             path: string;
             /** @example P-4 */
             proposal: string;
@@ -2373,7 +2380,7 @@ export interface components {
         RevisionView: {
             /** @description The agent whose proposal was integrated, or the human who pulled. */
             author: string | null;
-            /** @description The Git commit the revision became in the project's repository `.fold/git`; null until it is written, just after the integration. */
+            /** @description The Git commit the revision became in the project folder's repository `.git`; null until it is written, just after the integration. */
             commit: string | null;
             /**
              * Format: int64
@@ -2517,7 +2524,7 @@ export interface components {
             at: number;
             /** @description A worker or `human:<name>`. */
             by: string;
-            /** @description The Git commit the revision became in the project's repository `.fold/git`; null until it is written, just after the integration. */
+            /** @description The Git commit the revision became in the project folder's repository `.git`; null until it is written, just after the integration. */
             commit: string | null;
             /** @example P-3 */
             proposal: string;

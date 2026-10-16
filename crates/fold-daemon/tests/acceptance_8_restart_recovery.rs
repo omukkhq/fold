@@ -5,21 +5,19 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::common::acceptance::{AGENTS, Harness, WAIT};
+use crate::common::acceptance::{AGENTS, Harness, WAIT, read_tree};
 use crate::common::invariants::assert_store_consistent;
 use crate::common::sse::Sse;
 use fold_core::events::types;
 use fold_core::object::ObjectKind;
 use fold_core::tree::{EntryKind, Tree, flatten};
-use fold_core::{FoldError, RevisionId, WorkspaceId};
+use fold_core::{FoldError, WorkspaceId};
 use fold_daemon::http::events::EventEnvelope;
 use fold_daemon::jobs::{JobProgress, spawn_auto_checkpoints, spawn_lease_sweeper};
 use fold_store::Store;
 use fold_store::testing::eventually;
 use fold_store::workspaces;
-use fold_vcs::main_view;
 use fold_vcs::objects::ObjectStore;
-use fold_vcs::platform::Capabilities;
 use serde_json::json;
 use sqlx::AssertSqlSafe;
 use tokio::sync::watch;
@@ -46,7 +44,6 @@ struct Scene {
 impl Scene {
     async fn build() -> Self {
         let harness = Harness::start().await;
-        materialise_main(&harness).await;
         fs::write(
             harness.project.paths().config(),
             "auto_checkpoint_quiet_seconds = 1\n",
@@ -155,28 +152,6 @@ impl Scene {
     }
 }
 
-/// Writes `r1` into `main/` and the marker the way `fld init` does, so the test can hold `main/` to the head.
-async fn materialise_main(harness: &Harness) {
-    let paths = harness.project.paths().clone();
-    let tree = head_tree(&harness.handle.store).await;
-    tokio::task::spawn_blocking(move || {
-        let objects = ObjectStore::open(&paths.fold_dir()).unwrap();
-        let caps = Capabilities::probe(&paths.fold_dir()).unwrap();
-        main_view::update(
-            &objects,
-            &paths.main_dir(),
-            &paths.fold_dir(),
-            None,
-            &tree,
-            RevisionId::from_number(1).unwrap(),
-            caps,
-        )
-        .unwrap();
-    })
-    .await
-    .unwrap();
-}
-
 async fn head_tree(store: &Store) -> fold_core::object::ObjectHash {
     workspaces::head(store.read())
         .await
@@ -204,24 +179,6 @@ async fn head_files(harness: &Harness) -> BTreeMap<String, Vec<u8>> {
             (String::from_utf8(path).unwrap(), blob.payload.to_vec())
         })
         .collect()
-}
-
-/// Every file under `dir` by relative path, with its bytes.
-fn read_tree(dir: &Path) -> BTreeMap<String, Vec<u8>> {
-    fn walk(root: &Path, dir: &Path, into: &mut BTreeMap<String, Vec<u8>>) {
-        for entry in fs::read_dir(dir).unwrap() {
-            let path = entry.unwrap().path();
-            if path.is_dir() {
-                walk(root, &path, into);
-            } else {
-                let relative = path.strip_prefix(root).unwrap().to_string_lossy();
-                into.insert(relative.into_owned(), fs::read(&path).unwrap());
-            }
-        }
-    }
-    let mut files = BTreeMap::new();
-    walk(dir, dir, &mut files);
-    files
 }
 
 /// Waits until the live state of `workspace` lists `count` changed files, and returns their paths.
@@ -545,17 +502,10 @@ async fn restart_recovery(stop: Stop) {
     );
     drop(sse);
 
-    // Step 7: main/ shows the head and the project is consistent.
+    // Step 7: the project folder shows the head and the project is consistent.
     assert_eq!(
-        read_tree(&harness.project.paths().main_dir()),
+        read_tree(harness.project.paths().root()),
         head_files(harness).await
-    );
-    assert_eq!(
-        main_view::read_state(&harness.project.paths().fold_dir()).unwrap(),
-        main_view::MarkerState {
-            shown: RevisionId::from_number(1),
-            rewriting: None,
-        }
     );
     assert_store_consistent(&store, harness.project.paths()).await;
 

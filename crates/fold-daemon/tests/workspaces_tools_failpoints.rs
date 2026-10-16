@@ -114,7 +114,7 @@ impl Project {
     }
 
     fn lib(&self) -> std::path::PathBuf {
-        self.root.join("ws/t-1/lib.txt")
+        self.root.join(".fold/ws/t-1/lib.txt")
     }
 
     /// Moves `main` to a new revision where `lib.txt` holds `lib`.
@@ -238,7 +238,7 @@ async fn a_sync_stopped_after_its_writes_ends_like_an_uninterrupted_one() {
         .sync_workspace(&actor, ws(1))
         .await
         .unwrap();
-    let expected_files = files(&fixture.root.join("ws/t-1"));
+    let expected_files = files(&fixture.root.join(".fold/ws/t-1"));
 
     let mut stopped = TestProject::new().await;
     let fixture = Project::over(&stopped, stopped.store(), None);
@@ -279,7 +279,7 @@ async fn a_sync_stopped_after_its_writes_ends_like_an_uninterrupted_one() {
         .unwrap();
     assert_eq!(retried.base, expected.base);
     assert_eq!(retried.conflicted, expected.conflicted);
-    assert_eq!(files(&fixture.root.join("ws/t-1")), expected_files);
+    assert_eq!(files(&fixture.root.join(".fold/ws/t-1")), expected_files);
     let merged = fs::read_to_string(fixture.lib()).unwrap();
     assert_eq!(merged.matches("<<<<<<<").count(), 1, "{merged}");
     assert_eq!(fixture.event_seq("checkpoint.restored").await.len(), 1);
@@ -310,7 +310,7 @@ async fn a_restore_stopped_after_its_writes_finishes_when_it_runs_again() {
         .sync_workspace(&actor, ws(1))
         .await
         .unwrap();
-    let synced_files = files(&fixture.root.join("ws/t-1"));
+    let synced_files = files(&fixture.root.join(".fold/ws/t-1"));
     let r1 = RevisionId::from_number(1).unwrap();
     let r2 = RevisionId::from_number(2).unwrap();
 
@@ -369,7 +369,7 @@ async fn a_restore_stopped_after_its_writes_finishes_when_it_runs_again() {
         .await
         .unwrap();
     assert_eq!(undone.base, r2);
-    assert_eq!(files(&fixture.root.join("ws/t-1")), synced_files);
+    assert_eq!(files(&fixture.root.join(".fold/ws/t-1")), synced_files);
     scenario.teardown();
 }
 
@@ -603,7 +603,7 @@ async fn a_takeover_waits_for_the_old_owners_sync_and_later_ones_are_refused() {
     let adopted = fixture.event_seq("workspace.adopted").await;
     assert!(synced[0] < adopted[0]);
 
-    let after = files(&fixture.root.join("ws/t-1"));
+    let after = files(&fixture.root.join(".fold/ws/t-1"));
     fixture.move_main(b"later\n").await;
     let refused = fixture
         .workspaces
@@ -611,7 +611,7 @@ async fn a_takeover_waits_for_the_old_owners_sync_and_later_ones_are_refused() {
         .await
         .unwrap_err();
     assert_eq!(refused.code(), Some("not_workspace_owner"));
-    assert_eq!(files(&fixture.root.join("ws/t-1")), after);
+    assert_eq!(files(&fixture.root.join(".fold/ws/t-1")), after);
     scenario.teardown();
 }
 
@@ -671,14 +671,14 @@ async fn an_adoption_waits_for_the_old_owners_restore_and_later_ones_are_refused
     assert!(claimed.adopted);
     assert_eq!(fs::read(fixture.lib()).unwrap(), MINE);
 
-    let after = files(&fixture.root.join("ws/t-1"));
+    let after = files(&fixture.root.join(".fold/ws/t-1"));
     let refused = fixture
         .workspaces
         .restore_checkpoint(&frontend, first.id)
         .await
         .unwrap_err();
     assert_eq!(refused.code(), Some("not_workspace_owner"));
-    assert_eq!(files(&fixture.root.join("ws/t-1")), after);
+    assert_eq!(files(&fixture.root.join(".fold/ws/t-1")), after);
     scenario.teardown();
 }
 
@@ -729,7 +729,7 @@ async fn an_archive_waits_for_a_running_sync_and_later_ones_are_refused() {
         .unwrap();
     assert_eq!(row.state, workspaces::WorkspaceState::Archived);
 
-    let after = files(&fixture.root.join("ws/t-1"));
+    let after = files(&fixture.root.join(".fold/ws/t-1"));
     fixture.move_main(b"later\n").await;
     let refused = fixture
         .workspaces
@@ -737,7 +737,7 @@ async fn an_archive_waits_for_a_running_sync_and_later_ones_are_refused() {
         .await
         .unwrap_err();
     assert_eq!(refused.code(), Some("workspace_not_active"));
-    assert_eq!(files(&fixture.root.join("ws/t-1")), after);
+    assert_eq!(files(&fixture.root.join(".fold/ws/t-1")), after);
     scenario.teardown();
 }
 

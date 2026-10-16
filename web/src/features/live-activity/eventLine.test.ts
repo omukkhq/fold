@@ -248,6 +248,24 @@ describe("eventLine", () => {
     expect(eventLine(event("git.commit_failed")).text).toBe(
       "writing the Git commit of r17 failed",
     );
+    expect(eventLine(event("git.outside_commits")).text).toBe(
+      "the Git branch has commits fold did not write; run fld pull",
+    );
+    expect(eventLine(event("git.uncommitted_changes")).text).toBe(
+      "the project folder has changes that are not committed; commit or stash them",
+    );
+    expect(
+      eventLine(
+        event("git.attention_cleared", { data: { kind: "outside_commits" } }),
+      ).text,
+    ).toBe("the Git branch has no commits fold did not write");
+    expect(
+      eventLine(
+        event("git.attention_cleared", {
+          data: { kind: "uncommitted_changes" },
+        }),
+      ).text,
+    ).toBe("the project folder follows main again");
   });
 
   it("marks integrations, main moves and request approvals as emphasised, review approvals by their verdict", () => {

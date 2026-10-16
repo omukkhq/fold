@@ -1,9 +1,12 @@
 use std::path::Path;
 
 use fold_core::{Clock, HostPaths, ManualClock, ProjectConfig, ProjectPaths};
-use fold_daemon::services::projects::{ProjectError, init_project, init_project_from, load_config};
+use fold_daemon::services::projects::{
+    ProjectError, init_project, init_project_from_git, load_config,
+};
 use fold_store::projects;
 use fold_store::{Store, StoreError};
+use fold_vcs::git::Git;
 use tempfile::TempDir;
 
 #[cfg(test)]
@@ -64,23 +67,35 @@ async fn init_creates_the_layout_and_registers_the_project() {
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     entries.sort();
-    assert_eq!(entries, [".fold", "main"]);
+    assert_eq!(entries, [".fold", ".foldignore", ".git", ".gitignore"]);
+    assert_eq!(
+        std::fs::read_link(project.root.join(".gitignore")).unwrap(),
+        Path::new(".foldignore")
+    );
     let mut inside: Vec<_> = std::fs::read_dir(paths.fold_dir())
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     inside.retain(|name| !name.starts_with("fold.db-"));
-    inside.sort();
-    assert_eq!(
-        inside,
-        ["config.toml", "fold.db", "main-materialised", "objects"]
+    for name in ["config.toml", "fold.db", "objects"] {
+        assert!(inside.iter().any(|found| found == name), "{inside:?}");
+    }
+    assert!(
+        !inside
+            .iter()
+            .any(|found| found == "main-materialised" || found == "git")
     );
     assert_eq!(project.revision.to_string(), "r1");
-    assert_eq!(
-        fold_vcs::main_view::read_marker(&paths.fold_dir()).unwrap(),
-        Some(project.revision)
+    // The folder's own repository holds r1's commit with the ignore files init wrote, and keeps `.fold/` out.
+    assert_eq!(git(&project.root, &["log", "--format=%s"]), "fold r1\n");
+    assert!(
+        std::fs::read_to_string(paths.git_dir().join("info/exclude"))
+            .unwrap()
+            .lines()
+            .any(|line| line == "/.fold/")
     );
-    assert_eq!(project.imported.files, 0);
+    assert_eq!(git(&project.root, &["status", "--porcelain"]), "");
+    assert_eq!(project.imported.files, 2);
 
     let registry = host.registry().await;
     let rows = projects::list_projects(registry.read()).await.unwrap();
@@ -251,61 +266,95 @@ async fn a_file_in_place_of_the_directory_is_an_io_error() {
     assert!(Path::new(&file).is_file());
 }
 
+#[cfg(test)]
+fn git(dir: &Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.com")
+        .env("GIT_COMMITTER_NAME", "Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.com")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
 #[tokio::test]
-async fn init_from_records_the_source_as_r1_and_fills_main() {
+async fn init_records_the_folder_files_as_r1_and_keeps_its_gitignore() {
     let host = Host::new();
-    let source = host.root("source");
-    std::fs::create_dir_all(source.join("src")).unwrap();
-    std::fs::write(source.join("src/lib.rs"), "pub fn x() {}\n").unwrap();
     let root = host.root("app");
-    let project = init_project_from(&host.paths, &root, None, Some(&source), &host.clock)
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::create_dir_all(root.join("target")).unwrap();
+    std::fs::write(root.join("src/lib.rs"), "pub fn x() {}\n").unwrap();
+    std::fs::write(root.join("target/out"), "built").unwrap();
+    std::fs::write(root.join(".gitignore"), "target/\n").unwrap();
+    let project = init_project(&host.paths, &root, None, &host.clock)
         .await
         .unwrap();
     assert_eq!(project.revision.to_string(), "r1");
-    assert_eq!(project.imported.files, 1);
-    assert_eq!(project.imported.bytes, 14);
-    let main = root.join("main/src/lib.rs");
-    assert_eq!(std::fs::read(&main).unwrap(), b"pub fn x() {}\n");
-    assert!(std::fs::metadata(&main).unwrap().permissions().readonly());
+    assert_eq!(project.imported.files, 2);
+    assert_eq!(project.git_commit, None);
+    assert_eq!(
+        std::fs::read_to_string(root.join(".gitignore")).unwrap(),
+        "target/\n"
+    );
+    assert!(!root.join(".foldignore").exists());
+    assert_eq!(
+        git(&root, &["ls-tree", "-r", "--name-only", "HEAD"]),
+        ".gitignore\nsrc/lib.rs\n"
+    );
+    assert_eq!(git(&root, &["status", "--porcelain"]), "");
 }
 
 #[tokio::test]
-async fn a_main_dir_that_init_did_not_make_survives_a_failed_init() {
+async fn init_refuses_a_git_repository_and_from_git_refuses_anything_else() {
     let host = Host::new();
-    let root = host.root("app");
-    std::fs::create_dir_all(root.join("main")).unwrap();
-    std::fs::write(root.join("main/notes.txt"), "mine").unwrap();
-    let error = init_project(&host.paths, &root, None, &host.clock)
+    let repo = host.root("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "--quiet", "--initial-branch=main"]);
+    let error = init_project(&host.paths, &repo, None, &host.clock)
         .await
         .unwrap_err();
-    assert_eq!(code(&error), Some("target_not_empty"));
-    assert!(!root.join(".fold").exists());
-    assert_eq!(
-        std::fs::read_to_string(root.join("main/notes.txt")).unwrap(),
-        "mine"
-    );
-    let registry = host.registry().await;
-    assert!(
-        projects::list_projects(registry.read())
-            .await
-            .unwrap()
-            .is_empty()
-    );
-    registry.close().await.unwrap();
-}
+    assert_eq!(code(&error), Some("invalid_request"));
+    let ProjectError::Fold(error) = error else {
+        panic!("a fold error");
+    };
+    assert!(error.hint().unwrap().contains("fld init --from-git"));
+    assert!(!repo.join(".fold").exists());
 
-#[tokio::test]
-async fn a_source_that_is_not_a_directory_is_an_invalid_request() {
-    let host = Host::new();
-    let file = host.root("file.txt");
-    std::fs::write(&file, "x").unwrap();
-    let root = host.root("app");
-    for source in [file, host.root("absent")] {
-        let error = init_project_from(&host.paths, &root, None, Some(&source), &host.clock)
+    // A `.git` that is no repository is refused too, and kept.
+    let broken = host.root("broken");
+    std::fs::create_dir_all(broken.join(".git")).unwrap();
+    let error = init_project(&host.paths, &broken, None, &host.clock)
+        .await
+        .unwrap_err();
+    assert_eq!(code(&error), Some("invalid_request"));
+    assert!(broken.join(".git").is_dir() && !broken.join(".fold").exists());
+
+    let plain = host.root("plain");
+    std::fs::create_dir_all(&plain).unwrap();
+    for folder in [plain.clone(), host.root("absent")] {
+        let error = init_project_from_git(&host.paths, &folder, None, Git::default(), &host.clock)
             .await
             .unwrap_err();
-        assert_eq!(code(&error), Some("invalid_request"));
-        assert!(!root.exists());
+        let ProjectError::Fold(error) = error else {
+            panic!("a fold error");
+        };
+        assert_eq!(error.code(), "invalid_request");
+        assert!(error.hint().unwrap().contains("fld init"));
+        assert!(!folder.join(".fold").exists());
     }
 }
 
@@ -328,76 +377,29 @@ async fn refuse_registrations(host: &Host, refuse: bool) {
 }
 
 #[tokio::test]
-async fn a_failure_after_main_is_filled_puts_main_back_and_a_rerun_succeeds() {
+async fn a_failure_keeps_the_folder_files_and_a_rerun_succeeds() {
     let host = Host::new();
-    let source = host.root("source");
-    std::fs::create_dir_all(&source).unwrap();
-    std::fs::write(source.join("a.txt"), "a").unwrap();
-    let made = host.root("made");
-    let kept = host.root("kept");
-    std::fs::create_dir_all(kept.join("main")).unwrap();
+    let root = host.root("app");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("a.txt"), "a").unwrap();
     refuse_registrations(&host, true).await;
-    for root in [&made, &kept] {
-        let error = init_project_from(&host.paths, root, None, Some(&source), &host.clock)
-            .await
-            .unwrap_err();
-        assert!(matches!(error, ProjectError::Store(_)), "{error:?}");
-        assert!(!root.join(".fold").exists());
-    }
-    assert!(!made.join("main").exists());
-    assert_eq!(std::fs::read_dir(kept.join("main")).unwrap().count(), 0);
-
-    refuse_registrations(&host, false).await;
-    for root in [&made, &kept] {
-        init_project_from(&host.paths, root, None, Some(&source), &host.clock)
-            .await
-            .unwrap();
-        assert_eq!(std::fs::read(root.join("main/a.txt")).unwrap(), b"a");
-    }
-}
-
-#[tokio::test]
-async fn a_project_directory_at_or_below_the_source_is_refused_before_anything_is_created() {
-    let host = Host::new();
-    let source = host.root("source");
-    std::fs::create_dir_all(&source).unwrap();
-    std::fs::write(source.join("a.txt"), "a").unwrap();
-    let inside = source.join("absent/../app/deeper");
-    for root in [source.clone(), inside, source.join("./app")] {
-        let error = init_project_from(&host.paths, &root, None, Some(&source), &host.clock)
-            .await
-            .unwrap_err();
-        assert_eq!(code(&error), Some("invalid_request"), "{root:?}");
-    }
-    let entries: Vec<_> = std::fs::read_dir(&source)
+    let error = init_project(&host.paths, &root, None, &host.clock)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, ProjectError::Store(_)), "{error:?}");
+    let entries: Vec<_> = std::fs::read_dir(&root)
         .unwrap()
         .map(|entry| entry.unwrap().file_name())
         .collect();
     assert_eq!(entries, ["a.txt"]);
 
-    let beside = host.root("absent/../beside");
-    init_project_from(&host.paths, &beside, None, Some(&source), &host.clock)
+    refuse_registrations(&host, false).await;
+    init_project(&host.paths, &root, None, &host.clock)
         .await
         .unwrap();
-}
-
-#[tokio::test]
-async fn a_symlink_or_a_file_in_place_of_main_is_refused() {
-    let host = Host::new();
-    let elsewhere = host.root("elsewhere");
-    std::fs::create_dir_all(&elsewhere).unwrap();
-    let linked = host.root("linked");
-    std::fs::create_dir_all(&linked).unwrap();
-    std::os::unix::fs::symlink(&elsewhere, linked.join("main")).unwrap();
-    let file = host.root("file");
-    std::fs::create_dir_all(&file).unwrap();
-    std::fs::write(file.join("main"), "x").unwrap();
-    for root in [&linked, &file] {
-        let error = init_project(&host.paths, root, None, &host.clock)
-            .await
-            .unwrap_err();
-        assert_eq!(code(&error), Some("target_not_empty"));
-        assert!(!root.join(".fold").exists());
-    }
-    assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
+    assert_eq!(std::fs::read(root.join("a.txt")).unwrap(), b"a");
+    assert_eq!(
+        git(&root, &["ls-tree", "-r", "--name-only", "HEAD"]),
+        ".foldignore\n.gitignore\na.txt\n"
+    );
 }

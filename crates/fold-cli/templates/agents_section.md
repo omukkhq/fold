@@ -1,6 +1,6 @@
 ## fold
 
-This directory is a fold project. It is fold's folder, not the repository. The integrated code is in `main/`, and each task workspace is under `ws/`.
+This directory is a fold project. Its files are fold main, the integrated code, and its own Git repository gets one commit for each integration. fold keeps its data in `.fold/`, and each task workspace is under `.fold/ws/`.
 
 Start every session here with `FOLD_AGENT=<name> claude --name <name>`. Your fold identity and your Claude Code name are then the same.
 
@@ -18,8 +18,8 @@ In text for people (messages, review comments, evidence, task descriptions), wri
 
 Rules for files:
 
-- Edit files only inside your own workspace under `ws/`.
-- Build and test only in a workspace or in a review checkout. Never build or test in `main/`.
-- `main/` is read-only. It changes only when a proposal is integrated.
+- Edit files only inside your own workspace under `.fold/ws/`.
+- Build and test only in a workspace or in a review checkout. Never build or test in the project folder itself.
+- Never edit the files of the project folder. They change only when a proposal is integrated.
 
-The code has its own rules in the `AGENTS.md` or `CLAUDE.md` of the repository. They are in `main/` and in each workspace. Claude Code loads them when you work there, and you follow them for the code.
+The code has its own rules in the `AGENTS.md` or `CLAUDE.md` of the repository. They are in the project folder and in each workspace. Claude Code loads them when you work there, and you follow them for the code.

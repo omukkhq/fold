@@ -91,7 +91,7 @@ async fn fold_gc_prints_the_counts_of_the_project_it_runs_in() {
         .unwrap()
         .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000))
         .unwrap();
-    let inside = project.join("ws").join("t-1");
+    let inside = project.join(".fold/ws").join("t-1");
     fs::create_dir_all(&inside).unwrap();
     let socket = sandbox.socket();
     let socket = socket.to_str().unwrap();

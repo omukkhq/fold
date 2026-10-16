@@ -283,7 +283,7 @@ async fn create_takes_a_free_claim_writes_the_head_and_moves_the_task() {
 
     assert_eq!(view.id, ws(1));
     assert_eq!(view.task, t(1));
-    assert_eq!(view.path, "ws/t-1");
+    assert_eq!(view.path, ".fold/ws/t-1");
     assert_eq!(view.base, RevisionId::from_number(1).unwrap());
     assert_eq!(view.kind, WorkspaceKind::Task);
     assert_eq!(view.state, WorkspaceState::Active);
@@ -292,7 +292,7 @@ async fn create_takes_a_free_claim_writes_the_head_and_moves_the_task() {
     assert_eq!(view.last_activity_at, Some(fx.project.now()));
     assert_eq!(view.closed_at, None);
 
-    let dir = fx.dir("ws/t-1");
+    let dir = fx.dir(".fold/ws/t-1");
     assert_eq!(std::fs::read(dir.join("src/lib.rs")).unwrap(), LIB);
     assert_eq!(std::fs::read(dir.join("README.md")).unwrap(), README);
     assert_eq!(fx.ws_entries(), vec!["t-1"]);
@@ -310,7 +310,7 @@ async fn create_takes_a_free_claim_writes_the_head_and_moves_the_task() {
     assert_eq!(created.revision, RevisionId::from_number(1));
     assert_eq!(
         created.data,
-        json!({"path": "ws/t-1", "worker": "frontend"})
+        json!({"path": ".fold/ws/t-1", "worker": "frontend"})
     );
     assert_eq!(
         appended[2].data,
@@ -391,7 +391,7 @@ async fn a_second_create_returns_workspace_exists() {
     assert_eq!(error.code(), "workspace_exists");
     assert_eq!(
         details(&error),
-        json!({"workspace": "ws-1", "path": "ws/t-1"})
+        json!({"workspace": "ws-1", "path": ".fold/ws/t-1"})
     );
     assert!(error.hint().unwrap().contains("get_workspace"));
     assert_eq!(fx.ws_entries(), vec!["t-1"]);
@@ -416,7 +416,7 @@ async fn unknown_and_archived_tasks_are_refused() {
 async fn abandon_returns_the_task_to_todo_and_leaves_the_directory() {
     let fx = Fixture::new().await;
     fx.create(&fx.frontend, 1).await.unwrap();
-    let edited = fx.dir("ws/t-1/notes.txt");
+    let edited = fx.dir(".fold/ws/t-1/notes.txt");
     std::fs::write(&edited, b"draft").unwrap();
     let before = fx.last_seq().await;
     fx.project
@@ -429,7 +429,10 @@ async fn abandon_returns_the_task_to_todo_and_leaves_the_directory() {
     assert_eq!(view.closed_at, Some(fx.project.now()));
     assert_eq!(fx.status(1).await, (TaskStatus::Todo, false));
     assert_eq!(std::fs::read(&edited).unwrap(), b"draft");
-    assert_eq!(std::fs::read(fx.dir("ws/t-1/src/lib.rs")).unwrap(), LIB);
+    assert_eq!(
+        std::fs::read(fx.dir(".fold/ws/t-1/src/lib.rs")).unwrap(),
+        LIB
+    );
     let claim = claims::unreleased_for_task(fx.project.store().read(), t(1))
         .await
         .unwrap()
@@ -596,14 +599,14 @@ async fn one_worker_creating_twice_at_once_yields_one_workspace() {
     assert_eq!(fx.count("SELECT COUNT(*) FROM workspaces").await, 1);
 }
 
-/// Both creates rename before either transaction runs, so the one that renamed second can commit first and keep `ws/t-1-2`. The loser removes only its own directory.
+/// Both creates rename before either transaction runs, so the one that renamed second can commit first and keep `.fold/ws/t-1-2`. The loser removes only its own directory.
 #[cfg(test)]
 fn assert_only_the_winner_is_on_disk(fx: &Fixture, won: &WorkspaceView) {
     assert!(
-        ["ws/t-1", "ws/t-1-2"].contains(&won.path.as_str()),
+        [".fold/ws/t-1", ".fold/ws/t-1-2"].contains(&won.path.as_str()),
         "{won:?}"
     );
-    let name = won.path.trim_start_matches("ws/");
+    let name = won.path.trim_start_matches(".fold/ws/");
     assert_eq!(fx.ws_entries(), vec![name]);
     assert_eq!(
         std::fs::read(fx.dir(&won.path).join("src/lib.rs")).unwrap(),
@@ -618,8 +621,11 @@ async fn a_later_workspace_of_the_task_takes_the_next_name() {
     fx.abandon(&fx.frontend, 1).await.unwrap();
     let second = fx.create(&fx.frontend, 1).await.unwrap();
     assert_eq!(second.id, ws(2));
-    assert_eq!(second.path, "ws/t-1-2");
-    assert_eq!(std::fs::read(fx.dir("ws/t-1-2/src/lib.rs")).unwrap(), LIB);
+    assert_eq!(second.path, ".fold/ws/t-1-2");
+    assert_eq!(
+        std::fs::read(fx.dir(".fold/ws/t-1-2/src/lib.rs")).unwrap(),
+        LIB
+    );
     assert_eq!(fx.ws_entries(), vec!["t-1", "t-1-2"]);
     assert_eq!(
         fx.workspaces.get(WorkspaceRef::Task(t(1))).await.unwrap(),
@@ -628,7 +634,7 @@ async fn a_later_workspace_of_the_task_takes_the_next_name() {
 
     fx.abandon(&fx.frontend, 2).await.unwrap();
     let third = fx.create(&fx.frontend, 1).await.unwrap();
-    assert_eq!(third.path, "ws/t-1-3");
+    assert_eq!(third.path, ".fold/ws/t-1-3");
     fx.abandon(&fx.frontend, 3).await.unwrap();
     let latest = fx.workspaces.get(WorkspaceRef::Task(t(1))).await.unwrap();
     assert_eq!(
@@ -653,30 +659,33 @@ async fn a_later_workspace_of_the_task_takes_the_next_name() {
 #[tokio::test]
 async fn a_name_held_on_disk_is_skipped_and_left_alone() {
     let fx = Fixture::new().await;
-    std::fs::create_dir_all(fx.dir("ws/t-1-2")).unwrap();
-    std::fs::write(fx.dir("ws/t-1"), b"a file").unwrap();
-    std::fs::write(fx.dir("ws/t-1-2/keep"), b"kept").unwrap();
+    std::fs::create_dir_all(fx.dir(".fold/ws/t-1-2")).unwrap();
+    std::fs::write(fx.dir(".fold/ws/t-1"), b"a file").unwrap();
+    std::fs::write(fx.dir(".fold/ws/t-1-2/keep"), b"kept").unwrap();
     let view = fx.create(&fx.frontend, 1).await.unwrap();
-    assert_eq!(view.path, "ws/t-1-3");
-    assert_eq!(std::fs::read(fx.dir("ws/t-1")).unwrap(), b"a file");
-    assert_eq!(std::fs::read(fx.dir("ws/t-1-2/keep")).unwrap(), b"kept");
+    assert_eq!(view.path, ".fold/ws/t-1-3");
+    assert_eq!(std::fs::read(fx.dir(".fold/ws/t-1")).unwrap(), b"a file");
+    assert_eq!(
+        std::fs::read(fx.dir(".fold/ws/t-1-2/keep")).unwrap(),
+        b"kept"
+    );
     assert_eq!(fx.ws_entries(), vec!["t-1", "t-1-2", "t-1-3"]);
 }
 
 #[tokio::test]
 async fn a_name_a_closed_workspace_holds_is_skipped_after_its_directory_is_gone() {
     let fx = Fixture::new().await;
-    std::fs::create_dir_all(fx.dir("ws/t-1")).unwrap();
-    std::fs::write(fx.dir("ws/t-1/left"), b"left").unwrap();
+    std::fs::create_dir_all(fx.dir(".fold/ws/t-1")).unwrap();
+    std::fs::write(fx.dir(".fold/ws/t-1/left"), b"left").unwrap();
     let first = fx.create(&fx.frontend, 1).await.unwrap();
-    assert_eq!(first.path, "ws/t-1-2");
+    assert_eq!(first.path, ".fold/ws/t-1-2");
     fx.abandon(&fx.frontend, 1).await.unwrap();
-    std::fs::remove_dir_all(fx.dir("ws/t-1-2")).unwrap();
+    std::fs::remove_dir_all(fx.dir(".fold/ws/t-1-2")).unwrap();
 
     let second = fx.create(&fx.frontend, 1).await.unwrap();
-    assert_eq!(second.path, "ws/t-1-3");
+    assert_eq!(second.path, ".fold/ws/t-1-3");
     assert_eq!(fx.ws_entries(), vec!["t-1", "t-1-3"]);
-    assert_eq!(std::fs::read(fx.dir("ws/t-1/left")).unwrap(), b"left");
+    assert_eq!(std::fs::read(fx.dir(".fold/ws/t-1/left")).unwrap(), b"left");
 }
 
 #[tokio::test]
@@ -804,7 +813,7 @@ async fn archive_closes_a_live_workspace_once_and_keeps_the_directory() {
         .unwrap();
     assert_eq!(view.state, WorkspaceState::Archived);
     assert_eq!(view.closed_at, Some(now));
-    assert!(fx.dir("ws/t-1/src/lib.rs").is_file());
+    assert!(fx.dir(".fold/ws/t-1/src/lib.rs").is_file());
     assert_eq!(ArchiveReason::TaskArchived.as_str(), "task_archived");
 }
 
@@ -824,7 +833,7 @@ async fn archiving_the_task_archives_its_workspace() {
     assert_eq!(archived[0].data, json!({"reason": "task_archived"}));
     let view = fx.workspaces.get(WorkspaceRef::Task(t(1))).await.unwrap();
     assert_eq!(view.state, WorkspaceState::Archived);
-    assert!(Path::new(&fx.dir("ws/t-1")).is_dir());
+    assert!(Path::new(&fx.dir(".fold/ws/t-1")).is_dir());
 }
 
 #[tokio::test]

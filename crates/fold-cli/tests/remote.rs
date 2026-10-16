@@ -172,13 +172,14 @@ fn remote_set_writes_a_named_section_keeps_the_rest_and_configures_the_mirror() 
     let template = fs::read_to_string(&config_path).unwrap();
     let first = sandbox.remote("first.git");
 
-    // Run from inside the project with a relative path, which is stored absolute.
+    // Run from a folder inside the project with a relative path, which is stored absolute.
+    fs::create_dir(project.join("sub")).unwrap();
     let output = sandbox
         .command(
             &system_path(),
             &["remote", "set", "origin", "../../first.git", "main"],
         )
-        .current_dir(project.join("main"))
+        .current_dir(project.join("sub"))
         .output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");
@@ -193,10 +194,10 @@ fn remote_set_writes_a_named_section_keeps_the_rest_and_configures_the_mirror() 
     assert_eq!(config.remotes["origin"].url, canonical.to_str().unwrap());
     assert_eq!(config.remotes["origin"].branch, "main");
     assert!(!config.remotes["origin"].push_on_integrate);
-    let mirror = project.join(".fold/git");
+    let mirror = project.join(".git");
     assert_eq!(
         git(&mirror, &["rev-parse", "--is-bare-repository"]),
-        "true\n"
+        "false\n"
     );
     assert_eq!(
         git(&mirror, &["remote", "get-url", "origin"]),

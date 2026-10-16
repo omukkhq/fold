@@ -116,7 +116,7 @@ async fn the_repository_state_names_the_head_and_the_recent_revisions() {
     assert_eq!(state["head"], "r3");
     assert_eq!(
         state["main_path"],
-        project.paths().main_dir().to_string_lossy().as_ref()
+        project.paths().root().to_string_lossy().as_ref()
     );
     assert_eq!(
         state["recent"],

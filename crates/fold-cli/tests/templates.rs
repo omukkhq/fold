@@ -399,7 +399,7 @@ fn the_agents_section_points_to_the_skill_and_the_repository_rules() {
     assert!(AGENTS_SECTION.starts_with("## fold\n"));
     assert!(AGENTS_SECTION.contains("FOLD_AGENT=<name> claude --name <name>"));
     assert!(AGENTS_SECTION.contains("`fold` skill"));
-    assert!(AGENTS_SECTION.contains("`ws/`"));
+    assert!(AGENTS_SECTION.contains("`.fold/ws/`"));
     assert!(AGENTS_SECTION.contains("`AGENTS.md` or `CLAUDE.md`"));
 }
 
@@ -415,9 +415,9 @@ fn neither_template_uses_the_banned_word_for_a_proposal() {
 }
 
 #[test]
-fn both_templates_name_main_as_read_only() {
-    assert!(AGENTS_SECTION.contains("`main/` is read-only"));
-    assert!(SKILL.contains("Never edit `main/`"));
+fn both_templates_keep_agents_out_of_the_project_folder() {
+    assert!(AGENTS_SECTION.contains("Never edit the files of the project folder"));
+    assert!(SKILL.contains("Never edit the files of the project folder"));
 }
 
 #[test]

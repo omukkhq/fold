@@ -525,7 +525,7 @@ pub struct TaskIntegration {
     pub by: String,
     /// UTC milliseconds.
     pub at: i64,
-    /// The Git commit the revision became in the project's repository `.fold/git`; null until it is written, just after the integration.
+    /// The Git commit the revision became in the project folder's repository `.git`; null until it is written, just after the integration.
     #[schema(required = true)]
     pub commit: Option<String>,
 }

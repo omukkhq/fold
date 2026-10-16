@@ -30,7 +30,7 @@ async fn a_task_with_a_workspace_names_it_and_its_rule() {
         "Calculated: workspace ws-1 is open, no proposal yet"
     );
     let info = view.workspace_info.unwrap();
-    assert_eq!(info.directory, "ws/t-1");
+    assert_eq!(info.directory, ".fold/ws/t-1");
     assert_eq!(
         (info.base.to_string(), info.main.to_string()),
         ("r1".into(), "r1".into())

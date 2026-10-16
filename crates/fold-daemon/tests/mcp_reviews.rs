@@ -374,9 +374,13 @@ async fn create_review_checkout_gives_the_path_and_version() {
     ok(&review, "claim_review", json!({"id": "P-1"})).await;
     let checkout = ok(&review, "create_review_checkout", json!({"id": "P-1"})).await;
     assert_eq!(checkout["version"], "v1");
-    assert_eq!(checkout["path"], "ws/review-p-1");
+    assert_eq!(checkout["path"], ".fold/ws/review-p-1");
     assert!(checkout["workspace"].as_str().unwrap().starts_with("ws-"));
-    let copied = fx.project.paths().root().join("ws/review-p-1/src/lib.rs");
+    let copied = fx
+        .project
+        .paths()
+        .root()
+        .join(".fold/ws/review-p-1/src/lib.rs");
     assert_eq!(std::fs::read_to_string(copied).unwrap(), "pub fn y() {}\n");
 }
 

@@ -70,9 +70,6 @@ mod inbox_probe;
 mod integration;
 mod lease_sweeper;
 mod live_state;
-mod main_materialiser;
-#[cfg(feature = "failpoints")]
-mod main_view_failpoints;
 mod mcp_activity;
 mod mcp_footer;
 mod mcp_handshake;
@@ -88,6 +85,7 @@ mod mcp_workspaces;
 mod notifications;
 mod openapi;
 mod presence_events;
+mod project_git;
 mod projects;
 mod proposals;
 mod pull;

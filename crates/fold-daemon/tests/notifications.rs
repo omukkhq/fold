@@ -3,7 +3,7 @@
 use crate::reviews_support;
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::reviews_support::{Fixture, LIB, README, agent, by, human, p, t};
@@ -13,15 +13,12 @@ use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
 use fold_core::{
     Actor, Address, AgentName, MessageBody, RevisionId, TaskDescription, TaskId, TaskTitle,
 };
-use fold_daemon::jobs::{MainQueue, spawn_main_materialiser};
 use fold_daemon::push::{self, PushTargets, PushTask, PushToken};
 use fold_daemon::services::messages::{MessageService, SendMessage};
 use fold_daemon::services::reviews::{IntegrationOutcome, PullIntegration, PullOutcome};
 use fold_daemon::services::tasks::CreateTask;
 use fold_store::workspaces;
-use fold_vcs::main_view;
 use fold_vcs::objects::ObjectStore;
-use fold_vcs::platform::Capabilities;
 use fold_vcs::revision_store::write_initial_tree;
 use tempfile::TempDir;
 use tokio::io::AsyncReadExt;
@@ -387,31 +384,10 @@ async fn human_approval_pushes_the_review_claim_holder_else_every_integrator() {
 }
 
 #[tokio::test]
-async fn pull_integration_updates_main_dir_and_sends_no_message_or_push() {
+async fn pull_integration_sends_no_message_or_push() {
     let n = Notified::new().await;
     let paths = n.fx.project.paths().clone();
     let objects = ObjectStore::open(&paths.fold_dir()).unwrap();
-    let head = workspaces::get_by_number(n.fx.project.store().read(), r(1))
-        .await
-        .unwrap();
-    let caps = Capabilities::probe(&paths.fold_dir()).unwrap();
-    main_view::update(
-        &objects,
-        &paths.main_dir(),
-        &paths.fold_dir(),
-        None,
-        &head.tree_hash,
-        r(1),
-        caps,
-    )
-    .unwrap();
-    let _job = spawn_main_materialiser(
-        n.fx.project.store().clone(),
-        &n.fx.bus,
-        paths.clone(),
-        Arc::new(OnceLock::new()),
-        MainQueue::new(),
-    );
     let mut inboxes: Vec<Inbox> = ["frontend", "backend", "review"]
         .into_iter()
         .map(|agent| n.inbox(agent))
@@ -444,8 +420,6 @@ async fn pull_integration_updates_main_dir_and_sends_no_message_or_push() {
     let outcome = n.fx.reviews.integrate_pull(&human(), pull).await.unwrap();
 
     assert_eq!(outcome, PullOutcome::Succeeded { revision: r(2) });
-    let notes = paths.main_dir().join("NOTES.md");
-    until(|| std::fs::read_to_string(&notes).is_ok_and(|text| text == "notes\n")).await;
     assert_eq!(n.fx.count("SELECT COUNT(*) FROM messages").await, 0);
     // Push keeps event order, so a later message's notice arriving first means the pull sent none.
     n.send(&human(), &["frontend", "backend", "review"]).await;

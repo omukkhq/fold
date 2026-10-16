@@ -8,7 +8,7 @@ use fold_cli::daemon_client::{self, ClientConfig, ClientError, DaemonClient, Res
 use fold_core::{FoldError, HostPaths, codes};
 use fold_daemon::SystemClock;
 use fold_daemon::services::projects::{
-    ProjectError, init_project_from, init_project_from_git, root_for_dir_on_host,
+    FolderFiles, ProjectError, init_new_project, init_project_from_git, root_for_dir_on_host,
 };
 use fold_vcs::git::Git;
 use hyper::Method;
@@ -22,22 +22,19 @@ const ANSWER_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Args, Debug, Clone)]
 pub struct InitArgs {
-    /// A new directory for the project, which fold creates; without it the project is the working directory. With --refresh, a directory of the project, by default the working directory
+    /// A new directory for the project, which fold creates; without it the project is the working directory. With --from-git, an existing repository. With --refresh, a directory of the project, by default the working directory
     pub(crate) dir: Option<PathBuf>,
     /// The project name; defaults to the directory name
     #[arg(long)]
     pub(crate) name: Option<String>,
-    /// A directory whose files become the first revision, honouring its .gitignore and .foldignore files; the directory is only read
-    #[arg(long, value_name = "PATH")]
-    pub(crate) from: Option<PathBuf>,
-    /// A Git repository whose committed tree at HEAD becomes the first revision, without history or ignore rules; the repository is only read
-    #[arg(long, value_name = "REPO", conflicts_with = "from")]
-    pub(crate) from_git: Option<PathBuf>,
+    /// Make a Git repository the project: its folder stays main, its history stays, and the commit at HEAD becomes the first revision. The tree must be clean, with a branch checked out
+    #[arg(long)]
+    pub(crate) from_git: bool,
     /// Unix socket of the running daemon; overrides daemon.toml (default $XDG_RUNTIME_DIR/fold/fold.sock)
     #[arg(long)]
     pub(crate) socket: Option<PathBuf>,
     /// Rewrite the Claude Code files of an existing project, keeping every entry fold does not own, instead of creating a project
-    #[arg(long, conflicts_with_all = ["name", "from", "from_git", "socket"])]
+    #[arg(long, conflicts_with_all = ["name", "from_git", "socket"])]
     pub(crate) refresh: bool,
 }
 
@@ -73,7 +70,7 @@ impl InitError {
     /// The hint that names the next step, when a refusal carries one.
     pub fn hint(&self) -> Option<&str> {
         match self {
-            Self::Refused(error) => error.hint(),
+            Self::Refused(error) | Self::Project(ProjectError::Fold(error)) => error.hint(),
             _ => None,
         }
     }
@@ -100,6 +97,9 @@ pub fn run(args: &InitArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), Ini
         };
         return initialise(&args, dirs, out).map(|_| ());
     };
+    if args.from_git {
+        return initialise(args, dirs, out).map(|_| ());
+    }
     if std::fs::symlink_metadata(dir).is_ok() {
         return Err(InitError::Refused(dir_exists(dir)));
     }
@@ -137,11 +137,11 @@ pub(crate) fn initialise(
         .map_err(InitError::Runtime)?;
     let name = args.name.as_deref();
     let project = runtime.block_on(async {
-        match &args.from_git {
-            Some(repo) => {
-                init_project_from_git(&host, dir, name, repo, Git::default(), &SystemClock).await
-            }
-            None => init_project_from(&host, dir, name, args.from.as_deref(), &SystemClock).await,
+        if args.from_git {
+            init_project_from_git(&host, dir, name, Git::default(), &SystemClock).await
+        } else {
+            let files: FolderFiles = Box::new(|root: &Path| new_claude_files(root));
+            init_new_project(&host, dir, name, Git::default(), Some(files), &SystemClock).await
         }
     })?;
     let root = project.root.display();
@@ -154,15 +154,13 @@ pub(crate) fn initialise(
             out,
             "finished an init that had stopped before it registered the project",
         )?;
-        if args.from.is_some() || args.from_git.is_some() {
-            output::line(
-                out,
-                &format!(
-                    "{} keeps the files that the stopped init imported; the source given now is not read",
-                    project.revision
-                ),
-            )?;
-        }
+        output::line(
+            out,
+            &format!(
+                "{} keeps the files that the stopped init recorded",
+                project.revision
+            ),
+        )?;
     }
     let imported = &project.imported;
     output::line(
@@ -217,6 +215,35 @@ fn refresh(dir: Option<&Path>, dirs: &Dirs, out: &mut impl Write) -> Result<(), 
         &format!("refreshed the Claude Code files at {}", root.display()),
     )?;
     Ok(())
+}
+
+/// Writes the Claude Code files into a new project's folder before init records it, so they are part of `r1`, and returns the files and folders that did not exist before.
+fn new_claude_files(root: &Path) -> Result<Vec<PathBuf>, FoldError> {
+    let written = [
+        claude_files::MCP_FILE,
+        claude_files::AGENTS_FILE,
+        ".claude",
+        claude_files::SETTINGS_FILE,
+        ".claude/skills",
+        ".claude/skills/fold",
+        claude_files::SKILL_FILE,
+    ];
+    let mut created: Vec<PathBuf> = Vec::new();
+    for path in written.map(|relative| root.join(relative)) {
+        if std::fs::symlink_metadata(&path).is_err()
+            && !created.iter().any(|made| path.starts_with(made))
+        {
+            created.push(path);
+        }
+    }
+    match claude_files::write(root) {
+        Ok(()) => Ok(created),
+        Err(ClaudeFileError::Malformed(error)) => Err(error),
+        Err(ClaudeFileError::Io { source, .. }) => Err(FoldError::new(
+            codes::WORKSPACE_IO,
+            format!("cannot write the Claude Code files: {}", source.kind()),
+        )),
+    }
 }
 
 /// The warnings never stop the command: the files are written first.
@@ -308,32 +335,36 @@ mod tests {
             "Scratch",
             "--socket",
             "/tmp/f.sock",
-            "--from",
-            "../src",
         ])
         .unwrap();
-        assert_eq!(parsed.args.from.as_deref(), Some(Path::new("../src")));
         assert_eq!(parsed.args.dir.as_deref(), Some(Path::new("~/scratch")));
         assert_eq!(parsed.args.name.as_deref(), Some("Scratch"));
         assert_eq!(
             parsed.args.socket.as_deref(),
             Some(Path::new("/tmp/f.sock"))
         );
-        let bare = Wrapper::try_parse_from(["fld", "dir"]).unwrap();
-        assert!(bare.args.name.is_none() && bare.args.socket.is_none() && bare.args.from.is_none());
-        assert!(bare.args.from_git.is_none());
-        let git = Wrapper::try_parse_from(["fld", "dir", "--from-git", "../repo"]).unwrap();
-        assert_eq!(git.args.from_git.as_deref(), Some(Path::new("../repo")));
-        assert!(Wrapper::try_parse_from(["fld", "dir", "--from", "a", "--from-git", "b"]).is_err());
-        assert!(Wrapper::try_parse_from(["fld"]).unwrap().args.dir.is_none());
-        let refresh = Wrapper::try_parse_from(["fld", "--refresh"]).unwrap();
+        let bare = Wrapper::try_parse_from(["fold", "dir"]).unwrap();
+        assert!(bare.args.name.is_none() && bare.args.socket.is_none() && !bare.args.from_git);
+        let git = Wrapper::try_parse_from(["fold", "--from-git"]).unwrap();
+        assert!(git.args.from_git && git.args.dir.is_none());
+        assert!(Wrapper::try_parse_from(["fold", "dir", "--from", "a"]).is_err());
+        assert!(Wrapper::try_parse_from(["fold", "dir", "--from-git", "b"]).is_err());
+        assert!(
+            Wrapper::try_parse_from(["fold"])
+                .unwrap()
+                .args
+                .dir
+                .is_none()
+        );
+        let refresh = Wrapper::try_parse_from(["fold", "--refresh"]).unwrap();
         assert!(refresh.args.refresh && refresh.args.dir.is_none());
-        for flag in ["--name", "--from", "--from-git", "--socket"] {
+        for flag in ["--name", "--socket"] {
             assert!(
                 Wrapper::try_parse_from(["fld", "dir", "--refresh", flag, "x"]).is_err(),
                 "{flag}"
             );
         }
+        assert!(Wrapper::try_parse_from(["fold", "--refresh", "--from-git"]).is_err());
     }
 
     fn reply(status: u16, body: serde_json::Value) -> Result<Response, ClientError> {
@@ -407,8 +438,7 @@ mod tests {
         let args = InitArgs {
             dir: Some(dir.path().join("p")),
             name: None,
-            from: None,
-            from_git: None,
+            from_git: false,
             socket: None,
             refresh: false,
         };
@@ -426,8 +456,7 @@ mod tests {
         let args = InitArgs {
             dir: Some(dir.path().to_owned()),
             name: None,
-            from: None,
-            from_git: None,
+            from_git: false,
             socket: None,
             refresh: false,
         };

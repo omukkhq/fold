@@ -184,7 +184,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             CREATE_WORKSPACE,
-            "Create the task workspace for a task: a copy of main under ws/ where you make your changes. It claims the task for your worker and moves it to In Progress. A workspace left by a worker that released the task is adopted instead, with its files as they are, and adopted is true.",
+            "Create the task workspace for a task: a copy of main under .fold/ws/ where you make your changes. It claims the task for your worker and moves it to In Progress. A workspace left by a worker that released the task is adopted instead, with its files as they are, and adopted is true.",
             schema_for_type::<CreateWorkspaceInput>(),
         ),
         Tool::new(

@@ -68,6 +68,10 @@ impl Fixture {
         let objects = ObjectStore::open(&project.paths().fold_dir()).unwrap();
         let mut tree = FlatTree::new();
         for (path, content) in [("src/lib.rs", LIB), ("README.md", README)] {
+            // The project folder is main, so it holds r1's files.
+            let file = project.paths().root().join(path);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, content).unwrap();
             let hash = objects.write(ObjectKind::Blob, content).unwrap();
             tree.insert(
                 path.as_bytes().to_vec(),
@@ -201,7 +205,7 @@ impl Fixture {
     }
 
     pub fn task_dir(&self) -> PathBuf {
-        self.project.paths().root().join("ws/t-1")
+        self.project.paths().root().join(".fold/ws/t-1")
     }
 
     pub fn write(&self, path: &str, content: &str) {

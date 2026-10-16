@@ -131,7 +131,7 @@ async fn a_create_stopped_after_the_rename_leaves_no_row() {
         WorkspaceError::Fold(fold) => assert_eq!(fold.code(), "failpoint"),
         other => panic!("expected the failpoint, got {other:?}"),
     }
-    let orphan = project.paths().root().join("ws/t-1");
+    let orphan = project.paths().root().join(".fold/ws/t-1");
     assert!(orphan.join("a.txt").is_file());
 
     project.reopen().await;
@@ -157,7 +157,7 @@ async fn a_create_stopped_after_the_rename_leaves_no_row() {
         .await
         .unwrap()
         .workspace;
-    assert_eq!(view.path, "ws/t-1-2");
+    assert_eq!(view.path, ".fold/ws/t-1-2");
     assert!(orphan.join("a.txt").is_file());
     let task = restarted.tasks.get(t(1)).await.unwrap();
     assert_eq!(task.status, TaskStatus::InProgress);

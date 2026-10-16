@@ -65,11 +65,11 @@ A worker builds one task at a time.
 
 1. Call `get_ready_tasks` and choose a task. Read it with `get_task(id)`.
 2. Call `claim_task(id)`. If another agent holds the task, you get `already_claimed`: call `get_ready_tasks` again.
-3. Call `create_workspace(task)`. Do all the work inside the workspace under `ws/`. Read it with `get_workspace(ws or task)`. See your changed files with `get_workspace_changes(ws)`.
+3. Call `create_workspace(task)`. Do all the work inside the workspace under `.fold/ws/`. Read it with `get_workspace(ws or task)`. See your changed files with `get_workspace_changes(ws)`.
 4. Build and test only in the workspace. Read the repository's own `AGENTS.md` or `CLAUDE.md` there.
 5. Save your progress with `record_checkpoint(ws, label?)`. Read the checkpoints with `list_checkpoints(ws)`, and go back with `restore_checkpoint(ck)`. If `restore_checkpoint` fails with `unrecorded_changes`, call it again: the new call records your latest edits in its safety checkpoint. fold also records checkpoints by itself after a quiet time.
 6. When the task is finished, call `record_changes(ws, message)`. The message says what changed and why.
-7. If `main/` moved, call `sync_workspace(ws)`. Resolve each conflict in the workspace files: remove the conflict markers, and remove each `<path>.fold-main` file after you merge it. Then record again. `record_changes` refuses with `unresolved_conflicts` while a conflict stays. Read `get_repository_state`, `get_revision(r)` and `compare_revisions(from, to, path?)` to see what changed on main.
+7. If main moved, call `sync_workspace(ws)`. Resolve each conflict in the workspace files: remove the conflict markers, and remove each `<path>.fold-main` file after you merge it. Then record again. `record_changes` refuses with `unresolved_conflicts` while a conflict stays. Read `get_repository_state`, `get_revision(r)` and `compare_revisions(from, to, path?)` to see what changed on main.
 8. Open the proposal with `create_proposal(task, title, evidence?)`. The title becomes the subject of the Git commit that fold writes when the proposal is integrated, so write it as a short imperative subject of at most 72 characters, such as "Add the login endpoint". The evidence says how you tested the change. The first version is `v1`.
 9. Read the review with `get_review_comments(id, version?)`. Fix the points in the workspace, record again, and call `update_proposal(id, evidence?)`. This opens `v2`, which starts without approvals.
 10. Call `close_proposal(id, reason)` to withdraw a proposal. `abandon_workspace(ws, reason)` refuses with `invalid_request` and the reason `proposal_open` while a proposal for the task is open: call `close_proposal` first.
@@ -81,21 +81,21 @@ A reviewer reads proposals, asks for changes and integrates the proposals that a
 
 1. Call `list_proposals(state?, unclaimed?)` or wait with `wait_for_events` for `proposal.opened`.
 2. Call `claim_review(id)`. It also takes over a review claim that is stale. Read the proposal with `get_proposal(id, version?)`.
-3. Call `create_review_checkout(id)`. It gives you a checkout of the version. Build and test there, never in `main/`.
+3. Call `create_review_checkout(id)`. It gives you a checkout of the version. Build and test there, never in the project folder itself.
 4. Call `submit_review(id, verdict, body, comments[]?)`. The verdict is one of `comment`, `request_changes`, `approve` or `reject`. A comment has `path`, `start_line`, `end_line`, `side` and `body`. A review with no content fails with `empty_review`.
 5. An approval belongs to the version you reviewed. A new version starts without approvals, so review it again.
-6. fold integrates a ready proposal by itself when the project integrates automatically, which is the default: an integrator approved it, nothing asks for changes, a marked task has a human approval after the agent approval, and every prerequisite task is Done. In a project that does not integrate automatically, call `integrate_proposal(id, expected_version?)` when the proposal is ready. Pass the version you reviewed as `expected_version`: if a newer version exists, the call fails with `stale_version`. fold checks the approvals, the human review mark and the prerequisite tasks before it moves `main/`.
+6. fold integrates a ready proposal by itself when the project integrates automatically, which is the default: an integrator approved it, nothing asks for changes, a marked task has a human approval after the agent approval, and every prerequisite task is Done. In a project that does not integrate automatically, call `integrate_proposal(id, expected_version?)` when the proposal is ready. Pass the version you reviewed as `expected_version`: if a newer version exists, the call fails with `stale_version`. fold checks the approvals, the human review mark and the prerequisite tasks before it moves main.
 7. Call `release_review(id)` when you stop the review.
 
 ## Mentions
 
-In all text you write for people, `#` names a fold item, `@name` names a person and `@path` names a file. The text is in messages, review comments, proposal evidence, task descriptions and requests. `#T-12` is a task, `#P-3` a proposal, `#RQ-2` a request, `#r17` a revision, `#ws-9` a workspace, `#ck-88` a checkpoint and `#m-210` a message. `@tanim` is a human and `@frontend` or `@frontend/ui` is an agent or a worker: fold reads `@x` as a person when `x` is the name of a known human or agent. `@web/src/board.ts` is a file in `main/` and `@ws-9:web/src/board.ts` a file in a workspace. `@web/src/` with a `/` at the end is a folder. If a file has the same name as a person, write `@./name` for the file. The web interface shows each mention as a link or a name. fold keeps the text as it is written and checks no mention. Write a mention only for an item, person or file that exists, and write it with no space after the mark.
+In all text you write for people, `#` names a fold item, `@name` names a person and `@path` names a file. The text is in messages, review comments, proposal evidence, task descriptions and requests. `#T-12` is a task, `#P-3` a proposal, `#RQ-2` a request, `#r17` a revision, `#ws-9` a workspace, `#ck-88` a checkpoint and `#m-210` a message. `@tanim` is a human and `@frontend` or `@frontend/ui` is an agent or a worker: fold reads `@x` as a person when `x` is the name of a known human or agent. `@web/src/board.ts` is a file of main, in the project folder, and `@ws-9:web/src/board.ts` a file in a workspace. `@web/src/` with a `/` at the end is a folder. If a file has the same name as a person, write `@./name` for the file. The web interface shows each mention as a link or a name. fold keeps the text as it is written and checks no mention. Write a mention only for an item, person or file that exists, and write it with no space after the mark.
 
 ## Requests
 
 A request asks for work in plain words. Anyone can create one: a human in the web interface, or any worker with `create_request(body, attachments?, ws?)`. Give only the message. Do not give a title or a kind, because the orchestrator writes them. To attach files such as a log or a screenshot, give their paths inside your own workspace as `attachments` and that workspace as `ws`. A request holds at most 10 files of at most 10 MiB each.
 
-In the text of a request, a draft note and a comment, write mentions as described in Mentions. Read each item with its tool, such as `get_task` or `get_proposal`, and read each file in `main/` or in its workspace.
+In the text of a request, a draft note and a comment, write mentions as described in Mentions. Read each item with its tool, such as `get_task` or `get_proposal`, and read each file in the project folder or in its workspace.
 
 An orchestrator (the main worker of an agent) turns a request into cards:
 
@@ -151,7 +151,7 @@ Every error has a stable `code`, a message and a hint that names the next tool. 
 
 ## Never
 
-- Never edit `main/`. It changes only through integration.
+- Never edit the files of the project folder. They are main, and they change only through integration.
 - Never edit the workspace of another worker.
 - Never tick a linked checklist item. fold ticks it when the child task is Done.
 - Never clear the human review mark.

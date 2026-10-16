@@ -1,35 +1,238 @@
+use std::ffi::OsString;
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use fold_core::config::{check_branch, check_remote, check_remote_name};
-use fold_core::{FoldError, codes};
+use fold_core::{FoldError, ProjectPaths, codes};
 use serde_json::json;
 
 use crate::git::{CommitId, Git, failed, unexpected_output, wait_error};
 
-/// The project's Git repository inside `.fold/`, bare: the commits of main on the `[git]` branch and, per remote, the branch the last fetch found.
-pub const MIRROR_DIR: &str = "git";
+/// The ref fold writes its commits to. The `[git]` branch, which the project folder has checked out, moves to this ref's commit only by fast-forward, so a branch tip that is not an ancestor of it is a commit made outside fold, also after a stop between the write and the move.
+pub const FOLD_HEAD_REF: &str = "refs/fold/head";
 
-/// The branch ref the commits of main are written to in the mirror.
+/// The branch ref the commits of main are written to.
 pub fn branch_ref(branch: &str) -> String {
     format!("refs/heads/{branch}")
 }
 
-/// The mirror ref that keeps the commit a Git import read, so the commits after it can name it as their parent.
-pub const IMPORTED_REF: &str = "refs/fold/imported";
-
-/// The mirror ref that holds the branch of the remote `name` as the last fetch found it.
+/// The ref that holds the branch of the remote `name` as the last fetch found it.
 pub fn remote_ref(name: &str, branch: &str) -> String {
     format!("refs/remotes/{name}/{branch}")
 }
 
-/// Creates the bare mirror at `mirror` when it is not a repository yet, and points its remote `name` at `url`. The URL is never put in an error, because it can hold credentials. Blocking.
+/// fold's data folder, which `git status` in the project must never list.
+const EXCLUDE_LINE: &str = "/.fold/";
+
+/// The project's Git repository at [`ProjectPaths::git_dir`], whose working tree is the project folder, after making sure `info/exclude` lists fold's data folder. It never creates one: `fld init` does. Anything but a real directory in its place, a symlink included, is refused, so fold never writes Git data through it and Git never finds an enclosing repository instead. Blocking.
+pub fn project_repository(paths: &ProjectPaths) -> Result<PathBuf, FoldError> {
+    let repo = paths.git_dir();
+    match fs::symlink_metadata(&repo) {
+        Ok(meta) if meta.is_dir() => {}
+        Ok(_) => {
+            return Err(no_repository().with_details([("reason", json!("not_a_directory"))]));
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(no_repository().with_details([("reason", json!("missing"))]));
+        }
+        Err(error) => return Err(repository_io(&error)),
+    }
+    exclude_fold_dir(&repo)?;
+    Ok(repo)
+}
+
+fn no_repository() -> FoldError {
+    FoldError::new(
+        codes::INVALID_REQUEST,
+        "the project folder has no Git repository of its own in .git",
+    )
+    .with_hint("re-create the project with fld init")
+}
+
+/// Adds [`EXCLUDE_LINE`] to `info/exclude` of `repo` once. Blocking.
+pub fn exclude_fold_dir(repo: &Path) -> Result<(), FoldError> {
+    let exclude = repo.join("info").join("exclude");
+    let text = match fs::read_to_string(&exclude) {
+        Ok(text) => text,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(repository_io(&error)),
+    };
+    if text.lines().any(|line| line.trim() == EXCLUDE_LINE) {
+        return Ok(());
+    }
+    let separator = if text.is_empty() || text.ends_with('\n') {
+        ""
+    } else {
+        "\n"
+    };
+    fs::create_dir_all(repo.join("info"))
+        .and_then(|()| fs::write(&exclude, format!("{text}{separator}{EXCLUDE_LINE}\n")))
+        .map_err(|error| repository_io(&error))
+}
+
+/// Moves `branch` of `repo` to `new`, only while it points to `old`, or only while it does not exist when `old` is `None`. Blocking.
+pub fn move_branch(
+    git: &Git,
+    repo: &Path,
+    branch: &str,
+    new: &CommitId,
+    old: Option<&CommitId>,
+) -> Result<(), FoldError> {
+    check_branch(branch)?;
+    let old = old.map_or("0000000000000000000000000000000000000000", CommitId::as_str);
+    git.output(
+        repo,
+        &["update-ref", &branch_ref(branch), new.as_str(), old],
+        "update-ref",
+    )?;
+    Ok(())
+}
+
+/// `args` for a Git command in the project folder, naming the repository and the working tree, so Git never looks for a repository above the folder.
+fn in_folder(paths: &ProjectPaths, args: &[&str]) -> Vec<OsString> {
+    let mut git_dir = OsString::from("--git-dir=");
+    git_dir.push(paths.git_dir());
+    let mut work_tree = OsString::from("--work-tree=");
+    work_tree.push(paths.root());
+    let mut all = vec![git_dir, work_tree];
+    all.extend(args.iter().map(OsString::from));
+    all
+}
+
+/// Sets the index of the project folder to the tree of `commit` and refreshes its file stats, without touching a file: for the first commit, whose tree is the folder's files. Blocking.
+pub fn index_to(git: &Git, paths: &ProjectPaths, commit: &CommitId) -> Result<(), FoldError> {
+    let root = paths.root();
+    git.output(
+        root,
+        &in_folder(paths, &["read-tree", commit.as_str()]),
+        "read-tree",
+    )?;
+    let refreshed = git.status(
+        root,
+        &in_folder(paths, &["update-index", "-q", "--refresh"]),
+        "update-index",
+    )?;
+    // 1 names a path whose file differs from the index, such as one the import skipped.
+    match refreshed.code() {
+        Some(0 | 1) => Ok(()),
+        _ => Err(failed("update-index", refreshed)),
+    }
+}
+
+/// The branch `HEAD` of `repo` names, or `None` when `HEAD` is detached. Blocking.
+pub fn checked_out_branch(git: &Git, repo: &Path) -> Result<Option<String>, FoldError> {
+    let out = match git.output(repo, &["symbolic-ref", "-q", "HEAD"], "symbolic-ref") {
+        Ok(out) => out,
+        // `-q` exits 1, with nothing on stderr, for a detached `HEAD`.
+        Err(error) if error.code() == codes::GIT_FAILED => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let text = String::from_utf8(out).map_err(|_| unexpected_output("symbolic-ref"))?;
+    Ok(text
+        .trim_end()
+        .strip_prefix("refs/heads/")
+        .map(str::to_owned))
+}
+
+/// Whether the index and the tracked files of the project folder match `commit`, as Git checks before `updateInstead` updates a working tree; untracked files do not count. Blocking.
+pub fn folder_clean(git: &Git, paths: &ProjectPaths, commit: &CommitId) -> Result<bool, FoldError> {
+    let root = paths.root();
+    let quiet = |args: &[&str], what: &'static str| -> Result<bool, FoldError> {
+        let status = git.status(root, &in_folder(paths, args), what)?;
+        match status.code() {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
+            _ => Err(failed(what, status)),
+        }
+    };
+    // Refreshing the stats first keeps a file whose stats alone changed from counting as changed; its exit code is what the two checks below answer.
+    git.status(
+        root,
+        &in_folder(
+            paths,
+            &["update-index", "-q", "--ignore-submodules", "--refresh"],
+        ),
+        "update-index",
+    )?;
+    Ok(quiet(
+        &["diff-files", "--quiet", "--ignore-submodules", "--"],
+        "diff-files",
+    )? && quiet(
+        &[
+            "diff-index",
+            "--quiet",
+            "--cached",
+            "--ignore-submodules",
+            commit.as_str(),
+            "--",
+        ],
+        "diff-index",
+    )?)
+}
+
+/// Whether the index or a tracked file of the project folder differs from `HEAD`, read without writing the index, as a check that must change nothing needs. Untracked files do not count. Blocking.
+pub fn folder_has_changes(git: &Git, paths: &ProjectPaths) -> Result<bool, FoldError> {
+    let out = git.output(
+        paths.root(),
+        &in_folder(
+            paths,
+            &[
+                "--no-optional-locks",
+                "status",
+                "--porcelain",
+                "--untracked-files=no",
+                "--ignore-submodules",
+            ],
+        ),
+        "status",
+    )?;
+    Ok(!out.is_empty())
+}
+
+/// What [`follow_main`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Followed {
+    /// The branch moved, and with it the folder's files and index when the branch is checked out.
+    Moved,
+    /// The folder has changes that are not committed, or a file in the way of the update, so nothing moved.
+    Dirty,
+}
+
+/// Moves `branch` from `tip` to `new`, a commit that descends from it, and updates the project folder as Git's `receive.denyCurrentBranch=updateInstead` does: only when the index and the tracked files match `tip`, the files and the index are brought to `new` first and the branch moves after, while it still points to `tip`. A branch that is not checked out moves alone. Untracked files stay, and one that the update would overwrite makes the folder dirty. Never by force. Blocking.
+pub fn follow_main(
+    git: &Git,
+    paths: &ProjectPaths,
+    branch: &str,
+    tip: &CommitId,
+    new: &CommitId,
+) -> Result<Followed, FoldError> {
+    let repo = paths.git_dir();
+    if checked_out_branch(git, &repo)?.as_deref() == Some(branch) {
+        if !folder_clean(git, paths, tip)? {
+            return Ok(Followed::Dirty);
+        }
+        let updated = git.status(
+            paths.root(),
+            &in_folder(
+                paths,
+                &["read-tree", "-u", "-m", tip.as_str(), new.as_str()],
+            ),
+            "read-tree",
+        )?;
+        if !updated.success() {
+            return Ok(Followed::Dirty);
+        }
+    }
+    move_branch(git, &repo, branch, new, Some(tip))?;
+    Ok(Followed::Moved)
+}
+
+/// Points the remote `name` of the project's repository `mirror` at `url`. The URL is never put in an error, because it can hold credentials. Blocking.
 pub fn prepare_mirror(git: &Git, mirror: &Path, name: &str, url: &str) -> Result<(), FoldError> {
     check_remote_name(name)?;
     check_remote(url)?;
-    ensure_mirror(git, mirror)?;
     let verb = if git.succeeds(mirror, &["remote", "get-url", "--", name], "remote")? {
         "set-url"
     } else {
@@ -39,10 +242,10 @@ pub fn prepare_mirror(git: &Git, mirror: &Path, name: &str, url: &str) -> Result
     Ok(())
 }
 
-/// Deletes the remote `name` and the refs fetched from it from the mirror; a mirror or remote that does not exist is left as it is. Blocking.
+/// Deletes the remote `name` and the refs fetched from it from the project's repository `mirror`; a repository or remote that does not exist is left as it is. Blocking.
 pub fn remove_remote(git: &Git, mirror: &Path, name: &str) -> Result<(), FoldError> {
     check_remote_name(name)?;
-    if git.repository(mirror)?.is_none()
+    if !mirror.join("HEAD").is_file()
         || !git.succeeds(mirror, &["remote", "get-url", "--", name], "remote")?
     {
         return Ok(());
@@ -54,7 +257,6 @@ pub fn remove_remote(git: &Git, mirror: &Path, name: &str) -> Result<(), FoldErr
 /// The branch the `HEAD` of the repository at `url` points to, or `None` when it has no `HEAD` branch, as an empty repository has none. `mirror` is the repository Git runs in. Blocking.
 pub fn default_branch(git: &Git, mirror: &Path, url: &str) -> Result<Option<String>, FoldError> {
     check_remote(url)?;
-    ensure_mirror(git, mirror)?;
     let out = git.output(mirror, &["ls-remote", "--symref", url, "HEAD"], "ls-remote")?;
     let text = String::from_utf8(out).map_err(|_| unexpected_output("ls-remote"))?;
     Ok(text.lines().find_map(|line| {
@@ -104,43 +306,8 @@ pub fn create_local_remote(git: &Git, url: &str, branch: &str) -> Result<(), Fol
     if !path.is_absolute() || fs::symlink_metadata(path).is_ok() {
         return Ok(());
     }
-    fs::create_dir_all(path).map_err(|error| mirror_io(&error))?;
+    fs::create_dir_all(path).map_err(|error| repository_io(&error))?;
     git.init_bare(path, branch)
-}
-
-/// Creates the bare mirror at `mirror` when it is not a repository yet. Blocking.
-pub fn ensure_mirror(git: &Git, mirror: &Path) -> Result<(), FoldError> {
-    if git.repository(mirror)?.is_none() {
-        fs::create_dir_all(mirror).map_err(|error| mirror_io(&error))?;
-        git.init_bare(mirror, "main")?;
-    }
-    Ok(())
-}
-
-/// Copies `commit` of the repository `source`, with everything it reaches, into the mirror at `mirror` under [`IMPORTED_REF`], creating the mirror when it is missing. A local operation: `source` is a path. Blocking.
-pub fn fetch_imported(
-    git: &Git,
-    mirror: &Path,
-    source: &Path,
-    commit: &CommitId,
-) -> Result<(), FoldError> {
-    ensure_mirror(git, mirror)?;
-    // Canonical, so the source is an absolute path that Git cannot read as an option or a URL.
-    let source = source.canonicalize().map_err(|error| mirror_io(&error))?;
-    let refspec = format!("+{commit}:{IMPORTED_REF}");
-    let mut command = git.command(mirror);
-    command
-        .args(["fetch", "--quiet", "--no-tags", "--end-of-options"])
-        .arg(source)
-        .arg(refspec);
-    let status = Git::spawn(&mut command, "fetch")?
-        .wait()
-        .map_err(|error| wait_error(&error, "fetch"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(failed("fetch", status))
-    }
 }
 
 /// The best common ancestor of `a` and `b`, or `None` when their histories share no commit. Blocking.
@@ -213,18 +380,17 @@ pub fn set_ref(
     Ok(())
 }
 
-/// Pushes the mirror's `local` branch to the `branch` of the remote `name`, never with force. A push the remote rejects because its branch moved is `remote_ahead`; any other failure is `git_failed`. Blocking.
+/// Pushes `commit` of the project's repository `mirror` to the `branch` of the remote `name`, never with force. A push the remote rejects because its branch moved is `remote_ahead`; any other failure is `git_failed`. Blocking.
 pub fn push_branch(
     git: &Git,
     mirror: &Path,
     name: &str,
-    local: &str,
+    commit: &CommitId,
     branch: &str,
 ) -> Result<(), FoldError> {
     check_remote_name(name)?;
-    check_branch(local)?;
     check_branch(branch)?;
-    let refspec = format!("{}:{}", branch_ref(local), branch_ref(branch));
+    let refspec = format!("{commit}:{}", branch_ref(branch));
     let mut command = git.command(mirror);
     command
         .args(["push", "--porcelain", name, &refspec])
@@ -269,10 +435,13 @@ pub fn remote_ahead(branch: &str, remote_commit: Option<&CommitId>) -> FoldError
     }
 }
 
-fn mirror_io(error: &io::Error) -> FoldError {
+fn repository_io(error: &io::Error) -> FoldError {
     FoldError::new(
         codes::WORKSPACE_IO,
-        format!("cannot create or read the Git mirror: {}", error.kind()),
+        format!(
+            "cannot create, move or read the project's Git repository: {}",
+            error.kind()
+        ),
     )
 }
 
@@ -303,16 +472,25 @@ mod tests {
     }
 
     #[test]
-    fn a_mirror_that_cannot_be_created_is_an_io_error() {
+    fn a_project_without_its_own_repository_is_refused() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("file"), b"x").unwrap();
-        let error = prepare_mirror(
-            &Git::default(),
-            &dir.path().join("file/git"),
-            "origin",
-            "/r",
-        )
-        .unwrap_err();
-        assert_eq!(error.code(), codes::WORKSPACE_IO);
+        let paths = ProjectPaths::new(dir.path());
+        let missing = project_repository(&paths).unwrap_err();
+        assert_eq!(missing.code(), codes::INVALID_REQUEST);
+        assert!(missing.hint().unwrap().contains("fld init"));
+        std::os::unix::fs::symlink(dir.path(), paths.git_dir()).unwrap();
+        assert_eq!(
+            project_repository(&paths).unwrap_err().code(),
+            codes::INVALID_REQUEST
+        );
+        fs::remove_file(paths.git_dir()).unwrap();
+        fs::create_dir_all(paths.git_dir().join("info")).unwrap();
+        fs::write(paths.git_dir().join("info/exclude"), "# mine").unwrap();
+        project_repository(&paths).unwrap();
+        project_repository(&paths).unwrap();
+        assert_eq!(
+            fs::read_to_string(paths.git_dir().join("info/exclude")).unwrap(),
+            "# mine\n/.fold/\n"
+        );
     }
 }

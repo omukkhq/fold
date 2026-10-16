@@ -8,7 +8,7 @@ This page takes a person with a fresh host to a running daemon, an initialised p
 - For any other device or operating system, aarch64 Linux included: the Rust toolchain pinned in `rust-toolchain.toml`, [bun](https://bun.sh) and a source checkout.
 - Claude Code, installed and signed in.
 - systemd, only for the service unit on Linux.
-- `git`, for the project's own Git history, and your own Git credentials, only for `fld init --from-git`, `fld remote`, `fld pull` and `fld push`.
+- `git`, for the project folder's own Git repository, which `fld init` creates and every integration commits to, and your own Git credentials, only for `fld remote`, `fld pull` and `fld push`.
 
 ## Other targets
 
@@ -41,6 +41,8 @@ fld --version
 fld init ~/myapp
 cd ~/myapp
 ```
+
+The folder `~/myapp` is the project: its files are fold main and its `.git` gets one commit per integration. For code that is already in a Git repository, run `fld init --from-git` in that repository instead; it keeps the history. fold keeps its data and the agents' workspaces in `.fold/`.
 
 Then start one Claude Code session per agent, each in its own terminal, from the project root:
 

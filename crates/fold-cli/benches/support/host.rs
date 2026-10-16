@@ -30,7 +30,7 @@ impl Host {
         Ok(Self { dir, port })
     }
 
-    /// Removes the run's folder and returns the error when that fails, which dropping the host would hide. A directory without its write bit, such as a read-only `main/` folder, makes the removal fail, so the write bits come back first.
+    /// Removes the run's folder and returns the error when that fails, which dropping the host would hide. A directory without its write bit, such as a read-only review checkout, makes the removal fail, so the write bits come back first.
     pub fn close(self) -> io::Result<()> {
         let restored = restore_write_bits(self.dir.path());
         let removed = self.dir.close();

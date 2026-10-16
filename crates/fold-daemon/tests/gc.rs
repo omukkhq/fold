@@ -122,11 +122,11 @@ impl Fixture {
             self.store(),
             &format!(
                 "INSERT INTO workspaces (number, task_id, kind, path, base_revision_id, state, created_at, closed_at)
-                 VALUES ({n}, 1, '{kind}', 'ws/{dir}', 1, '{state}', 0, {closed_at});"
+                 VALUES ({n}, 1, '{kind}', '.fold/ws/{dir}', 1, '{state}', 0, {closed_at});"
             ),
         )
         .await;
-        let path = self.root().join("ws").join(dir);
+        let path = self.root().join(".fold/ws").join(dir);
         fs::create_dir_all(path.join("src")).unwrap();
         fs::write(path.join("src").join("lib.rs"), b"secret content").unwrap();
         fs::set_permissions(
@@ -273,7 +273,7 @@ async fn automatic_checkpoints_beyond_twenty_are_pruned_before_marking_and_a_dry
     let before = fixture.state().await;
     let planned = gc(&fixture.handle, true).await.unwrap();
     assert_eq!(fixture.state().await, before);
-    assert!(fixture.root().join("ws").join("t-1").is_dir());
+    assert!(fixture.root().join(".fold/ws").join("t-1").is_dir());
 
     let report = gc(&fixture.handle, false).await.unwrap();
     assert_eq!(counts(&planned), counts(&report));
@@ -404,7 +404,7 @@ async fn closed_workspaces_past_their_retention_lose_directories_and_checkpoints
     for name in ["t-1", "review-p-1", "t-1-2", "t-1-3"] {
         let file = fixture
             .root()
-            .join("ws")
+            .join(".fold/ws")
             .join(name)
             .join("src")
             .join("lib.rs");
@@ -416,7 +416,7 @@ async fn closed_workspaces_past_their_retention_lose_directories_and_checkpoints
     assert_eq!(report.checkpoints_pruned, 3);
     assert_eq!(report.deleted, 6);
 
-    let dir = |name: &str| fixture.root().join("ws").join(name);
+    let dir = |name: &str| fixture.root().join(".fold/ws").join(name);
     assert!(!dir("t-1").exists() && !dir("review-p-1").exists());
     assert!(dir("t-1-2").join("src").join("lib.rs").is_file());
     assert!(dir("t-1-3").join("src").join("lib.rs").is_file());
@@ -457,7 +457,7 @@ async fn a_closed_workspace_whose_directory_escapes_ws_is_left_alone() {
         .await;
     execute(
         fixture.store(),
-        "UPDATE workspaces SET path = 'ws/../outside' WHERE number = 1;",
+        "UPDATE workspaces SET path = '.fold/ws/../outside' WHERE number = 1;",
     )
     .await;
     for dry_run in [true, false] {
@@ -468,7 +468,7 @@ async fn a_closed_workspace_whose_directory_escapes_ws_is_left_alone() {
         );
     }
     assert_eq!(fixture.unpruned(1).await, vec![1]);
-    assert!(fixture.root().join("ws").join("t-1").is_dir());
+    assert!(fixture.root().join(".fold/ws").join("t-1").is_dir());
 }
 
 #[tokio::test]
@@ -480,7 +480,7 @@ async fn a_closed_workspace_already_gone_counts_once() {
     fixture
         .checkpoint(1, "checkpoint", CheckpointReason::Explicit)
         .await;
-    let path = fixture.root().join("ws").join("t-1");
+    let path = fixture.root().join(".fold/ws").join("t-1");
     fs::set_permissions(
         path.join("src").join("lib.rs"),
         fs::Permissions::from_mode(0o644),

@@ -7,14 +7,14 @@ use fold_core::{
 use fold_store::Store;
 use fold_vcs::git::{CommitId, Git};
 use fold_vcs::git_remote::{
-    MIRROR_DIR, create_local_remote, fetch_branch, is_ancestor, prepare_mirror, push_branch,
-    remote_ahead,
+    create_local_remote, fetch_branch, is_ancestor, prepare_mirror, project_repository,
+    push_branch, remote_ahead,
 };
 use fold_vcs::git_sync_map::SyncMap;
 use serde_json::json;
 
 use super::commits::commit_locked;
-use super::{ProjectError, load_config};
+use super::{GitAttention, ProjectAttention, ProjectError, load_config};
 use crate::projects::ProjectHandle;
 use crate::services::events::{EventBuffer, EventBus};
 
@@ -38,7 +38,7 @@ pub enum PushOutcome {
     },
 }
 
-/// Writes the commits that `.fold/git` lacks for main, as every integration does, then pushes the `[git]` branch of `.fold/git` to the branch of the remote `remote`, never with force, and appends `remote.pushed` in one transaction. Without a name the push goes to the only remote. The configuration is read on every call, so `fld remote set` takes effect without a restart. A remote that is an absolute local path that does not exist is created as a bare repository first. A remote branch with commits that main lacks fails with `remote_ahead` before anything is sent; one already on main's newest commit is up to date. A push never changes main, tasks, workspaces or claims, and a failed one writes no event. The project's remote lock and its Git sync lock are held throughout, so pushes, pulls and the commit of each integration run one after the other. The push runs as its own task, so a caller that stops waiting never leaves the remote moved without its event.
+/// Writes the commits that the project's repository lacks for main, as every integration does, then pushes main's newest commit to the branch of the remote `remote`, never with force, and appends `remote.pushed` in one transaction. Without a name the push goes to the only remote. The configuration is read on every call, so `fld remote set` takes effect without a restart. A remote that is an absolute local path that does not exist is created as a bare repository first. A remote branch with commits that main lacks fails with `remote_ahead` before anything is sent; one already on main's newest commit is up to date. A push never changes main, tasks, workspaces or claims, and a failed one writes no event. The project's remote lock and its Git sync lock are held throughout, so pushes, pulls and the commit of each integration run one after the other. The push runs as its own task, so a caller that stops waiting never leaves the remote moved without its event.
 pub async fn push(
     handle: &Arc<ProjectHandle>,
     actor: &Actor,
@@ -64,6 +64,8 @@ pub struct RemoteContext {
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) bus: EventBus,
     pub(crate) remote_lock: Arc<tokio::sync::Mutex<()>>,
+    /// What the commit writer last found that needs a person.
+    pub(crate) git_attention: Arc<GitAttention>,
 }
 
 impl RemoteContext {
@@ -82,7 +84,13 @@ impl RemoteContext {
             clock,
             bus,
             remote_lock: Arc::new(tokio::sync::Mutex::new(())),
+            git_attention: Arc::new(GitAttention::default()),
         }
+    }
+
+    /// What the commit writer last found that needs a person, as the project overview shows it.
+    pub fn attention(&self) -> Vec<ProjectAttention> {
+        self.git_attention.kinds()
     }
 
     pub(crate) fn of(handle: &ProjectHandle) -> Self {
@@ -93,6 +101,7 @@ impl RemoteContext {
             clock: handle.clock.clone(),
             bus: handle.bus.clone(),
             remote_lock: handle.remote_lock.clone(),
+            git_attention: handle.git_attention.clone(),
         }
     }
 }
@@ -122,14 +131,18 @@ async fn run(
     let (name, remote) = select_remote(&config, remote)?;
     let (url, branch, local) = (remote.url, remote.branch, config.git.branch);
     let remote_guard = handle.remote_lock.clone().lock_owned().await;
-    let fold_dir = handle.paths.fold_dir();
-    let mirror = fold_dir.join(MIRROR_DIR);
+    let mirror = handle.paths.git_dir();
     // Both locks move into each blocking step and come back out, so a task stopped by a shutdown never releases them while Git still runs.
     let (held, map, fetched) = {
-        let (git, mirror, name, branch) =
-            (git.clone(), mirror.clone(), name.clone(), branch.clone());
+        let (git, paths, name, branch) = (
+            git.clone(),
+            handle.paths.clone(),
+            name.clone(),
+            branch.clone(),
+        );
         blocking(move || {
-            let (sync_lock, map) = SyncMap::lock(&fold_dir)?;
+            let (sync_lock, map) = SyncMap::lock(&paths.fold_dir())?;
+            let mirror = project_repository(&paths)?;
             create_local_remote(&git, &url, &branch)?;
             prepare_mirror(&git, &mirror, &name, &url)?;
             let fetched = fetch_branch(&git, &mirror, &name, &branch)?;
@@ -163,7 +176,7 @@ async fn run(
                 }
                 Some(remote) => return Err(remote_ahead(&branch, Some(remote))),
             };
-            push_branch(&git, &mirror, &name, &local, &branch)?;
+            push_branch(&git, &mirror, &name, &tip, &branch)?;
             Ok(Some(first))
         })
         .await?

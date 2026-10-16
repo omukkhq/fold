@@ -12,15 +12,11 @@ use fold_daemon::http::assets::AssetSource;
 use fold_daemon::http::{router, socket_router};
 use fold_daemon::mcp::handshake::{self, Answer, PROTOCOL_VERSION};
 use fold_daemon::projects::{ProjectHandle, Projects};
-use fold_daemon::services::projects::{
-    DEFAULT_SESSION_LIFETIME, InitializedProject, init_project_from,
-};
+use fold_daemon::services::projects::{DEFAULT_SESSION_LIFETIME, InitializedProject, init_project};
 use fold_store::projects::{self, ProjectRow};
 use fold_store::testing::{TestProject, eventually};
 use fold_store::workspaces::{self, RevisionRow, create_initial_revision, initial_revision};
-use fold_vcs::main_view;
 use fold_vcs::objects::ObjectStore;
-use fold_vcs::platform::Capabilities;
 use fold_vcs::revision_store::{write_initial_tree, write_revision};
 use http_body_util::BodyExt;
 use rmcp::model::{CallToolRequestParams, CallToolResult};
@@ -52,7 +48,7 @@ pub struct Session {
     server: JoinHandle<()>,
 }
 
-/// Project `demo` open in daemon state, with `r1` holding `README.md` and `main/` showing it as `fld init` leaves it, and one adapter session for each of [`AGENTS`], connected over in-memory streams through the same handshake `fld mcp` performs with `FOLD_AGENT` set. `review` holds `integrator`, granted by the human [`HUMAN`] over the socket.
+/// Project `demo` open in daemon state, with `r1` holding `README.md` and the project folder holding it as `fld init` leaves it, and one adapter session for each of [`AGENTS`], connected over in-memory streams through the same handshake `fld mcp` performs with `FOLD_AGENT` set. `review` holds `integrator`, granted by the human [`HUMAN`] over the socket.
 pub struct Harness {
     pub project: TestProject,
     /// Holds the fake inbox sockets.
@@ -93,17 +89,7 @@ impl Harness {
         let tree = write_initial_tree(&objects, tree).unwrap();
         let revision = initial_revision(tree, project.now()).unwrap();
         let stored = write_revision(&objects, &revision).unwrap();
-        let fold_dir = project.paths().fold_dir();
-        main_view::update(
-            &objects,
-            &project.paths().main_dir(),
-            &fold_dir,
-            None,
-            &tree,
-            revision.number,
-            Capabilities::probe(&fold_dir).unwrap(),
-        )
-        .unwrap();
+        std::fs::write(project.paths().root().join("README.md"), b"# demo\n").unwrap();
         create_initial_revision(project.store(), &stored, None)
             .await
             .unwrap();
@@ -139,13 +125,12 @@ impl Harness {
         harness
     }
 
-    /// Project `demo` made by `fld init --from source`, so `r1` holds the files of `source`, with the three sessions connected and no tag granted. Returns what init reported.
+    /// Project `demo` made by `fld init` in a folder that holds the files of `source`, so `r1` holds them, with the three sessions connected and no tag granted. Returns what init reported.
     pub async fn start_initialized(source: &Path) -> (Self, InitializedProject) {
         let mut initialized = None;
         let project = TestProject::initialized(async |root, host, clock| {
-            let made = init_project_from(host, root, Some("Demo"), Some(source), clock)
-                .await
-                .unwrap();
+            copy_dir(source, root);
+            let made = init_project(host, root, Some("Demo"), clock).await.unwrap();
             initialized = Some(made);
         })
         .await;
@@ -611,6 +596,13 @@ pub fn read_tree(dir: &Path) -> BTreeMap<String, Vec<u8>> {
     fn walk(root: &Path, dir: &Path, into: &mut BTreeMap<String, Vec<u8>>) {
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
+            // Git's and fold's data are never part of a tree.
+            if path
+                .file_name()
+                .is_some_and(|name| name == ".git" || name == ".fold")
+            {
+                continue;
+            }
             if path.is_dir() {
                 walk(root, &path, into);
             } else {
@@ -735,4 +727,18 @@ pub fn proposal_notice(proposal: &str, task: &str) -> String {
 /// The notice text for a new message.
 pub fn message_notice(message: &str) -> String {
     format!("fold: message {message} arrived. Call get_inbox.")
+}
+
+/// Copies every file and folder of `from` into `to`, which it creates.
+pub fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), target).unwrap();
+        }
+    }
 }

@@ -12,7 +12,6 @@ pub mod ignore;
 pub mod import;
 pub mod index;
 pub mod integrate;
-pub mod main_view;
 pub mod materialise;
 pub mod objects;
 pub mod paths;

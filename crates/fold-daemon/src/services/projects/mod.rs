@@ -1,16 +1,18 @@
 use std::collections::BTreeSet;
 use std::fs::{File, TryLockError};
 use std::io;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
+use fold_core::config::GIT_SECTION;
 use fold_core::object::{ObjectHash, ObjectKind};
 use fold_core::projects::find_root;
-use fold_core::tree::{FlatTree, Tree};
+use fold_core::tree::Tree;
 use fold_core::{
-    AgentName, CONFIG_TEMPLATE, Clock, FoldError, HostPaths, HumanName, Presence, ProjectConfig,
-    ProjectPaths, RevisionId, SessionFact, TaskStatus, Timestamp, choose_slug, codes, presence_of,
-    slugify,
+    AgentName, CONFIG_TEMPLATE, Clock, FoldError, GitConfig, HostPaths, HumanName, Presence,
+    ProjectConfig, ProjectPaths, RevisionId, SessionFact, TaskStatus, Timestamp, choose_slug,
+    codes, presence_of, slugify,
 };
 use fold_store::projects::{self, HumanRow, ProjectRow};
 use fold_store::workspaces::{RevisionRow, create_initial_revision, head, initial_revision};
@@ -18,16 +20,13 @@ use fold_store::{Store, StoreError};
 use fold_vcs::gc::mark;
 use fold_vcs::git::{CommitId, Git};
 use fold_vcs::git_import::{GitImportOptions, archive_tree};
-use fold_vcs::git_remote::{MIRROR_DIR, fetch_imported};
+use fold_vcs::git_remote::{checked_out_branch, exclude_fold_dir, folder_clean};
 use fold_vcs::git_sync_map::SyncMap;
-use fold_vcs::ignore::IgnoreRules;
+use fold_vcs::ignore::{FOLDIGNORE, GITIGNORE, IgnoreRules};
 use fold_vcs::import::{ImportOptions, ImportResult, import_dir};
-use fold_vcs::main_view;
-use fold_vcs::materialise::{MaterialiseOptions, fill_missing, materialise};
 use fold_vcs::objects::ObjectStore;
-use fold_vcs::paths::WorkspaceError;
 use fold_vcs::platform::Capabilities;
-use fold_vcs::revision_store::{read_revision, write_initial_tree, write_revision};
+use fold_vcs::revision_store::{read_revision, write_revision};
 use thiserror::Error;
 
 use crate::daemon::DaemonState;
@@ -40,7 +39,7 @@ mod remote;
 mod web_auth;
 
 pub(crate) use commits::error_code;
-pub use commits::{commit_main, commit_message};
+pub use commits::{Committed, commit_main, commit_message};
 pub use gc::{GcReport, gc};
 pub use pull::{PullOutcome, PulledConflict, pull};
 pub(crate) use remote::push_with;
@@ -86,77 +85,194 @@ pub struct InitializedProject {
     pub resumed: bool,
 }
 
-/// An import source that passed the checks: an existing directory, canonical, with a UTF-8 path.
-struct Source {
-    path: PathBuf,
-    text: String,
-    kind: SourceKind,
+/// Files a caller writes into a new project's folder before init records it, so they are part of `r1` and its first commit. It returns the files and folders it created, which a failed init removes; a file it changed stays changed. Blocking.
+pub type FolderFiles = Box<dyn FnOnce(&Path) -> Result<Vec<PathBuf>, FoldError> + Send>;
+
+/// How init takes the project folder.
+enum Start {
+    /// The folder is not a Git repository: init runs `git init`, and the folder's files, less the ignore rules, with the ignore files and `files` init writes, become `r1` and its first commit.
+    New { files: Option<FolderFiles> },
+    /// The folder is a Git repository with a clean tree on `branch`: `r1` is the committed tree at `head`, whose commit is `head` itself.
+    FromGit { head: CommitId, branch: String },
 }
 
-enum SourceKind {
-    Directory,
-    Git(Git),
+/// What a failed init made in the folder, so it removes exactly that and never a file of the folder.
+#[derive(Debug, Default)]
+struct Created {
+    repository: bool,
+    files: Vec<PathBuf>,
 }
 
-/// [`init_project_from`] with no import source, so `r1` is the empty tree.
+/// Makes `root` a fold project whose folder is main: creates `.fold/`, migrates the project database, writes the commented config, records the folder's files, less the ignore rules, as `r1`, runs `git init` and writes `r1`'s commit, and only then registers the project under a free slug. A folder that is a Git repository is refused with a hint to use `--from-git`. A folder that is inside another repository's working tree is refused with a hint to use `--from-git` at that repository's top, so no repository is nested in another. When the folder has no `.gitignore`, init writes `.foldignore` and makes `.gitignore` a symlink to it before the folder's files are recorded, so both are in `r1` and its commit and the folder is clean after init; an existing `.gitignore` is kept. Init is a host command, so it has no actor and appends no event. A failure after `.fold/` exists removes `.fold/` and what init wrote beside it, never a file of the folder. A `.fold/` that the registry does not know is an init that stopped part-way: when its database is complete the init finishes it, and otherwise it is refused with `project_incomplete` and nothing is removed.
 pub async fn init_project(
     host: &HostPaths,
     root: &Path,
     name: Option<&str>,
     clock: &dyn Clock,
 ) -> Result<InitializedProject, ProjectError> {
-    init_project_from(host, root, name, None, clock).await
+    init_new_project(host, root, name, Git::default(), None, clock).await
 }
 
-/// Creates `.fold/` in `root`, migrates the project database, writes the commented config, records `r1` from `source` (or the empty tree) as `main`, fills `main/` read-only and only then registers the project under a free slug. Init is a host command, so it has no actor and appends no event. A failure after `.fold/` exists removes the directory this call made and puts `main/` back as it was: absent or empty, the only states init accepts. A `.fold/` that the registry does not know is an init that stopped part-way: when its database is complete the init finishes it, and otherwise it is refused with `project_incomplete` and nothing is removed. `source` is only read, so a project directory at or below it is refused.
-pub async fn init_project_from(
+/// What a plain init finds where the project folder is.
+enum Found {
+    Nothing,
+    /// The folder is the top of a Git repository.
+    Repository,
+    /// The folder is below the top of the working tree at this path, whose repository would hold the new one.
+    Inside(PathBuf),
+}
+
+/// The folder is below the top of another repository's working tree, where a repository of its own would be nested in that one.
+fn inside_repository(root: &Path, top: &Path) -> FoldError {
+    FoldError::new(
+        codes::INVALID_REQUEST,
+        format!(
+            "{} is inside the Git repository at {}",
+            root.display(),
+            top.display()
+        ),
+    )
+    .with_hint(format!(
+        "run fld init --from-git in {} to make the whole repository the project, or move the folder out of it",
+        top.display()
+    ))
+    .with_details([("reason", serde_json::json!("inside_git_repository"))])
+}
+
+/// [`init_project`] with the given `git` program, writing `files` into the folder with the ignore files.
+pub async fn init_new_project(
     host: &HostPaths,
     root: &Path,
     name: Option<&str>,
-    source: Option<&Path>,
+    git: Git,
+    files: Option<FolderFiles>,
     clock: &dyn Clock,
 ) -> Result<InitializedProject, ProjectError> {
-    let source = match source {
-        Some(source) => Some(check_source(source, SourceKind::Directory, "--from").await?),
-        None => None,
-    };
-    init_with(host, root, name, source, clock).await
+    let root = prepare_root(root).await?;
+    let (checked, git_checked) = (root.clone(), git.clone());
+    // A folder with `.fold/` is an init that stopped or a project, which `create_and_register` tells apart; the stopped init may have made the repository already.
+    let found = blocking(move || {
+        let paths = ProjectPaths::new(&checked);
+        if paths.fold_dir().exists() {
+            return Ok(Found::Nothing);
+        }
+        // A `.git` that Git does not read as a repository is refused too, so init never writes into it or deletes it.
+        if std::fs::symlink_metadata(paths.git_dir()).is_ok()
+            || git_checked.repository(&checked)?.is_some()
+        {
+            return Ok(Found::Repository);
+        }
+        Ok(match git_checked.working_tree_top(&checked)? {
+            Some(top) => Found::Inside(top),
+            None => Found::Nothing,
+        })
+    })
+    .await?;
+    match found {
+        Found::Nothing => {}
+        Found::Repository => {
+            return Err(FoldError::new(
+                codes::INVALID_REQUEST,
+                format!("{} is a Git repository", root.display()),
+            )
+            .with_hint("run fld init --from-git there, so the repository keeps its history")
+            .with_details([("reason", serde_json::json!("git_repository"))])
+            .into());
+        }
+        Found::Inside(top) => return Err(inside_repository(&root, &top).into()),
+    }
+    init_with(host, &root, name, git, Start::New { files }, clock).await
 }
 
-/// [`init_project_from`] with `r1` holding the committed tree at the `HEAD` of the Git repository whose top is `repo`, free of ignore rules, and `.fold/git-sync.map` starting with `r1 <commit>`, the first sync point. `HEAD` is resolved to its commit first, so the map names exactly the commit whose tree was read.
+/// Makes the Git repository whose top is `root` a fold project whose folder is main, as [`init_project`] does, keeping the repository and its history: `r1` is the committed tree at `HEAD`, free of ignore rules, and its commit is `HEAD` itself, which `.fold/git-sync.map` records as its first line. The folder must be the top of a repository whose `.git` is a directory, with a branch checked out that has a commit and no change in the index or a tracked file; anything else is refused with a hint. The `[git]` branch becomes the checked-out branch. Nothing in the repository changes but `info/exclude`, which gains `/.fold/`.
 pub async fn init_project_from_git(
     host: &HostPaths,
     root: &Path,
     name: Option<&str>,
-    repo: &Path,
     git: Git,
     clock: &dyn Clock,
 ) -> Result<InitializedProject, ProjectError> {
-    let source = check_source(repo, SourceKind::Git(git.clone()), "--from-git").await?;
-    let path = source.path.clone();
-    let found = blocking(move || Ok(git.repository(&path)?)).await?;
-    if found.is_none() {
-        return Err(FoldError::new(
+    let given = root.to_owned();
+    let found = tokio::task::spawn_blocking(move || std::fs::canonicalize(given))
+        .await
+        .ok()
+        .and_then(Result::ok);
+    let not_repository = |root: &Path| {
+        FoldError::new(
             codes::INVALID_REQUEST,
-            format!("{} is not the top of a Git repository", source.text),
+            format!("{} is not the top of a Git repository", root.display()),
         )
-        .with_hint("pass the top directory of a Git repository to --from-git")
-        .into());
+        .with_hint("run fld init there to make a new project with a new repository")
+        .with_details([("reason", serde_json::json!("not_git_repository"))])
+    };
+    let Some(root) = found else {
+        return Err(not_repository(root).into());
+    };
+    let (checked, git_checked) = (root.clone(), git.clone());
+    let start = blocking(move || match git_start(&git_checked, &checked)? {
+        Some(start) => Ok(Ok(start)),
+        None => Ok(Err(git_checked.working_tree_top(&checked)?)),
+    })
+    .await?;
+    let start = match start {
+        Ok(start) => start,
+        Err(Some(top)) => return Err(inside_repository(&root, &top).into()),
+        Err(None) => return Err(not_repository(&root).into()),
+    };
+    init_with(host, &root, name, git, start, clock).await
+}
+
+/// The start of a `--from-git` init in `root`, or `None` when `root` is not the top of a repository. Blocking.
+fn git_start(git: &Git, root: &Path) -> Result<Option<Start>, ProjectError> {
+    if git.repository(root)?.is_none() {
+        return Ok(None);
     }
-    init_with(host, root, name, Some(source), clock).await
+    let paths = ProjectPaths::new(root);
+    let refused = |message: &str, hint: &str, reason: &str| -> ProjectError {
+        FoldError::new(codes::INVALID_REQUEST, message.to_owned())
+            .with_hint(hint.to_owned())
+            .with_details([("reason", serde_json::json!(reason))])
+            .into()
+    };
+    if !std::fs::symlink_metadata(paths.git_dir()).is_ok_and(|meta| meta.is_dir()) {
+        return Err(refused(
+            "the repository keeps its Git data elsewhere, as a linked worktree or a submodule does",
+            "run fld init --from-git in a repository whose .git is a directory",
+            "git_dir_elsewhere",
+        ));
+    }
+    let Some(branch) = checked_out_branch(git, &paths.git_dir())? else {
+        return Err(refused(
+            "the repository has no branch checked out",
+            "check out a branch, then run fld init --from-git again",
+            "detached_head",
+        ));
+    };
+    let Ok(head) = git.resolve_commit(root, "HEAD") else {
+        return Err(refused(
+            "the checked-out branch has no commit yet",
+            "commit the files, then run fld init --from-git again",
+            "no_commit",
+        ));
+    };
+    if !folder_clean(git, &paths, &head)? {
+        return Err(refused(
+            "the repository has changes that are not committed",
+            "commit or stash them, then run fld init --from-git again",
+            "uncommitted_changes",
+        ));
+    }
+    Ok(Some(Start::FromGit { head, branch }))
 }
 
 async fn init_with(
     host: &HostPaths,
     root: &Path,
     name: Option<&str>,
-    source: Option<Source>,
+    git: Git,
+    start: Start,
     clock: &dyn Clock,
 ) -> Result<InitializedProject, ProjectError> {
-    if let Some(source) = &source {
-        check_apart(source, root).await?;
-    }
-    let root = prepare_root(root).await?;
     let root_text = root
         .to_str()
         .ok_or_else(|| {
@@ -174,8 +290,7 @@ async fn init_with(
             .unwrap_or_default(),
     };
     let registry = Store::open_registry(&host.registry_db()).await?;
-    let outcome =
-        create_and_register(&registry, &root, &root_text, name, source.as_ref(), clock).await;
+    let outcome = create_and_register(&registry, root, &root_text, name, &git, start, clock).await;
     // The outcome is what the caller needs; a failed close only delays the WAL checkpoint.
     let _ = registry.close().await;
     outcome
@@ -186,7 +301,8 @@ async fn create_and_register(
     root: &Path,
     root_text: &str,
     name: String,
-    source: Option<&Source>,
+    git: &Git,
+    start: Start,
     clock: &dyn Clock,
 ) -> Result<InitializedProject, ProjectError> {
     if projects::find_by_root(registry.read(), root_text)
@@ -197,23 +313,28 @@ async fn create_and_register(
     }
     let paths = ProjectPaths::new(root);
     if !create_fold_dir(&paths).await? {
-        return finish_stopped(registry, &paths, root_text, name, clock).await;
+        return finish_stopped(registry, &paths, root_text, name, git, clock).await;
     }
     let _init = match lock_fold_dir(&paths).await {
         Ok(lock) => lock,
         Err(error) => {
-            remove_created(&paths, None).await;
+            remove_created(&paths, Created::default()).await;
             return Err(error);
         }
     };
-    let main = match check_main(&paths).await {
-        Ok(main) => main,
-        Err(error) => {
-            remove_created(&paths, None).await;
-            return Err(error);
-        }
-    };
-    match populate_and_register(registry, &paths, root_text, name, source, clock).await {
+    let mut created = Created::default();
+    match populate_and_register(
+        registry,
+        &paths,
+        root_text,
+        name,
+        git,
+        start,
+        &mut created,
+        clock,
+    )
+    .await
+    {
         Ok(project) => Ok(project),
         Err(error) => {
             // A fired failpoint stands for a crash at that point, and a crashed process removes nothing.
@@ -221,26 +342,42 @@ async fn create_and_register(
             if error.code() == Some(codes::FAILPOINT) {
                 return Err(error);
             }
-            remove_created(&paths, Some(main)).await;
+            remove_created(&paths, created).await;
             Err(error)
         }
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is one input of the init, and grouping them would only rename them"
+)]
 async fn populate_and_register(
     registry: &Store,
     paths: &ProjectPaths,
     root_text: &str,
     name: String,
-    source: Option<&Source>,
+    git: &Git,
+    start: Start,
+    created: &mut Created,
     clock: &dyn Clock,
 ) -> Result<InitializedProject, ProjectError> {
     let now = clock.now();
     let project_store = Store::open_project(paths).await?;
     let first = async {
-        write_config(paths).await?;
+        let branch = match &start {
+            Start::FromGit { branch, .. } => Some(branch.as_str()),
+            Start::New { .. } => None,
+        };
+        write_config(paths, branch).await?;
         let config = load_config(paths).await?;
-        create_first_revision(&project_store, paths, source, config.max_file_bytes, now).await
+        let first =
+            create_first_revision(&project_store, paths, git, start, &config, created, now).await?;
+        // The daemon writes a commit that is missing when it opens the project, so a failure here only delays `r1`'s.
+        if let Err(error) = commit_main(&project_store, paths, git, clock).await {
+            tracing::warn!(code = error.code().unwrap_or(codes::INTERNAL_ERROR), "the Git commit of r1 was not written; the daemon writes it when it opens the project");
+        }
+        Ok::<_, ProjectError>(first)
     }
     .await;
     let closed = project_store.close().await;
@@ -287,12 +424,13 @@ async fn register(
         .await
 }
 
-/// Finishes an init that stopped after it made `.fold/` and before it registered the project. A migrated database whose `main` names a revision with every object below it in the store is a project the stopped run completed, except perhaps for `main/` and the registry row: the files `main/` lacks are written and the project is registered. Anything less is refused with `project_incomplete`, and so is a `.fold/` that a running init holds. Nothing is removed in either case, and no database is created in a `.fold/` that has none.
+/// Finishes an init that stopped after it made `.fold/` and before it registered the project. A migrated database whose `main` names a revision with every object below it in the store is a project the stopped run completed, except perhaps for the new repository, which is then created, and the registry row, which is then inserted; the daemon writes a missing commit when it opens the project. Anything less is refused with `project_incomplete`, and so is a `.fold/` that a running init holds. Nothing is removed in either case, and no database is created in a `.fold/` that has none.
 async fn finish_stopped(
     registry: &Store,
     paths: &ProjectPaths,
     root_text: &str,
     name: String,
+    git: &Git,
     clock: &dyn Clock,
 ) -> Result<InitializedProject, ProjectError> {
     let Some(_init) = try_lock_fold_dir(paths).await? else {
@@ -311,23 +449,23 @@ async fn finish_stopped(
     let Some(head) = row else {
         return Err(incomplete(paths).into());
     };
-    check_kept_main(paths).await?;
     let fold_dir = paths.fold_dir();
-    let main = paths.main_dir();
     let revision = head.number;
+    let branch = load_config(paths).await?.git.branch;
+    let (git, paths_owned) = (git.clone(), paths.clone());
     let finished = blocking(move || {
         let objects = ObjectStore::open(&fold_dir).map_err(FoldError::from)?;
         let Some(imported) = stored_contents(&objects, &head)? else {
             return Ok(None);
         };
-        let caps = Capabilities::probe(&fold_dir).map_err(|error| io_error(&error))?;
-        let opts = MaterialiseOptions {
-            read_only: true,
-            caps,
+        if !paths_owned.git_dir().exists() {
+            git.init_checkout(paths_owned.root(), &branch)?;
+            exclude_fold_dir(&paths_owned.git_dir())?;
+        }
+        let git_commit = match head.import_source {
+            Some(_) => SyncMap::load(&fold_dir)?.commit_of(head.number).cloned(),
+            None => None,
         };
-        fill_missing(&objects, &head.tree_hash, &main, &opts).map_err(FoldError::from)?;
-        main_view::write_marker(&fold_dir, head.number).map_err(|error| io_error(&error))?;
-        let git_commit = SyncMap::load(&fold_dir)?.commit_of(head.number).cloned();
         Ok(Some((imported, git_commit)))
     })
     .await?;
@@ -382,80 +520,104 @@ fn fired(name: &str) -> ProjectError {
     FoldError::new(codes::FAILPOINT, format!("{name} fired")).into()
 }
 
-/// Objects first, then the sync map that names `r1`, then the one transaction that inserts `r1` and creates `main`, then `main/`. The map comes before the row, so a database that holds `r1` always has the map that a Git import needs.
+/// The ignore file init writes when the folder has no `.gitignore`; `.gitignore` becomes a symlink to it, so fold and Git read the same rules.
+const FOLDIGNORE_TEXT: &str =
+    "# Paths that fold and Git leave out, one pattern per line, as in a .gitignore file.\n";
+
+/// A new project's ignore files and the caller's `files` first, so `r1` holds them and the folder is clean against `r1`'s commit; then the objects of `r1`, the sync map that names `r1` for [`Start::FromGit`], and the one transaction that inserts `r1` and creates `main`. The map comes before the row, so a database that holds `r1` always has the map that names its commit. A new project's repository comes last, so an init that stops before its database is complete leaves no repository; one that stops after has it created when the init runs again. Both kinds get `/.fold/` in `info/exclude`.
 async fn create_first_revision(
     store: &Store,
     paths: &ProjectPaths,
-    source: Option<&Source>,
-    max_file_bytes: u64,
+    git: &Git,
+    start: Start,
+    config: &ProjectConfig,
+    created: &mut Created,
     now: Timestamp,
 ) -> Result<(RevisionId, ImportResult, Option<CommitId>), ProjectError> {
-    let fold_dir = paths.fold_dir();
-    let source_path = source.map(|source| source.path.clone());
-    let git = match source.map(|source| &source.kind) {
-        Some(SourceKind::Git(git)) => Some(git.clone()),
-        _ => None,
-    };
-    let (objects, caps, imported, stored, git_commit) = blocking(move || {
-        let objects = ObjectStore::open(&fold_dir).map_err(FoldError::from)?;
-        let caps = Capabilities::probe(&fold_dir).map_err(|error| io_error(&error))?;
-        let (imported, git_commit) = match (source_path, git) {
-            (Some(repo), Some(git)) => {
-                let commit = git.resolve_commit(&repo, "HEAD")?;
-                let opts = GitImportOptions { max_file_bytes };
-                let imported = archive_tree(&objects, &git, &repo, commit.as_str(), &opts)?;
-                // The commits fold writes after `r1` name this commit as their parent.
-                fetch_imported(&git, &fold_dir.join(MIRROR_DIR), &repo, &commit)?;
-                (imported, Some(commit))
+    let (max_file_bytes, branch) = (config.max_file_bytes, config.git.branch.clone());
+    let head = match start {
+        Start::FromGit { head, .. } => Some(head),
+        Start::New { files } => {
+            let root = paths.root().to_owned();
+            created.files = blocking(move || write_ignore_files(&root)).await?;
+            if let Some(files) = files {
+                let root = paths.root().to_owned();
+                let written = blocking(move || Ok(files(&root)?)).await?;
+                created.files.extend(written);
             }
-            (Some(source), None) => {
+            None
+        }
+    };
+    let (git_owned, paths_owned, head_owned) = (git.clone(), paths.clone(), head.clone());
+    let (imported, stored) = blocking(move || {
+        let (git, paths) = (git_owned, paths_owned);
+        let root = paths.root();
+        let fold_dir = paths.fold_dir();
+        let objects = ObjectStore::open(&fold_dir).map_err(FoldError::from)?;
+        let imported = match &head_owned {
+            Some(head) => {
+                exclude_fold_dir(&paths.git_dir())?;
+                let opts = GitImportOptions { max_file_bytes };
+                archive_tree(&objects, &git, root, head.as_str(), &opts)?
+            }
+            None => {
+                let caps = Capabilities::probe(&fold_dir).map_err(|error| io_error(&error))?;
                 let opts = ImportOptions {
                     max_file_bytes,
                     caps,
                 };
-                let rules = IgnoreRules::new(&source);
-                let imported = import_dir(&objects, &source, &rules, &opts)?;
+                let imported = import_dir(&objects, root, &IgnoreRules::new(root), &opts)?;
                 #[cfg(feature = "failpoints")]
                 fail::fail_point!("init_after_import", |_| Err(fired("init_after_import")));
-                (imported, None)
-            }
-            (None, _) => {
-                let empty = ImportResult {
-                    tree: write_initial_tree(&objects, FlatTree::new())?,
-                    files: 0,
-                    bytes: 0,
-                    skipped: Vec::new(),
-                };
-                (empty, None)
+                imported
             }
         };
         let revision = initial_revision(imported.tree, now)?;
         let stored = write_revision(&objects, &revision).map_err(FoldError::from)?;
-        Ok((objects, caps, imported, stored, git_commit))
+        Ok((imported, stored))
     })
     .await?;
-    if let Some(commit) = git_commit.clone() {
+    if let Some(commit) = head.clone() {
         let fold_dir = paths.fold_dir();
         let synced = (stored.revision().number, commit);
         blocking(move || Ok(SyncMap::load(&fold_dir)?.append(&[synced])?)).await?;
     }
-    let import_source = source.map(|source| source.text.as_str());
+    // A Git import names the repository it read, so a stopped init that is finished later still reports `r1`'s commit; a new project's `r1` has none.
+    let import_source = match head {
+        Some(_) => paths.root().to_str(),
+        None => None,
+    };
     let row = create_initial_revision(store, &stored, import_source).await?;
-    let main = paths.main_dir();
-    let tree = imported.tree;
-    let fold_dir = paths.fold_dir();
-    let number = row.number;
-    blocking(move || {
-        let opts = MaterialiseOptions {
-            read_only: true,
-            caps,
-        };
-        materialise(&objects, &tree, &main, &opts).map_err(FoldError::from)?;
-        main_view::write_marker(&fold_dir, number).map_err(|error| io_error(&error))?;
-        Ok(())
-    })
-    .await?;
-    Ok((row.number, imported, git_commit))
+    if head.is_none() {
+        let (git, paths) = (git.clone(), paths.clone());
+        created.repository = true;
+        blocking(move || {
+            git.init_checkout(paths.root(), &branch)?;
+            exclude_fold_dir(&paths.git_dir())?;
+            Ok(())
+        })
+        .await?;
+    }
+    Ok((row.number, imported, head))
+}
+
+/// Writes `.foldignore` and makes `.gitignore` a symlink to it when the folder has no `.gitignore`, and returns what it wrote. Blocking.
+fn write_ignore_files(root: &Path) -> Result<Vec<PathBuf>, ProjectError> {
+    let gitignore = root.join(GITIGNORE);
+    match std::fs::symlink_metadata(&gitignore) {
+        Ok(_) => return Ok(Vec::new()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(io_error(&error)),
+    }
+    let foldignore = root.join(FOLDIGNORE);
+    let mut written = Vec::new();
+    if std::fs::symlink_metadata(&foldignore).is_err() {
+        std::fs::write(&foldignore, FOLDIGNORE_TEXT).map_err(|error| io_error(&error))?;
+        written.push(foldignore);
+    }
+    std::os::unix::fs::symlink(FOLDIGNORE, &gitignore).map_err(|error| io_error(&error))?;
+    written.push(gitignore);
+    Ok(written)
 }
 
 async fn blocking<T: Send + 'static>(
@@ -464,75 +626,6 @@ async fn blocking<T: Send + 'static>(
     tokio::task::spawn_blocking(work)
         .await
         .unwrap_or_else(|error| Err(io_error(&io::Error::other(error))))
-}
-
-/// Init writes `.fold/` and `main/` into the project directory, so one at or below the source would change the source.
-async fn check_apart(source: &Source, root: &Path) -> Result<(), ProjectError> {
-    let given = root.to_owned();
-    let planned = tokio::task::spawn_blocking(move || planned_path(&given)).await;
-    let planned = flatten(planned).map_err(|error| io_error(&error))?;
-    if planned.starts_with(&source.path) {
-        return Err(FoldError::new(
-            codes::INVALID_REQUEST,
-            format!(
-                "the project directory {} is inside the import source {}",
-                root.display(),
-                source.path.display()
-            ),
-        )
-        .with_hint("create the project in a directory outside the source")
-        .into());
-    }
-    Ok(())
-}
-
-/// The canonical path `root` has once `create_dir_all` makes it: its deepest existing part canonicalised, then the rest with `.` and `..` applied in order, as the kernel applies them once the parents exist.
-fn planned_path(root: &Path) -> io::Result<PathBuf> {
-    let absolute = std::path::absolute(root)?;
-    let parts: Vec<Component<'_>> = absolute.components().collect();
-    for split in (1..=parts.len()).rev() {
-        let existing: PathBuf = parts[..split].iter().collect();
-        let mut planned = match std::fs::canonicalize(&existing) {
-            Ok(found) => found,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(error),
-        };
-        for part in &parts[split..] {
-            match part {
-                Component::ParentDir => {
-                    planned.pop();
-                }
-                Component::Normal(name) => planned.push(name),
-                Component::CurDir | Component::RootDir | Component::Prefix(_) => {}
-            }
-        }
-        return Ok(planned);
-    }
-    Err(io::ErrorKind::NotFound.into())
-}
-
-async fn check_source(source: &Path, kind: SourceKind, flag: &str) -> Result<Source, ProjectError> {
-    let given = source.to_owned();
-    let found = tokio::task::spawn_blocking(move || {
-        let path = std::fs::canonicalize(&given).ok()?;
-        std::fs::metadata(&path).ok()?.is_dir().then_some(path)
-    })
-    .await
-    .ok()
-    .flatten();
-    let refused = |reason: &str| {
-        FoldError::new(
-            codes::INVALID_REQUEST,
-            format!("the import source {} {reason}", source.display()),
-        )
-        .with_hint(format!("pass an existing directory to {flag}"))
-    };
-    let path = found.ok_or_else(|| refused("is not an existing directory"))?;
-    let text = path
-        .to_str()
-        .ok_or_else(|| refused("is not a valid UTF-8 path"))?
-        .to_owned();
-    Ok(Source { path, text, kind })
 }
 
 /// Where a service takes the claim lease from: a fixed length, or the project's `.fold/config.toml` read on each use. Reading on use means an edit applies without a restart and an invalid file fails only the calls that need the lease, never a session or a whole project.
@@ -617,88 +710,40 @@ async fn try_lock_fold_dir(paths: &ProjectPaths) -> Result<Option<File>, Project
     flatten(locked).map_err(|error| io_error(&error))
 }
 
-async fn write_config(paths: &ProjectPaths) -> Result<(), ProjectError> {
+/// The commented template, with a `[git]` section naming `branch` when it is not the default, as for a repository checked out on another branch.
+async fn write_config(paths: &ProjectPaths, branch: Option<&str>) -> Result<(), ProjectError> {
     let path = paths.config();
-    let wrote = tokio::task::spawn_blocking(move || std::fs::write(path, CONFIG_TEMPLATE)).await;
+    let text = match branch {
+        Some(branch) if branch != GitConfig::default().branch => {
+            // A JSON string is a valid TOML basic string.
+            let quoted = serde_json::to_string(branch)
+                .map_err(|error| FoldError::new(codes::INTERNAL_ERROR, error.to_string()))?;
+            format!("{CONFIG_TEMPLATE}\n[{GIT_SECTION}]\nbranch = {quoted}\n")
+        }
+        _ => CONFIG_TEMPLATE.to_owned(),
+    };
+    let wrote = tokio::task::spawn_blocking(move || std::fs::write(path, text)).await;
     flatten(wrote).map_err(|error| io_error(&error))
 }
 
-/// What `main/` was before this init filled it.
-#[derive(Debug, Clone, Copy)]
-enum MainDir {
-    Absent,
-    Empty,
-}
-
-/// `main/` must be absent or an empty directory. Checked before any import, so a large source is not read only to be refused; a symlink in its place is refused too, so nothing is written through it.
-async fn check_main(paths: &ProjectPaths) -> Result<MainDir, ProjectError> {
-    let main = paths.main_dir();
-    let found = tokio::task::spawn_blocking(move || -> io::Result<Option<MainDir>> {
-        match std::fs::symlink_metadata(&main) {
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Some(MainDir::Absent)),
-            Err(error) => Err(error),
-            Ok(meta) if meta.is_dir() && std::fs::read_dir(&main)?.next().is_none() => {
-                Ok(Some(MainDir::Empty))
-            }
-            Ok(_) => Ok(None),
-        }
-    })
-    .await;
-    match flatten(found) {
-        Ok(Some(main)) => Ok(main),
-        Ok(None) => {
-            let main = paths.main_dir().to_string_lossy().into_owned();
-            Err(FoldError::from(WorkspaceError::TargetNotEmpty(main)).into())
-        }
-        Err(error) => Err(io_error(&error)),
-    }
-}
-
-/// A stopped init may have filled `main/` in part, so any directory there is kept; a symlink or a file in its place is refused, so nothing is written through it.
-async fn check_kept_main(paths: &ProjectPaths) -> Result<(), ProjectError> {
-    let main = paths.main_dir();
-    let found = tokio::task::spawn_blocking(move || match std::fs::symlink_metadata(&main) {
-        Ok(meta) => Ok(meta.is_dir()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(true),
-        Err(error) => Err(error),
-    })
-    .await;
-    match flatten(found) {
-        Ok(true) => Ok(()),
-        Ok(false) => {
-            let main = paths.main_dir().to_string_lossy().into_owned();
-            Err(FoldError::from(WorkspaceError::TargetNotEmpty(main)).into())
-        }
-        Err(error) => Err(io_error(&error)),
-    }
-}
-
-/// `main/` is the read-only view of `r1`, never a workspace: no agent wrote to it and no checkpoint refers to it, so the files this failed run put there are the only ones removed.
-async fn remove_created(paths: &ProjectPaths, main: Option<MainDir>) {
+/// Removes `.fold/` and what this failed init wrote beside it: the repository it created and the files and folders it created. The folder's own files are never touched.
+async fn remove_created(paths: &ProjectPaths, created: Created) {
     let fold = paths.fold_dir();
-    let main_dir = paths.main_dir();
+    let repository = created.repository.then(|| paths.git_dir());
     // The original error is what the caller needs; a `.fold/` that stays behind makes the next init refuse with `project_exists`.
     let _ = tokio::task::spawn_blocking(move || {
         let _ = std::fs::remove_dir_all(fold);
-        let _ = match main {
-            None => Ok(()),
-            Some(MainDir::Absent) => std::fs::remove_dir_all(main_dir),
-            Some(MainDir::Empty) => empty_dir(&main_dir),
-        };
+        if let Some(repository) = repository {
+            let _ = std::fs::remove_dir_all(repository);
+        }
+        for path in created.files {
+            let _ = match std::fs::symlink_metadata(&path) {
+                Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(path),
+                _ => std::fs::remove_file(path),
+            };
+        }
     })
     .await;
-}
-
-fn empty_dir(dir: &Path) -> io::Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            std::fs::remove_dir_all(entry.path())?;
-        } else {
-            std::fs::remove_file(entry.path())?;
-        }
-    }
-    Ok(())
 }
 
 fn flatten<T>(joined: Result<io::Result<T>, tokio::task::JoinError>) -> io::Result<T> {
@@ -755,6 +800,74 @@ pub struct ProjectOverview {
     pub head: Option<RevisionId>,
     /// When the newest stored event happened.
     pub last_change_at: Option<Timestamp>,
+    /// What needs a person in the project as a whole, beside the attention items of its tasks.
+    pub attention: Vec<ProjectAttention>,
+}
+
+/// Why the project, rather than one of its tasks, needs a person. The daemon decides every kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectAttention {
+    /// The `[git]` branch has commits fold did not write, so the project folder stops following main until a human runs `fld pull`, which brings them in.
+    OutsideCommits,
+    /// The project folder has changes that are not committed, so it stops following main until the human commits or stashes them.
+    UncommittedChanges,
+}
+
+impl ProjectAttention {
+    /// The name the HTTP view and the `git.attention_cleared` event give the kind.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OutsideCommits => "outside_commits",
+            Self::UncommittedChanges => "uncommitted_changes",
+        }
+    }
+}
+
+/// What the commit writer's last run found that needs a person. It is derived from the repository, never stored: the writer's first run after the project opens finds it again.
+#[derive(Debug, Default)]
+pub struct GitAttention {
+    outside: AtomicBool,
+    uncommitted: AtomicBool,
+}
+
+/// How a run of the commit writer changed the project's Git attention.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct AttentionChange {
+    pub(crate) raised: Vec<ProjectAttention>,
+    pub(crate) cleared: Vec<ProjectAttention>,
+}
+
+impl GitAttention {
+    pub fn kinds(&self) -> Vec<ProjectAttention> {
+        let mut kinds = Vec::new();
+        if self.outside.load(Ordering::Relaxed) {
+            kinds.push(ProjectAttention::OutsideCommits);
+        }
+        if self.uncommitted.load(Ordering::Relaxed) {
+            kinds.push(ProjectAttention::UncommittedChanges);
+        }
+        kinds
+    }
+
+    /// Records what a run found and returns what changed since the run before; the first run after the project opens compares with nothing found.
+    pub(crate) fn set(&self, outside: bool, uncommitted: bool) -> AttentionChange {
+        let mut change = AttentionChange::default();
+        for (flag, now, kind) in [
+            (&self.outside, outside, ProjectAttention::OutsideCommits),
+            (
+                &self.uncommitted,
+                uncommitted,
+                ProjectAttention::UncommittedChanges,
+            ),
+        ] {
+            match (flag.swap(now, Ordering::Relaxed), now) {
+                (false, true) => change.raised.push(kind),
+                (true, false) => change.cleared.push(kind),
+                _ => {}
+            }
+        }
+        change
+    }
 }
 
 /// Reads the overview of an open project from its store.
@@ -796,6 +909,7 @@ pub async fn overview(handle: &ProjectHandle) -> Result<ProjectOverview, Project
             .await?
             .map(|revision| revision.number),
         last_change_at: fold_store::events::newest_at(pool).await?,
+        attention: handle.git_attention.kinds(),
     })
 }
 
@@ -895,4 +1009,36 @@ pub async fn ensure_human(
     registry
         .write(async |tx| projects::ensure_human(tx, name, now).await)
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_change_of_the_git_attention_is_reported_once() {
+        let attention = GitAttention::default();
+        let change = |raised: &[ProjectAttention], cleared: &[ProjectAttention]| AttentionChange {
+            raised: raised.to_vec(),
+            cleared: cleared.to_vec(),
+        };
+        use ProjectAttention::{OutsideCommits, UncommittedChanges};
+        assert_eq!(attention.set(false, false), change(&[], &[]));
+        assert_eq!(
+            attention.set(true, true),
+            change(&[OutsideCommits, UncommittedChanges], &[])
+        );
+        assert_eq!(attention.kinds(), [OutsideCommits, UncommittedChanges]);
+        assert_eq!(attention.set(true, true), change(&[], &[]));
+        assert_eq!(
+            attention.set(true, false),
+            change(&[], &[UncommittedChanges])
+        );
+        assert_eq!(attention.set(false, false), change(&[], &[OutsideCommits]));
+        assert!(attention.kinds().is_empty());
+        assert_eq!(
+            [OutsideCommits.as_str(), UncommittedChanges.as_str()],
+            ["outside_commits", "uncommitted_changes"]
+        );
+    }
 }

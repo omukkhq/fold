@@ -255,6 +255,26 @@ impl Git {
         Ok(())
     }
 
+    /// Creates a SHA-1 repository whose working tree is `dir`, with an unborn `HEAD` on `branch`, whatever the user's defaults are.
+    pub fn init_checkout(&self, dir: &Path, branch: &str) -> Result<(), FoldError> {
+        check_rev(branch)?;
+        let initial = format!("--initial-branch={branch}");
+        self.output(
+            dir,
+            &["init", "--quiet", "--object-format=sha1", &initial],
+            "init",
+        )?;
+        Ok(())
+    }
+
+    /// The top of the working tree that holds `dir`, `dir` itself or a folder above it, or `None` when no repository's working tree holds it.
+    pub fn working_tree_top(&self, dir: &Path) -> Result<Option<PathBuf>, FoldError> {
+        Ok(self
+            .query(dir, &["rev-parse", "--show-toplevel"])?
+            .map(|top| PathBuf::from(top.trim_end_matches('\n')))
+            .filter(|top| !top.as_os_str().is_empty()))
+    }
+
     /// The UTF-8 standard output of a query, or `None` when it exits non-zero, for the questions a failure answers.
     fn query(&self, dir: &Path, args: &[&str]) -> Result<Option<String>, FoldError> {
         let mut command = self.command(dir);

@@ -26,7 +26,7 @@ pub struct ProjectConfig {
     pub integration: IntegrationConfig,
 }
 
-/// The `[git]` section: the branch of the project's repository `.fold/git` that every integration is committed to.
+/// The `[git]` section: the branch of the project folder's repository `.git` that every integration is committed to and the folder has checked out.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct GitConfig {

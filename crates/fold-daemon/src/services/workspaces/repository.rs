@@ -52,7 +52,7 @@ pub struct RevisionSummary {
     pub author: Option<String>,
     /// The remote commit a pull brought in.
     pub pull: Option<String>,
-    /// The Git commit the revision became in `.fold/git`; `None` until it is written.
+    /// The Git commit the revision became in the project folder's repository `.git`; `None` until it is written.
     pub commit: Option<String>,
 }
 
@@ -90,7 +90,7 @@ impl From<RevisionRow> for RevisionSummary {
 pub struct RepositoryState {
     /// `None` only before `r1` exists.
     pub head: Option<RevisionId>,
-    /// The project's read-only copy of main.
+    /// The project folder, whose files follow main through its own Git repository.
     pub main_path: PathBuf,
     /// The newest revisions, newest first.
     pub recent: Vec<RevisionSummary>,
@@ -118,7 +118,7 @@ impl WorkspaceService {
         let recent = workspaces::list_recent(read, RECENT_REVISIONS, None).await?;
         Ok(RepositoryState {
             head,
-            main_path: self.paths.main_dir(),
+            main_path: self.paths.root().to_path_buf(),
             recent: recent.into_iter().map(RevisionSummary::from).collect(),
         })
     }

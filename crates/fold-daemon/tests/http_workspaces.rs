@@ -88,7 +88,7 @@ async fn the_five_repository_routes_answer_for_a_known_revision() {
     assert_eq!(state["head"], "r3");
     assert_eq!(
         state["main_path"],
-        project.paths().main_dir().to_string_lossy().as_ref()
+        project.paths().root().to_string_lossy().as_ref()
     );
     let ids: Vec<&str> = state["recent"]
         .as_array()

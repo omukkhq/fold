@@ -37,9 +37,22 @@ impl Sandbox {
         command.output()
     }
 
+    /// Init runs with the caller's `PATH`, because it needs `git`; doctor still runs with none.
     fn init(&self, name: &str) -> io::Result<PathBuf> {
         let project = self.path(name);
-        let output = self.fold(&["init", &project.to_string_lossy()])?;
+        let output = Command::new(env!("CARGO_BIN_EXE_fld"))
+            .args(["init", &project.to_string_lossy()])
+            .current_dir(self.dir.path())
+            .env_clear()
+            .env("HOME", self.path("home"))
+            .env("XDG_DATA_HOME", self.path("data"))
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .envs(
+                std::env::var_os("LLVM_PROFILE_FILE").map(|profile| ("LLVM_PROFILE_FILE", profile)),
+            )
+            .output()?;
         assert!(output.status.success(), "{output:?}");
         Ok(project)
     }

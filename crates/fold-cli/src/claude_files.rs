@@ -14,13 +14,16 @@ pub const MCP_SERVER_NAME: &str = "fold";
 pub const SETTINGS_FILE: &str = ".claude/settings.json";
 /// The `permissions.allow` entry that allows every fold MCP tool; `mcp__fold__*` does the same.
 pub const ALLOW_FOLD_TOOLS: &str = "mcp__fold";
-/// The `permissions.deny` entries that keep a session from editing the integrated tree, which changes only through integration. A leading `/` is relative to the project root.
-pub const DENY_MAIN: [&str; 2] = ["Edit(/main/**)", "Write(/main/**)"];
+/// The `permissions.deny` rules an earlier fold wrote, which a refresh removes. An agent's edits are checked by the `PreToolUse` hook instead: Claude Code reads an `Edit` path as a gitignore pattern, a deny rule always wins over an allow rule, and a `!` carve-out never reopens a path below a folder a deny rule matches, so no rule denies the project folder but `.fold/ws/` (<https://code.claude.com/docs/en/permissions#read-and-edit>).
+const OLD_DENY: [&str; 2] = ["Edit(/main/**)", "Write(/main/**)"];
 /// The Claude Code hook events and the fold command each one runs.
-pub const HOOKS: [(&str, &str); 2] = [
+pub const HOOKS: [(&str, &str); 3] = [
     ("SessionStart", "fld hook session-start"),
     ("Stop", "fld hook stop"),
+    ("PreToolUse", "fld hook pre-tool-use"),
 ];
+/// The tools whose calls the `PreToolUse` hook sees: those that change a file named by its path.
+const FILE_TOOLS: &str = "Edit|Write|MultiEdit|NotebookEdit";
 /// A hook command that starts with this belongs to fold, and a refresh replaces it.
 /// `fold hook` is what files written before the binary became `fld` hold; a refresh replaces those too.
 const HOOK_PREFIXES: [&str; 2] = ["fld hook", "fold hook"];
@@ -192,13 +195,11 @@ fn merge_settings(object: &mut Map<String, Value>) -> Result<(), &'static str> {
     )?;
     allow.retain(|rule| rule.as_str() != Some(ALLOW_FOLD_TOOLS));
     allow.push(json!(ALLOW_FOLD_TOOLS));
-    let deny = array_at(
-        permissions,
-        "deny",
-        "has a permissions.deny that is not an array",
-    )?;
-    deny.retain(|rule| !rule.as_str().is_some_and(|rule| DENY_MAIN.contains(&rule)));
-    deny.extend(DENY_MAIN.map(Value::from));
+    if let Some(deny) = permissions.get_mut("deny") {
+        deny.as_array_mut()
+            .ok_or("has a permissions.deny that is not an array")?
+            .retain(|rule| !rule.as_str().is_some_and(|rule| OLD_DENY.contains(&rule)));
+    }
 
     let hooks = object_at(object, "hooks", "has a hooks that is not an object")?;
     for groups in hooks.values_mut() {
@@ -217,7 +218,11 @@ fn merge_settings(object: &mut Map<String, Value>) -> Result<(), &'static str> {
     }
     for (event, command) in HOOKS {
         let groups = array_at(hooks, event, "has a hook event that is not an array")?;
-        groups.push(json!({"hooks": [{"type": "command", "command": command}]}));
+        let hook = json!([{"type": "command", "command": command}]);
+        groups.push(match event {
+            "PreToolUse" => json!({"matcher": FILE_TOOLS, "hooks": hook}),
+            _ => json!({"hooks": hook}),
+        });
     }
     Ok(())
 }
@@ -319,4 +324,23 @@ pub fn shadowing_warning(path: &Path) -> String {
         "warning: {} makes Claude Code skip AGENTS.md; move its text into AGENTS.md and delete it",
         path.display()
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_refresh_drops_the_old_deny_rules_and_hooks_the_file_tools() {
+        let mut settings =
+            json!({"permissions": {"deny": ["Read(.env)", "Edit(/main/**)", "Write(/main/**)"]}});
+        let object = settings.as_object_mut().unwrap();
+        merge_settings(object).unwrap();
+        merge_settings(object).unwrap();
+        assert_eq!(settings["permissions"]["deny"], json!(["Read(.env)"]));
+        assert_eq!(
+            settings["hooks"]["PreToolUse"],
+            json!([{"matcher": "Edit|Write|MultiEdit|NotebookEdit", "hooks": [{"type": "command", "command": "fld hook pre-tool-use"}]}])
+        );
+    }
 }

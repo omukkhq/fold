@@ -13,12 +13,12 @@ use fold_store::{Store, StoreError, workspaces};
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::revision_store::{write_initial_tree, write_revision};
 
-/// The project rows a proposal integration and a workspace point at: agent `backend` with worker `backend/api`, task `T-3`, its workspace `ws-1` at `ws/t-3` on `r1`, and proposal `P-5` "Add the guide" with one version.
+/// The project rows a proposal integration and a workspace point at: agent `backend` with worker `backend/api`, task `T-3`, its workspace `ws-1` at `.fold/ws/t-3` on `r1`, and proposal `P-5` "Add the guide" with one version.
 const ROWS: &str = "
 INSERT INTO agents (id, name, created_at) VALUES (1, 'backend', 0);
 INSERT INTO workers (id, agent_id, name, created_at) VALUES (1, 1, 'backend/api', 0);
 INSERT INTO tasks (id, number, title, created_by, created_at, updated_at) VALUES (1, 3, 'three', 'backend', 0, 0);
-INSERT INTO workspaces (id, number, task_id, worker_id, kind, path, base_revision_id, state, created_at) VALUES (1, 1, 1, 1, 'task', 'ws/t-3', 1, 'active', 0);
+INSERT INTO workspaces (id, number, task_id, worker_id, kind, path, base_revision_id, state, created_at) VALUES (1, 1, 1, 1, 'task', '.fold/ws/t-3', 1, 'active', 0);
 ";
 
 pub const R1: &[(&str, &[u8])] = &[
@@ -165,7 +165,7 @@ pub async fn checkpoint(project: &TestProject, number: u32, files: &[(&str, &[u8
 
 /// The directory of `ws-1`, filled with `files`.
 pub fn workspace_dir(project: &TestProject, files: &[(&str, &[u8])]) -> PathBuf {
-    let root = project.paths().root().join("ws/t-3");
+    let root = project.paths().root().join(".fold/ws/t-3");
     for (path, content) in files {
         let at = root.join(path);
         fs::create_dir_all(at.parent().unwrap()).unwrap();

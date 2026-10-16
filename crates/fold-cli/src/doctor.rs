@@ -11,7 +11,7 @@ use fold_core::{Clock, FoldError, HostPaths, ProjectPaths, Timestamp, codes};
 use fold_daemon::SystemClock;
 use fold_daemon::services::agents::claude::{AuthStatus, ClaudeVersion, MIN_CLAUDE_VERSION};
 use fold_vcs::git::Git;
-use fold_vcs::git_remote::MIRROR_DIR;
+use fold_vcs::git_remote::folder_has_changes;
 use fold_vcs::git_sync_map::{SYNC_MAP_FILE, SyncMap};
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection, Row, SqliteConnection};
@@ -377,7 +377,7 @@ fn git_check(host: &Host) -> Check {
     } else {
         Check::warn(
             "git",
-            "git is not on PATH; fold needs it for the Git commit of every integration, --from-git, fld remote, fld push and fld pull",
+            "git is not on PATH; fold needs it for fld init, the Git commit of every integration, which the project folder follows, fld remote, fld push and fld pull",
             "install git",
         )
     }
@@ -662,6 +662,7 @@ fn project_checks(
         database_check(&paths.db(), &facts),
         objects_check(&paths.objects()),
         git_history_check(&paths, host),
+        folder_check(&paths, host),
     ];
     checks.push(if watch_applicable {
         degraded_check(&facts, now)
@@ -924,7 +925,7 @@ fn runs_hook(settings: &serde_json::Value, event: &str, command: &str) -> bool {
         .any(|run| run.trim().ends_with(command))
 }
 
-/// Every integration continues the commit `.fold/git-sync.map` names last, so a `.fold/git` without that commit leaves each new revision without its Git commit.
+/// Every integration continues the commit `.fold/git-sync.map` names last, so a project repository without that commit leaves each new revision without its Git commit.
 fn git_history_check(paths: &ProjectPaths, host: &Host) -> Check {
     const NAME: &str = "git history";
     let fold_dir = paths.fold_dir();
@@ -944,14 +945,45 @@ fn git_history_check(paths: &ProjectPaths, host: &Host) -> Check {
     let Some(program) = on_path("git", host.path.as_deref()) else {
         return Check::not_applicable(NAME);
     };
-    match Git::new(program).has_commit(&fold_dir.join(MIRROR_DIR), &commit) {
-        Ok(true) => Check::ok(NAME, format!("{revision} has its Git commit in .fold/git")),
+    match Git::new(program).has_commit(&paths.git_dir(), &commit) {
+        Ok(true) => Check::ok(NAME, format!("{revision} has its Git commit in .git")),
         _ => Check::warn(
             NAME,
             format!(
-                ".fold/git does not hold {commit}, the commit of {revision}, so new revisions get no Git commit"
+                ".git does not hold {commit}, the commit of {revision}, so new revisions get no Git commit"
             ),
             "run fld remote set <name> <url> with a repository that holds that commit, then fld pull <name>",
+        ),
+    }
+}
+
+/// The project folder follows main only while its index and tracked files match its branch, as Git's `updateInstead` requires, so changes that are not committed hold it back.
+fn folder_check(paths: &ProjectPaths, host: &Host) -> Check {
+    const NAME: &str = "project folder";
+    let Some(program) = on_path("git", host.path.as_deref()) else {
+        return Check::not_applicable(NAME);
+    };
+    if !paths.git_dir().is_dir() {
+        return Check::warn(
+            NAME,
+            "the project folder has no Git repository in .git, so it cannot follow main",
+            "re-create the project with fld init",
+        );
+    }
+    match folder_has_changes(&Git::new(program), paths) {
+        Ok(false) => Check::ok(
+            NAME,
+            "the project folder has no changes that are not committed",
+        ),
+        Ok(true) => Check::warn(
+            NAME,
+            "the project folder has changes that are not committed, so it does not follow main",
+            "commit or stash the changes; fold brings the folder to main at the next integration or daemon start",
+        ),
+        Err(_) => Check::warn(
+            NAME,
+            "git cannot read the state of the project folder",
+            "run git status in the project folder",
         ),
     }
 }

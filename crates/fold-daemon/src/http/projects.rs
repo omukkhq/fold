@@ -47,6 +47,25 @@ pub struct ProjectOverview {
     /// UTC milliseconds of the newest stored event; null when nothing happened yet.
     #[schema(value_type = Option<i64>, required = true)]
     pub last_change_at: Option<Timestamp>,
+    /// What needs a person in the project as a whole, beside the attention items of its tasks; empty when nothing does.
+    pub attention: Vec<ProjectAttentionKind>,
+}
+
+/// Why the project, rather than one of its tasks, needs a person. The daemon decides every kind. `outside_commits`: the Git branch of main has commits fold did not write, so the project folder stops following main until a human runs `fld pull`. `uncommitted_changes`: the project folder has changes that are not committed, so it follows main again once the human commits or stashes them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectAttentionKind {
+    OutsideCommits,
+    UncommittedChanges,
+}
+
+impl From<projects::ProjectAttention> for ProjectAttentionKind {
+    fn from(attention: projects::ProjectAttention) -> Self {
+        match attention {
+            projects::ProjectAttention::OutsideCommits => Self::OutsideCommits,
+            projects::ProjectAttention::UncommittedChanges => Self::UncommittedChanges,
+        }
+    }
 }
 
 /// The number of tasks in each board column.
@@ -90,6 +109,7 @@ impl From<projects::ProjectOverview> for ProjectOverview {
                 .collect(),
             head: overview.head.map(|head| head.to_string()),
             last_change_at: overview.last_change_at,
+            attention: overview.attention.into_iter().map(Into::into).collect(),
         }
     }
 }

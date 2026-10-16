@@ -32,7 +32,7 @@ mod git;
 mod hook_session_start;
 mod hook_stop;
 mod init;
-mod init_from;
+mod init_folder;
 mod remote;
 #[cfg(feature = "dev-seed")]
 mod seed_dev;

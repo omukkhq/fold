@@ -9,7 +9,7 @@ use fold_core::config::{
 use fold_core::{FoldError, GitConfig, ProjectConfig, ProjectPaths, codes};
 use fold_daemon::services::projects::{ProjectError, slug_for_dir_on_host};
 use fold_vcs::git::Git;
-use fold_vcs::git_remote::{MIRROR_DIR, default_branch, prepare_mirror, remove_remote};
+use fold_vcs::git_remote::{default_branch, prepare_mirror, project_repository, remove_remote};
 use hyper::Method;
 use thiserror::Error;
 use toml_edit::{DocumentMut, Item, Table, value};
@@ -146,7 +146,7 @@ fn project_paths(project: Option<&Path>) -> Result<ProjectPaths, FoldError> {
     Ok(paths)
 }
 
-/// Writes `[remotes.<name>]` of `.fold/config.toml`, keeping every other line and comment and the remote's `push_on_integrate`, after the mirror `.fold/git/` points its remote `<name>` at the URL. Without a branch, the branch the remote's `HEAD` names is used. It changes no database row, so it needs no daemon.
+/// Writes `[remotes.<name>]` of `.fold/config.toml`, keeping every other line and comment and the remote's `push_on_integrate`, after the project's Git repository points its remote `<name>` at the URL. Without a branch, the branch the remote's `HEAD` names is used. It changes no database row, so it needs no daemon.
 fn set(
     paths: &ProjectPaths,
     args: &SetArgs,
@@ -156,7 +156,7 @@ fn set(
     check_remote_name(&args.name)?;
     check_remote(&args.url)?;
     let url = absolute_if_local(&args.url)?;
-    let mirror = paths.fold_dir().join(MIRROR_DIR);
+    let mirror = project_repository(paths)?;
     let branch = match &args.branch {
         Some(branch) => {
             check_branch(branch)?;
@@ -196,12 +196,12 @@ fn set(
     Ok(())
 }
 
-/// Deletes `[remotes.<name>]` from the config and the remote with its fetched refs from the mirror.
+/// Deletes `[remotes.<name>]` from the config and the remote with its fetched refs from the project's Git repository.
 fn remove(paths: &ProjectPaths, name: &str, out: &mut impl Write) -> Result<(), RemoteError> {
     check_remote_name(name)?;
     let text = read_config(&paths.config())?;
     let edited = without_remote(&text, name)?;
-    remove_remote(&Git::default(), &paths.fold_dir().join(MIRROR_DIR), name)?;
+    remove_remote(&Git::default(), &paths.git_dir(), name)?;
     write_config(&paths.config(), &edited)?;
     output::line(out, &format!("remote {name} removed"))?;
     Ok(())
@@ -250,7 +250,7 @@ fn read_config(path: &Path) -> Result<String, FoldError> {
     }
 }
 
-/// A local path is made absolute from the working directory, whether or not it exists yet, because Git would resolve a relative one from the mirror. A remote is a URL, as Git reads it, when it holds `://` or a `:` before its first `/` (`host:path` and `<transport>::<address>`); it stays as given.
+/// A local path is made absolute from the working directory, whether or not it exists yet, because Git would resolve a relative one from the project's repository. A remote is a URL, as Git reads it, when it holds `://` or a `:` before its first `/` (`host:path` and `<transport>::<address>`); it stays as given.
 fn absolute_if_local(url: &str) -> Result<String, FoldError> {
     let colon = url.find(':');
     let is_url = url.contains("://")
@@ -839,8 +839,8 @@ mod tests {
         let root = dir.path().join("app");
         std::fs::create_dir_all(root.join(".fold")).unwrap();
         std::fs::write(root.join(".fold/fold.db"), "").unwrap();
-        std::fs::create_dir_all(root.join("ws/one/src")).unwrap();
-        assert_eq!(find_project(&root.join("ws/one/src")), root);
+        std::fs::create_dir_all(root.join(".fold/ws/one/src")).unwrap();
+        assert_eq!(find_project(&root.join(".fold/ws/one/src")), root);
         assert_eq!(find_project(&root), root);
         let outside = dir.path().join("elsewhere");
         assert_eq!(find_project(&outside), outside);
@@ -886,7 +886,7 @@ mod tests {
                 &fold_core::ManualClock::new(),
             ))
             .unwrap();
-        let paths = project_paths(Some(&root.join("main"))).unwrap();
+        let paths = project_paths(Some(&root)).unwrap();
         // A repository whose HEAD names `trunk` gives the default branch.
         let source = dir.path().join("source");
         std::fs::create_dir(&source).unwrap();
@@ -938,8 +938,7 @@ mod tests {
             "{listed}"
         );
         assert!(!listed.contains("token") && !listed.contains("only"));
-        let mirror = root.join(".fold/git");
-        assert!(mirror.join("HEAD").is_file());
+        assert!(root.join(".git/HEAD").is_file());
 
         // A missing local path or an empty repository has no default branch.
         for missing in [dir.path().join("absent"), {

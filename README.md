@@ -8,9 +8,11 @@ fold is a local-first platform where independent AI coding agents plan, build, r
 
 ### Projects and the daemon
 
+A project is one folder, and its files are fold main: the code every integration changes. The folder's own Git repository in `.git` gets one commit per integration, and when the folder has no changes that are not committed, fold moves its checked-out branch and its files to that commit, as Git's `receive.denyCurrentBranch=updateInstead` does. A folder with such changes, or a branch with commits made outside fold, waits until the human commits or stashes them or runs `fld pull`. fold keeps its data in `.fold/`, which `.git/info/exclude` keeps out of Git, and each agent works in its own workspace in `.fold/ws/`.
+
 | Command | What it does |
 |---|---|
-| `fld init [DIR]` | Creates a project, registers it and writes its Claude Code files. Without `DIR` the project is the working directory; with `DIR` fold creates that directory and fails when it exists already (then run `cd DIR && fld init`). `--name` sets the project name, `--from <path>` makes the files of a directory the first revision (honouring `.gitignore` and `.foldignore`), `--from-git <repo>` makes the committed tree at a Git repository's `HEAD` the first revision, and `--refresh` rewrites the Claude Code files of an existing project, keeping every entry fold does not own. |
+| `fld init [DIR]` | Makes a folder a project, registers it and writes its Claude Code files. Without `DIR` the project is the working directory; with `DIR` fold creates that directory and fails when it exists already (then run `cd DIR && fld init`). The folder must not be a Git repository or inside one: fold runs `git init` there, and the folder's files, less the ignore rules, become the first revision and its first commit, together with the Claude Code files and, for a folder without a `.gitignore`, a `.foldignore` and a `.gitignore` symlink to it, so `git status` is clean after init. `--from-git` makes the Git repository in the working directory, or in an existing `DIR`, the project instead: its tree must be clean with a branch checked out, its history stays, and the commit at `HEAD` is the first revision. `--name` sets the project name, and `--refresh` rewrites the Claude Code files of an existing project, keeping every entry fold does not own. |
 | `fld serve` | Runs the daemon in the foreground. `--listen` sets the HTTP address (default `127.0.0.1:7420`) and `--web-dir` serves the web files from a folder instead of the binary. |
 | `fld setup` | Writes the systemd user unit that starts the daemon at login, then enables and starts it. `--no-start` only writes the unit. |
 | `fld doctor` | Checks the host, the daemon and each project, and names the fix for every problem. `--project` checks one project only. |
@@ -27,11 +29,11 @@ fold is a local-first platform where independent AI coding agents plan, build, r
 | `fld token list` | Lists the unrevoked web tokens: id, human, creation and last use, never the token. |
 | `fld token revoke <id>` | Revokes a web token, such as `wt-3`, and ends every web session made from it. |
 
-Claude Code also runs `fld hook session-start` and `fld hook stop` from the `.claude/settings.json` that `fld init` writes; people never type them, so `fld --help` does not list them.
+Claude Code also runs `fld hook session-start`, `fld hook stop` and `fld hook pre-tool-use` from the `.claude/settings.json` that `fld init` writes; people never type them, so `fld --help` does not list them. The `pre-tool-use` hook refuses an agent's file edit in the project folder outside its workspace in `.fold/ws/`, because main changes only through integration; a session started without `FOLD_AGENT`, such as your own, edits the folder as usual.
 
 ### Git
 
-Every integration becomes one Git commit, at once and with no command, in the project's own repository `.fold/git` on the `[git]` branch (default `main`). Its subject is the proposal title, its body the task title, and trailers name the proposal, version, task, revision, reviewers and integrator. A project can name several remote Git repositories, each with its own branch, in `[remotes.<name>]` of `.fold/config.toml`; these commands manage them, copy main's history to them and bring their commits in.
+Every integration becomes one Git commit, at once and with no command, in the project folder's own repository `.git` on the `[git]` branch (default `main`, or the branch a `--from-git` repository had checked out). Its subject is the proposal title, its body the task title, and trailers name the proposal, version, task, revision, reviewers and integrator. A project can name several remote Git repositories, each with its own branch, in `[remotes.<name>]` of `.fold/config.toml`; these commands manage them, copy main's history to them and bring their commits in.
 
 | Command | What it does |
 |---|---|
@@ -39,7 +41,7 @@ Every integration becomes one Git commit, at once and with no command, in the pr
 | `fld remote remove <name>` | Deletes a remote and the refs fetched from it. |
 | `fld remote list` | Lists the remotes: name, branch and URL without credentials, and which one is the only remote. `fld remote` alone prints the same. |
 | `fld push [<name>]` | Pushes main's Git history, one commit per revision, to the remote's branch, without force; a local path that does not exist becomes a new bare repository. Without a name it uses the only remote. |
-| `fld pull [<name>]` | Brings the commits of the remote's branch into main; a conflict becomes a sync task. Without a name it uses the only remote. |
+| `fld pull [<name>]` | Brings the commits of the remote's branch into main; a conflict becomes a sync task. Without a name it uses the only remote. When the project's own branch has commits made outside fold, `fld pull` without a name brings those in, and `fld pull <name>` refuses until it has. |
 
 ## Developer setup
 
