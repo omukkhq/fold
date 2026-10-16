@@ -161,6 +161,26 @@ export interface TeamGroup {
   /** The area lead's open task count, for an area group. */
   owned: number;
   area: string | null;
+  /** The area's profile, for an area group; empty for every other group. */
+  profile: AreaProfileView;
+}
+
+/** What an area's profile sets, as its group head shows it: short facts on the head line, the instructions after them. */
+export interface AreaProfileView {
+  facts: string[];
+  instructions: string | null;
+}
+
+const NO_PROFILE: AreaProfileView = { facts: [], instructions: null };
+
+/** `model opus` and `MCP fold, pencil` for the fields the profile sets; a field it leaves to the role is not shown. */
+export function areaProfile(area: AreaEntry | null): AreaProfileView {
+  if (area === null) return NO_PROFILE;
+  const facts = [
+    ...(area.model === null ? [] : [`model ${area.model}`]),
+    ...(area.mcp === null ? [] : [`MCP ${area.mcp.join(", ")}`]),
+  ];
+  return { facts, instructions: area.instructions };
 }
 
 export interface TeamInput {
@@ -434,6 +454,7 @@ export function teamGroups(input: TeamInput): TeamGroup[] {
       label: null,
       area: null,
       owned: 0,
+      profile: NO_PROFILE,
       rows: mains.map((agent) => mainRow(agent, input.human)),
     });
   }
@@ -458,6 +479,7 @@ export function teamGroups(input: TeamInput): TeamGroup[] {
       label: areaLabel(areas, input.labels, name),
       area: name === "" ? null : name,
       owned: area ? ownedTasks(input.cards, area.label) : 0,
+      profile: areaProfile(area),
       rows: orderRows(members, input),
     });
   }
@@ -471,6 +493,7 @@ export function teamGroups(input: TeamInput): TeamGroup[] {
       label: null,
       area: null,
       owned: 0,
+      profile: NO_PROFILE,
       rows: orderRows(review, input),
     });
   }

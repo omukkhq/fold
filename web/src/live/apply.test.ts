@@ -601,6 +601,14 @@ describe("invalidation rules", () => {
     expect(hit(keys.workers(slug))).toBe(true);
   });
 
+  it("refreshes the workers for a new or changed area", () => {
+    for (const type of ["area.defined", "area.updated"]) {
+      invalidated = [];
+      applyEvent(client, slug, ev(type));
+      expect(hit(keys.workers(slug))).toBe(true);
+    }
+  });
+
   it("refreshes the needs-you list for the events that change it", () => {
     const cases: [string, Record<string, unknown>][] = [
       ["message.sent", {}],

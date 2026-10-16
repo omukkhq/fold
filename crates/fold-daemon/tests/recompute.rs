@@ -5,8 +5,8 @@ use fold_core::dag::Dag;
 use fold_core::events::types;
 use fold_core::status::{ProposalFact, TaskFacts, calculate};
 use fold_core::{
-    Actor, AgentActor, Event, EventActor, EventFilter, TaskDescription, TaskId, TaskStatus,
-    TaskTitle, WorkerName,
+    Actor, AgentActor, Event, EventActor, EventFilter, TaskDescription, TaskId, TaskKind,
+    TaskStatus, TaskTitle, WorkerName,
 };
 use fold_daemon::services::events::EventBus;
 use fold_daemon::services::tasks::{self, CreateTask, TaskError, TaskService};
@@ -151,9 +151,12 @@ impl Fixture {
         let mut expected: BTreeMap<TaskId, TaskStatus> = BTreeMap::new();
         for task in dag.topological_order(stored.keys().copied()) {
             let facts = TaskFacts {
+                kind: TaskKind::Proposal,
                 completed: completed.contains(&task.to_db()),
                 proposal: ProposalFact::None,
                 has_active_workspace: false,
+                claimed: false,
+                reported: false,
                 prerequisites: dag
                     .prerequisites(task)
                     .into_iter()

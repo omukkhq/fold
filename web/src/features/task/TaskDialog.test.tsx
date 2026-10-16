@@ -94,6 +94,8 @@ beforeAll(() => {
 const ui = { name: "ui", color: "sage" };
 const auth = { name: "auth", color: "slate" };
 const STEP = "Map invalid_credentials and rate_limited to messages";
+const DESIGN = "Update the board screens in Pencil";
+const REPORT = "Drew the five board screens.";
 
 /** The tasks of the project, kept by the fake daemon between requests. */
 let tasks: Map<string, TaskDetail>;
@@ -175,7 +177,59 @@ function seed(): void {
       taskView("T-13", { title: "Form field components", status: "done" }),
     ],
     ["T-16", taskView("T-16", { title: "Scaffold the web app" })],
+    [
+      "T-7",
+      taskView("T-7", {
+        title: DESIGN,
+        kind: "no_proposal",
+        status: "review",
+        claims: [
+          {
+            kind: "implementation",
+            holder: "design-coder",
+            claimed_at: 1_000,
+            renewed_at: 2_000,
+            stale: false,
+          },
+        ],
+        reports: [
+          {
+            by: "design-coder",
+            note: REPORT,
+            at: 2_000,
+            resolution: null,
+            resolved_by: null,
+            resolved_at: null,
+            send_back_note: null,
+          },
+        ],
+      }),
+    ],
   ]);
+}
+
+/** The lead check the fake daemon writes for T-7: the first report answered `resolution`, and the status that follows. */
+function check(
+  resolution: "completed" | "sent_back",
+  note: string | null,
+): TaskDetail {
+  const task = view("T-7");
+  const [first, ...rest] = task.reports;
+  if (!first) throw new Error("T-7 has no report");
+  return patch("T-7", {
+    status: resolution === "completed" ? "done" : "in_progress",
+    claims: resolution === "completed" ? [] : task.claims,
+    reports: [
+      {
+        ...first,
+        resolution,
+        resolved_by: "human:tanim",
+        resolved_at: 3_000,
+        send_back_note: note,
+      },
+      ...rest,
+    ],
+  });
 }
 
 function cardOf(task: TaskDetail): BoardCard {
@@ -186,6 +240,11 @@ function cardOf(task: TaskDetail): BoardCard {
     labels: task.labels,
     worker: task.claims[0]?.holder ?? null,
     workspace: task.workspace,
+    kind: task.kind,
+    report:
+      task.kind === "no_proposal" && task.status === "review"
+        ? (task.reports[0]?.note ?? null)
+        : null,
   });
 }
 
@@ -394,6 +453,13 @@ function registerDaemon(): void {
       },
     ];
     return ok({}, 201);
+  });
+  daemon.on(`POST ${P}/:slug/tasks/:id/complete`, () =>
+    ok(check("completed", null)),
+  );
+  daemon.on(`POST ${P}/:slug/tasks/:id/send-back`, (call) => {
+    const { note } = call.body as { note: string };
+    return ok(check("sent_back", note));
   });
   daemon.on(`POST ${P}/:slug/tasks/:id/archive`, (call) => {
     if (archiveRefusal) {
@@ -1339,6 +1405,112 @@ describe("the human edits", () => {
         within(messages).getByRole("option", { name: "frontend/ui" }),
       ).toBeTruthy();
     }, WAIT);
+  }, 15_000);
+});
+
+describe("a task without a proposal", () => {
+  it("shows the report and completes the task with a pending state", async () => {
+    const { dialog } = await openTask("T-7", DESIGN);
+    const lead = region(dialog, "Lead check");
+    expect(within(lead).getByText("Waits for a lead check")).toBeTruthy();
+    expect(within(lead).getByText(REPORT)).toBeTruthy();
+    expect(
+      within(dialog).queryByRole("region", { name: "Proposal" }),
+    ).toBeNull();
+    expect(
+      within(dialog).queryByRole("region", { name: "Workspace" }),
+    ).toBeNull();
+    await userEvent.click(
+      within(lead).getByRole("button", { name: "Complete task" }),
+    );
+    expect(
+      within(lead)
+        .getByRole("button", { name: "Complete task" })
+        .getAttribute("aria-busy"),
+    ).toBe("true");
+    expect(
+      await within(region(dialog, "Lead check")).findByText(
+        "Completed by a lead check",
+        {},
+        WAIT,
+      ),
+    ).toBeTruthy();
+    expect(
+      within(region(dialog, "Lead check")).queryByRole("button", {
+        name: "Complete task",
+      }),
+    ).toBeNull();
+    expect(daemon.made(`POST ${P}/demo/tasks/T-7/complete`)).toHaveLength(1);
+  }, 15_000);
+
+  it("sends the task back with a note, refusing an empty one", async () => {
+    const { dialog } = await openTask("T-7", DESIGN);
+    const lead = region(dialog, "Lead check");
+    await userEvent.click(
+      within(lead).getByRole("button", { name: "Send back" }),
+    );
+    const form = within(lead).getByRole("form", {
+      name: "Send the task back",
+    });
+    await userEvent.click(
+      within(form).getByRole("button", { name: "Send back" }),
+    );
+    expect(
+      await within(form).findByText("Say what the coder must change."),
+    ).toBeTruthy();
+    expect(daemon.made(`POST ${P}/demo/tasks/T-7/send-back`)).toHaveLength(0);
+    await userEvent.type(
+      within(form).getByRole("textbox", { name: "Note to the coder" }),
+      "Use the colour tokens.",
+    );
+    await userEvent.click(
+      within(form).getByRole("button", { name: "Send back" }),
+    );
+    expect(
+      within(form)
+        .getByRole("button", { name: "Send back" })
+        .getAttribute("aria-busy"),
+    ).toBe("true");
+    const after = region(dialog, "Lead check");
+    expect(
+      await within(after).findByText("Sent back to the coder", {}, WAIT),
+    ).toBeTruthy();
+    expect(within(after).getByText("Use the colour tokens.")).toBeTruthy();
+    expect(daemon.made(`POST ${P}/demo/tasks/T-7/send-back`)[0]?.body).toEqual({
+      note: "Use the colour tokens.",
+    });
+  }, 15_000);
+
+  it("marks the card in Review with the report note", async () => {
+    setup("/p/demo/board");
+    const title = await screen.findByRole("link", { name: DESIGN }, WAIT);
+    const card = title.closest<HTMLElement>("[data-task]");
+    if (!card) throw new Error("no card");
+    expect(card.dataset.task).toBe("T-7");
+    expect(within(card).getByText("Waits for lead check")).toBeTruthy();
+    expect(within(card).getByText(REPORT)).toBeTruthy();
+    expect(within(card).getByText("no proposal")).toBeTruthy();
+  }, 15_000);
+
+  it("creates a task that needs no proposal", async () => {
+    setup("/p/demo/t/new");
+    const dialog = await screen.findByRole("dialog", {}, WAIT);
+    await userEvent.type(
+      within(dialog).getByRole("textbox", { name: "Title" }),
+      "Draw the icons",
+    );
+    await userEvent.click(
+      within(dialog).getByRole("checkbox", { name: "Needs no proposal" }),
+    );
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Create task" }),
+    );
+    await screen.findByRole("heading", { name: "Draw the icons" }, WAIT);
+    expect(daemon.made(`POST ${P}/demo/tasks`)[0]?.body).toEqual({
+      title: "Draw the icons",
+      description: "",
+      kind: "no_proposal",
+    });
   }, 15_000);
 });
 

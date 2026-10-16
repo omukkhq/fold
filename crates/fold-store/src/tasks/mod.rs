@@ -1,7 +1,7 @@
 use fold_core::reviews::HumanReviewMark;
 use fold_core::{
-    EventActor, HumanName, LabelColor, LabelName, TaskDescription, TaskId, TaskStatus, TaskTitle,
-    Timestamp,
+    EventActor, HumanName, LabelColor, LabelName, TaskDescription, TaskId, TaskKind, TaskStatus,
+    TaskTitle, Timestamp,
 };
 use sqlx::{SqliteConnection, SqliteExecutor, SqlitePool};
 
@@ -16,6 +16,7 @@ mod human_review;
 mod ready;
 mod recompute;
 mod removal;
+pub mod reports;
 pub mod requests;
 mod views;
 
@@ -49,6 +50,7 @@ pub struct TaskRow {
     pub human_review: Option<HumanReviewMark>,
     pub status: TaskStatus,
     pub blocked: bool,
+    pub kind: TaskKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,6 +67,7 @@ pub struct NewTask<'a> {
     pub title: &'a TaskTitle,
     pub description: &'a TaskDescription,
     pub created_by: &'a str,
+    pub kind: TaskKind,
     pub now: Timestamp,
 }
 
@@ -82,6 +85,7 @@ struct RawTask {
     human_review_set_by: Option<String>,
     status: String,
     blocked: bool,
+    kind: String,
 }
 
 impl RawTask {
@@ -108,6 +112,10 @@ impl RawTask {
                 .parse()
                 .map_err(|_| StoreError::Corrupt("tasks.status"))?,
             blocked: self.blocked,
+            kind: self
+                .kind
+                .parse()
+                .map_err(|_| StoreError::Corrupt("tasks.kind"))?,
         })
     }
 }
@@ -156,14 +164,16 @@ pub async fn insert(tx: &mut WriteTx, task: &NewTask<'_>) -> Result<(), StoreErr
     let number = task.number.to_db();
     let title = task.title.as_str();
     let description = task.description.as_str();
+    let kind = task.kind.as_str();
     let now = task.now.as_millis();
     sqlx::query!(
-        "INSERT INTO tasks (number, title, description, created_by, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+        "INSERT INTO tasks (number, title, description, created_by, kind, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
         number,
         title,
         description,
         task.created_by,
+        kind,
         now
     )
     .execute(tx.conn())
@@ -280,7 +290,7 @@ pub async fn fetch(
         RawTask,
         r#"SELECT number, title, description, created_by, created_at, updated_at, archived_at,
                   human_review AS "human_review: bool", human_reviewer, human_review_reason,
-                  human_review_set_by, status, blocked AS "blocked: bool"
+                  human_review_set_by, status, blocked AS "blocked: bool", kind
            FROM tasks WHERE number = ?"#,
         number
     )
@@ -296,7 +306,7 @@ pub async fn list(pool: &SqlitePool, include_archived: bool) -> Result<Vec<TaskR
         RawTask,
         r#"SELECT number, title, description, created_by, created_at, updated_at, archived_at,
                   human_review AS "human_review: bool", human_reviewer, human_review_reason,
-                  human_review_set_by, status, blocked AS "blocked: bool"
+                  human_review_set_by, status, blocked AS "blocked: bool", kind
            FROM tasks WHERE ?1 OR archived_at IS NULL ORDER BY number"#,
         include_archived
     )

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE task_reports SET resolution = ?2, resolved_by = ?3, resolved_at = ?4, send_back_note = ?5\n         WHERE resolution IS NULL AND task_id = (SELECT id FROM tasks WHERE number = ?1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "2b9c00648facb255efa9bac21e81ef875333c8eaf3c01055a9117793eef69ab3"
+}

@@ -9,11 +9,16 @@ use crate::task::LabelName;
 
 mod answers;
 mod handoff;
+mod profile;
 
 pub use answers::{PermissionBehavior, ask_answer_turn, permission_answer_turn};
 pub use handoff::{
     HANDOFF_REQUEST, HANDOFF_TURNS, MAX_HANDOFF_CHARS, RefreshFacts, SUMMARY_ITEMS,
     SummaryProposal, SummaryTask, check_handoff, handoff_due, handoff_overdue, refresh_turn,
+};
+pub use profile::{
+    AreaProfile, AreaProfileChange, AreaProfileRequest, FieldChange, MAX_AREA_INSTRUCTIONS_CHARS,
+    area_prompt,
 };
 
 /// The kinds of worker agent fold starts and supervises. The main agent is the user's own interactive session and has no role.

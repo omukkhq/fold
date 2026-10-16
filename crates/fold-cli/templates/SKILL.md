@@ -52,7 +52,7 @@ You get news in four ways:
 The main agent is the session the user talks to. It runs the team through fold: it handles requests, decides the areas, plans the tasks and starts the leads. The leads, the coders and the reviewers do the rest.
 
 1. Handle every request as described in Requests: claim it, ask in its thread when the message is not clear, draft the cards with the label of the area that must build each one, and revise the draft until the requester approves it. When the user asks you for work in the conversation, plan the tasks yourself with `create_task` and `add_dependency`.
-2. Decide the areas. An area is a part of the project that one lead can own, such as `backend` or `web`. Make its label with `create_label`, then call `define_area(name, label)`. Give every task the label of its area.
+2. Decide the areas. An area is a part of the project that one lead can own, such as `backend` or `web`. Make its label with `create_label`, then call `define_area(name, label, instructions?, model?, mcp?)`. Give every task the label of its area. When the work of an area needs a special setup, give the area a profile: for example, the area `design` gets the instructions "draw screens in Pencil", the MCP servers `["fold", "pencil"]` and a model. Change a profile with `update_area(name, instructions?, model?, mcp?, clear_instructions?, clear_model?, clear_mcp?)`.
 3. Plan the tasks as described in Orchestrator. Put every dependency in the graph, and split a large task into child tasks.
 4. Call `require_human_review(task, reviewer?, reason)` when the user wants a human to review a task.
 5. Start one `area_lead` for each area and one `review_lead` with `start_worker`. Tell each lead in `instructions` what is important for its area. The area leads start the task coders, and the review lead starts the batch reviewers. You do not start them.
@@ -68,7 +68,7 @@ While one agent has the `main` tag, only that agent defines areas, starts leads 
 An orchestrator keeps the task graph correct and the workers busy.
 
 1. Read the graph with `get_task_graph` and one task with `get_task(id)`. Read what each worker does with `get_activity(agent?)`: claims, workspaces with changed files, latest checkpoints and open proposals.
-2. Create a task with `create_task(title, description?, labels?, needs?, parent?)`. Write the description with the task template below. Change it with `update_task`, and remove it with `delete_task` or `archive_task`.
+2. Create a task with `create_task(title, description?, labels?, needs?, parent?, kind?)`. Write the description with the task template below. Give `kind` the value `no_proposal` for work that changes no project file, such as screens drawn through an MCP server (see Worker). Change it with `update_task`, and remove it with `delete_task` or `archive_task`.
 3. Put every dependency in the graph with `add_dependency(task, needs)`. Remove one with `remove_dependency`. A dependency that would close a cycle fails with `dependency_cycle`.
 4. Split a large task with a parent and child tasks. Add each child to the parent's checklist with `add_checklist_item(task, text? / linked_task?, checklist?)`. With `linked_task` the item follows the child task, and fold ticks it when the child is Done. Change a plain item with `update_checklist_item(id, text?, done?)`. Move an item with `move_checklist_item(id, position, checklist?)`: the position counts from 0, a position past the end puts the item last, and `checklist` moves it into another checklist of the same task. Remove an item with `remove_checklist_item`.
 5. Sort tasks with labels. Make one with `create_label(name, color)`.
@@ -92,6 +92,8 @@ A worker builds one task at a time.
 9. Read the review with `get_review_comments(id, version?)`. Fix the points in the workspace, record again, and call `update_proposal(id, evidence?)`. This opens `v2`, which starts without approvals.
 10. Call `close_proposal(id, reason)` to withdraw a proposal. `abandon_workspace(ws, reason)` refuses with `invalid_request` and the reason `proposal_open` while a proposal for the task is open: call `close_proposal` first.
 11. Call `release_task(id)` when you cannot finish the task. Call `takeover_claim(id)` to take a task whose claim is stale. It fails with `claim_not_stale` while the lease is valid.
+
+A task of kind `no_proposal` has no workspace and no proposal; `create_workspace` and `create_proposal` refuse it with `task_kind_mismatch`. Claim it with `claim_task`, which moves it to In Progress, do the work with the tools the task names, then call `report_task(id, note)`. The task moves to Review and waits for a lead check: the lead of its area, the main agent or a human reads the report with `get_task` and calls `complete_task(id)`, which makes the task Done, or `send_back_task(id, note)`, which returns it to In Progress with the note. A task with the human review mark is completed only by a human, whose check is the human review; an agent gets `human_approval_missing`. A coder never completes its own task, and a reviewer never checks one.
 
 ## Reviewer
 
@@ -151,12 +153,12 @@ A subagent works as a worker of your agent. The orchestrator calls `register_wor
 
 fold can run agents for you. Each worker agent is a headless Claude Code session that fold starts, feeds with notices, watches and stops. It has its own agent name and works through the same tools as you.
 
-1. The main agent, which is the user's own interactive session, or a human defines each area with `define_area(name, label)`. The tasks with that label belong to the area. Create the label with `create_label` first.
+1. The main agent, which is the user's own interactive session, or a human defines each area with `define_area(name, label, instructions?, model?, mcp?)`. The tasks with that label belong to the area. Create the label with `create_label` first. The instructions, the model and the MCP servers are the area's profile: the area lead and the task coders of the area start with them. fold adds the instructions to their system prompt, and `mcp` names servers of the project's `.mcp.json` or `fold`. A field that the profile does not set comes from the role in `.fold/config.toml`, and a `model` or `instructions` that `start_worker` gives comes first. The main agent or a human changes a profile with `update_area`; the next start gets the new profile, and a running worker keeps its own. `list_workers` shows each area's profile.
 2. The main agent or a human starts the leads with `start_worker(role, name?, area?, model?, instructions?)`: one `area_lead` for each area and one `review_lead`. A start for an area whose lead is stopped or failed resumes that lead. When the lead's session is gone, fold starts it in a new session whose first turn holds its latest hand-off note.
 3. An area lead starts a `task_coder` with `start_worker(role, tasks[], model?, instructions?)` for tasks of its own area. A task without the area's label fails with `task_outside_area`.
 4. The review lead starts a `batch_reviewer` with `start_worker(role, proposals[], model?, instructions?)` for related proposals.
 5. Nobody else starts a worker. A subagent worker, a task coder, a batch reviewer or a lead of another kind gets `worker_start_denied` or `main_agent_required`, and another agent that fold does not supervise gets `orchestrator_required` while the main agent exists.
-6. fold stops a task coder when each of its tasks is Done, is integrated or has an open proposal with no changes requested and no conflict, a batch reviewer when each of its proposals has a verdict, and either one after `idle_minutes` without a turn. Call `stop_worker(name)` to stop a worker. A stopped worker keeps its session, so fold can resume it.
+6. fold stops a task coder when each of its tasks is Done, is integrated, is reported with `report_task` or has an open proposal with no changes requested and no conflict, a batch reviewer when each of its proposals has a verdict, and either one after `idle_minutes` without a turn. Call `stop_worker(name)` to stop a worker. A stopped worker keeps its session, so fold can resume it.
 7. `list_workers` shows the areas with their leads and every worker with its role, state, tasks or proposals, turns, cost and context size.
 8. A start over the limits in `.fold/config.toml` fails with `worker_limit_reached`, and its hint names the role and its limit. By default 4 task coders and 3 batch reviewers run at a time. The leads are outside the limits, so a start of a lead is never refused for them. The main agent or a human changes the limits with `set_worker_limits(task_coder?, batch_reviewer?, max_per_area?, clear_max_per_area?)`: fold rewrites `[workers]` in `.fold/config.toml`, the next start follows the new numbers, and `list_workers` shows them. A lead or another agent gets `main_agent_required` or `orchestrator_required`. A limit has no upper bound, and a limit of 0 lets no worker of that role start.
 9. When a review requests changes on a stopped task coder's proposal, or the proposal conflicts with main at integration, fold resumes that coder in its own session with the comments or the conflicting paths and the `sync_workspace` step. It stops again when it posts the new version with `update_proposal`. When the worker limits are full, fold resumes it as soon as a worker stops. A coder whose session is gone starts in a new session with the same name, so it stays the author. After a daemon restart, each worker whose session is gone starts in a new session the same way.
@@ -170,15 +172,16 @@ Each role has its own part:
 The area lead owns the tasks with its area's label. It plans and starts coders, and writes no code.
 
 1. Read the tasks of the area with `get_task_graph` and `get_ready_tasks`. Split a large task with `create_task` and `add_dependency`, and give each new task the area's label.
-2. Start a `task_coder` for ready work with `start_worker(role, tasks[], model?, instructions?)`. Choose the model and write the instructions for the tasks. fold sends you a notice when a task of the area becomes ready and nobody holds its claim.
+2. Start a `task_coder` for ready work with `start_worker(role, tasks[], model?, instructions?)`. Choose the model and write the instructions for the tasks. Leave `model` out to use the model of your area's profile. fold sends you a notice when a task of the area becomes ready and nobody holds its claim.
 3. Watch the coders with `list_workers`. fold stops each one when its work is done, and resumes it when its proposal needs changes.
-4. When your context grows large, call `write_handoff(text)` when fold asks for it, then end your turn.
+4. For work that changes no project file, create the task with kind `no_proposal` and start a coder for it. When the coder calls `report_task`, fold sends you a notice. Read the report with `get_task`, check the work, and call `complete_task(id)` or `send_back_task(id, note)`. A send-back resumes the same coder with your note.
+5. When your context grows large, call `write_handoff(text)` when fold asks for it, then end your turn.
 
 ### Review lead
 
 The review lead keeps the open proposals moving.
 
-1. Read the open proposals with `list_proposals` or wait for `proposal.opened` with `wait_for_events`.
+1. Read the open proposals with `list_proposals` or wait for `proposal.opened` with `wait_for_events`. A task of kind `no_proposal` in Review has no proposal and waits for its area lead, not for you.
 2. Put related proposals, such as the proposals of dependent tasks, into one review batch with `create_review_batch(proposals[])`. fold takes the review claim of each one and orders them by their task dependencies. Review a single proposal as described in Reviewer.
 3. Review a batch yourself, or start a `batch_reviewer` for it with `start_worker(role, proposals[], model?, instructions?)` when its tests take long.
 4. To review a batch, call `create_batch_checkout(id)`: a checkout of main with every member merged in order. A member that conflicts with another gives `batch_conflict`. Take it out with `remove_from_batch(id, proposal)` and review it alone. Build and test the checkout once.
@@ -187,7 +190,7 @@ The review lead keeps the open proposals moving.
 
 ### Task coder
 
-A task coder builds the tasks its lead gave it, as described in Worker. It works only in their task workspaces and sends one proposal for each task. When a review requests changes or the proposal conflicts with main, fold resumes it: it changes the work in the same workspace and sends the new version with `update_proposal`. fold stops it when each task has its proposal.
+A task coder builds the tasks its lead gave it, as described in Worker. It works only in their task workspaces and sends one proposal for each task. When a review requests changes or the proposal conflicts with main, fold resumes it: it changes the work in the same workspace and sends the new version with `update_proposal`. fold stops it when each task has its proposal. For a task of kind `no_proposal` it calls `report_task` instead, and fold resumes it with the note when the task is sent back.
 
 ### Batch reviewer
 
@@ -207,8 +210,8 @@ Every error has a stable `code`, a message and a hint that names the next tool. 
 | `already_claimed` | Call `get_ready_tasks` and choose another task. For a request, call `list_requests` and choose another request. |
 | `dependency_cycle` | Call `get_task_graph` and remove the edge that closes the cycle. In a request draft, remove the edge between the cards. |
 | `not_approved` | Call `get_proposal`. The current version needs an approval. |
-| `human_approval_missing` | Call `get_proposal`. A human must approve first. |
-| `prerequisites_not_done` | Call `get_proposal`. A task that this one needs is not Done. |
+| `human_approval_missing` | Call `get_proposal`. A human must approve first. For `complete_task`, the task has the human review mark, so a human completes it. |
+| `prerequisites_not_done` | A task that this one needs is not Done. Call `get_proposal` for a proposal, or `get_task` on each prerequisite in the details for `complete_task`. |
 | `integrator_required` | Call `get_proposal`. An agent with the `integrator` tag or a human must integrate. |
 | `stale_version` | Call `get_proposal`, review the newest version and integrate again. For a request, call `get_request` and read the latest version. |
 | `changes_requested` | Call `get_proposal`. A review of the current version asks for changes. |
@@ -225,6 +228,11 @@ Every error has a stable `code`, a message and a hint that names the next tool. 
 | `task_outside_area` | Start a task coder only for tasks with the label of your own area. Call `get_task` to see the labels. |
 | `area_has_lead` | The area's lead runs already. Send it a message instead. |
 | `worker_limit_reached` | Call `list_workers`. Wait until a worker stops, or stop one with `stop_worker`. |
+| `task_kind_mismatch` | The task's kind does not fit the call. Call `get_task`: a `no_proposal` task ends with `report_task`, any other task with `create_proposal`. |
+| `task_kind_denied` | Only the main agent, a human or the lead of the task's area creates a `no_proposal` task. Create it with the default kind, or ask the main agent. |
+| `task_check_denied` | Only the lead of the task's area, the main agent or a human completes or sends back a `no_proposal` task. Ask that lead. |
+| `task_not_reported` | The task has no report to check. Wait until its coder calls `report_task`. |
+| `task_already_reported` | Your report waits for a lead check. End your turn; fold resumes you if the task is sent back. |
 | `handoff_denied` | Only an area lead or the review lead writes a hand-off note. As the main agent, send yourself the note and run `/clear`. |
 | `worker_peer_refused` | A command in a worker's Bash acts only as that worker's own agent and never as a human. Use the fold tools of your own session. |
 

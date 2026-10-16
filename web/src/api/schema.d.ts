@@ -142,6 +142,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/areas/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** A named human changes an area's profile. The next start of the area's lead or coders gets it; running workers keep theirs. */
+        patch: operations["update_area"];
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/board": {
         parameters: {
             query?: never;
@@ -795,6 +812,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/tasks/{id}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Completes a reported `no_proposal` task after the human checked its work: the report is answered, the claim released and the completion record written, so the task is Done. On a task with the human review mark, this check by a human is the human review. */
+        post: operations["complete_task"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/tasks/{id}/dependencies": {
         parameters: {
             query?: never;
@@ -860,6 +894,23 @@ export interface paths {
         post?: never;
         /** Takes one label off a task and keeps the labels it still has. Taking off a label the task does not carry changes nothing. */
         delete: operations["detach_label"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/tasks/{id}/send-back": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sends a reported `no_proposal` task back to its coder with a note: the task returns to In Progress and fold resumes the coder. */
+        post: operations["send_back_task"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1136,6 +1187,11 @@ export interface components {
         };
         /** @description A part of the project that one area lead owns through one task label. */
         AreaEntry: {
+            /**
+             * @description The instructions every worker of the area starts with; null for none.
+             * @example Draw the screens in Pencil.
+             */
+            instructions: string | null;
             /** @example frontend */
             label: string;
             /**
@@ -1143,6 +1199,19 @@ export interface components {
              * @example web-lead
              */
             lead: string | null;
+            /**
+             * @description The MCP servers the area's lead and coders load; null when the role's servers apply.
+             * @example [
+             *       "fold",
+             *       "pencil"
+             *     ]
+             */
+            mcp: string[] | null;
+            /**
+             * @description The model of the area's lead and coders; null when the role's model applies.
+             * @example opus
+             */
+            model: string | null;
             /** @example web */
             name: string;
         };
@@ -1195,6 +1264,7 @@ export interface components {
              */
             completed_at: number | null;
             human_review: components["schemas"]["HumanReviewMark"] | null;
+            kind: components["schemas"]["TaskKind"];
             labels: components["schemas"]["Label"][];
             /**
              * Format: int32
@@ -1204,6 +1274,8 @@ export interface components {
             /** @description Every direct prerequisite, as public task ids. */
             needs: string[];
             proposal: components["schemas"]["BoardProposal"] | null;
+            /** @description The note of the coder's open report on a `no_proposal` task, which waits for a lead check; null otherwise. */
+            report: string | null;
             status: components["schemas"]["TaskStatus"];
             /** @example T-12 */
             task: string;
@@ -1537,6 +1609,7 @@ export interface components {
         CreateTaskBody: {
             /** @description Markdown; empty when left out. */
             description?: string | null;
+            kind?: components["schemas"]["TaskKind"] | null;
             /** @description Names of existing labels. */
             labels?: string[];
             /** @description Tasks the new task needs; each adds one direct edge. */
@@ -1547,11 +1620,17 @@ export interface components {
             title: string;
         };
         DefineAreaBody: {
+            /** @description What every worker of the area must know about its kind of work, at most 8000 characters. */
+            instructions?: string | null;
             /**
              * @description The task label whose tasks the area owns.
              * @example frontend
              */
             label: string;
+            /** @description The MCP servers of the area's lead and coders, by name; leave it out for the role's servers. */
+            mcp?: string[] | null;
+            /** @description The model of the area's lead and coders; leave it out for the role's model. */
+            model?: string | null;
             /** @example web */
             name: string;
         };
@@ -1654,7 +1733,7 @@ export interface components {
             workspace: string | null;
         };
         /** @enum {string} */
-        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused";
+        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back";
         /**
          * @description `needs`: this task needs the other task. `needed_by`: the other task needs this one.
          * @enum {string}
@@ -2424,6 +2503,11 @@ export interface components {
             /** @example frontend/ui */
             name: string;
         };
+        /**
+         * @description How a lead check answered a report.
+         * @enum {string}
+         */
+        ReportResolution: "completed" | "sent_back";
         RepositoryView: {
             /**
              * @description The revision `main` names; null only before `r1` exists.
@@ -2810,6 +2894,11 @@ export interface components {
             model: string | null;
             role: components["schemas"]["WorkerRole"];
         };
+        /** @description The note a send-back gives the task's coder. */
+        SendBackBody: {
+            /** @description What to change: plain text, not empty. */
+            note: string;
+        };
         /** @description A token off loopback, a name on loopback. */
         SessionRequest: components["schemas"]["TokenSignIn"] | components["schemas"]["NameSignIn"];
         SessionStartContext: {
@@ -2973,6 +3062,11 @@ export interface components {
              */
             revision: string;
         };
+        /**
+         * @description How a task's work reaches Done: `proposal` through the integration of its proposal, `no_proposal` through a lead check of its coder's report.
+         * @enum {string}
+         */
+        TaskKind: "proposal" | "no_proposal";
         TaskList: {
             /** @description In number order. */
             tasks: components["schemas"]["TaskSummary"][];
@@ -2988,6 +3082,27 @@ export interface components {
              * @description The current version.
              */
             version: number;
+        };
+        /** @description A coder's report that the work of a `no_proposal` task is finished, with the lead check that answered it. */
+        TaskReport: {
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            at: number;
+            /** @description The coder's worker. */
+            by: string;
+            note: string;
+            resolution: components["schemas"]["ReportResolution"] | null;
+            /**
+             * Format: int64
+             * @description UTC milliseconds; null while the report waits.
+             */
+            resolved_at: number | null;
+            /** @description A worker or `human:<name>`; null while the report waits. */
+            resolved_by: string | null;
+            /** @description What to change, for a report that was sent back; null otherwise. */
+            send_back_note: string | null;
         };
         TaskReview: {
             /**
@@ -3055,9 +3170,12 @@ export interface components {
              */
             human_review_set_at: number | null;
             integration: components["schemas"]["TaskIntegration"] | null;
+            kind: components["schemas"]["TaskKind"];
             labels: components["schemas"]["Label"][];
             progress: components["schemas"]["ChecklistCounts"];
             proposal: components["schemas"]["TaskProposal"] | null;
+            /** @description The coder's reports on a `no_proposal` task, newest first; the first one without a resolution waits for a lead check. */
+            reports: components["schemas"]["TaskReport"][];
             status: components["schemas"]["TaskStatus"];
             /** @description The rule of the status calculation that decided the status, with the ids it used. */
             status_reason: string;
@@ -3170,6 +3288,18 @@ export interface components {
             entries: components["schemas"]["TreeEntryView"][];
             /** @description The directory listed; empty for the root. */
             path: string;
+        };
+        /** @description A change of an area's profile; a field left out and not cleared stays as it is. */
+        UpdateAreaBody: {
+            /** @description True removes the instructions. */
+            clear_instructions?: boolean;
+            /** @description True gives the area's workers the role's MCP servers again. */
+            clear_mcp?: boolean;
+            /** @description True gives the area's workers the role's model again. */
+            clear_model?: boolean;
+            instructions?: string | null;
+            mcp?: string[] | null;
+            model?: string | null;
         };
         /** @description Fields left out stay as they are. */
         UpdateTaskBody: {
@@ -4159,6 +4289,89 @@ export interface operations {
             };
             /** @description `area_exists` */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    update_area: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The area's name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateAreaBody"];
+            };
+        };
+        responses: {
+            /** @description The area after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AreaEntry"];
+                };
+            };
+            /** @description `invalid_request` or `invalid_name` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `area_not_found` or `project_not_found` */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7986,6 +8199,94 @@ export interface operations {
             };
         };
     };
+    complete_task: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The task id, such as T-12 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The completed task */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskView"];
+                };
+            };
+            /** @description `invalid_id` or `invalid_name` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `task_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `task_closed`, `task_kind_mismatch`, `task_not_reported` or `prerequisites_not_done` (`details.prerequisites`) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     add_dependency: {
         parameters: {
             query?: never;
@@ -8487,6 +8788,98 @@ export interface operations {
                 };
             };
             /** @description `task_closed`: the task is archived */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    send_back_task: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The task id, such as T-12 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SendBackBody"];
+            };
+        };
+        responses: {
+            /** @description The task, back in progress */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskView"];
+                };
+            };
+            /** @description `invalid_request` (an empty or too long note), `invalid_id` or `invalid_name` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `task_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `task_closed`, `task_kind_mismatch` or `task_not_reported` */
             409: {
                 headers: {
                     [name: string]: unknown;

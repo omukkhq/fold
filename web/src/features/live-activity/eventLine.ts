@@ -5,6 +5,7 @@ import {
   Check,
   CircleCheck,
   CircleDot,
+  ClipboardCheck,
   FilePen,
   GitCommitHorizontal,
   GitMerge,
@@ -136,6 +137,9 @@ function resumedText(event: DurableEvent): string {
   if (event.data.reason === "session_lost") {
     return `restarted ${worker} in a new session`;
   }
+  if (event.data.reason === "sent_back") {
+    return `resumed ${worker} for the send-back of ${taskOf(event)}`;
+  }
   const proposal = proposalOf(event);
   const why =
     event.data.reason === "conflict"
@@ -231,6 +235,14 @@ const SPECS: Record<EventType, Spec> = {
     text: (e) => `${taskOf(e)} is Done`,
   },
   "task.status_changed": { icon: Undo2, text: statusText },
+  "task.reported": {
+    icon: ClipboardCheck,
+    text: (e) => `reported ${taskOf(e)} finished for a lead check`,
+  },
+  "task.sent_back": {
+    icon: Undo2,
+    text: (e) => `sent ${taskOf(e)} back to its coder`,
+  },
   "task.blocked_changed": {
     icon: Hand,
     text: (e) =>
@@ -537,6 +549,10 @@ const SPECS: Record<EventType, Spec> = {
         ? `defined ${area}`
         : `defined ${area} over label ${label}`;
     },
+  },
+  "area.updated": {
+    icon: Tag,
+    text: (e) => `changed the profile of ${text(e.data.area) ?? "an area"}`,
   },
   "workers.limits_changed": {
     icon: Bot,

@@ -1,5 +1,6 @@
 use fold_core::{
-    IdKind, LabelColor, LabelName, TaskDescription, TaskId, TaskStatus, TaskTitle, Timestamp,
+    IdKind, LabelColor, LabelName, TaskDescription, TaskId, TaskKind, TaskStatus, TaskTitle,
+    Timestamp,
 };
 use fold_store::tasks::{self, NewTask};
 use fold_store::testing::TestProject;
@@ -35,6 +36,7 @@ async fn add(project: &TestProject, number: u32, name: &str) -> Result<(), Store
                     title: &title,
                     description: &description,
                     created_by: "frontend",
+                    kind: TaskKind::Proposal,
                     now,
                 },
             )

@@ -90,3 +90,28 @@ export function proposalLook(proposal: BoardProposal): ProposalLook {
       return "active";
   }
 }
+
+/** `no proposal` on the card of a task that a lead check completes; null for a task that ends with a proposal. */
+export function kindText(card: Pick<BoardCard, "kind">): string | null {
+  return card.kind === "no_proposal" ? "no proposal" : null;
+}
+
+export interface LeadCheckMark {
+  text: string;
+  /** The coder's report note. */
+  note: string;
+}
+
+/** The mark of a task without a proposal whose report waits in Review for a lead check; null otherwise. */
+export function leadCheckMark(
+  card: Pick<BoardCard, "kind" | "status" | "report">,
+): LeadCheckMark | null {
+  if (
+    card.kind !== "no_proposal" ||
+    card.status !== "review" ||
+    card.report === null
+  ) {
+    return null;
+  }
+  return { text: "Waits for lead check", note: card.report };
+}

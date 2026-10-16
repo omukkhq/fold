@@ -26,7 +26,12 @@ import { applyEvent } from "@/live/apply";
 import { agent } from "@/test/agents";
 import { byContent } from "@/test/content";
 import { errorReply, stubFetch, type StubReply } from "@/test/stubFetch";
-import { permissionQuestion, workerList, workerProcess } from "@/test/workers";
+import {
+  areaEntry,
+  permissionQuestion,
+  workerList,
+  workerProcess,
+} from "@/test/workers";
 import { AgentsScreen } from "./AgentsScreen";
 
 afterEach(() => {
@@ -37,7 +42,7 @@ afterEach(() => {
 const BASE = "/api/v1/projects/demo";
 
 const team = workerList({
-  areas: [{ name: "web", label: "frontend", lead: "web-lead" }],
+  areas: [areaEntry("web", "frontend", { lead: "web-lead" })],
   workers: [
     workerProcess("web-lead"),
     workerProcess("web-coder", {

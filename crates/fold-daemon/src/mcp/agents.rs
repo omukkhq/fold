@@ -1,4 +1,6 @@
-use fold_core::roles::{WorkerLimits, WorkerLimitsChange};
+use fold_core::roles::{
+    AreaProfile, AreaProfileChange, AreaProfileRequest, WorkerLimits, WorkerLimitsChange,
+};
 use fold_core::{
     AgentName, AreaName, FoldError, LabelName, ProposalId, Role, Tag, TaskId, WorkerName, codes,
 };
@@ -20,6 +22,7 @@ use crate::services::agents::{
 pub const GET_ACTIVITY: &str = "get_activity";
 pub const LIST_AGENTS: &str = "list_agents";
 pub const DEFINE_AREA: &str = "define_area";
+pub const UPDATE_AREA: &str = "update_area";
 pub const START_WORKER: &str = "start_worker";
 pub const STOP_WORKER: &str = "stop_worker";
 pub const LIST_WORKERS: &str = "list_workers";
@@ -33,6 +36,43 @@ pub struct DefineAreaInput {
     pub name: String,
     /// The task label whose tasks the area owns, such as frontend. Create it with create_label first.
     pub label: String,
+    /// What every worker of the area must know about its kind of work, such as "draw screens in Pencil", at most 8000 characters. fold adds it to the system prompt of the area lead and the task coders. Leave it out for none.
+    #[serde(default)]
+    pub instructions: Option<String>,
+    /// The Claude Code model of the area's lead and coders, such as opus. A start_worker model comes first. Leave it out for the role's model from .fold/config.toml.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// The MCP servers the area's lead and coders load, by name: fold and servers of the project's .mcp.json, such as ["fold", "pencil"]. Leave it out for the role's servers.
+    #[serde(default)]
+    pub mcp: Option<Vec<String>>,
+    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
+    #[serde(rename = "as", default)]
+    pub as_worker: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct UpdateAreaInput {
+    /// The area's name, such as design.
+    pub name: String,
+    /// The new instructions for every worker of the area, at most 8000 characters. Leave it out to keep them.
+    #[serde(default)]
+    pub instructions: Option<String>,
+    /// The new Claude Code model of the area's lead and coders, such as opus. Leave it out to keep it.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// The new MCP server list of the area's lead and coders, such as ["fold", "pencil"]. Leave it out to keep it.
+    #[serde(default)]
+    pub mcp: Option<Vec<String>>,
+    /// True removes the area's instructions. Do not combine it with instructions.
+    #[serde(default)]
+    pub clear_instructions: bool,
+    /// True removes the area's model, so its workers get the role's model again. Do not combine it with model.
+    #[serde(default)]
+    pub clear_model: bool,
+    /// True removes the area's MCP server list, so its workers get the role's servers again. Do not combine it with mcp.
+    #[serde(default)]
+    pub clear_mcp: bool,
     /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
     #[serde(rename = "as", default)]
     pub as_worker: Option<String>,
@@ -55,7 +95,7 @@ pub struct StartWorkerInput {
     /// The proposals a batch reviewer reviews, such as P-3.
     #[serde(default)]
     pub proposals: Vec<String>,
-    /// The Claude Code model, such as sonnet. Leave it out for the role's model from .fold/config.toml.
+    /// The Claude Code model, such as sonnet. Leave it out for the area's model, else the role's model from .fold/config.toml.
     #[serde(default)]
     pub model: Option<String>,
     /// What the worker should know beyond its role and its tasks; fold adds it to the worker's first turn.
@@ -147,8 +187,13 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             DEFINE_AREA,
-            "As the main agent, define an area: a part of the project that one area lead owns through one task label.",
+            "As the main agent, define an area: a part of the project that one area lead owns through one task label. Give it a profile for its kind of work: instructions, a model and MCP servers that its area lead and task coders start with.",
             schema_for_type::<DefineAreaInput>(),
+        ),
+        Tool::new(
+            UPDATE_AREA,
+            "As the main agent, change the profile of an area: its instructions, model and MCP servers. The next start of the area's lead or coders gets the new profile; a running worker keeps what it started with.",
+            schema_for_type::<UpdateAreaInput>(),
         ),
         Tool::new(
             START_WORKER,
@@ -183,6 +228,9 @@ fn area_json(area: &AreaRow) -> Value {
         "name": area.name.as_str(),
         "label": area.label.as_str(),
         "lead": area.lead.as_ref().map(AgentName::as_str),
+        "instructions": area.profile.instructions,
+        "model": area.profile.model,
+        "mcp": area.profile.mcp,
     })
 }
 
@@ -220,13 +268,41 @@ pub async fn define_area(
     let input: DefineAreaInput = parse(arguments)?;
     let name = AreaName::parse(&input.name)?;
     let label = LabelName::parse(&input.label)?;
+    let profile = AreaProfile::from_request(input.instructions, input.model, input.mcp)?;
     let actor = server.actor(as_worker).await?;
     let area = server
         .agents
-        .define_area(&actor, &name, &label)
+        .define_area(&actor, &name, &label, &profile)
         .await
         .map_err(from_agent)?;
     Ok(json!({ "area": area_json(&area) }))
+}
+
+pub async fn update_area(
+    server: &FoldServer,
+    as_worker: Option<&WorkerName>,
+    arguments: &JsonObject,
+) -> Result<Value, FoldError> {
+    let input: UpdateAreaInput = parse(arguments)?;
+    let name = AreaName::parse(&input.name)?;
+    let change = AreaProfileChange::from_request(AreaProfileRequest {
+        instructions: input.instructions,
+        model: input.model,
+        mcp: input.mcp,
+        clear_instructions: input.clear_instructions,
+        clear_model: input.clear_model,
+        clear_mcp: input.clear_mcp,
+    })?;
+    let actor = server.actor(as_worker).await?;
+    let area = server
+        .agents
+        .update_area(&actor, &name, &change)
+        .await
+        .map_err(from_agent)?;
+    Ok(json!({
+        "area": area_json(&area),
+        "next": "the next start of the area's lead or coders gets this profile; running workers keep theirs",
+    }))
 }
 
 pub async fn start_worker(

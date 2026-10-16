@@ -46,7 +46,7 @@ fn claim_view_of(row: ClaimRow, now: Timestamp, lease_minutes: u64) -> ClaimView
 
 /// Implementation claims. `policy::can_claim` admits only an agent, and the claim belongs to the agent's acting worker; the lease is the project's `lease_minutes`, read before the command's transaction.
 impl TaskService {
-    /// Takes the implementation claim on `task` for the actor's worker. A repeat call by the holder renews the claim and returns it without a second `claim.acquired`. A live workspace of the task that no claim holder owns, left by a worker that released the claim, is adopted with `workspace.adopted`. A claim moves no card; an adoption runs `recompute`, which leaves the status as it is.
+    /// Takes the implementation claim on `task` for the actor's worker. A repeat call by the holder renews the claim and returns it without a second `claim.acquired`. A live workspace of the task that no claim holder owns, left by a worker that released the claim, is adopted with `workspace.adopted`. The command runs `recompute` after the claim and any adoption: it moves a task without a proposal to In Progress, and a task with a proposal moves only for an adopted workspace.
     pub async fn claim_task(&self, actor: &Actor, task: TaskId) -> Result<Claimed, TaskError> {
         let claimant = policy::can_claim(actor).map_err(FoldError::from)?;
         let now = self.clock.now();
@@ -66,9 +66,7 @@ impl TaskService {
                     }
                     None => None,
                 };
-                if adopted.is_some() {
-                    buffer.extend(recompute(tx, &[task], now).await?.events);
-                }
+                buffer.extend(recompute(tx, &[task], now).await?.events);
                 let was_adopted = adopted.is_some();
                 let workspace = holder_workspace(tx, task, &worker, adopted).await?;
                 Ok::<_, TaskError>(Claimed {
@@ -107,7 +105,7 @@ impl TaskService {
         }
     }
 
-    /// Releases the claim the actor's worker holds on `task`. The task's workspace stays where it is.
+    /// Releases the claim the actor's worker holds on `task`. The task's workspace stays where it is; a task without a proposal and without an open report returns to Todo or Backlog.
     pub async fn release_task(&self, actor: &Actor, task: TaskId) -> Result<(), TaskError> {
         let claimant = policy::can_claim(actor).map_err(FoldError::from)?;
         let now = self.clock.now();
@@ -150,6 +148,7 @@ impl TaskService {
                         "reason": reason.as_str(),
                     }))?;
                 buffer.append(tx, &event, now).await?;
+                buffer.extend(recompute(tx, &[task], now).await?.events);
                 Ok::<_, TaskError>(())
             })
             .await?;
@@ -223,7 +222,7 @@ pub async fn renew_leases(
     claims::renew(tx, worker_ids, now).await
 }
 
-/// The insert runs before any read of the holder, so the unique index on unreleased implementation claims decides a race and its violation becomes `already_claimed` or, for the holder, a renewal.
+/// The insert runs before any read of the holder, so the unique index on unreleased implementation claims decides a race and its violation becomes `already_claimed` or, for the holder, a renewal. The caller runs `recompute` once the rest of its command, such as an adoption or a new workspace, is in place, so the event log shows each `task.status_changed` after the changes that caused it.
 pub(crate) async fn claim_in_tx(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,

@@ -1,3 +1,4 @@
+use fold_core::roles::AreaProfile;
 use fold_core::{AgentName, ProposalId, Role, TaskId, Timestamp, WorkerState};
 use fold_store::Store;
 use fold_store::agents::{self, NewWorkerProcess, TurnTotals};
@@ -106,6 +107,85 @@ async fn an_area_has_one_lead_for_good_and_one_label() {
         Some("areas.lead_agent_id")
     );
     assert!(exec(&store, "DELETE FROM areas").await.is_err());
+}
+
+#[tokio::test]
+async fn an_area_profile_changes_while_its_lead_stays_set_once() {
+    let (_dir, store) = seeded().await;
+    let web = fold_core::AreaName::parse("web").unwrap();
+    let area = store
+        .write(async |tx| agents::insert_area(tx.conn(), &web, 1, "main", at(1)).await)
+        .await
+        .unwrap();
+    let fresh = agents::find_area(store.read(), &web)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(fresh.profile, AreaProfile::default());
+    store
+        .write(async |tx| agents::set_area_lead(tx.conn(), area, 1).await)
+        .await
+        .unwrap();
+    let design = AreaProfile {
+        instructions: Some("draw screens in Pencil".to_owned()),
+        model: Some("opus".to_owned()),
+        mcp: Some(vec!["pencil".to_owned(), "fold".to_owned()]),
+    };
+    store
+        .write(async |tx| agents::set_area_profile(tx.conn(), area, &design).await)
+        .await
+        .unwrap();
+    let row = agents::find_area(store.read(), &web)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.profile, design);
+    assert_eq!(row.lead, Some(AgentName::parse("web-lead").unwrap()));
+    assert_eq!(agents::list_areas(store.read()).await.unwrap(), vec![row]);
+
+    let fewer = AreaProfile {
+        mcp: Some(vec!["fold".to_owned()]),
+        ..AreaProfile::default()
+    };
+    store
+        .write(async |tx| agents::set_area_profile(tx.conn(), area, &fewer).await)
+        .await
+        .unwrap();
+    let row = agents::find_area(store.read(), &web)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.profile, fewer);
+    assert_eq!(
+        count(&store, "SELECT count(*) FROM area_mcp_servers").await,
+        1
+    );
+
+    let cleared = exec(&store, "UPDATE areas SET lead_agent_id = NULL WHERE id = 1")
+        .await
+        .unwrap_err();
+    assert!(cleared.to_string().contains("areas_lead_once"), "{cleared}");
+    let renamed = exec(&store, "UPDATE areas SET name = 'site' WHERE id = 1")
+        .await
+        .unwrap_err();
+    assert!(renamed.to_string().contains("areas_lead_once"), "{renamed}");
+    let twice = exec(
+        &store,
+        "INSERT INTO area_mcp_servers (area_id, position, name) VALUES (1, 5, 'fold')",
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        twice.constraint().as_deref(),
+        Some("area_mcp_servers.area_id, area_mcp_servers.name")
+    );
+    let blank = exec(&store, "UPDATE areas SET instructions = '  ' WHERE id = 1")
+        .await
+        .unwrap_err();
+    assert_eq!(
+        blank.constraint().as_deref(),
+        Some("areas_instructions_present")
+    );
 }
 
 #[tokio::test]

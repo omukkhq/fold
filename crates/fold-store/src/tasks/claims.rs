@@ -14,6 +14,8 @@ pub enum ReleaseReason {
     TakenOver,
     /// The task's proposal integrated, which completes the task.
     Integrated,
+    /// A lead check completed the task without a proposal.
+    Completed,
 }
 
 impl ReleaseReason {
@@ -23,6 +25,7 @@ impl ReleaseReason {
             ReleaseReason::TaskArchived => "task_archived",
             ReleaseReason::TakenOver => "taken_over",
             ReleaseReason::Integrated => "integrated",
+            ReleaseReason::Completed => "completed",
         }
     }
 }

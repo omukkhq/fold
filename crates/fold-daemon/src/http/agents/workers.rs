@@ -1,7 +1,9 @@
 use axum::Json;
 use axum::extract::Path;
 use axum::http::StatusCode;
-use fold_core::roles::{WorkerLimits, WorkerLimitsChange};
+use fold_core::roles::{
+    AreaProfile, AreaProfileChange, AreaProfileRequest, WorkerLimits, WorkerLimitsChange,
+};
 use fold_core::{AgentName, AreaName, FoldError, LabelName, ProjectConfig, Role};
 use fold_store::agents::{AreaRow, WorkerProcessRow};
 use serde::{Deserialize, Serialize};
@@ -20,6 +22,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(list_workers, start_worker))
         .routes(routes!(stop_worker))
         .routes(routes!(define_area))
+        .routes(routes!(update_area))
         .routes(routes!(set_worker_limits))
 }
 
@@ -100,6 +103,15 @@ pub struct AreaEntry {
     /// The area lead's agent name; null until the first lead starts.
     #[schema(required = true, example = "web-lead")]
     pub lead: Option<String>,
+    /// The instructions every worker of the area starts with; null for none.
+    #[schema(required = true, example = "Draw the screens in Pencil.")]
+    pub instructions: Option<String>,
+    /// The model of the area's lead and coders; null when the role's model applies.
+    #[schema(required = true, example = "opus")]
+    pub model: Option<String>,
+    /// The MCP servers the area's lead and coders load; null when the role's servers apply.
+    #[schema(required = true, example = json!(["fold", "pencil"]))]
+    pub mcp: Option<Vec<String>>,
 }
 
 /// The kinds of worker fold runs.
@@ -236,6 +248,9 @@ impl From<AreaRow> for AreaEntry {
             name: area.name.to_string(),
             label: area.label.to_string(),
             lead: area.lead.map(|lead| lead.to_string()),
+            instructions: area.profile.instructions,
+            model: area.profile.model,
+            mcp: area.profile.mcp,
         }
     }
 }
@@ -265,6 +280,35 @@ pub struct DefineAreaBody {
     /// The task label whose tasks the area owns.
     #[schema(example = "frontend")]
     pub label: String,
+    /// What every worker of the area must know about its kind of work, at most 8000 characters.
+    #[serde(default)]
+    pub instructions: Option<String>,
+    /// The model of the area's lead and coders; leave it out for the role's model.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// The MCP servers of the area's lead and coders, by name; leave it out for the role's servers.
+    #[serde(default)]
+    pub mcp: Option<Vec<String>>,
+}
+
+/// A change of an area's profile; a field left out and not cleared stays as it is.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdateAreaBody {
+    #[serde(default)]
+    pub instructions: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub mcp: Option<Vec<String>>,
+    /// True removes the instructions.
+    #[serde(default)]
+    pub clear_instructions: bool,
+    /// True gives the area's workers the role's model again.
+    #[serde(default)]
+    pub clear_model: bool,
+    /// True gives the area's workers the role's MCP servers again.
+    #[serde(default)]
+    pub clear_mcp: bool,
 }
 
 fn fold<T, E: Into<FoldError>>(result: Result<T, E>) -> Result<T, ApiError> {
@@ -417,12 +461,59 @@ pub async fn define_area(
 ) -> Result<(StatusCode, Json<AreaEntry>), ApiError> {
     let name = fold(AreaName::parse(&body.name))?;
     let label = fold(LabelName::parse(&body.label))?;
+    let profile = fold(AreaProfile::from_request(
+        body.instructions,
+        body.model,
+        body.mcp,
+    ))?;
     let area = project
         .0
         .agents()
-        .define_area(&human.actor(), &name, &label)
+        .define_area(&human.actor(), &name, &label, &profile)
         .await?;
     Ok((StatusCode::CREATED, Json(area.into())))
+}
+
+/// A named human changes an area's profile. The next start of the area's lead or coders gets it; running workers keep theirs.
+#[utoipa::path(
+    patch,
+    path = "/api/v1/projects/{slug}/areas/{name}",
+    operation_id = "update_area",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("name" = String, Path, description = "The area's name"),
+    ),
+    request_body = UpdateAreaBody,
+    responses(
+        (status = 200, description = "The area after the change", body = AreaEntry),
+        (status = 400, description = "`invalid_request` or `invalid_name`", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
+        (status = 404, description = "`area_not_found` or `project_not_found`", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn update_area(
+    human: Human,
+    project: Project,
+    Path((_slug, name)): Path<(String, String)>,
+    ApiJson(body): ApiJson<UpdateAreaBody>,
+) -> Result<Json<AreaEntry>, ApiError> {
+    let name = fold(AreaName::parse(&name))?;
+    let change = fold(AreaProfileChange::from_request(AreaProfileRequest {
+        instructions: body.instructions,
+        model: body.model,
+        mcp: body.mcp,
+        clear_instructions: body.clear_instructions,
+        clear_model: body.clear_model,
+        clear_mcp: body.clear_mcp,
+    }))?;
+    let area = project
+        .0
+        .agents()
+        .update_area(&human.actor(), &name, &change)
+        .await?;
+    Ok(Json(area.into()))
 }
 
 /// A named human changes the worker limits. The new limits apply to the next start; running workers keep running.

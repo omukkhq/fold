@@ -134,6 +134,11 @@ fn status_of(code: &str) -> Option<StatusCode> {
         | codes::WORKER_LIMIT_REACHED
         | codes::WORKER_EXISTS
         | codes::PERMISSION_QUESTION_CLOSED => Some(StatusCode::CONFLICT),
+        codes::INVALID_TASK_KIND => Some(StatusCode::BAD_REQUEST),
+        codes::TASK_KIND_DENIED | codes::TASK_CHECK_DENIED => Some(StatusCode::FORBIDDEN),
+        codes::TASK_KIND_MISMATCH | codes::TASK_ALREADY_REPORTED | codes::TASK_NOT_REPORTED => {
+            Some(StatusCode::CONFLICT)
+        }
         _ => None,
     }
 }
@@ -330,6 +335,12 @@ mod tests {
     fn mapped_codes_keep_their_code_and_unmapped_codes_become_internal() {
         for (code, status) in [
             (codes::NOT_FOUND, StatusCode::NOT_FOUND),
+            (codes::INVALID_TASK_KIND, StatusCode::BAD_REQUEST),
+            (codes::TASK_CHECK_DENIED, StatusCode::FORBIDDEN),
+            (codes::TASK_KIND_DENIED, StatusCode::FORBIDDEN),
+            (codes::TASK_KIND_MISMATCH, StatusCode::CONFLICT),
+            (codes::TASK_NOT_REPORTED, StatusCode::CONFLICT),
+            (codes::TASK_ALREADY_REPORTED, StatusCode::CONFLICT),
             (codes::PROJECT_NOT_FOUND, StatusCode::NOT_FOUND),
             (codes::WEB_NOT_BUILT, StatusCode::NOT_FOUND),
             (codes::INVALID_REQUEST, StatusCode::BAD_REQUEST),

@@ -3,11 +3,12 @@ use std::collections::BTreeSet;
 const SKILL: &str = include_str!("../templates/SKILL.md");
 const AGENTS_SECTION: &str = include_str!("../templates/agents_section.md");
 
-const FOLD_TOOLS: [&str; 74] = [
+const FOLD_TOOLS: [&str; 78] = [
     "register_agent",
     "register_worker",
     "list_agents",
     "define_area",
+    "update_area",
     "start_worker",
     "stop_worker",
     "list_workers",
@@ -36,6 +37,9 @@ const FOLD_TOOLS: [&str; 74] = [
     "claim_task",
     "release_task",
     "takeover_claim",
+    "report_task",
+    "complete_task",
+    "send_back_task",
     "get_repository_state",
     "get_revision",
     "compare_revisions",
@@ -84,7 +88,7 @@ const FOLD_TOOLS: [&str; 74] = [
 const PENDING_TOOLS: [&str; 0] = [];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 136] = [
+const FOLD_ERROR_CODES: [&str; 142] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -221,6 +225,12 @@ const FOLD_ERROR_CODES: [&str; 136] = [
     "permission_question_closed",
     "worker_peer_refused",
     "client_header_required",
+    "invalid_task_kind",
+    "task_kind_denied",
+    "task_kind_mismatch",
+    "task_already_reported",
+    "task_not_reported",
+    "task_check_denied",
 ];
 
 /// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.
@@ -239,7 +249,7 @@ const INVALID_REQUEST_REASONS: [&str; 9] = [
     "attachment_too_large",
 ];
 
-const NON_TOOL_NAMES: [&str; 20] = [
+const NON_TOOL_NAMES: [&str; 24] = [
     "stall_minutes",
     "lease_minutes",
     "request_changes",
@@ -260,6 +270,10 @@ const NON_TOOL_NAMES: [&str; 20] = [
     "clear_max_per_area",
     "max_per_area",
     "last_reviewed",
+    "clear_instructions",
+    "clear_model",
+    "clear_mcp",
+    "no_proposal",
 ];
 
 const SECTIONS: [&str; 14] = [

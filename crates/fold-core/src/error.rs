@@ -154,6 +154,12 @@ define_codes! {
     PERMISSION_QUESTION_CLOSED = "permission_question_closed",
     WORKER_PEER_REFUSED = "worker_peer_refused",
     CLIENT_HEADER_REQUIRED = "client_header_required",
+    INVALID_TASK_KIND = "invalid_task_kind",
+    TASK_KIND_DENIED = "task_kind_denied",
+    TASK_KIND_MISMATCH = "task_kind_mismatch",
+    TASK_ALREADY_REPORTED = "task_already_reported",
+    TASK_NOT_REPORTED = "task_not_reported",
+    TASK_CHECK_DENIED = "task_check_denied",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

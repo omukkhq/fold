@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT number, title, description, created_by, created_at, updated_at, archived_at,\n                  human_review AS \"human_review: bool\", human_reviewer, human_review_reason,\n                  human_review_set_by, status, blocked AS \"blocked: bool\"\n           FROM tasks WHERE number = ?",
+  "query": "SELECT number, title, description, created_by, created_at, updated_at, archived_at,\n                  human_review AS \"human_review: bool\", human_reviewer, human_review_reason,\n                  human_review_set_by, status, blocked AS \"blocked: bool\", kind\n           FROM tasks WHERE ?1 OR archived_at IS NULL ORDER BY number",
   "describe": {
     "columns": [
       {
@@ -145,6 +145,17 @@
             "name": "blocked"
           }
         }
+      },
+      {
+        "name": "kind",
+        "ordinal": 13,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "kind"
+          }
+        }
       }
     ],
     "parameters": {
@@ -163,8 +174,9 @@
       true,
       true,
       false,
+      false,
       false
     ]
   },
-  "hash": "0fea44e4476000ba75351eee0f5843f6b161f9746c843674bf40b4884b43228b"
+  "hash": "8257cf2877939e5bf614c412335fea27eda464e7ba4011e7adcdb2ceabe77574"
 }

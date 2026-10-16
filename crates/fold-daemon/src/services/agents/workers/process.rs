@@ -7,8 +7,9 @@ use std::time::Duration;
 
 use fold_core::config::RoleSettings;
 use fold_core::events::types;
+use fold_core::roles::area_prompt;
 use fold_core::{
-    AgentName, Clock, EventActor, LiveEvent, NewEvent, ProjectPaths, WorkerState, codes,
+    AgentName, AreaName, Clock, EventActor, LiveEvent, NewEvent, ProjectPaths, WorkerState, codes,
 };
 use fold_store::agents::{self, TurnTotals, WorkerProcessRow};
 use fold_store::{Store, StoreError};
@@ -30,6 +31,7 @@ use questions::Waiter;
 mod questions;
 mod refresh;
 mod resume;
+mod send_back;
 
 pub(super) use resume::StartWatch;
 
@@ -248,9 +250,31 @@ impl Supervisor {
                 return Ok(None);
             }
         };
-        let settings = config.role(row.role);
+        let mut settings = config.role(row.role);
+        let mut area_instructions = None;
+        if let Some(area) = &row.area {
+            match agents::find_area(self.inner.store.read(), area).await {
+                Ok(Some(area)) => {
+                    settings = settings.with_area(&area.profile);
+                    area_instructions = area.profile.instructions.map(|text| (area.name, text));
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(agent = %row.agent, code = error.code().unwrap_or("store_error"), "could not read the area profile for a worker");
+                    self.fail(row.id, &row.agent, "config").await?;
+                    return Ok(None);
+                }
+            }
+        }
         let launcher = lock(&self.inner.launcher).clone();
-        let files = write_files(&self.inner.paths, &launcher, row, &settings).await;
+        let files = write_files(
+            &self.inner.paths,
+            &launcher,
+            row,
+            &settings,
+            area_instructions,
+        )
+        .await;
         let (mcp, prompt) = match files {
             Ok(files) => files,
             Err(_) => {
@@ -840,13 +864,14 @@ impl Supervisor {
         }
     }
 
-    /// The short-lived workers whose work `event` finished: a task coder once no bound task awaits its work (see [`agents::tasks_awaiting_proposal`]), checked when it opens a proposal or sends a new version and when a bound task is archived; a batch reviewer once every bound proposal has a verdict or is no longer open.
+    /// The short-lived workers whose work `event` finished: a task coder once no bound task awaits its work (see [`agents::tasks_awaiting_proposal`]), checked when it opens a proposal, sends a new version or reports a task without a proposal and when a bound task is archived; a batch reviewer once every bound proposal has a verdict or is no longer open.
     async fn done_workers(&self, event: &fold_core::Event) -> Result<Vec<AgentName>, StoreError> {
         let kind = event.event_type;
         let mut done = Vec::new();
         if (kind == types::PROPOSAL_OPENED
             || kind == types::PROPOSAL_VERSION_ADDED
-            || kind == types::TASK_ARCHIVED)
+            || kind == types::TASK_ARCHIVED
+            || kind == types::TASK_REPORTED)
             && let Some(task) = event.task
         {
             for coder in agents::coders_of_task(self.inner.store.read(), task).await? {
@@ -962,7 +987,7 @@ impl Supervisor {
         Ok(stopped)
     }
 
-    /// Runs again, after a daemon start, every worker that was working or idle when the daemon stopped: `--resume` of its session, with a turn that tells a working one to go on. A worker whose session is gone starts again in a new one, a lead with its latest hand-off note. A worker with an open question waits without a process until a human answers it, and then resumes with the answer as its first turn. A worker left `starting` ends `failed` and one left `stopping` ends `stopped`. A row that cannot be served is logged and the next row is served. Requested changes and conflicts that the worker limits held back are then served.
+    /// Runs again, after a daemon start, every worker that was working or idle when the daemon stopped: `--resume` of its session, with a turn that tells a working one to go on. A worker whose session is gone starts again in a new one, a lead with its latest hand-off note. A worker with an open question waits without a process until a human answers it, and then resumes with the answer as its first turn. A worker left `starting` ends `failed` and one left `stopping` ends `stopped`. A row that cannot be served is logged and the next row is served. Requested changes, conflicts and send-backs that the worker limits held back are then served.
     pub async fn resume_after_restart(&self) -> Result<(), AgentError> {
         let mut conn = self
             .inner
@@ -979,6 +1004,7 @@ impl Supervisor {
             }
         }
         tokio::spawn(self.clone().resume_pending());
+        tokio::spawn(self.clone().resume_owed_send_backs());
         Ok(())
     }
 
@@ -1006,10 +1032,11 @@ impl Supervisor {
         Ok(())
     }
 
-    /// Does from the stored state what the events the watcher missed would have done: answers each `ask` question whose messages all have their replies, stops each short-lived worker whose work is done, and serves the resumes the limits held back.
+    /// Does from the stored state what the events the watcher missed would have done: answers each `ask` question whose messages all have their replies, stops each short-lived worker whose work is done, and serves the resumes and send-backs the limits held back.
     async fn recover(self) {
         self.answer_open_asks().await;
         self.stop_done_workers().await;
+        self.clone().resume_owed_send_backs().await;
         self.resume_pending().await;
     }
 
@@ -1137,22 +1164,29 @@ async fn watch_done(
         if !items.is_empty() {
             tokio::spawn(supervisor.clone().resume_authors(items));
         }
+        if event.event_type == types::TASK_SENT_BACK
+            && let Some(task) = event.task
+        {
+            tokio::spawn(supervisor.clone().resume_sent_back(task));
+        }
         // A freed worker slot or a raised limit can serve a resume that the limits refused earlier.
         if event.event_type == types::WORKER_STOPPED
             || event.event_type == types::WORKER_FAILED
             || event.event_type == types::WORKERS_LIMITS_CHANGED
         {
+            tokio::spawn(supervisor.clone().resume_owed_send_backs());
             tokio::spawn(supervisor.resume_pending());
         }
     }
 }
 
-/// Writes the worker's MCP configuration and, unless the project overrides the role's prompt, the shipped prompt, under the worker's folder. Returns the two paths Claude Code reads.
+/// Writes the worker's MCP configuration and, unless the project overrides the role's prompt, the shipped prompt, under the worker's folder. With `area_instructions` the prompt is the role's prompt, shipped or overridden, followed by the area's instructions. Returns the two paths Claude Code reads.
 async fn write_files(
     paths: &ProjectPaths,
     launcher: &Launcher,
     row: &WorkerProcessRow,
     settings: &RoleSettings,
+    area_instructions: Option<(AreaName, String)>,
 ) -> std::io::Result<(PathBuf, PathBuf)> {
     let dir = paths.worker_dir(&row.agent);
     let override_prompt = paths.role_prompt(row.role);
@@ -1169,12 +1203,23 @@ async fn write_files(
         let config = mcp_config(&fold, &agent, limit.as_deref(), &project_mcp);
         let mcp = dir.join("mcp.json");
         std::fs::write(&mcp, config.to_string())?;
-        let prompt = if override_prompt.is_file() {
-            override_prompt
-        } else {
-            let prompt = dir.join("prompt.md");
-            std::fs::write(&prompt, prompt_text)?;
-            prompt
+        let prompt = match area_instructions {
+            None if override_prompt.is_file() => override_prompt,
+            None => {
+                let prompt = dir.join("prompt.md");
+                std::fs::write(&prompt, prompt_text)?;
+                prompt
+            }
+            Some((area, instructions)) => {
+                let role_prompt = if override_prompt.is_file() {
+                    std::fs::read_to_string(&override_prompt)?
+                } else {
+                    prompt_text.to_owned()
+                };
+                let prompt = dir.join("prompt.md");
+                std::fs::write(&prompt, area_prompt(&role_prompt, &area, &instructions))?;
+                prompt
+            }
         };
         Ok((mcp, prompt))
     })

@@ -30,6 +30,8 @@ export type TaskReview = Schemas["TaskReview"];
 export type TaskProposal = Schemas["TaskProposal"];
 export type TaskIntegration = Schemas["TaskIntegration"];
 export type TaskEvent = Schemas["TaskEvent"];
+export type TaskKind = Schemas["TaskKind"];
+export type TaskReport = Schemas["TaskReport"];
 
 export type TaskDetail = Schemas["TaskView"];
 
@@ -85,18 +87,45 @@ export async function getMessageTargets(slug: string): Promise<MessageTargets> {
   return { agents: names, tags };
 }
 
-/** Answers the new task's public id. */
+/** Answers the new task's public id. Only a `no_proposal` kind is sent; the daemon's default is `proposal`. */
 export async function createTask(
   slug: string,
-  input: { title: string; description: string },
+  input: { title: string; description: string; noProposal?: boolean },
 ): Promise<string> {
+  const { noProposal, ...fields } = input;
+  const body: Schemas["CreateTaskBody"] = noProposal
+    ? { ...fields, kind: "no_proposal" }
+    : fields;
   const created = await unwrap(
     api.POST("/api/v1/projects/{slug}/tasks", {
       params: { path: { slug } },
-      body: input,
+      body,
     }),
   );
   return created.task;
+}
+
+/** The lead check of a reported `no_proposal` task: refused with `task_not_reported` when no report waits. */
+export async function completeTask(slug: string, task: string): Promise<void> {
+  await unwrap(
+    api.POST("/api/v1/projects/{slug}/tasks/{id}/complete", {
+      params: { path: { slug, id: task } },
+    }),
+  );
+}
+
+/** Returns a reported `no_proposal` task to its coder with `note`, which the daemon gives the resumed coder. */
+export async function sendBackTask(
+  slug: string,
+  task: string,
+  note: string,
+): Promise<void> {
+  await unwrap(
+    api.POST("/api/v1/projects/{slug}/tasks/{id}/send-back", {
+      params: { path: { slug, id: task } },
+      body: { note },
+    }),
+  );
 }
 
 async function update(

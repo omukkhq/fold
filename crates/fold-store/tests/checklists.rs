@@ -1,4 +1,6 @@
-use fold_core::{ChecklistItemId, ChecklistName, StepText, TaskDescription, TaskId, TaskTitle};
+use fold_core::{
+    ChecklistItemId, ChecklistName, StepText, TaskDescription, TaskId, TaskKind, TaskTitle,
+};
 use fold_store::tasks::checklists::{self, ItemContent, NewItem};
 use fold_store::tasks::{self, NewTask};
 use fold_store::testing::TestProject;
@@ -41,6 +43,7 @@ async fn project_with_tasks(count: u32) -> TestProject {
                         title: &title,
                         description: &description,
                         created_by: "frontend",
+                        kind: TaskKind::Proposal,
                         now,
                     },
                 )

@@ -3,6 +3,7 @@ import type { BoardCard, TaskStatus } from "@/api/board";
 import { agent, worker, workspace } from "@/test/agents";
 import { boardCard } from "@/test/payloads";
 import {
+  areaEntry,
   batch,
   member,
   permissionQuestion,
@@ -13,6 +14,7 @@ import {
   actorAgent,
   areaLabel,
   areaNote,
+  areaProfile,
   askingRow,
   batchedProposals,
   contextText,
@@ -103,15 +105,36 @@ describe("pills", () => {
         rows: [],
         owned: 1,
         area: "web",
+        profile: { facts: [], instructions: null },
       }),
     ).toBe("area · lead owns 1 task");
   });
 
+  it("shows only the profile fields an area sets", () => {
+    expect(areaProfile(null)).toEqual({ facts: [], instructions: null });
+    expect(areaProfile(areaEntry("web", "frontend"))).toEqual({
+      facts: [],
+      instructions: null,
+    });
+    expect(
+      areaProfile(
+        areaEntry("design", "design", {
+          instructions: "Draw screens in Pencil.",
+          model: "opus",
+          mcp: ["fold", "pencil"],
+        }),
+      ),
+    ).toEqual({
+      facts: ["model opus", "MCP fold, pencil"],
+      instructions: "Draw screens in Pencil.",
+    });
+    expect(
+      areaProfile(areaEntry("api", "api", { mcp: ["fold"] })).facts,
+    ).toEqual(["MCP fold"]);
+  });
+
   it("colours an area by its label, in stone for a label the board does not know", () => {
-    const areas = [
-      { name: "web", label: "frontend", lead: null },
-      { name: "api", label: "server", lead: null },
-    ];
+    const areas = [areaEntry("web", "frontend"), areaEntry("api", "server")];
     const labels = [{ name: "frontend", color: "slate" as const }];
     expect(areaLabel(areas, labels, "web")).toEqual({
       name: "frontend",
@@ -249,8 +272,8 @@ describe("lookups", () => {
 
 describe("teamGroups", () => {
   const areas = [
-    { name: "web", label: "frontend", lead: "web-lead" },
-    { name: "api", label: "api", lead: null },
+    areaEntry("web", "frontend", { lead: "web-lead" }),
+    areaEntry("api", "api", { model: "sonnet" }),
   ];
 
   it("puts the main agent first, each area with its lead and coders, then review", () => {
@@ -324,6 +347,13 @@ describe("teamGroups", () => {
     });
     expect(api?.label).toEqual({ name: "api", color: "stone" });
     expect(api?.rows).toEqual([]);
+    expect(api?.profile).toEqual({
+      facts: ["model sonnet"],
+      instructions: null,
+    });
+    expect(web?.profile).toEqual({ facts: [], instructions: null });
+    expect(main?.profile.facts).toEqual([]);
+    expect(review?.profile.facts).toEqual([]);
     expect(review?.rows[0]?.bound).toEqual({
       kind: "text",
       text: "2 proposals",
@@ -379,7 +409,7 @@ describe("teamGroups", () => {
     const groups = teamGroups(
       input({
         workers: workerList({
-          areas: [{ name: "web", label: "web", lead: "b" }],
+          areas: [areaEntry("web", "web", { lead: "b" })],
           workers: [
             workerProcess("a", { state: "stopped" }),
             workerProcess("b"),
@@ -406,7 +436,7 @@ describe("teamGroups", () => {
       input({
         agents: [agent("main", { presence: "offline" })],
         workers: workerList({
-          areas: [{ name: "web", label: "web", lead: null }],
+          areas: [areaEntry("web", "web")],
         }),
       }),
     );

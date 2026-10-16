@@ -58,6 +58,21 @@ export function describeError(error: unknown): ErrorView | null {
       return reason !== null && reason in INVALID_REQUEST
         ? { field: null, text: INVALID_REQUEST[reason] ?? "" }
         : null;
+    case "task_not_reported":
+      return {
+        field: null,
+        text: "No report waits for a check. The coder reports the task again first.",
+      };
+    case "prerequisites_not_done":
+      return {
+        field: null,
+        text: "A task that this task needs is not Done. Complete this task when its prerequisites are Done.",
+      };
+    case "task_kind_mismatch":
+      return {
+        field: null,
+        text: "This task ends with a proposal, so its review completes it.",
+      };
     case "task_closed":
       return {
         field: null,

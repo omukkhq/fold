@@ -14,7 +14,7 @@ use crate::services::events::EventBuffer;
 use crate::services::workspaces::{self as workspace_service, ArchiveReason};
 
 impl TaskService {
-    /// Removes a task that never had a workspace, a proposal, a completion or a message naming it, with its edges, the linked checklist items pointing at it, its labels, its own checklists and its claim rows. Its earlier events stay, and its number is never reused. Dependents recompute in the same transaction.
+    /// Removes a task that never had a workspace, a proposal, a completion, a report or a message naming it, with its edges, the linked checklist items pointing at it, its labels, its own checklists and its claim rows. Its earlier events stay, and its number is never reused. Dependents recompute in the same transaction.
     pub async fn delete_task(&self, actor: &Actor, id: TaskId) -> Result<(), TaskError> {
         let actor = &actor.event_actor();
         let now = self.clock.now();

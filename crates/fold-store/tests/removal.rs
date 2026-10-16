@@ -1,4 +1,4 @@
-use fold_core::{TaskDescription, TaskId, TaskTitle};
+use fold_core::{TaskDescription, TaskId, TaskKind, TaskTitle};
 use fold_store::tasks::{self, NewTask, TaskHistory};
 use fold_store::testing::TestProject;
 use fold_store::{StoreError, workspaces};
@@ -24,6 +24,7 @@ async fn project_with_task() -> TestProject {
                     title: &title,
                     description: &description,
                     created_by: "frontend",
+                    kind: TaskKind::Proposal,
                     now,
                 },
             )

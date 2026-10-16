@@ -135,6 +135,9 @@ impl FoldServer {
             (agents::DEFINE_AREA, Some(_)) => {
                 agents::define_area(self, as_worker.as_ref(), &arguments).await?
             }
+            (agents::UPDATE_AREA, Some(_)) => {
+                agents::update_area(self, as_worker.as_ref(), &arguments).await?
+            }
             (agents::START_WORKER, Some(_)) => {
                 agents::start_worker(self, as_worker.as_ref(), &arguments).await?
             }

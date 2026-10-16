@@ -24,6 +24,7 @@ export const newTaskSchema = z.object({
   description: z
     .string()
     .max(20_000, "Keep the description to 20000 characters."),
+  noProposal: z.boolean(),
 });
 export type NewTaskForm = z.infer<typeof newTaskSchema>;
 
@@ -87,6 +88,15 @@ export const humanReviewSchema = z.object({
 });
 export type HumanReviewInput = z.input<typeof humanReviewSchema>;
 export type HumanReviewForm = z.output<typeof humanReviewSchema>;
+
+export const sendBackSchema = z.object({
+  note: z
+    .string()
+    .trim()
+    .min(1, "Say what the coder must change.")
+    .max(20_000, "Keep the note to 20000 characters."),
+});
+export type SendBackForm = z.infer<typeof sendBackSchema>;
 
 export const feedbackSchema = z.object({
   to: z.string().min(1, "Choose who reads the feedback."),

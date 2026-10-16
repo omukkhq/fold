@@ -6,7 +6,9 @@ import {
   feedbackSchema,
   humanReviewSchema,
   labelSchema,
+  newTaskSchema,
   renameItemSchema,
+  sendBackSchema,
   titleSchema,
 } from "./schemas";
 
@@ -29,6 +31,32 @@ describe("titleSchema", () => {
       "A title is one line.",
     );
     expect(titleSchema.safeParse({ title: "x".repeat(201) }).success).toBe(
+      false,
+    );
+  });
+});
+
+describe("newTaskSchema", () => {
+  it("takes the no-proposal choice with the title", () => {
+    expect(
+      newTaskSchema.parse({
+        title: " Draw it ",
+        description: "",
+        noProposal: true,
+      }),
+    ).toEqual({ title: "Draw it", description: "", noProposal: true });
+  });
+});
+
+describe("sendBackSchema", () => {
+  it("trims the note and refuses an empty or very long one", () => {
+    expect(sendBackSchema.parse({ note: " Use the tokens. " })).toEqual({
+      note: "Use the tokens.",
+    });
+    expect(firstMessage(sendBackSchema.safeParse({ note: "  " }))).toBe(
+      "Say what the coder must change.",
+    );
+    expect(sendBackSchema.safeParse({ note: "x".repeat(20_001) }).success).toBe(
       false,
     );
   });

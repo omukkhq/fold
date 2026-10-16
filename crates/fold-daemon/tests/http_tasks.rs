@@ -250,6 +250,8 @@ async fn the_board_returns_five_columns_in_order_with_blocked_blocks_and_attenti
             "title": "Endpoint",
             "status": "backlog",
             "blocked": false,
+            "kind": "proposal",
+            "report": null,
             "labels": [],
             "checklist": {"steps_done": 0, "steps_total": 0, "linked_done": 0, "linked_total": 0},
             "needs": ["T-1"],

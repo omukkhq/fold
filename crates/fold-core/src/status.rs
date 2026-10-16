@@ -4,7 +4,7 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{ProposalId, TaskId, WorkspaceId};
-use crate::task::TaskValueError;
+use crate::task::{TaskKind, TaskValueError};
 
 /// A task's column on the board. The value is always calculated from `TaskFacts`; nothing sets it directly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -75,14 +75,19 @@ impl ProposalFact {
     }
 }
 
-/// The stored facts that decide a task's status.
+/// The stored facts that decide a task's status. A `proposal` task reads `proposal` and `has_active_workspace`; a `no_proposal` task reads `claimed` and `reported` instead, because its work leaves no workspace or proposal behind.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskFacts {
+    pub kind: TaskKind,
     /// A completion record exists.
     pub completed: bool,
     pub proposal: ProposalFact,
     /// A task workspace in state `active` or `missing` exists.
     pub has_active_workspace: bool,
+    /// An unreleased implementation claim exists, stale or not.
+    pub claimed: bool,
+    /// The coder's report of finished work waits for a lead check: it is neither completed nor sent back.
+    pub reported: bool,
     /// The status of each direct prerequisite.
     pub prerequisites: Vec<(TaskId, TaskStatus)>,
 }
@@ -114,15 +119,31 @@ fn unfinished(facts: &TaskFacts) -> Vec<TaskId> {
     ids
 }
 
+/// The status the task's own work gives it, before the prerequisites decide between Todo and Backlog: Review while a reviewer or a lead check has the next move, In Progress while the work goes on.
+fn started(facts: &TaskFacts) -> Option<TaskStatus> {
+    let (review, in_progress) = match facts.kind {
+        TaskKind::Proposal => (
+            facts.proposal == ProposalFact::WithReviewer,
+            facts.has_active_workspace,
+        ),
+        TaskKind::NoProposal => (facts.reported, facts.claimed),
+    };
+    if review {
+        Some(TaskStatus::Review)
+    } else if in_progress {
+        Some(TaskStatus::InProgress)
+    } else {
+        None
+    }
+}
+
 /// Only `completed` yields `Done`, and the first matching rule wins.
 pub fn calculate(facts: &TaskFacts) -> Calculated {
     let unfinished = || unfinished(facts);
     let status = if facts.completed {
         TaskStatus::Done
-    } else if facts.proposal == ProposalFact::WithReviewer {
-        TaskStatus::Review
-    } else if facts.has_active_workspace {
-        TaskStatus::InProgress
+    } else if let Some(status) = started(facts) {
+        status
     } else if unfinished().is_empty() {
         TaskStatus::Todo
     } else {
@@ -150,19 +171,31 @@ pub fn status_reason(
     };
     let proposal = proposal.map_or_else(|| "the proposal".to_owned(), |id| id.to_string());
     let workspace = workspace.map_or_else(|| "a workspace".to_owned(), |id| id.to_string());
-    let mut text = match calculated.status {
-        TaskStatus::Done => "Completed: a completion record exists".to_owned(),
-        TaskStatus::Review => format!("Calculated: proposal {proposal} waits for a reviewer"),
-        TaskStatus::InProgress => match facts.proposal {
+    let mut text = match (calculated.status, facts.kind) {
+        (TaskStatus::Done, _) => "Completed: a completion record exists".to_owned(),
+        (TaskStatus::Review, TaskKind::NoProposal) => {
+            "Calculated: the coder reported the work finished and it waits for a lead check"
+                .to_owned()
+        }
+        (TaskStatus::InProgress, TaskKind::NoProposal) => {
+            "Calculated: a coder holds the claim, no report yet".to_owned()
+        }
+        (TaskStatus::Todo, TaskKind::NoProposal) => {
+            "Calculated: no claim yet and every prerequisite is Done".to_owned()
+        }
+        (TaskStatus::Review, TaskKind::Proposal) => {
+            format!("Calculated: proposal {proposal} waits for a reviewer")
+        }
+        (TaskStatus::InProgress, TaskKind::Proposal) => match facts.proposal {
             ProposalFact::WithAuthor => format!(
                 "Calculated: workspace {workspace} is open and proposal {proposal} waits for its author"
             ),
             _ => format!("Calculated: workspace {workspace} is open, no proposal yet"),
         },
-        TaskStatus::Todo => {
+        (TaskStatus::Todo, TaskKind::Proposal) => {
             "Calculated: no workspace yet and every prerequisite is Done".to_owned()
         }
-        TaskStatus::Backlog => format!("Calculated: waits for {}", ids(&unfinished(facts))),
+        (TaskStatus::Backlog, _) => format!("Calculated: waits for {}", ids(&unfinished(facts))),
     };
     if calculated.blocked() {
         text.push_str(&format!(", needs {}", ids(&calculated.blocked_by)));
@@ -186,10 +219,28 @@ mod tests {
         prerequisites: &[(u32, TaskStatus)],
     ) -> TaskFacts {
         TaskFacts {
+            kind: TaskKind::Proposal,
             completed,
             proposal,
             has_active_workspace: workspace,
+            claimed: false,
+            reported: false,
             prerequisites: prerequisites.iter().map(|&(n, s)| (t(n), s)).collect(),
+        }
+    }
+
+    /// The facts of a task without a proposal.
+    fn lead(
+        completed: bool,
+        claimed: bool,
+        reported: bool,
+        prerequisites: &[(u32, TaskStatus)],
+    ) -> TaskFacts {
+        TaskFacts {
+            kind: TaskKind::NoProposal,
+            claimed,
+            reported,
+            ..facts(completed, NoProposal, false, prerequisites)
         }
     }
 
@@ -418,6 +469,61 @@ mod tests {
             calculate(&facts(false, NoProposal, false, &[]))
                 .blocked_by
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_task_without_a_proposal_moves_by_its_claim_report_and_completion() {
+        let todo = lead(false, false, false, &[(1, Done)]);
+        let claimed = lead(false, true, false, &[(1, Done)]);
+        let reported = lead(false, true, true, &[(1, Done)]);
+        let completed = lead(true, false, true, &[(1, Done)]);
+        assert_eq!(moves(&todo, &claimed), (Todo, InProgress));
+        assert_eq!(moves(&claimed, &reported), (InProgress, Review));
+        assert_eq!(moves(&reported, &completed), (Review, Done));
+        assert_eq!(moves(&reported, &claimed), (Review, InProgress));
+        assert_eq!(status(&lead(false, false, true, &[])), Review);
+        assert_eq!(status(&lead(false, false, false, &[(1, Todo)])), Backlog);
+        assert_eq!(
+            calculate(&lead(false, true, false, &[(4, Review)])).blocked_by,
+            vec![t(4)]
+        );
+    }
+
+    #[test]
+    fn each_kind_reads_only_its_own_facts() {
+        let mut proposal = facts(false, NoProposal, false, &[]);
+        proposal.claimed = true;
+        proposal.reported = true;
+        assert_eq!(status(&proposal), Todo);
+        let mut no_proposal = lead(false, false, false, &[]);
+        no_proposal.proposal = WithReviewer;
+        no_proposal.has_active_workspace = true;
+        assert_eq!(status(&no_proposal), Todo);
+    }
+
+    #[test]
+    fn the_reason_names_the_lead_check_rules() {
+        let reason = |f: &TaskFacts| status_reason(f, None, None);
+        assert_eq!(
+            reason(&lead(false, true, true, &[])),
+            "Calculated: the coder reported the work finished and it waits for a lead check"
+        );
+        assert_eq!(
+            reason(&lead(false, true, false, &[(2, Todo)])),
+            "Calculated: a coder holds the claim, no report yet, needs T-2"
+        );
+        assert_eq!(
+            reason(&lead(false, false, false, &[])),
+            "Calculated: no claim yet and every prerequisite is Done"
+        );
+        assert_eq!(
+            reason(&lead(true, false, true, &[])),
+            "Completed: a completion record exists"
+        );
+        assert_eq!(
+            reason(&lead(false, false, false, &[(3, Todo)])),
+            "Calculated: waits for T-3"
         );
     }
 

@@ -16,6 +16,7 @@ import { ArchiveMenu } from "./ArchiveMenu";
 import { ChecklistSection } from "./ChecklistSection";
 import { DescriptionSection } from "./DescriptionSection";
 import { DialogFrame } from "./DialogFrame";
+import { needsProposal } from "./leadCheck";
 import { liveStrip } from "./liveStrip";
 import { MessagesSection } from "./MessagesSection";
 import { TaskSide } from "./TaskSide";
@@ -84,13 +85,15 @@ function Loaded({
         />
         <DescriptionSection slug={slug} task={task} />
         <ChecklistSection slug={slug} task={task} />
-        <WorkingChanges
-          slug={slug}
-          workspace={task.workspace}
-          info={task.workspace_info}
-          live={live}
-          now={now}
-        />
+        {needsProposal(task) ? (
+          <WorkingChanges
+            slug={slug}
+            workspace={task.workspace}
+            info={task.workspace_info}
+            live={live}
+            now={now}
+          />
+        ) : null}
         <MessagesSection slug={slug} task={task} />
       </div>
       <TaskSide slug={slug} task={task} live={live} now={now} />

@@ -274,17 +274,34 @@ fn human_review(input: &IntegrateInput<'_>) -> Option<GateRefusal> {
 }
 
 fn prerequisites(input: &IntegrateInput<'_>) -> Option<GateRefusal> {
-    let mut unfinished: Vec<(TaskId, TaskStatus)> = input
-        .prerequisites
+    prerequisites_done(input.prerequisites).err()
+}
+
+/// A task becomes Done only after each of its direct prerequisites, so both the integration of its proposal and the lead check of a task without a proposal refuse while one is not Done. The refusal lists the unfinished prerequisites in number order.
+pub fn prerequisites_done(prerequisites: &[(TaskId, TaskStatus)]) -> Result<(), GateRefusal> {
+    let mut unfinished: Vec<(TaskId, TaskStatus)> = prerequisites
         .iter()
         .filter(|(_, status)| *status != TaskStatus::Done)
         .copied()
         .collect();
     if unfinished.is_empty() {
-        return None;
+        return Ok(());
     }
     unfinished.sort_by_key(|(task, _)| *task);
-    Some(GateRefusal::PrerequisitesNotDone { unfinished })
+    Err(GateRefusal::PrerequisitesNotDone { unfinished })
+}
+
+/// The lead check of a task without a proposal stands in for the review of a proposal, so a task with the human review mark is completed only by a human: the human's check is the human review. An agent's complete of a marked task is refused with `human_approval_missing`, which names the mark's reviewer.
+pub fn human_check_done(
+    mark: Option<&HumanReviewMark>,
+    checker_is_human: bool,
+) -> Result<(), GateRefusal> {
+    match mark {
+        Some(mark) if !checker_is_human => Err(GateRefusal::HumanApprovalMissing {
+            reviewer: mark.reviewer.clone(),
+        }),
+        _ => Ok(()),
+    }
 }
 
 #[cfg(test)]
@@ -1040,5 +1057,25 @@ mod tests {
             let filtered = Case { reviews: current, ..case };
             prop_assert_eq!(filtered.run(can_integrate), alone);
         }
+    }
+
+    #[test]
+    fn a_marked_task_without_a_proposal_is_completed_only_by_a_human() {
+        assert_eq!(human_check_done(None, false), Ok(()));
+        assert_eq!(human_check_done(None, true), Ok(()));
+        let named = mark(Some("ana"));
+        assert_eq!(human_check_done(Some(&named), true), Ok(()));
+        let refusal = human_check_done(Some(&named), false).unwrap_err();
+        assert_eq!(refusal.code(), codes::HUMAN_APPROVAL_MISSING);
+        assert_eq!(
+            refusal,
+            GateRefusal::HumanApprovalMissing {
+                reviewer: Some(name("ana"))
+            }
+        );
+        assert_eq!(
+            human_check_done(Some(&mark(None)), false),
+            Err(GateRefusal::HumanApprovalMissing { reviewer: None })
+        );
     }
 }

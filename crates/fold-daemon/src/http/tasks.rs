@@ -30,6 +30,8 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(get_task, update_task, delete_task))
         .routes(routes!(attach_label, detach_label))
         .routes(routes!(archive_task))
+        .routes(routes!(complete_task))
+        .routes(routes!(send_back_task))
         .routes(routes!(add_dependency))
         .routes(routes!(remove_dependency))
         .routes(routes!(add_checklist_item))
@@ -46,6 +48,32 @@ pub enum TaskStatus {
     InProgress,
     Review,
     Done,
+}
+
+/// How a task's work reaches Done: `proposal` through the integration of its proposal, `no_proposal` through a lead check of its coder's report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskKind {
+    Proposal,
+    NoProposal,
+}
+
+impl From<fold_core::TaskKind> for TaskKind {
+    fn from(kind: fold_core::TaskKind) -> Self {
+        match kind {
+            fold_core::TaskKind::Proposal => Self::Proposal,
+            fold_core::TaskKind::NoProposal => Self::NoProposal,
+        }
+    }
+}
+
+impl From<TaskKind> for fold_core::TaskKind {
+    fn from(kind: TaskKind) -> Self {
+        match kind {
+            TaskKind::Proposal => Self::Proposal,
+            TaskKind::NoProposal => Self::NoProposal,
+        }
+    }
 }
 
 impl From<fold_core::TaskStatus> for TaskStatus {
@@ -172,6 +200,10 @@ pub struct BoardCard {
     pub title: String,
     pub status: TaskStatus,
     pub blocked: bool,
+    pub kind: TaskKind,
+    /// The note of the coder's open report on a `no_proposal` task, which waits for a lead check; null otherwise.
+    #[schema(required = true)]
+    pub report: Option<String>,
     pub labels: Vec<Label>,
     pub checklist: ChecklistCounts,
     /// Every direct prerequisite, as public task ids.
@@ -272,6 +304,8 @@ impl From<service::BoardCard> for BoardCard {
             title: card.title.to_string(),
             status: card.status.into(),
             blocked: card.blocked,
+            kind: card.kind.into(),
+            report: card.report,
             labels: labels(card.labels),
             checklist: card.checklist.into(),
             needs: ids(&card.needs),
@@ -403,6 +437,7 @@ pub struct TaskView {
     pub description: String,
     pub status: TaskStatus,
     pub blocked: bool,
+    pub kind: TaskKind,
     /// UTC milliseconds; null while the task is on the board.
     #[schema(required = true)]
     pub archived_at: Option<i64>,
@@ -446,6 +481,8 @@ pub struct TaskView {
     /// The integration that published the proposal; null until the task is integrated.
     #[schema(required = true)]
     pub integration: Option<TaskIntegration>,
+    /// The coder's reports on a `no_proposal` task, newest first; the first one without a resolution waits for a lead check.
+    pub reports: Vec<TaskReport>,
     /// The task's newest stored events, newest first, at most 50.
     pub history: Vec<TaskEvent>,
     /// Whether the human who made the request may turn the human review mark on, change it or clear it. False without a named human.
@@ -511,6 +548,54 @@ pub struct TaskIntegration {
     /// The Git commit the revision became in the project folder's repository `.git`; null until it is written, just after the integration.
     #[schema(required = true)]
     pub commit: Option<String>,
+}
+
+/// How a lead check answered a report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportResolution {
+    Completed,
+    SentBack,
+}
+
+/// A coder's report that the work of a `no_proposal` task is finished, with the lead check that answered it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct TaskReport {
+    /// The coder's worker.
+    pub by: String,
+    pub note: String,
+    /// UTC milliseconds.
+    pub at: i64,
+    /// Null while the report waits for a lead check.
+    #[schema(required = true)]
+    pub resolution: Option<ReportResolution>,
+    /// A worker or `human:<name>`; null while the report waits.
+    #[schema(required = true)]
+    pub resolved_by: Option<String>,
+    /// UTC milliseconds; null while the report waits.
+    #[schema(required = true)]
+    pub resolved_at: Option<i64>,
+    /// What to change, for a report that was sent back; null otherwise.
+    #[schema(required = true)]
+    pub send_back_note: Option<String>,
+}
+
+impl From<service::ReportView> for TaskReport {
+    fn from(report: service::ReportView) -> Self {
+        use fold_store::tasks::reports::Resolution;
+        Self {
+            by: report.by.to_string(),
+            note: report.note,
+            at: report.at.as_millis(),
+            resolution: report.resolution.map(|resolution| match resolution {
+                Resolution::Completed => ReportResolution::Completed,
+                Resolution::SentBack => ReportResolution::SentBack,
+            }),
+            resolved_by: report.resolved_by,
+            resolved_at: report.resolved_at.map(|at| at.as_millis()),
+            send_back_note: report.send_back_note,
+        }
+    }
 }
 
 /// A stored event of the task as its history lists it.
@@ -587,6 +672,7 @@ impl From<service::TaskDetail> for TaskView {
             description: task.description.as_str().to_owned(),
             status: task.status.into(),
             blocked: task.blocked,
+            kind: task.kind.into(),
             archived_at: task.archived_at.map(|at| at.as_millis()),
             created_by: task.created_by,
             created_at: task.created_at.as_millis(),
@@ -661,6 +747,7 @@ impl From<service::TaskDetail> for TaskView {
                 at: integration.at.as_millis(),
                 commit: integration.commit,
             }),
+            reports: detail.reports.into_iter().map(TaskReport::from).collect(),
             history: detail
                 .history
                 .into_iter()
@@ -727,6 +814,16 @@ pub struct CreateTaskBody {
     /// The task to split: the new task becomes a linked item of its `Subtasks` checklist.
     #[serde(default)]
     pub parent: Option<String>,
+    /// `proposal` when left out. A `no_proposal` task is for work that changes no project file: its coder reports the work and a lead check completes it.
+    #[serde(default)]
+    pub kind: Option<TaskKind>,
+}
+
+/// The note a send-back gives the task's coder.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SendBackBody {
+    /// What to change: plain text, not empty.
+    pub note: String,
 }
 
 /// Fields left out stay as they are.
@@ -905,8 +1002,9 @@ pub async fn create_task(
         .collect::<Result<Vec<TaskId>, _>>()?;
     let parent = body.parent.as_deref().map(id).transpose()?;
     let tasks = &project.0.tasks;
+    let kind = body.kind.map_or(fold_core::TaskKind::Proposal, Into::into);
     let created = tasks
-        .create_linked_task(&human.actor(), create, &needs, parent)
+        .create_task_of_kind(&human.actor(), create, kind, &needs, parent)
         .await?;
     let view = tasks.get_view(created.id).await?;
     Ok((StatusCode::CREATED, Json(task_view(view, Some(&human)))))
@@ -1109,6 +1207,70 @@ pub async fn archive_task(
         .archive_task(&human.actor(), id(&task)?)
         .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Completes a reported `no_proposal` task after the human checked its work: the report is answered, the claim released and the completion record written, so the task is Done. On a task with the human review mark, this check by a human is the human review.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/tasks/{id}/complete",
+    operation_id = "complete_task",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("id" = String, Path, description = "The task id, such as T-12"),
+    ),
+    responses(
+        (status = 200, description = "The completed task", body = TaskView),
+        (status = 400, description = "`invalid_id` or `invalid_name`", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
+        (status = 404, description = "`task_not_found` or `project_not_found`", body = ErrorEnvelope),
+        (status = 409, description = "`task_closed`, `task_kind_mismatch`, `task_not_reported` or `prerequisites_not_done` (`details.prerequisites`)", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn complete_task(
+    human: Human,
+    project: Project,
+    Path((_slug, task)): Path<(String, String)>,
+) -> Result<Json<TaskView>, ApiError> {
+    let task: TaskId = id(&task)?;
+    let tasks = &project.0.tasks;
+    tasks.complete_task(&human.actor(), task).await?;
+    Ok(Json(task_view(tasks.get_view(task).await?, Some(&human))))
+}
+
+/// Sends a reported `no_proposal` task back to its coder with a note: the task returns to In Progress and fold resumes the coder.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/tasks/{id}/send-back",
+    operation_id = "send_back_task",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("id" = String, Path, description = "The task id, such as T-12"),
+    ),
+    request_body = SendBackBody,
+    responses(
+        (status = 200, description = "The task, back in progress", body = TaskView),
+        (status = 400, description = "`invalid_request` (an empty or too long note), `invalid_id` or `invalid_name`", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
+        (status = 404, description = "`task_not_found` or `project_not_found`", body = ErrorEnvelope),
+        (status = 409, description = "`task_closed`, `task_kind_mismatch` or `task_not_reported`", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn send_back_task(
+    human: Human,
+    project: Project,
+    Path((_slug, task)): Path<(String, String)>,
+    ApiJson(body): ApiJson<SendBackBody>,
+) -> Result<Json<TaskView>, ApiError> {
+    let task: TaskId = id(&task)?;
+    let tasks = &project.0.tasks;
+    tasks
+        .send_back_task(&human.actor(), task, &body.note)
+        .await?;
+    Ok(Json(task_view(tasks.get_view(task).await?, Some(&human))))
 }
 
 /// Makes the task need another task.

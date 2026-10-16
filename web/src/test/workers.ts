@@ -1,6 +1,7 @@
 import type { ReviewBatch, ReviewBatchMember } from "@/api/reviews";
 import type { ProposalSummary } from "@/api/proposals";
 import type {
+  AreaEntry,
   NeedsYouItem,
   WorkerList,
   WorkerProcess,
@@ -29,6 +30,23 @@ export function workerProcess(
     context_tokens: 164_000,
     exit_code: null,
     cache_ttl: "1h",
+    ...fields,
+  };
+}
+
+/** An area without a lead or a profile. */
+export function areaEntry(
+  name: string,
+  label: string,
+  fields: Partial<AreaEntry> = {},
+): AreaEntry {
+  return {
+    name,
+    label,
+    lead: null,
+    instructions: null,
+    model: null,
+    mcp: null,
     ...fields,
   };
 }

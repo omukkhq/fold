@@ -44,6 +44,8 @@ pub struct BoardSnapshot {
     pub activity: BTreeMap<TaskId, Timestamp>,
     /// The open or integrated proposal of each task.
     pub proposals: BTreeMap<TaskId, ProposalSummary>,
+    /// The note of each open report, on tasks without a proposal.
+    pub reports: BTreeMap<TaskId, String>,
 }
 
 fn task_id(number: i64) -> Result<TaskId, StoreError> {
@@ -78,7 +80,7 @@ pub async fn board_snapshot(pool: &SqlitePool) -> Result<BoardSnapshot, StoreErr
         RawTask,
         r#"SELECT number, title, description, created_by, created_at, updated_at, archived_at,
                   human_review AS "human_review: bool", human_reviewer, human_review_reason,
-                  human_review_set_by, status, blocked AS "blocked: bool"
+                  human_review_set_by, status, blocked AS "blocked: bool", kind
            FROM tasks WHERE archived_at IS NULL ORDER BY number"#
     )
     .fetch_all(&mut *tx)
@@ -218,6 +220,19 @@ pub async fn board_snapshot(pool: &SqlitePool) -> Result<BoardSnapshot, StoreErr
         .map(|summary| (summary.task, summary))
         .collect();
 
+    let mut reports = BTreeMap::new();
+    let rows = sqlx::query!(
+        r#"SELECT t.number AS "task!: i64", r.note
+           FROM task_reports r
+           JOIN tasks t ON t.id = r.task_id
+           WHERE r.resolution IS NULL AND t.archived_at IS NULL"#
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    for row in rows {
+        reports.insert(task_id(row.task)?, row.note);
+    }
+
     tx.commit().await?;
     Ok(BoardSnapshot {
         tasks,
@@ -230,6 +245,7 @@ pub async fn board_snapshot(pool: &SqlitePool) -> Result<BoardSnapshot, StoreErr
         completions,
         activity,
         proposals,
+        reports,
     })
 }
 

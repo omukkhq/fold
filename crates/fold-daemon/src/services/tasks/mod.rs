@@ -5,8 +5,8 @@ use std::sync::Arc;
 use fold_core::events::types;
 use fold_core::{
     Actor, ChecklistName, Clock, DependencyOrigin, EventError, FoldError, IdKind, LabelColor,
-    LabelName, NewEvent, ProjectPaths, TaskDescription, TaskId, TaskStatus, TaskTitle, Timestamp,
-    codes,
+    LabelName, NewEvent, ProjectPaths, TaskDescription, TaskId, TaskKind, TaskStatus, TaskTitle,
+    Timestamp, codes, policy,
 };
 use fold_store::tasks::{self, NewTask};
 use fold_store::{Store, StoreError, WriteTx, counters};
@@ -22,6 +22,7 @@ mod attention;
 mod checklists;
 mod claims;
 mod dependencies;
+mod lead_checks;
 mod leases;
 mod ready;
 mod recompute;
@@ -38,6 +39,8 @@ pub use claims::{ClaimView, Claimed, claim_view, renew_leases};
 pub(crate) use claims::{already_claimed, claim_in_tx, closed_refusal, worker_row};
 pub use dependencies::{Edge, add_edge_in_tx};
 pub use fold_core::reviews::HumanReviewMark;
+pub use lead_checks::{MAX_NOTE_CHARS, REPORT_LIMIT, ReportView};
+pub(crate) use lead_checks::{areas_of, proposal_kind_refusal};
 pub use leases::sweep_leases;
 pub use ready::ReadyTask;
 pub use recompute::{Recomputed, recompute};
@@ -123,6 +126,7 @@ pub struct TaskView {
     pub archived_at: Option<Timestamp>,
     pub status: TaskStatus,
     pub blocked: bool,
+    pub kind: TaskKind,
     /// `None` while the mark is off.
     pub human_review: Option<HumanReviewMark>,
     pub labels: Vec<LabelView>,
@@ -217,11 +221,24 @@ impl TaskService {
         self.create_linked_task(actor, input, &[], None).await
     }
 
-    /// Creates a task with a direct edge to each task in `needs` and, with a `parent`, a linked item on the parent's `Subtasks` checklist, so the parent needs the new task. Everything is one transaction: a refusal of any edge, such as a cycle, leaves nothing behind. A task named twice in `needs` gets one edge.
+    /// [`TaskService::create_task_of_kind`] for a task with a proposal.
     pub async fn create_linked_task(
         &self,
         actor: &Actor,
         input: CreateTask,
+        needs: &[TaskId],
+        parent: Option<TaskId>,
+    ) -> Result<TaskView, TaskError> {
+        self.create_task_of_kind(actor, input, TaskKind::Proposal, needs, parent)
+            .await
+    }
+
+    /// Creates a task of `kind` with a direct edge to each task in `needs` and, with a `parent`, a linked item on the parent's `Subtasks` checklist, so the parent needs the new task. Everything is one transaction: a refusal of any edge, such as a cycle, leaves nothing behind. A task named twice in `needs` gets one edge. A task without a proposal is created only by whoever may check it (`policy::can_choose_no_proposal`), judged by the areas of its labels.
+    pub async fn create_task_of_kind(
+        &self,
+        actor: &Actor,
+        input: CreateTask,
+        kind: TaskKind,
         needs: &[TaskId],
         parent: Option<TaskId>,
     ) -> Result<TaskView, TaskError> {
@@ -233,7 +250,12 @@ impl TaskService {
         let id = self
             .store
             .write(async |tx| {
-                let id = create_in_tx(tx, &mut buffer, actor, &input, now).await?;
+                if kind == TaskKind::NoProposal {
+                    let starter = crate::services::agents::starter_of(tx, actor).await?;
+                    let areas = areas_of(tx, &input.labels).await?;
+                    policy::can_choose_no_proposal(&starter, &areas).map_err(FoldError::from)?;
+                }
+                let id = create_in_tx(tx, &mut buffer, actor, &input, kind, now).await?;
                 for need in &needs {
                     add_edge_in_tx(
                         tx,
@@ -398,6 +420,7 @@ fn view(row: tasks::TaskRow, labels: Vec<tasks::LabelRow>) -> TaskView {
         archived_at: row.archived_at,
         status: row.status,
         blocked: row.blocked,
+        kind: row.kind,
         human_review: row.human_review,
         labels: labels.into_iter().map(label_view).collect(),
     }
@@ -423,12 +446,13 @@ async fn require_labels(tx: &mut WriteTx, names: &[LabelName]) -> Result<(), Tas
     ))
 }
 
-/// Creates a task and its label links inside the caller's transaction and appends `task.created`. The tool card calls this to create a task, its edges and its parent link in one transaction. The caller runs `recompute` on the new task before it commits, once every edge is in place.
+/// Creates a task of `kind` and its label links inside the caller's transaction and appends `task.created`, whose data names the kind of a task without a proposal. The tool card calls this to create a task, its edges and its parent link in one transaction. The caller runs `recompute` on the new task before it commits, once every edge is in place.
 pub(crate) async fn create_in_tx(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,
     actor: &Actor,
     input: &CreateTask,
+    kind: TaskKind,
     now: Timestamp,
 ) -> Result<TaskId, TaskError> {
     require_labels(tx, &input.labels).await?;
@@ -441,15 +465,20 @@ pub(crate) async fn create_in_tx(
             title: &input.title,
             description: &input.description,
             created_by: actor.event_actor().as_str(),
+            kind,
             now,
         },
     )
     .await?;
     tasks::replace_labels(tx, id, &input.labels).await?;
     let labels: BTreeSet<&str> = input.labels.iter().map(LabelName::as_str).collect();
+    let mut data = json!({"labels": labels});
+    if kind == TaskKind::NoProposal {
+        data["kind"] = json!(kind.as_str());
+    }
     let event = NewEvent::new(types::TASK_CREATED, actor.event_actor())?
         .task(id)
-        .data(json!({"labels": labels}))?;
+        .data(data)?;
     buffer.append(tx, &event, now).await?;
     Ok(id)
 }

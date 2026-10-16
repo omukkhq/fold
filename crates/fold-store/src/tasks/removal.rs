@@ -11,11 +11,12 @@ pub struct TaskHistory {
     pub proposal: bool,
     pub completion: bool,
     pub message: bool,
+    pub report: bool,
 }
 
 impl TaskHistory {
     pub fn any(self) -> bool {
-        self.workspace || self.proposal || self.completion || self.message
+        self.workspace || self.proposal || self.completion || self.message || self.report
     }
 }
 
@@ -25,7 +26,8 @@ pub async fn history(conn: &mut SqliteConnection, task: TaskId) -> Result<TaskHi
         r#"SELECT EXISTS (SELECT 1 FROM workspaces w WHERE w.task_id = t.id) AS "workspace!: bool",
                   EXISTS (SELECT 1 FROM proposals p WHERE p.task_id = t.id) AS "proposal!: bool",
                   EXISTS (SELECT 1 FROM completions c WHERE c.task_id = t.id) AS "completion!: bool",
-                  EXISTS (SELECT 1 FROM messages m WHERE m.task_id = t.id) AS "message!: bool"
+                  EXISTS (SELECT 1 FROM messages m WHERE m.task_id = t.id) AS "message!: bool",
+                  EXISTS (SELECT 1 FROM task_reports r WHERE r.task_id = t.id) AS "report!: bool"
            FROM tasks t WHERE t.number = ?"#,
         number
     )
@@ -36,6 +38,7 @@ pub async fn history(conn: &mut SqliteConnection, task: TaskId) -> Result<TaskHi
         proposal: row.proposal,
         completion: row.completion,
         message: row.message,
+        report: row.report,
     }))
 }
 

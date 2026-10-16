@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO task_reports (task_id, worker_id, note, created_at)\n         SELECT t.id, ?2, ?3, ?4 FROM tasks t WHERE t.number = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "056bff8bf02402b8edfe1e985e0ae1451010194c344b05ea0215c692fd6ede15"
+}

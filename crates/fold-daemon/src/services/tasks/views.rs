@@ -6,12 +6,13 @@ use fold_core::events::types;
 use fold_core::reviews::ProposalStanding;
 use fold_core::status::status_reason;
 use fold_core::{
-    ChangesetId, ChecklistName, DependencyOrigin, Event, ProposalId, RevisionId, TaskId,
+    ChangesetId, ChecklistName, DependencyOrigin, Event, ProposalId, RevisionId, TaskId, TaskKind,
     TaskStatus, TaskTitle, Timestamp, WorkerName, WorkspaceId,
 };
 use fold_store::reviews::{self, ProposalSummary, ReviewEntry};
 use fold_store::tasks::checklists::{self, ItemContent};
 use fold_store::tasks::claims;
+use fold_store::tasks::reports;
 use fold_store::tasks::{self, BoardSnapshot};
 use fold_store::workspaces::{self, Checkpoint};
 use fold_store::{StoreError, events};
@@ -20,8 +21,8 @@ pub use fold_store::tasks::{ChecklistCounts, TaskRef};
 
 use super::attention::{AttentionItem, attention, stalled_tasks};
 use super::{
-    ChecklistItemView, ClaimView, HumanReviewMark, LabelView, TaskError, TaskService, TaskView,
-    label_view, task_not_found, view,
+    ChecklistItemView, ClaimView, HumanReviewMark, LabelView, REPORT_LIMIT, ReportView, TaskError,
+    TaskService, TaskView, label_view, task_not_found, view,
 };
 
 /// How many Done cards the board returns: the most recently completed ones. The Done column's `total` counts them all.
@@ -132,6 +133,8 @@ pub struct TaskDetail {
     pub checkpoints: Vec<Checkpoint>,
     pub proposal: Option<TaskProposal>,
     pub integration: Option<TaskIntegration>,
+    /// The coder's reports on a task without a proposal, newest first, at most [`REPORT_LIMIT`]; the first is the open one while the task waits for a lead check.
+    pub reports: Vec<ReportView>,
     /// The task's newest [`HISTORY_LIMIT`] events, newest first.
     pub history: Vec<Event>,
 }
@@ -143,6 +146,7 @@ pub struct GraphTask {
     pub title: TaskTitle,
     pub status: TaskStatus,
     pub blocked: bool,
+    pub kind: TaskKind,
     pub labels: Vec<LabelView>,
     /// Every direct prerequisite, Done or not.
     pub needs: Vec<TaskId>,
@@ -155,6 +159,9 @@ pub struct BoardCard {
     pub title: TaskTitle,
     pub status: TaskStatus,
     pub blocked: bool,
+    pub kind: TaskKind,
+    /// The note of the coder's open report on a task without a proposal: the card waits for a lead check.
+    pub report: Option<String>,
     pub labels: Vec<LabelView>,
     pub checklist: ChecklistCounts,
     /// Every direct prerequisite.
@@ -289,6 +296,11 @@ impl TaskService {
             }),
             None => None,
         };
+        let reports = reports::for_task(&mut *tx, id, REPORT_LIMIT)
+            .await?
+            .into_iter()
+            .map(ReportView::from)
+            .collect();
         let history = events::newest_for_task(&mut *tx, id, HISTORY_LIMIT).await?;
         let human_review_set_at = match row.human_review {
             Some(_) => {
@@ -390,6 +402,7 @@ impl TaskService {
             checkpoints,
             proposal,
             integration,
+            reports,
             history,
         })
     }
@@ -424,6 +437,7 @@ impl TaskService {
                 title: row.title,
                 status: row.status,
                 blocked: row.blocked,
+                kind: row.kind,
             })
             .collect())
     }
@@ -487,10 +501,12 @@ impl TaskService {
                     snapshot.activity.get(&row.id).copied(),
                 ),
                 attention: attention.remove(&row.id).unwrap_or_default(),
+                report: snapshot.reports.remove(&row.id),
                 id: row.id,
                 title: row.title,
                 status: row.status,
                 blocked: row.blocked,
+                kind: row.kind,
             };
             if let Some(column) = columns.iter_mut().find(|c| c.status == card.status) {
                 column.cards.push(card);

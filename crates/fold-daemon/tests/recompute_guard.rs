@@ -186,8 +186,10 @@ fn only_recompute_calls_the_cache_writer() {
 
 #[test]
 fn only_completions_insert_writes_completion_rows() {
+    // A migration that rebuilds a table copies the rows that exist; it is not a command that completes a task.
     let writers: Vec<String> = sources()
         .into_iter()
+        .filter(|(path, _)| !path.contains("/migrations/"))
         .filter(|(_, text)| normalise(text).contains("into completions"))
         .map(|(path, _)| path)
         .collect();

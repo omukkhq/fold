@@ -139,3 +139,9 @@ permission_question_not_found
 permission_question_closed
 worker_peer_refused
 client_header_required
+invalid_task_kind
+task_kind_denied
+task_kind_mismatch
+task_already_reported
+task_not_reported
+task_check_denied

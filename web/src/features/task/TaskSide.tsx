@@ -4,6 +4,7 @@ import { useRouterState } from "@tanstack/react-router";
 import {
   Bookmark,
   ChevronDown,
+  ClipboardCheck,
   ChevronUp,
   GitCommitHorizontal,
   GitPullRequestArrow,
@@ -17,14 +18,16 @@ import { sessionQuery } from "@/api/queries";
 import {
   addDependency,
   clearHumanReview,
+  completeTask,
   removeDependency,
+  sendBackTask,
   setHumanReview,
   type LiveWorkspace,
   type TaskDetail,
 } from "@/api/tasks";
 import { HrefLink } from "@/app/HrefLink";
 import { Button, IconButton } from "@/components/button/Button";
-import { TextField } from "@/components/form/controls";
+import { Textarea, TextField } from "@/components/form/controls";
 import { CommitId } from "@/components/mono/CommitId";
 import { Mono } from "@/components/mono/Mono";
 import { taskPath } from "@/features/board/card";
@@ -39,6 +42,13 @@ import {
   needsTitle,
   type DependencyRow,
 } from "./dependencies";
+import {
+  KIND_NOTE,
+  leadCheck,
+  needsProposal,
+  reportedText,
+  resolvedText,
+} from "./leadCheck";
 import { recordedCheckpoints } from "./liveStrip";
 import { proposalPath, revisionPath } from "./links";
 import {
@@ -52,9 +62,11 @@ import {
 import {
   dependencySchema,
   humanReviewSchema,
+  sendBackSchema,
   type DependencyForm,
   type HumanReviewForm,
   type HumanReviewInput,
+  type SendBackForm as SendBackValues,
 } from "./schemas";
 import {
   checkpointText,
@@ -294,6 +306,157 @@ function Proposal({ slug, task }: { slug: string; task: TaskDetail }) {
           />
         </p>
       ) : null}
+    </SideGroup>
+  );
+}
+
+function SendBackForm({
+  slug,
+  task,
+  onDone,
+}: {
+  slug: string;
+  task: string;
+  onDone: () => void;
+}) {
+  const write = useTaskWrite(slug, task, (values: SendBackValues) =>
+    sendBackTask(slug, task, values.note),
+  );
+  const form = useForm<SendBackValues>({
+    resolver: zodResolver(sendBackSchema),
+    defaultValues: { note: "" },
+  });
+  return (
+    <form
+      aria-label="Send the task back"
+      className="flex flex-col gap-8"
+      onSubmit={submit(
+        form.handleSubmit((values) => {
+          write.mutate(values, { onSuccess: onDone });
+        }),
+      )}
+    >
+      <Textarea
+        label="Note to the coder"
+        hint="fold resumes the coder with this note."
+        rows={3}
+        disabled={write.isPending}
+        error={form.formState.errors.note?.message}
+        {...form.register("note")}
+      />
+      <WriteError error={write.error} />
+      <div className="flex gap-8">
+        <Button
+          type="submit"
+          variant="primary"
+          size="sm"
+          pending={write.isPending}
+        >
+          Send back
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={write.isPending}
+          onClick={onDone}
+        >
+          Cancel
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+/** Takes the proposal group's place for a task without a proposal: the coder's newest report, how the lead check answered it, and the human's complete and send-back controls. */
+function LeadCheck({
+  slug,
+  task,
+  now,
+}: {
+  slug: string;
+  task: TaskDetail;
+  now: number;
+}) {
+  const [sending, setSending] = useState(false);
+  const complete = useTaskWrite(slug, task.task, () =>
+    completeTask(slug, task.task),
+  );
+  const check = leadCheck(task);
+  if (check === null) {
+    return null;
+  }
+  const { report } = check;
+  const resolved = report === null ? null : resolvedText(report, now);
+  return (
+    <SideGroup title="Lead check">
+      <p
+        className={cn(
+          "flex items-center gap-6 text-bar font-medium",
+          check.state === "waiting" ? "text-secondary-text" : "text-text",
+        )}
+      >
+        <ClipboardCheck aria-hidden="true" size={13} />
+        {check.title}
+      </p>
+      {report === null ? (
+        <Note>{KIND_NOTE}</Note>
+      ) : (
+        <>
+          <p className="text-meta text-text-muted">
+            <ActorText
+              segments={reportedText(report, now)}
+              personClassName="text-bar"
+            />
+          </p>
+          <p className="text-bar leading-normal whitespace-pre-wrap text-text">
+            {report.note}
+          </p>
+          {resolved ? (
+            <p className="text-meta text-text-muted">
+              <ActorText segments={resolved} personClassName="text-bar" />
+            </p>
+          ) : null}
+          {report.send_back_note === null ? null : (
+            <p className="text-bar leading-normal whitespace-pre-wrap text-text">
+              {report.send_back_note}
+            </p>
+          )}
+        </>
+      )}
+      {check.canCheck && sending ? (
+        <SendBackForm
+          slug={slug}
+          task={task.task}
+          onDone={() => {
+            setSending(false);
+          }}
+        />
+      ) : null}
+      {check.canCheck && !sending ? (
+        <div className="flex gap-8">
+          <Button
+            variant="primary"
+            size="sm"
+            pending={complete.isPending}
+            onClick={() => {
+              complete.mutate(undefined);
+            }}
+          >
+            Complete task
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={complete.isPending}
+            onClick={() => {
+              setSending(true);
+            }}
+          >
+            Send back
+          </Button>
+        </div>
+      ) : null}
+      <WriteError error={complete.error} />
     </SideGroup>
   );
 }
@@ -653,10 +816,16 @@ export function TaskSide({ slug, task, live, now }: Props) {
   return (
     <aside className="flex w-full shrink-0 flex-col gap-20 border-border-subtle md:w-side-panel md:border-l md:pt-2 md:pl-20">
       <Responsible task={task} now={now} />
-      <Workspace task={task} live={live} />
-      <Checkpoints slug={slug} task={task} live={live} now={now} />
-      <Changesets slug={slug} task={task} live={live} now={now} />
-      <Proposal slug={slug} task={task} />
+      {needsProposal(task) ? (
+        <>
+          <Workspace task={task} live={live} />
+          <Checkpoints slug={slug} task={task} live={live} now={now} />
+          <Changesets slug={slug} task={task} live={live} now={now} />
+          <Proposal slug={slug} task={task} />
+        </>
+      ) : (
+        <LeadCheck slug={slug} task={task} now={now} />
+      )}
       <HumanReview slug={slug} task={task} />
       <Dependencies slug={slug} task={task} />
       {/* An empty History draws nothing, so the group is left out for a task read without events. */}

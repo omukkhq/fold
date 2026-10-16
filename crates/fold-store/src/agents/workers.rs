@@ -1,3 +1,4 @@
+use fold_core::roles::AreaProfile;
 use fold_core::{AgentName, AreaName, LabelName, ProposalId, Role, TaskId, Timestamp, WorkerState};
 use sqlx::{SqliteConnection, SqliteExecutor};
 
@@ -11,6 +12,7 @@ pub struct AreaRow {
     pub label_id: i64,
     pub label: LabelName,
     pub lead: Option<AgentName>,
+    pub profile: AreaProfile,
     pub created_by: String,
     pub created_at: Timestamp,
 }
@@ -68,25 +70,39 @@ fn db_count(value: u64) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
-fn area_row(
+/// One `areas` row with its label, lead and profile, as the area queries select it.
+struct RawArea {
     id: i64,
-    name: &str,
+    name: String,
     label_id: i64,
-    label: &str,
+    label: String,
     lead: Option<String>,
+    instructions: Option<String>,
+    model: Option<String>,
+    mcp: String,
     created_by: String,
     created_at: i64,
-) -> Result<AreaRow, StoreError> {
+}
+
+fn area_row(raw: RawArea) -> Result<AreaRow, StoreError> {
+    let mcp: Vec<String> =
+        serde_json::from_str(&raw.mcp).map_err(|_| StoreError::Corrupt("area_mcp_servers"))?;
     Ok(AreaRow {
-        id,
-        name: AreaName::parse(name).map_err(|_| StoreError::Corrupt("areas.name"))?,
-        label_id,
-        label: LabelName::parse(label).map_err(|_| StoreError::Corrupt("labels.name"))?,
-        lead: lead
+        id: raw.id,
+        name: AreaName::parse(&raw.name).map_err(|_| StoreError::Corrupt("areas.name"))?,
+        label_id: raw.label_id,
+        label: LabelName::parse(&raw.label).map_err(|_| StoreError::Corrupt("labels.name"))?,
+        lead: raw
+            .lead
             .map(|lead| AgentName::parse(&lead).map_err(|_| StoreError::Corrupt("agents.name")))
             .transpose()?,
-        created_by,
-        created_at: time(created_at, "areas.created_at")?,
+        profile: AreaProfile {
+            instructions: raw.instructions,
+            model: raw.model,
+            mcp: (!mcp.is_empty()).then_some(mcp),
+        },
+        created_by: raw.created_by,
+        created_at: time(raw.created_at, "areas.created_at")?,
     })
 }
 
@@ -131,8 +147,12 @@ pub async fn find_area(
     name: &AreaName,
 ) -> Result<Option<AreaRow>, StoreError> {
     let name = name.as_str();
-    let row = sqlx::query!(
+    let row = sqlx::query_as!(
+        RawArea,
         r#"SELECT a.id AS "id!: i64", a.name, a.label_id, l.name AS label, g.name AS "lead?: String",
+                  a.instructions, a.model,
+                  (SELECT json_group_array(m.name ORDER BY m.position) FROM area_mcp_servers m
+                   WHERE m.area_id = a.id) AS "mcp!: String",
                   a.created_by, a.created_at
            FROM areas a JOIN labels l ON l.id = a.label_id LEFT JOIN agents g ON g.id = a.lead_agent_id
            WHERE a.name = ?"#,
@@ -140,43 +160,55 @@ pub async fn find_area(
     )
     .fetch_optional(executor)
     .await?;
-    row.map(|row| {
-        area_row(
-            row.id,
-            &row.name,
-            row.label_id,
-            &row.label,
-            row.lead,
-            row.created_by,
-            row.created_at,
-        )
-    })
-    .transpose()
+    row.map(area_row).transpose()
 }
 
 /// Every area in name order.
 pub async fn list_areas(executor: impl SqliteExecutor<'_>) -> Result<Vec<AreaRow>, StoreError> {
-    let rows = sqlx::query!(
+    let rows = sqlx::query_as!(
+        RawArea,
         r#"SELECT a.id AS "id!: i64", a.name, a.label_id, l.name AS label, g.name AS "lead?: String",
+                  a.instructions, a.model,
+                  (SELECT json_group_array(m.name ORDER BY m.position) FROM area_mcp_servers m
+                   WHERE m.area_id = a.id) AS "mcp!: String",
                   a.created_by, a.created_at
            FROM areas a JOIN labels l ON l.id = a.label_id LEFT JOIN agents g ON g.id = a.lead_agent_id
            ORDER BY a.name"#
     )
     .fetch_all(executor)
     .await?;
-    rows.into_iter()
-        .map(|row| {
-            area_row(
-                row.id,
-                &row.name,
-                row.label_id,
-                &row.label,
-                row.lead,
-                row.created_by,
-                row.created_at,
-            )
-        })
-        .collect()
+    rows.into_iter().map(area_row).collect()
+}
+
+/// Replaces the area's profile: its instructions, its model and its MCP servers in their order.
+pub async fn set_area_profile(
+    conn: &mut SqliteConnection,
+    area_id: i64,
+    profile: &AreaProfile,
+) -> Result<(), StoreError> {
+    sqlx::query!(
+        "UPDATE areas SET instructions = ?, model = ? WHERE id = ?",
+        profile.instructions,
+        profile.model,
+        area_id
+    )
+    .execute(&mut *conn)
+    .await?;
+    sqlx::query!("DELETE FROM area_mcp_servers WHERE area_id = ?", area_id)
+        .execute(&mut *conn)
+        .await?;
+    for (position, name) in profile.mcp.iter().flatten().enumerate() {
+        let position = i64::try_from(position).unwrap_or(i64::MAX);
+        sqlx::query!(
+            "INSERT INTO area_mcp_servers (area_id, position, name) VALUES (?, ?, ?)",
+            area_id,
+            position,
+            name
+        )
+        .execute(&mut *conn)
+        .await?;
+    }
+    Ok(())
 }
 
 /// Makes `agent_id` the area's lead. The `areas_lead_once` trigger refuses a second lead.
@@ -596,7 +628,7 @@ pub async fn reviewers_of_proposal(
         .collect()
 }
 
-/// How many bound tasks of the worker still wait for its work. A task is finished when it is Done, when it is archived, when it has an integrated proposal (a proposal can integrate before fold looks), or when it has an open proposal that is not conflicted and whose latest verdict on its newest version is not `request_changes`, read with the rule `reviews::get_proposal` uses. A requested change or a conflict therefore keeps the coder bound until it sends the next version.
+/// How many bound tasks of the worker still wait for its work. A task is finished when it is Done, when it is archived, when it has an integrated proposal (a proposal can integrate before fold looks), when it is a task without a proposal whose report waits for a lead check, or when it has an open proposal that is not conflicted and whose latest verdict on its newest version is not `request_changes`, read with the rule `reviews::get_proposal` uses. A requested change or a conflict therefore keeps the coder bound until it sends the next version.
 pub async fn tasks_awaiting_proposal(
     executor: impl SqliteExecutor<'_>,
     worker_process_id: i64,
@@ -605,6 +637,7 @@ pub async fn tasks_awaiting_proposal(
         r#"SELECT COUNT(*) AS "count!: i64" FROM worker_tasks b JOIN tasks t ON t.id = b.task_id
            WHERE b.worker_process_id = ? AND t.status <> 'done' AND t.archived_at IS NULL
              AND NOT EXISTS (SELECT 1 FROM proposals p WHERE p.task_id = b.task_id AND p.state = 'integrated')
+             AND NOT EXISTS (SELECT 1 FROM task_reports r WHERE r.task_id = b.task_id AND r.resolution IS NULL)
              AND NOT EXISTS (
                  SELECT 1 FROM proposals p
                  WHERE p.task_id = b.task_id AND p.state = 'open' AND NOT p.conflicted

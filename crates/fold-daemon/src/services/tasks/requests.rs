@@ -9,7 +9,7 @@ use fold_core::requests::{
 };
 use fold_core::{
     Actor, DependencyOrigin, FoldError, IdKind, MessageId, NewEvent, RequestId, TaskDescription,
-    TaskId, TaskTitle, Timestamp, WorkerName, codes, policy,
+    TaskId, TaskKind, TaskTitle, Timestamp, WorkerName, codes, policy,
 };
 use fold_store::tasks::requests::{self, NewAttachment, NewRequest, RequestRow};
 pub use fold_store::tasks::requests::{AttachmentRow as RequestAttachment, RequestFilter};
@@ -495,7 +495,9 @@ impl TaskService {
                         description: TaskDescription::new(card.description.clone()),
                         labels: card.label.iter().cloned().collect(),
                     };
-                    let task = create_in_tx(tx, &mut buffer, actor, &input, now).await?;
+                    let task =
+                        create_in_tx(tx, &mut buffer, actor, &input, TaskKind::Proposal, now)
+                            .await?;
                     requests::set_task_request(tx, task, request).await?;
                     by_key.insert(&card.key, task);
                     created.push(task);

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM area_mcp_servers WHERE area_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "f01863a0a30d22935b0d585c889bb1b5afee199721fc50cb4cb967bf57540e8b"
+}

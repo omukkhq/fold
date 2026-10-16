@@ -59,6 +59,19 @@ pub fn can_define_area(starter: &Starter) -> Result<(), PolicyDenied> {
     }
 }
 
+/// An area's profile is part of the plan of the whole project, so whoever defines the areas changes it.
+pub fn can_update_area(starter: &Starter) -> Result<(), PolicyDenied> {
+    match starter {
+        Starter::Human | Starter::MainAgent => Ok(()),
+        Starter::Unsupervised => Err(not_the_main_agent("ask the main agent to call update_area")),
+        _ => Err(PolicyDenied {
+            code: codes::MAIN_AGENT_REQUIRED,
+            message: "only the main agent or a human can change an area",
+            hint: "ask the main agent to call update_area",
+        }),
+    }
+}
+
 /// The worker limits bound the whole project's processes, so the main agent or a named human changes them.
 pub fn can_set_worker_limits(starter: &Starter) -> Result<(), PolicyDenied> {
     match starter {
@@ -121,6 +134,41 @@ pub fn can_stop_worker(
             message: "only the worker's starter, the main agent or a human can stop it",
             hint: "call list_workers to see who leads the worker",
         })
+    }
+}
+
+/// A task without a proposal is done when a lead check says so, so whoever may check it decides at creation that it needs no proposal: the main agent, a named human, or the lead of an area whose label the task carries. `task_areas` are the areas whose label the task carries.
+pub fn can_choose_no_proposal(
+    starter: &Starter,
+    task_areas: &[AreaName],
+) -> Result<(), PolicyDenied> {
+    match starter {
+        Starter::Human | Starter::MainAgent => Ok(()),
+        Starter::AreaLead(own) if task_areas.contains(own) => Ok(()),
+        Starter::Unsupervised => Err(not_the_main_agent(
+            "create the task with the default kind, or ask the main agent",
+        )),
+        _ => Err(PolicyDenied {
+            code: codes::TASK_KIND_DENIED,
+            message: "only the main agent, a human or the lead of the task's area creates a task without a proposal",
+            hint: "create the task with the default kind, or give it your area's label",
+        }),
+    }
+}
+
+/// The lead check of a task without a proposal stands in for the review of a proposal, so neither the coder that did the work nor a review agent makes it: the main agent, a named human or the lead of an area whose label the task carries completes the task or sends it back. `task_areas` are the areas whose label the task carries.
+pub fn can_check_task(starter: &Starter, task_areas: &[AreaName]) -> Result<(), PolicyDenied> {
+    match starter {
+        Starter::Human | Starter::MainAgent => Ok(()),
+        Starter::AreaLead(own) if task_areas.contains(own) => Ok(()),
+        Starter::Unsupervised => Err(not_the_main_agent(
+            "ask the main agent or the lead of the task's area to check the task",
+        )),
+        _ => Err(PolicyDenied {
+            code: codes::TASK_CHECK_DENIED,
+            message: "only the lead of the task's area, the main agent or a human completes or sends back a task without a proposal",
+            hint: "ask the lead of the task's area; get_task shows the task's labels",
+        }),
     }
 }
 
@@ -235,6 +283,9 @@ mod tests {
         let denied = can_set_worker_limits(&Starter::Unsupervised).unwrap_err();
         assert_eq!(denied.code(), codes::ORCHESTRATOR_REQUIRED);
         assert!(denied.hint().contains("set_worker_limits"));
+        let denied = can_update_area(&Starter::Unsupervised).unwrap_err();
+        assert_eq!(denied.code(), codes::ORCHESTRATOR_REQUIRED);
+        assert!(denied.hint().contains("update_area"));
         for role in [Role::AreaLead, Role::ReviewLead] {
             let denied = can_start_worker(&Starter::Unsupervised, role).unwrap_err();
             assert_eq!(denied.code(), codes::ORCHESTRATOR_REQUIRED);
@@ -259,6 +310,7 @@ mod tests {
     fn only_the_main_agent_or_a_human_defines_areas_and_starts_leads() {
         for starter in [Starter::Human, Starter::MainAgent] {
             assert!(can_define_area(&starter).is_ok());
+            assert!(can_update_area(&starter).is_ok());
             assert!(can_set_worker_limits(&starter).is_ok());
             assert!(can_start_worker(&starter, Role::AreaLead).is_ok());
             assert!(can_start_worker(&starter, Role::ReviewLead).is_ok());
@@ -273,6 +325,10 @@ mod tests {
         ] {
             assert_eq!(
                 can_define_area(&starter).unwrap_err().code(),
+                codes::MAIN_AGENT_REQUIRED
+            );
+            assert_eq!(
+                can_update_area(&starter).unwrap_err().code(),
                 codes::MAIN_AGENT_REQUIRED
             );
             assert_eq!(
@@ -328,6 +384,49 @@ mod tests {
             codes::WORKER_STOP_DENIED
         );
         assert!(can_stop_worker(&Starter::Subagent, Role::TaskCoder, None).is_err());
+    }
+
+    #[test]
+    fn only_the_tasks_area_lead_the_main_agent_or_a_human_checks_a_task() {
+        let web = area("web");
+        let areas = [web.clone()];
+        for starter in [
+            Starter::Human,
+            Starter::MainAgent,
+            Starter::AreaLead(web.clone()),
+        ] {
+            assert!(can_check_task(&starter, &areas).is_ok());
+            assert!(can_choose_no_proposal(&starter, &areas).is_ok());
+        }
+        for starter in [
+            Starter::AreaLead(area("api")),
+            Starter::ReviewLead,
+            Starter::ShortLived,
+            Starter::Subagent,
+            Starter::System,
+        ] {
+            assert_eq!(
+                can_check_task(&starter, &areas).unwrap_err().code(),
+                codes::TASK_CHECK_DENIED
+            );
+            assert_eq!(
+                can_choose_no_proposal(&starter, &areas).unwrap_err().code(),
+                codes::TASK_KIND_DENIED
+            );
+        }
+        assert!(can_check_task(&Starter::AreaLead(web), &[]).is_err());
+        assert_eq!(
+            can_check_task(&Starter::Unsupervised, &areas)
+                .unwrap_err()
+                .code(),
+            codes::ORCHESTRATOR_REQUIRED
+        );
+        assert_eq!(
+            can_choose_no_proposal(&Starter::Unsupervised, &areas)
+                .unwrap_err()
+                .code(),
+            codes::ORCHESTRATOR_REQUIRED
+        );
     }
 
     #[test]

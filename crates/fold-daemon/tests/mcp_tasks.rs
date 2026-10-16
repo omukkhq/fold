@@ -294,7 +294,7 @@ async fn every_task_tool_succeeds_and_ends_with_the_footer() {
     let graph = ok(&client, "get_task_graph", json!({})).await;
     assert_eq!(
         graph["tasks"][0],
-        json!({"id": "T-1", "title": "Schema v2", "status": "todo", "blocked": false, "labels": [], "needs": [], "holder": "frontend"})
+        json!({"id": "T-1", "title": "Schema v2", "status": "todo", "blocked": false, "kind": "proposal", "labels": [], "needs": [], "holder": "frontend"})
     );
     assert_eq!(graph["tasks"][1]["needs"], json!(["T-1", "T-3"]));
     let ready = ok(&client, "get_ready_tasks", json!({})).await;
@@ -490,7 +490,7 @@ async fn bad_input_is_refused_with_a_code() {
 #[test]
 fn every_task_tool_input_field_has_a_description() {
     let tools = fold_daemon::mcp::tasks::tools();
-    assert_eq!(tools.len(), 17);
+    assert_eq!(tools.len(), 20);
     for tool in &tools {
         assert!(tool.description.is_some(), "{}", tool.name);
         let properties = tool.input_schema["properties"]

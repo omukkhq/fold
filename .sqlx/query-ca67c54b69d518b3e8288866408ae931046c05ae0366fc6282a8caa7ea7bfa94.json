@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO area_mcp_servers (area_id, position, name) VALUES (?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "ca67c54b69d518b3e8288866408ae931046c05ae0366fc6282a8caa7ea7bfa94"
+}

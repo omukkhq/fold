@@ -1,8 +1,8 @@
 use fold_core::events::types;
 use fold_core::policy::{self, Starter};
 use fold_core::roles::{
-    StartFacts, check_limits, check_model, default_worker_name, first_turn, outside_area,
-    session_uuid,
+    AreaProfile, AreaProfileChange, StartFacts, check_limits, check_model, default_worker_name,
+    first_turn, outside_area, session_uuid,
 };
 use fold_core::{
     Actor, AgentName, AreaName, FoldError, LabelName, NewEvent, ProjectConfig, ProposalId, Role,
@@ -125,12 +125,13 @@ impl AgentService {
         Ok(Starter::of(actor, supervised, main_exists))
     }
 
-    /// Defines area `name` over the tasks labelled `label`. The label must exist; an area name or label that another area has is refused with `area_exists`.
+    /// Defines area `name` over the tasks labelled `label`, with its `profile`. The label must exist; an area name or label that another area has is refused with `area_exists`.
     pub async fn define_area(
         &self,
         actor: &Actor,
         name: &AreaName,
         label: &LabelName,
+        profile: &AreaProfile,
     ) -> Result<AreaRow, AgentError> {
         let starter = self.starter(actor).await?;
         policy::can_define_area(&starter).map_err(FoldError::from)?;
@@ -161,9 +162,45 @@ impl AgentService {
                     .with_hint("call list_workers to see the areas")
                     .into());
                 }
-                agents::insert_area(tx.conn(), name, label_id, by.as_str(), now).await?;
+                let area_id =
+                    agents::insert_area(tx.conn(), name, label_id, by.as_str(), now).await?;
+                if !profile.is_empty() {
+                    agents::set_area_profile(tx.conn(), area_id, profile).await?;
+                }
                 let event = NewEvent::new(types::AREA_DEFINED, by.clone())?
                     .data(json!({"area": name.as_str(), "label": label.as_str()}))?;
+                buffer.append(tx, &event, now).await?;
+                agents::find_area(tx.conn(), name)
+                    .await?
+                    .ok_or(StoreError::Corrupt("areas"))
+                    .map_err(AgentError::from)
+            })
+            .await?;
+        self.bus.publish(buffer);
+        Ok(area)
+    }
+
+    /// Changes the profile of area `name`. Running workers keep what they started with; the next start of a lead or a coder of the area gets the new profile.
+    pub async fn update_area(
+        &self,
+        actor: &Actor,
+        name: &AreaName,
+        change: &AreaProfileChange,
+    ) -> Result<AreaRow, AgentError> {
+        let starter = self.starter(actor).await?;
+        policy::can_update_area(&starter).map_err(FoldError::from)?;
+        let now = self.clock.now();
+        let by = actor.event_actor();
+        let mut buffer = EventBuffer::new();
+        let area = self
+            .store
+            .write(async |tx| {
+                let area = agents::find_area(tx.conn(), name)
+                    .await?
+                    .ok_or_else(|| area_not_found(name))?;
+                agents::set_area_profile(tx.conn(), area.id, &change.apply(&area.profile)).await?;
+                let event = NewEvent::new(types::AREA_UPDATED, by.clone())?
+                    .data(json!({"area": name.as_str(), "fields": change.fields()}))?;
                 buffer.append(tx, &event, now).await?;
                 agents::find_area(tx.conn(), name)
                     .await?
@@ -226,7 +263,7 @@ impl AgentService {
             check_model(model)?;
         }
         let config = load_config(supervisor.paths()).await?;
-        let model = request.model.clone().or(config.role(role).model);
+        let role_model = config.role(role).model;
         let session = new_session()?;
         let by = actor.event_actor();
         let now = self.clock.now();
@@ -243,6 +280,12 @@ impl AgentService {
                     ),
                     None => None,
                 };
+                let model = request.model.clone().or_else(|| {
+                    area_row
+                        .as_ref()
+                        .and_then(|area| area.profile.model.clone())
+                        .or_else(|| role_model.clone())
+                });
                 match role {
                     Role::AreaLead => {
                         if let Some(lead) = area_row.as_ref().and_then(|area| area.lead.clone()) {
@@ -437,6 +480,20 @@ impl AgentService {
         supervisor.resume(agent, turn, &[]).await?;
         self.get_worker(agent).await
     }
+}
+
+/// [`AgentService::starter`] read inside a write transaction, so a command of another domain decides it with the rows it changes.
+pub(crate) async fn starter_of(tx: &mut WriteTx, actor: &Actor) -> Result<Starter, StoreError> {
+    let (supervised, main_exists) = match actor {
+        Actor::Agent(agent) => {
+            let supervised = agents::find_worker_process(tx.conn(), &agent.agent)
+                .await?
+                .map(|row| (row.role, row.area));
+            (supervised, agents::main_exists(tx.conn()).await?)
+        }
+        Actor::Human { .. } | Actor::System => (None, false),
+    };
+    Ok(Starter::of(actor, supervised, main_exists))
 }
 
 /// The area a start binds: an area lead names its own, a task coder takes its lead's, the other roles have none. It also checks that each role gets only its own kind of binding.

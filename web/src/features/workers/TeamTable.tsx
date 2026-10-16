@@ -201,6 +201,19 @@ function GroupHead({
           <Label color={group.label.color}>{group.label.name}</Label>
         ) : null}
         <span className="text-text-muted">{areaNote(group)}</span>
+        {group.profile.facts.map((fact) => (
+          <span key={fact} className="whitespace-nowrap text-text-muted">
+            {fact}
+          </span>
+        ))}
+        {group.profile.instructions === null ? null : (
+          <span
+            className="min-w-0 truncate text-text-faint"
+            title={group.profile.instructions}
+          >
+            {group.profile.instructions}
+          </span>
+        )}
       </>
     );
   }
@@ -211,7 +224,9 @@ function GroupHead({
         scope="colgroup"
         className="px-16 py-7 text-left font-normal"
       >
-        <span className="flex items-center gap-12 text-code">{content}</span>
+        <span className="flex min-w-0 items-center gap-12 text-code">
+          {content}
+        </span>
       </th>
     </tr>
   );

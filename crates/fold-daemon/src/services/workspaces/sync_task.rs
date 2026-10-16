@@ -6,7 +6,7 @@ use fold_core::events::types;
 use fold_core::merge::{ConflictKind, TreeMerge};
 use fold_core::object::ObjectHash;
 use fold_core::{
-    Actor, FoldError, IdKind, NewEvent, RevisionId, TaskDescription, TaskId, TaskTitle,
+    Actor, FoldError, IdKind, NewEvent, RevisionId, TaskDescription, TaskId, TaskKind, TaskTitle,
     WorkspaceId, codes, task_workspace_path,
 };
 use fold_store::workspaces::{self, ConflictRow, NewTaskWorkspace};
@@ -125,7 +125,8 @@ impl WorkspaceService {
         let written = self
             .store
             .write(async |tx| {
-                let task = create_in_tx(tx, &mut buffer, actor, &input, now).await?;
+                let task =
+                    create_in_tx(tx, &mut buffer, actor, &input, TaskKind::Proposal, now).await?;
                 fold_store::tasks::set_remote_commit(tx, task, &sync.remote_commit).await?;
                 let (from, ws) = (staging.clone(), ws_dir.clone());
                 let root = root.clone();

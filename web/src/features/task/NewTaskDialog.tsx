@@ -5,7 +5,7 @@ import { Controller, useForm } from "react-hook-form";
 import { keys } from "@/api/keys";
 import { createTask } from "@/api/tasks";
 import { Button } from "@/components/button/Button";
-import { TextField } from "@/components/form/controls";
+import { Checkbox, TextField } from "@/components/form/controls";
 import { MentionField } from "@/mentions/MentionField";
 import { DialogFrame } from "./DialogFrame";
 import { submit, WriteError } from "./parts";
@@ -35,7 +35,7 @@ export function NewTaskDialog({
   });
   const form = useForm<NewTaskForm>({
     resolver: zodResolver(newTaskSchema),
-    defaultValues: { title: "", description: "" },
+    defaultValues: { title: "", description: "", noProposal: false },
   });
   return (
     <DialogFrame crumb="New task" crumbIsId={false} described onClose={onClose}>
@@ -78,6 +78,21 @@ export function NewTaskDialog({
               ref={field.ref}
               value={field.value}
               onValueChange={field.onChange}
+              onBlur={field.onBlur}
+            />
+          )}
+        />
+        <Controller
+          control={form.control}
+          name="noProposal"
+          render={({ field }) => (
+            <Checkbox
+              label="Needs no proposal"
+              hint="For work that changes no project file, such as screens drawn through an MCP server. The coder reports the work, and a lead check completes it."
+              disabled={create.isPending}
+              ref={field.ref}
+              checked={field.value}
+              onCheckedChange={field.onChange}
               onBlur={field.onBlur}
             />
           )}

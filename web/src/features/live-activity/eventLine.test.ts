@@ -226,7 +226,22 @@ describe("eventLine", () => {
       "defined web over label ui",
     );
     expect(line("area.defined")).toBe("defined an area");
+    expect(line("area.updated", { area: "design" })).toBe(
+      "changed the profile of design",
+    );
+    expect(line("area.updated")).toBe("changed the profile of an area");
     expect(line("workers.limits_changed")).toBe("changed the worker limits");
+    expect(line("task.reported")).toBe(
+      "reported T-12 finished for a lead check",
+    );
+    expect(line("task.sent_back")).toBe("sent T-12 back to its coder");
+    expect(
+      line("worker.resumed", {
+        agent: "web-coder",
+        reason: "sent_back",
+        resumed: true,
+      }),
+    ).toBe("resumed web-coder for the send-back of T-12");
     expect(
       line("worker.started", { agent: "web-coder", role: "task_coder" }),
     ).toBe("started web-coder as task coder");

@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 
 use fold_core::readiness::{Candidate, ready_order};
 use fold_core::status::{ProposalFact, TaskFacts, TaskStatus, calculate};
-use fold_core::{TaskId, Timestamp};
+use fold_core::{TaskId, TaskKind, Timestamp};
 use proptest::prelude::*;
 
 #[expect(
@@ -47,15 +47,41 @@ fn prerequisites() -> impl Strategy<Value = Vec<(TaskId, TaskStatus)>> {
         .prop_shuffle()
 }
 
+fn kind() -> impl Strategy<Value = TaskKind> {
+    prop_oneof![Just(TaskKind::Proposal), Just(TaskKind::NoProposal)]
+}
+
 fn facts() -> impl Strategy<Value = TaskFacts> {
-    (any::<bool>(), proposal(), any::<bool>(), prerequisites()).prop_map(
-        |(completed, proposal, has_active_workspace, prerequisites)| TaskFacts {
-            completed,
-            proposal,
-            has_active_workspace,
-            prerequisites,
-        },
+    (
+        kind(),
+        any::<bool>(),
+        proposal(),
+        any::<bool>(),
+        any::<bool>(),
+        any::<bool>(),
+        prerequisites(),
     )
+        .prop_map(
+            |(
+                kind,
+                completed,
+                proposal,
+                has_active_workspace,
+                claimed,
+                reported,
+                prerequisites,
+            )| {
+                TaskFacts {
+                    kind,
+                    completed,
+                    proposal,
+                    has_active_workspace,
+                    claimed,
+                    reported,
+                    prerequisites,
+                }
+            },
+        )
 }
 
 fn candidates() -> impl Strategy<Value = Vec<Candidate>> {
@@ -80,13 +106,48 @@ proptest! {
     fn untouched_task_without_unfinished_prerequisites_is_todo(
         prereqs in prop::collection::btree_map(1u32..30, Just(TaskStatus::Done), 0..8),
     ) {
-        let f = TaskFacts {
-            completed: false,
-            proposal: ProposalFact::None,
-            has_active_workspace: false,
-            prerequisites: prereqs.into_iter().map(|(n, s)| (t(n), s)).collect(),
-        };
-        prop_assert_eq!(calculate(&f).status, TaskStatus::Todo);
+        for kind in [TaskKind::Proposal, TaskKind::NoProposal] {
+            let f = TaskFacts {
+                kind,
+                completed: false,
+                proposal: ProposalFact::None,
+                has_active_workspace: false,
+                claimed: false,
+                reported: false,
+                prerequisites: prereqs.iter().map(|(n, s)| (t(*n), *s)).collect(),
+            };
+            prop_assert_eq!(calculate(&f).status, TaskStatus::Todo);
+        }
+    }
+
+    #[test]
+    fn a_kind_never_reads_the_facts_of_the_other_kind(
+        f in facts(),
+        proposal in proposal(),
+        workspace in any::<bool>(),
+        claimed in any::<bool>(),
+        reported in any::<bool>(),
+    ) {
+        let mut other = f.clone();
+        match f.kind {
+            TaskKind::Proposal => {
+                other.claimed = claimed;
+                other.reported = reported;
+            }
+            TaskKind::NoProposal => {
+                other.proposal = proposal;
+                other.has_active_workspace = workspace;
+            }
+        }
+        prop_assert_eq!(calculate(&other), calculate(&f));
+    }
+
+    #[test]
+    fn an_open_report_puts_an_unfinished_task_without_a_proposal_in_review(f in facts()) {
+        prop_assume!(f.kind == TaskKind::NoProposal && !f.completed);
+        let status = calculate(&f).status;
+        prop_assert_eq!(status == TaskStatus::Review, f.reported);
+        prop_assert_eq!(status == TaskStatus::InProgress, f.claimed && !f.reported);
     }
 
     #[test]

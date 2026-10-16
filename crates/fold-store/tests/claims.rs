@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use fold_core::{AgentName, TaskDescription, TaskId, TaskTitle, Timestamp, WorkerName};
+use fold_core::{AgentName, TaskDescription, TaskId, TaskKind, TaskTitle, Timestamp, WorkerName};
 use fold_store::agents;
 use fold_store::tasks::claims::{self, ClaimRow, ReleaseReason};
 use fold_store::tasks::{self, NewTask};
@@ -35,6 +35,7 @@ async fn setup() -> (TestProject, [i64; 3]) {
                         title: &title,
                         description: &description,
                         created_by: "frontend",
+                        kind: TaskKind::Proposal,
                         now,
                     },
                 )

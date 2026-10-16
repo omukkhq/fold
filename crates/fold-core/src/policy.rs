@@ -17,14 +17,14 @@ pub use batches::can_review_batch;
 pub use human_review::{MarkChange, can_clear_human_review, can_set_human_review};
 pub use integrate::{
     CallerFacts, Gate, GateRefusal, GateState, GateStatus, IntegrateInput, ProposalFacts,
-    can_integrate, gate_report,
+    can_integrate, gate_report, human_check_done, prerequisites_done,
 };
 pub use questions::can_answer_worker_permission;
 pub use requests::{can_claim_request, can_create_request, is_drafter, is_requester};
 pub use sessions::{SessionPeer, can_bind_agent, can_name_human};
 pub use workers::{
-    Starter, can_define_area, can_set_worker_limits, can_start_worker, can_stop_worker,
-    can_write_handoff,
+    Starter, can_check_task, can_choose_no_proposal, can_define_area, can_set_worker_limits,
+    can_start_worker, can_stop_worker, can_update_area, can_write_handoff,
 };
 
 /// A refusal by a policy gate. The code is a stable error code, so every transport reports it unchanged.

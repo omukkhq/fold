@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
-use fold_core::TaskId;
 use fold_core::container::{ContainerFacts, ItemFact};
 use fold_core::status::{ProposalFact, TaskFacts, TaskStatus};
+use fold_core::{TaskId, TaskKind};
 use sqlx::SqliteConnection;
 
 use crate::error::StoreError;
@@ -19,7 +19,7 @@ pub struct LoadedFacts {
     pub container: ContainerFacts,
 }
 
-/// Reads the facts of `ids` from the tables that hold them: completions, dependencies with the prerequisites' stored statuses, task workspaces, the open proposal, its highest version and the latest verdict on that version, and for the container rule the checklist items with their linked children's stored statuses and whether a task workspace ever existed. Reviews with the verdict `comment` are not verdicts and are skipped; among the rest the newest by `created_at`, then by row id, decides, whoever wrote it. Run on the writer's connection (`WriteTx::conn`) it sees the prerequisite statuses this transaction last wrote; on a read connection it sees the committed ones. Unknown numbers are left out; the result is in number order.
+/// Reads the facts of `ids` from the tables that hold them: the task's kind, completions, dependencies with the prerequisites' stored statuses, task workspaces, the unreleased implementation claim, the open report, the open proposal, its highest version and the latest verdict on that version, and for the container rule the checklist items with their linked children's stored statuses and whether a task workspace ever existed. Reviews with the verdict `comment` are not verdicts and are skipped; among the rest the newest by `created_at`, then by row id, decides, whoever wrote it. Run on the writer's connection (`WriteTx::conn`) it sees the prerequisite statuses this transaction last wrote; on a read connection it sees the committed ones. Unknown numbers are left out; the result is in number order.
 pub async fn load_facts(
     conn: &mut SqliteConnection,
     ids: &[TaskId],
@@ -74,7 +74,15 @@ pub async fn load_facts(
                   t.status,
                   t.blocked AS "blocked: bool",
                   t.archived_at IS NOT NULL AS "archived!: bool",
+                  t.kind,
                   EXISTS (SELECT 1 FROM completions c WHERE c.task_id = t.id) AS "completed!: bool",
+                  EXISTS (
+                      SELECT 1 FROM claims c
+                      WHERE c.task_id = t.id AND c.kind = 'implementation' AND c.released_at IS NULL
+                  ) AS "claimed!: bool",
+                  EXISTS (
+                      SELECT 1 FROM task_reports r WHERE r.task_id = t.id AND r.resolution IS NULL
+                  ) AS "reported!: bool",
                   EXISTS (
                       SELECT 1 FROM workspaces w
                       WHERE w.task_id = t.id AND w.kind = 'task' AND w.state IN ('active', 'missing')
@@ -118,9 +126,15 @@ pub async fn load_facts(
                 blocked: row.blocked,
                 archived: row.archived,
                 facts: TaskFacts {
+                    kind: row
+                        .kind
+                        .parse::<TaskKind>()
+                        .map_err(|_| StoreError::Corrupt("tasks.kind"))?,
                     completed: row.completed,
                     proposal,
                     has_active_workspace: row.active_workspace,
+                    claimed: row.claimed,
+                    reported: row.reported,
                     prerequisites: prerequisites.remove(&row.number).unwrap_or_default(),
                 },
                 container: ContainerFacts {

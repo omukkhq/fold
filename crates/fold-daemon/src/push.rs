@@ -590,6 +590,20 @@ async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError
         }
         return Ok(ctx);
     }
+    if kind == fold_core::events::types::TASK_REPORTED {
+        if let Some(task) = event.task {
+            route(store, task, &mut ctx).await?;
+        }
+        return Ok(ctx);
+    }
+    if kind == fold_core::events::types::TASK_SENT_BACK {
+        if let Some(task) = event.task {
+            ctx.implementation_claim = claims::unreleased_for_task(store.read(), task)
+                .await?
+                .map(|claim| claim.worker.agent());
+        }
+        return Ok(ctx);
+    }
     if kind == fold_core::events::types::TASK_STATUS_CHANGED {
         if let Some(task) = event.task {
             ctx.implementation_claim = claims::unreleased_for_task(store.read(), task)
@@ -620,7 +634,7 @@ async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError
     Ok(ctx)
 }
 
-/// The areas whose label the ready task carries, their leads and the main agents, which take the task when no lead does.
+/// The areas whose label the task carries, their leads and the main agents, which take a ready or reported task when no lead does.
 async fn route(store: &Store, task: TaskId, ctx: &mut PushContext) -> Result<(), StoreError> {
     let labels = tasks::labels_for(store.read(), task).await?;
     for area in agents::list_areas(store.read()).await? {

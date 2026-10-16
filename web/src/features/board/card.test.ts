@@ -4,6 +4,8 @@ import {
   blockedText,
   blocksText,
   checklistText,
+  kindText,
+  leadCheckMark,
   messagesText,
   needsText,
   proposalLook,
@@ -123,5 +125,24 @@ describe("proposalLook", () => {
     expect(proposalLook(proposal("open"))).toBe("active");
     expect(proposalLook(proposal("approved"))).toBe("active");
     expect(proposalLook(proposal("integrated", "r8"))).toBe("merged");
+  });
+});
+
+describe("tasks without a proposal", () => {
+  it("names the kind and marks a reported task in Review", () => {
+    const card = {
+      kind: "no_proposal" as const,
+      status: "review" as const,
+      report: "Drew the board.",
+    };
+    expect(kindText(card)).toBe("no proposal");
+    expect(kindText({ kind: "proposal" })).toBeNull();
+    expect(leadCheckMark(card)).toEqual({
+      text: "Waits for lead check",
+      note: "Drew the board.",
+    });
+    expect(leadCheckMark({ ...card, status: "in_progress" })).toBeNull();
+    expect(leadCheckMark({ ...card, report: null })).toBeNull();
+    expect(leadCheckMark({ ...card, kind: "proposal" })).toBeNull();
   });
 });

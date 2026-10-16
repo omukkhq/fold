@@ -27,7 +27,8 @@ pub use workers::{
     coders_of_task, find_area, find_worker_process, insert_area, insert_worker_process, label_id,
     list_areas, list_worker_processes, mark_worker_working, proposals_without_verdict, record_exit,
     record_turn, restart_worker_process, reviewers_of_proposal, running_counts, set_area_lead,
-    set_worker_context, set_worker_pid, set_worker_state, tasks_awaiting_proposal,
+    set_area_profile, set_worker_context, set_worker_pid, set_worker_state,
+    tasks_awaiting_proposal,
 };
 pub use workers::{PendingResume, pending_resumes};
 

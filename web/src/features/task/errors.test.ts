@@ -78,6 +78,16 @@ describe("describeError", () => {
     );
   });
 
+  it("names a lead check that has nothing to check", () => {
+    expect(describeError(refusal("task_not_reported"))?.text).toBe(
+      "No report waits for a check. The coder reports the task again first.",
+    );
+    expect(describeError(refusal("task_kind_mismatch"))?.field).toBeNull();
+    expect(describeError(refusal("prerequisites_not_done"))?.text).toBe(
+      "A task that this task needs is not Done. Complete this task when its prerequisites are Done.",
+    );
+  });
+
   it("leaves every other code, and a value with no code, to the generic banner", () => {
     expect(describeError(refusal("task_not_found"))).toBeNull();
     expect(describeError(refusal("human_review_already_set"))).toBeNull();

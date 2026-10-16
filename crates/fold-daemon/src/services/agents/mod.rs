@@ -40,10 +40,10 @@ pub use overview::{
     ProposalSummary, SessionSummary, WorkerOverview, WorkspaceSummary,
 };
 pub use presence::SeenPresence;
-pub(crate) use workers::code_of;
 pub use workers::{
     FOLD_SERVER, Launcher, RESTART_TURN, StartWorker, StopTimeouts, Supervisor, WorkerLimitsChanged,
 };
+pub(crate) use workers::{code_of, starter_of};
 
 #[derive(Debug, Error)]
 pub enum AgentError {

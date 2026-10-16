@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT t.number AS \"task!: i64\", r.note\n           FROM task_reports r\n           JOIN tasks t ON t.id = r.task_id\n           WHERE r.resolution IS NULL AND t.archived_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "task!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "note",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_reports",
+            "name": "note"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "1365ccab391b31b9dbff7517970c2aa8033c7b56d68148de9927adbdbdfa5f19"
+}

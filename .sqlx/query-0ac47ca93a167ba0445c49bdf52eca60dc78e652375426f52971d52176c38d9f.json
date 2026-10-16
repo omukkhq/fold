@@ -1,0 +1,122 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT t.number AS \"task!: i64\", r.worker_id, w.name AS worker, r.note, r.created_at,\n                  r.resolution, r.resolved_by, r.resolved_at, r.send_back_note\n           FROM task_reports r\n           JOIN tasks t ON t.id = r.task_id\n           JOIN workers w ON w.id = r.worker_id\n           WHERE t.number = ?1\n           ORDER BY r.id DESC\n           LIMIT ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "task!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "worker_id",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "task_reports",
+            "name": "worker_id"
+          }
+        }
+      },
+      {
+        "name": "worker",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workers",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "note",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_reports",
+            "name": "note"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "task_reports",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "resolution",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_reports",
+            "name": "resolution"
+          }
+        }
+      },
+      {
+        "name": "resolved_by",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_reports",
+            "name": "resolved_by"
+          }
+        }
+      },
+      {
+        "name": "resolved_at",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "task_reports",
+            "name": "resolved_at"
+          }
+        }
+      },
+      {
+        "name": "send_back_note",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_reports",
+            "name": "send_back_note"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "0ac47ca93a167ba0445c49bdf52eca60dc78e652375426f52971d52176c38d9f"
+}

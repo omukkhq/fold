@@ -4,7 +4,7 @@ use std::str::FromStr;
 
 use fold_core::{
     Actor, ChecklistItemId, ChecklistName, FoldError, HumanName, IdParseError, LabelColor,
-    LabelName, StepText, TaskDescription, TaskId, TaskTitle, WorkerName,
+    LabelName, StepText, TaskDescription, TaskId, TaskKind, TaskTitle, WorkerName,
 };
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{JsonObject, Tool};
@@ -40,6 +40,9 @@ pub const CREATE_LABEL: &str = "create_label";
 pub const CLAIM_TASK: &str = "claim_task";
 pub const RELEASE_TASK: &str = "release_task";
 pub const TAKEOVER_CLAIM: &str = "takeover_claim";
+pub const REPORT_TASK: &str = "report_task";
+pub const COMPLETE_TASK: &str = "complete_task";
+pub const SEND_BACK_TASK: &str = "send_back_task";
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -87,6 +90,21 @@ pub struct CreateTaskInput {
     /// A task to split: the new task becomes a linked item of its Subtasks checklist, so the parent needs the new task.
     #[serde(default)]
     pub parent: Option<String>,
+    /// proposal (the default) or no_proposal. A no_proposal task is for work that changes no project file, such as designs made through an MCP server: its coder claims it, does the work without a workspace and calls report_task, and a lead check completes it. Only the main agent or the lead of the task's area creates one.
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
+    #[serde(rename = "as", default)]
+    pub as_worker: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct TaskNoteInput {
+    /// The task, such as T-12.
+    pub id: String,
+    /// What was done, or what to change: plain text, not empty.
+    pub note: String,
     /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
     #[serde(rename = "as", default)]
     pub as_worker: Option<String>,
@@ -209,12 +227,12 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             GET_TASK,
-            "Read one task: description, labels, checklists with progress, dependencies, dependents, claim and workspace.",
+            "Read one task: description, labels, checklists with progress, dependencies, dependents, claim and workspace, and for a no_proposal task its reports and lead checks.",
             schema_for_type::<TaskIdInput>(),
         ),
         Tool::new(
             CREATE_TASK,
-            "Create a task, with its dependencies and its parent link in the same step. A refused dependency, such as a cycle, creates nothing.",
+            "Create a task, with its dependencies and its parent link in the same step. A refused dependency, such as a cycle, creates nothing. Pass kind no_proposal for work that changes no project file.",
             schema_for_type::<CreateTaskInput>(),
         ),
         Tool::new(
@@ -281,6 +299,21 @@ pub fn tools() -> Vec<Tool> {
             TAKEOVER_CLAIM,
             "Take over a claim whose lease has run out, when its holder has stopped working. The task's workspace moves to you with its files as they are; the result names it.",
             schema_for_type::<TaskIdInput>(),
+        ),
+        Tool::new(
+            REPORT_TASK,
+            "Report the work on a no_proposal task you claimed as finished, with a note on what you did. The task moves to Review and waits for a lead check; it has no workspace and no proposal.",
+            schema_for_type::<TaskNoteInput>(),
+        ),
+        Tool::new(
+            COMPLETE_TASK,
+            "Complete a reported no_proposal task after you checked the work: the task is Done and its dependents unblock. Only the lead of the task's area, the main agent or a human checks a task. Refused with prerequisites_not_done while a prerequisite is not Done, and with human_approval_missing on a task with the human review mark, which only a human completes.",
+            schema_for_type::<TaskIdInput>(),
+        ),
+        Tool::new(
+            SEND_BACK_TASK,
+            "Send a reported no_proposal task back to its coder with a note on what to change. The task returns to In Progress and fold resumes the coder with the note.",
+            schema_for_type::<TaskNoteInput>(),
         ),
     ]
 }
@@ -352,12 +385,13 @@ fn detail_json(detail: &TaskDetail) -> Value {
         })
         .collect();
     let progress = &detail.progress;
-    json!({
+    let mut value = json!({
         "id": task.id,
         "title": task.title.as_str(),
         "description": task.description.as_str(),
         "status": task.status.as_str(),
         "blocked": task.blocked,
+        "kind": task.kind.as_str(),
         "archived": task.archived_at.is_some(),
         "labels": labels_json(&task.labels),
         "checklists": checklists,
@@ -405,7 +439,23 @@ fn detail_json(detail: &TaskDetail) -> Value {
             "type": event.event_type.as_str(),
             "actor": event.actor.to_string(),
         })).collect::<Vec<_>>(),
-    })
+    });
+    if task.kind == TaskKind::NoProposal {
+        value["reports"] = detail
+            .reports
+            .iter()
+            .map(|report| {
+                json!({
+                    "by": report.by.as_str(),
+                    "note": report.note,
+                    "resolution": report.resolution.map(|resolution| resolution.as_str()),
+                    "resolved_by": report.resolved_by,
+                    "send_back_note": report.send_back_note,
+                })
+            })
+            .collect();
+    }
+    value
 }
 
 /// Runs a task or request tool acting as `as_worker`. `None` when `tool` is neither.
@@ -455,6 +505,9 @@ async fn run(
         CLAIM_TASK => claim_task(server, actor, arguments).await?,
         RELEASE_TASK => release_task(server, actor, arguments).await?,
         TAKEOVER_CLAIM => takeover_claim(server, actor, arguments).await?,
+        REPORT_TASK => report_task(server, actor, arguments).await?,
+        COMPLETE_TASK => complete_task(server, actor, arguments).await?,
+        SEND_BACK_TASK => send_back_task(server, actor, arguments).await?,
         _ => return Ok(None),
     };
     Ok(Some(value))
@@ -472,6 +525,7 @@ async fn get_task_graph(server: &FoldServer, arguments: &JsonObject) -> Result<V
                 "title": task.title.as_str(),
                 "status": task.status.as_str(),
                 "blocked": task.blocked,
+                "kind": task.kind.as_str(),
                 "labels": labels_json(&task.labels),
                 "needs": task.needs,
                 "holder": task.holder.as_ref().map(WorkerName::as_str),
@@ -524,8 +578,12 @@ async fn create_task(
         .map(|need| id(need))
         .collect::<Result<Vec<TaskId>, _>>()?;
     let parent = input.parent.as_deref().map(id).transpose()?;
+    let kind = match input.kind.as_deref() {
+        Some(kind) => kind.parse::<TaskKind>()?,
+        None => TaskKind::Proposal,
+    };
     let view = tasks
-        .create_linked_task(actor, create, &needs, parent)
+        .create_task_of_kind(actor, create, kind, &needs, parent)
         .await
         .map_err(from_task)?;
     Ok(json!({"id": view.id, "status": view.status.as_str()}))
@@ -799,4 +857,46 @@ impl FooterSource for ClaimsNearStaleFooter {
             }
         })
     }
+}
+
+async fn report_task(
+    server: &FoldServer,
+    actor: &Actor,
+    arguments: &JsonObject,
+) -> Result<Value, FoldError> {
+    let input: TaskNoteInput = parse(arguments)?;
+    let view = server
+        .tasks
+        .report_task(actor, id(&input.id)?, &input.note)
+        .await
+        .map_err(from_task)?;
+    Ok(json!({"id": view.id, "status": view.status.as_str()}))
+}
+
+async fn complete_task(
+    server: &FoldServer,
+    actor: &Actor,
+    arguments: &JsonObject,
+) -> Result<Value, FoldError> {
+    let input: TaskIdInput = parse(arguments)?;
+    let view = server
+        .tasks
+        .complete_task(actor, id(&input.id)?)
+        .await
+        .map_err(from_task)?;
+    Ok(json!({"id": view.id, "status": view.status.as_str()}))
+}
+
+async fn send_back_task(
+    server: &FoldServer,
+    actor: &Actor,
+    arguments: &JsonObject,
+) -> Result<Value, FoldError> {
+    let input: TaskNoteInput = parse(arguments)?;
+    let view = server
+        .tasks
+        .send_back_task(actor, id(&input.id)?, &input.note)
+        .await
+        .map_err(from_task)?;
+    Ok(json!({"id": view.id, "status": view.status.as_str()}))
 }

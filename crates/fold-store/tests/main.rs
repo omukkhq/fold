@@ -30,6 +30,7 @@ mod revision_reads;
 mod revisions;
 mod schema;
 mod store;
+mod task_reports_schema;
 mod tasks;
 mod test_project;
 mod worker_questions_schema;

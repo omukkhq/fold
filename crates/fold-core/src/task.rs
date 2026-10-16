@@ -20,6 +20,8 @@ pub enum TaskValueError {
     InvalidChecklistName,
     #[error("a checklist step is not empty and has no line break")]
     InvalidStepText,
+    #[error("a task kind is proposal or no_proposal")]
+    InvalidKind,
 }
 
 impl TaskValueError {
@@ -31,6 +33,7 @@ impl TaskValueError {
             TaskValueError::InvalidStatus => codes::INVALID_TASK_STATUS,
             TaskValueError::InvalidChecklistName => codes::INVALID_CHECKLIST_NAME,
             TaskValueError::InvalidStepText => codes::INVALID_STEP_TEXT,
+            TaskValueError::InvalidKind => codes::INVALID_TASK_KIND,
         }
     }
 }
@@ -182,6 +185,16 @@ define_names!(
     }
 );
 
+define_names!(
+    /// How a task's work reaches Done. A `proposal` task is done when its proposal integrates; a `no_proposal` task changes no project file, such as design work done through an MCP server, so its coder reports the work and a lead check completes it.
+    TaskKind,
+    TaskValueError::InvalidKind,
+    {
+        Proposal = "proposal",
+        NoProposal = "no_proposal",
+    }
+);
+
 /// How an edge came to exist. A checklist edge belongs to a linked checklist item and goes away only with that item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DependencyOrigin {
@@ -288,6 +301,19 @@ mod tests {
     }
 
     #[test]
+    fn task_kinds_round_trip() {
+        for kind in TaskKind::ALL {
+            assert_eq!(kind.as_str().parse::<TaskKind>(), Ok(*kind));
+            assert_eq!(kind.to_string(), kind.as_str());
+        }
+        assert_eq!(TaskKind::NoProposal.as_str(), "no_proposal");
+        assert_eq!(
+            "design".parse::<TaskKind>(),
+            Err(TaskValueError::InvalidKind)
+        );
+    }
+
+    #[test]
     fn dependency_origins_round_trip() {
         for origin in DependencyOrigin::ALL {
             assert_eq!(DependencyOrigin::parse(origin.as_str()), Some(*origin));
@@ -324,6 +350,7 @@ mod tests {
                 "invalid_checklist_name",
             ),
             (TaskValueError::InvalidStepText, "invalid_step_text"),
+            (TaskValueError::InvalidKind, "invalid_task_kind"),
         ];
         for (error, code) in cases {
             assert_eq!(error.code(), code);

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE areas SET instructions = ?, model = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "3511a625d86248fa9b25cc37d331581504877ad40776afc8662b495c1bd86c5d"
+}

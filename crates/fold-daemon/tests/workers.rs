@@ -671,7 +671,10 @@ async fn a_human_defines_areas_and_starts_and_stops_leads_over_http() {
         )
         .await;
     assert_eq!(status, StatusCode::CREATED, "{area}");
-    assert_eq!(area, json!({"name": "web", "label": "ui", "lead": null}));
+    assert_eq!(
+        area,
+        json!({"name": "web", "label": "ui", "lead": null, "instructions": null, "model": null, "mcp": null})
+    );
     let (status, again) = harness
         .socket(
             Method::POST,

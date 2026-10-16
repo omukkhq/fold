@@ -1,6 +1,7 @@
 import { skipToken, useQuery } from "@tanstack/react-query";
 import { useRouterState } from "@tanstack/react-router";
 import {
+  ClipboardCheck,
   GitFork,
   GitMerge,
   GitPullRequest,
@@ -27,11 +28,14 @@ import {
   blockedText,
   blocksText,
   checklistText,
+  kindText,
+  leadCheckMark,
   messagesText,
   needsText,
   proposalLook,
   proposalText,
   taskPath,
+  type LeadCheckMark,
   type ProposalLook,
 } from "./card";
 
@@ -68,6 +72,25 @@ function ProposalPill({ proposal }: { proposal: BoardProposal }) {
       <Icon aria-hidden="true" size={12} className={color} />
       {proposalText(proposal)}
     </span>
+  );
+}
+
+/** The proposal pill's place and shape, for a reported task without a proposal: the mark and the coder's note. */
+function LeadCheckPill({ mark }: { mark: LeadCheckMark }) {
+  return (
+    <div className="flex flex-col gap-4">
+      <span className="inline-flex items-center gap-4 self-start rounded-s bg-surface px-7 py-2 text-meta font-medium text-text inset-ring inset-ring-border">
+        <ClipboardCheck
+          aria-hidden="true"
+          size={12}
+          className="text-secondary-text"
+        />
+        {mark.text}
+      </span>
+      <p className="line-clamp-2 text-meta leading-normal text-text-muted">
+        {mark.note}
+      </p>
+    </div>
   );
 }
 
@@ -128,6 +151,8 @@ export function BoardCard({
   const messages = messagesText(card);
   const needs = needsText(card);
   const blocked = blockedText(card);
+  const kind = kindText(card);
+  const leadCheck = leadCheckMark(card);
   const stalled = hasKind(card.attention, "stalled");
   const stale = hasKind(card.attention, "stale_claim");
   const hasFooter =
@@ -174,6 +199,7 @@ export function BoardCard({
       ) : null}
       <div className="flex flex-wrap items-center gap-x-10 gap-y-4 leading-snug">
         <Mono className="text-caption text-text-faint">{card.task}</Mono>
+        {kind ? <Meta icon={ClipboardCheck} text={kind} /> : null}
         {checklist ? <Meta icon={ListChecks} text={checklist} /> : null}
         {blocks ? <Meta icon={GitFork} text={blocks} /> : null}
         {needs ? <Meta icon={Hourglass} text={needs} /> : null}
@@ -188,6 +214,7 @@ export function BoardCard({
         />
       ) : null}
       {card.proposal ? <ProposalPill proposal={card.proposal} /> : null}
+      {leadCheck ? <LeadCheckPill mark={leadCheck} /> : null}
       {hasFooter ? (
         <div className="flex items-center justify-between gap-8 border-t border-border-subtle pt-7">
           {card.worker ? (

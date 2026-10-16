@@ -11,6 +11,8 @@ import {
   archiveTask,
   attachLabel,
   clearHumanReview,
+  completeTask,
+  sendBackTask,
   setHumanReview,
   createLabel,
   createLabelOn,
@@ -117,6 +119,41 @@ describe("writes to a task", () => {
       title: "Reset",
       description: "d",
     });
+  });
+
+  it("sends the no-proposal kind only when it is chosen", async () => {
+    daemon.on(`POST ${P}/tasks`, ok(taskView("T-18"), 201));
+    expect(
+      await createTask("demo", {
+        title: "Draw it",
+        description: "",
+        noProposal: true,
+      }),
+    ).toBe("T-18");
+    await createTask("demo", {
+      title: "Build it",
+      description: "",
+      noProposal: false,
+    });
+    expect(daemon.made(`POST ${P}/tasks`).map((c) => c.body)).toEqual([
+      { title: "Draw it", description: "", kind: "no_proposal" },
+      { title: "Build it", description: "" },
+    ]);
+  });
+
+  it("completes a reported task and sends one back with a note", async () => {
+    daemon.on(`POST ${P}/tasks/T-4/complete`, ok(taskView("T-4")));
+    daemon.on(`POST ${P}/tasks/T-4/send-back`, ok(taskView("T-4")));
+    await completeTask("demo", "T-4");
+    await sendBackTask("demo", "T-4", "Use the tokens.");
+    expect(daemon.made(`POST ${P}/tasks/T-4/complete`)).toHaveLength(1);
+    expect(bodyOf(`POST ${P}/tasks/T-4/send-back`)).toEqual({
+      note: "Use the tokens.",
+    });
+    daemon.on(`POST ${P}/tasks/T-5/complete`, refuse(409, "task_not_reported"));
+    await expect(completeTask("demo", "T-5")).rejects.toSatisfy(
+      (e: unknown) => apiErrorCode(e) === "task_not_reported",
+    );
   });
 
   it("changes the title and the description with one patch each", async () => {

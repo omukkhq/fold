@@ -61,6 +61,8 @@ pub fn is_pushed(event: &Event) -> bool {
         types::REQUEST_DRAFT_SUBMITTED,
         types::REQUEST_CHANGES_REQUESTED,
         types::REQUEST_APPROVED,
+        types::TASK_REPORTED,
+        types::TASK_SENT_BACK,
     ]
     .contains(&event.event_type)
 }
@@ -168,6 +170,27 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
             ));
         }
         return Some(ready_route(task, ctx));
+    }
+    if kind == types::TASK_REPORTED {
+        let task = event.task?;
+        let checkers = if ctx.area_leads.is_empty() {
+            &ctx.main_agents
+        } else {
+            &ctx.area_leads
+        };
+        return Some((
+            checkers.iter().cloned().collect(),
+            format!("{task} is reported finished and waits for your check"),
+            "get_task",
+        ));
+    }
+    if kind == types::TASK_SENT_BACK {
+        let task = event.task?;
+        return Some((
+            ctx.implementation_claim.iter().cloned().collect(),
+            format!("{task} was sent back"),
+            "get_task",
+        ));
     }
     if let Some(rule) = request_rule(event, ctx) {
         return Some(rule);
@@ -402,6 +425,47 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn a_report_reaches_the_area_lead_or_else_the_main_agent() {
+        let event = event(types::TASK_REPORTED, "backend");
+        let mut ctx = ctx();
+        ctx.area_leads = [name("web-lead")].into_iter().collect();
+        ctx.main_agents = [name("main")].into_iter().collect();
+        assert_eq!(
+            sent(&notice_for(&event, &ctx)),
+            vec![row(
+                "web-lead",
+                "fold: T-12 is reported finished and waits for your check. Call get_task.",
+                "get_task"
+            )]
+        );
+        ctx.area_leads.clear();
+        assert_eq!(
+            sent(&notice_for(&event, &ctx)),
+            vec![row(
+                "main",
+                "fold: T-12 is reported finished and waits for your check. Call get_task.",
+                "get_task"
+            )]
+        );
+    }
+
+    #[test]
+    fn a_send_back_reaches_the_claim_holder() {
+        let event = event(types::TASK_SENT_BACK, "web-lead");
+        assert_eq!(
+            sent(&notice_for(&event, &ctx())),
+            vec![row(
+                "backend",
+                "fold: T-12 was sent back. Call get_task.",
+                "get_task"
+            )]
+        );
+        let mut nobody = ctx();
+        nobody.implementation_claim = None;
+        assert!(notice_for(&event, &nobody).is_empty());
     }
 
     #[test]

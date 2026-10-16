@@ -1,4 +1,4 @@
-use fold_core::{IntegrationId, TaskDescription, TaskId, TaskTitle};
+use fold_core::{IntegrationId, TaskDescription, TaskId, TaskKind, TaskTitle};
 use fold_store::tasks::completions::{self, CompletionKind};
 use fold_store::tasks::{self, NewTask};
 use fold_store::testing::{TestProject, assert_append_only};
@@ -48,6 +48,7 @@ async fn project_with_tasks(count: u32) -> TestProject {
                         title: &title,
                         description: &description,
                         created_by: "frontend",
+                        kind: TaskKind::Proposal,
                         now,
                     },
                 )

@@ -21,7 +21,9 @@ use serde_json::json;
 use super::batches::close_batch_of;
 use super::{ReviewError, ReviewService};
 use crate::services::events::EventBuffer;
-use crate::services::tasks::{closed_refusal, recompute, task_not_found, worker_row};
+use crate::services::tasks::{
+    closed_refusal, proposal_kind_refusal, recompute, task_not_found, worker_row,
+};
 use crate::services::workspaces::{
     ArchiveReason, ProposalSnapshot, archive_in_tx, auto_checkpoint_in_tx,
 };
@@ -548,7 +550,7 @@ fn open_checks(
     facts: OpenFacts,
 ) -> Result<(&AgentActor, WorkspaceRow), ReviewError> {
     let row = facts.task.ok_or_else(|| task_not_found(task))?;
-    if let Some(refusal) = closed_refusal(&row) {
+    if let Some(refusal) = closed_refusal(&row).or_else(|| proposal_kind_refusal(&row)) {
         return Err(refusal.into());
     }
     let holder = facts.holder.map(|claim| claim.worker);
