@@ -5,6 +5,7 @@ import { projectsQuery } from "@/api/queries";
 import { HrefLink } from "@/app/HrefLink";
 import { ThemeToggle } from "@/app/ThemeToggle";
 import { Mono } from "@/components/mono/Mono";
+import { Wordmark } from "@/components/Wordmark";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { cn } from "@/lib/cn";
 import { PersonName } from "@/people/PersonName";
@@ -24,7 +25,7 @@ export function ProjectsScreen() {
   return (
     <div className="flex min-h-screen flex-col bg-bg">
       <header className="flex h-bar items-center justify-between border-b border-border-subtle bg-surface px-24">
-        <span className="text-wordmark font-bold text-text">fold</span>
+        <Wordmark />
         <ThemeToggle />
       </header>
       <main className="flex flex-col px-40 py-40">

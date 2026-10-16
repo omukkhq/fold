@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { Button } from "@/components/button/Button";
 import { TextField } from "@/components/form/controls";
 import { Mono } from "@/components/mono/Mono";
+import { Wordmark } from "@/components/Wordmark";
 import { NAME_HINT, nameFormSchema, type NameFormValues } from "./name";
 import { tokenFormSchema, type TokenFormValues } from "./token";
 
@@ -22,7 +23,7 @@ function Card({
       aria-label={title}
       className="flex w-sign-in max-w-full flex-col gap-16 rounded-l bg-surface p-32 inset-ring inset-ring-border-subtle"
     >
-      <span className="text-wordmark font-bold text-text">fold</span>
+      <Wordmark />
       <div className="flex flex-col gap-4">
         <h1 className="text-screen leading-snug font-semibold text-text">
           {title}
