@@ -314,6 +314,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/needs-you": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every item that waits for a human, oldest first: questions with choices from agents to the humans, workers' permission questions, proposals waiting for a human approval and card drafts waiting for their human requester. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*` and `request.*`. */
+        get: operations["list_needs_you"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/proposals": {
         parameters: {
             query?: never;
@@ -830,6 +847,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/worker-questions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The open permission questions of the project's workers, oldest first. A worker's `AskUserQuestion` call is not among them: it is a question message. */
+        get: operations["list_worker_questions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/worker-questions/{id}/answer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A named human allows or denies a worker's tool call. The answer reaches the waiting worker at once, or as the first turn of its session when fold resumes it after a restart. */
+        post: operations["answer_worker_question"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/workers": {
         parameters: {
             query?: never;
@@ -1019,6 +1070,11 @@ export interface components {
             /** @description Every tag of the agent after the change, sorted. */
             tags: string[];
         };
+        AnswerWorkerQuestionBody: {
+            behavior: components["schemas"]["Behavior"];
+            /** @description A note for the worker: the tool error it gets with `deny`, or what it reads with the answer after a restart. */
+            message?: string | null;
+        };
         ApproveDraftBody: {
             /**
              * Format: int32
@@ -1054,6 +1110,11 @@ export interface components {
             task: string;
             title: string;
         };
+        /**
+         * @description A human's answer to a worker's permission question.
+         * @enum {string}
+         */
+        Behavior: "allow" | "deny";
         /** @description The last tracked edit in the task's workspace. */
         BoardActivity: {
             /**
@@ -1541,7 +1602,7 @@ export interface components {
             workspace: string | null;
         };
         /** @enum {string} */
-        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed";
+        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered";
         /**
          * @description `needs`: this task needs the other task. `needed_by`: the other task needs this one.
          * @enum {string}
@@ -1854,6 +1915,8 @@ export interface components {
         MessageView: {
             /** @description Plain text. */
             body: string;
+            /** @description The options of a multiple-choice question, in order; empty for any other message. A human answers with a reply whose body names one option, or with free text. */
+            choices: string[];
             /** @example m-31 */
             id: string;
             /** @example P-3 */
@@ -1888,6 +1951,68 @@ export interface components {
         NameSignIn: {
             name: string;
         };
+        /** @description One item that waits for a human. Only the ids its kind has are set. */
+        NeedsYouEntry: {
+            /**
+             * @description The agent that asks.
+             * @example web-coder
+             */
+            agent: string | null;
+            /** @description The options of a `question` with choices; empty otherwise. */
+            choices: string[];
+            /**
+             * @description The human a `human_review` or `request_draft` waits for; null when any human may answer.
+             * @example tanim
+             */
+            human: string | null;
+            kind: components["schemas"]["NeedsYouItemKind"];
+            /**
+             * @description The question message of a `question`.
+             * @example m-31
+             */
+            message: string | null;
+            /** @example P-3 */
+            proposal: string | null;
+            /**
+             * @description The permission question of a `permission`.
+             * @example pq-3
+             */
+            question: string | null;
+            /** @example RQ-4 */
+            request: string | null;
+            screen: components["schemas"]["NeedsYouScreen"];
+            /**
+             * Format: int64
+             * @description UTC milliseconds since the item waits.
+             */
+            since: number;
+            /** @example T-12 */
+            task: string | null;
+            /**
+             * @description The thread of a `question`.
+             * @example m-31
+             */
+            thread: string | null;
+            /**
+             * @description The tool of a `permission`.
+             * @example Bash
+             */
+            tool: string | null;
+        };
+        /**
+         * @description Why an item waits for a human.
+         * @enum {string}
+         */
+        NeedsYouItemKind: "question" | "permission" | "human_review" | "request_draft";
+        /** @description Every item that waits for a human, oldest first. */
+        NeedsYouList: {
+            items: components["schemas"]["NeedsYouEntry"][];
+        };
+        /**
+         * @description The screen that answers an item: `messages` opens the thread, `worker` the asking worker, `proposal` the proposal and `request` the request.
+         * @enum {string}
+         */
+        NeedsYouScreen: "messages" | "worker" | "proposal" | "request";
         /** @description Exactly one of `text` and `linked_task`. */
         NewChecklistItemBody: {
             /** @description The checklist name; the task's first checklist when left out. A new name creates the checklist. */
@@ -2163,6 +2288,22 @@ export interface components {
         };
         /** @enum {string} */
         PushState: "up_to_date" | "pushed";
+        /** @description The answer a question got. */
+        QuestionAnswer: {
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            answered_at: number;
+            /**
+             * @description `human:<name>`.
+             * @example human:tanim
+             */
+            answered_by: string;
+            behavior: components["schemas"]["Behavior"];
+            /** @description The human's note to the worker. */
+            message: string | null;
+        };
         /** @description One recipient row. Names starting `human:` are humans. */
         RecipientView: {
             /**
@@ -2946,6 +3087,30 @@ export interface components {
          * @enum {string}
          */
         WorkerProcessState: "starting" | "working" | "idle" | "stopping" | "stopped" | "failed";
+        /** @description A tool call of a worker that a permission rule marks `ask` and Claude Code's auto mode would not decide. The worker waits until a human allows or denies it. */
+        WorkerQuestionEntry: {
+            answer: components["schemas"]["QuestionAnswer"] | null;
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            asked_at: number;
+            /** @example pq-3 */
+            id: string;
+            /** @description The tool's input as Claude Code sent it, such as `{"command": "make deploy"}`. It is shown here and never logged. */
+            input: Record<string, never>;
+            /** @example Bash */
+            tool: string;
+            /**
+             * @description The worker's agent name.
+             * @example web-coder
+             */
+            worker: string;
+        };
+        /** @description The open permission questions, oldest first. */
+        WorkerQuestionList: {
+            items: components["schemas"]["WorkerQuestionEntry"][];
+        };
         /**
          * @description The kinds of worker fold runs.
          * @enum {string}
@@ -4784,6 +4949,74 @@ export interface operations {
                 };
             };
             /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    list_needs_you: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The items */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NeedsYouList"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -7870,6 +8103,166 @@ export interface operations {
                 };
             };
             /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    list_worker_questions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The open questions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerQuestionList"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    answer_worker_question: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The question, such as `pq-3` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AnswerWorkerQuestionBody"];
+            };
+        };
+        responses: {
+            /** @description The answered question */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerQuestionEntry"];
+                };
+            };
+            /** @description `invalid_request` or `invalid_id` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `permission_question_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `permission_question_closed`: the question has its answer, or fold stopped its worker */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
             503: {
                 headers: {
                     [name: string]: unknown;

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO worker_question_messages (question_id, position, message_id)\n         VALUES (?1, ?2, (SELECT id FROM messages WHERE number = ?3))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "46f9729e1628e1c6b01ee8aa188499c42473a2fa541044e65296460bbf6fda5b"
+}

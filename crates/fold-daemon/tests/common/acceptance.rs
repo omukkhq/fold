@@ -636,7 +636,9 @@ async fn open(
     let clock = Arc::new(project.clock().clone());
     let state: AppState = Arc::new(DaemonState {
         registry: project.registry().clone(),
-        projects: Projects::default().with_launcher(launcher.clone()),
+        projects: Projects::default()
+            .with_launcher(launcher.clone())
+            .with_registry(project.registry().clone()),
         clock: clock.clone(),
         assets: AssetSource::Embedded,
         listen: "127.0.0.1".parse().unwrap(),

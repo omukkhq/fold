@@ -18,6 +18,7 @@ use crate::services::agents::{
     SessionSummary, WorkerOverview, WorkspaceSummary,
 };
 
+pub mod questions;
 pub mod workers;
 
 pub fn routes() -> OpenApiRouter<AppState> {
@@ -25,6 +26,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(list_agents))
         .routes(routes!(grant_integrator, revoke_integrator))
         .merge(workers::routes())
+        .merge(questions::routes())
 }
 
 #[derive(Debug, Deserialize, IntoParams)]

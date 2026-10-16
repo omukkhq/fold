@@ -110,8 +110,8 @@ impl Daemon {
 
         let registry = Store::open_registry(&config.registry_path()).await?;
         let state: AppState = Arc::new(DaemonState {
+            projects: Projects::default().with_registry(registry.clone()),
             registry,
-            projects: Projects::default(),
             clock: clock.clone(),
             assets: config
                 .web_dir

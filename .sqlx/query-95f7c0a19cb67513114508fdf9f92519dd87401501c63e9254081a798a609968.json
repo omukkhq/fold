@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT q.question_id AS \"id!: i64\" FROM worker_question_messages q\n           JOIN messages m ON m.id = q.message_id\n           WHERE m.thread_id = ?1\n             AND NOT EXISTS (SELECT 1 FROM worker_permission_answers a WHERE a.question_id = q.question_id)\n             AND NOT EXISTS (SELECT 1 FROM worker_permission_closures c WHERE c.question_id = q.question_id)\n           LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "worker_question_messages",
+            "name": "question_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "95f7c0a19cb67513114508fdf9f92519dd87401501c63e9254081a798a609968"
+}

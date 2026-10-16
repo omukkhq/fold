@@ -135,3 +135,5 @@ worker_exists
 worker_process_not_found
 main_tag_denied
 handoff_denied
+permission_question_not_found
+permission_question_closed

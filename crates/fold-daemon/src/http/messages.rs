@@ -71,6 +71,8 @@ pub struct MessageView {
     /// UTC milliseconds.
     pub sent_at: i64,
     pub recipients: Vec<RecipientView>,
+    /// The options of a multiple-choice question, in order; empty for any other message. A human answers with a reply whose body names one option, or with free text.
+    pub choices: Vec<String>,
 }
 
 impl From<service::MessageView> for MessageView {
@@ -95,6 +97,7 @@ impl From<service::MessageView> for MessageView {
                     acknowledged_at: recipient.acknowledged_at.map(|time| time.as_millis()),
                 })
                 .collect(),
+            choices: message.choices,
         }
     }
 }

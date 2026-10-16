@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT m.number, c.label\n           FROM message_choices c\n           JOIN messages m ON m.id = c.message_id\n           WHERE m.number IN (SELECT value FROM json_each(?))\n           ORDER BY m.number, c.position",
+  "describe": {
+    "columns": [
+      {
+        "name": "number",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "label",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "message_choices",
+            "name": "label"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "36de48f3e947d4795685e85e121a4631049b60957a447898f48f80cd4667ef74"
+}

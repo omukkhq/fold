@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT m.number AS \"number!: i64\" FROM worker_question_messages q\n           JOIN messages m ON m.id = q.message_id\n           WHERE q.question_id = ? ORDER BY q.position",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "8245503b9c88c8f6810fde93b848d45b1b0c281599cd79c9ca045969a5dd5c41"
+}

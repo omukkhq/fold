@@ -122,6 +122,8 @@ define_event_types! {
     WORKER_OUTPUT = "worker.output",
     WORKER_REFRESHED = "worker.refreshed",
     WORKER_RESUMED = "worker.resumed",
+    WORKER_PERMISSION_ASKED = "worker.permission_asked",
+    WORKER_PERMISSION_ANSWERED = "worker.permission_answered",
 }
 
 impl EventType {

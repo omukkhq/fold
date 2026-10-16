@@ -228,12 +228,20 @@ pub struct Projects {
     opening: tokio::sync::Mutex<()>,
     /// The programs every project's worker processes run.
     launcher: Launcher,
+    /// The host registry, whose humans a worker's `AskUserQuestion` call reaches.
+    registry: Option<Store>,
 }
 
 impl Projects {
     #[must_use]
     pub fn with_launcher(mut self, launcher: Launcher) -> Self {
         self.launcher = launcher;
+        self
+    }
+
+    #[must_use]
+    pub fn with_registry(mut self, registry: Store) -> Self {
+        self.registry = Some(registry);
         self
     }
 
@@ -271,6 +279,9 @@ impl Projects {
             .await
             .map(Arc::new);
         if let Ok(handle) = &outcome {
+            if let Some(registry) = &self.registry {
+                handle.workers.set_registry(registry.clone());
+            }
             jobs::reconcile_workspaces(handle).await;
             if let Err(error) = handle.agents().close_orphan_sessions().await {
                 tracing::error!(project = %row.slug, %error, "could not end orphan sessions");

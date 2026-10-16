@@ -3,8 +3,9 @@ use std::sync::Arc;
 use fold_core::events::types;
 use fold_core::messages::resolve;
 use fold_core::{
-    Actor, Address, AddressedAs, Clock, EventError, FoldError, IdKind, MessageBody, MessageId,
-    NewEvent, ProposalId, Recipient, RequestId, Sender, Target, TaskId, Timestamp, codes, policy,
+    Actor, Address, AddressedAs, AgentActor, Clock, EventError, FoldError, HumanName, IdKind,
+    MessageBody, MessageChoices, MessageId, NewEvent, ProposalId, Recipient, RequestId, Sender,
+    Target, TaskId, Timestamp, WorkerName, codes, policy,
 };
 use fold_store::messages::{self, MessageHead, MessageRow, NewMessage, RecipientRow};
 use fold_store::tasks::claims;
@@ -79,6 +80,8 @@ pub struct MessageView {
     pub body: String,
     pub sent_at: Timestamp,
     pub recipients: Vec<RecipientView>,
+    /// The options of a multiple-choice question, in order; empty for any other message.
+    pub choices: Vec<String>,
 }
 
 fn recipient_view(row: RecipientRow) -> RecipientView {
@@ -102,6 +105,7 @@ fn message_view(row: MessageRow) -> MessageView {
         body: row.body,
         sent_at: row.created_at,
         recipients: row.recipients.into_iter().map(recipient_view).collect(),
+        choices: row.choices,
     }
 }
 
@@ -145,6 +149,17 @@ impl MessageService {
         actor: &Actor,
         input: SendMessage,
         request: Option<RequestId>,
+    ) -> Result<MessageView, MessageError> {
+        self.send_with_choices(actor, input, request, None).await
+    }
+
+    /// [`MessageService::send_linked`] for a question with `choices`: the recipients answer with a normal reply that names one choice, or with free text.
+    pub async fn send_with_choices(
+        &self,
+        actor: &Actor,
+        input: SendMessage,
+        request: Option<RequestId>,
+        choices: Option<MessageChoices>,
     ) -> Result<MessageView, MessageError> {
         let humans = projects::list_humans(self.registry.read()).await?;
         let sender = Sender::of(actor);
@@ -197,6 +212,7 @@ impl MessageService {
                     join,
                     parent,
                     body: &input.body,
+                    choices: choices.as_ref(),
                     recipients,
                     now,
                 };
@@ -253,6 +269,7 @@ impl MessageService {
                     join: None,
                     parent: None,
                     body: &body,
+                    choices: None,
                     recipients,
                     now,
                 };
@@ -297,6 +314,7 @@ struct Draft<'a> {
     join: Option<MessageId>,
     parent: Option<MessageHead>,
     body: &'a MessageBody,
+    choices: Option<&'a MessageChoices>,
     recipients: Vec<Recipient>,
     now: Timestamp,
 }
@@ -333,6 +351,11 @@ async fn write_message(
     for recipient in &draft.recipients {
         messages::insert_recipient(tx, id, recipient).await?;
     }
+    let choices: Vec<String> = draft
+        .choices
+        .map(|choices| choices.labels().to_vec())
+        .unwrap_or_default();
+    messages::insert_choices(tx, id, &choices).await?;
     let names: Vec<String> = draft
         .recipients
         .iter()
@@ -377,6 +400,7 @@ async fn write_message(
                 acknowledged_at: None,
             })
             .collect(),
+        choices,
     })
 }
 
@@ -398,8 +422,49 @@ pub(crate) async fn send_from_fold_in_tx(
         join: None,
         parent: None,
         body,
+        choices: None,
         recipients,
         now,
+    };
+    write_message(tx, buffer, draft).await
+}
+
+/// A worker's question to every human in `humans`, linked to `task`, with `choices` when the question offers them.
+pub(crate) struct WorkerQuestion<'a> {
+    pub humans: Vec<HumanName>,
+    pub worker: &'a WorkerName,
+    pub task: Option<TaskId>,
+    pub body: &'a MessageBody,
+    pub choices: Option<&'a MessageChoices>,
+    pub now: Timestamp,
+}
+
+/// Sends a worker's question inside the caller's transaction. It stands in for the `AskUserQuestion` call that a headless worker cannot show to anyone. The caller publishes the buffer after the commit.
+pub(crate) async fn ask_humans_in_tx(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    question: WorkerQuestion<'_>,
+) -> Result<MessageView, MessageError> {
+    let sender = Sender::Worker(question.worker.clone());
+    let directory = messages::directory(tx.conn(), question.humans).await?;
+    let recipients = resolve(&[Address::Humans], &directory, &sender).map_err(FoldError::from)?;
+    let actor = Actor::Agent(AgentActor {
+        agent: question.worker.agent(),
+        worker: question.worker.clone(),
+        tags: Vec::new(),
+    });
+    let draft = Draft {
+        actor: &actor,
+        sender: &sender,
+        task: question.task,
+        proposal: None,
+        request: None,
+        join: None,
+        parent: None,
+        body: question.body,
+        choices: question.choices,
+        recipients,
+        now: question.now,
     };
     write_message(tx, buffer, draft).await
 }

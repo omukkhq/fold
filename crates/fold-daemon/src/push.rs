@@ -546,6 +546,17 @@ async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError
             .await?
             .into_iter()
             .collect();
+        let message = event
+            .data
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|message| message.parse::<fold_core::MessageId>().ok());
+        if event.actor.as_str().starts_with("human:")
+            && let Some(message) = message
+            && let Some(asker) = agents::asker_answered_by(store.read(), message).await?
+        {
+            ctx.recipients.remove(&asker);
+        }
         return Ok(ctx);
     }
     if kind.as_str().starts_with("request.")

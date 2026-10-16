@@ -89,7 +89,7 @@ const PENDING_TOOLS: [&str; 6] = [
 ];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 132] = [
+const FOLD_ERROR_CODES: [&str; 134] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -222,6 +222,8 @@ const FOLD_ERROR_CODES: [&str; 132] = [
     "worker_process_not_found",
     "main_tag_denied",
     "handoff_denied",
+    "permission_question_not_found",
+    "permission_question_closed",
 ];
 
 /// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.

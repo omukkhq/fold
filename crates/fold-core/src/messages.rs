@@ -405,3 +405,62 @@ impl MessageBody {
         &self.0
     }
 }
+
+/// The fewest options a question with choices offers.
+pub const MIN_CHOICES: usize = 2;
+
+/// The most options a question with choices offers.
+pub const MAX_CHOICES: usize = 6;
+
+/// The longest option label, in characters.
+pub const MAX_CHOICE_LEN: usize = 100;
+
+/// The options of a multiple-choice question from an agent to a human: 2 to 6 distinct single-line labels. The human answers with a normal reply that names one label, or with free text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageChoices(Vec<String>);
+
+impl MessageChoices {
+    /// Trims each label. Too few or too many options, an empty, multi-line or too long label, or two labels that differ only in case are `invalid_request` with `details.reason = "choices"`.
+    pub fn parse<S: AsRef<str>>(labels: &[S]) -> Result<MessageChoices, FoldError> {
+        let invalid = |message: &str| {
+            FoldError::new(codes::INVALID_REQUEST, message)
+                .with_details([("reason", json!("choices"))])
+                .with_hint(format!(
+                    "pass {MIN_CHOICES} to {MAX_CHOICES} short single-line choices"
+                ))
+        };
+        if !(MIN_CHOICES..=MAX_CHOICES).contains(&labels.len()) {
+            return Err(invalid("a question has 2 to 6 choices"));
+        }
+        let mut seen = HashSet::new();
+        let mut kept = Vec::with_capacity(labels.len());
+        for label in labels {
+            let label = label.as_ref().trim();
+            if label.is_empty() || label.contains(['\n', '\r']) {
+                return Err(invalid("a choice is one line of text"));
+            }
+            if label.chars().count() > MAX_CHOICE_LEN {
+                return Err(invalid("a choice is at most 100 characters"));
+            }
+            if !seen.insert(label.to_lowercase()) {
+                return Err(invalid("the choices repeat a label"));
+            }
+            kept.push(label.to_owned());
+        }
+        Ok(MessageChoices(kept))
+    }
+
+    pub fn labels(&self) -> &[String] {
+        &self.0
+    }
+}
+
+/// The answer a human's reply gives to a question with `choices`: the label the reply names, compared without case and surrounding space, or else the reply's own text, trimmed.
+pub fn chosen_answer(choices: &[String], reply: &str) -> String {
+    let reply = reply.trim();
+    choices
+        .iter()
+        .find(|label| label.to_lowercase() == reply.to_lowercase())
+        .cloned()
+        .unwrap_or_else(|| reply.to_owned())
+}

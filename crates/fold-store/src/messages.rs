@@ -57,6 +57,8 @@ pub struct MessageRow {
     pub body: String,
     pub created_at: Timestamp,
     pub recipients: Vec<RecipientRow>,
+    /// The options of a multiple-choice question, in order; empty for any other message.
+    pub choices: Vec<String>,
 }
 
 /// Inserts the message. A sender worker, task or proposal that does not exist leaves its column empty, which the sender check or the caller's earlier lookup refuses.
@@ -101,6 +103,27 @@ pub async fn insert(tx: &mut WriteTx, message: &NewMessage<'_>) -> Result<(), St
     )
     .execute(tx.conn())
     .await?;
+    Ok(())
+}
+
+/// Stores the options of a question message, in their order.
+pub async fn insert_choices(
+    tx: &mut WriteTx,
+    message: MessageId,
+    labels: &[String],
+) -> Result<(), StoreError> {
+    let number = message.to_db();
+    for (position, label) in (1_i64..).zip(labels) {
+        sqlx::query!(
+            "INSERT INTO message_choices (message_id, position, label)
+             VALUES ((SELECT id FROM messages WHERE number = ?1), ?2, ?3)",
+            number,
+            position,
+            label
+        )
+        .execute(tx.conn())
+        .await?;
+    }
     Ok(())
 }
 
@@ -320,10 +343,14 @@ pub async fn inbox(
            ORDER BY m.number, rw.id"#,
         ids
     )
-    .fetch_all(conn)
+    .fetch_all(&mut *conn)
     .await?;
+    let numbers = serde_json::to_string(&rows.iter().map(|row| row.number).collect::<Vec<_>>())
+        .map_err(|_| StoreError::Invalid("message numbers"))?;
+    let choices = choices_of(conn, &numbers).await?;
     rows.into_iter()
         .map(|row| {
+            let labels = choices.get(&row.number).cloned().unwrap_or_default();
             let message = RawMessage {
                 number: row.number,
                 thread_id: row.thread_id,
@@ -337,7 +364,7 @@ pub async fn inbox(
                 body: row.body,
                 created_at: row.created_at,
             }
-            .into_row(Vec::new())?;
+            .into_row(Vec::new(), labels)?;
             Ok(InboxRow {
                 row: row.row,
                 worker: WorkerName::parse(&row.recipient)
@@ -636,7 +663,11 @@ struct RawMessage {
 }
 
 impl RawMessage {
-    fn into_row(self, recipients: Vec<RecipientRow>) -> Result<MessageRow, StoreError> {
+    fn into_row(
+        self,
+        recipients: Vec<RecipientRow>,
+        choices: Vec<String>,
+    ) -> Result<MessageRow, StoreError> {
         let sender = match (self.sender_kind.as_str(), self.worker, self.sender_human) {
             ("worker", Some(worker), None) => Sender::Worker(
                 WorkerName::parse(&worker).map_err(|_| StoreError::Corrupt("workers.name"))?,
@@ -662,6 +693,7 @@ impl RawMessage {
             body: self.body,
             created_at: time(self.created_at, "messages.created_at")?,
             recipients,
+            choices,
         })
     }
 }
@@ -682,8 +714,9 @@ async fn with_recipients(
            ORDER BY m.number, r.id"#,
         numbers
     )
-    .fetch_all(conn)
+    .fetch_all(&mut *conn)
     .await?;
+    let mut choices = choices_of(conn, &numbers).await?;
     let mut of: HashMap<i64, Vec<RecipientRow>> = HashMap::new();
     for row in recipients {
         let target = match (row.worker, row.human) {
@@ -715,9 +748,56 @@ async fn with_recipients(
     rows.into_iter()
         .map(|row| {
             let recipients = of.remove(&row.number).unwrap_or_default();
-            row.into_row(recipients)
+            let choices = choices.remove(&row.number).unwrap_or_default();
+            row.into_row(recipients, choices)
         })
         .collect()
+}
+
+/// The first message a human wrote in the thread of `message` after it: the human's answer to a question. Returns its body and its human.
+pub async fn first_human_reply(
+    executor: impl SqliteExecutor<'_>,
+    message: MessageId,
+) -> Result<Option<(String, HumanName)>, StoreError> {
+    let number = message.to_db();
+    let row = sqlx::query!(
+        r#"SELECT later.body, later.sender_human AS "human!: String"
+           FROM messages m
+           JOIN messages later ON later.thread_id = m.thread_id AND later.number > m.number
+           WHERE m.number = ?1 AND later.sender_kind = 'human'
+           ORDER BY later.number LIMIT 1"#,
+        number
+    )
+    .fetch_optional(executor)
+    .await?;
+    row.map(|row| {
+        let human = HumanName::parse(&row.human)
+            .map_err(|_| StoreError::Corrupt("messages.sender_human"))?;
+        Ok((row.body, human))
+    })
+    .transpose()
+}
+
+/// The choices of each message whose number is in the JSON list `numbers`, in order.
+async fn choices_of(
+    conn: &mut SqliteConnection,
+    numbers: &str,
+) -> Result<HashMap<i64, Vec<String>>, StoreError> {
+    let labels = sqlx::query!(
+        r#"SELECT m.number, c.label
+           FROM message_choices c
+           JOIN messages m ON m.id = c.message_id
+           WHERE m.number IN (SELECT value FROM json_each(?))
+           ORDER BY m.number, c.position"#,
+        numbers
+    )
+    .fetch_all(conn)
+    .await?;
+    let mut choices: HashMap<i64, Vec<String>> = HashMap::new();
+    for row in labels {
+        choices.entry(row.number).or_default().push(row.label);
+    }
+    Ok(choices)
 }
 
 fn message_id(number: i64, column: &'static str) -> Result<MessageId, StoreError> {

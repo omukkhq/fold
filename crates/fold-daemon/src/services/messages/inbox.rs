@@ -28,6 +28,8 @@ pub struct InboxItem {
     pub sent_at: Timestamp,
     /// The first time an inbox returned the row.
     pub delivered_at: Timestamp,
+    /// The options of a multiple-choice question; empty for any other message.
+    pub choices: Vec<String>,
 }
 
 fn item(row: InboxRow, now: Timestamp) -> InboxItem {
@@ -45,6 +47,7 @@ fn item(row: InboxRow, now: Timestamp) -> InboxItem {
         body: message.body,
         sent_at: message.created_at,
         delivered_at: row.delivered_at.unwrap_or(now),
+        choices: message.choices,
     }
 }
 

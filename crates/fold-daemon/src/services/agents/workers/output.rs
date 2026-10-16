@@ -1,8 +1,8 @@
 use serde_json::{Value, json};
 
 use crate::services::agents::claude::{
-    ClaudeInput, ClaudeMessage, ContentBlock, ControlRequest, ControlResponseBody, IncomingRequest,
-    PermissionDecision, SystemMessage, Usage, UserContent,
+    CanUseTool, ClaudeInput, ClaudeMessage, ContentBlock, ControlRequest, ControlResponseBody,
+    IncomingRequest, SystemMessage, Usage, UserContent,
 };
 
 /// What one stdout line of a worker changes. It holds counts, names and lengths, never text: the step goes into the live `worker.output` event and the change into the worker's row.
@@ -12,6 +12,15 @@ pub(super) struct LineEffect {
     pub change: RowChange,
     /// The answer fold writes back on stdin, for a request Claude Code sent.
     pub reply: Option<ClaudeInput>,
+    /// A `can_use_tool` request, which waits for a human's answer or a stored one.
+    pub permission: Option<ToolRequest>,
+}
+
+/// A `can_use_tool` request and the id its answer must carry.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct ToolRequest {
+    pub request_id: String,
+    pub call: Box<CanUseTool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,14 +73,12 @@ pub(super) enum RowChange {
     },
 }
 
-/// The answer to a permission question while no person can be asked: the turn goes on without the tool.
-const NO_PERSON: &str = "fold cannot ask a person about this tool call now; continue without it";
-
 pub(super) fn effect_of(message: &ClaudeMessage) -> LineEffect {
     let plain = |kind| LineEffect {
         step: Step::kind(kind),
         change: RowChange::None,
         reply: None,
+        permission: None,
     };
     match message {
         ClaudeMessage::System(SystemMessage::Init(init)) => LineEffect {
@@ -80,6 +87,7 @@ pub(super) fn effect_of(message: &ClaudeMessage) -> LineEffect {
                 model: init.model.clone(),
             },
             reply: None,
+            permission: None,
         },
         ClaudeMessage::System(SystemMessage::PermissionDenied(denied)) => LineEffect {
             step: Step {
@@ -89,6 +97,7 @@ pub(super) fn effect_of(message: &ClaudeMessage) -> LineEffect {
             },
             change: RowChange::None,
             reply: None,
+            permission: None,
         },
         ClaudeMessage::System(_) => plain("system"),
         ClaudeMessage::Assistant(assistant) => {
@@ -109,6 +118,7 @@ pub(super) fn effect_of(message: &ClaudeMessage) -> LineEffect {
                 step,
                 change,
                 reply: None,
+                permission: None,
             }
         }
         ClaudeMessage::User(user) => match &user.message.content {
@@ -116,6 +126,7 @@ pub(super) fn effect_of(message: &ClaudeMessage) -> LineEffect {
                 step: block_step(&blocks[0]),
                 change: RowChange::None,
                 reply: None,
+                permission: None,
             },
             UserContent::Blocks(_) | UserContent::Text(_) => plain("user"),
         },
@@ -140,6 +151,7 @@ pub(super) fn effect_of(message: &ClaudeMessage) -> LineEffect {
                     .collect(),
             },
             reply: None,
+            permission: None,
         },
         ClaudeMessage::ControlRequest(ControlRequest {
             request_id,
@@ -152,12 +164,11 @@ pub(super) fn effect_of(message: &ClaudeMessage) -> LineEffect {
                     text_length: None,
                 },
                 change: RowChange::None,
-                reply: Some(ClaudeInput::permission(
-                    request_id.clone(),
-                    PermissionDecision::Deny {
-                        message: NO_PERSON.to_owned(),
-                    },
-                )),
+                reply: None,
+                permission: Some(ToolRequest {
+                    request_id: request_id.clone(),
+                    call: request.clone(),
+                }),
             },
             IncomingRequest::Other => LineEffect {
                 step: Step::kind("control_request"),
@@ -168,6 +179,7 @@ pub(super) fn effect_of(message: &ClaudeMessage) -> LineEffect {
                         error: "fold does not handle this request".to_owned(),
                     },
                 }),
+                permission: None,
             },
         },
         ClaudeMessage::ControlResponse(_) => plain("control_response"),
@@ -293,19 +305,22 @@ mod tests {
     }
 
     #[test]
-    fn a_permission_question_is_denied_so_the_turn_goes_on() {
+    fn a_permission_question_waits_for_an_answer() {
         let all = effects("permission_request");
         let asked = all
             .iter()
             .find(|effect| effect.step.kind == "permission_request")
             .unwrap();
         assert_eq!(asked.step.tool.as_deref(), Some("Bash"));
-        match asked.reply.as_ref().unwrap() {
-            ClaudeInput::ControlResponse {
-                response: ControlResponseBody::Success { response, .. },
-            } => assert_eq!(response["behavior"], "deny"),
-            other => panic!("{other:?}"),
-        }
+        assert!(asked.reply.is_none());
+        let request = asked.permission.as_ref().unwrap();
+        assert_eq!(request.request_id, "00000000-0000-4000-8000-000000000103");
+        assert_eq!(request.call.input["command"], "echo fold-probe-allow");
+        assert!(
+            all.iter()
+                .filter(|effect| effect.step.kind != "permission_request")
+                .all(|effect| effect.permission.is_none())
+        );
         let denied = effects("denied_by_rule");
         assert!(
             denied

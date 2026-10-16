@@ -28,6 +28,7 @@ export function message(
     task: null,
     proposal: null,
     request: null,
+    choices: [],
     ...fields,
   };
 }

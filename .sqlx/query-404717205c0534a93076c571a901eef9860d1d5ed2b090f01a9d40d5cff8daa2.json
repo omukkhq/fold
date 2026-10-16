@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO worker_permission_answers (question_id, behavior, answered_by, message, created_at)\n         VALUES (?1, ?2, ?3, ?4, ?5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "404717205c0534a93076c571a901eef9860d1d5ed2b090f01a9d40d5cff8daa2"
+}

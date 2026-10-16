@@ -8,6 +8,7 @@ use crate::reviews::{Reviewer, Verdict};
 mod batches;
 mod human_review;
 mod integrate;
+mod questions;
 mod requests;
 mod workers;
 
@@ -17,6 +18,7 @@ pub use integrate::{
     CallerFacts, Gate, GateRefusal, GateState, GateStatus, IntegrateInput, ProposalFacts,
     can_integrate, gate_report,
 };
+pub use questions::can_answer_worker_permission;
 pub use requests::{can_claim_request, can_create_request, is_drafter, is_requester};
 pub use workers::{Starter, can_define_area, can_start_worker, can_stop_worker, can_write_handoff};
 

@@ -7,8 +7,10 @@ use crate::error::{FoldError, codes};
 use crate::ids::{ProposalId, TaskId};
 use crate::task::LabelName;
 
+mod answers;
 mod handoff;
 
+pub use answers::{PermissionBehavior, ask_answer_turn, permission_answer_turn};
 pub use handoff::{
     HANDOFF_REQUEST, HANDOFF_TURNS, MAX_HANDOFF_CHARS, RefreshFacts, SUMMARY_ITEMS,
     SummaryProposal, SummaryTask, check_handoff, handoff_due, handoff_overdue, refresh_turn,

@@ -451,3 +451,34 @@ fn a_reply_to_your_own_message_or_to_fold_goes_to_the_other_recipients() {
     );
     assert!(reply_addresses(&tanim, &[Target::Human(human("tanim"))], &tanim).is_empty());
 }
+
+#[test]
+fn choices_are_two_to_six_distinct_single_lines() {
+    use fold_core::messages::{MessageChoices, chosen_answer};
+    let choices = MessageChoices::parse(&[" Red ", "Blue"]).unwrap();
+    assert_eq!(choices.labels(), ["Red", "Blue"]);
+    let reason = |labels: &[&str]| {
+        MessageChoices::parse(labels)
+            .unwrap_err()
+            .details()
+            .and_then(|details| details.get("reason").cloned())
+    };
+    for labels in [
+        &["one"][..],
+        &["a", "b", "c", "d", "e", "f", "g"][..],
+        &["a", " "][..],
+        &["a", "b\nc"][..],
+        &["Red", "red"][..],
+    ] {
+        assert_eq!(
+            reason(labels),
+            Some(serde_json::json!("choices")),
+            "{labels:?}"
+        );
+    }
+    let long = "x".repeat(101);
+    assert!(MessageChoices::parse(&["a", long.as_str()]).is_err());
+    let labels = choices.labels();
+    assert_eq!(chosen_answer(labels, " blue \n"), "Blue");
+    assert_eq!(chosen_answer(labels, "green, please"), "green, please");
+}

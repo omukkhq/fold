@@ -361,6 +361,7 @@ function registerDaemon(): void {
         id: messageId(90 + linked.length),
         thread: messageId(90 + linked.length),
         sender: "human:tanim",
+        choices: [],
         recipients: [],
         body: body.body,
         proposal: null,
@@ -513,6 +514,7 @@ describe("the task dialog route", () => {
         id: messageId(31),
         thread: messageId(30),
         sender: "frontend/ui",
+        choices: [],
         recipients: [
           {
             name: "review",

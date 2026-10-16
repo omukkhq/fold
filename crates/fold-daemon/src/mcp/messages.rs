@@ -2,8 +2,8 @@ use std::future::Future;
 use std::pin::Pin;
 
 use fold_core::{
-    Actor, Address, FoldError, MessageBody, MessageId, ProposalId, RequestId, TaskId, Timestamp,
-    codes,
+    Actor, Address, FoldError, MessageBody, MessageChoices, MessageId, ProposalId, RequestId,
+    TaskId, Timestamp, codes,
 };
 use fold_store::agents::WorkerRow;
 use rmcp::handler::server::common::schema_for_type;
@@ -42,6 +42,9 @@ pub struct SendMessageInput {
     /// Link the message to this request, such as RQ-4, to ask or answer about it: the message joins the request's clarification thread. A reply takes its parent's request when left out.
     #[serde(default)]
     pub request: Option<String>,
+    /// Make the message a multiple-choice question: 2 to 6 short single-line options. The recipient answers with a reply that names one option, or with free text. Ask a human with to: ["humans"] or ["human:<name>"].
+    #[serde(default)]
+    pub choices: Option<Vec<String>>,
     /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
     #[serde(rename = "as", default)]
     pub as_worker: Option<String>,
@@ -164,6 +167,9 @@ fn inbox_json(item: &InboxItem) -> Value {
         item.request,
     );
     object.insert("body".into(), json!(item.body));
+    if !item.choices.is_empty() {
+        object.insert("choices".into(), json!(item.choices));
+    }
     object.insert("sent_at".into(), json!(millis(item.sent_at)));
     Value::Object(object)
 }
@@ -190,6 +196,9 @@ fn thread_json(message: &MessageView) -> Value {
         message.request,
     );
     object.insert("body".into(), json!(message.body));
+    if !message.choices.is_empty() {
+        object.insert("choices".into(), json!(message.choices));
+    }
     object.insert("sent_at".into(), json!(millis(message.sent_at)));
     Value::Object(object)
 }
@@ -216,10 +225,15 @@ pub async fn send_message(
         .as_deref()
         .map(str::parse::<RequestId>)
         .transpose()?;
+    let choices = input
+        .choices
+        .as_deref()
+        .map(MessageChoices::parse)
+        .transpose()?;
     let actor = actor(server, worker).await?;
     let sent = server
         .messages
-        .send_linked(&actor, message, request)
+        .send_with_choices(&actor, message, request, choices)
         .await
         .map_err(from_message)?;
     Ok(json!({

@@ -24,9 +24,15 @@ INSERT INTO workspaces (id, number, task_id, worker_id, kind, path, base_revisio
 INSERT INTO review_batch_lines (workspace_id, member_id, path, start_line, end_line, member_start_line) VALUES (2, 1, 'a.rs', 1, 1, 1);
 INSERT INTO review_batch_comments (id, batch_id, number, body, created_at) VALUES (1, 1, 1, 'b', 0);
 INSERT INTO handoffs (agent_id, session_id, body, created_at) VALUES (1, 's', 'b', 0);
+INSERT INTO worker_processes (id, agent_id, role, session_id, state, started_by, started_at) VALUES (1, 1, 'review_lead', 's-1', 'working', 'human:ana', 0);
+INSERT INTO worker_permission_questions (id, number, kind, worker_process_id, session_id, request_id, tool, input, created_at) VALUES (1, 1, 'tool', 1, 's-1', 'r-1', 'Bash', '{}', 0), (2, NULL, 'ask', 1, 's-1', 'r-2', 'AskUserQuestion', '{}', 0), (3, 2, 'tool', 1, 's-1', 'r-3', 'Bash', '{}', 0);
+INSERT INTO worker_permission_answers (question_id, behavior, answered_by, created_at) VALUES (1, 'allow', 'human:ana', 0);
+INSERT INTO worker_permission_closures (question_id, created_at) VALUES (3, 0);
+INSERT INTO worker_question_messages (question_id, position, message_id) VALUES (2, 1, 1);
+INSERT INTO message_choices (message_id, position, label) VALUES (1, 1, 'Red');
 ";
 
-const APPEND_ONLY: [&str; 12] = [
+const APPEND_ONLY: [&str; 17] = [
     "completions",
     "revisions",
     "changesets",
@@ -39,10 +45,19 @@ const APPEND_ONLY: [&str; 12] = [
     "review_batch_lines",
     "review_batch_comments",
     "handoffs",
+    "worker_permission_questions",
+    "worker_permission_answers",
+    "worker_permission_closures",
+    "worker_question_messages",
+    "message_choices",
 ];
 
 /// The append-only tables whose rows are derived in the transaction of a row that carries the time, so they have no `created_at` of their own.
-const WITHOUT_CREATED_AT: [&str; 1] = ["review_batch_lines"];
+const WITHOUT_CREATED_AT: [&str; 3] = [
+    "review_batch_lines",
+    "worker_question_messages",
+    "message_choices",
+];
 
 #[cfg(test)]
 async fn seeded() -> (tempfile::TempDir, Store) {
@@ -84,6 +99,7 @@ async fn baseline_creates_every_table_of_the_data_model() {
         "handoffs",
         "integrations",
         "labels",
+        "message_choices",
         "message_recipients",
         "messages",
         "proposal_versions",
@@ -107,8 +123,12 @@ async fn baseline_creates_every_table_of_the_data_model() {
         "sessions",
         "task_labels",
         "tasks",
+        "worker_permission_answers",
+        "worker_permission_closures",
+        "worker_permission_questions",
         "worker_processes",
         "worker_proposals",
+        "worker_question_messages",
         "worker_tasks",
         "workers",
         "workspace_conflicts",

@@ -21,7 +21,7 @@ Only a human gives the `integrator` tag. An agent with that tag may approve, rej
 
 To message another orchestrator, use the native `SendMessage` of Claude Code. Use `send_message`, `get_inbox`, `get_thread` and `acknowledge_message` only where native messaging is not available, and to write to humans.
 
-Addresses for `send_message(to[], body, task?, proposal?, request?, reply_to?)`:
+Addresses for `send_message(to[], body, task?, proposal?, request?, reply_to?, choices?)`:
 
 - `frontend` is the agent `frontend` and its main worker.
 - `frontend/ui` is the worker `ui` of the agent `frontend`.
@@ -29,6 +29,8 @@ Addresses for `send_message(to[], body, task?, proposal?, request?, reply_to?)`:
 - `human:<name>` is one human.
 - `humans` is every human.
 - `all` is every agent.
+
+To ask a human to choose, send the question to `humans` or `human:<name>` with 2 to 6 short options in `choices`. The human answers with a reply that names one option, or with free text.
 
 To answer a message, pass its id as `reply_to`: the reply joins its thread. `get_inbox` lists your unread messages, `get_thread(thread)` shows one conversation, and `get_thread(request)` shows the clarification thread of a request. Call `acknowledge_message(id, up_to?)` when you have read a message. With `up_to` true it acknowledges every message up to `id`.
 
@@ -144,7 +146,7 @@ fold can run agents for you. Each worker agent is a headless Claude Code session
 10. A lead never loses its work to a full context. When a lead's context passes `handoff_at` of its role (60 percent of the model's context window by default) and its turn has ended, fold asks it once for a hand-off note. The lead calls `write_handoff(text)` with what it is doing, its open decisions and what comes next, then ends its turn. fold starts the lead again in a new session whose first turn holds the note and a summary of its open tasks, open proposals and unread messages. A lead that writes no note within a few turns starts fresh with the summary alone. `list_workers` shows each worker's newest note.
 11. fold does not refresh the main agent, because it is the user's own session. When your context as the main agent grows large, send yourself a hand-off note with `send_message`, run `/clear`, and read the note with `get_inbox` in the new session.
 
-Claude Code runs each worker in its auto permission mode. When auto mode cannot decide on a tool call, fold refuses that call and the worker continues without it.
+When Claude Code's auto mode is not sure about a tool call of a worker, fold asks a human and the worker waits for the answer. A worker that uses `AskUserQuestion` asks the humans a question with choices, and the human's reply is its answer.
 
 A worker reads and writes project files only inside its own workspace under `.fold/ws/`. It never edits the files of the project folder, which are main, or another workspace, and it writes no files outside the project. fold checks every path that its own tools receive and every file edit of Claude Code's edit tools, but not shell commands, so each worker keeps this rule itself.
 

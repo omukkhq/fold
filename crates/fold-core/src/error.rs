@@ -150,6 +150,8 @@ define_codes! {
     WORKER_PROCESS_NOT_FOUND = "worker_process_not_found",
     MAIN_TAG_DENIED = "main_tag_denied",
     HANDOFF_DENIED = "handoff_denied",
+    PERMISSION_QUESTION_NOT_FOUND = "permission_question_not_found",
+    PERMISSION_QUESTION_CLOSED = "permission_question_closed",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

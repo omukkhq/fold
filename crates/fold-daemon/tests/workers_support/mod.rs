@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use fold_daemon::services::agents::Launcher;
 use tempfile::TempDir;
 
-/// A stand-in for `claude -p` in stream-json mode, so no test needs Claude Code. It records its arguments, environment, working directory and every stdin line under `FOLD_FAKE_CLAUDE_DIR`, answers `initialize` and `interrupt` as Claude Code does, replays the fixture `FOLD_FAKE_CLAUDE_TURN` for each user turn, and exits when stdin closes. With `FOLD_FAKE_CLAUDE_STUBBORN` set it ignores SIGINT and a closed stdin, so only SIGTERM or SIGKILL ends it. With `FOLD_FAKE_CLAUDE_LOST` naming a fixture, a run with `--resume` answers its first user turn with that fixture and exits with code 1, as Claude Code does for a session it cannot find.
+/// A stand-in for `claude -p` in stream-json mode, so no test needs Claude Code. It records its arguments, environment, working directory and every stdin line under `FOLD_FAKE_CLAUDE_DIR`, answers `initialize` and `interrupt` as Claude Code does, replays the fixture `FOLD_FAKE_CLAUDE_TURN` for each user turn, waits after a `can_use_tool` request until fold answers it, and exits when stdin closes. With `FOLD_FAKE_CLAUDE_STUBBORN` set it ignores SIGINT and a closed stdin, so only SIGTERM or SIGKILL ends it. With `FOLD_FAKE_CLAUDE_LOST` naming a fixture, a run with `--resume` answers its first user turn with that fixture and exits with code 1, as Claude Code does for a session it cannot find.
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
 dir="$FOLD_FAKE_CLAUDE_DIR"
 for arg in "$@"; do printf '%s\n' "$arg"; done > "$dir/$$.args"
@@ -27,7 +27,17 @@ while IFS= read -r line; do
       printf '%s\n' '{"type":"result","subtype":"error_during_execution","is_error":true,"num_turns":1,"session_id":"fake","total_cost_usd":0}' ;;
     *'"type":"user"'*)
       if [ -n "$lost" ]; then cat "$FOLD_FAKE_CLAUDE_LOST"; exit 1; fi
-      cat "$FOLD_FAKE_CLAUDE_TURN" ;;
+      while IFS= read -r out <&3; do
+        printf '%s\n' "$out"
+        case "$out" in
+          *'"subtype":"can_use_tool"'*)
+            while :; do
+              IFS= read -r reply || exit 0
+              printf '%s\n' "$reply" >> "$dir/$$.stdin"
+              case "$reply" in *'"type":"control_response"'*) break ;; esac
+            done ;;
+        esac
+      done 3< "$FOLD_FAKE_CLAUDE_TURN" ;;
   esac
 done
 if [ -n "$FOLD_FAKE_CLAUDE_STUBBORN" ]; then

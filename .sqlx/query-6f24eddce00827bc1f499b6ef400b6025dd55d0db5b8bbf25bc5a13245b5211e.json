@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO worker_permission_closures (question_id, created_at)\n         SELECT q.id, ?2 FROM worker_permission_questions q\n         WHERE q.worker_process_id = ?1\n           AND NOT EXISTS (SELECT 1 FROM worker_permission_answers a WHERE a.question_id = q.id)\n           AND NOT EXISTS (SELECT 1 FROM worker_permission_closures c WHERE c.question_id = q.id)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "6f24eddce00827bc1f499b6ef400b6025dd55d0db5b8bbf25bc5a13245b5211e"
+}

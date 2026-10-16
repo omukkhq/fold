@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT m.number AS \"number!: i64\" FROM worker_question_messages q\n           JOIN messages m ON m.id = q.message_id\n           WHERE m.number IN (SELECT value FROM json_each(?1))\n           ORDER BY m.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "2ecf42558721d32662b99a7ffc472e78307e1de07cd753baca15524d4f52f11e"
+}

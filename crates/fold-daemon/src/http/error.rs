@@ -120,7 +120,9 @@ fn status_of(code: &str) -> Option<StatusCode> {
         codes::INVALID_COMMENT_RANGE | codes::UNKNOWN_COMMENT_PATH | codes::EMPTY_REVIEW => {
             Some(StatusCode::UNPROCESSABLE_ENTITY)
         }
-        codes::AREA_NOT_FOUND | codes::WORKER_PROCESS_NOT_FOUND => Some(StatusCode::NOT_FOUND),
+        codes::AREA_NOT_FOUND
+        | codes::WORKER_PROCESS_NOT_FOUND
+        | codes::PERMISSION_QUESTION_NOT_FOUND => Some(StatusCode::NOT_FOUND),
         codes::MAIN_AGENT_REQUIRED
         | codes::WORKER_START_DENIED
         | codes::WORKER_STOP_DENIED
@@ -128,7 +130,8 @@ fn status_of(code: &str) -> Option<StatusCode> {
         codes::AREA_EXISTS
         | codes::AREA_HAS_LEAD
         | codes::WORKER_LIMIT_REACHED
-        | codes::WORKER_EXISTS => Some(StatusCode::CONFLICT),
+        | codes::WORKER_EXISTS
+        | codes::PERMISSION_QUESTION_CLOSED => Some(StatusCode::CONFLICT),
         _ => None,
     }
 }
@@ -404,6 +407,8 @@ mod tests {
             (codes::AREA_HAS_LEAD, StatusCode::CONFLICT),
             (codes::WORKER_LIMIT_REACHED, StatusCode::CONFLICT),
             (codes::WORKER_EXISTS, StatusCode::CONFLICT),
+            (codes::PERMISSION_QUESTION_NOT_FOUND, StatusCode::NOT_FOUND),
+            (codes::PERMISSION_QUESTION_CLOSED, StatusCode::CONFLICT),
         ] {
             assert_eq!(status_of(code), Some(status));
         }

@@ -247,6 +247,22 @@ describe("eventLine", () => {
         resumed: false,
       }),
     ).toBe("restarted web-coder in a new session for the conflict on P-4");
+    expect(
+      line("worker.permission_asked", { agent: "web-coder", tool: "Bash" }),
+    ).toBe("web-coder asked to use Bash");
+    expect(line("worker.permission_asked")).toBe(
+      "a worker asked to use a tool",
+    );
+    expect(
+      line("worker.permission_answered", {
+        agent: "web-coder",
+        tool: "Bash",
+        behavior: "deny",
+      }),
+    ).toBe("denied Bash for web-coder");
+    expect(line("worker.permission_answered", { behavior: "allow" })).toBe(
+      "allowed a tool for a worker",
+    );
     expect(line("proposal.opened", { version: 1 })).toBe(
       "opened P-4 v1 for T-12",
     );

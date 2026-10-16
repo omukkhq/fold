@@ -49,10 +49,11 @@ pub enum IdKind {
     ChecklistItem,
     Request,
     ReviewBatch,
+    PermissionQuestion,
 }
 
 impl IdKind {
-    pub const ALL: [IdKind; 12] = [
+    pub const ALL: [IdKind; 13] = [
         IdKind::Task,
         IdKind::Proposal,
         IdKind::Changeset,
@@ -65,6 +66,7 @@ impl IdKind {
         IdKind::ChecklistItem,
         IdKind::Request,
         IdKind::ReviewBatch,
+        IdKind::PermissionQuestion,
     ];
 
     pub const fn prefix(self) -> &'static str {
@@ -81,6 +83,7 @@ impl IdKind {
             IdKind::ChecklistItem => "ci-",
             IdKind::Request => "RQ-",
             IdKind::ReviewBatch => "rb-",
+            IdKind::PermissionQuestion => "pq-",
         }
     }
 
@@ -98,6 +101,7 @@ impl IdKind {
             IdKind::ChecklistItem => "checklist_item",
             IdKind::Request => "request",
             IdKind::ReviewBatch => "review_batch",
+            IdKind::PermissionQuestion => "permission_question",
         }
     }
 }
@@ -222,6 +226,11 @@ define_id!(
     IdKind::ReviewBatch
 );
 define_id!(
+    /// The public id of a question a worker's permission check put to a human; the `permission_question` counter numbers them.
+    PermissionQuestionId,
+    IdKind::PermissionQuestion
+);
+define_id!(
     @prefixed
     /// The public id of a web sign-in token: `web_tokens.number`, unique across the host registry rather than one project. A revoked token keeps its row and its number, so a number is never handed out twice.
     WebTokenId,
@@ -261,6 +270,7 @@ mod tests {
             round_trip!(ChecklistItemId, n);
             round_trip!(RequestId, n);
             round_trip!(ReviewBatchId, n);
+            round_trip!(PermissionQuestionId, n);
         }
     }
 
@@ -334,6 +344,14 @@ mod tests {
             Err(IdParseError::WrongPrefix)
         );
         assert_eq!(IdKind::ReviewBatch.counter_key(), "review_batch");
+        assert_eq!(
+            IdKind::PermissionQuestion.counter_key(),
+            "permission_question"
+        );
+        assert_eq!(
+            "pq-4".parse::<PermissionQuestionId>().unwrap().to_string(),
+            "pq-4"
+        );
     }
 
     #[test]
@@ -344,8 +362,8 @@ mod tests {
         prefixes.dedup();
         keys.sort_unstable();
         keys.dedup();
-        assert_eq!(prefixes.len(), 12);
-        assert_eq!(keys.len(), 12);
+        assert_eq!(prefixes.len(), IdKind::ALL.len());
+        assert_eq!(keys.len(), IdKind::ALL.len());
     }
 
     #[test]

@@ -25,7 +25,9 @@ use crate::services::agents::AgentError;
 use crate::services::agents::claude::{ClaudeInput, ClaudeMessage, OutgoingRequest};
 use crate::services::events::{BusMessage, EventBuffer, EventBus};
 use crate::services::projects::load_config;
+use questions::Waiter;
 
+mod questions;
 mod refresh;
 mod resume;
 
@@ -134,6 +136,12 @@ struct Inner {
     refreshing: Mutex<HashSet<AgentName>>,
     /// Held while a coder is resumed, so two events that resume the same coder start it once.
     resuming: tokio::sync::Mutex<()>,
+    /// The live `can_use_tool` requests that wait for each open question, by the question's row id.
+    pending: Mutex<HashMap<i64, Vec<Waiter>>>,
+    /// The answered questions whose request ended with its process, by agent: each answers the resumed worker's first repeat of the same call once.
+    replays: Mutex<HashMap<AgentName, Vec<i64>>>,
+    /// The host registry, whose humans receive a worker's `AskUserQuestion` call as a question message.
+    registry: Mutex<Option<Store>>,
 }
 
 impl Drop for Inner {
@@ -160,6 +168,8 @@ struct Process {
     resumed: bool,
     /// Whether the process's session went on (`true`) or was not found (`false`); `None` until its first output tells.
     session: Arc<watch::Sender<Option<bool>>>,
+    /// The worker row's Claude Code session id.
+    session_id: String,
 }
 
 impl Supervisor {
@@ -187,6 +197,9 @@ impl Supervisor {
                 watch: Mutex::new(None),
                 refreshing: Mutex::new(HashSet::new()),
                 resuming: tokio::sync::Mutex::new(()),
+                pending: Mutex::new(HashMap::new()),
+                replays: Mutex::new(HashMap::new()),
+                registry: Mutex::new(None),
             }),
         };
         let receiver = supervisor.inner.bus.subscribe();
@@ -197,6 +210,10 @@ impl Supervisor {
 
     pub fn set_launcher(&self, launcher: Launcher) {
         *lock(&self.inner.launcher) = launcher;
+    }
+
+    pub fn set_registry(&self, registry: Store) {
+        *lock(&self.inner.registry) = Some(registry);
     }
 
     pub fn set_stop_timeouts(&self, timeouts: StopTimeouts) {
@@ -308,6 +325,7 @@ impl Supervisor {
             base_cost: row.cost_micro_usd,
             generation,
             resumed: resume,
+            session_id: row.session_id.clone(),
             session: Arc::new(session),
         };
         let start = StartWatch {
@@ -411,6 +429,7 @@ impl Supervisor {
             .store
             .write(async |tx| {
                 agents::record_exit(tx.conn(), id, WorkerState::Failed, None, now).await?;
+                agents::close_open_questions(tx.conn(), id, now).await?;
                 let event = NewEvent::new(types::WORKER_FAILED, EventActor::fold())?
                     .data(json!({"agent": agent.as_str(), "reason": reason}))?;
                 buffer.append(tx, &event, now).await?;
@@ -495,7 +514,9 @@ impl Supervisor {
         {
             tracing::warn!(agent = %process.agent, code = super::code_of(&error), "could not record a worker's exit");
         }
+        lock(&self.inner.replays).remove(&process.agent);
         self.forget(&process);
+        self.forget_waiters(process.generation);
         let _ = exit.send(true);
     }
 
@@ -509,6 +530,7 @@ impl Supervisor {
             step,
             mut change,
             reply,
+            permission,
         } = effect_of(&message);
         if let Some(went) = resume::session_signal(&message, process.resumed) {
             process.session.send_if_modified(|seen| {
@@ -532,6 +554,11 @@ impl Supervisor {
             if let Some(input) = input {
                 let _ = input.send(Input::Line(line));
             }
+        }
+        if let Some(request) = permission
+            && !detached
+        {
+            self.on_tool_request(process, request).await;
         }
         let now = self.inner.clock.now();
         let id = process.id;
@@ -620,6 +647,7 @@ impl Supervisor {
                 if row.id != id || !row.state.is_running() {
                     return Ok(());
                 }
+                agents::close_open_questions(tx.conn(), id, now).await?;
                 let event = if row.state == WorkerState::Stopping {
                     agents::record_exit(tx.conn(), id, WorkerState::Stopped, code, now).await?;
                     stopped_event(&row, code)?
@@ -686,6 +714,7 @@ impl Supervisor {
                     return Ok(());
                 }
                 agents::record_exit(tx.conn(), row.id, WorkerState::Stopped, None, now).await?;
+                agents::close_open_questions(tx.conn(), row.id, now).await?;
                 buffer.append(tx, &stopped_event(row, None)?, now).await?;
                 Ok::<_, AgentError>(())
             })
@@ -884,7 +913,7 @@ impl Supervisor {
         Ok(stopped)
     }
 
-    /// Runs again, after a daemon start, every worker that was working or idle when the daemon stopped: `--resume` of its session, with a turn that tells a working one to go on. A task coder whose session is gone starts again in a new one. A worker left `starting` ends `failed` and one left `stopping` ends `stopped`. Requested changes and conflicts that the worker limits held back are then served.
+    /// Runs again, after a daemon start, every worker that was working or idle when the daemon stopped: `--resume` of its session, with a turn that tells a working one to go on. A task coder whose session is gone starts again in a new one. A worker with an open question waits without a process until a human answers it, and then resumes with the answer as its first turn. A worker left `starting` ends `failed` and one left `stopping` ends `stopped`. Requested changes and conflicts that the worker limits held back are then served.
     pub async fn resume_after_restart(&self) -> Result<(), AgentError> {
         let mut conn = self
             .inner
@@ -898,6 +927,9 @@ impl Supervisor {
         for row in rows {
             match row.state {
                 WorkerState::Working | WorkerState::Idle => {
+                    if self.waits_for_answer(&row).await? {
+                        continue;
+                    }
                     let turn = (row.state == WorkerState::Working).then(|| RESTART_TURN.to_owned());
                     let now = self.inner.clock.now();
                     self.inner
@@ -971,6 +1003,7 @@ async fn watch_done(
             return;
         };
         let supervisor = Supervisor { inner };
+        supervisor.on_event(&event).await;
         let done = match supervisor.done_workers(&event).await {
             Ok(done) => done,
             Err(error) => {

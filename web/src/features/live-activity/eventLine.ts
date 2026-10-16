@@ -538,6 +538,23 @@ const SPECS: Record<EventType, Spec> = {
         : `gave ${workerOf(e)} a fresh context`,
   },
   "worker.resumed": { icon: Bot, text: resumedText },
+  "worker.permission_asked": {
+    icon: Hand,
+    text: (e) => {
+      const tool = text(e.data.tool);
+      return tool === null
+        ? `${workerOf(e)} asked to use a tool`
+        : `${workerOf(e)} asked to use ${tool}`;
+    },
+  },
+  "worker.permission_answered": {
+    icon: Hand,
+    text: (e) => {
+      const verb = e.data.behavior === "deny" ? "denied" : "allowed";
+      const tool = text(e.data.tool) ?? "a tool";
+      return `${verb} ${tool} for ${workerOf(e)}`;
+    },
+  },
 };
 
 /** Every stored event type this build writes a line for. */

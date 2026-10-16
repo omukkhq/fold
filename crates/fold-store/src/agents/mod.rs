@@ -10,11 +10,17 @@ use crate::error::StoreError;
 use crate::workspaces::WorkspaceState;
 
 mod handoffs;
+mod questions;
 mod workers;
 
 pub use handoffs::{
     HandoffRow, OpenProposalRow, OpenTaskRow, handoff_asked, insert_handoff, latest_handoff,
     open_area_proposals, open_area_tasks, refresh_session, session_handoff, set_handoff_asked,
+};
+pub use questions::{
+    AnswerRow, NewQuestion, QuestionKind, QuestionRow, asked_among, asker_answered_by,
+    close_open_questions, find_question, insert_answer, insert_question, insert_question_message,
+    open_ask_of_thread, open_questions, question_by_id, question_messages, questions_of_worker,
 };
 pub use workers::{
     AreaRow, NewWorkerProcess, TurnTotals, WorkerProcessRow, bind_proposal, bind_task,

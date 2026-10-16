@@ -21,6 +21,7 @@ use crate::services::tasks::{TaskError, renew_leases};
 /// Claude Code's headless stream-json protocol as fold reads and writes it, the oldest Claude Code fold drives, and the sign-in answer of `claude auth status`. It is public because `fld doctor` checks the installed Claude Code with the same version and sign-in types.
 pub mod claude;
 mod context;
+mod needs_you;
 mod overview;
 mod presence;
 mod push;
@@ -30,6 +31,7 @@ pub use context::{
     CONTEXT_READY_TASKS, ContextClaim, MAX_SESSION_CONTEXT, SessionFacts,
     render as render_session_context,
 };
+pub use needs_you::{NeedsYouItem, NeedsYouKind, Screen, needs_you};
 pub use overview::{
     AgentAttention, AgentOverview, ClaimSummary, MAX_OVERVIEW_EVENTS, OverviewFilter,
     ProposalSummary, SessionSummary, WorkerOverview, WorkspaceSummary,
