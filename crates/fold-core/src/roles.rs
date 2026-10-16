@@ -192,9 +192,6 @@ impl WorkerLimits {
     }
 }
 
-/// The most one worker limit can be set to.
-pub const MAX_WORKER_LIMIT: u64 = 20;
-
 /// What a change does to `max_per_area`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum AreaLimitChange {
@@ -241,12 +238,8 @@ impl WorkerLimitsChange {
         })
     }
 
-    /// Refuses a change that sets nothing and a value outside 1 to [`MAX_WORKER_LIMIT`].
+    /// Refuses a change that sets nothing. A limit has no upper bound, because how many workers a machine and a token budget carry is the user's choice, and a limit of 0 lets no worker of that role start.
     pub fn check(&self) -> Result<(), FoldError> {
-        let area = match self.max_per_area {
-            AreaLimitChange::Set(value) => Some(value),
-            AreaLimitChange::Keep | AreaLimitChange::Clear => None,
-        };
         if self.task_coder.is_none()
             && self.batch_reviewer.is_none()
             && self.max_per_area == AreaLimitChange::Keep
@@ -256,25 +249,6 @@ impl WorkerLimitsChange {
                 "set_worker_limits needs at least one limit",
             )
             .with_hint("pass task_coder, batch_reviewer, max_per_area or clear_max_per_area"));
-        }
-        for (name, value) in [
-            ("task_coder", self.task_coder),
-            ("batch_reviewer", self.batch_reviewer),
-            ("max_per_area", area),
-        ] {
-            if let Some(value) = value
-                && !(1..=MAX_WORKER_LIMIT).contains(&value)
-            {
-                return Err(FoldError::new(
-                    codes::INVALID_REQUEST,
-                    format!("{name} must be a whole number from 1 to {MAX_WORKER_LIMIT}"),
-                )
-                .with_details([
-                    ("limit", serde_json::json!(name)),
-                    ("max", serde_json::json!(MAX_WORKER_LIMIT)),
-                ])
-                .with_hint(format!("pass {name} between 1 and {MAX_WORKER_LIMIT}")));
-            }
         }
         Ok(())
     }
@@ -304,33 +278,53 @@ pub fn check_limits(
         return Ok(());
     };
     if running >= max {
-        return Err(FoldError::new(
-            codes::WORKER_LIMIT_REACHED,
-            format!("the project already runs {running} workers of role {role}, its limit"),
-        )
-        .with_details([
-            ("role", serde_json::json!(role.as_str())),
-            ("max", serde_json::json!(max)),
-        ])
-        .with_hint(format!(
-            "the {role} limit is {max}: wait until a {role} stops, stop one with stop_worker, or ask the main agent or a human to raise it with set_worker_limits"
-        )));
+        // A limit of 0 frees no place when a worker stops, so only raising it helps.
+        let (message, hint) = if max == 0 {
+            (
+                format!("the {role} limit is 0, so no worker of role {role} starts"),
+                format!(
+                    "ask the main agent or a human to raise the {role} limit with set_worker_limits"
+                ),
+            )
+        } else {
+            (
+                format!("the project already runs {running} workers of role {role}, its limit"),
+                format!(
+                    "the {role} limit is {max}: wait until a {role} stops, stop one with stop_worker, or ask the main agent or a human to raise it with set_worker_limits"
+                ),
+            )
+        };
+        return Err(FoldError::new(codes::WORKER_LIMIT_REACHED, message)
+            .with_details([
+                ("role", serde_json::json!(role.as_str())),
+                ("max", serde_json::json!(max)),
+            ])
+            .with_hint(hint));
     }
     if let Some(((area, count), max)) = in_area.zip(limits.max_per_area)
         && count >= max
     {
-        return Err(FoldError::new(
-            codes::WORKER_LIMIT_REACHED,
-            format!("area {area} already runs {count} workers of role {role}, its limit"),
-        )
-        .with_details([
-            ("role", serde_json::json!(role.as_str())),
-            ("area", serde_json::json!(area.as_str())),
-            ("max_per_area", serde_json::json!(max)),
-        ])
-        .with_hint(format!(
-            "the limit of area {area} is {max}: wait until a {role} of the area stops, stop one with stop_worker, or ask the main agent or a human to raise it with set_worker_limits"
-        )));
+        let (message, hint) = if max == 0 {
+            (
+                format!("the limit of area {area} is 0, so no worker of role {role} starts there"),
+                "ask the main agent or a human to raise max_per_area with set_worker_limits"
+                    .to_owned(),
+            )
+        } else {
+            (
+                format!("area {area} already runs {count} workers of role {role}, its limit"),
+                format!(
+                    "the limit of area {area} is {max}: wait until a {role} of the area stops, stop one with stop_worker, or ask the main agent or a human to raise it with set_worker_limits"
+                ),
+            )
+        };
+        return Err(FoldError::new(codes::WORKER_LIMIT_REACHED, message)
+            .with_details([
+                ("role", serde_json::json!(role.as_str())),
+                ("area", serde_json::json!(area.as_str())),
+                ("max_per_area", serde_json::json!(max)),
+            ])
+            .with_hint(hint));
     }
     Ok(())
 }
@@ -441,21 +435,45 @@ mod tests {
     }
 
     #[test]
-    fn a_limits_change_takes_one_to_twenty_and_needs_a_limit() {
+    fn a_limits_change_takes_any_number_and_needs_a_limit() {
         let set = |task_coder| WorkerLimitsChange {
             task_coder: Some(task_coder),
             ..WorkerLimitsChange::default()
         };
-        assert!(set(1).check().is_ok());
-        assert!(set(MAX_WORKER_LIMIT).check().is_ok());
-        for bad in [0, MAX_WORKER_LIMIT + 1] {
-            assert_eq!(set(bad).check().unwrap_err().code(), codes::INVALID_REQUEST);
+        for value in [0, 1, 50, u64::from(u32::MAX)] {
+            assert!(set(value).check().is_ok(), "{value}");
         }
         let area = WorkerLimitsChange {
-            max_per_area: AreaLimitChange::Set(21),
+            max_per_area: AreaLimitChange::Set(0),
             ..WorkerLimitsChange::default()
         };
-        assert_eq!(area.check().unwrap_err().code(), codes::INVALID_REQUEST);
+        assert!(area.check().is_ok());
+        let none = WorkerLimits {
+            task_coder: 0,
+            batch_reviewer: 50,
+            max_per_area: None,
+        };
+        let zero = check_limits(none, Role::TaskCoder, 0, None).unwrap_err();
+        assert_eq!(zero.code(), codes::WORKER_LIMIT_REACHED);
+        assert_eq!(
+            zero.hint(),
+            Some(
+                "ask the main agent or a human to raise the task_coder limit with set_worker_limits"
+            )
+        );
+        assert!(check_limits(none, Role::BatchReviewer, 49, None).is_ok());
+        let web = AreaName::parse("web").unwrap();
+        let closed = WorkerLimits {
+            task_coder: 4,
+            max_per_area: Some(0),
+            ..none
+        };
+        let zero = check_limits(closed, Role::TaskCoder, 0, Some((&web, 0))).unwrap_err();
+        assert_eq!(zero.code(), codes::WORKER_LIMIT_REACHED);
+        assert_eq!(
+            zero.hint(),
+            Some("ask the main agent or a human to raise max_per_area with set_worker_limits")
+        );
         assert_eq!(
             WorkerLimitsChange::default().check().unwrap_err().code(),
             codes::INVALID_REQUEST

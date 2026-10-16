@@ -29,6 +29,12 @@ fn each_combination_of_counts_gives_its_exact_line() {
             (1000, 1, 70),
             Some("fold: 1000 unread · 1 new events · 70 claims near stale"),
         ),
+        ((0, 100, 0), Some("fold: 100 new events")),
+        ((0, 101, 0), Some("fold: 100+ new events")),
+        (
+            (101, 0, 101),
+            Some("fold: 101 unread · 101 claims near stale"),
+        ),
     ];
     for ((unread, new_events, stale), line) in table {
         assert_eq!(

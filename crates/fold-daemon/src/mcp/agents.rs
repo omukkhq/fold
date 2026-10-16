@@ -87,13 +87,13 @@ pub struct ListWorkersInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct SetWorkerLimitsInput {
-    /// The most task coders that run at once, a whole number from 1 to 20. Leave it out to keep the limit.
+    /// The most task coders that run at once, a whole number with no upper bound; 0 lets none start. Leave it out to keep the limit.
     #[serde(default)]
     pub task_coder: Option<u64>,
-    /// The most batch reviewers that run at once, a whole number from 1 to 20. Leave it out to keep the limit.
+    /// The most batch reviewers that run at once, a whole number with no upper bound; 0 lets none start. Leave it out to keep the limit.
     #[serde(default)]
     pub batch_reviewer: Option<u64>,
-    /// The most task coders that run at once in one area, a whole number from 1 to 20. Leave it out to keep the limit.
+    /// The most task coders that run at once in one area, a whole number with no upper bound; 0 lets none start. Leave it out to keep the limit.
     #[serde(default)]
     pub max_per_area: Option<u64>,
     /// True removes the limit of one area, so an area has no limit of its own. Do not combine it with max_per_area.
@@ -167,7 +167,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             SET_WORKER_LIMITS,
-            "As the main agent, change how many task coders and batch reviewers run at once, for example when the user asks for more or fewer agents. Each limit is a whole number from 1 to 20. The new limits apply to the next start; a running worker is never stopped by a lower limit. Say the new numbers back to the user.",
+            "As the main agent, change how many task coders and batch reviewers run at once, for example when the user asks for more or fewer agents. Each limit is a whole number with no upper bound, and 0 lets no worker of that role start. The new limits apply to the next start; a running worker is never stopped by a lower limit. Say the new numbers back to the user.",
             schema_for_type::<SetWorkerLimitsInput>(),
         ),
         Tool::new(

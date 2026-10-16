@@ -648,6 +648,30 @@ async fn the_persisted_columns_update_at_most_once_per_ten_seconds() {
 }
 
 #[tokio::test]
+async fn a_detach_writes_the_summary_the_interval_held_back() {
+    let fx = Fixture::new().await;
+    let (id, dir) = fx.create(&fx.frontend, 1).await;
+    let first_at = fx.advance(1);
+    fs::write(dir.join("a.txt"), "a\n").unwrap();
+    eventually(WAIT, async || match fx.row(id).await {
+        (1, Some(at)) if at == first_at => Ok(()),
+        other => Err(other),
+    })
+    .await;
+    let second_at = fx.advance(2);
+    fs::write(dir.join("b.txt"), "b\n").unwrap();
+    fx.wait_for(id, |state| state.view.files.len() == 2).await;
+    assert_eq!(
+        fx.row(id).await,
+        (1, Some(first_at)),
+        "the interval holds it"
+    );
+
+    fx.live.detach(id).await;
+    assert_eq!(fx.row(id).await, (2, Some(second_at)));
+}
+
+#[tokio::test]
 async fn a_file_rewritten_on_every_read_keeps_its_base_entry_with_a_warning() {
     let fx = Fixture::new().await;
     let (id, dir) = fx.create(&fx.frontend, 1).await;

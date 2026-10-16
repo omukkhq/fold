@@ -859,3 +859,62 @@ async fn a_batch_reviewer_stops_once_its_batch_review_gives_every_proposal_a_ver
         WorkerState::Idle
     );
 }
+
+#[tokio::test]
+async fn an_archived_task_stops_its_coder_at_once() {
+    let fake = FakeClaude::new("result");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    areas(&harness).await;
+    let lead = start_lead(&mut harness, "web").await;
+    harness
+        .call(
+            &lead,
+            "start_worker",
+            json!({"role": "task_coder", "tasks": ["T-1"]}),
+        )
+        .await;
+    until_state(&harness, "web-coder", WorkerState::Idle).await;
+    harness
+        .call(MAIN, "archive_task", json!({"id": "T-1"}))
+        .await;
+    let stopped = until_state(&harness, "web-coder", WorkerState::Stopped).await;
+    assert_eq!(stopped.exit_code, Some(0));
+    assert_eq!(worker(&harness, &lead).await.state, WorkerState::Idle);
+}
+
+#[tokio::test]
+async fn a_restart_that_cannot_read_the_configuration_fails_each_worker_and_goes_on() {
+    let fake = FakeClaude::new("result");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    areas(&harness).await;
+    let leads = [
+        start_lead(&mut harness, "web").await,
+        start_lead(&mut harness, "api").await,
+    ];
+    for lead in &leads {
+        until_state(&harness, lead, WorkerState::Idle).await;
+    }
+    harness.stop().await;
+    std::fs::write(
+        std::path::Path::new(harness.root()).join(".fold/config.toml"),
+        "[workers]\ntask_coder = \"many\"\n",
+    )
+    .unwrap();
+    harness.start_again().await;
+    for lead in &leads {
+        let failed = until_state(&harness, lead, WorkerState::Failed).await;
+        assert_eq!(failed.pid, None);
+        assert_eq!(fake.runs_of(lead).len(), 1, "no second process started");
+    }
+    let reasons: Vec<Value> = stored_events(&harness)
+        .await
+        .into_iter()
+        .filter(|(kind, _)| kind == "worker.failed")
+        .map(|(_, data)| data)
+        .collect();
+    assert_eq!(reasons.len(), 2, "{reasons:?}");
+    for (lead, data) in leads.iter().zip(&reasons) {
+        assert_eq!(data["agent"], lead.as_str());
+        assert_eq!(data["reason"], "config");
+    }
+}

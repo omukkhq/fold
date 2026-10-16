@@ -733,3 +733,130 @@ async fn a_daemon_start_that_finds_a_batch_reviewers_session_gone_starts_it_fres
         [fold_core::ProposalId::from_number(1).unwrap()]
     );
 }
+
+#[tokio::test]
+async fn a_raised_limit_serves_a_resume_the_worker_limits_refused() {
+    let fake = FakeClaude::new("result");
+    let (harness, _work) = proposed_by_a_coder(&fake, &[("page.html", "<p>page</p>\n")]).await;
+    harness
+        .call(MAIN, "set_worker_limits", json!({"max_per_area": 1}))
+        .await;
+    harness
+        .call(
+            MAIN,
+            "create_task",
+            json!({"title": "Draw the menu", "labels": ["ui"]}),
+        )
+        .await;
+    let other = harness
+        .call(
+            "web-lead",
+            "start_worker",
+            json!({"role": "task_coder", "tasks": ["T-2"]}),
+        )
+        .await;
+    let other = other["worker"]["name"].as_str().unwrap().to_owned();
+    until_state(&harness, &other, WorkerState::Idle).await;
+    harness
+        .project
+        .clock()
+        .advance(Duration::from_secs(1))
+        .unwrap();
+    request_changes(&harness, "P-1", "Split the page.").await;
+    assert_eq!(
+        worker(&harness, CODER).await.state,
+        WorkerState::Stopped,
+        "the area holds the other coder"
+    );
+
+    harness
+        .call(MAIN, "set_worker_limits", json!({"max_per_area": 2}))
+        .await;
+    let runs = until_runs(&fake, CODER, 2).await;
+    assert!(runs[1].has("--resume"));
+    assert!(
+        runs[1].stdin[1].contains("Split the page."),
+        "{}",
+        runs[1].stdin[1]
+    );
+    assert_eq!(worker(&harness, &other).await.state, WorkerState::Idle);
+    until_resumed(&harness, 1).await;
+}
+
+/// A stand-in for Claude Code that records whether the daemon's socket exists as it starts, which is when its `fld mcp` looks for the daemon, then reads its input until fold closes it.
+const SOCKET_PROBE: &str = r#"#!/bin/sh
+if [ -S "$FOLD_TEST_SOCKET" ]; then state=bound; else state=missing; fi
+printf '%s\n' "$state" > "$FOLD_TEST_PROBE.tmp" && mv "$FOLD_TEST_PROBE.tmp" "$FOLD_TEST_PROBE"
+cat > /dev/null
+"#;
+
+#[tokio::test]
+async fn a_daemon_start_resumes_a_working_coder_once_its_socket_is_bound() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::Arc;
+
+    use fold_daemon::services::agents::Launcher;
+    use fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME;
+    use fold_daemon::{Daemon, DaemonConfig};
+    use fold_store::projects::{self, ProjectRow};
+    use fold_store::{Store, StoreError};
+
+    let fake = FakeClaude::new("init");
+    let mut harness = coder_for(&fake, &["Draw the page"], WorkerState::Working).await;
+    until_runs(&fake, CODER, 1).await;
+    harness.stop().await;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let program = dir.path().join("claude");
+    std::fs::write(&program, SOCKET_PROBE).unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let probe = dir.path().join("probe");
+    let config = DaemonConfig {
+        listen: "127.0.0.1:0".parse().unwrap(),
+        socket: dir.path().join("run").join("fold.sock"),
+        data_dir: dir.path().join("data"),
+        runtime_dir: dir.path().join("run"),
+        web_dir: None,
+        session_lifetime: DEFAULT_SESSION_LIFETIME,
+    };
+    let registry = Store::open_registry(&config.registry_path()).await.unwrap();
+    let row = ProjectRow {
+        slug: SLUG.to_owned(),
+        name: "Demo".to_owned(),
+        root: harness.root().to_owned(),
+    };
+    let now = harness.project.now();
+    registry
+        .write(async |tx| {
+            projects::insert_project(tx, &row, now).await?;
+            Ok::<_, StoreError>(())
+        })
+        .await
+        .unwrap();
+    registry.close().await.unwrap();
+    let launcher = Launcher {
+        claude: program,
+        fold: Some(std::path::PathBuf::from("/usr/local/bin/fld")),
+        env: vec![
+            (
+                "FOLD_TEST_SOCKET".to_owned(),
+                config.socket.to_string_lossy().into_owned(),
+            ),
+            (
+                "FOLD_TEST_PROBE".to_owned(),
+                probe.to_string_lossy().into_owned(),
+            ),
+        ],
+    };
+    let clock = Arc::new(harness.project.clock().clone());
+    let daemon = Daemon::start_with(config, clock, launcher).await.unwrap();
+    let seen = eventually(WAIT, async || {
+        std::fs::read_to_string(&probe).map_err(|error| error.kind())
+    })
+    .await;
+    assert_eq!(
+        seen, "bound\n",
+        "the resumed coder found the daemon's socket"
+    );
+    daemon.shutdown().await;
+}

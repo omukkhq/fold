@@ -273,14 +273,14 @@ mod tests {
     fn a_file_that_is_not_valid_is_refused_and_left_alone() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        std::fs::write(&path, "[workers]\ntask_coder = 0\n").unwrap();
+        std::fs::write(&path, "[workers]\ntask_coder = -1\n").unwrap();
         let Err(error) = edit(&path, &change(2)) else {
-            panic!("a limit of 0 is not a valid file");
+            panic!("a negative limit is not a valid file");
         };
         assert_eq!(error.code(), codes::INVALID_CONFIG);
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
-            "[workers]\ntask_coder = 0\n"
+            "[workers]\ntask_coder = -1\n"
         );
     }
 

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
+use std::time::Duration;
 
 use fold_core::{Clock, FoldError, ProjectConfig, ProjectPaths, codes};
 use fold_store::Store;
@@ -48,11 +49,11 @@ pub struct ProjectHandle {
     pub live: LiveState,
     /// The Claude Code inbox sockets of the project's agents. They live in memory only, so a restarted daemon has none until the session-start hooks run again.
     pub push: PushTargets,
-    _push_task: PushTask,
+    push_task: PushTask,
     /// The Claude Code processes of the project's worker agents.
     pub workers: Supervisor,
     /// Commits each integration to the project's repository, moves the project folder to it and pushes it when the configuration asks.
-    _auto_commit: AutoCommit,
+    auto_commit: AutoCommit,
 }
 
 impl std::fmt::Debug for ProjectHandle {
@@ -176,10 +177,16 @@ impl ProjectHandle {
             capabilities,
             live,
             push,
-            _push_task: push_task,
+            push_task,
             workers,
-            _auto_commit: auto_commit,
+            auto_commit,
         })
+    }
+
+    /// Waits up to `timeout` for the commit writer and the push delivery to end after [`EventBus::close`], then aborts them, so neither outlives the project's database.
+    pub async fn stop_tasks(&self, timeout: Duration) {
+        self.auto_commit.stopped(timeout).await;
+        self.push_task.stopped(timeout).await;
     }
 
     /// The agent service of this project: its store, bus, clock, configured lease, seen presence and push targets.
@@ -265,15 +272,37 @@ impl Projects {
             .collect()
     }
 
-    /// Opens `row` unless it is already open, in which case the same handle comes back. A new handle runs its start-up sequence before any request can reach it: the database opens with SQLite's own WAL recovery, the workspaces are reconciled with their directories, and every session a previous run left open ends at the start time with its `session.ended`, so presence shows offline until the adapters reconnect, and every worker that was working or idle runs again with its session resumed. The handle's commit writer runs as it starts, which writes the commit of a revision an integration cut off after its own commit never got and brings the project folder to it, and changes nothing otherwise. No session of this run can exist yet, because a session starts only through an open handle. The daemon's jobs start after its projects are open.
+    /// Opens `row` unless it is already open, in which case the same handle comes back. A new handle runs its start-up sequence before any request can reach it: the database opens with SQLite's own WAL recovery, the workspaces are reconciled with their directories, and every session a previous run left open ends at the start time with its `session.ended`, so presence shows offline until the adapters reconnect. The handle's commit writer runs as it starts, which writes the commit of a revision an integration cut off after its own commit never got and brings the project folder to it, and changes nothing otherwise. No session of this run can exist yet, because a session starts only through an open handle. Once the handle is in place, every worker that was working or idle runs again with its session resumed; a resumed worker's adapter connects through the daemon's socket, which is bound by then, and its handshake opens this same project, so the resume runs after the open has let go of its lock.
     pub async fn open(
         &self,
         row: &ProjectRow,
         clock: Arc<dyn Clock>,
     ) -> Result<Arc<ProjectHandle>, FoldError> {
+        let (handle, opened) = self.open_once(row, clock).await?;
+        if opened {
+            resume_workers(&handle).await;
+        }
+        Ok(handle)
+    }
+
+    /// [`Projects::open`] without the resume of the workers, for the daemon's start: it opens its projects before it binds its socket, and resumes their workers with [`resume_workers`] once the socket and the HTTP listener are bound, so a resumed worker's adapter always finds the daemon.
+    pub async fn open_at_start(
+        &self,
+        row: &ProjectRow,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Arc<ProjectHandle>, FoldError> {
+        self.open_once(row, clock).await.map(|(handle, _)| handle)
+    }
+
+    /// The handle of `row` and whether this call opened it.
+    async fn open_once(
+        &self,
+        row: &ProjectRow,
+        clock: Arc<dyn Clock>,
+    ) -> Result<(Arc<ProjectHandle>, bool), FoldError> {
         let _opening = self.opening.lock().await;
         if let Some(Slot::Open(handle)) = self.slot(&row.slug) {
-            return Ok(handle);
+            return Ok((handle, false));
         }
         let outcome = ProjectHandle::open_with(row, clock, self.launcher.clone())
             .await
@@ -286,9 +315,6 @@ impl Projects {
             if let Err(error) = handle.agents().close_orphan_sessions().await {
                 tracing::error!(project = %row.slug, %error, "could not end orphan sessions");
             }
-            if let Err(error) = handle.workers.resume_after_restart().await {
-                tracing::error!(project = %row.slug, %error, "could not resume the workers");
-            }
         }
         let slot = match &outcome {
             Ok(handle) => Slot::Open(handle.clone()),
@@ -297,6 +323,13 @@ impl Projects {
         if let Ok(mut slots) = self.slots.write() {
             slots.insert(row.slug.clone(), slot);
         }
-        outcome
+        outcome.map(|handle| (handle, true))
+    }
+}
+
+/// Runs again every worker of `handle` that was working or idle when the last daemon stopped.
+pub async fn resume_workers(handle: &ProjectHandle) {
+    if let Err(error) = handle.workers.resume_after_restart().await {
+        tracing::error!(project = %handle.slug, %error, "could not resume the workers");
     }
 }

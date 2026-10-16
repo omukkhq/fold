@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) AS \"count!: i64\"\n           FROM claims c JOIN workers w ON w.id = c.worker_id\n           WHERE w.agent_id = ?1 AND c.released_at IS NULL AND c.renewed_at <= ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "count!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e5489d965a173ddf798497ac54e91e9bd7a2e4238e9bc7b2e87d9f611c92b3e9"
+}

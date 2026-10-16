@@ -2820,19 +2820,19 @@ export interface components {
         SetWorkerLimitsBody: {
             /**
              * Format: int64
-             * @description A whole number from 1 to 20.
+             * @description The most batch reviewers that run at once, a whole number with no upper bound; 0 lets none start.
              */
             batch_reviewer?: number | null;
             /** @description True removes the limit of one area. */
             clear_max_per_area?: boolean;
             /**
              * Format: int64
-             * @description A whole number from 1 to 20.
+             * @description The most task coders that run at once in one area, a whole number with no upper bound; 0 lets none start.
              */
             max_per_area?: number | null;
             /**
              * Format: int64
-             * @description A whole number from 1 to 20.
+             * @description The most task coders that run at once, a whole number with no upper bound; 0 lets none start.
              */
             task_coder?: number | null;
         };
@@ -8419,7 +8419,7 @@ export interface operations {
                     "application/json": components["schemas"]["LimitsEntry"];
                 };
             };
-            /** @description `invalid_request`: no limit, or a limit outside 1 to 20 */
+            /** @description `invalid_request`: no limit, or a limit together with its clear */
             400: {
                 headers: {
                     [name: string]: unknown;

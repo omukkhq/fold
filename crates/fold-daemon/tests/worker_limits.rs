@@ -99,7 +99,7 @@ async fn the_main_agent_raises_the_coder_limit_and_the_next_start_follows_it() {
 }
 
 #[tokio::test]
-async fn a_lead_and_a_value_over_twenty_are_refused_and_a_human_sets_a_limit_over_http() {
+async fn a_lead_and_an_empty_change_are_refused_and_a_human_sets_a_limit_over_http() {
     let fake = FakeClaude::new("result");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
     let config = std::path::Path::new(harness.root()).join(".fold/config.toml");
@@ -119,10 +119,6 @@ async fn a_lead_and_a_value_over_twenty_are_refused_and_a_human_sets_a_limit_ove
         )
         .await;
     assert_eq!(subagent["code"], codes::MAIN_AGENT_REQUIRED);
-    let over = harness
-        .refused(MAIN, "set_worker_limits", json!({"batch_reviewer": 21}))
-        .await;
-    assert_eq!(over["code"], codes::INVALID_REQUEST);
     let nothing = harness.refused(MAIN, "set_worker_limits", json!({})).await;
     assert_eq!(nothing["code"], codes::INVALID_REQUEST);
     let both = harness
@@ -161,7 +157,7 @@ async fn a_lead_and_a_value_over_twenty_are_refused_and_a_human_sets_a_limit_ove
         .await;
     assert_eq!(status, StatusCode::OK, "{limits}");
     assert_eq!(limits["max_per_area"], Value::Null);
-    let (status, refused) = harness
+    let (status, none) = harness
         .http(
             Method::PATCH,
             &path,
@@ -169,7 +165,8 @@ async fn a_lead_and_a_value_over_twenty_are_refused_and_a_human_sets_a_limit_ove
             "tanim",
         )
         .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(status, StatusCode::OK, "{none}");
+    assert_eq!(none["task_coder"], 0);
     let (status, listed) = harness
         .http(
             Method::GET,
@@ -181,9 +178,54 @@ async fn a_lead_and_a_value_over_twenty_are_refused_and_a_human_sets_a_limit_ove
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         listed["limits"],
-        json!({"task_coder": 4, "batch_reviewer": 5, "max_per_area": null})
+        json!({"task_coder": 0, "batch_reviewer": 5, "max_per_area": null})
     );
-    assert_eq!(limit_events(&harness).await.len(), 2);
+    assert_eq!(limit_events(&harness).await.len(), 3);
+}
+
+#[tokio::test]
+async fn a_limit_of_zero_starts_no_worker_and_a_limit_has_no_upper_bound() {
+    let fake = FakeClaude::new("result");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    let config = std::path::Path::new(harness.root()).join(".fold/config.toml");
+    let lead = lead(&mut harness).await;
+    let set = harness
+        .call(
+            MAIN,
+            "set_worker_limits",
+            json!({"task_coder": 0, "batch_reviewer": 50, "max_per_area": 0}),
+        )
+        .await;
+    assert_eq!(
+        set["limits"],
+        json!({"task_coder": 0, "batch_reviewer": 50, "max_per_area": 0})
+    );
+    let text = std::fs::read_to_string(&config).unwrap();
+    assert!(text.contains("task_coder = 0"), "{text}");
+    assert!(text.contains("batch_reviewer = 50"), "{text}");
+    let coder = json!({"role": "task_coder", "tasks": ["T-1"]});
+    let refused = harness.refused(&lead, "start_worker", coder.clone()).await;
+    assert_eq!(refused["code"], codes::WORKER_LIMIT_REACHED);
+    assert_eq!(refused["details"], json!({"role": "task_coder", "max": 0}));
+    assert_eq!(
+        refused["hint"],
+        "ask the main agent or a human to raise the task_coder limit with set_worker_limits"
+    );
+
+    let set = harness
+        .call(
+            MAIN,
+            "set_worker_limits",
+            json!({"task_coder": 50, "clear_max_per_area": true}),
+        )
+        .await;
+    assert_eq!(set["limits"]["task_coder"], 50);
+    assert_eq!(set["limits"]["max_per_area"], Value::Null);
+    for _ in 0..5 {
+        harness.call(&lead, "start_worker", coder.clone()).await;
+    }
+    let listed = harness.call(MAIN, "list_workers", json!({})).await;
+    assert_eq!(listed["limits"]["task_coder"], 50);
 }
 
 #[tokio::test]

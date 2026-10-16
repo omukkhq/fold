@@ -1,3 +1,5 @@
+use std::future::Future;
+use std::pin::Pin;
 use std::str::FromStr;
 
 use fold_core::{
@@ -10,12 +12,13 @@ use rmcp::schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::FoldServer;
 use super::error::{from_agent, from_task};
 use super::identity::parse;
+use super::{FoldServer, FooterPart, FooterSource};
+use crate::services::agents::{AgentService, SessionContext};
 use crate::services::tasks::{
     ChecklistItemPatch, ClaimView, Claimed, CreateTask, DetailEdge, ItemContent, LabelView,
-    NewChecklistItem, TaskDetail, TaskPatch,
+    NewChecklistItem, TaskDetail, TaskPatch, TaskService,
 };
 
 pub mod requests;
@@ -743,4 +746,57 @@ async fn takeover_claim(
         .await
         .map_err(from_task)?;
     Ok(claimed_json(&claimed))
+}
+
+/// The `claims near stale` part of the footer: the unreleased claims of every worker of the calling agent that are near the end of their lease. Every recorded call renews those claims, so the count is taken as the call arrives: it tells an agent that it went quiet long enough for its claims to near stale, even though the call itself renews them.
+pub struct ClaimsNearStaleFooter {
+    agents: AgentService,
+    tasks: TaskService,
+}
+
+impl ClaimsNearStaleFooter {
+    pub fn new(agents: AgentService, tasks: TaskService) -> Self {
+        Self { agents, tasks }
+    }
+}
+
+impl FooterSource for ClaimsNearStaleFooter {
+    fn part(&self) -> FooterPart {
+        FooterPart::ClaimsNearStale
+    }
+
+    fn before_call(&self) -> bool {
+        true
+    }
+
+    fn count<'a>(
+        &'a self,
+        session: &'a SessionContext,
+    ) -> Pin<Box<dyn Future<Output = u64> + Send + 'a>> {
+        Box::pin(async move {
+            if session.agent.is_none() {
+                return 0;
+            }
+            let agent = match self.agents.require_agent(session).await {
+                Ok(agent) => agent,
+                Err(error) => {
+                    tracing::warn!(
+                        code = from_agent(error).code(),
+                        "could not count claims near stale"
+                    );
+                    return 0;
+                }
+            };
+            match self.tasks.claims_near_stale(agent.id).await {
+                Ok(count) => count,
+                Err(error) => {
+                    tracing::warn!(
+                        code = from_task(error).code(),
+                        "could not count claims near stale"
+                    );
+                    0
+                }
+            }
+        })
+    }
 }

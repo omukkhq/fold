@@ -1,7 +1,5 @@
 use fold_core::events::types;
-use fold_core::{
-    AgentName, Event, EventFilter, EventType, FoldError, ProposalId, TaskId, codes, concerns,
-};
+use fold_core::{AgentName, Event, EventFilter, EventType, FoldError, ProposalId, TaskId, codes};
 use fold_store::{Store, StoreError, events};
 use serde_json::json;
 use thiserror::Error;
@@ -152,7 +150,7 @@ fn page(events: Vec<Event>, start: u64) -> EventPage {
     EventPage { events, next }
 }
 
-/// Reads after the stored cursor, keeps at most `limit` matching events and moves the cursor to the last one kept, all in one write transaction. With `recipients_only`, a message event is kept only when a worker of the agent receives the message, and pages are read on until one is kept or the table ends.
+/// Reads after the stored cursor, keeps at most `limit` matching events and moves the cursor to the last one kept. With `recipients_only`, a message event is kept only when a worker of the agent receives the message. The page is one read-pool query; the single writer is taken only to move the cursor, and only while the cursor still stands where the read started, so two reads of one agent never return the same event. A read that lost that race reads again from where the other one left the cursor.
 pub(super) async fn cursor_page(
     store: &Store,
     agent_id: i64,
@@ -160,62 +158,39 @@ pub(super) async fn cursor_page(
     limit: usize,
     recipients_only: bool,
 ) -> Result<EventPage, EventsError> {
-    store
-        .write(async |tx| {
-            let start = events::cursor(tx.conn(), agent_id).await?;
-            let mut from = start;
-            let mut kept = Vec::new();
-            loop {
-                let page = events::read_after(tx.conn(), from, filter, limit).await?;
-                let full = page.len() == limit;
-                if let Some(last) = page.last() {
-                    from = last.seq;
-                }
-                for event in page {
-                    let keep = match recipient_check(&event) {
-                        _ if !recipients_only => true,
-                        RecipientCheck::Pass => true,
-                        RecipientCheck::Ask(seq) => {
-                            events::is_recipient(tx.conn(), seq, agent_id).await?
-                        }
-                    };
-                    if keep {
-                        kept.push(event);
-                    }
-                }
-                if !kept.is_empty() || !full {
-                    break;
-                }
-            }
-            kept.truncate(limit);
-            let page = page(kept, start);
-            if page.next > start {
-                events::advance_cursor(tx, agent_id, page.next).await?;
-            }
-            Ok::<_, EventsError>(page)
-        })
-        .await
-}
-
-fn is_message_event(event: &Event) -> bool {
-    event.event_type == types::MESSAGE_SENT || event.event_type == types::MESSAGE_ACKNOWLEDGED
-}
-
-/// What decides whether an event reaches an agent that waits.
-pub(super) enum RecipientCheck {
-    Pass,
-    /// Passes only when a worker of the agent receives the message that the event with this `seq` names in `events.message_id`.
-    Ask(u64),
-}
-
-/// A message event reaches an agent only when one of its workers is a recipient of the event's message; every other event passes.
-pub(super) fn recipient_check(event: &Event) -> RecipientCheck {
-    if is_message_event(event) {
-        RecipientCheck::Ask(event.seq)
-    } else {
-        RecipientCheck::Pass
+    loop {
+        let start = events::cursor(store.read(), agent_id).await?;
+        let kept = if recipients_only {
+            events::read_reaching(
+                store.read(),
+                start,
+                filter,
+                agent_id,
+                &MESSAGE_EVENTS,
+                limit,
+            )
+            .await?
+        } else {
+            events::read_after(store.read(), start, filter, limit).await?
+        };
+        let page = page(kept, start);
+        if page.next == start {
+            return Ok(page);
+        }
+        let moved = store
+            .write(async |tx| events::move_cursor(tx, agent_id, start, page.next).await)
+            .await?;
+        if moved {
+            return Ok(page);
+        }
     }
 }
+
+/// The event types that reach an agent that waits only when one of its workers is a recipient of the message the event names.
+const MESSAGE_EVENTS: [EventType; 2] = [types::MESSAGE_SENT, types::MESSAGE_ACKNOWLEDGED];
+
+/// The most new events the footer counts; a larger number shows as `100+`.
+pub const NEW_EVENTS_CAP: u64 = 100;
 
 /// Queries and cursors of one project's events. Reading never appends an event and never changes task state; the only write is the agent's cursor.
 #[derive(Debug, Clone)]
@@ -246,7 +221,7 @@ impl EventService {
         read_since_cursor(&self.store, agent_id, query).await
     }
 
-    /// How many events after the agent's cursor concern it. It only reads, so building a footer never moves the cursor.
+    /// How many events after the agent's cursor concern it by the rule of `fold_core::concerns`, counted up to one more than [`NEW_EVENTS_CAP`]. It only reads, in one read transaction, so building a footer never moves the cursor and never loads the events it counts.
     pub async fn new_event_count(
         &self,
         agent_id: i64,
@@ -259,14 +234,17 @@ impl EventService {
         tasks.extend(facts.prerequisites.iter().copied());
         let mut proposals = facts.authored.clone();
         proposals.extend(facts.reviewing.iter().copied());
-        let candidates =
-            events::touching_after(&mut *tx, after, &tasks, &proposals, &[types::MAIN_ADVANCED])
-                .await?;
+        let count = events::count_concerning(
+            &mut *tx,
+            after,
+            agent,
+            &tasks,
+            &proposals,
+            &[types::MAIN_ADVANCED],
+            NEW_EVENTS_CAP + 1,
+        )
+        .await?;
         tx.commit().await.map_err(StoreError::from)?;
-        let count = candidates
-            .iter()
-            .filter(|event| concerns(event, &facts))
-            .count();
-        Ok(u64::try_from(count).unwrap_or(u64::MAX))
+        Ok(count)
     }
 }

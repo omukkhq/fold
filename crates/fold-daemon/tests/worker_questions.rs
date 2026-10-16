@@ -1,13 +1,18 @@
 #![cfg(test)]
 
 use axum::http::{Method, StatusCode};
+use fold_core::events::types;
 use fold_core::roles::PermissionBehavior;
 use fold_core::{
-    Actor, AgentActor, AgentName, PermissionQuestionId, WorkerName, WorkerState, codes,
+    Actor, AgentActor, AgentName, Clock, HumanName, LiveEvent, MessageBody, PermissionQuestionId,
+    Role, WorkerName, WorkerState, codes,
 };
-use fold_daemon::services::agents::AgentError;
+use fold_daemon::push::PushTargets;
+use fold_daemon::services::agents::{AgentError, AgentService, StartWorker, Supervisor};
+use fold_daemon::services::events::EventBus;
+use fold_daemon::services::messages::{Feedback, MessageService};
 use fold_store::agents::WorkerProcessRow;
-use fold_store::testing::eventually;
+use fold_store::testing::{TestProject, eventually};
 use serde_json::{Value, json};
 
 use crate::common::acceptance::{Harness, SLUG, WAIT};
@@ -577,5 +582,86 @@ async fn a_restart_while_a_question_with_choices_waits_resumes_the_worker_with_t
         again["updatedInput"]["answers"],
         json!({"Which colour should the fold probe use?": "a darker red"}),
         "the repeated question takes the stored reply"
+    );
+}
+
+/// A supervisor whose watcher falls behind its bus checks the stored state: the human's reply, whose event it never received, still answers the worker's waiting question.
+#[tokio::test]
+async fn a_supervisor_that_falls_behind_its_bus_still_answers_a_replied_question() {
+    let fake = FakeClaude::new("ask_question");
+    let project = TestProject::new().await;
+    let clock: std::sync::Arc<dyn Clock> = std::sync::Arc::new(project.clock().clone());
+    let ana = HumanName::parse("ana").unwrap();
+    let now = project.now();
+    project
+        .registry()
+        .write(async |tx| fold_store::projects::ensure_human(tx, &ana, now).await)
+        .await
+        .unwrap();
+    let bus = EventBus::with_capacity(4);
+    let push = PushTargets::new();
+    let workers = Supervisor::new(
+        project.store().clone(),
+        bus.clone(),
+        clock.clone(),
+        project.paths().clone(),
+        push.clone(),
+        fake.launcher.clone(),
+    );
+    workers.set_registry(project.registry().clone());
+    let service = AgentService::new(project.store().clone(), bus.clone(), clock.clone())
+        .with_project_config(project.paths().clone())
+        .with_push_targets(push)
+        .with_workers(workers);
+    let human = Actor::human(ana);
+    let lead = service
+        .start_worker(
+            &human,
+            StartWorker {
+                role: Some(Role::ReviewLead),
+                ..StartWorker::default()
+            },
+        )
+        .await
+        .unwrap()
+        .agent;
+    // The reply goes out on a bus of its own, so its event never reaches the supervisor.
+    let messages = MessageService::new(
+        project.store().clone(),
+        project.registry().clone(),
+        EventBus::new(),
+        clock,
+    );
+    let question = eventually(WAIT, async || {
+        let waiting = messages.awaiting_human().await.unwrap();
+        waiting
+            .first()
+            .map(|message| message.id)
+            .ok_or(waiting.len())
+    })
+    .await;
+    messages
+        .feedback(
+            &human,
+            Feedback {
+                body: MessageBody::parse("blue".to_owned()).unwrap(),
+                task: None,
+                request: None,
+                reply_to: Some(question),
+                to: None,
+            },
+        )
+        .await
+        .unwrap();
+    // More messages than the bus holds, sent while the watcher cannot run, so it falls behind.
+    for _ in 0..8 {
+        bus.publish_live(LiveEvent::new(types::WORKER_OUTPUT, None, json!({})).unwrap());
+    }
+    let run = until_answered(&fake, lead.as_str(), 1, 1).await.remove(0);
+    let allowed = responses(&run).remove(0);
+    assert_eq!(allowed["behavior"], "allow");
+    assert_eq!(
+        allowed["updatedInput"]["answers"],
+        json!({"Which colour should the fold probe use?": "Blue"})
     );
 }

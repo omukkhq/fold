@@ -17,8 +17,8 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
 use tokio::sync::Notify;
 use tokio::sync::broadcast::error::RecvError;
-use tokio::task::JoinHandle;
 
+use crate::jobs::ProjectTask;
 use crate::services::events::{BusMessage, EventBus};
 
 /// The newest sockets kept per agent. One agent rarely runs more sessions at once.
@@ -492,29 +492,29 @@ fn frames(token: &PushToken, text: &str) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// The project's push delivery. Dropping it stops the task.
-#[derive(Debug)]
-pub struct PushTask(JoinHandle<()>);
-
-impl Drop for PushTask {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
+/// The project's push delivery.
+pub type PushTask = ProjectTask;
 
 /// Starts the delivery task of one project: it reads each event from the bus, which carries an event only after its commit, and queues the notices the event sends. Push is a hint: it writes nothing, and an event committed while no socket was registered is never replayed.
 pub fn run(store: Store, bus: &EventBus, targets: PushTargets) -> PushTask {
     let receiver = bus.subscribe();
-    PushTask(tokio::spawn(deliver_events(store, receiver, targets)))
+    ProjectTask::spawn(deliver_events(store, receiver, bus.closing(), targets))
 }
 
+/// It ends once the project's bus closes.
 async fn deliver_events(
     store: Store,
     mut receiver: tokio::sync::broadcast::Receiver<BusMessage>,
+    mut closing: tokio::sync::watch::Receiver<bool>,
     targets: PushTargets,
 ) {
     loop {
-        let event = match receiver.recv().await {
+        let received = tokio::select! {
+            biased;
+            _ = closing.wait_for(|closed| *closed) => return,
+            received = receiver.recv() => received,
+        };
+        let event = match received {
             Ok(BusMessage::Durable(event)) => event,
             Ok(BusMessage::Live(_)) => continue,
             Err(RecvError::Lagged(skipped)) => {

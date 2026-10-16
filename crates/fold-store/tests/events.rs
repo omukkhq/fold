@@ -1,6 +1,9 @@
+use std::collections::BTreeSet;
+
 use fold_core::events::types;
 use fold_core::{
-    EventActor, EventFilter, EventType, NewEvent, ProposalId, RevisionId, TaskId, WorkspaceId,
+    AgentEventFacts, AgentName, EventActor, EventFilter, EventType, MessageId, NewEvent,
+    ProposalId, RevisionId, TaskId, WorkspaceId, concerns,
 };
 use fold_store::testing::{TestProject, assert_append_only};
 use fold_store::{StoreError, events};
@@ -326,4 +329,171 @@ async fn rows_that_do_not_parse_are_reported_as_corrupt() {
             "{error:?}"
         );
     }
+}
+
+#[cfg(test)]
+fn by(event_type: EventType, actor: &str) -> NewEvent {
+    NewEvent::new(event_type, EventActor::parse(actor).unwrap()).unwrap()
+}
+
+#[cfg(test)]
+fn proposal(n: u32) -> ProposalId {
+    ProposalId::from_number(n).unwrap()
+}
+
+#[cfg(test)]
+async fn exec(project: &TestProject, sql: &str) {
+    project
+        .store()
+        .write(async |tx| {
+            sqlx::query(sqlx::AssertSqlSafe(sql))
+                .execute(tx.conn())
+                .await
+                .map_err(StoreError::from)
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn count_concerning_counts_what_concerns_holds_and_stops_at_its_cap() {
+    let project = TestProject::new().await;
+    let agent = AgentName::parse("fe").unwrap();
+    let mut facts = AgentEventFacts::new(agent.clone());
+    facts.claimed.insert(task(1));
+    facts.prerequisites.insert(task(2));
+    facts.authored.insert(proposal(3));
+    facts.reviewing.insert(proposal(4));
+    let batch = vec![
+        by(types::TASK_UPDATED, "be").task(task(1)),
+        by(types::TASK_UPDATED, "be").task(task(2)),
+        by(types::TASK_UPDATED, "be").task(task(5)),
+        by(types::REVIEW_SUBMITTED, "be").proposal(proposal(3)),
+        by(types::REVIEW_SUBMITTED, "human:ana").proposal(proposal(4)),
+        by(types::REVIEW_SUBMITTED, "be").proposal(proposal(6)),
+        by(types::MAIN_ADVANCED, "fold"),
+        by(types::TASK_UPDATED, "fe").task(task(1)),
+        by(types::TASK_UPDATED, "fe/ui").task(task(1)),
+        by(types::TASK_UPDATED, "fe-two").task(task(1)),
+        by(types::MAIN_ADVANCED, "fe"),
+    ];
+    append_all(&project, batch).await;
+    let stored = events::after(project.store().read(), 0, 100).await.unwrap();
+    let tasks: BTreeSet<TaskId> = facts.claimed.union(&facts.prerequisites).copied().collect();
+    let proposals: BTreeSet<ProposalId> = facts.authored.union(&facts.reviewing).copied().collect();
+    let count = |after: u64, cap: u64| {
+        let (agent, tasks, proposals) = (agent.clone(), tasks.clone(), proposals.clone());
+        let store = project.store().clone();
+        async move {
+            events::count_concerning(
+                store.read(),
+                after,
+                &agent,
+                &tasks,
+                &proposals,
+                &[types::MAIN_ADVANCED],
+                cap,
+            )
+            .await
+            .unwrap()
+        }
+    };
+    for after in [0, 4, 9, 11] {
+        let expected = stored
+            .iter()
+            .filter(|event| event.seq > after && concerns(event, &facts))
+            .count();
+        assert_eq!(count(after, 1000).await, expected as u64, "after {after}");
+    }
+    assert_eq!(count(0, 1000).await, 6);
+    assert_eq!(count(0, 2).await, 2);
+
+    let backlog = (0..1500)
+        .map(|_| by(types::MAIN_ADVANCED, "fold"))
+        .collect();
+    append_all(&project, backlog).await;
+    assert_eq!(
+        count(0, 101).await,
+        101,
+        "the count stops at its cap however long the backlog is"
+    );
+}
+
+#[tokio::test]
+async fn read_reaching_keeps_a_message_event_only_for_an_agent_whose_worker_receives_it() {
+    let project = TestProject::new().await;
+    exec(
+        &project,
+        "INSERT INTO agents (id, name, created_at) VALUES (1, 'fe', 0), (2, 'be', 0);
+         INSERT INTO workers (id, agent_id, name, created_at) VALUES (1, 1, 'fe', 0), (2, 2, 'be', 0);
+         INSERT INTO messages (number, thread_id, sender_kind, sender_human, body, created_at)
+         VALUES (1, 1, 'human', 'ana', 'one', 0), (2, 2, 'human', 'ana', 'two', 0);
+         INSERT INTO message_recipients (message_id, worker_id, addressed_as)
+         SELECT m.id, 2, 'agent' FROM messages m WHERE m.number = 1;
+         INSERT INTO message_recipients (message_id, worker_id, addressed_as)
+         SELECT m.id, 1, 'agent' FROM messages m WHERE m.number = 2;",
+    )
+    .await;
+    let to_be = MessageId::from_number(1).unwrap();
+    let to_fe = MessageId::from_number(2).unwrap();
+    let mut batch: Vec<NewEvent> = (0..1200)
+        .map(|_| by(types::MESSAGE_SENT, "human:ana").message(to_be))
+        .collect();
+    batch.push(by(types::TASK_UPDATED, "be").task(task(1)));
+    batch.push(by(types::MESSAGE_ACKNOWLEDGED, "be").message(to_be));
+    batch.push(by(types::MESSAGE_SENT, "human:ana").message(to_fe));
+    let seqs = append_all(&project, batch).await;
+    let messages = [types::MESSAGE_SENT, types::MESSAGE_ACKNOWLEDGED];
+    let page = events::read_reaching(
+        project.store().read(),
+        0,
+        &EventFilter::default(),
+        1,
+        &messages,
+        100,
+    )
+    .await
+    .unwrap();
+    let read: Vec<u64> = page.iter().map(|event| event.seq).collect();
+    assert_eq!(
+        read,
+        [seqs[1200], seqs[1202]],
+        "one read passes the 1200 messages to another agent"
+    );
+    let backend = events::read_reaching(
+        project.store().read(),
+        seqs[1199],
+        &EventFilter::default(),
+        2,
+        &messages,
+        2,
+    )
+    .await
+    .unwrap();
+    let read: Vec<u64> = backend.iter().map(|event| event.seq).collect();
+    assert_eq!(read, [seqs[1200], seqs[1201]]);
+}
+
+#[tokio::test]
+async fn move_cursor_moves_only_from_where_the_cursor_stands() {
+    let project = TestProject::new().await;
+    exec(
+        &project,
+        "INSERT INTO agents (id, name, created_at) VALUES (1, 'fe', 0)",
+    )
+    .await;
+    let mv = async |from: u64, to: u64| {
+        project
+            .store()
+            .write(async |tx| events::move_cursor(tx, 1, from, to).await)
+            .await
+            .unwrap()
+    };
+    let cursor = async || events::cursor(project.store().read(), 1).await.unwrap();
+    assert!(mv(0, 5).await, "no cursor yet stands at 0");
+    assert_eq!(cursor().await, 5);
+    assert!(!mv(0, 7).await, "another read moved it first");
+    assert!(mv(5, 9).await);
+    assert!(!mv(5, 12).await);
+    assert_eq!(cursor().await, 9);
 }

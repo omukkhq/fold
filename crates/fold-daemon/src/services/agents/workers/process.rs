@@ -233,14 +233,21 @@ impl Supervisor {
         &self.inner.paths
     }
 
-    /// Runs Claude Code for the row, which a committed command left in state `starting`: a new session, or `--resume` of the row's session. `turn` is the first user turn; without one a resumed worker waits idle for its next notice. A process that cannot start leaves the row `failed` with `worker.failed` and gives no [`StartWatch`].
+    /// Runs Claude Code for the row, which a committed command left in state `starting`: a new session, or `--resume` of the row's session. `turn` is the first user turn; without one a resumed worker waits idle for its next notice. A process that cannot start, for an unreadable configuration, files that cannot be written, a failed spawn or a process that cannot be recorded, leaves the row `failed` with `worker.failed` and gives no [`StartWatch`], so no `starting` row holds a place under the limits.
     pub(super) async fn launch(
         &self,
         row: &WorkerProcessRow,
         resume: bool,
         turn: Option<String>,
     ) -> Result<Option<StartWatch>, AgentError> {
-        let config = load_config(&self.inner.paths).await?;
+        let config = match load_config(&self.inner.paths).await {
+            Ok(config) => config,
+            Err(error) => {
+                tracing::warn!(agent = %row.agent, code = error.code().unwrap_or(codes::INTERNAL_ERROR), "could not read the configuration for a worker");
+                self.fail(row.id, &row.agent, "config").await?;
+                return Ok(None);
+            }
+        };
         let settings = config.role(row.role);
         let launcher = lock(&self.inner.launcher).clone();
         let files = write_files(&self.inner.paths, &launcher, row, &settings).await;
@@ -368,7 +375,10 @@ impl Supervisor {
             Ok(starting) => starting,
             Err(error) => {
                 self.forget(&process);
-                return Err(error.into());
+                tracing::warn!(agent = %row.agent, code = error.code().unwrap_or("store_error"), "could not record a worker's process");
+                // Dropping the child on return kills the process.
+                self.fail(row.id, &row.agent, "record").await?;
+                return Ok(None);
             }
         };
         tokio::spawn(drain(stderr));
@@ -423,13 +433,17 @@ impl Supervisor {
         )
     }
 
-    /// Records a worker whose process could not start.
+    /// Records a worker whose process could not start. A row that is no longer the agent's current one, or that has ended already, is left as it is.
     async fn fail(&self, id: i64, agent: &AgentName, reason: &str) -> Result<(), AgentError> {
         let now = self.inner.clock.now();
         let mut buffer = EventBuffer::new();
         self.inner
             .store
             .write(async |tx| {
+                let current = agents::find_worker_process(tx.conn(), agent).await?;
+                if !current.is_some_and(|current| current.id == id && current.state.is_running()) {
+                    return Ok(());
+                }
                 agents::record_exit(tx.conn(), id, WorkerState::Failed, None, now).await?;
                 agents::close_open_questions(tx.conn(), id, now).await?;
                 let event = NewEvent::new(types::WORKER_FAILED, EventActor::fold())?
@@ -671,6 +685,15 @@ impl Supervisor {
 
     /// Marks the agent's running worker `stopping`, then ends its process: the interrupt of a working turn and a closed stdin, then SIGINT, SIGTERM and SIGKILL, each after its timeout. It returns once the process has exited and its exit is recorded. A worker that is not running is left as it is; one whose row runs without a process here ends `stopped` at once.
     pub(super) async fn stop(&self, agent: &AgentName) -> Result<(), AgentError> {
+        self.stop_when(agent, |_| true).await.map(|_| ())
+    }
+
+    /// [`Supervisor::stop`] of a worker that `still` holds for, read in the transaction that marks it `stopping`. Returns whether it stopped the worker.
+    async fn stop_when(
+        &self,
+        agent: &AgentName,
+        still: impl Fn(&WorkerProcessRow) -> bool,
+    ) -> Result<bool, AgentError> {
         let now = self.inner.clock.now();
         let started = self
             .inner
@@ -679,7 +702,7 @@ impl Supervisor {
                 let Some(row) = agents::find_worker_process(tx.conn(), agent).await? else {
                     return Ok::<_, StoreError>(None);
                 };
-                if !row.state.is_running() {
+                if !row.state.is_running() || !still(&row) {
                     return Ok(None);
                 }
                 let working = row.state == WorkerState::Working;
@@ -688,16 +711,24 @@ impl Supervisor {
             })
             .await?;
         let Some((row, working)) = started else {
-            return Ok(());
+            return Ok(false);
         };
         let running = lock(&self.inner.running).get(agent).cloned();
         match running {
-            Some(run) => {
-                self.terminate(&run, working).await;
-                Ok(())
-            }
-            None => self.stopped_without_process(&row).await,
+            Some(run) => self.terminate(&run, working).await,
+            None => self.stopped_without_process(&row).await?,
         }
+        Ok(true)
+    }
+
+    /// Stops `agent` in a task of its own, as a worker whose work is done.
+    fn spawn_stop(&self, agent: AgentName) {
+        let supervisor = self.clone();
+        tokio::spawn(async move {
+            if let Err(error) = supervisor.stop(&agent).await {
+                tracing::warn!(%agent, code = super::code_of(&error), "could not stop a finished worker");
+            }
+        });
     }
 
     /// Ends a `stopping` row that has no process here. A process that a racing launch started and ended itself may have recorded the stop already, so a row that is no longer `stopping` is left as it is.
@@ -809,11 +840,13 @@ impl Supervisor {
         }
     }
 
-    /// The short-lived workers whose work `event` finished: a task coder once no bound task awaits its work (see [`agents::tasks_awaiting_proposal`]), checked when it opens a proposal or sends a new version; a batch reviewer once every bound proposal has a verdict or is no longer open.
+    /// The short-lived workers whose work `event` finished: a task coder once no bound task awaits its work (see [`agents::tasks_awaiting_proposal`]), checked when it opens a proposal or sends a new version and when a bound task is archived; a batch reviewer once every bound proposal has a verdict or is no longer open.
     async fn done_workers(&self, event: &fold_core::Event) -> Result<Vec<AgentName>, StoreError> {
         let kind = event.event_type;
         let mut done = Vec::new();
-        if (kind == types::PROPOSAL_OPENED || kind == types::PROPOSAL_VERSION_ADDED)
+        if (kind == types::PROPOSAL_OPENED
+            || kind == types::PROPOSAL_VERSION_ADDED
+            || kind == types::TASK_ARCHIVED)
             && let Some(task) = event.task
         {
             for coder in agents::coders_of_task(self.inner.store.read(), task).await? {
@@ -881,7 +914,7 @@ impl Supervisor {
         Ok(done)
     }
 
-    /// Stops every short-lived worker that has been idle for its role's `idle_minutes` at `now`. Returns the agents it stopped.
+    /// Stops every short-lived worker that has been idle for its role's `idle_minutes` at `now`. A worker is stopped only while it is still idle since the same moment, so one that took a turn after the rows were read keeps running. A worker that cannot be stopped is logged and the sweep goes on. Returns the agents it stopped.
     pub async fn sweep_idle(
         &self,
         now: fold_core::Timestamp,
@@ -907,15 +940,29 @@ impl Supervisor {
             let due = since
                 .checked_add(Duration::from_secs(minutes.saturating_mul(60)))
                 .is_some_and(|due| due <= now);
-            if due {
-                self.stop(&row.agent).await?;
-                stopped.push(row.agent);
+            if !due {
+                continue;
+            }
+            #[cfg(feature = "failpoints")]
+            fail::fail_point!("worker_sweep_before_stop");
+            let id = row.id;
+            let still_idle = |current: &WorkerProcessRow| {
+                current.id == id
+                    && current.state == WorkerState::Idle
+                    && current.idle_since == Some(since)
+            };
+            match self.stop_when(&row.agent, still_idle).await {
+                Ok(true) => stopped.push(row.agent),
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(agent = %row.agent, code = super::code_of(&error), "could not stop an idle worker");
+                }
             }
         }
         Ok(stopped)
     }
 
-    /// Runs again, after a daemon start, every worker that was working or idle when the daemon stopped: `--resume` of its session, with a turn that tells a working one to go on. A worker whose session is gone starts again in a new one, a lead with its latest hand-off note. A worker with an open question waits without a process until a human answers it, and then resumes with the answer as its first turn. A worker left `starting` ends `failed` and one left `stopping` ends `stopped`. Requested changes and conflicts that the worker limits held back are then served.
+    /// Runs again, after a daemon start, every worker that was working or idle when the daemon stopped: `--resume` of its session, with a turn that tells a working one to go on. A worker whose session is gone starts again in a new one, a lead with its latest hand-off note. A worker with an open question waits without a process until a human answers it, and then resumes with the answer as its first turn. A worker left `starting` ends `failed` and one left `stopping` ends `stopped`. A row that cannot be served is logged and the next row is served. Requested changes and conflicts that the worker limits held back are then served.
     pub async fn resume_after_restart(&self) -> Result<(), AgentError> {
         let mut conn = self
             .inner
@@ -927,30 +974,86 @@ impl Supervisor {
         let rows = agents::list_worker_processes(&mut conn).await?;
         drop(conn);
         for row in rows {
-            match row.state {
-                WorkerState::Working | WorkerState::Idle => {
-                    if self.waits_for_answer(&row).await? {
-                        continue;
-                    }
-                    let turn = (row.state == WorkerState::Working).then(|| RESTART_TURN.to_owned());
-                    let now = self.inner.clock.now();
-                    self.inner
-                        .store
-                        .write(async |tx| {
-                            agents::restart_worker_process(tx.conn(), row.id, now).await
-                        })
-                        .await?;
-                    if let Some(watch) = self.launch(&row, true, turn).await? {
-                        tokio::spawn(self.clone().restart_lost(row.agent.clone(), watch, None));
-                    }
-                }
-                WorkerState::Starting => self.fail(row.id, &row.agent, "daemon_restart").await?,
-                WorkerState::Stopping => self.stopped_without_process(&row).await?,
-                WorkerState::Stopped | WorkerState::Failed => {}
+            if let Err(error) = self.resume_row(&row).await {
+                tracing::warn!(agent = %row.agent, code = super::code_of(&error), "could not serve a worker after the daemon start");
             }
         }
         tokio::spawn(self.clone().resume_pending());
         Ok(())
+    }
+
+    /// What a daemon start does with one row; see [`Supervisor::resume_after_restart`].
+    async fn resume_row(&self, row: &WorkerProcessRow) -> Result<(), AgentError> {
+        match row.state {
+            WorkerState::Working | WorkerState::Idle => {
+                if self.waits_for_answer(row).await? {
+                    return Ok(());
+                }
+                let turn = (row.state == WorkerState::Working).then(|| RESTART_TURN.to_owned());
+                let now = self.inner.clock.now();
+                self.inner
+                    .store
+                    .write(async |tx| agents::restart_worker_process(tx.conn(), row.id, now).await)
+                    .await?;
+                if let Some(watch) = self.launch(row, true, turn).await? {
+                    tokio::spawn(self.clone().restart_lost(row.agent.clone(), watch, None));
+                }
+            }
+            WorkerState::Starting => self.fail(row.id, &row.agent, "daemon_restart").await?,
+            WorkerState::Stopping => self.stopped_without_process(row).await?,
+            WorkerState::Stopped | WorkerState::Failed => {}
+        }
+        Ok(())
+    }
+
+    /// Does from the stored state what the events the watcher missed would have done: answers each `ask` question whose messages all have their replies, stops each short-lived worker whose work is done, and serves the resumes the limits held back.
+    async fn recover(self) {
+        self.answer_open_asks().await;
+        self.stop_done_workers().await;
+        self.resume_pending().await;
+    }
+
+    async fn stop_done_workers(&self) {
+        let rows = async {
+            let mut conn = self
+                .inner
+                .store
+                .read()
+                .acquire()
+                .await
+                .map_err(StoreError::from)?;
+            let mut done = Vec::new();
+            for row in agents::list_worker_processes(&mut conn).await? {
+                if !matches!(row.state, WorkerState::Working | WorkerState::Idle) {
+                    continue;
+                }
+                let finished = match row.role {
+                    fold_core::Role::TaskCoder => {
+                        agents::tasks_awaiting_proposal(&mut *conn, row.id).await? == 0
+                    }
+                    fold_core::Role::BatchReviewer => {
+                        agents::proposals_without_verdict(&mut *conn, row.id).await? == 0
+                    }
+                    fold_core::Role::AreaLead | fold_core::Role::ReviewLead => false,
+                };
+                if finished {
+                    done.push(row.agent);
+                }
+            }
+            Ok::<_, StoreError>(done)
+        }
+        .await;
+        match rows {
+            Ok(done) => {
+                for agent in done {
+                    self.spawn_stop(agent);
+                }
+            }
+            Err(error) => tracing::warn!(
+                code = error.code().unwrap_or(codes::INTERNAL_ERROR),
+                "could not check for finished workers"
+            ),
+        }
     }
 }
 
@@ -989,7 +1092,7 @@ async fn drain(mut stderr: ChildStderr) {
     }
 }
 
-/// Stops each short-lived worker whose work an event finished. It holds the supervisor weakly, so the project's handle can drop.
+/// Stops each short-lived worker whose work an event finished. A watcher that falls behind the bus checks the stored state instead of the events it missed. It holds the supervisor weakly, so the project's handle can drop.
 async fn watch_done(
     inner: Weak<Inner>,
     mut receiver: tokio::sync::broadcast::Receiver<BusMessage>,
@@ -997,7 +1100,18 @@ async fn watch_done(
     loop {
         let event = match receiver.recv().await {
             Ok(BusMessage::Durable(event)) => event,
-            Ok(BusMessage::Live(_)) | Err(RecvError::Lagged(_)) => continue,
+            Ok(BusMessage::Live(_)) => continue,
+            Err(RecvError::Lagged(missed)) => {
+                let Some(inner) = inner.upgrade() else {
+                    return;
+                };
+                tracing::warn!(
+                    missed,
+                    "the worker supervisor missed events; it checks the stored state"
+                );
+                tokio::spawn(Supervisor { inner }.recover());
+                continue;
+            }
             Err(RecvError::Closed) => return,
         };
         let Some(inner) = inner.upgrade() else {
@@ -1017,19 +1131,17 @@ async fn watch_done(
             }
         };
         for agent in done {
-            let supervisor = supervisor.clone();
-            tokio::spawn(async move {
-                if let Err(error) = supervisor.stop(&agent).await {
-                    tracing::warn!(%agent, code = super::code_of(&error), "could not stop a finished worker");
-                }
-            });
+            supervisor.spawn_stop(agent);
         }
         let items = resume::resume_items(&event);
         if !items.is_empty() {
             tokio::spawn(supervisor.clone().resume_authors(items));
         }
-        // A freed worker slot can serve a resume that the limits refused earlier.
-        if event.event_type == types::WORKER_STOPPED || event.event_type == types::WORKER_FAILED {
+        // A freed worker slot or a raised limit can serve a resume that the limits refused earlier.
+        if event.event_type == types::WORKER_STOPPED
+            || event.event_type == types::WORKER_FAILED
+            || event.event_type == types::WORKERS_LIMITS_CHANGED
+        {
             tokio::spawn(supervisor.resume_pending());
         }
     }

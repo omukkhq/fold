@@ -816,3 +816,120 @@ async fn the_footer_counts_new_events_that_concern_the_agent() {
         "reading after the cursor clears the count"
     );
 }
+
+#[tokio::test]
+async fn a_wait_behind_a_large_backlog_reads_one_page() {
+    let fx = Fixture::new().await;
+    let session = fx.connect("frontend").await;
+    let added = fx
+        .commit(
+            (0..1500)
+                .map(|_| new_event(types::MAIN_ADVANCED, "fold"))
+                .collect(),
+        )
+        .await;
+    let events = EventService::new(fx.store().clone(), fx.bus.clone());
+    let query = WaitQuery {
+        types: vec!["main.advanced".to_owned()],
+        timeout_s: Some(600),
+        ..WaitQuery::default()
+    };
+    for page in 0..2 {
+        let mut waiter = events.wait(session.agent_id, &query).await.unwrap();
+        assert_eq!(waiter.held(), 100, "the waiter holds one page, not 1500");
+        let step = tokio::time::timeout(WAIT, waiter.next())
+            .await
+            .unwrap()
+            .unwrap();
+        let WaitStep::Events(read) = step else {
+            panic!("no page: {step:?}");
+        };
+        let seqs: Vec<u64> = read.events.iter().map(|event| event.seq).collect();
+        assert_eq!(seqs, added[page * 100..(page + 1) * 100]);
+        assert_eq!(fx.cursor(&session).await, added[page * 100 + 99]);
+    }
+}
+
+#[tokio::test]
+async fn a_wait_ends_once_the_bus_closes() {
+    let fx = Fixture::new().await;
+    let session = fx.connect("frontend").await;
+    let events = EventService::new(fx.store().clone(), fx.bus.clone());
+    let query = WaitQuery {
+        timeout_s: Some(1500),
+        ..WaitQuery::default()
+    };
+    let mut waiter = events.wait(session.agent_id, &query).await.unwrap();
+    let waiting = tokio::spawn(async move { waiter.next().await.unwrap() });
+    fx.bus.close();
+    let step = tokio::time::timeout(WAIT, waiting).await.unwrap().unwrap();
+    assert_eq!(step, WaitStep::TimedOut);
+    let mut late = events.wait(session.agent_id, &query).await.unwrap();
+    let step = tokio::time::timeout(WAIT, late.next())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        step,
+        WaitStep::TimedOut,
+        "a wait that starts after the close ends at once"
+    );
+}
+
+#[tokio::test]
+async fn the_footer_shows_more_than_100_new_events_as_100_plus() {
+    let fx = Fixture::new().await;
+    let session = fx.connect("frontend").await;
+    fx.commit(
+        (0..150)
+            .map(|_| new_event(types::MAIN_ADVANCED, "fold"))
+            .collect(),
+    )
+    .await;
+    let result = call_raw(&session, "list_agents", json!({})).await;
+    let footer = result
+        .content
+        .get(1)
+        .map(|line| line.as_text().unwrap().text.clone());
+    assert_eq!(footer.as_deref(), Some("fold: 100+ new events"));
+}
+
+#[tokio::test]
+async fn a_claim_in_the_last_quarter_of_its_lease_shows_in_the_next_footer() {
+    let fx = Fixture::new().await;
+    fx.create_task().await;
+    let session = fx.connect("frontend").await;
+    let main = fx
+        .agents
+        .resolve_worker(&session.context, None)
+        .await
+        .unwrap();
+    fx.tasks.claim_task(&by(&main), t(1)).await.unwrap();
+    let footer = |result: &CallToolResult| {
+        result
+            .content
+            .get(1)
+            .map(|line| line.as_text().unwrap().text.clone())
+    };
+    let fresh = call_raw(&session, "get_events", json!({})).await;
+    assert_eq!(footer(&fresh), None);
+    // The lease is 30 minutes, so its last quarter starts 22.5 minutes after the renewal.
+    fx.project
+        .clock()
+        .advance(Duration::from_secs(22 * 60))
+        .unwrap();
+    let early = call_raw(&session, "list_agents", json!({})).await;
+    assert_eq!(footer(&early), None);
+    fx.project
+        .clock()
+        .advance(Duration::from_secs(23 * 60))
+        .unwrap();
+    let late = call_raw(&session, "list_agents", json!({})).await;
+    assert_eq!(footer(&late).as_deref(), Some("fold: 1 claims near stale"));
+    let renewed = call_raw(&session, "list_agents", json!({})).await;
+    assert_eq!(
+        footer(&renewed),
+        None,
+        "the call that showed the claim renewed it"
+    );
+}

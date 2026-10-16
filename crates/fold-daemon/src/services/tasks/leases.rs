@@ -1,12 +1,24 @@
-use fold_core::claims::is_stale;
+use fold_core::claims::{is_stale, near_stale_cutoff};
 use fold_core::events::types;
 use fold_core::{EventActor, NewEvent, Timestamp};
 use fold_store::tasks::claims::{self, ClaimTarget, StaleClaim};
 use serde_json::json;
 
-use super::TaskError;
+use super::{TaskError, TaskService};
 use crate::projects::ProjectHandle;
 use crate::services::events::EventBuffer;
+
+impl TaskService {
+    /// How many unreleased claims the workers of agent `agent_id` hold that are near stale now (see [`near_stale_cutoff`]), with the project's lease.
+    pub async fn claims_near_stale(&self, agent_id: i64) -> Result<u64, TaskError> {
+        let lease_minutes = self.lease_minutes().await?;
+        let Some(cutoff) = near_stale_cutoff(self.clock.now(), lease_minutes) else {
+            return Ok(0);
+        };
+        let count = claims::count_renewed_by(self.store.read(), agent_id, cutoff).await?;
+        Ok(count)
+    }
+}
 
 /// Marks each unreleased claim of `project` whose lease ran out at `now` and that is not marked yet, with one `claim.stale` per claim, in one write transaction; the events reach the bus after the commit. The lease is the project's `lease_minutes`. A marked claim keeps its holder, its workspace and its task's status: only `takeover_claim` moves it, and a renewal clears the mark. Returns the claims it marked.
 pub async fn sweep_leases(

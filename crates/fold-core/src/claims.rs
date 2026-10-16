@@ -9,6 +9,13 @@ pub fn is_stale(renewed_at: Timestamp, now: Timestamp, lease_minutes: u64) -> bo
         .is_some_and(|elapsed| elapsed >= lease)
 }
 
+/// A claim is near stale once three quarters of its lease have passed since its last renewal, so its holder hears of it while a quarter of the lease is left. A claim already stale and not yet taken over is near stale too: its holder still keeps it. A claim renewed at or before the returned time is near stale; `None` when the cutoff falls before the first representable time, and then no claim is.
+pub fn near_stale_cutoff(now: Timestamp, lease_minutes: u64) -> Option<Timestamp> {
+    let lease_millis = lease_minutes.saturating_mul(60_000);
+    let warned_after = Duration::from_millis(lease_millis - lease_millis / 4);
+    now.checked_sub(warned_after)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -35,6 +42,19 @@ mod tests {
         assert!(is_stale(renewed, at(5 * MINUTE), 5));
         assert!(!is_stale(renewed, at(5 * MINUTE), 6));
         assert!(!is_stale(renewed, at(200_000_000_000_000), u64::MAX));
+    }
+
+    #[test]
+    fn a_claim_is_near_stale_in_the_last_quarter_of_its_lease() {
+        let now = at(100 * MINUTE);
+        assert_eq!(near_stale_cutoff(now, 40), Some(at(70 * MINUTE)));
+        assert_eq!(near_stale_cutoff(now, 1), Some(at(100 * MINUTE - 45_000)));
+        assert_eq!(near_stale_cutoff(now, 0), Some(now));
+        assert_eq!(
+            near_stale_cutoff(at(10 * MINUTE), 40),
+            Some(at(-20 * MINUTE))
+        );
+        assert_eq!(near_stale_cutoff(now, u64::MAX), None);
     }
 
     #[test]

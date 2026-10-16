@@ -525,3 +525,54 @@ fn parse_hello_reads_the_tags_and_an_adapter_without_them_sends_none() {
     assert!(hello.tags.is_empty());
     assert!(!serde_json::to_string(&hello).unwrap().contains("tags"));
 }
+
+#[tokio::test]
+async fn shutdown_answers_an_open_wait_for_events_and_ends_before_the_drain_timeout() {
+    let host = Host::start().await;
+    let stream = tokio::net::UnixStream::connect(host.daemon.socket_path())
+        .await
+        .unwrap();
+    let (read, mut write) = stream.into_split();
+    let hello = host.hello(&host.root, Some("review"));
+    write
+        .write_all(format!("{hello}\n").as_bytes())
+        .await
+        .unwrap();
+    let mut read = BufReader::new(read);
+    let mut line = String::new();
+    read.read_line(&mut line).await.unwrap();
+    assert_eq!(
+        serde_json::from_str::<Answer>(&line).unwrap(),
+        Answer::accepted("app")
+    );
+    let client: Client = ().serve((read, write)).await.unwrap();
+    let Some(fold_daemon::projects::Slot::Open(handle)) = host.state().projects.slot("app") else {
+        panic!("project app is not open");
+    };
+    let waiting = tokio::spawn(async move {
+        let mut arguments = serde_json::Map::new();
+        arguments.insert("types".to_owned(), json!(["main.advanced"]));
+        arguments.insert("timeout_s".to_owned(), json!(1500));
+        client
+            .call_tool(CallToolRequestParams::new("wait_for_events").with_arguments(arguments))
+            .await
+    });
+    eventually(WAIT, async || {
+        let waiters = handle.bus.waiters();
+        if waiters == 1 { Ok(()) } else { Err(waiters) }
+    })
+    .await;
+    drop(handle);
+
+    // Shorter than the drain timeout, so the session must end because the daemon ended it.
+    tokio::time::timeout(Duration::from_secs(4), host.daemon.shutdown())
+        .await
+        .expect("shutdown waited for the open wait");
+    let result = tokio::time::timeout(WAIT, waiting)
+        .await
+        .unwrap()
+        .unwrap()
+        .expect("the wait got its answer before the session ended");
+    let body: Value = serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap();
+    assert_eq!(body, json!({"timed_out": true}));
+}

@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT seq AS \"seq!: i64\", type AS event_type, actor, task_id, proposal_id,\n                  workspace_id, revision_id, data, created_at\n           FROM events\n           WHERE seq > ?1\n             AND (type IN (SELECT value FROM json_each(?4))\n                  OR task_id IN (SELECT value FROM json_each(?2))\n                  OR proposal_id IN (SELECT value FROM json_each(?3)))\n           ORDER BY seq ASC",
+  "query": "SELECT e.seq AS \"seq!: i64\", e.type AS event_type, e.actor, e.task_id, e.proposal_id,\n                  e.workspace_id, e.revision_id, e.data, e.created_at\n           FROM events e\n           WHERE e.seq > ?1\n             AND (?2 IS NULL OR e.type IN (SELECT value FROM json_each(?2)))\n             AND (?3 IS NULL OR e.task_id = ?3)\n             AND (?4 IS NULL OR e.proposal_id = ?4)\n             AND (e.type NOT IN (SELECT value FROM json_each(?6))\n                  OR EXISTS (\n                      SELECT 1 FROM messages m\n                      JOIN message_recipients r ON r.message_id = m.id\n                      JOIN workers w ON w.id = r.worker_id\n                      WHERE m.number = e.message_id AND w.agent_id = ?5))\n           ORDER BY e.seq ASC\n           LIMIT ?7",
   "describe": {
     "columns": [
       {
@@ -104,7 +104,7 @@
       }
     ],
     "parameters": {
-      "Right": 4
+      "Right": 7
     },
     "nullable": [
       false,
@@ -118,5 +118,5 @@
       false
     ]
   },
-  "hash": "2c4a4dc8b035ec1467ce1de98f0d3aa8d53dbffe0a892d558e0243b3dcb6c861"
+  "hash": "5e42dcfb4a92e7bf6696c7d0fb43efef949bc655c290fe60641826c21c896eac"
 }

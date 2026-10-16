@@ -243,7 +243,7 @@ impl Harness {
         }
     }
 
-    /// Stops the project the way a stopping daemon does: the sessions end, the stream closes, the live state lets go of the workspaces, the worker processes end with their rows unchanged and the database closes. [`Harness::start_again`] opens it again.
+    /// Stops the project the way a stopping daemon does: the sessions end, the stream closes, the live state lets go of the workspaces, the worker processes end with their rows unchanged, the commit writer and the push delivery end and the database closes. [`Harness::start_again`] opens it again.
     pub async fn stop(&mut self) {
         let connected: Vec<String> = self.sessions.keys().cloned().collect();
         for agent in &connected {
@@ -254,6 +254,7 @@ impl Harness {
             self.handle.live.detach(live.view.workspace).await;
         }
         self.handle.workers.shutdown().await;
+        self.handle.stop_tasks(WAIT).await;
         self.handle
             .agents()
             .close_sessions_at_shutdown()

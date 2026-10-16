@@ -64,13 +64,13 @@ impl From<WorkerLimits> for LimitsEntry {
 /// A change of the worker limits; a limit left out stays as it is.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct SetWorkerLimitsBody {
-    /// A whole number from 1 to 20.
+    /// The most task coders that run at once, a whole number with no upper bound; 0 lets none start.
     #[serde(default)]
     pub task_coder: Option<u64>,
-    /// A whole number from 1 to 20.
+    /// The most batch reviewers that run at once, a whole number with no upper bound; 0 lets none start.
     #[serde(default)]
     pub batch_reviewer: Option<u64>,
-    /// A whole number from 1 to 20.
+    /// The most task coders that run at once in one area, a whole number with no upper bound; 0 lets none start.
     #[serde(default)]
     pub max_per_area: Option<u64>,
     /// True removes the limit of one area.
@@ -434,7 +434,7 @@ pub async fn define_area(
     request_body = SetWorkerLimitsBody,
     responses(
         (status = 200, description = "The limits after the change", body = LimitsEntry),
-        (status = 400, description = "`invalid_request`: no limit, or a limit outside 1 to 20", body = ErrorEnvelope),
+        (status = 400, description = "`invalid_request`: no limit, or a limit together with its clear", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 404, description = "`project_not_found`", body = ErrorEnvelope),
         (status = 409, description = "`invalid_config`", body = ErrorEnvelope),

@@ -55,7 +55,7 @@ impl std::fmt::Debug for FoldServer {
 }
 
 impl FoldServer {
-    /// Every server counts the unread messages and the new events of its agent in the footer.
+    /// Every server counts the unread messages, the new events and the claims near stale of its agent in the footer.
     pub fn new(
         agents: AgentService,
         events: EventService,
@@ -70,6 +70,10 @@ impl FoldServer {
         ));
         let new_events: Arc<dyn FooterSource> =
             Arc::new(events::NewEventsFooter::new(agents.clone(), events.clone()));
+        let near_stale: Arc<dyn FooterSource> = Arc::new(tasks::ClaimsNearStaleFooter::new(
+            agents.clone(),
+            tasks.clone(),
+        ));
         Self {
             agents,
             events,
@@ -78,7 +82,7 @@ impl FoldServer {
             messages,
             reviews: None,
             session: Mutex::new(session),
-            footer: vec![unread, new_events],
+            footer: vec![unread, new_events, near_stale],
         }
     }
 
@@ -220,10 +224,14 @@ impl FoldServer {
             .map_err(from_agent)
     }
 
-    async fn counts(&self) -> FooterCounts {
+    /// Adds to `counts` the sources taken before the call when `before_call` is true, the others when it is false.
+    async fn counts(&self, before_call: bool, mut counts: FooterCounts) -> FooterCounts {
         let session = self.session().await;
-        let mut counts = FooterCounts::default();
-        for source in &self.footer {
+        for source in self
+            .footer
+            .iter()
+            .filter(|s| s.before_call() == before_call)
+        {
             let part = source.part();
             counts = counts.with(part, counts.get(part) + source.count(&session).await);
         }
@@ -272,6 +280,7 @@ impl ServerHandler for FoldServer {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
+        let arrived = self.counts(true, FooterCounts::default()).await;
         let mut result = match self.run(&request, &context).await {
             Ok(Some(value)) => CallToolResult::success(vec![ContentBlock::text(value.to_string())]),
             Ok(None) => {
@@ -282,7 +291,7 @@ impl ServerHandler for FoldServer {
             }
             Err(error) => tool_error(&error),
         };
-        if let Some(line) = footer(&self.counts().await) {
+        if let Some(line) = footer(&self.counts(false, arrived).await) {
             result.content.push(ContentBlock::text(line));
         }
         Ok(result.into())

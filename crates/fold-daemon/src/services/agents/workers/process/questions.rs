@@ -155,17 +155,50 @@ impl Supervisor {
             .rev()
             .find(|question| same_call(question, request) && question.is_open())
         {
-            lock(&self.inner.pending)
-                .entry(open.id)
-                .or_default()
-                .push(waiter);
-            return Ok(());
+            #[cfg(feature = "failpoints")]
+            fail::fail_point!("worker_question_before_waiter");
+            return self.join(open.id, waiter, &request.call.input).await;
         }
         if request.call.tool_name == ASK_USER_QUESTION {
             self.ask_humans(process, request, waiter).await
         } else {
             self.ask_permission(process, request, waiter).await
         }
+    }
+
+    /// Adds `waiter` to an open question. An answer that came after the question was read has found no waiter here, so the question is read again: when it is answered and the waiter is still in place, the waiter takes it out and replies itself; a waiter that is gone was answered by [`Supervisor::deliver`].
+    async fn join(&self, id: i64, waiter: Waiter, input: &Value) -> Result<(), AgentError> {
+        lock(&self.inner.pending)
+            .entry(id)
+            .or_default()
+            .push(waiter.clone());
+        let Some(question) = agents::question_by_id(self.inner.store.read(), id).await? else {
+            return Ok(());
+        };
+        if question.is_open() {
+            return Ok(());
+        }
+        let taken = {
+            let mut pending = lock(&self.inner.pending);
+            let taken = pending.get_mut(&id).is_some_and(|waiters| {
+                let before = waiters.len();
+                waiters.retain(|other| {
+                    other.generation != waiter.generation || other.request_id != waiter.request_id
+                });
+                waiters.len() < before
+            });
+            pending.retain(|_, waiters| !waiters.is_empty());
+            taken
+        };
+        if taken && let Some(decision) = self.decision(&question, input).await? {
+            self.reply(
+                &waiter.agent,
+                waiter.generation,
+                &waiter.request_id,
+                decision,
+            );
+        }
+        Ok(())
     }
 
     /// A new `tool` question with `worker.permission_asked`. The waiter joins before the commit, so an answer that follows the commit at once finds it.
@@ -549,6 +582,32 @@ impl Supervisor {
                 code = super::super::code_of(&error),
                 "could not answer a worker's question"
             );
+        }
+    }
+
+    /// Answers every open `ask` question whose messages all have their replies, for a watcher that may have missed the replies' events.
+    pub(super) async fn answer_open_asks(&self) {
+        let open = match agents::open_questions(self.inner.store.read()).await {
+            Ok(open) => open,
+            Err(error) => {
+                tracing::warn!(
+                    code = error.code().unwrap_or(codes::INTERNAL_ERROR),
+                    "could not read the open questions"
+                );
+                return;
+            }
+        };
+        for question in open {
+            if question.kind != QuestionKind::Ask {
+                continue;
+            }
+            if let Err(error) = self.complete_ask(question.id).await {
+                tracing::warn!(
+                    agent = %question.agent,
+                    code = super::super::code_of(&error),
+                    "could not answer a worker's question"
+                );
+            }
         }
     }
 

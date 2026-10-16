@@ -157,36 +157,88 @@ pub async fn after(pool: &SqlitePool, after: u64, limit: usize) -> Result<Vec<Ev
     read_after(pool, after, &EventFilter::default(), limit).await
 }
 
-/// Events with `seq > after` that carry one of `tasks` or `proposals`, or have one of `types`, in ascending order. It is the coarse SQL side of the relevance rule; the caller applies the rule itself to what it returns.
-pub async fn touching_after(
+/// [`read_after`] for the agent with row id `agent_id`: an event of one of `message_types` is selected only when a worker of the agent receives the message it names in `events.message_id`, so one query returns the page an agent's wait keeps.
+pub async fn read_reaching(
     executor: impl SqliteExecutor<'_>,
     after: u64,
-    tasks: &BTreeSet<TaskId>,
-    proposals: &BTreeSet<ProposalId>,
-    types: &[EventType],
+    filter: &EventFilter,
+    agent_id: i64,
+    message_types: &[EventType],
+    limit: usize,
 ) -> Result<Vec<Event>, StoreError> {
     let after = seq_param(after)?;
-    let tasks = json_list(tasks.iter(), |t| t.to_db().into());
-    let proposals = json_list(proposals.iter(), |p| p.to_db().into());
-    let types = json_list(types.iter(), |t| t.as_str().into());
+    let limit = i64::try_from(limit.min(MAX_PAGE)).unwrap_or(MAX_PAGE as i64);
+    let types =
+        (!filter.types.is_empty()).then(|| json_list(filter.types.iter(), |t| t.as_str().into()));
+    let task = filter.task.map(TaskId::to_db);
+    let proposal = filter.proposal.map(ProposalId::to_db);
+    let message_types = json_list(message_types.iter(), |t| t.as_str().into());
     let rows = sqlx::query_as!(
         EventRecord,
-        r#"SELECT seq AS "seq!: i64", type AS event_type, actor, task_id, proposal_id,
-                  workspace_id, revision_id, data, created_at
-           FROM events
-           WHERE seq > ?1
-             AND (type IN (SELECT value FROM json_each(?4))
-                  OR task_id IN (SELECT value FROM json_each(?2))
-                  OR proposal_id IN (SELECT value FROM json_each(?3)))
-           ORDER BY seq ASC"#,
+        r#"SELECT e.seq AS "seq!: i64", e.type AS event_type, e.actor, e.task_id, e.proposal_id,
+                  e.workspace_id, e.revision_id, e.data, e.created_at
+           FROM events e
+           WHERE e.seq > ?1
+             AND (?2 IS NULL OR e.type IN (SELECT value FROM json_each(?2)))
+             AND (?3 IS NULL OR e.task_id = ?3)
+             AND (?4 IS NULL OR e.proposal_id = ?4)
+             AND (e.type NOT IN (SELECT value FROM json_each(?6))
+                  OR EXISTS (
+                      SELECT 1 FROM messages m
+                      JOIN message_recipients r ON r.message_id = m.id
+                      JOIN workers w ON w.id = r.worker_id
+                      WHERE m.number = e.message_id AND w.agent_id = ?5))
+           ORDER BY e.seq ASC
+           LIMIT ?7"#,
         after,
-        tasks,
-        proposals,
-        types
+        types,
+        task,
+        proposal,
+        agent_id,
+        message_types,
+        limit
     )
     .fetch_all(executor)
     .await?;
     rows.into_iter().map(EventRecord::into_event).collect()
+}
+
+/// How many events with `seq > after` concern `agent`, counted up to `cap` and no further: the event has one of `types`, or carries one of `tasks` or `proposals`, and no worker of `agent` performed it. With the agent's facts as `tasks`, `proposals` and `types`, it is the rule of `fold_core::concerns` in SQL, so the count never loads the events. A worker actor is the agent's name or a name under `agent/`, the range from `agent/` up to `agent0` that [`newest_by_agent`] also reads.
+pub async fn count_concerning(
+    executor: impl SqliteExecutor<'_>,
+    after: u64,
+    agent: &AgentName,
+    tasks: &BTreeSet<TaskId>,
+    proposals: &BTreeSet<ProposalId>,
+    types: &[EventType],
+    cap: u64,
+) -> Result<u64, StoreError> {
+    let after = seq_param(after)?;
+    let agent = agent.as_str();
+    let tasks = json_list(tasks.iter(), |t| t.to_db().into());
+    let proposals = json_list(proposals.iter(), |p| p.to_db().into());
+    let types = json_list(types.iter(), |t| t.as_str().into());
+    let cap = i64::try_from(cap).unwrap_or(i64::MAX);
+    let count = sqlx::query_scalar!(
+        r#"SELECT COUNT(*) AS "count!: i64" FROM (
+               SELECT 1 FROM events
+               WHERE seq > ?1
+                 AND NOT (actor = ?2 OR (actor >= ?2 || '/' AND actor < ?2 || '0'))
+                 AND (type IN (SELECT value FROM json_each(?5))
+                      OR task_id IN (SELECT value FROM json_each(?3))
+                      OR proposal_id IN (SELECT value FROM json_each(?4)))
+               LIMIT ?6
+           )"#,
+        after,
+        agent,
+        tasks,
+        proposals,
+        types,
+        cap
+    )
+    .fetch_one(executor)
+    .await?;
+    u64::try_from(count).map_err(|_| StoreError::Corrupt("events"))
 }
 
 /// The newest `limit` events that carry `task`, newest first.
@@ -286,6 +338,37 @@ pub async fn advance_cursor(tx: &mut WriteTx, agent_id: i64, seq: u64) -> Result
     .execute(tx.conn())
     .await?;
     Ok(())
+}
+
+/// Moves the agent's cursor from `from` to `to` only while it still stands at `from` (0 also when the agent has no cursor yet). False when another read moved it first, and then nothing changes.
+pub async fn move_cursor(
+    tx: &mut WriteTx,
+    agent_id: i64,
+    from: u64,
+    to: u64,
+) -> Result<bool, StoreError> {
+    let (from, to) = (seq_param(from)?, seq_param(to)?);
+    let moved = if from == 0 {
+        sqlx::query!(
+            "INSERT INTO agent_cursors (agent_id, last_seq) VALUES (?1, ?2)
+             ON CONFLICT (agent_id) DO UPDATE SET last_seq = excluded.last_seq
+             WHERE agent_cursors.last_seq = 0",
+            agent_id,
+            to
+        )
+        .execute(tx.conn())
+        .await?
+    } else {
+        sqlx::query!(
+            "UPDATE agent_cursors SET last_seq = ?3 WHERE agent_id = ?1 AND last_seq = ?2",
+            agent_id,
+            from,
+            to
+        )
+        .execute(tx.conn())
+        .await?
+    };
+    Ok(moved.rows_affected() == 1)
 }
 
 /// Whether a worker of the agent receives the message that the event `seq` is about, read from `events.message_id`. An event about no message reaches nobody here.

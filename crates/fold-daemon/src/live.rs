@@ -722,6 +722,8 @@ impl Pipeline {
                 for answer in round.answers {
                     let _ = answer.send(Err(not_attached(self.workspace)));
                 }
+                // A summary the interval still holds back would be lost with the pipeline.
+                self.flush_summary(self.clock.now(), true).await;
                 break;
             }
             self.handle(round).await;
@@ -767,7 +769,7 @@ impl Pipeline {
                 let _ = answer.send(outcome.clone());
             }
         }
-        self.flush_summary(self.clock.now()).await;
+        self.flush_summary(self.clock.now(), false).await;
     }
 
     /// One scan, and one full scan more when a working file moved between the scan and the comparison.
@@ -936,8 +938,8 @@ impl Pipeline {
         }
     }
 
-    /// Mirrors the state into the row's summary columns, at most once per [`TOUCH_INTERVAL`]. A change inside the interval is written by the first tick after it.
-    async fn flush_summary(&mut self, now: Timestamp) {
+    /// Mirrors the state into the row's summary columns, at most once per [`TOUCH_INTERVAL`] unless `at_stop`, which the pipeline sets as it stops. A change inside the interval is written by the first tick after it.
+    async fn flush_summary(&mut self, now: Timestamp, at_stop: bool) {
         let Some(state) = self
             .states
             .read()
@@ -956,7 +958,7 @@ impl Pipeline {
             .touched_at
             .and_then(|at| at.checked_add(TOUCH_INTERVAL))
             .is_some_and(|due| now < due);
-        if held {
+        if held && !at_stop {
             return;
         }
         let workspace = self.workspace;

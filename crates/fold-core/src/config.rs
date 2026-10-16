@@ -31,7 +31,7 @@ pub struct ProjectConfig {
     pub roles: BTreeMap<String, RoleConfig>,
 }
 
-/// The `[workers]` section: how many short-lived workers of each role fold runs at once, and optionally how many task coders in one area. The leads are outside these limits.
+/// The `[workers]` section: how many short-lived workers of each role fold runs at once, and optionally how many task coders in one area. The leads are outside these limits. A limit of 0 lets no worker of its role start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct WorkersConfig {
@@ -366,7 +366,7 @@ fn check_workers_section(value: &toml::Value) -> Result<(), FoldError> {
     for (key, value) in table {
         let name = format!("{WORKERS_SECTION}.{key}");
         match key.as_str() {
-            "task_coder" | "batch_reviewer" | "max_per_area" => check_positive(&name, value)?,
+            "task_coder" | "batch_reviewer" | "max_per_area" => check_limit(&name, value)?,
             _ => return Err(refused(&name, "is not a config key")),
         }
     }
@@ -436,6 +436,14 @@ fn check_positive(name: &str, value: &toml::Value) -> Result<(), FoldError> {
     match value.as_integer() {
         Some(number) if number > 0 => Ok(()),
         _ => Err(refused(name, "must be a whole number above 0")),
+    }
+}
+
+/// A worker limit has no upper bound, and 0 lets no worker of its role start.
+fn check_limit(name: &str, value: &toml::Value) -> Result<(), FoldError> {
+    match value.as_integer() {
+        Some(number) if number >= 0 => Ok(()),
+        _ => Err(refused(name, "must be a whole number, 0 or more")),
     }
 }
 
@@ -579,6 +587,18 @@ mod tests {
                 max_per_area: Some(1)
             }
         );
+        let open = ProjectConfig::from_toml(
+            "[workers]\ntask_coder = 0\nbatch_reviewer = 500\nmax_per_area = 0\n",
+        )
+        .unwrap();
+        assert_eq!(
+            open.workers.limits(),
+            WorkerLimits {
+                task_coder: 0,
+                batch_reviewer: 500,
+                max_per_area: Some(0)
+            }
+        );
         let coder = config.role(Role::TaskCoder);
         assert_eq!(coder.model.as_deref(), Some("sonnet"));
         assert_eq!(coder.cache_ttl, CacheTtl::OneHour);
@@ -652,8 +672,9 @@ mod tests {
     fn a_wrong_value_in_the_workers_or_roles_sections_is_invalid_config() {
         for (text, key) in [
             ("workers = 3", "workers"),
-            ("[workers]\ntask_coder = 0", "workers.task_coder"),
-            ("[workers]\nbatch_reviewer = 0", "workers.batch_reviewer"),
+            ("[workers]\ntask_coder = -1", "workers.task_coder"),
+            ("[workers]\nbatch_reviewer = -1", "workers.batch_reviewer"),
+            ("[workers]\nmax_per_area = 1.5", "workers.max_per_area"),
             ("[workers]\nmax = 3", "workers.max"),
             ("[workers]\nmax_per_area = \"2\"", "workers.max_per_area"),
             ("[workers]\nmin = 1", "workers.min"),

@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) AS \"count!: i64\" FROM (\n               SELECT 1 FROM events\n               WHERE seq > ?1\n                 AND NOT (actor = ?2 OR (actor >= ?2 || '/' AND actor < ?2 || '0'))\n                 AND (type IN (SELECT value FROM json_each(?5))\n                      OR task_id IN (SELECT value FROM json_each(?3))\n                      OR proposal_id IN (SELECT value FROM json_each(?4)))\n               LIMIT ?6\n           )",
+  "describe": {
+    "columns": [
+      {
+        "name": "count!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "da50346e1c63b0b8f039de49d02d8e2ca33f4e52e3dc6d32d20858bd9cac2187"
+}

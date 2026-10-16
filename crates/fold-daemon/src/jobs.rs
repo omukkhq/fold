@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -617,30 +618,68 @@ async fn collect_all(state: &AppState) {
     }
 }
 
-/// The Git job of one project. Dropping it stops the task; a push already started finishes in its own task.
+/// A task of one project that follows its bus until the bus closes at the daemon's stop. Dropping it aborts the task.
 #[derive(Debug)]
-pub struct AutoCommit(JoinHandle<()>);
+pub struct ProjectTask(std::sync::Mutex<Option<JoinHandle<()>>>);
 
-impl Drop for AutoCommit {
-    fn drop(&mut self) {
-        self.0.abort();
+impl ProjectTask {
+    pub fn spawn(task: impl Future<Output = ()> + Send + 'static) -> Self {
+        Self(std::sync::Mutex::new(Some(tokio::spawn(task))))
+    }
+
+    /// Waits up to `timeout` for the task to end after the project's bus closed, then aborts it, so the task never outlives the project's database. A second call returns at once.
+    pub async fn stopped(&self, timeout: Duration) {
+        let task = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(task) = task {
+            let abort = task.abort_handle();
+            if tokio::time::timeout(timeout, task).await.is_err() {
+                abort.abort();
+            }
+        }
     }
 }
+
+impl Drop for ProjectTask {
+    fn drop(&mut self) {
+        let task = self
+            .0
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(task) = task {
+            task.abort();
+        }
+    }
+}
+
+/// The Git job of one project. A push already started finishes in its own task.
+pub type AutoCommit = ProjectTask;
 
 /// Starts `auto_commit` for one project. It writes the commit of every revision that has none into the project's repository, and brings the project folder to it, once at the start, which catches up an integration a stopped daemon never committed, and again after every committed integration of either kind, which the bus carries only after its commit. After an integration it then runs the push of `fld push` as `fold` to each remote whose `push_on_integrate` is true, read at that moment. A commit covers every revision so far, so the integrations that arrive while one runs need one more run at most. Each commit recorded in `revision_commits` gets its `git.committed` event in the same transaction, published once the run returns, so the web interface shows the commit without a reload. A failed commit appends `git.commit_failed`, and a failed push appends `remote.push_failed` with the remote's failure in `remote_states`, each in its own transaction, and logs the project and the code only; the integration stands either way.
 pub fn auto_commit(context: RemoteContext, git: Git) -> AutoCommit {
     let receiver = context.bus.subscribe();
-    AutoCommit(tokio::spawn(run_auto_commit(context, git, receiver)))
+    ProjectTask::spawn(run_auto_commit(context, git, receiver))
 }
 
+/// It ends once the project's bus closes; a commit or push it is running finishes first.
 async fn run_auto_commit(
     context: RemoteContext,
     git: Git,
     mut receiver: broadcast::Receiver<BusMessage>,
 ) {
+    let mut closing = context.bus.closing();
     commit_after_integration(&context, &git).await;
     loop {
-        match receiver.recv().await {
+        let received = tokio::select! {
+            biased;
+            _ = closing.wait_for(|closed| *closed) => return,
+            received = receiver.recv() => received,
+        };
+        match received {
             Ok(BusMessage::Durable(event)) if event.event_type == types::INTEGRATION_SUCCEEDED => {}
             // A missed event may have been an integration; a commit is cheap when nothing is new.
             Err(RecvError::Lagged(_)) => {}

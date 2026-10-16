@@ -596,14 +596,14 @@ pub async fn reviewers_of_proposal(
         .collect()
 }
 
-/// How many bound tasks of the worker still wait for its work. A task is finished when it is Done, when it has an integrated proposal (a proposal can integrate before fold looks), or when it has an open proposal that is not conflicted and whose latest verdict on its newest version is not `request_changes`, read with the rule `reviews::get_proposal` uses. A requested change or a conflict therefore keeps the coder bound until it sends the next version.
+/// How many bound tasks of the worker still wait for its work. A task is finished when it is Done, when it is archived, when it has an integrated proposal (a proposal can integrate before fold looks), or when it has an open proposal that is not conflicted and whose latest verdict on its newest version is not `request_changes`, read with the rule `reviews::get_proposal` uses. A requested change or a conflict therefore keeps the coder bound until it sends the next version.
 pub async fn tasks_awaiting_proposal(
     executor: impl SqliteExecutor<'_>,
     worker_process_id: i64,
 ) -> Result<u64, StoreError> {
     let missing = sqlx::query_scalar!(
         r#"SELECT COUNT(*) AS "count!: i64" FROM worker_tasks b JOIN tasks t ON t.id = b.task_id
-           WHERE b.worker_process_id = ? AND t.status <> 'done'
+           WHERE b.worker_process_id = ? AND t.status <> 'done' AND t.archived_at IS NULL
              AND NOT EXISTS (SELECT 1 FROM proposals p WHERE p.task_id = b.task_id AND p.state = 'integrated')
              AND NOT EXISTS (
                  SELECT 1 FROM proposals p

@@ -240,3 +240,22 @@ pub async fn tasks_with_stale_claims(
         .map(|number| TaskId::try_from_db(number).ok_or(StoreError::Corrupt("tasks.number")))
         .collect()
 }
+
+/// How many unreleased claims, of either kind, the workers of agent `agent_id` hold with a `renewed_at` at or before `cutoff`.
+pub async fn count_renewed_by(
+    executor: impl SqliteExecutor<'_>,
+    agent_id: i64,
+    cutoff: Timestamp,
+) -> Result<u64, StoreError> {
+    let cutoff = cutoff.as_millis();
+    let count = sqlx::query_scalar!(
+        r#"SELECT COUNT(*) AS "count!: i64"
+           FROM claims c JOIN workers w ON w.id = c.worker_id
+           WHERE w.agent_id = ?1 AND c.released_at IS NULL AND c.renewed_at <= ?2"#,
+        agent_id,
+        cutoff
+    )
+    .fetch_one(executor)
+    .await?;
+    u64::try_from(count).map_err(|_| StoreError::Corrupt("claims"))
+}
