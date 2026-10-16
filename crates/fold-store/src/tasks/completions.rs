@@ -3,12 +3,13 @@ use fold_core::{IntegrationId, TaskId, Timestamp};
 use crate::error::StoreError;
 use crate::store::WriteTx;
 
-/// What completed a task: the integration of its proposal, the container rule once every child is Done, or the lead check of a task without a proposal.
+/// What completed a task: the integration of its proposal, the container rule once every child is Done, the lead check of a task without a proposal, or a person marking a human task Done.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompletionKind {
     Integration,
     Children,
     Check,
+    Human,
 }
 
 impl CompletionKind {
@@ -17,6 +18,7 @@ impl CompletionKind {
             CompletionKind::Integration => "integration",
             CompletionKind::Children => "children",
             CompletionKind::Check => "check",
+            CompletionKind::Human => "human",
         }
     }
 }

@@ -259,7 +259,7 @@ impl AgentService {
             .ok_or_else(|| not_supervised(agent))
     }
 
-    /// Starts a worker agent: the agent and its main worker, its process row in state `starting` and its binding, in one transaction with `worker.started`; then its Claude Code process with its first turn. A lead whose area or role already has a stopped or failed lead resumes that lead instead, and starts it in a new session when its old one is gone.
+    /// Starts a worker agent: the agent and its main worker, its process row in state `starting` and its binding, in one transaction with `worker.started`; then its Claude Code process with its first turn. A task coder is refused for a human task (`task_needs_human`) and for a task on hold (`task_on_hold`). A lead whose area or role already has a stopped or failed lead resumes that lead instead, and starts it in a new session when its old one is gone.
     pub async fn start_worker(
         &self,
         actor: &Actor,
@@ -321,10 +321,13 @@ impl AgentService {
                             .ok_or(StoreError::Corrupt("areas"))?;
                         let mut facts = Vec::new();
                         for task in &request.tasks {
-                            if tasks::fetch(tx.conn(), *task).await?.is_none() {
+                            let Some(row) = tasks::fetch(tx.conn(), *task).await? else {
                                 return Err(crate::services::tasks::task_missing(*task)
                                     .with_details([("task", json!(task.to_string()))])
                                     .into());
+                            };
+                            if let Some(refusal) = crate::services::tasks::agent_refusal(&row) {
+                                return Err(refusal.into());
                             }
                             let labels = tasks::labels_for_conn(tx.conn(), *task)
                                 .await?

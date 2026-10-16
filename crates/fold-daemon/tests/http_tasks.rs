@@ -259,6 +259,7 @@ async fn the_board_returns_five_columns_in_order_with_blocked_blocks_and_attenti
             "worker": null,
             "workspace": null,
             "human_review": null,
+            "blocker": null,
             "messages": 0,
             "completed_at": null,
             "attention": [],

@@ -31,7 +31,7 @@ export type TitleForm = z.infer<typeof titleSchema>;
 export const newTaskSchema = z.object({
   title: titleSchema.shape.title,
   description: z.string().refine(...textLimit("description")),
-  noProposal: z.boolean(),
+  kind: z.enum(["proposal", "no_proposal", "human"]),
 });
 export type NewTaskForm = z.infer<typeof newTaskSchema>;
 
@@ -93,6 +93,18 @@ export const humanReviewSchema = z.object({
 });
 export type HumanReviewInput = z.input<typeof humanReviewSchema>;
 export type HumanReviewForm = z.output<typeof humanReviewSchema>;
+
+export const blockerSchema = z.object({
+  reason: z
+    .string()
+    .trim()
+    .min(1, "Say why the task waits for a person.")
+    .refine(
+      (value) => charCount(value) <= 500,
+      "Keep the reason to 500 characters.",
+    ),
+});
+export type BlockerForm = z.infer<typeof blockerSchema>;
 
 export const sendBackSchema = z.object({
   note: z

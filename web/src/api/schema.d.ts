@@ -811,6 +811,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/tasks/{id}/blocker": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Puts a blocker on the task with its reason, or changes the reason: no agent claims the task and no lead starts a coder for it until a human clears it. Only a task in Backlog or Todo that no agent has started gets one. The status does not change. */
+        put: operations["set_blocker"];
+        post?: never;
+        /** Removes the blocker of the task, so agents can take it again. A task without a blocker is returned as it is. */
+        delete: operations["clear_blocker"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/tasks/{id}/checklist-items": {
         parameters: {
             query?: never;
@@ -837,7 +855,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Completes a reported `no_proposal` task after the human checked its work: the report is answered, the claim released and the completion record written, so the task is Done. On a task with the human review mark, this check by a human is the human review. */
+        /** Completes a reported `no_proposal` task after the human checked its work: the report is answered, the claim released and the completion record written, so the task is Done. On a task with the human review mark, this check by a human is the human review. On a `human` task it marks the person's work Done: the completion record is written and its dependents unblock. */
         post: operations["complete_task"];
         delete?: never;
         options?: never;
@@ -1250,6 +1268,23 @@ export interface components {
          * @enum {string}
          */
         Behavior: "allow" | "deny";
+        /** @description Why the task waits for a person. */
+        BlockerBody: {
+            /** @description Plain text, not empty, at most 500 characters. */
+            reason: string;
+        };
+        /** @description The blocker of a task: while it is set, no agent claims the task and no lead starts a coder for it. It never changes the status. */
+        BlockerMark: {
+            /** @description Why the task waits for a person. */
+            reason: string;
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            set_at: number;
+            /** @description The worker or human that set it, such as `web-lead` or `human:tanim`. */
+            set_by: string;
+        };
         /** @description The last tracked edit in the task's workspace. */
         BoardActivity: {
             /**
@@ -1266,6 +1301,7 @@ export interface components {
             blocked: boolean;
             /** @description The direct prerequisites that are not Done. */
             blocked_by: string[];
+            blocker: components["schemas"]["BlockerMark"] | null;
             /**
              * Format: int32
              * @description How many open tasks wait directly for this one; 0 once it is Done.
@@ -1747,7 +1783,7 @@ export interface components {
             workspace: string | null;
         };
         /** @enum {string} */
-        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed";
+        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared";
         /**
          * @description `needs`: this task needs the other task. `needed_by`: the other task needs this one.
          * @enum {string}
@@ -2164,6 +2200,11 @@ export interface components {
              * @example pq-3
              */
             question: string | null;
+            /**
+             * @description The reason of a `blocker`.
+             * @example Wait until the design is signed off
+             */
+            reason: string | null;
             /** @example RQ-4 */
             request: string | null;
             screen: components["schemas"]["NeedsYouScreen"];
@@ -2180,7 +2221,7 @@ export interface components {
              */
             thread: string | null;
             /**
-             * @description The second line of a `human_review` (the proposal title) and of a `request_draft` (the request title, which the claim gave it).
+             * @description The second line of a `human_review` (the proposal title) and of a `request_draft` (the request title, which the claim gave it); the task title of a `human_task` or a `blocker`.
              * @example Database schema for reports
              */
             title: string | null;
@@ -2194,16 +2235,16 @@ export interface components {
          * @description Why an item waits for a human.
          * @enum {string}
          */
-        NeedsYouItemKind: "question" | "permission" | "human_review" | "request_draft";
+        NeedsYouItemKind: "question" | "permission" | "human_review" | "request_draft" | "human_task" | "blocker";
         /** @description Every item that waits for a human, oldest first. */
         NeedsYouList: {
             items: components["schemas"]["NeedsYouEntry"][];
         };
         /**
-         * @description The screen that answers an item: `messages` opens the thread, `worker` the asking worker, `proposal` the proposal and `request` the request.
+         * @description The screen that answers an item: `messages` opens the thread, `worker` the asking worker, `proposal` the proposal, `request` the request and `task` the task.
          * @enum {string}
          */
-        NeedsYouScreen: "messages" | "worker" | "proposal" | "request";
+        NeedsYouScreen: "messages" | "worker" | "proposal" | "request" | "task";
         /** @description Exactly one of `text` and `linked_task`. */
         NewChecklistItemBody: {
             /** @description The checklist name; the task's first checklist when left out. A new name creates the checklist. */
@@ -3122,10 +3163,10 @@ export interface components {
             revision: string;
         };
         /**
-         * @description How a task's work reaches Done: `proposal` through the integration of its proposal, `no_proposal` through a lead check of its coder's report.
+         * @description How a task's work reaches Done: `proposal` through the integration of its proposal, `no_proposal` through a lead check of its coder's report, `human` when a person marks the work Done; no agent takes a human task.
          * @enum {string}
          */
-        TaskKind: "proposal" | "no_proposal";
+        TaskKind: "proposal" | "no_proposal" | "human";
         TaskList: {
             /** @description In number order. */
             tasks: components["schemas"]["TaskSummary"][];
@@ -3200,8 +3241,15 @@ export interface components {
             archived_at: number | null;
             attention: components["schemas"]["AttentionItem"][];
             blocked: boolean;
+            blocker: components["schemas"]["BlockerMark"] | null;
             /** @description Whether the human who made the request may turn the human review mark on, change it or clear it. False without a named human. */
             can_change_human_review: boolean;
+            /** @description Whether the human who made the request may clear the blocker. False without a named human or a blocker. */
+            can_clear_blocker: boolean;
+            /** @description Whether the human who made the request may mark this human task Done: false without a named human, for any other kind and for a Done or archived task. The daemon refuses it while a prerequisite is not Done. */
+            can_mark_done: boolean;
+            /** @description Whether the human who made the request may set the blocker or change its reason: false without a named human, and false once an agent has started the task (a claim, a task workspace or an open proposal) or it is past Todo. */
+            can_set_blocker: boolean;
             /** @description Of the live workspace, or of the latest one when none is live; newest first. */
             changesets: components["schemas"]["TaskChangeset"][];
             /** @description The first checklist is `Subtasks` when the task was split. */
@@ -8117,6 +8165,186 @@ export interface operations {
                 };
             };
             /** @description `task_closed`: the task is already archived */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    set_blocker: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The task id, such as T-12 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BlockerBody"];
+            };
+        };
+        responses: {
+            /** @description The task with its blocker */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskView"];
+                };
+            };
+            /** @description `invalid_hold_reason`, `invalid_id` or `invalid_name` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `task_hold_denied` with the detail reason `started`: the task has a claim, a task workspace or an open proposal, or is past Todo; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `task_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `task_closed` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    clear_blocker: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The task id, such as T-12 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The task without a blocker */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskView"];
+                };
+            };
+            /** @description `invalid_id` or `invalid_name` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `task_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `task_closed` */
             409: {
                 headers: {
                     [name: string]: unknown;

@@ -128,9 +128,13 @@ pub enum NeedsYouItemKind {
     HumanReview,
     /// A card draft that waits for its human requester.
     RequestDraft,
+    /// A human task in Todo: every prerequisite is Done and a person does the work, then marks it Done.
+    HumanTask,
+    /// A task with a blocker, which waits until a human clears it; `reason` says why.
+    Blocker,
 }
 
-/// The screen that answers an item: `messages` opens the thread, `worker` the asking worker, `proposal` the proposal and `request` the request.
+/// The screen that answers an item: `messages` opens the thread, `worker` the asking worker, `proposal` the proposal, `request` the request and `task` the task.
 #[derive(Debug, Clone, Copy, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum NeedsYouScreen {
@@ -138,6 +142,7 @@ pub enum NeedsYouScreen {
     Worker,
     Proposal,
     Request,
+    Task,
 }
 
 /// One item that waits for a human. Only the ids its kind has are set.
@@ -177,9 +182,12 @@ pub struct NeedsYouEntry {
     /// The short header of a `question`, such as `Chart library`.
     #[schema(required = true, example = "Chart library")]
     pub header: Option<String>,
-    /// The second line of a `human_review` (the proposal title) and of a `request_draft` (the request title, which the claim gave it).
+    /// The second line of a `human_review` (the proposal title) and of a `request_draft` (the request title, which the claim gave it); the task title of a `human_task` or a `blocker`.
     #[schema(required = true, example = "Database schema for reports")]
     pub title: Option<String>,
+    /// The reason of a `blocker`.
+    #[schema(required = true, example = "Wait until the design is signed off")]
+    pub reason: Option<String>,
 }
 
 impl From<NeedsYouItem> for NeedsYouEntry {
@@ -189,12 +197,15 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             NeedsYouKind::Permission => NeedsYouItemKind::Permission,
             NeedsYouKind::HumanReview => NeedsYouItemKind::HumanReview,
             NeedsYouKind::RequestDraft => NeedsYouItemKind::RequestDraft,
+            NeedsYouKind::HumanTask => NeedsYouItemKind::HumanTask,
+            NeedsYouKind::Blocker => NeedsYouItemKind::Blocker,
         };
         let screen = match item.kind.screen() {
             Screen::Messages => NeedsYouScreen::Messages,
             Screen::Worker => NeedsYouScreen::Worker,
             Screen::Proposal => NeedsYouScreen::Proposal,
             Screen::Request => NeedsYouScreen::Request,
+            Screen::Task => NeedsYouScreen::Task,
         };
         Self {
             kind,
@@ -212,6 +223,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             choices: item.choices.into_iter().map(MessageChoice::from).collect(),
             header: item.header,
             title: item.title,
+            reason: item.reason,
         }
     }
 }

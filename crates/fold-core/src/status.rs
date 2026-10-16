@@ -36,7 +36,7 @@ impl ProposalFact {
     }
 }
 
-/// The stored facts that decide a task's status. A `proposal` task reads `proposal` and `has_active_workspace`; a `no_proposal` task reads `claimed` and `reported` instead, because its work leaves no workspace or proposal behind.
+/// The stored facts that decide a task's status. A `proposal` task reads `proposal` and `has_active_workspace`; a `no_proposal` task reads `claimed` and `reported` instead, because its work leaves no workspace or proposal behind; a `human` task reads neither, because a person does its work outside fold and only the completion record moves it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskFacts {
     pub kind: TaskKind,
@@ -80,7 +80,7 @@ fn unfinished(facts: &TaskFacts) -> Vec<TaskId> {
     ids
 }
 
-/// The status the task's own work gives it, before the prerequisites decide between Todo and Backlog: Review while a reviewer or a lead check has the next move, In Progress while the work goes on.
+/// The status the task's own work gives it, before the prerequisites decide between Todo and Backlog: Review while a reviewer or a lead check has the next move, In Progress while the work goes on. A human task never starts in fold: it stays in Todo, or Backlog while a prerequisite is unfinished, until a person marks it Done.
 fn started(facts: &TaskFacts) -> Option<TaskStatus> {
     let (review, in_progress) = match facts.kind {
         TaskKind::Proposal => (
@@ -88,6 +88,7 @@ fn started(facts: &TaskFacts) -> Option<TaskStatus> {
             facts.has_active_workspace,
         ),
         TaskKind::NoProposal => (facts.reported, facts.claimed),
+        TaskKind::Human => (false, false),
     };
     if review {
         Some(TaskStatus::Review)
@@ -144,6 +145,10 @@ pub fn status_reason(
         (TaskStatus::Todo, TaskKind::NoProposal) => {
             "Calculated: no claim yet and every prerequisite is Done".to_owned()
         }
+        (TaskStatus::Backlog, _) => format!("Calculated: waits for {}", ids(&unfinished(facts))),
+        (_, TaskKind::Human) => {
+            "Calculated: every prerequisite is Done and a person marks the task Done".to_owned()
+        }
         (TaskStatus::Review, TaskKind::Proposal) => {
             format!("Calculated: proposal {proposal} waits for a reviewer")
         }
@@ -156,7 +161,6 @@ pub fn status_reason(
         (TaskStatus::Todo, TaskKind::Proposal) => {
             "Calculated: no workspace yet and every prerequisite is Done".to_owned()
         }
-        (TaskStatus::Backlog, _) => format!("Calculated: waits for {}", ids(&unfinished(facts))),
     };
     if calculated.blocked() {
         text.push_str(&format!(", needs {}", ids(&calculated.blocked_by)));
@@ -201,6 +205,14 @@ mod tests {
             kind: TaskKind::NoProposal,
             claimed,
             reported,
+            ..facts(completed, NoProposal, false, prerequisites)
+        }
+    }
+
+    /// The facts of a human task.
+    fn human(completed: bool, prerequisites: &[(u32, TaskStatus)]) -> TaskFacts {
+        TaskFacts {
+            kind: TaskKind::Human,
             ..facts(completed, NoProposal, false, prerequisites)
         }
     }
@@ -461,6 +473,26 @@ mod tests {
         no_proposal.proposal = WithReviewer;
         no_proposal.has_active_workspace = true;
         assert_eq!(status(&no_proposal), Todo);
+    }
+
+    #[test]
+    fn a_human_task_waits_in_todo_until_its_completion() {
+        assert_eq!(status(&human(false, &[])), Todo);
+        assert_eq!(status(&human(false, &[(1, Done)])), Todo);
+        assert_eq!(status(&human(false, &[(1, InProgress)])), Backlog);
+        assert_eq!(status(&human(true, &[(1, Todo)])), Done);
+        assert_eq!(
+            status_reason(&human(false, &[]), None, None),
+            "Calculated: every prerequisite is Done and a person marks the task Done"
+        );
+        assert_eq!(
+            status_reason(&human(false, &[(2, Todo)]), None, None),
+            "Calculated: waits for T-2"
+        );
+        assert_eq!(
+            status_reason(&human(true, &[]), None, None),
+            "Completed: a completion record exists"
+        );
     }
 
     #[test]

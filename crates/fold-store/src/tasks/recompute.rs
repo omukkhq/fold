@@ -109,16 +109,17 @@ pub async fn load_facts(
                     conflicted,
                 ),
             };
+            let kind = row
+                .kind
+                .parse::<TaskKind>()
+                .map_err(|_| StoreError::Corrupt("tasks.kind"))?;
             Ok(LoadedFacts {
                 task: TaskId::try_from_db(row.number).ok_or(StoreError::Corrupt("tasks.number"))?,
                 status: parse_status(&row.status)?,
                 blocked: row.blocked,
                 archived: row.archived,
                 facts: TaskFacts {
-                    kind: row
-                        .kind
-                        .parse::<TaskKind>()
-                        .map_err(|_| StoreError::Corrupt("tasks.kind"))?,
+                    kind,
                     completed: row.completed,
                     proposal,
                     has_active_workspace: row.active_workspace,
@@ -131,6 +132,7 @@ pub async fn load_facts(
                     ever_had_workspace: row.ever_had_workspace,
                     completed: row.completed,
                     archived: row.archived,
+                    human_task: kind == TaskKind::Human,
                 },
             })
         })

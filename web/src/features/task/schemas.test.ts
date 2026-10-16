@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  blockerSchema,
   checklistItemSchema,
   dependencySchema,
   descriptionSchema,
@@ -37,14 +38,35 @@ describe("titleSchema", () => {
 });
 
 describe("newTaskSchema", () => {
-  it("takes the no-proposal choice with the title", () => {
+  it("takes the kind with the title and refuses an unknown kind", () => {
     expect(
       newTaskSchema.parse({
-        title: " Draw it ",
+        title: " Verify it ",
         description: "",
-        noProposal: true,
+        kind: "human",
       }),
-    ).toEqual({ title: "Draw it", description: "", noProposal: true });
+    ).toEqual({ title: "Verify it", description: "", kind: "human" });
+    expect(
+      newTaskSchema.safeParse({ title: "x", description: "", kind: "design" })
+        .success,
+    ).toBe(false);
+  });
+});
+
+describe("blockerSchema", () => {
+  it("trims the reason and refuses an empty or very long one", () => {
+    expect(blockerSchema.parse({ reason: " Wait for the logo " })).toEqual({
+      reason: "Wait for the logo",
+    });
+    expect(firstMessage(blockerSchema.safeParse({ reason: "  " }))).toBe(
+      "Say why the task waits for a person.",
+    );
+    expect(
+      firstMessage(blockerSchema.safeParse({ reason: "a".repeat(501) })),
+    ).toBe("Keep the reason to 500 characters.");
+    expect(blockerSchema.safeParse({ reason: "a".repeat(500) }).success).toBe(
+      true,
+    );
   });
 });
 

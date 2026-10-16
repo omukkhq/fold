@@ -131,6 +131,55 @@ describe("needsYouGroups", () => {
     expect(group?.lines[0]?.title).toBeNull();
   });
 
+  it("lists ready human tasks and blockers last, each opening its task", () => {
+    const groups = needsYouGroups("demo", [
+      needsItem({
+        kind: "blocker",
+        screen: "task",
+        task: "T-2",
+        title: "Wire the Meta login",
+        reason: "Wait for the app id",
+      }),
+      needsItem({ kind: "question", message: "m-1" }),
+      needsItem({
+        kind: "human_task",
+        screen: "task",
+        task: "T-1",
+        title: "Verify the app on Meta",
+      }),
+    ]);
+    expect(groups.map((g) => g.title)).toEqual([
+      "Questions",
+      "Human tasks",
+      "Blockers",
+    ]);
+    expect(groups[1]?.lines[0]).toMatchObject({
+      key: "human_task:T-1",
+      chip: "T-1",
+      person: null,
+      task: null,
+      text: "is ready for a person to do",
+      title: "Verify the app on Meta",
+      hint: "opens the task",
+      href: "/p/demo/t/T-1",
+    });
+    expect(groups[2]?.lines[0]).toMatchObject({
+      key: "blocker:T-2",
+      chip: "T-2",
+      task: null,
+      text: "has a blocker",
+      title: "Wait for the app id",
+      href: "/p/demo/t/T-2",
+    });
+    const [bare] = needsYouGroups("demo", [needsItem({ kind: "blocker" })]);
+    expect(bare?.lines[0]).toMatchObject({
+      title: null,
+      href: "/p/demo/t/",
+    });
+    const [human] = needsYouGroups("demo", [needsItem({ kind: "human_task" })]);
+    expect(human?.lines[0]?.href).toBe("/p/demo/t/");
+  });
+
   it("counts what waits", () => {
     expect(waitingText(4)).toBe("4 waiting");
   });

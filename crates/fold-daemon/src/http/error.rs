@@ -135,13 +135,17 @@ fn status_of(code: &str) -> Option<StatusCode> {
         | codes::WORKER_LIMIT_REACHED
         | codes::WORKER_EXISTS
         | codes::PERMISSION_QUESTION_CLOSED => Some(StatusCode::CONFLICT),
-        codes::INVALID_TASK_KIND => Some(StatusCode::BAD_REQUEST),
-        codes::TASK_KIND_DENIED | codes::TASK_CHECK_DENIED => Some(StatusCode::FORBIDDEN),
+        codes::INVALID_TASK_KIND | codes::INVALID_HOLD_REASON => Some(StatusCode::BAD_REQUEST),
+        codes::TASK_KIND_DENIED | codes::TASK_CHECK_DENIED | codes::TASK_HOLD_DENIED => {
+            Some(StatusCode::FORBIDDEN)
+        }
         codes::TASK_KIND_MISMATCH
         | codes::TASK_ALREADY_REPORTED
         | codes::TASK_NOT_REPORTED
         | codes::AGENT_APPROVAL_REQUIRED
-        | codes::PROJECT_PAUSED => Some(StatusCode::CONFLICT),
+        | codes::PROJECT_PAUSED
+        | codes::TASK_ON_HOLD
+        | codes::TASK_NEEDS_HUMAN => Some(StatusCode::CONFLICT),
         _ => None,
     }
 }
@@ -371,6 +375,10 @@ mod tests {
             (codes::PERMISSION_QUESTION_CLOSED, StatusCode::CONFLICT),
             (codes::AGENT_APPROVAL_REQUIRED, StatusCode::CONFLICT),
             (codes::PROJECT_PAUSED, StatusCode::CONFLICT),
+            (codes::INVALID_HOLD_REASON, StatusCode::BAD_REQUEST),
+            (codes::TASK_HOLD_DENIED, StatusCode::FORBIDDEN),
+            (codes::TASK_ON_HOLD, StatusCode::CONFLICT),
+            (codes::TASK_NEEDS_HUMAN, StatusCode::CONFLICT),
         ] {
             assert_eq!(status_of(code), Some(status));
         }

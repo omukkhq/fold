@@ -71,6 +71,7 @@ mod http_reviews;
 mod http_tasks;
 mod http_workspaces;
 mod human_review;
+mod human_tasks;
 mod inbox_probe;
 mod integration;
 mod lease_sweeper;

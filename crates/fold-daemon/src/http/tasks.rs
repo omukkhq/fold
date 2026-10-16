@@ -32,6 +32,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(archive_task))
         .routes(routes!(complete_task))
         .routes(routes!(send_back_task))
+        .routes(routes!(set_blocker, clear_blocker))
         .routes(routes!(add_dependency))
         .routes(routes!(remove_dependency))
         .routes(routes!(add_checklist_item))
@@ -50,12 +51,13 @@ pub enum TaskStatus {
     Done,
 }
 
-/// How a task's work reaches Done: `proposal` through the integration of its proposal, `no_proposal` through a lead check of its coder's report.
+/// How a task's work reaches Done: `proposal` through the integration of its proposal, `no_proposal` through a lead check of its coder's report, `human` when a person marks the work Done; no agent takes a human task.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskKind {
     Proposal,
     NoProposal,
+    Human,
 }
 
 impl From<fold_core::TaskKind> for TaskKind {
@@ -63,6 +65,7 @@ impl From<fold_core::TaskKind> for TaskKind {
         match kind {
             fold_core::TaskKind::Proposal => Self::Proposal,
             fold_core::TaskKind::NoProposal => Self::NoProposal,
+            fold_core::TaskKind::Human => Self::Human,
         }
     }
 }
@@ -72,6 +75,7 @@ impl From<TaskKind> for fold_core::TaskKind {
         match kind {
             TaskKind::Proposal => Self::Proposal,
             TaskKind::NoProposal => Self::NoProposal,
+            TaskKind::Human => Self::Human,
         }
     }
 }
@@ -179,6 +183,27 @@ pub struct HumanReviewMark {
     pub set_by: String,
 }
 
+/// The blocker of a task: while it is set, no agent claims the task and no lead starts a coder for it. It never changes the status.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct BlockerMark {
+    /// Why the task waits for a person.
+    pub reason: String,
+    /// The worker or human that set it, such as `web-lead` or `human:tanim`.
+    pub set_by: String,
+    /// UTC milliseconds.
+    pub set_at: i64,
+}
+
+impl From<fold_core::HoldMark> for BlockerMark {
+    fn from(mark: fold_core::HoldMark) -> Self {
+        Self {
+            reason: mark.reason.to_string(),
+            set_by: mark.set_by.to_string(),
+            set_at: mark.set_at.as_millis(),
+        }
+    }
+}
+
 impl From<service::HumanReviewMark> for HumanReviewMark {
     fn from(mark: service::HumanReviewMark) -> Self {
         Self {
@@ -220,6 +245,9 @@ pub struct BoardCard {
     pub workspace: Option<String>,
     #[schema(required = true)]
     pub human_review: Option<HumanReviewMark>,
+    /// The blocker; null while the task has none.
+    #[schema(required = true)]
+    pub blocker: Option<BlockerMark>,
     /// How many messages name the task.
     pub messages: u32,
     /// UTC milliseconds of the completion record; null until the task is Done.
@@ -314,6 +342,7 @@ impl From<service::BoardCard> for BoardCard {
             worker: card.holder.map(|worker| worker.to_string()),
             workspace: card.workspace.map(|workspace| workspace.to_string()),
             human_review: card.human_review.map(HumanReviewMark::from),
+            blocker: card.hold.map(BlockerMark::from),
             messages: card.messages,
             completed_at: card.completed_at.map(|at| at.as_millis()),
             attention: attention(card.attention),
@@ -462,6 +491,9 @@ pub struct TaskView {
     /// When the human review mark was last set, in UTC milliseconds; null without a mark.
     #[schema(required = true)]
     pub human_review_set_at: Option<i64>,
+    /// The blocker; null while the task has none.
+    #[schema(required = true)]
+    pub blocker: Option<BlockerMark>,
     pub attention: Vec<AttentionItem>,
     /// The rule of the status calculation that decided the status, with the ids it used.
     pub status_reason: String,
@@ -487,6 +519,12 @@ pub struct TaskView {
     pub history: Vec<TaskEvent>,
     /// Whether the human who made the request may turn the human review mark on, change it or clear it. False without a named human.
     pub can_change_human_review: bool,
+    /// Whether the human who made the request may set the blocker or change its reason: false without a named human, and false once an agent has started the task (a claim, a task workspace or an open proposal) or it is past Todo.
+    pub can_set_blocker: bool,
+    /// Whether the human who made the request may clear the blocker. False without a named human or a blocker.
+    pub can_clear_blocker: bool,
+    /// Whether the human who made the request may mark this human task Done: false without a named human, for any other kind and for a Done or archived task. The daemon refuses it while a prerequisite is not Done.
+    pub can_mark_done: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
@@ -613,9 +651,13 @@ pub struct TaskEvent {
 
 /// The task read for `human`, the caller of the route; `None` when the request names no human.
 pub(super) fn task_view(detail: service::TaskDetail, human: Option<&Human>) -> TaskView {
+    let rights = service::human_task_rights(&detail, human.is_some());
     let mut view = TaskView::from(detail);
     view.can_change_human_review =
         human.is_some_and(|human| service::can_change_human_review(&human.actor()));
+    view.can_set_blocker = rights.set_blocker;
+    view.can_clear_blocker = rights.clear_blocker;
+    view.can_mark_done = rights.mark_done;
     view
 }
 
@@ -703,6 +745,7 @@ impl From<service::TaskDetail> for TaskView {
             human_review: task.human_review.map(HumanReviewMark::from),
             attention: attention(detail.attention),
             human_review_set_at: detail.human_review_set_at.map(|at| at.as_millis()),
+            blocker: task.hold.map(BlockerMark::from),
             status_reason: detail.status_reason,
             workspace_info: detail.workspace_info.map(|info| TaskWorkspaceInfo {
                 directory: info.directory,
@@ -759,6 +802,9 @@ impl From<service::TaskDetail> for TaskView {
                 })
                 .collect(),
             can_change_human_review: false,
+            can_set_blocker: false,
+            can_clear_blocker: false,
+            can_mark_done: false,
         }
     }
 }
@@ -814,7 +860,7 @@ pub struct CreateTaskBody {
     /// The task to split: the new task becomes a linked item of its `Subtasks` checklist.
     #[serde(default)]
     pub parent: Option<String>,
-    /// `proposal` when left out. A `no_proposal` task is for work that changes no project file: its coder reports the work and a lead check completes it.
+    /// `proposal` when left out. A `no_proposal` task is for work that changes no project file: its coder reports the work and a lead check completes it. A `human` task is work only a person can do: no agent takes it and a human marks it Done.
     #[serde(default)]
     pub kind: Option<TaskKind>,
 }
@@ -824,6 +870,13 @@ pub struct CreateTaskBody {
 pub struct SendBackBody {
     /// What to change: plain text, not empty.
     pub note: String,
+}
+
+/// Why the task waits for a person.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct BlockerBody {
+    /// Plain text, not empty, at most 500 characters.
+    pub reason: String,
 }
 
 /// Fields left out stay as they are.
@@ -1205,7 +1258,7 @@ pub async fn archive_task(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Completes a reported `no_proposal` task after the human checked its work: the report is answered, the claim released and the completion record written, so the task is Done. On a task with the human review mark, this check by a human is the human review.
+/// Completes a reported `no_proposal` task after the human checked its work: the report is answered, the claim released and the completion record written, so the task is Done. On a task with the human review mark, this check by a human is the human review. On a `human` task it marks the person's work Done: the completion record is written and its dependents unblock.
 #[utoipa::path(
     post,
     path = "/api/v1/projects/{slug}/tasks/{id}/complete",
@@ -1266,6 +1319,69 @@ pub async fn send_back_task(
     tasks
         .send_back_task(&human.actor(), task, &body.note)
         .await?;
+    Ok(Json(task_view(tasks.get_view(task).await?, Some(&human))))
+}
+
+/// Puts a blocker on the task with its reason, or changes the reason: no agent claims the task and no lead starts a coder for it until a human clears it. Only a task in Backlog or Todo that no agent has started gets one. The status does not change.
+#[utoipa::path(
+    put,
+    path = "/api/v1/projects/{slug}/tasks/{id}/blocker",
+    operation_id = "set_blocker",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("id" = String, Path, description = "The task id, such as T-12"),
+    ),
+    request_body = BlockerBody,
+    responses(
+        (status = 200, description = "The task with its blocker", body = TaskView),
+        (status = 400, description = "`invalid_hold_reason`, `invalid_id` or `invalid_name`", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
+        (status = 403, description = "`task_hold_denied` with the detail reason `started`: the task has a claim, a task workspace or an open proposal, or is past Todo", body = ErrorEnvelope),
+        (status = 404, description = "`task_not_found` or `project_not_found`", body = ErrorEnvelope),
+        (status = 409, description = "`task_closed`", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn set_blocker(
+    human: Human,
+    project: Project,
+    Path((_slug, task)): Path<(String, String)>,
+    ApiJson(body): ApiJson<BlockerBody>,
+) -> Result<Json<TaskView>, ApiError> {
+    let task: TaskId = id(&task)?;
+    let tasks = &project.0.tasks;
+    tasks.set_hold(&human.actor(), task, &body.reason).await?;
+    Ok(Json(task_view(tasks.get_view(task).await?, Some(&human))))
+}
+
+/// Removes the blocker of the task, so agents can take it again. A task without a blocker is returned as it is.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/projects/{slug}/tasks/{id}/blocker",
+    operation_id = "clear_blocker",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("id" = String, Path, description = "The task id, such as T-12"),
+    ),
+    responses(
+        (status = 200, description = "The task without a blocker", body = TaskView),
+        (status = 400, description = "`invalid_id` or `invalid_name`", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
+        (status = 404, description = "`task_not_found` or `project_not_found`", body = ErrorEnvelope),
+        (status = 409, description = "`task_closed`", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn clear_blocker(
+    human: Human,
+    project: Project,
+    Path((_slug, task)): Path<(String, String)>,
+) -> Result<Json<TaskView>, ApiError> {
+    let task: TaskId = id(&task)?;
+    let tasks = &project.0.tasks;
+    tasks.clear_hold(&human.actor(), task).await?;
     Ok(Json(task_view(tasks.get_view(task).await?, Some(&human))))
 }
 

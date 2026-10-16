@@ -48,7 +48,11 @@ fn prerequisites() -> impl Strategy<Value = Vec<(TaskId, TaskStatus)>> {
 }
 
 fn kind() -> impl Strategy<Value = TaskKind> {
-    prop_oneof![Just(TaskKind::Proposal), Just(TaskKind::NoProposal)]
+    prop_oneof![
+        Just(TaskKind::Proposal),
+        Just(TaskKind::NoProposal),
+        Just(TaskKind::Human)
+    ]
 }
 
 fn facts() -> impl Strategy<Value = TaskFacts> {
@@ -106,7 +110,7 @@ proptest! {
     fn untouched_task_without_unfinished_prerequisites_is_todo(
         prereqs in prop::collection::btree_map(1u32..30, Just(TaskStatus::Done), 0..8),
     ) {
-        for kind in [TaskKind::Proposal, TaskKind::NoProposal] {
+        for kind in TaskKind::ALL {
             let f = TaskFacts {
                 kind,
                 completed: false,
@@ -138,13 +142,35 @@ proptest! {
                 other.proposal = proposal;
                 other.has_active_workspace = workspace;
             }
+            TaskKind::Human => {
+                other.proposal = proposal;
+                other.has_active_workspace = workspace;
+                other.claimed = claimed;
+                other.reported = reported;
+            }
         }
         prop_assert_eq!(calculate(&other), calculate(&f));
     }
 
     #[test]
-    fn an_open_report_puts_an_unfinished_task_without_a_proposal_in_review(f in facts()) {
-        prop_assume!(f.kind == TaskKind::NoProposal && !f.completed);
+    fn a_human_task_moves_only_by_its_completion_and_prerequisites(mut f in facts()) {
+        f.kind = TaskKind::Human;
+        let calculated = calculate(&f);
+        let expected = if f.completed {
+            TaskStatus::Done
+        } else if f.prerequisites.iter().all(|(_, s)| *s == TaskStatus::Done) {
+            TaskStatus::Todo
+        } else {
+            TaskStatus::Backlog
+        };
+        prop_assert_eq!(calculated.status, expected);
+        prop_assert!(!calculated.blocked());
+    }
+
+    #[test]
+    fn an_open_report_puts_an_unfinished_task_without_a_proposal_in_review(mut f in facts()) {
+        f.kind = TaskKind::NoProposal;
+        prop_assume!(!f.completed);
         let status = calculate(&f).status;
         prop_assert_eq!(status == TaskStatus::Review, f.reported);
         prop_assert_eq!(status == TaskStatus::InProgress, f.claimed && !f.reported);

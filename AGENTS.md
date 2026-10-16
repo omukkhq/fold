@@ -80,7 +80,7 @@ To run the tests of one file in `crates/<crate>/tests/`, select its module: `car
 
 1. **Objects before references.** An object is written, flushed and renamed into place before any row or object refers to it. A hash never changes for the same content.
 2. **The main head moves only through the integration procedure,** under the project's integration mutex, by compare-and-swap. A published revision is never partial.
-3. **Done means a completion record,** written in the same transaction as the integration (or by the container rule in `recompute`, or by the complete command of a task without a proposal). A failed integration never completes a task.
+3. **Done means a completion record,** written in the same transaction as the integration (or by the container rule in `recompute`, or by the complete command of a task without a proposal or of a human task, which only a human or the main agent marks Done). A failed integration never completes a task.
 4. **Proposal versions never change.** Approvals belong to the version they reviewed; a new version starts unapproved.
 5. **fold writes into a workspace only on create, sync and restore,** and never copies unrecorded changes between workspaces. Nothing deletes a workspace directory except `fld gc` after the retention period.
 6. **Messages never change task state,** never stand in for a dependency and never stand in for a claim.

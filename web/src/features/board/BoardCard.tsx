@@ -5,9 +5,11 @@ import {
   GitFork,
   GitMerge,
   GitPullRequest,
+  Hand,
   Hourglass,
   ListChecks,
   MessageSquare,
+  UserRound,
   type LucideIcon,
 } from "lucide-react";
 import type { BoardCard as BoardCardData, BoardProposal } from "@/api/board";
@@ -26,6 +28,7 @@ import { activityLine, liveFilesText, type ActivityLine } from "./activityLine";
 import { attentionMark, hasKind } from "./attention";
 import {
   blockedText,
+  blockerMark,
   blocksText,
   checklistText,
   kindText,
@@ -35,6 +38,7 @@ import {
   proposalLook,
   proposalText,
   taskPath,
+  type BlockerMark,
   type LeadCheckMark,
   type ProposalLook,
 } from "./card";
@@ -89,6 +93,21 @@ function LeadCheckPill({ mark }: { mark: LeadCheckMark }) {
       </span>
       <p className="line-clamp-2 text-meta leading-normal text-text-muted">
         {mark.note}
+      </p>
+    </div>
+  );
+}
+
+/** The blocker under the title: agents may not take the task until a human clears it. */
+function BlockerPill({ mark }: { mark: BlockerMark }) {
+  return (
+    <div className="flex flex-col gap-4">
+      <span className="inline-flex items-center gap-5 self-start rounded-s bg-warning-soft px-8 py-3 text-caption font-semibold text-warning">
+        <Hand aria-hidden="true" size={12} />
+        {mark.text}
+      </span>
+      <p className="line-clamp-2 text-meta leading-normal text-text-muted">
+        {mark.reason}
       </p>
     </div>
   );
@@ -152,6 +171,7 @@ export function BoardCard({
   const needs = needsText(card);
   const blocked = blockedText(card);
   const kind = kindText(card);
+  const blocker = blockerMark(card);
   const leadCheck = leadCheckMark(card);
   const stalled = hasKind(card.attention, "stalled");
   const stale = hasKind(card.attention, "stale_claim");
@@ -197,9 +217,15 @@ export function BoardCard({
           {blocked}
         </Badge>
       ) : null}
+      {blocker ? <BlockerPill mark={blocker} /> : null}
       <div className="flex flex-wrap items-center gap-x-10 gap-y-4 leading-snug">
         <Mono className="text-caption text-text-faint">{card.task}</Mono>
-        {kind ? <Meta icon={ClipboardCheck} text={kind} /> : null}
+        {kind ? (
+          <Meta
+            icon={card.kind === "human" ? UserRound : ClipboardCheck}
+            text={kind}
+          />
+        ) : null}
         {checklist ? <Meta icon={ListChecks} text={checklist} /> : null}
         {blocks ? <Meta icon={GitFork} text={blocks} /> : null}
         {needs ? <Meta icon={Hourglass} text={needs} /> : null}

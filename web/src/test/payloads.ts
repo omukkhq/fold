@@ -37,6 +37,7 @@ export function boardCard(
     worker: null,
     workspace: null,
     human_review: null,
+    blocker: null,
     attention: [],
     proposal: null,
     activity: null,
@@ -97,6 +98,10 @@ export function taskView(
     reports: [],
     history: [],
     can_change_human_review: false,
+    blocker: null,
+    can_set_blocker: false,
+    can_clear_blocker: false,
+    can_mark_done: false,
     ...over,
   };
 }

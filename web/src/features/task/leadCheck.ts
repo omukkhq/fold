@@ -29,16 +29,16 @@ const TITLES: Record<LeadCheckState, string> = {
 export const KIND_NOTE =
   "This task needs no proposal. Its coder works with the tools the task names and reports the work; a lead check completes the task or sends it back.";
 
-/** A task without a proposal has no workspace, so the workspace and proposal parts of the task are left out. */
+/** A `no_proposal` or `human` task has no workspace, so the workspace and proposal parts of the task are left out. */
 export function needsProposal(task: Pick<TaskDetail, "kind">): boolean {
-  return task.kind !== "no_proposal";
+  return task.kind === "proposal";
 }
 
-/** The lead check of a task without a proposal; null for a task that ends with a proposal. */
+/** The lead check of a `no_proposal` task; null for any other kind. */
 export function leadCheck(
   task: Pick<TaskDetail, "kind" | "reports" | "archived_at">,
 ): LeadCheck | null {
-  if (needsProposal(task)) {
+  if (task.kind !== "no_proposal") {
     return null;
   }
   const report = task.reports[0] ?? null;

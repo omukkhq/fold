@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT number AS \"number!: i64\", title, hold_reason AS \"hold_reason!: String\",\n                  hold_set_at AS \"hold_set_at!: i64\"\n           FROM tasks\n           WHERE hold_reason IS NOT NULL AND status <> 'done' AND archived_at IS NULL\n           ORDER BY hold_set_at, number",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "title",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "name": "hold_reason!: String",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "hold_reason"
+          }
+        }
+      },
+      {
+        "name": "hold_set_at!: i64",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "hold_set_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "7130619c21e96960d525a57b54cd54a70f4fc802a8f999133567d4108cd5a6cc"
+}

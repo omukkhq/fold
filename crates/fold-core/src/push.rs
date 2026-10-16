@@ -35,6 +35,8 @@ pub struct PushContext {
     pub areas: BTreeSet<AreaName>,
     /// Every agent tagged `main`.
     pub main_agents: BTreeSet<AgentName>,
+    /// No agent can take the event's task now: it is a human task or on hold, or, for `task.hold_cleared`, it is not an unclaimed Todo task.
+    pub held_from_agents: bool,
 }
 
 /// One line for one agent's Claude Code session. `text` holds public ids and the next tool only.
@@ -63,6 +65,7 @@ pub fn is_pushed(event: &Event) -> bool {
         types::TASK_SENT_BACK,
         types::PROJECT_PAUSED,
         types::PROJECT_RESUMED,
+        types::TASK_HOLD_CLEARED,
     ]
     .contains(&event.event_type)
 }
@@ -156,12 +159,22 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
         if to != TaskStatus::Todo.as_str() {
             return None;
         }
+        if ctx.held_from_agents {
+            return None;
+        }
         if let Some(holder) = &ctx.implementation_claim {
             return Some((
                 vec![holder.clone()],
                 format!("{task} is ready"),
                 "create_workspace",
             ));
+        }
+        return Some(ready_route(task, ctx));
+    }
+    if kind == types::TASK_HOLD_CLEARED {
+        let task = event.task?;
+        if ctx.held_from_agents {
+            return None;
         }
         return Some(ready_route(task, ctx));
     }
@@ -385,6 +398,7 @@ mod tests {
             area_leads: BTreeSet::new(),
             areas: BTreeSet::new(),
             main_agents: BTreeSet::new(),
+            held_from_agents: false,
         }
     }
 
@@ -560,6 +574,51 @@ mod tests {
             )],
             "the claim holder builds it, so its lead hears nothing"
         );
+    }
+
+    #[test]
+    fn a_human_task_or_a_task_on_hold_is_offered_to_no_agent() {
+        let event = with_data(
+            event(types::TASK_STATUS_CHANGED, "fold"),
+            json!({"from": "backlog", "to": "todo"}),
+        );
+        let held = PushContext {
+            held_from_agents: true,
+            ..ready(None, &["backend-lead"], &["backend"])
+        };
+        assert!(notice_for(&event, &held).is_empty());
+    }
+
+    #[test]
+    fn a_cleared_hold_offers_the_ready_task_to_its_lead() {
+        let event = event(types::TASK_HOLD_CLEARED, "human:ana");
+        let open = ready(None, &["backend-lead"], &["backend"]);
+        assert_eq!(
+            sent(&notice_for(&event, &open)),
+            vec![row(
+                "backend-lead",
+                "fold: T-12 is ready in your area. Call start_worker.",
+                "start_worker"
+            )]
+        );
+        let not_ready = PushContext {
+            held_from_agents: true,
+            ..open
+        };
+        assert!(notice_for(&event, &not_ready).is_empty());
+    }
+
+    #[test]
+    fn a_held_task_turning_todo_sends_its_holder_nothing() {
+        let status = with_data(
+            event(types::TASK_STATUS_CHANGED, "fold"),
+            json!({"from": "backlog", "to": "todo"}),
+        );
+        let held = PushContext {
+            held_from_agents: true,
+            ..ready(Some("frontend"), &["backend-lead"], &["backend"])
+        };
+        assert!(notice_for(&status, &held).is_empty());
     }
 
     #[test]

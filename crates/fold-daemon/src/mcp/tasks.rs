@@ -43,6 +43,8 @@ pub const TAKEOVER_CLAIM: &str = "takeover_claim";
 pub const REPORT_TASK: &str = "report_task";
 pub const COMPLETE_TASK: &str = "complete_task";
 pub const SEND_BACK_TASK: &str = "send_back_task";
+pub const SET_BLOCKER: &str = "set_blocker";
+pub const CLEAR_BLOCKER: &str = "clear_blocker";
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -90,9 +92,21 @@ pub struct CreateTaskInput {
     /// A task to split: the new task becomes a linked item of its Subtasks checklist, so the parent needs the new task.
     #[serde(default)]
     pub parent: Option<String>,
-    /// proposal (the default) or no_proposal. A no_proposal task is for work that changes no project file, such as designs made through an MCP server: its coder claims it, does the work without a workspace and calls report_task, and a lead check completes it. Only the main agent or the lead of the task's area creates one.
+    /// proposal (the default), no_proposal or human. A no_proposal task is for work that changes no project file, such as designs made through an MCP server: its coder claims it, does the work without a workspace and calls report_task, and a lead check completes it. A human task is work only a person can do outside every agent, such as verifying an app with a provider: no agent claims it, and a human, or the main agent when the user says so, marks it Done with complete_task. Only the main agent, a human or the lead of the task's area creates a no_proposal or human task.
     #[serde(default)]
     pub kind: Option<String>,
+    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
+    #[serde(rename = "as", default)]
+    pub as_worker: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct SetBlockerInput {
+    /// The task, such as T-12.
+    pub id: String,
+    /// Why the task waits for a person, such as "Wait until the Meta app review passes": plain text, not empty, at most 500 characters.
+    pub reason: String,
     /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
     #[serde(rename = "as", default)]
     pub as_worker: Option<String>,
@@ -217,22 +231,22 @@ pub fn tools() -> Vec<Tool> {
     vec![
         Tool::new(
             GET_TASK_GRAPH,
-            "Read the task graph: every task that is not archived with its status, blocked flag, labels, the tasks it needs and its claim holder.",
+            "Read the task graph: every task that is not archived with its status, blocked flag, kind, labels, the tasks it needs and its claim holder, and the reason of its blocker when it has one. No agent takes a human task or a task with a blocker.",
             schema_for_type::<GetTaskGraphInput>(),
         ),
         Tool::new(
             GET_READY_TASKS,
-            "List the Todo tasks nobody has claimed, the one that unblocks the most tasks first.",
+            "List the Todo tasks nobody has claimed, the one that unblocks the most tasks first. Human tasks and tasks with a blocker are left out: no agent takes them.",
             schema_for_type::<AsOnlyInput>(),
         ),
         Tool::new(
             GET_TASK,
-            "Read one task: description, labels, checklists with progress, dependencies, dependents, claim and workspace, and for a no_proposal task its reports and lead checks.",
+            "Read one task: description, labels, checklists with progress, dependencies, dependents, claim, workspace, its blocker with the reason, and for a no_proposal task its reports and lead checks.",
             schema_for_type::<TaskIdInput>(),
         ),
         Tool::new(
             CREATE_TASK,
-            "Create a task, with its dependencies and its parent link in the same step. A refused dependency, such as a cycle, creates nothing. Pass kind no_proposal for work that changes no project file.",
+            "Create a task, with its dependencies and its parent link in the same step. A refused dependency, such as a cycle, creates nothing. Pass kind no_proposal for work that changes no project file, and kind human for work only a person can do.",
             schema_for_type::<CreateTaskInput>(),
         ),
         Tool::new(
@@ -287,7 +301,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             CLAIM_TASK,
-            "Claim a task before you change files for it. A repeat call by the holder renews the claim. A workspace left by a worker that released the task becomes yours; the result names it.",
+            "Claim a task before you change files for it. A repeat call by the holder renews the claim. A workspace left by a worker that released the task becomes yours; the result names it. A human task (task_needs_human) and a task with a blocker (task_on_hold) are refused.",
             schema_for_type::<TaskIdInput>(),
         ),
         Tool::new(
@@ -307,13 +321,23 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             COMPLETE_TASK,
-            "Complete a reported no_proposal task after you checked the work: the task is Done and its dependents unblock. Only the lead of the task's area, the main agent or a human checks a task. Refused with prerequisites_not_done while a prerequisite is not Done, and with human_approval_missing on a task with the human review mark, which only a human completes.",
+            "Complete a reported no_proposal task after you checked the work, or mark a human task Done: the task is Done and its dependents unblock. Only the lead of the task's area, the main agent or a human checks a no_proposal task. Only a human or the main agent marks a human task Done, and the main agent only when the user says the work is done. Refused with prerequisites_not_done while a prerequisite is not Done, and with human_approval_missing on a task with the human review mark, which only a human completes.",
             schema_for_type::<TaskIdInput>(),
         ),
         Tool::new(
             SEND_BACK_TASK,
             "Send a reported no_proposal task back to its coder with a note on what to change. The task returns to In Progress and fold resumes the coder with the note.",
             schema_for_type::<TaskNoteInput>(),
+        ),
+        Tool::new(
+            SET_BLOCKER,
+            "Put a blocker on a task with the reason it waits for a person, or change the reason. Only a task in Backlog or Todo that no agent has started gets one: a task with a claim, a workspace or an open proposal is refused with task_hold_denied. While it is set, no agent claims the task, no lead starts a coder for it and get_ready_tasks leaves it out; the status does not change. Only a human, the main agent or the lead of the task's area sets one.",
+            schema_for_type::<SetBlockerInput>(),
+        ),
+        Tool::new(
+            CLEAR_BLOCKER,
+            "Remove the blocker of a task, so agents can take it again. Only a human or the main agent clears one, and the main agent only when the user says the task can start.",
+            schema_for_type::<TaskIdInput>(),
         ),
     ]
 }
@@ -413,6 +437,11 @@ fn detail_json(detail: &TaskDetail) -> Value {
             "set_by": mark.set_by.as_str(),
             "set_at": detail.human_review_set_at,
         })),
+        "blocker": task.hold.as_ref().map(|hold| json!({
+            "reason": hold.reason.as_str(),
+            "set_by": hold.set_by.as_str(),
+            "set_at": hold.set_at,
+        })),
         "status_reason": detail.status_reason,
         "workspace_info": detail.workspace_info.as_ref().map(|info| json!({
             "directory": info.directory,
@@ -499,6 +528,8 @@ async fn run(
         REPORT_TASK => report_task(server, actor, arguments).await?,
         COMPLETE_TASK => complete_task(server, actor, arguments).await?,
         SEND_BACK_TASK => send_back_task(server, actor, arguments).await?,
+        SET_BLOCKER => set_blocker(server, actor, arguments).await?,
+        CLEAR_BLOCKER => clear_blocker(server, actor, arguments).await?,
         _ => return Ok(None),
     };
     Ok(Some(value))
@@ -511,7 +542,7 @@ async fn get_task_graph(server: &FoldServer, arguments: &JsonObject) -> Result<V
     let tasks: Vec<Value> = graph
         .iter()
         .map(|task| {
-            json!({
+            let mut node = json!({
                 "id": task.id,
                 "title": task.title.as_str(),
                 "status": task.status.as_str(),
@@ -520,7 +551,11 @@ async fn get_task_graph(server: &FoldServer, arguments: &JsonObject) -> Result<V
                 "labels": labels_json(&task.labels),
                 "needs": task.needs,
                 "holder": task.holder.as_ref().map(WorkerName::as_str),
-            })
+            });
+            if let Some(hold) = &task.hold {
+                node["blocker"] = json!({"reason": hold.reason.as_str()});
+            }
+            node
         })
         .collect();
     Ok(json!({"tasks": tasks}))
@@ -863,6 +898,34 @@ async fn complete_task(
         .await
         .map_err(from_task)?;
     Ok(json!({"id": view.id, "status": view.status.as_str()}))
+}
+
+async fn set_blocker(
+    server: &FoldServer,
+    actor: &Actor,
+    arguments: &JsonObject,
+) -> Result<Value, FoldError> {
+    let input: SetBlockerInput = parse(arguments)?;
+    let view = server
+        .tasks
+        .set_hold(actor, id(&input.id)?, &input.reason)
+        .await
+        .map_err(from_task)?;
+    Ok(json!({"id": view.id, "blocker": view.hold.is_some()}))
+}
+
+async fn clear_blocker(
+    server: &FoldServer,
+    actor: &Actor,
+    arguments: &JsonObject,
+) -> Result<Value, FoldError> {
+    let input: TaskIdInput = parse(arguments)?;
+    let view = server
+        .tasks
+        .clear_hold(actor, id(&input.id)?)
+        .await
+        .map_err(from_task)?;
+    Ok(json!({"id": view.id, "blocker": view.hold.is_some()}))
 }
 
 async fn send_back_task(

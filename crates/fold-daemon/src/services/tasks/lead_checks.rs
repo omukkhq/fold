@@ -11,7 +11,8 @@ use fold_store::{WriteTx, agents, tasks};
 use serde_json::json;
 
 use super::{
-    TaskError, TaskService, TaskView, closed_refusal, recompute, task_not_found, worker_row,
+    TaskError, TaskService, TaskView, agent_refusal, closed_refusal, recompute, task_not_found,
+    worker_row,
 };
 use crate::services::agents::starter_of;
 use crate::services::events::EventBuffer;
@@ -66,6 +67,11 @@ impl TaskService {
             .write(async |tx| {
                 let worker = worker_row(tx, claimant).await?;
                 let row = open_task(tx, task).await?;
+                if row.kind == TaskKind::Human
+                    && let Some(refusal) = agent_refusal(&row)
+                {
+                    return Err(refusal.into());
+                }
                 if row.kind != TaskKind::NoProposal {
                     return Err(FoldError::new(
                         codes::TASK_KIND_MISMATCH,
@@ -114,13 +120,19 @@ impl TaskService {
         self.get(task).await
     }
 
-    /// Completes a reported task without a proposal: the open report is answered `completed`, the claim is released and the completion record is written, so the task is Done and its dependents unblock in the same transaction. It is refused with `prerequisites_not_done` while a prerequisite is not Done, as an integration is, and with `human_approval_missing` when an agent completes a task with the human review mark, which only a human's check passes.
+    /// Completes a reported task without a proposal: the open report is answered `completed`, the claim is released and the completion record is written, so the task is Done and its dependents unblock in the same transaction. It is refused with `prerequisites_not_done` while a prerequisite is not Done, as an integration is, and with `human_approval_missing` when an agent completes a task with the human review mark, which only a human's check passes. A human task has no report: a human or the main agent marks it Done (see [`complete_human_in_tx`]).
     pub async fn complete_task(&self, actor: &Actor, task: TaskId) -> Result<TaskView, TaskError> {
         let now = self.clock.now();
         let by = actor.event_actor();
         let mut buffer = EventBuffer::new();
         self.store
             .write(async |tx| {
+                let human = tasks::fetch(tx.conn(), task)
+                    .await?
+                    .filter(|row| row.kind == TaskKind::Human);
+                if let Some(row) = human {
+                    return complete_human_in_tx(tx, &mut buffer, actor, &row, now).await;
+                }
                 let (row, _) = checked_report(tx, actor, task).await?;
                 policy::human_check_done(row.human_review.as_ref(), matches!(actor, Actor::Human { .. }))
                     .map_err(|refusal| {
@@ -200,17 +212,59 @@ impl TaskService {
     }
 }
 
-/// Refuses a task without a proposal where a command needs a task workspace or a proposal; `None` for a task with a proposal.
+/// Refuses a task without a proposal where a command needs a task workspace or a proposal: `task_kind_mismatch` for a `no_proposal` task, `task_needs_human` for a human task; `None` for a task with a proposal.
 pub(crate) fn proposal_kind_refusal(row: &TaskRow) -> Option<TaskError> {
-    (row.kind == TaskKind::NoProposal).then(|| {
-        FoldError::new(
-            codes::TASK_KIND_MISMATCH,
-            format!("{} needs no proposal, so it has no workspace", row.id),
+    match row.kind {
+        TaskKind::Proposal => None,
+        TaskKind::Human => agent_refusal(row).map(Into::into),
+        TaskKind::NoProposal => Some(
+            FoldError::new(
+                codes::TASK_KIND_MISMATCH,
+                format!("{} needs no proposal, so it has no workspace", row.id),
+            )
+            .with_details([("kind", json!(row.kind.as_str()))])
+            .with_hint("do the work through the tools the task names, then call report_task")
+            .into(),
+        ),
+    }
+}
+
+/// Marks a human task Done: a person did the work outside fold, so a human or the main agent, once the user says so, writes the `human` completion and the task's dependents unblock in the same transaction. It is refused with `prerequisites_not_done` while a prerequisite is not Done, and with `human_approval_missing` when the main agent completes a task with the human review mark.
+async fn complete_human_in_tx(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    actor: &Actor,
+    row: &TaskRow,
+    now: Timestamp,
+) -> Result<(), TaskError> {
+    let task = row.id;
+    let starter = starter_of(tx, actor).await?;
+    policy::can_complete_human_task(&starter).map_err(FoldError::from)?;
+    if let Some(refusal) = closed_refusal(row) {
+        return Err(refusal);
+    }
+    policy::human_check_done(row.human_review.as_ref(), actor.is_human()).map_err(|refusal| {
+        FoldError::from(refusal).with_hint(
+            "the task has the human review mark, so a human marks it Done; ask the named human, or any human when none is named",
         )
-        .with_details([("kind", json!(row.kind.as_str()))])
-        .with_hint("do the work through the tools the task names, then call report_task")
-        .into()
-    })
+    })?;
+    let prerequisites = tasks::load_facts(tx.conn(), &[task])
+        .await?
+        .pop()
+        .map(|loaded| loaded.facts.prerequisites)
+        .unwrap_or_default();
+    policy::prerequisites_done(&prerequisites).map_err(|refusal| {
+        FoldError::from(refusal).with_hint(
+            "call get_task on each prerequisite in the details; mark this task Done once they are Done",
+        )
+    })?;
+    completions::insert(tx, task, CompletionKind::Human, None, now).await?;
+    let event = NewEvent::new(types::TASK_COMPLETED, actor.event_actor())?
+        .task(task)
+        .data(json!({"kind": CompletionKind::Human.as_str()}))?;
+    buffer.append(tx, &event, now).await?;
+    buffer.extend(recompute(tx, &[task], now).await?.events);
+    Ok(())
 }
 
 /// The areas whose label is among `labels`.
@@ -245,6 +299,15 @@ async fn checked_report(
     policy::can_check_task(&starter, &areas).map_err(FoldError::from)?;
     if let Some(refusal) = closed_refusal(&row) {
         return Err(refusal);
+    }
+    if row.kind == TaskKind::Human {
+        return Err(FoldError::new(
+            codes::TASK_KIND_MISMATCH,
+            format!("{task} is a human task and has no report"),
+        )
+        .with_details([("kind", json!(row.kind.as_str()))])
+        .with_hint("a human or the main agent marks a human task Done with complete_task")
+        .into());
     }
     if row.kind != TaskKind::NoProposal {
         return Err(FoldError::new(

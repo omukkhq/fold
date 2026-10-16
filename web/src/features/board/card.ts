@@ -92,9 +92,31 @@ export function proposalLook(proposal: BoardProposal): ProposalLook {
   }
 }
 
-/** `no proposal` on the card of a task that a lead check completes; null for a task that ends with a proposal. */
+/** `no proposal` on the card of a task that a lead check completes, `human task` on work a person does; null for a task that ends with a proposal. */
 export function kindText(card: Pick<BoardCard, "kind">): string | null {
-  return card.kind === "no_proposal" ? "no proposal" : null;
+  switch (card.kind) {
+    case "no_proposal":
+      return "no proposal";
+    case "human":
+      return "human task";
+    case "proposal":
+      return null;
+  }
+}
+
+export interface BlockerMark {
+  text: string;
+  /** Why the task waits for a person. */
+  reason: string;
+}
+
+/** The blocker of a task that agents may not take until a human clears it; null without one. */
+export function blockerMark(
+  card: Pick<BoardCard, "blocker">,
+): BlockerMark | null {
+  return card.blocker === null
+    ? null
+    : { text: "Blocker", reason: card.blocker.reason };
 }
 
 export interface LeadCheckMark {

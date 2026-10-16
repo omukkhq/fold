@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT t.number AS \"number!: i64\", t.title, t.created_at\n           FROM tasks t\n           WHERE t.status = 'todo' AND t.archived_at IS NULL\n             AND NOT EXISTS (\n                 SELECT 1 FROM claims c\n                 WHERE c.task_id = t.id AND c.kind = 'implementation' AND c.released_at IS NULL\n             )\n           ORDER BY t.number",
+  "query": "SELECT t.number AS \"number!: i64\", t.title,\n                  COALESCE(\n                      (SELECT MAX(e.created_at) FROM events e\n                       WHERE e.task_id = t.number AND e.type = 'task.status_changed'),\n                      t.created_at\n                  ) AS \"since!: i64\"\n           FROM tasks t\n           WHERE t.kind = 'human' AND t.status = 'todo' AND t.archived_at IS NULL\n           ORDER BY 3, t.number",
   "describe": {
     "columns": [
       {
@@ -26,15 +26,10 @@
         }
       },
       {
-        "name": "created_at",
+        "name": "since!: i64",
         "ordinal": 2,
         "type_info": "Integer",
-        "origin": {
-          "Table": {
-            "table": "tasks",
-            "name": "created_at"
-          }
-        }
+        "origin": "Expression"
       }
     ],
     "parameters": {
@@ -46,5 +41,5 @@
       false
     ]
   },
-  "hash": "0cc7634f59ddad6b366a692f951756d91a77cba6da50082b947463fda959a4d3"
+  "hash": "e8b1f3c4fcfba636903790894be367f6990b4747a3346c4e9fe78a0639f47b3e"
 }

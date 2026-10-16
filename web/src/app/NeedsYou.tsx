@@ -4,9 +4,11 @@ import {
   Bell,
   ChevronRight,
   GitPullRequest,
+  Hand,
   Inbox,
   MessagesSquare,
   ShieldAlert,
+  UserRound,
   type LucideIcon,
 } from "lucide-react";
 import { useState } from "react";
@@ -31,6 +33,8 @@ const ICONS: Record<NeedsYouKind, LucideIcon> = {
   permission: ShieldAlert,
   human_review: GitPullRequest,
   request_draft: Inbox,
+  human_task: UserRound,
+  blocker: Hand,
 };
 
 const MINUTE_MS = 60_000;

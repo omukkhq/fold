@@ -54,7 +54,7 @@ The main agent is the session the user talks to. It runs the team through fold: 
 1. Handle every request as described in Requests: claim it, ask in its thread when the message is not clear, draft the cards with the label of the area that must build each one, and revise the draft until the requester approves it. When the user asks you for work in the conversation, plan the tasks yourself with `create_task` and `add_dependency`.
 2. Decide the areas. An area is a part of the project that one lead can own, such as `backend` or `web`. Make its label with `create_label`, then call `define_area(name, label, instructions?, model?, mcp?)`. Give every task the label of its area. When the work of an area needs a special setup, give the area a profile: for example, the area `design` gets the instructions "draw screens in Pencil", the MCP servers `["fold", "pencil"]` and a model. Change a profile with `update_area(name, instructions?, model?, mcp?, clear_instructions?, clear_model?, clear_mcp?)`.
 3. Plan the tasks as described in Orchestrator. Put every dependency in the graph, and split a large task into child tasks.
-4. Call `require_human_review(task, reviewer?, reason)` when the user wants a human to review a task.
+4. Call `require_human_review(task, reviewer?, reason)` when the user wants a human to review a task. Make a human task or a blocker as described in Orchestrator. Call `clear_blocker(id)` or mark a human task Done with `complete_task(id)` only when the user tells you in the conversation that the task can start or that the work is done.
 5. Start one `area_lead` for each area and one `review_lead` with `start_worker`. Tell each lead in `instructions` what is important for its area. The area leads start the task coders, and the review lead starts the batch reviewers. You do not start them.
 6. The review lead and its batch reviewers approve, and fold integrates their approvals. Approve or integrate yourself only when the user asks you to.
 7. Watch the work with `list_workers`, `get_task_graph` and `wait_for_events`, and answer the messages of the leads. Stop a worker with `stop_worker` only when its work is no longer necessary.
@@ -69,12 +69,13 @@ Only the agent with the `main` tag defines areas and starts leads. Every other a
 An orchestrator keeps the task graph correct and the workers busy.
 
 1. Read the graph with `get_task_graph` and one task with `get_task(id)`. Read what each worker does with `get_activity(agent?)`: claims, workspaces with changed files, latest checkpoints and open proposals.
-2. Create a task with `create_task(title, description?, labels?, needs?, parent?, kind?)`. Write the description with the task template below. Give `kind` the value `no_proposal` for work that changes no project file, such as screens drawn through an MCP server (see Worker). Change it with `update_task`, and remove it with `delete_task` or `archive_task`. A task that a worker holds is removed only by that worker's agent, its lead or a human.
+2. Create a task with `create_task(title, description?, labels?, needs?, parent?, kind?)`. Write the description with the task template below. Give `kind` the value `no_proposal` for work that changes no project file, such as screens drawn through an MCP server (see Worker), and the value `human` for work that only a person can do outside every agent, such as "Verify the app on Meta". Make the tasks that wait for that work need the human task. Change it with `update_task`, and remove it with `delete_task` or `archive_task`. A task that a worker holds is removed only by that worker's agent, its lead or a human.
 3. Put every dependency in the graph with `add_dependency(task, needs)`. Remove one with `remove_dependency`. A dependency that would close a cycle fails with `dependency_cycle`.
 4. Split a large task with a parent and child tasks. Add each child to the parent's checklist with `add_checklist_item(task, text? / linked_task?, checklist?)`. With `linked_task` the item follows the child task, and fold ticks it when the child is Done. Change a plain item with `update_checklist_item(id, text?, done?)`. Move an item with `move_checklist_item(id, position, checklist?)`: the position counts from 0, a position past the end puts the item last, and `checklist` moves it into another checklist of the same task. Remove an item with `remove_checklist_item`. The checklists of a Done task are locked; put more work in a new task.
 5. Sort tasks with labels. Make one with `create_label(name, color)`.
 6. Call `require_human_review(task, reviewer?, reason)` on a task when the human's prompt asks for a human to review it. The mark stays until a human clears it.
-7. Give each subagent its own worker with `register_worker(name, parent?)`, and tell it to pass `as` (see Subagents).
+7. When agent work must wait until a person says it can start, call `set_blocker(id, reason)` on the task while it waits in Backlog or Todo, before an agent starts it. A task with a claim, a workspace or an open proposal is refused with `task_hold_denied`. While the blocker is set, no agent claims the task, no lead starts a coder for it and `get_ready_tasks` leaves it out; its status does not change. Use a human task when a person has work to do, and a blocker when agent work only waits for a person's word. Only a human, the main agent or the lead of the task's area sets a blocker, and only a human or the main agent clears it with `clear_blocker(id)`.
+8. Give each subagent its own worker with `register_worker(name, parent?)`, and tell it to pass `as` (see Subagents).
 
 A task is ready when its dependencies are Done and nobody holds it. Stalled and stale are two different states. A claim is stalled when its workspace had no file change for 5 minutes (`stall_minutes`). This only shows on the board. A claim is stale when its 30-minute lease (`lease_minutes`) ran out. A stale claim allows `takeover_claim`.
 
@@ -95,6 +96,8 @@ A worker builds one task at a time.
 11. Call `release_task(id)` when you cannot finish the task. Call `takeover_claim(id)` to take a task whose claim is stale. It fails with `claim_not_stale` while the lease is valid.
 
 A task of kind `no_proposal` has no workspace and no proposal; `create_workspace` and `create_proposal` refuse it with `task_kind_mismatch`. Claim it with `claim_task`, which moves it to In Progress, do the work with the tools the task names, then call `report_task(id, note)`. The task moves to Review and waits for a lead check: the lead of its area, the main agent or a human reads the report with `get_task` and calls `complete_task(id)`, which makes the task Done, or `send_back_task(id, note)`, which returns it to In Progress with the note. A task with the human review mark is completed only by a human, whose check is the human review; an agent gets `human_approval_missing`. A coder never completes its own task, and a reviewer never checks one.
+
+A task of kind `human` is work a person does outside fold. No agent claims it or works on it: `claim_task`, `create_workspace`, `create_proposal` and `start_worker` refuse it with `task_needs_human`. A human, or the main agent when the user says the work is done, marks it Done with `complete_task(id)`, and the tasks that need it unblock. A task with a blocker is refused with `task_on_hold` until a human or the main agent clears the blocker.
 
 ## Reviewer
 
@@ -177,7 +180,8 @@ The area lead owns the tasks with its area's label. It plans and starts coders, 
 2. Start a `task_coder` for ready work with `start_worker(role, tasks[], model?, instructions?)`. Choose the model and write the instructions for the tasks. Leave `model` out to use the model of your area's profile. fold sends you a notice when a task of the area becomes ready and nobody holds its claim.
 3. Watch the coders with `list_workers`. fold stops each one when its work is done, and resumes it when its proposal needs changes.
 4. For work that changes no project file, create the task with kind `no_proposal` and start a coder for it. When the coder calls `report_task`, fold sends you a notice. Read the report with `get_task`, check the work, and call `complete_task(id)` or `send_back_task(id, note)`. A send-back resumes the same coder with your note.
-5. When your context grows large, call `write_handoff(text)` when fold asks for it, then end your turn.
+5. When a task of the area needs work that only a person can do, create a task of kind `human` with the area's label and make the waiting tasks need it. When a task must wait for a person's word, call `set_blocker(id, reason)` before you start a coder for it; fold refuses a blocker on a task an agent has started. Never start a coder for a human task or a task with a blocker. You cannot clear a blocker or mark a human task Done: send the reason to a human with `send_message`. fold sends you a notice when a blocker is cleared and the task is ready.
+6. When your context grows large, call `write_handoff(text)` when fold asks for it, then end your turn.
 
 ### Review lead
 
@@ -239,6 +243,10 @@ Every error has a stable `code`, a message and a hint that names the next tool. 
 | `handoff_denied` | Only an area lead or the review lead writes a hand-off note. As the main agent, send yourself the note and run `/clear`. |
 | `project_paused` | The user paused the agents of the project. Start no work. Only when the user asks, the main agent calls `resume_project`. |
 | `worker_peer_refused` | A command in a worker's Bash acts only as that worker's own agent and never as a human. Use the fold tools of your own session. |
+| `invalid_hold_reason` | Give the blocker a reason of 1 to 500 characters. |
+| `task_on_hold` | The task has a blocker and waits for a person. Call `get_task` to read the reason, and call `get_ready_tasks` for other work. A human or the main agent clears it with `clear_blocker`. |
+| `task_needs_human` | The task is a human task: a person does it outside fold. Call `get_ready_tasks` for other work. A human or the main agent marks it Done with `complete_task`. |
+| `task_hold_denied` | Only a human, the main agent or the lead of the task's area sets a blocker, and only on a task in Backlog or Todo that no agent has started (detail reason `started`). Ask that lead or the main agent, or let the started work finish. |
 
 ## Never
 
@@ -246,6 +254,7 @@ Every error has a stable `code`, a message and a hint that names the next tool. 
 - Never edit the workspace of another worker.
 - Never tick a linked checklist item. fold ticks it when the child task is Done.
 - Never clear the human review mark.
+- Never clear a blocker or mark a human task Done, unless you are the main agent and the user told you to.
 - Never approve your own proposal.
 - Never approve a request you did not create.
 - Never treat a message as a claim or as a dependency.

@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use fold_core::events::types;
 use fold_core::{
-    Actor, ChecklistName, Clock, DependencyOrigin, EventError, FoldError, IdKind, LabelColor,
-    LabelName, NewEvent, ProjectPaths, TaskDescription, TaskId, TaskKind, TaskStatus, TaskTitle,
-    Timestamp, codes, policy,
+    Actor, ChecklistName, Clock, DependencyOrigin, EventError, FoldError, HoldMark, IdKind,
+    LabelColor, LabelName, NewEvent, ProjectPaths, TaskDescription, TaskId, TaskKind, TaskStatus,
+    TaskTitle, Timestamp, codes, policy,
 };
 use fold_store::tasks::{self, NewTask};
 use fold_store::{Store, StoreError, WriteTx, counters};
@@ -22,6 +22,7 @@ mod attention;
 mod checklists;
 mod claims;
 mod dependencies;
+mod hold;
 mod lead_checks;
 mod leases;
 mod ready;
@@ -39,6 +40,8 @@ pub use claims::{ClaimView, Claimed, renew_leases};
 pub(crate) use claims::{already_claimed, claim_in_tx, closed_refusal, worker_row};
 pub use dependencies::{Edge, add_edge_in_tx};
 pub use fold_core::reviews::HumanReviewMark;
+pub(crate) use hold::agent_refusal;
+pub use hold::{HumanTaskRights, human_task_rights};
 pub use lead_checks::{MAX_NOTE_CHARS, REPORT_LIMIT, ReportView};
 pub(crate) use lead_checks::{areas_of, proposal_kind_refusal};
 pub use leases::sweep_leases;
@@ -135,6 +138,8 @@ pub struct TaskView {
     pub kind: TaskKind,
     /// `None` while the mark is off.
     pub human_review: Option<HumanReviewMark>,
+    /// `None` while the task is not on hold.
+    pub hold: Option<HoldMark>,
     pub labels: Vec<LabelView>,
 }
 
@@ -239,7 +244,7 @@ impl TaskService {
             .await
     }
 
-    /// Creates a task of `kind` with a direct edge to each task in `needs` and, with a `parent`, a linked item on the parent's `Subtasks` checklist, so the parent needs the new task. Everything is one transaction: a refusal of any edge, such as a cycle, leaves nothing behind. A task named twice in `needs` gets one edge. A task without a proposal is created only by whoever may check it (`policy::can_choose_no_proposal`), judged by the areas of its labels.
+    /// Creates a task of `kind` with a direct edge to each task in `needs` and, with a `parent`, a linked item on the parent's `Subtasks` checklist, so the parent needs the new task. Everything is one transaction: a refusal of any edge, such as a cycle, leaves nothing behind. A task named twice in `needs` gets one edge. A `no_proposal` or `human` task is created only by whoever plans the work (`policy::can_choose_no_proposal`), judged by the areas of its labels.
     pub async fn create_task_of_kind(
         &self,
         actor: &Actor,
@@ -256,7 +261,7 @@ impl TaskService {
         let id = self
             .store
             .write(async |tx| {
-                if kind == TaskKind::NoProposal {
+                if kind != TaskKind::Proposal {
                     let starter = crate::services::agents::starter_of(tx, actor).await?;
                     let areas = areas_of(tx, &input.labels).await?;
                     policy::can_choose_no_proposal(&starter, &areas).map_err(FoldError::from)?;
@@ -426,6 +431,7 @@ fn view(row: tasks::TaskRow, labels: Vec<tasks::LabelRow>) -> TaskView {
         blocked: row.blocked,
         kind: row.kind,
         human_review: row.human_review,
+        hold: row.hold,
         labels: labels.into_iter().map(label_view).collect(),
     }
 }
@@ -452,7 +458,7 @@ async fn require_labels(tx: &mut WriteTx, names: &[LabelName]) -> Result<(), Tas
     ))
 }
 
-/// Creates a task of `kind` and its label links inside the caller's transaction and appends `task.created`, whose data names the kind of a task without a proposal. Task creation, request approval and the sync task of a conflicted pull call it, so each adds its edges and links in the same transaction. The caller runs `recompute` on the new task before it commits, once every edge is in place.
+/// Creates a task of `kind` and its label links inside the caller's transaction and appends `task.created`, whose data names the kind of a task without a proposal or a human task. Task creation, request approval and the sync task of a conflicted pull call it, so each adds its edges and links in the same transaction. The caller runs `recompute` on the new task before it commits, once every edge is in place.
 pub(crate) async fn create_in_tx(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,
@@ -479,7 +485,7 @@ pub(crate) async fn create_in_tx(
     tasks::replace_labels(tx, id, &input.labels).await?;
     let labels: BTreeSet<&str> = input.labels.iter().map(LabelName::as_str).collect();
     let mut data = json!({"labels": labels});
-    if kind == TaskKind::NoProposal {
+    if kind != TaskKind::Proposal {
         data["kind"] = json!(kind.as_str());
     }
     let event = NewEvent::new(types::TASK_CREATED, actor.event_actor())?

@@ -29,6 +29,12 @@ describe("leadCheck", () => {
     expect(needsProposal(taskView("T-1"))).toBe(true);
   });
 
+  it("is null for a human task, which has no proposal either", () => {
+    const human = taskView("T-2", { kind: "human" });
+    expect(leadCheck(human)).toBeNull();
+    expect(needsProposal(human)).toBe(false);
+  });
+
   it("follows the newest report of a task without a proposal", () => {
     const task = (reports: TaskReport[], archived_at: number | null = null) =>
       taskView("T-1", { kind: "no_proposal", reports, archived_at });

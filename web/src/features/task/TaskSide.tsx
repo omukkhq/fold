@@ -8,6 +8,8 @@ import {
   ChevronUp,
   GitCommitHorizontal,
   GitPullRequestArrow,
+  Hand,
+  Pencil,
   Plus,
   UserCheck,
   X,
@@ -17,10 +19,12 @@ import { useForm } from "react-hook-form";
 import { sessionQuery } from "@/api/queries";
 import {
   addDependency,
+  clearBlocker,
   clearHumanReview,
   completeTask,
   removeDependency,
   sendBackTask,
+  setBlocker,
   setHumanReview,
   type LiveWorkspace,
   type TaskDetail,
@@ -49,6 +53,7 @@ import {
   reportedText,
   resolvedText,
 } from "./leadCheck";
+import { blockerControls, blockerView } from "./humanTask";
 import { recordedCheckpoints } from "./liveStrip";
 import { proposalPath, revisionPath } from "./links";
 import {
@@ -60,9 +65,11 @@ import {
   WriteError,
 } from "./parts";
 import {
+  blockerSchema,
   dependencySchema,
   humanReviewSchema,
   sendBackSchema,
+  type BlockerForm as BlockerValues,
   type DependencyForm,
   type HumanReviewForm,
   type HumanReviewInput,
@@ -604,6 +611,160 @@ function HumanReview({ slug, task }: { slug: string; task: TaskDetail }) {
   );
 }
 
+function BlockerForm({
+  slug,
+  task,
+  reason,
+  onDone,
+}: {
+  slug: string;
+  task: string;
+  reason: string;
+  onDone: () => void;
+}) {
+  const write = useTaskWrite(slug, task, (values: BlockerValues) =>
+    setBlocker(slug, task, values.reason),
+  );
+  const form = useForm<BlockerValues>({
+    resolver: zodResolver(blockerSchema),
+    defaultValues: { reason },
+  });
+  return (
+    <form
+      aria-label="Set a blocker"
+      className="flex flex-col gap-8"
+      onSubmit={submit(
+        form.handleSubmit((values) => {
+          write.mutate(values, { onSuccess: onDone });
+        }),
+      )}
+    >
+      <Textarea
+        label="Reason"
+        hint="Agents cannot claim the task or start a coder for it until a human clears the blocker."
+        rows={3}
+        disabled={write.isPending}
+        error={form.formState.errors.reason?.message}
+        {...form.register("reason")}
+      />
+      <WriteError error={write.error} />
+      <div className="flex gap-8">
+        <Button
+          type="submit"
+          variant="primary"
+          size="sm"
+          pending={write.isPending}
+        >
+          Set blocker
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={write.isPending}
+          onClick={onDone}
+        >
+          Cancel
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+/** The blocker: while it is set, no agent claims the task and no lead starts a coder for it. */
+function Blocker({
+  slug,
+  task,
+  now,
+}: {
+  slug: string;
+  task: TaskDetail;
+  now: number;
+}) {
+  const [editing, setEditing] = useState(false);
+  const clear = useTaskWrite(slug, task.task, () =>
+    clearBlocker(slug, task.task),
+  );
+  const view = blockerView(task, now);
+  const controls = blockerControls(task);
+  if (editing && controls.canSet) {
+    return (
+      <SideGroup title="Blocker">
+        <BlockerForm
+          slug={slug}
+          task={task.task}
+          reason={view?.reason ?? ""}
+          onDone={() => {
+            setEditing(false);
+          }}
+        />
+      </SideGroup>
+    );
+  }
+  if (view === null) {
+    return (
+      <SideGroup title="Blocker">
+        <div className="flex items-center gap-8">
+          <span className="flex-1 text-bar text-text-muted">None</span>
+          {controls.canSet ? (
+            <SmallAction
+              icon={Hand}
+              onClick={() => {
+                setEditing(true);
+              }}
+            >
+              Set blocker
+            </SmallAction>
+          ) : null}
+        </div>
+      </SideGroup>
+    );
+  }
+  return (
+    <SideGroup title="Blocker">
+      <div className="flex flex-col gap-6 rounded-m bg-warning-soft px-12 py-10">
+        <p className="flex items-center gap-6 text-bar font-semibold text-warning">
+          <Hand aria-hidden="true" size={13} />
+          No agent takes this task
+        </p>
+        <p className="text-bar leading-normal whitespace-pre-wrap text-text">
+          {view.reason}
+        </p>
+        <p className="text-meta text-text-muted">
+          <ActorText segments={view.setBy} personClassName="text-bar" />
+        </p>
+      </div>
+      {controls.canClear || controls.canSet ? (
+        <div className="flex gap-4">
+          {controls.canClear ? (
+            <SmallAction
+              icon={X}
+              disabled={clear.isPending}
+              aria-busy={clear.isPending ? true : undefined}
+              onClick={() => {
+                clear.mutate(undefined);
+              }}
+            >
+              {clear.isPending ? "Clearing blocker…" : "Clear blocker"}
+            </SmallAction>
+          ) : null}
+          {controls.canSet ? (
+            <SmallAction
+              icon={Pencil}
+              disabled={clear.isPending}
+              onClick={() => {
+                setEditing(true);
+              }}
+            >
+              Change reason
+            </SmallAction>
+          ) : null}
+        </div>
+      ) : null}
+      <WriteError error={clear.error} />
+    </SideGroup>
+  );
+}
+
 function EdgeRow({
   slug,
   row,
@@ -826,6 +987,7 @@ export function TaskSide({ slug, task, live, now }: Props) {
       ) : (
         <LeadCheck slug={slug} task={task} now={now} />
       )}
+      <Blocker slug={slug} task={task} now={now} />
       <HumanReview slug={slug} task={task} />
       <Dependencies slug={slug} task={task} />
       {/* An empty History draws nothing, so the group is left out for a task read without events. */}

@@ -163,6 +163,10 @@ define_codes! {
     TASK_CHECK_DENIED = "task_check_denied",
     AGENT_APPROVAL_REQUIRED = "agent_approval_required",
     PROJECT_PAUSED = "project_paused",
+    INVALID_HOLD_REASON = "invalid_hold_reason",
+    TASK_ON_HOLD = "task_on_hold",
+    TASK_NEEDS_HUMAN = "task_needs_human",
+    TASK_HOLD_DENIED = "task_hold_denied",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

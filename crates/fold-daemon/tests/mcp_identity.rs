@@ -508,6 +508,8 @@ async fn the_server_lists_described_tools_and_sends_the_workflow() {
             "report_task",
             "complete_task",
             "send_back_task",
+            "set_blocker",
+            "clear_blocker",
             "create_request",
             "list_requests",
             "get_request",

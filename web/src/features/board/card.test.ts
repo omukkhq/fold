@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { BoardProposal } from "@/api/board";
 import {
   blockedText,
+  blockerMark,
   blocksText,
   checklistText,
   kindText,
@@ -144,5 +145,20 @@ describe("tasks without a proposal", () => {
     expect(leadCheckMark({ ...card, status: "in_progress" })).toBeNull();
     expect(leadCheckMark({ ...card, report: null })).toBeNull();
     expect(leadCheckMark({ ...card, kind: "proposal" })).toBeNull();
+  });
+});
+
+describe("human tasks and blockers", () => {
+  it("names a human task and shows a blocker with its reason", () => {
+    expect(kindText({ kind: "human" })).toBe("human task");
+    expect(
+      leadCheckMark({ kind: "human", status: "review", report: "x" }),
+    ).toBeNull();
+    expect(blockerMark({ blocker: null })).toBeNull();
+    expect(
+      blockerMark({
+        blocker: { reason: "Wait for the logo", set_by: "web-lead", set_at: 1 },
+      }),
+    ).toEqual({ text: "Blocker", reason: "Wait for the logo" });
   });
 });

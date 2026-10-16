@@ -245,6 +245,8 @@ describe("eventLine", () => {
       "reported T-12 finished for a lead check",
     );
     expect(line("task.sent_back")).toBe("sent T-12 back to its coder");
+    expect(line("task.hold_set")).toBe("put a blocker on T-12");
+    expect(line("task.hold_cleared")).toBe("cleared the blocker of T-12");
     expect(
       line("worker.resumed", {
         agent: "web-coder",

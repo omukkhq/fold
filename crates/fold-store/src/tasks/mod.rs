@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, HashSet};
 
 use fold_core::reviews::HumanReviewMark;
 use fold_core::{
-    EventActor, HumanName, LabelColor, LabelName, TaskDescription, TaskId, TaskKind, TaskStatus,
-    TaskTitle, Timestamp,
+    EventActor, HoldMark, HoldReason, HumanName, LabelColor, LabelName, TaskDescription, TaskId,
+    TaskKind, TaskStatus, TaskTitle, Timestamp,
 };
 use sqlx::{SqliteConnection, SqliteExecutor, SqlitePool};
 
@@ -15,6 +15,7 @@ pub mod checklists;
 pub mod claims;
 pub mod completions;
 mod dependencies;
+mod hold;
 mod human_review;
 mod ready;
 mod recompute;
@@ -27,6 +28,7 @@ pub use dependencies::{
     EdgeRow, delete_edge, dependent_edges, edges, edges_conn, edges_of, fetch_edge, insert_edge,
     needs_transitively, prerequisite_statuses,
 };
+pub use hold::{WaitingTask, clear_hold, held_tasks, ready_human_tasks, set_hold};
 pub use human_review::{
     MarkedProposal, clear_human_review, marked_open_proposals, set_human_review,
 };
@@ -55,6 +57,8 @@ pub struct TaskRow {
     pub status: TaskStatus,
     pub blocked: bool,
     pub kind: TaskKind,
+    /// `None` while the task is not on hold.
+    pub hold: Option<HoldMark>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,6 +94,9 @@ struct RawTask {
     status: String,
     blocked: bool,
     kind: String,
+    hold_reason: Option<String>,
+    hold_set_by: Option<String>,
+    hold_set_at: Option<i64>,
 }
 
 /// The columns of [`RawTask`], followed by the tail of each read: every task row maps the same way.
@@ -99,7 +106,8 @@ macro_rules! select_tasks {
             RawTask,
             r#"SELECT number, title, description, created_by, created_at, updated_at, archived_at,
                       human_review AS "human_review: bool", human_reviewer, human_review_reason,
-                      human_review_set_by, status, blocked AS "blocked: bool", kind
+                      human_review_set_by, status, blocked AS "blocked: bool", kind,
+                      hold_reason, hold_set_by, hold_set_at
                FROM tasks
                "# + $tail
             $(, $arg)*
@@ -135,8 +143,34 @@ impl RawTask {
                 .kind
                 .parse()
                 .map_err(|_| StoreError::Corrupt("tasks.kind"))?,
+            hold: hold_mark(self.hold_reason, self.hold_set_by, self.hold_set_at)?,
         })
     }
+}
+
+/// The mark the three `hold_*` columns hold. A trigger keeps them all set or all null.
+fn hold_mark(
+    reason: Option<String>,
+    set_by: Option<String>,
+    set_at: Option<i64>,
+) -> Result<Option<HoldMark>, StoreError> {
+    let Some(reason) = reason else {
+        return Ok(None);
+    };
+    let reason =
+        HoldReason::parse(&reason).map_err(|_| StoreError::Corrupt("tasks.hold_reason"))?;
+    let set_by = set_by
+        .and_then(|actor| EventActor::parse(&actor).ok())
+        .ok_or(StoreError::Corrupt("tasks.hold_set_by"))?;
+    let set_at = timestamp(
+        set_at.ok_or(StoreError::Corrupt("tasks.hold_set_at"))?,
+        "tasks.hold_set_at",
+    )?;
+    Ok(Some(HoldMark {
+        reason,
+        set_by,
+        set_at,
+    }))
 }
 
 /// The mark the four `human_review` columns hold. A mark that is on always has a reason and a setter; the columns of a mark that is off are ignored.

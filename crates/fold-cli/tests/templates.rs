@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 const SKILL: &str = include_str!("../templates/SKILL.md");
 const AGENTS_SECTION: &str = include_str!("../templates/agents_section.md");
 
-const FOLD_TOOLS: [&str; 80] = [
+const FOLD_TOOLS: [&str; 82] = [
     "register_agent",
     "register_worker",
     "list_agents",
@@ -42,6 +42,8 @@ const FOLD_TOOLS: [&str; 80] = [
     "report_task",
     "complete_task",
     "send_back_task",
+    "set_blocker",
+    "clear_blocker",
     "get_repository_state",
     "get_revision",
     "compare_revisions",
@@ -90,7 +92,7 @@ const FOLD_TOOLS: [&str; 80] = [
 const PENDING_TOOLS: [&str; 0] = [];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 144] = [
+const FOLD_ERROR_CODES: [&str; 148] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -235,6 +237,10 @@ const FOLD_ERROR_CODES: [&str; 144] = [
     "task_check_denied",
     "agent_approval_required",
     "project_paused",
+    "invalid_hold_reason",
+    "task_on_hold",
+    "task_needs_human",
+    "task_hold_denied",
 ];
 
 /// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.

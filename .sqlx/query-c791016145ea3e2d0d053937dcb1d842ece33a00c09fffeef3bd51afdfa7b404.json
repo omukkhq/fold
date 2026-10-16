@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE tasks\n         SET hold_reason = NULL, hold_set_by = NULL, hold_set_at = NULL, updated_at = ?2\n         WHERE number = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "c791016145ea3e2d0d053937dcb1d842ece33a00c09fffeef3bd51afdfa7b404"
+}

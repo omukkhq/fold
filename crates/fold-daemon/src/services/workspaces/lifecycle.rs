@@ -30,8 +30,8 @@ use super::sync::path_text;
 use super::{WorkspaceError, WorkspaceService, blocking, capabilities};
 use crate::services::events::EventBuffer;
 use crate::services::tasks::{
-    already_claimed, claim_in_tx, closed_refusal, proposal_kind_refusal, recompute, task_not_found,
-    worker_row,
+    agent_refusal, already_claimed, claim_in_tx, closed_refusal, proposal_kind_refusal, recompute,
+    task_not_found, worker_row,
 };
 
 static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -350,7 +350,10 @@ impl WorkspaceService {
         let row = tasks::get_by_number(read, task)
             .await?
             .ok_or_else(|| task_not_found(task))?;
-        if let Some(refusal) = closed_refusal(&row).or_else(|| proposal_kind_refusal(&row)) {
+        if let Some(refusal) = closed_refusal(&row)
+            .or_else(|| proposal_kind_refusal(&row))
+            .or_else(|| agent_refusal(&row).map(Into::into))
+        {
             return Err(refusal.into());
         }
         let holder = claims::unreleased_for_task(read, task).await?;

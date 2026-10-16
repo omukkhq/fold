@@ -32,6 +32,7 @@ export type TaskIntegration = Schemas["TaskIntegration"];
 export type TaskEvent = Schemas["TaskEvent"];
 export type TaskKind = Schemas["TaskKind"];
 export type TaskReport = Schemas["TaskReport"];
+export type Blocker = Schemas["BlockerMark"];
 
 export type TaskDetail = Schemas["TaskView"];
 
@@ -87,15 +88,14 @@ export async function getMessageTargets(slug: string): Promise<MessageTargets> {
   return { agents: names, tags };
 }
 
-/** Answers the new task's public id. Only a `no_proposal` kind is sent; the daemon's default is `proposal`. */
+/** Answers the new task's public id. The kind is sent only when it is not `proposal`, the daemon's default. */
 export async function createTask(
   slug: string,
-  input: { title: string; description: string; noProposal?: boolean },
+  input: { title: string; description: string; kind?: TaskKind },
 ): Promise<string> {
-  const { noProposal, ...fields } = input;
-  const body: Schemas["CreateTaskBody"] = noProposal
-    ? { ...fields, kind: "no_proposal" }
-    : fields;
+  const { kind, ...fields } = input;
+  const body: Schemas["CreateTaskBody"] =
+    kind === undefined || kind === "proposal" ? fields : { ...fields, kind };
   const created = await unwrap(
     api.POST("/api/v1/projects/{slug}/tasks", {
       params: { path: { slug } },
@@ -105,7 +105,7 @@ export async function createTask(
   return created.task;
 }
 
-/** The lead check of a reported `no_proposal` task: refused with `task_not_reported` when no report waits. */
+/** The lead check of a reported `no_proposal` task, refused with `task_not_reported` when no report waits; for a `human` task, the human marks the person's work Done. */
 export async function completeTask(slug: string, task: string): Promise<void> {
   await unwrap(
     api.POST("/api/v1/projects/{slug}/tasks/{id}/complete", {
@@ -124,6 +124,28 @@ export async function sendBackTask(
     api.POST("/api/v1/projects/{slug}/tasks/{id}/send-back", {
       params: { path: { slug, id: task } },
       body: { note },
+    }),
+  );
+}
+
+/** Puts a blocker on the task with `reason`, or changes the reason: no agent takes the task until a human clears it. */
+export async function setBlocker(
+  slug: string,
+  task: string,
+  reason: string,
+): Promise<void> {
+  await unwrap(
+    api.PUT("/api/v1/projects/{slug}/tasks/{id}/blocker", {
+      params: { path: { slug, id: task } },
+      body: { reason },
+    }),
+  );
+}
+
+export async function clearBlocker(slug: string, task: string): Promise<void> {
+  await unwrap(
+    api.DELETE("/api/v1/projects/{slug}/tasks/{id}/blocker", {
+      params: { path: { slug, id: task } },
     }),
   );
 }

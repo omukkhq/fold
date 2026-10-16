@@ -6,7 +6,7 @@ use sqlx::SqlitePool;
 use super::{LabelRow, edges_conn, labels_for_conn, timestamp};
 use crate::error::StoreError;
 
-/// A Todo task that is not archived and has no unreleased implementation claim.
+/// A Todo task that is not archived, has no unreleased implementation claim, is no human task and is not on hold.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadyRow {
     pub id: TaskId,
@@ -31,6 +31,7 @@ pub async fn ready_snapshot(pool: &SqlitePool) -> Result<ReadySnapshot, StoreErr
         r#"SELECT t.number AS "number!: i64", t.title, t.created_at
            FROM tasks t
            WHERE t.status = 'todo' AND t.archived_at IS NULL
+             AND t.kind <> 'human' AND t.hold_reason IS NULL
              AND NOT EXISTS (
                  SELECT 1 FROM claims c
                  WHERE c.task_id = t.id AND c.kind = 'implementation' AND c.released_at IS NULL

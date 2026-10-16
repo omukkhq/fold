@@ -628,6 +628,9 @@ describe("invalidation rules", () => {
       ["message.sent", {}],
       ["review.submitted", { proposal: "P-3" }],
       ["task.human_review_set", { task: "T-3" }],
+      ["task.status_changed", { task: "T-3" }],
+      ["task.hold_set", { task: "T-3" }],
+      ["task.updated", { task: "T-3" }],
       ["proposal.opened", { proposal: "P-3" }],
       ["request.draft_submitted", { data: { request: "RQ-4" } }],
       ["request.approved", { data: { request: "RQ-4", tasks: [] } }],
@@ -638,7 +641,7 @@ describe("invalidation rules", () => {
       expect(hit(keys.needsYou(slug)), type).toBe(true);
     }
     invalidated = [];
-    applyEvent(client, slug, ev("task.updated", { task: "T-3" }));
+    applyEvent(client, slug, ev("checklist.item_done", { task: "T-3" }));
     expect(hit(keys.needsYou(slug))).toBe(false);
   });
 
@@ -679,6 +682,12 @@ describe("invalidation rules", () => {
     invalidated = [];
     applyEvent(client, slug, ev("task.updated", { task: "T-3" }));
     expect(hit(keys.task(slug, "T-3"))).toBe(true);
+    for (const type of ["task.hold_set", "task.hold_cleared"]) {
+      invalidated = [];
+      applyEvent(client, slug, ev(type, { task: "T-3" }));
+      expect(hit(keys.task(slug, "T-3")), type).toBe(true);
+      expect(hit(keys.board(slug)), type).toBe(true);
+    }
   });
 
   it("refreshes only the activity list for an event of an unknown type", () => {

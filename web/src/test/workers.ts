@@ -93,6 +93,7 @@ export function needsItem(fields: Partial<NeedsYouItem> = {}): NeedsYouItem {
     choices: [],
     header: null,
     title: null,
+    reason: null,
     ...fields,
   };
 }

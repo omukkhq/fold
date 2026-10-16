@@ -10,9 +10,11 @@ import {
   addDependency,
   archiveTask,
   attachLabel,
+  clearBlocker,
   clearHumanReview,
   completeTask,
   sendBackTask,
+  setBlocker,
   setHumanReview,
   createLabel,
   createLabelOn,
@@ -121,24 +123,45 @@ describe("writes to a task", () => {
     });
   });
 
-  it("sends the no-proposal kind only when it is chosen", async () => {
+  it("sends the kind only when it is not the default", async () => {
     daemon.on(`POST ${P}/tasks`, ok(taskView("T-18"), 201));
     expect(
       await createTask("demo", {
         title: "Draw it",
         description: "",
-        noProposal: true,
+        kind: "no_proposal",
       }),
     ).toBe("T-18");
     await createTask("demo", {
       title: "Build it",
       description: "",
-      noProposal: false,
+      kind: "proposal",
+    });
+    await createTask("demo", {
+      title: "Verify it",
+      description: "",
+      kind: "human",
     });
     expect(daemon.made(`POST ${P}/tasks`).map((c) => c.body)).toEqual([
       { title: "Draw it", description: "", kind: "no_proposal" },
       { title: "Build it", description: "" },
+      { title: "Verify it", description: "", kind: "human" },
     ]);
+  });
+
+  it("sets and clears a blocker", async () => {
+    daemon.on(`PUT ${P}/tasks/T-6/blocker`, ok(taskView("T-6")));
+    daemon.on(`DELETE ${P}/tasks/T-6/blocker`, ok(taskView("T-6")));
+    await setBlocker("demo", "T-6", "Wait for the logo");
+    await clearBlocker("demo", "T-6");
+    expect(bodyOf(`PUT ${P}/tasks/T-6/blocker`)).toEqual({
+      reason: "Wait for the logo",
+    });
+    expect(daemon.made(`DELETE ${P}/tasks/T-6/blocker`)).toHaveLength(1);
+    daemon.on(`PUT ${P}/tasks/T-7/blocker`, refuse(400, "invalid_hold_reason"));
+    await expect(setBlocker("demo", "T-7", " ")).rejects.toSatisfy(
+      (e: unknown) => apiErrorCode(e) === "invalid_hold_reason",
+    );
   });
 
   it("completes a reported task and sends one back with a note", async () => {

@@ -132,6 +132,8 @@ define_event_types! {
     PROPOSAL_AUTHOR_CHANGED = "proposal.author_changed",
     PROJECT_PAUSED = "project.paused",
     PROJECT_RESUMED = "project.resumed",
+    TASK_HOLD_SET = "task.hold_set",
+    TASK_HOLD_CLEARED = "task.hold_cleared",
 }
 
 impl EventType {

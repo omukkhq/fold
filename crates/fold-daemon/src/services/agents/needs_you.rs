@@ -5,6 +5,7 @@ use fold_core::{
 };
 use fold_store::agents::{self, QuestionKind};
 use fold_store::reviews;
+use fold_store::tasks;
 use fold_store::tasks::requests::{self, RequestFilter};
 use fold_store::{Store, StoreError, messages};
 
@@ -21,6 +22,10 @@ pub enum NeedsYouKind {
     HumanReview,
     /// A card draft that waits for its human requester.
     RequestDraft,
+    /// A human task in Todo: every prerequisite is Done and a person does the work.
+    HumanTask,
+    /// A task with a blocker, which waits until a human clears it.
+    Blocker,
 }
 
 /// The screen on which a human answers an item.
@@ -30,6 +35,7 @@ pub enum Screen {
     Worker,
     Proposal,
     Request,
+    Task,
 }
 
 impl NeedsYouKind {
@@ -39,6 +45,7 @@ impl NeedsYouKind {
             NeedsYouKind::Permission => Screen::Worker,
             NeedsYouKind::HumanReview => Screen::Proposal,
             NeedsYouKind::RequestDraft => Screen::Request,
+            NeedsYouKind::HumanTask | NeedsYouKind::Blocker => Screen::Task,
         }
     }
 }
@@ -63,8 +70,10 @@ pub struct NeedsYouItem {
     pub choices: Vec<Choice>,
     /// The short header of a `Question`.
     pub header: Option<String>,
-    /// The proposal title of a `HumanReview`; the request title of a `RequestDraft`, which the claim gave it before any draft.
+    /// The proposal title of a `HumanReview`; the request title of a `RequestDraft`, which the claim gave it before any draft; the task title of a `HumanTask` or a `Blocker`.
     pub title: Option<String>,
+    /// The reason of a `Blocker`.
+    pub reason: Option<String>,
 }
 
 impl NeedsYouItem {
@@ -83,6 +92,7 @@ impl NeedsYouItem {
             choices: Vec::new(),
             header: None,
             title: None,
+            reason: None,
         }
     }
 }
@@ -129,7 +139,20 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
         },
     )
     .await?;
+    let human_tasks = tasks::ready_human_tasks(&mut *conn).await?;
+    let held = tasks::held_tasks(&mut *conn).await?;
     drop(conn);
+    for (kind, waiting) in human_tasks
+        .into_iter()
+        .map(|task| (NeedsYouKind::HumanTask, task))
+        .chain(held.into_iter().map(|task| (NeedsYouKind::Blocker, task)))
+    {
+        let mut item = NeedsYouItem::new(kind, waiting.since);
+        item.task = Some(waiting.id);
+        item.title = Some(waiting.title.as_str().to_owned());
+        item.reason = waiting.reason.map(|reason| reason.as_str().to_owned());
+        items.push(item);
+    }
     for request in drafts {
         let Requester::Human(human) = request.requester else {
             continue;

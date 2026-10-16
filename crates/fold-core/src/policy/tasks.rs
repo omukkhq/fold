@@ -1,6 +1,7 @@
 use crate::actor::Actor;
 use crate::agents::{AgentName, WorkerName};
 use crate::error::codes;
+use crate::status::TaskStatus;
 
 use super::PolicyDenied;
 
@@ -32,6 +33,30 @@ pub fn can_delete_task(actor: &Actor, holder: Option<&TaskHolder>) -> Result<(),
         code: codes::NOT_CLAIM_HOLDER,
         message: "only the agent that holds the task, its lead or a human can delete it",
         hint: "call get_task to see the holder, then ask it or its lead",
+    })
+}
+
+/// How far an agent has taken a task, which decides whether it can still get a blocker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TaskStart {
+    pub status: TaskStatus,
+    /// An unreleased implementation claim exists.
+    pub claimed: bool,
+    /// A live task workspace exists.
+    pub workspace: bool,
+    pub open_proposal: bool,
+}
+
+/// A blocker keeps agents from starting a task, so it is set while the task waits in Backlog or Todo and no agent has started it: no claim, no live task workspace and no open proposal. Work that an agent has started is never put on hold.
+pub fn can_hold_task(start: &TaskStart) -> Result<(), PolicyDenied> {
+    let waiting = matches!(start.status, TaskStatus::Backlog | TaskStatus::Todo);
+    if waiting && !start.claimed && !start.workspace && !start.open_proposal {
+        return Ok(());
+    }
+    Err(PolicyDenied {
+        code: codes::TASK_HOLD_DENIED,
+        message: "a blocker is set only on a task in Backlog or Todo that no agent has started",
+        hint: "set the blocker before an agent claims the task; call get_task to see its claim, workspace and proposal",
     })
 }
 
@@ -90,6 +115,50 @@ mod tests {
                 assert!(denied.to_string().ends_with("can delete it"), "{case}");
                 assert!(denied.hint().contains("get_task"));
             }
+        }
+    }
+
+    #[test]
+    fn only_a_task_no_agent_has_started_gets_a_blocker() {
+        let waiting = TaskStart {
+            status: TaskStatus::Todo,
+            claimed: false,
+            workspace: false,
+            open_proposal: false,
+        };
+        assert!(can_hold_task(&waiting).is_ok());
+        assert!(
+            can_hold_task(&TaskStart {
+                status: TaskStatus::Backlog,
+                ..waiting
+            })
+            .is_ok()
+        );
+        for started in [
+            TaskStart {
+                claimed: true,
+                ..waiting
+            },
+            TaskStart {
+                workspace: true,
+                ..waiting
+            },
+            TaskStart {
+                open_proposal: true,
+                ..waiting
+            },
+            TaskStart {
+                status: TaskStatus::InProgress,
+                ..waiting
+            },
+            TaskStart {
+                status: TaskStatus::Review,
+                ..waiting
+            },
+        ] {
+            let denied = can_hold_task(&started).unwrap_err();
+            assert_eq!(denied.code(), codes::TASK_HOLD_DENIED, "{started:?}");
+            assert!(denied.hint().contains("get_task"));
         }
     }
 

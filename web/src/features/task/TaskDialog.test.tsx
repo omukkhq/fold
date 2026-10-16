@@ -1500,7 +1500,7 @@ describe("a task without a proposal", () => {
       "Draw the icons",
     );
     await userEvent.click(
-      within(dialog).getByRole("checkbox", { name: "Needs no proposal" }),
+      within(dialog).getByRole("radio", { name: /An agent, with no proposal/ }),
     );
     await userEvent.click(
       within(dialog).getByRole("button", { name: "Create task" }),

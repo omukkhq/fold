@@ -74,6 +74,11 @@ export function describeError(error: unknown): ErrorView | null {
         field: null,
         text: "This task ends with a proposal, so its review completes it.",
       };
+    case "invalid_hold_reason":
+      return {
+        field: null,
+        text: "Give the blocker a reason of 1 to 500 characters.",
+      };
     case "task_closed":
       return {
         field: null,

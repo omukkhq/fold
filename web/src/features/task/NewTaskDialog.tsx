@@ -5,9 +5,11 @@ import { Controller, useForm } from "react-hook-form";
 import { keys } from "@/api/keys";
 import { createTask } from "@/api/tasks";
 import { Button } from "@/components/button/Button";
-import { Checkbox, TextField } from "@/components/form/controls";
+import { TextField } from "@/components/form/controls";
+import { cn } from "@/lib/cn";
 import { MentionField } from "@/mentions/MentionField";
 import { DialogFrame } from "./DialogFrame";
+import { KIND_OPTIONS } from "./humanTask";
 import { submit, WriteError } from "./parts";
 import { newTaskSchema, type NewTaskForm } from "./schemas";
 
@@ -35,7 +37,7 @@ export function NewTaskDialog({
   });
   const form = useForm<NewTaskForm>({
     resolver: zodResolver(newTaskSchema),
-    defaultValues: { title: "", description: "", noProposal: false },
+    defaultValues: { title: "", description: "", kind: "proposal" },
   });
   return (
     <DialogFrame crumb="New task" crumbIsId={false} described onClose={onClose}>
@@ -84,17 +86,49 @@ export function NewTaskDialog({
         />
         <Controller
           control={form.control}
-          name="noProposal"
+          name="kind"
           render={({ field }) => (
-            <Checkbox
-              label="Needs no proposal"
-              hint="For work that changes no project file, such as screens drawn through an MCP server. The coder reports the work, and a lead check completes it."
-              disabled={create.isPending}
-              ref={field.ref}
-              checked={field.value}
-              onCheckedChange={field.onChange}
-              onBlur={field.onBlur}
-            />
+            <fieldset className="flex flex-col gap-8">
+              <legend className="mb-8 text-bar leading-snug font-semibold text-text">
+                Who does the work
+              </legend>
+              {KIND_OPTIONS.map((option) => {
+                const chosen = field.value === option.value;
+                return (
+                  <label
+                    key={option.value}
+                    className={cn(
+                      "flex cursor-pointer gap-10 rounded-m px-12 py-9 inset-ring has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-focus-ring",
+                      chosen
+                        ? "bg-sunken inset-ring-ink"
+                        : "bg-surface inset-ring-border-subtle",
+                      create.isPending && "cursor-default opacity-60",
+                    )}
+                  >
+                    <input
+                      type="radio"
+                      name={field.name}
+                      value={option.value}
+                      checked={chosen}
+                      disabled={create.isPending}
+                      onChange={() => {
+                        field.onChange(option.value);
+                      }}
+                      onBlur={field.onBlur}
+                      className="mt-2 size-16 shrink-0 accent-ink"
+                    />
+                    <span className="flex min-w-0 flex-col gap-2">
+                      <span className="text-bar font-medium text-text">
+                        {option.title}
+                      </span>
+                      <span className="text-meta leading-normal text-text-muted">
+                        {option.hint}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+            </fieldset>
           )}
         />
         <WriteError error={create.error} />

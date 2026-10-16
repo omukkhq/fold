@@ -4,7 +4,9 @@ use std::str::FromStr;
 use thiserror::Error;
 
 use crate::error::{FoldError, codes};
+use crate::events::EventActor;
 use crate::text::one_line;
+use crate::time::Timestamp;
 
 /// The messages never repeat the rejected text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -21,8 +23,10 @@ pub enum TaskValueError {
     InvalidChecklistName,
     #[error("a checklist step is not empty and has no line break")]
     InvalidStepText,
-    #[error("a task kind is proposal or no_proposal")]
+    #[error("a task kind is proposal, no_proposal or human")]
     InvalidKind,
+    #[error("a blocker reason is not empty and has at most 500 characters")]
+    InvalidHoldReason,
 }
 
 impl TaskValueError {
@@ -35,6 +39,7 @@ impl TaskValueError {
             TaskValueError::InvalidChecklistName => codes::INVALID_CHECKLIST_NAME,
             TaskValueError::InvalidStepText => codes::INVALID_STEP_TEXT,
             TaskValueError::InvalidKind => codes::INVALID_TASK_KIND,
+            TaskValueError::InvalidHoldReason => codes::INVALID_HOLD_REASON,
         }
     }
 }
@@ -118,6 +123,41 @@ impl ChecklistName {
     }
 }
 
+/// The longest hold reason, in characters.
+pub const MAX_HOLD_REASON_CHARS: usize = 500;
+
+/// Why a task is on hold: trimmed text of 1 to [`MAX_HOLD_REASON_CHARS`] characters, line breaks allowed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HoldReason(String);
+
+impl HoldReason {
+    pub fn parse(text: &str) -> Result<Self, TaskValueError> {
+        let text = text.trim();
+        if text.is_empty() || text.chars().count() > MAX_HOLD_REASON_CHARS {
+            return Err(TaskValueError::InvalidHoldReason);
+        }
+        Ok(Self(text.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for HoldReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// The hold mark of a task, which the board labels Blocker: while it is on, no agent claims the task and no lead starts a coder for it, until a person says the work can start. It is set by hand with a reason, unlike `tasks.blocked`, which recompute calculates from unfinished prerequisites. It never changes the task's status.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HoldMark {
+    pub reason: HoldReason,
+    pub set_by: EventActor,
+    pub set_at: Timestamp,
+}
+
 /// Markdown text, kept exactly as given.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TaskDescription(String);
@@ -198,11 +238,12 @@ define_names!(
 );
 
 define_names!(
-    /// How a task's work reaches Done. A `proposal` task is done when its proposal integrates; a `no_proposal` task changes no project file, such as design work done through an MCP server, so its coder reports the work and a lead check completes it.
+    /// How a task's work reaches Done. A `proposal` task is done when its proposal integrates; a `no_proposal` task changes no project file, such as design work done through an MCP server, so its coder reports the work and a lead check completes it; a `human` task is work only a person can do outside every agent, such as verifying an account with a provider, so no agent takes it and a person marks it Done.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub enum TaskKind {
         Proposal = "proposal",
         NoProposal = "no_proposal",
+        Human = "human",
     },
     error = TaskValueError::InvalidKind
 );
@@ -296,10 +337,38 @@ mod tests {
             assert_eq!(kind.to_string(), kind.as_str());
         }
         assert_eq!(TaskKind::NoProposal.as_str(), "no_proposal");
+        assert_eq!(TaskKind::Human.as_str(), "human");
+        assert_eq!(TaskKind::ALL.len(), 3);
         assert_eq!(
             "design".parse::<TaskKind>(),
             Err(TaskValueError::InvalidKind)
         );
+    }
+
+    #[test]
+    fn hold_reasons_are_trimmed_and_bounded() {
+        assert_eq!(
+            HoldReason::parse("  Wait for the Meta review \n")
+                .unwrap()
+                .as_str(),
+            "Wait for the Meta review"
+        );
+        assert_eq!(
+            HoldReason::parse("line one\nline two").unwrap().to_string(),
+            "line one\nline two"
+        );
+        let longest = "a".repeat(MAX_HOLD_REASON_CHARS);
+        assert_eq!(HoldReason::parse(&longest).unwrap().as_str(), longest);
+        for bad in [
+            String::new(),
+            " \n ".to_owned(),
+            "a".repeat(MAX_HOLD_REASON_CHARS + 1),
+        ] {
+            assert_eq!(
+                HoldReason::parse(&bad),
+                Err(TaskValueError::InvalidHoldReason)
+            );
+        }
     }
 
     #[test]
@@ -340,6 +409,7 @@ mod tests {
             ),
             (TaskValueError::InvalidStepText, "invalid_step_text"),
             (TaskValueError::InvalidKind, "invalid_task_kind"),
+            (TaskValueError::InvalidHoldReason, "invalid_hold_reason"),
         ];
         for (error, code) in cases {
             assert_eq!(error.code(), code);

@@ -259,6 +259,14 @@ const SPECS: Record<EventType, Spec> = {
     icon: Check,
     text: (e) => `${taskOf(e)} no longer waits for a human review`,
   },
+  "task.hold_set": {
+    icon: Hand,
+    text: (e) => `put a blocker on ${taskOf(e)}`,
+  },
+  "task.hold_cleared": {
+    icon: Check,
+    text: (e) => `cleared the blocker of ${taskOf(e)}`,
+  },
   "label.created": { icon: Tag, text: fixed("created a label") },
   "dependency.added": {
     icon: ListChecks,

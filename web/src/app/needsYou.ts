@@ -1,4 +1,5 @@
 import type { NeedsYouItem, NeedsYouKind } from "@/api/workers";
+import { taskPath } from "@/features/board/card";
 import { messagesHref } from "@/features/messages/search";
 import { asksText } from "@/features/workers/permission";
 import { projectPath, withQuery } from "@/routes/paths";
@@ -12,7 +13,7 @@ export interface NeedsYouLine {
   chip: string | null;
   text: string;
   task: string | null;
-  /** The second line's title: the proposal title of a review, the request title of a draft. */
+  /** The second line's title: the proposal title of a review, the request title of a draft, the task title of a human task, the reason of a blocker. */
   title: string | null;
   since: number;
   hint: string;
@@ -30,6 +31,8 @@ const GROUPS: readonly { kind: NeedsYouKind; title: string }[] = [
   { kind: "permission", title: "Permissions" },
   { kind: "human_review", title: "Reviews" },
   { kind: "request_draft", title: "Request drafts" },
+  { kind: "human_task", title: "Human tasks" },
+  { kind: "blocker", title: "Blockers" },
 ];
 
 /** The items for this human: an item that waits for another named human is theirs. Before a name, every item shows. */
@@ -58,7 +61,7 @@ export function questionText(
 
 function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
   const base = {
-    key: `${item.kind}:${item.message ?? item.question ?? item.proposal ?? item.request ?? String(index)}`,
+    key: `${item.kind}:${item.message ?? item.question ?? item.proposal ?? item.request ?? item.task ?? String(index)}`,
     kind: item.kind,
     task: item.task,
     title:
@@ -68,6 +71,28 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
     since: item.since,
   };
   switch (item.kind) {
+    case "human_task":
+      return {
+        ...base,
+        person: null,
+        chip: item.task,
+        task: null,
+        title: titleText(item.title),
+        text: "is ready for a person to do",
+        hint: "opens the task",
+        href: taskPath(slug, item.task ?? ""),
+      };
+    case "blocker":
+      return {
+        ...base,
+        person: null,
+        chip: item.task,
+        task: null,
+        title: titleText(item.reason),
+        text: "has a blocker",
+        hint: "opens the task",
+        href: taskPath(slug, item.task ?? ""),
+      };
     case "question":
       return {
         ...base,
@@ -111,7 +136,7 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
   }
 }
 
-/** The list in group order: questions, permissions, reviews, request drafts; a group without items is left out. */
+/** The list in group order: questions, permissions, reviews, request drafts, human tasks, blockers; a group without items is left out. */
 export function needsYouGroups(
   slug: string,
   items: readonly NeedsYouItem[],

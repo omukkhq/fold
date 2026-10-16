@@ -15,11 +15,13 @@ pub struct ContainerFacts {
     /// A completion record exists.
     pub completed: bool,
     pub archived: bool,
+    /// The task is a human task, which only a person marks Done, so it never completes by the rule.
+    pub human_task: bool,
 }
 
-/// True when the task has at least one linked item, every linked child is Done, every plain step is ticked, it never had a workspace, and it is neither completed nor archived. A parent that keeps an unticked plain step for its own work therefore completes through its own proposal instead.
+/// True when the task has at least one linked item, every linked child is Done, every plain step is ticked, it never had a workspace, it is no human task, and it is neither completed nor archived. A parent that keeps an unticked plain step for its own work therefore completes through its own proposal instead.
 pub fn completes_by_children(facts: &ContainerFacts) -> bool {
-    if facts.completed || facts.archived || facts.ever_had_workspace {
+    if facts.completed || facts.archived || facts.ever_had_workspace || facts.human_task {
         return false;
     }
     let mut linked = false;

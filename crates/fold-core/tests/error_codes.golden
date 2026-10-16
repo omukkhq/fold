@@ -147,3 +147,7 @@ task_not_reported
 task_check_denied
 agent_approval_required
 project_paused
+invalid_hold_reason
+task_on_hold
+task_needs_human
+task_hold_denied

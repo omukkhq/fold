@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT number, title, description, created_by, created_at, updated_at, archived_at,\n                      human_review AS \"human_review: bool\", human_reviewer, human_review_reason,\n                      human_review_set_by, status, blocked AS \"blocked: bool\", kind\n               FROM tasks\n               WHERE number = ?",
+  "query": "SELECT number, title, description, created_by, created_at, updated_at, archived_at,\n                      human_review AS \"human_review: bool\", human_reviewer, human_review_reason,\n                      human_review_set_by, status, blocked AS \"blocked: bool\", kind,\n                      hold_reason, hold_set_by, hold_set_at\n               FROM tasks\n               WHERE ?1 OR archived_at IS NULL ORDER BY number",
   "describe": {
     "columns": [
       {
@@ -156,6 +156,39 @@
             "name": "kind"
           }
         }
+      },
+      {
+        "name": "hold_reason",
+        "ordinal": 14,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "hold_reason"
+          }
+        }
+      },
+      {
+        "name": "hold_set_by",
+        "ordinal": 15,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "hold_set_by"
+          }
+        }
+      },
+      {
+        "name": "hold_set_at",
+        "ordinal": 16,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "hold_set_at"
+          }
+        }
       }
     ],
     "parameters": {
@@ -175,8 +208,11 @@
       true,
       false,
       false,
-      false
+      false,
+      true,
+      true,
+      true
     ]
   },
-  "hash": "eebdbb3330910b263a89c610c8f5b00e67c3d75b06f8892a4b658084e785caef"
+  "hash": "69570a803ff9ff6d83ccb2a1898a7beaa5dfe67814b8712c4f519d21c3786eb5"
 }

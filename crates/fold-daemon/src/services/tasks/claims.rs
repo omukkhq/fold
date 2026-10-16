@@ -11,7 +11,7 @@ use fold_store::{StoreError, WriteTx, tasks, workspaces};
 use serde_json::json;
 use tokio::sync::OwnedMutexGuard;
 
-use super::{TaskError, TaskService, recompute, task_not_found};
+use super::{TaskError, TaskService, agent_refusal, recompute, task_not_found};
 use crate::services::agents::{actor_worker, worker_not_found};
 use crate::services::events::EventBuffer;
 use crate::services::workspaces::{AdoptReason, adopt_if_orphaned, hand_over_proposal};
@@ -45,7 +45,7 @@ fn claim_view_of(row: ClaimRow, now: Timestamp, lease_minutes: u64) -> ClaimView
     }
 }
 
-/// Implementation claims. `policy::can_claim` admits only an agent, and the claim belongs to the agent's acting worker; the lease is the project's `lease_minutes`, read before the command's transaction.
+/// Implementation claims. `policy::can_claim` admits only an agent, and the claim belongs to the agent's acting worker; the lease is the project's `lease_minutes`, read before the command's transaction. A human task and a task on hold take no new claim.
 impl TaskService {
     /// Takes the implementation claim on `task` for the actor's worker. A repeat call by the holder renews the claim and returns it without a second `claim.acquired`. A live workspace of the task that no claim holder owns, left by a worker that released the claim, is adopted with `workspace.adopted`. The command runs `recompute` after the claim and any adoption: it moves a task without a proposal to In Progress, and a task with a proposal moves only for an adopted workspace.
     pub async fn claim_task(&self, actor: &Actor, task: TaskId) -> Result<Claimed, TaskError> {
@@ -220,7 +220,7 @@ pub(crate) async fn claim_in_tx(
     let row = tasks::fetch(tx.conn(), task)
         .await?
         .ok_or_else(|| task_not_found(task))?;
-    if let Some(refusal) = closed_refusal(&row) {
+    if let Some(refusal) = closed_refusal(&row).or_else(|| agent_refusal(&row).map(Into::into)) {
         return Err(refusal);
     }
     match claims::insert_implementation(tx, task, worker.id, now).await {
@@ -322,7 +322,7 @@ async fn takeover_in_tx(
     let row = tasks::fetch(tx.conn(), task)
         .await?
         .ok_or_else(|| task_not_found(task))?;
-    if let Some(refusal) = closed_refusal(&row) {
+    if let Some(refusal) = closed_refusal(&row).or_else(|| agent_refusal(&row).map(Into::into)) {
         return Err(refusal);
     }
     let Some(holder) = claims::unreleased_for_task(tx.conn(), task).await? else {

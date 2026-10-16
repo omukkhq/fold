@@ -16,6 +16,7 @@ import { ArchiveMenu } from "./ArchiveMenu";
 import { ChecklistSection } from "./ChecklistSection";
 import { DescriptionSection } from "./DescriptionSection";
 import { DialogFrame } from "./DialogFrame";
+import { HumanWork } from "./HumanWork";
 import { needsProposal } from "./leadCheck";
 import { liveStrip } from "./liveStrip";
 import { MessagesSection } from "./MessagesSection";
@@ -83,6 +84,7 @@ function Loaded({
           task={task}
           strip={liveStrip(task, live, now)}
         />
+        <HumanWork slug={slug} task={task} />
         <DescriptionSection slug={slug} task={task} />
         <ChecklistSection slug={slug} task={task} />
         {needsProposal(task) ? (

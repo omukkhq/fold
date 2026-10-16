@@ -51,6 +51,7 @@ fn expected(facts: &ContainerFacts) -> bool {
         && !facts.ever_had_workspace
         && !facts.completed
         && !facts.archived
+        && !facts.human_task
 }
 
 #[test]
@@ -58,12 +59,13 @@ fn every_combination_of_items_workspace_and_closure_matches_the_rule() {
     let mut checked = 0;
     let mut completing = 0;
     for items in item_lists(4) {
-        for bits in 0..8u8 {
+        for bits in 0..16u8 {
             let facts = ContainerFacts {
                 items: items.clone(),
                 ever_had_workspace: bits & 1 != 0,
                 completed: bits & 2 != 0,
                 archived: bits & 4 != 0,
+                human_task: bits & 8 != 0,
             };
             let result = completes_by_children(&facts);
             assert_eq!(result, expected(&facts), "{facts:?}");
@@ -71,8 +73,8 @@ fn every_combination_of_items_workspace_and_closure_matches_the_rule() {
             completing += usize::from(result);
         }
     }
-    // 1 + 4 + 16 + 64 + 256 item lists, each with the eight flag combinations.
-    assert_eq!(checked, 341 * 8);
+    // 1 + 4 + 16 + 64 + 256 item lists, each with the sixteen flag combinations.
+    assert_eq!(checked, 341 * 16);
     assert!(completing > 0);
 }
 
@@ -136,7 +138,7 @@ fn plain_steps_alone_never_complete() {
 }
 
 #[test]
-fn a_workspace_completion_or_archive_turns_the_rule_off() {
+fn a_workspace_completion_archive_or_human_kind_turns_the_rule_off() {
     let done = vec![ItemFact::Linked { child_done: true }];
     for facts in [
         ContainerFacts {
@@ -150,8 +152,13 @@ fn a_workspace_completion_or_archive_turns_the_rule_off() {
             ..ContainerFacts::default()
         },
         ContainerFacts {
-            items: done,
+            items: done.clone(),
             archived: true,
+            ..ContainerFacts::default()
+        },
+        ContainerFacts {
+            items: done,
+            human_task: true,
             ..ContainerFacts::default()
         },
     ] {

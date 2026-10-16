@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use fold_core::push::{MAX_NOTICE_LEN, Notice, PushContext, is_pushed, notice_for, request_of};
 use fold_core::requests::{Requester, deputy};
-use fold_core::{AgentName, Event, FoldError, Tag, TaskId, TaskStatus, Timestamp, codes};
+use fold_core::{AgentName, Event, FoldError, Tag, TaskId, TaskKind, TaskStatus, Timestamp, codes};
 use fold_store::agents::AgentRow;
 use fold_store::reviews;
 use fold_store::tasks::{claims, requests};
@@ -614,7 +614,32 @@ async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError
                 .await?
                 .map(|claim| claim.worker.agent());
             let to = event.data.get("to").and_then(serde_json::Value::as_str);
-            if ctx.implementation_claim.is_none() && to == Some(TaskStatus::Todo.as_str()) {
+            if to == Some(TaskStatus::Todo.as_str()) {
+                ctx.held_from_agents = tasks::get_by_number(store.read(), task)
+                    .await?
+                    .is_some_and(|row| row.kind == TaskKind::Human || row.hold.is_some());
+                if ctx.implementation_claim.is_none() && !ctx.held_from_agents {
+                    route(store, task, &mut ctx).await?;
+                }
+            }
+        }
+        return Ok(ctx);
+    }
+    if kind == fold_core::events::types::TASK_HOLD_CLEARED {
+        if let Some(task) = event.task {
+            let claimed = claims::unreleased_for_task(store.read(), task)
+                .await?
+                .is_some();
+            let open = tasks::get_by_number(store.read(), task)
+                .await?
+                .is_some_and(|row| {
+                    row.status == TaskStatus::Todo
+                        && row.kind != TaskKind::Human
+                        && row.hold.is_none()
+                        && row.archived_at.is_none()
+                });
+            ctx.held_from_agents = claimed || !open;
+            if !ctx.held_from_agents {
                 route(store, task, &mut ctx).await?;
             }
         }

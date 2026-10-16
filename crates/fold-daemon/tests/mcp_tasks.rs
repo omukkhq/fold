@@ -490,7 +490,7 @@ async fn bad_input_is_refused_with_a_code() {
 #[test]
 fn every_task_tool_input_field_has_a_description() {
     let tools = fold_daemon::mcp::tasks::tools();
-    assert_eq!(tools.len(), 20);
+    assert_eq!(tools.len(), 22);
     for tool in &tools {
         assert!(tool.description.is_some(), "{}", tool.name);
         let properties = tool.input_schema["properties"]

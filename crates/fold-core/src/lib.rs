@@ -56,7 +56,7 @@ pub use projects::{choose_slug, slugify};
 pub use roles::{CacheTtl, Role, WorkerState};
 pub use status::TaskStatus;
 pub use task::{
-    ChecklistName, DependencyOrigin, LabelColor, LabelName, StepText, TaskDescription, TaskKind,
-    TaskTitle, TaskValueError,
+    ChecklistName, DependencyOrigin, HoldMark, HoldReason, LabelColor, LabelName, StepText,
+    TaskDescription, TaskKind, TaskTitle, TaskValueError,
 };
 pub use time::{TimeError, Timestamp};

@@ -6,8 +6,8 @@ use fold_core::events::types;
 use fold_core::reviews::ProposalStanding;
 use fold_core::status::status_reason;
 use fold_core::{
-    ChangesetId, ChecklistName, DependencyOrigin, Event, ProposalId, RevisionId, TaskId, TaskKind,
-    TaskStatus, TaskTitle, Timestamp, WorkerName, WorkspaceId,
+    ChangesetId, ChecklistName, DependencyOrigin, Event, HoldMark, ProposalId, RevisionId, TaskId,
+    TaskKind, TaskStatus, TaskTitle, Timestamp, WorkerName, WorkspaceId,
 };
 use fold_store::reviews::{self, ProposalSummary, ReviewEntry};
 use fold_store::tasks::checklists::{self, ItemContent};
@@ -137,6 +137,8 @@ pub struct TaskDetail {
     pub reports: Vec<ReportView>,
     /// The task's newest [`HISTORY_LIMIT`] events, newest first.
     pub history: Vec<Event>,
+    /// The task can get a blocker or a new reason now: it is not archived and no agent has started it (`policy::can_hold_task`). Who may set it is decided by the command.
+    pub blocker_allowed: bool,
 }
 
 /// One node of the task graph.
@@ -151,6 +153,8 @@ pub struct GraphTask {
     /// Every direct prerequisite, Done or not.
     pub needs: Vec<TaskId>,
     pub holder: Option<WorkerName>,
+    /// `None` while the task is not on hold.
+    pub hold: Option<HoldMark>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -173,6 +177,8 @@ pub struct BoardCard {
     pub holder: Option<WorkerName>,
     pub workspace: Option<WorkspaceId>,
     pub human_review: Option<HumanReviewMark>,
+    /// `None` while the task is not on hold.
+    pub hold: Option<HoldMark>,
     /// How many messages name the task.
     pub messages: u32,
     pub completed_at: Option<Timestamp>,
@@ -277,6 +283,14 @@ impl TaskService {
             }
             None => Vec::new(),
         };
+        let blocker_allowed = row.archived_at.is_none()
+            && fold_core::policy::can_hold_task(&fold_core::policy::TaskStart {
+                status: row.status,
+                claimed: claim.is_some(),
+                workspace: workspace.is_some(),
+                open_proposal: reviews::open_for_task(&mut *tx, id).await?.is_some(),
+            })
+            .is_ok();
         let summary = reviews::proposal_summaries(&mut tx, Some(id)).await?.pop();
         let integration = summary.as_ref().and_then(|summary| {
             summary.integration.as_ref().map(|record| TaskIntegration {
@@ -404,6 +418,7 @@ impl TaskService {
             integration,
             reports,
             history,
+            blocker_allowed,
         })
     }
 
@@ -438,6 +453,7 @@ impl TaskService {
                 status: row.status,
                 blocked: row.blocked,
                 kind: row.kind,
+                hold: row.hold,
             })
             .collect())
     }
@@ -488,6 +504,7 @@ impl TaskService {
                 holder: snapshot.holders.remove(&row.id),
                 workspace: snapshot.workspaces.get(&row.id).copied(),
                 human_review: row.human_review,
+                hold: row.hold,
                 messages: snapshot.messages.get(&row.id).copied().unwrap_or(0),
                 completed_at: snapshot.completions.get(&row.id).copied(),
                 proposal: snapshot.proposals.get(&row.id).map(|summary| CardProposal {
