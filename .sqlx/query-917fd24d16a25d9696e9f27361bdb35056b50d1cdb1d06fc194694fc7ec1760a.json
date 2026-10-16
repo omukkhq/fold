@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO worker_proposals (worker_process_id, proposal_id)\n         SELECT ?, id FROM proposals WHERE number = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "917fd24d16a25d9696e9f27361bdb35056b50d1cdb1d06fc194694fc7ec1760a"
+}

@@ -13,6 +13,7 @@ export type PresenceChanged = Extract<
   EventEnvelope,
   { kind: "agent_presence_changed" }
 >;
+export type WorkerOutput = Extract<EventEnvelope, { kind: "worker_output" }>;
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -113,6 +114,13 @@ export function isEventEnvelope(value: unknown): value is EventEnvelope {
       return (
         typeof value.agent === "string" &&
         PRESENCE_STATES.includes(value.presence)
+      );
+    case "worker_output":
+      return (
+        typeof value.agent === "string" &&
+        typeof value.step === "string" &&
+        isNullableString(value.tool) &&
+        (value.text_length === null || isCount(value.text_length))
       );
     case "snapshot":
       return (

@@ -89,6 +89,10 @@ segment_newtype!(
     Tag
 );
 segment_newtype!(
+    /// The name of an area: a part of the project that one area lead owns through one task label. It follows the agent name pattern, so it can be part of a worker's agent name.
+    AreaName
+);
+segment_newtype!(
     /// A person who acts through the CLI or the web. It follows the agent name pattern, so `human:<name>` is a valid event actor.
     HumanName
 );

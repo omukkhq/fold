@@ -138,6 +138,16 @@ define_codes! {
     NOT_BATCH_MEMBER = "not_batch_member",
     BATCH_CONFLICT = "batch_conflict",
     UNATTRIBUTED_LINES = "unattributed_lines",
+    AREA_NOT_FOUND = "area_not_found",
+    AREA_EXISTS = "area_exists",
+    AREA_HAS_LEAD = "area_has_lead",
+    MAIN_AGENT_REQUIRED = "main_agent_required",
+    WORKER_START_DENIED = "worker_start_denied",
+    WORKER_STOP_DENIED = "worker_stop_denied",
+    TASK_OUTSIDE_AREA = "task_outside_area",
+    WORKER_LIMIT_REACHED = "worker_limit_reached",
+    WORKER_EXISTS = "worker_exists",
+    WORKER_PROCESS_NOT_FOUND = "worker_process_not_found",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

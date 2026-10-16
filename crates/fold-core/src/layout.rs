@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 
+use crate::agents::AgentName;
 use crate::error::{FoldError, codes};
 use crate::ids::{ProposalId, ReviewBatchId, TaskId, WorkspaceId};
+use crate::roles::Role;
 
 /// Where the host-wide files live: `<data home>/fold/`. The data home is `XDG_DATA_HOME`, else `<home>/.local/share`. An empty or relative value counts as unset, as the XDG base directory rules require.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,6 +82,23 @@ impl ProjectPaths {
         self.root.join(WS_DIR)
     }
 
+    /// A project's own prompt for a worker role, which replaces the one that ships with fold.
+    pub fn role_prompt(&self, role: Role) -> PathBuf {
+        self.fold_dir()
+            .join("roles")
+            .join(format!("{}.md", role.as_str()))
+    }
+
+    /// The files fold writes for one worker agent's Claude Code process: its MCP configuration and its role prompt.
+    pub fn worker_dir(&self, agent: &AgentName) -> PathBuf {
+        self.fold_dir().join("workers").join(agent.as_str())
+    }
+
+    /// The MCP servers of the project that Claude Code reads.
+    pub fn mcp_json(&self) -> PathBuf {
+        self.root.join(".mcp.json")
+    }
+
     /// The stat index of one workspace. It is named by the public id, which never repeats, rather than by the directory.
     pub fn workspace_index(&self, workspace: WorkspaceId) -> PathBuf {
         self.index().join(format!("{workspace}.idx"))
@@ -150,6 +169,15 @@ mod tests {
         assert_eq!(paths.config(), Path::new("/srv/demo/.fold/config.toml"));
         assert_eq!(paths.git_dir(), Path::new("/srv/demo/.git"));
         assert_eq!(paths.ws_dir(), Path::new("/srv/demo/.fold/ws"));
+        assert_eq!(
+            paths.role_prompt(Role::TaskCoder),
+            Path::new("/srv/demo/.fold/roles/task_coder.md")
+        );
+        assert_eq!(
+            paths.worker_dir(&AgentName::parse("web-lead").unwrap()),
+            Path::new("/srv/demo/.fold/workers/web-lead")
+        );
+        assert_eq!(paths.mcp_json(), Path::new("/srv/demo/.mcp.json"));
         let workspace = WorkspaceId::from_number(9).unwrap();
         assert_eq!(
             paths.workspace_index(workspace),

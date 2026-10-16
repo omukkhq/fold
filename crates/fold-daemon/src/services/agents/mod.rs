@@ -24,6 +24,7 @@ mod context;
 mod overview;
 mod presence;
 mod push;
+mod workers;
 
 pub use context::{
     CONTEXT_READY_TASKS, ContextClaim, MAX_SESSION_CONTEXT, SessionFacts,
@@ -34,6 +35,8 @@ pub use overview::{
     ProposalSummary, SessionSummary, WorkerOverview, WorkspaceSummary,
 };
 pub use presence::SeenPresence;
+pub(crate) use workers::code_of;
+pub use workers::{FOLD_SERVER, Launcher, RESTART_TURN, StartWorker, StopTimeouts, Supervisor};
 
 #[derive(Debug, Error)]
 pub enum AgentError {
@@ -104,6 +107,7 @@ pub struct AgentService {
     seen: SeenPresence,
     push: PushTargets,
     live: Option<LiveState>,
+    workers: Option<Supervisor>,
 }
 
 impl std::fmt::Debug for AgentService {
@@ -123,6 +127,7 @@ impl AgentService {
             seen: SeenPresence::new(),
             push: PushTargets::new(),
             live: None,
+            workers: None,
         }
     }
 
@@ -156,6 +161,13 @@ impl AgentService {
     #[must_use]
     pub fn with_live(mut self, live: LiveState) -> Self {
         self.live = Some(live);
+        self
+    }
+
+    /// Runs the worker commands through the project's supervisor. Without it they fail with `internal_error`.
+    #[must_use]
+    pub fn with_workers(mut self, workers: Supervisor) -> Self {
+        self.workers = Some(workers);
         self
     }
 

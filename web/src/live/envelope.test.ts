@@ -102,6 +102,47 @@ describe("isEventEnvelope", () => {
     }
   });
 
+  it("accepts a worker_output frame and refuses a malformed one", () => {
+    expect(
+      isEventEnvelope({
+        kind: "worker_output",
+        agent: "web-coder",
+        step: "tool_use",
+        tool: "Bash",
+        text_length: null,
+      }),
+    ).toBe(true);
+    expect(
+      isEventEnvelope({
+        kind: "worker_output",
+        agent: "web-coder",
+        step: "text",
+        tool: null,
+        text_length: 8,
+      }),
+    ).toBe(true);
+    for (const bad of [
+      { kind: "worker_output", step: "text", tool: null, text_length: 8 },
+      { kind: "worker_output", agent: "a", tool: null, text_length: 8 },
+      {
+        kind: "worker_output",
+        agent: "a",
+        step: "text",
+        tool: 3,
+        text_length: 8,
+      },
+      {
+        kind: "worker_output",
+        agent: "a",
+        step: "text",
+        tool: null,
+        text_length: -1,
+      },
+    ]) {
+      expect(isEventEnvelope(bad), JSON.stringify(bad)).toBe(false);
+    }
+  });
+
   it("accepts a workspace_changed frame without seq", () => {
     const frame = changed();
     expect("seq" in frame).toBe(false);

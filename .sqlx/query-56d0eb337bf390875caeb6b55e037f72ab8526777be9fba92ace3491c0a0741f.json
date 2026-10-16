@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT a.id AS \"id!: i64\", a.name, a.label_id, l.name AS label, g.name AS \"lead?: String\",\n                  a.created_by, a.created_at\n           FROM areas a JOIN labels l ON l.id = a.label_id LEFT JOIN agents g ON g.id = a.lead_agent_id\n           WHERE a.name = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "areas",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "areas",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "label_id",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "areas",
+            "name": "label_id"
+          }
+        }
+      },
+      {
+        "name": "label",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "labels",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "lead?: String",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "created_by",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "areas",
+            "name": "created_by"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "areas",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "56d0eb337bf390875caeb6b55e037f72ab8526777be9fba92ace3491c0a0741f"
+}

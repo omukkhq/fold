@@ -153,6 +153,8 @@ impl Daemon {
         let stalls = jobs::spawn_stalls(state.clone(), jobs::STALL_TICK, stopped.clone());
         let auto_integrate =
             jobs::spawn_auto_integrate(state.clone(), jobs::AUTO_INTEGRATE_TICK, stopped.clone());
+        let worker_idle =
+            jobs::spawn_worker_idle(state.clone(), jobs::WORKER_IDLE_TICK, stopped.clone());
         let http = tokio::spawn(serve_http(listener, http::router(state.clone()), stopped));
         tracing::info!(%http_addr, "daemon started");
         Ok(RunningDaemon {
@@ -168,6 +170,7 @@ impl Daemon {
             leases,
             stalls,
             auto_integrate,
+            worker_idle,
             stop,
             _lock: lock,
         })
@@ -189,6 +192,7 @@ pub struct RunningDaemon {
     leases: Job,
     stalls: Job,
     auto_integrate: Job,
+    worker_idle: Job,
     stop: watch::Sender<bool>,
     /// The advisory lock lives as long as this file is open.
     _lock: File,
@@ -211,7 +215,7 @@ impl RunningDaemon {
         &self.socket
     }
 
-    /// Stops accepting, ends open sessions, checkpoints every WAL and removes the socket file.
+    /// Stops accepting, ends the worker processes (their rows keep their state, so the next start resumes them), ends open sessions, checkpoints every WAL and removes the socket file.
     pub async fn shutdown(self) {
         let _ = self.stop.send(true);
         // An open event stream would hold its connection until the drain timeout.
@@ -233,7 +237,9 @@ impl RunningDaemon {
         self.leases.stopped(DRAIN_TIMEOUT).await;
         self.stalls.stopped(DRAIN_TIMEOUT).await;
         self.auto_integrate.stopped(DRAIN_TIMEOUT).await;
+        self.worker_idle.stopped(DRAIN_TIMEOUT).await;
         for handle in self.state.projects.handles() {
+            handle.workers.shutdown().await;
             if let Err(error) = handle.agents().close_sessions_at_shutdown().await {
                 tracing::error!(project = %handle.slug, %error, "could not end sessions");
             }

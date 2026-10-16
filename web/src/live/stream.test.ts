@@ -51,6 +51,15 @@ const presence = () =>
     agent: "frontend",
     presence: "idle",
   })}\n\n`;
+/** A `worker_output` frame is live as well. */
+const step = () =>
+  `data: ${JSON.stringify({
+    kind: "worker_output",
+    agent: "web-coder",
+    step: "tool_use",
+    tool: "Bash",
+    text_length: null,
+  })}\n\n`;
 const snap = (seq: number) =>
   `data: ${JSON.stringify({ kind: "snapshot", seq, workspaces: [] })}\n\n`;
 const label = (e: EventEnvelope) => {
@@ -59,6 +68,9 @@ const label = (e: EventEnvelope) => {
   }
   if (e.kind === "agent_presence_changed") {
     return `presence ${e.agent} ${e.presence}`;
+  }
+  if (e.kind === "worker_output") {
+    return `step ${e.agent} ${e.step}`;
   }
   return `event ${String(e.seq)}`;
 };
@@ -368,6 +380,23 @@ describe("startStream", () => {
       "presence frontend idle",
       "event 5",
       "presence frontend idle",
+    ]);
+    h.pipes[0]?.end();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(h.cursors).toEqual([null, 5]);
+    h.handle.stop();
+  });
+
+  it("delivers every worker_output frame without moving the cursor", async () => {
+    const h = harness();
+    await vi.advanceTimersByTimeAsync(0);
+    h.pipes[0]?.push(frame(4) + step() + frame(5));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.log).toEqual([
+      "open",
+      "event 4",
+      "step web-coder tool_use",
+      "event 5",
     ]);
     h.pipes[0]?.end();
     await vi.advanceTimersByTimeAsync(1000);

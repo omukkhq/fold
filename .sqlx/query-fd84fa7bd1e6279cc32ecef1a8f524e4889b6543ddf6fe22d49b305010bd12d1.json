@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) AS \"count!: i64\" FROM worker_tasks b JOIN tasks t ON t.id = b.task_id\n           WHERE b.worker_process_id = ? AND t.status <> 'done'\n             AND NOT EXISTS (\n                 SELECT 1 FROM proposals p WHERE p.task_id = b.task_id AND p.state IN ('open', 'integrated')\n             )",
+  "describe": {
+    "columns": [
+      {
+        "name": "count!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "fd84fa7bd1e6279cc32ecef1a8f524e4889b6543ddf6fe22d49b305010bd12d1"
+}

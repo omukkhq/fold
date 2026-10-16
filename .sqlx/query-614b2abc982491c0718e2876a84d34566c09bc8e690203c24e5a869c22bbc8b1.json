@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE worker_processes SET state = 'working', idle_since = NULL\n         WHERE id = ? AND state IN ('starting', 'idle')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "614b2abc982491c0718e2876a84d34566c09bc8e690203c24e5a869c22bbc8b1"
+}

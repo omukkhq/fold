@@ -3,10 +3,14 @@ use std::collections::BTreeSet;
 const SKILL: &str = include_str!("../templates/SKILL.md");
 const AGENTS_SECTION: &str = include_str!("../templates/agents_section.md");
 
-const FOLD_TOOLS: [&str; 67] = [
+const FOLD_TOOLS: [&str; 71] = [
     "register_agent",
     "register_worker",
     "list_agents",
+    "define_area",
+    "start_worker",
+    "stop_worker",
+    "list_workers",
     "send_message",
     "get_inbox",
     "get_thread",
@@ -84,7 +88,7 @@ const PENDING_TOOLS: [&str; 6] = [
 ];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 120] = [
+const FOLD_ERROR_CODES: [&str; 130] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -205,6 +209,16 @@ const FOLD_ERROR_CODES: [&str; 120] = [
     "not_batch_member",
     "batch_conflict",
     "unattributed_lines",
+    "area_not_found",
+    "area_exists",
+    "area_has_lead",
+    "main_agent_required",
+    "worker_start_denied",
+    "worker_stop_denied",
+    "task_outside_area",
+    "worker_limit_reached",
+    "worker_exists",
+    "worker_process_not_found",
 ];
 
 /// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.
@@ -223,7 +237,7 @@ const INVALID_REQUEST_REASONS: [&str; 9] = [
     "attachment_too_large",
 ];
 
-const NON_TOOL_NAMES: [&str; 11] = [
+const NON_TOOL_NAMES: [&str; 16] = [
     "stall_minutes",
     "lease_minutes",
     "request_changes",
@@ -235,9 +249,14 @@ const NON_TOOL_NAMES: [&str; 11] = [
     "expected_version",
     "timeout_s",
     "reply_to",
+    "area_lead",
+    "review_lead",
+    "task_coder",
+    "batch_reviewer",
+    "idle_minutes",
 ];
 
-const SECTIONS: [&str; 12] = [
+const SECTIONS: [&str; 13] = [
     "Identity",
     "Messaging",
     "Noticing news",
@@ -248,6 +267,7 @@ const SECTIONS: [&str; 12] = [
     "Requests",
     "Task template",
     "Subagents",
+    "Worker agents",
     "Errors",
     "Never",
 ];

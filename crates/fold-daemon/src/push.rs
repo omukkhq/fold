@@ -80,7 +80,10 @@ fn unix_connect() -> Connect {
     Arc::new(|path| Box::pin(async move { UnixStream::connect(path).await }))
 }
 
-/// The inbox sockets of one project's agents, in memory only. They are keyed by agent rather than by session because the session-start hook runs before the adapter connects. Each socket has its own queue and sender task, so a slow socket never holds up another one or the bus.
+/// Hands one notice text to a supervised worker's stdin as a user turn; it returns false once the worker's process is gone.
+pub type StdinSink = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
+/// The inbox sockets of one project's agents, in memory only, and the stdin of each worker process fold supervises. They are keyed by agent rather than by session because the session-start hook runs before the adapter connects. Each socket has its own queue and sender task, so a slow socket never holds up another one or the bus.
 #[derive(Clone)]
 pub struct PushTargets {
     inner: Arc<Inner>,
@@ -100,6 +103,8 @@ impl Default for PushTargets {
 
 struct Inner {
     agents: Mutex<HashMap<AgentName, Vec<Target>>>,
+    /// One per supervised worker. A session ending never clears it: the worker's adapter session can reconnect while its process lives, and only the supervisor removes it when the process ends.
+    stdin: Mutex<HashMap<AgentName, Arc<Queue>>>,
     connect: Connect,
 }
 
@@ -107,6 +112,9 @@ impl Drop for Inner {
     fn drop(&mut self) {
         for target in lock(&self.agents).drain().flat_map(|(_, targets)| targets) {
             target.queue.close();
+        }
+        for (_, queue) in lock(&self.stdin).drain() {
+            queue.close();
         }
     }
 }
@@ -127,6 +135,7 @@ impl PushTargets {
         Self {
             inner: Arc::new(Inner {
                 agents: Mutex::new(HashMap::new()),
+                stdin: Mutex::new(HashMap::new()),
                 connect,
             }),
         }
@@ -165,7 +174,49 @@ impl PushTargets {
         tokio::spawn(sender.run());
     }
 
-    /// Drops every target of the agent and the notices waiting for them.
+    /// Sends the agent's notices to its worker process through `sink`, in order, in place of an earlier stdin target of the agent.
+    pub fn register_stdin(&self, agent: &AgentName, sink: StdinSink) {
+        let queue = Arc::new(Queue::default());
+        if let Some(old) = lock(&self.inner.stdin).insert(agent.clone(), Arc::clone(&queue)) {
+            old.close();
+        }
+        let targets = Arc::downgrade(&self.inner);
+        let agent = agent.clone();
+        tokio::spawn(async move {
+            while let Some(notice) = queue.next().await {
+                if !sink(&notice.text) {
+                    if let Some(inner) = targets.upgrade() {
+                        PushTargets { inner }.clear_stdin_queue(&agent, &queue);
+                    }
+                    return;
+                }
+            }
+        });
+    }
+
+    /// Drops the agent's stdin target, when its worker process has ended.
+    pub fn clear_stdin(&self, agent: &AgentName) {
+        if let Some(queue) = lock(&self.inner.stdin).remove(agent) {
+            queue.close();
+        }
+    }
+
+    fn clear_stdin_queue(&self, agent: &AgentName, queue: &Arc<Queue>) {
+        let mut stdin = lock(&self.inner.stdin);
+        if stdin
+            .get(agent)
+            .is_some_and(|current| Arc::ptr_eq(current, queue))
+        {
+            stdin.remove(agent);
+        }
+    }
+
+    /// Whether the agent's notices go to a worker process's stdin.
+    pub fn has_stdin(&self, agent: &AgentName) -> bool {
+        lock(&self.inner.stdin).contains_key(agent)
+    }
+
+    /// Drops every socket target of the agent and the notices waiting for them.
     pub fn clear(&self, agent: &AgentName) {
         let removed = lock(&self.inner.agents).remove(agent);
         for target in removed.into_iter().flatten() {
@@ -213,15 +264,23 @@ impl PushTargets {
     }
 
     pub fn is_empty(&self) -> bool {
-        lock(&self.inner.agents).is_empty()
+        lock(&self.inner.agents).is_empty() && lock(&self.inner.stdin).is_empty()
     }
 
-    /// Queues each notice on every socket of its agent. `seq` is the event the notice is about and goes into the log line of a failed post. A notice that is not one short line of envelope-safe text is dropped here.
+    /// Queues each notice on its supervised worker's stdin, else on every socket of its agent: a worker's own session-start hook can report an inbox socket too, and the notice must reach the worker once. `seq` is the event the notice is about and goes into the log line of a failed post. A notice that is not one short line of envelope-safe text is dropped here.
     pub fn deliver(&self, notices: &[Notice], seq: u64) {
         let agents = lock(&self.inner.agents);
+        let stdin = lock(&self.inner.stdin);
         for notice in notices {
             if !postable(&notice.text) {
                 tracing::warn!(agent = %notice.agent, seq, "session push refused a malformed notice");
+                continue;
+            }
+            if let Some(queue) = stdin.get(&notice.agent) {
+                queue.push(Queued {
+                    text: Arc::from(notice.text.as_str()),
+                    seq,
+                });
                 continue;
             }
             for target in agents.get(&notice.agent).into_iter().flatten() {

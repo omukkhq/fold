@@ -499,6 +499,10 @@ export function applyEvent(
     applyPresence(queryClient, slug, event);
     return;
   }
+  if (event.kind === "worker_output") {
+    // No cached query holds a worker's steps; the stored worker events refresh the agents.
+    return;
+  }
   const durable: DurableEvent = {
     seq: event.seq,
     type: event.type,

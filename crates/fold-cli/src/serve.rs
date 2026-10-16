@@ -180,15 +180,22 @@ fn parse_file_config(text: &str) -> Result<FileConfig, toml::de::Error> {
     toml::from_str(text)
 }
 
+/// `RUST_LOG`'s filter, else `info`, with rmcp held at `warn` whatever `RUST_LOG` asks: rmcp logs the requests and notifications it handles with their arguments, and those can carry an agent's text.
+fn log_filter(from_env: Option<tracing_subscriber::EnvFilter>) -> tracing_subscriber::EnvFilter {
+    let filter = from_env.unwrap_or_else(|| tracing_subscriber::EnvFilter::new("info"));
+    match "rmcp=warn".parse::<tracing_subscriber::filter::Directive>() {
+        Ok(directive) => filter.add_directive(directive),
+        Err(_) => filter,
+    }
+}
+
 pub fn run(args: &ServeArgs) -> Result<(), ServeError> {
     tracing_subscriber::fmt()
         .json()
         .with_writer(std::io::stderr)
-        .with_env_filter(
-            // rmcp logs the notifications it receives at info, and a notification can carry an agent's text.
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,rmcp=warn".into()),
-        )
+        .with_env_filter(log_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().ok(),
+        ))
         .init();
     #[cfg(feature = "failpoints")]
     let _failpoints = fold_daemon::failpoints_from_env();
@@ -211,6 +218,24 @@ pub fn run(args: &ServeArgs) -> Result<(), ServeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rmcp_stays_at_warn_whatever_rust_log_asks() {
+        use tracing_subscriber::EnvFilter;
+        let default = log_filter(None).to_string();
+        assert!(
+            default.contains("rmcp=warn") && default.contains("info"),
+            "{default}"
+        );
+        for asked in ["trace", "rmcp=trace,fold_daemon=debug", "rmcp=info"] {
+            let filter = log_filter(Some(EnvFilter::new(asked))).to_string();
+            assert!(filter.contains("rmcp=warn"), "{asked}: {filter}");
+            assert!(
+                !filter.contains("rmcp=trace") && !filter.contains("rmcp=info"),
+                "{asked}: {filter}"
+            );
+        }
+    }
 
     fn dirs() -> Dirs {
         Dirs {

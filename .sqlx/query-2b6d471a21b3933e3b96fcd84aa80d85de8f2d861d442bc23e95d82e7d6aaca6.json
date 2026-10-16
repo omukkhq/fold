@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE worker_processes\n         SET state = ?2,\n             idle_since = CASE WHEN ?2 = 'idle' THEN COALESCE(idle_since, ?3) ELSE NULL END,\n             stopped_at = CASE WHEN ?2 IN ('stopped', 'failed') THEN ?3 ELSE NULL END\n         WHERE id = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "2b6d471a21b3933e3b96fcd84aa80d85de8f2d861d442bc23e95d82e7d6aaca6"
+}

@@ -10,7 +10,7 @@ use fold_vcs::platform::Capabilities;
 use crate::jobs::{self, AutoCommit};
 use crate::live::{LiveConfig, LiveState};
 use crate::push::{self, PushTargets, PushTask};
-use crate::services::agents::{AgentService, SeenPresence};
+use crate::services::agents::{AgentService, Launcher, SeenPresence, Supervisor};
 use crate::services::events::EventBus;
 use crate::services::projects::{GitAttention, RemoteContext, load_config};
 use crate::services::reviews::ReviewService;
@@ -49,6 +49,8 @@ pub struct ProjectHandle {
     /// The Claude Code inbox sockets of the project's agents. They live in memory only, so a restarted daemon has none until the session-start hooks run again.
     pub push: PushTargets,
     _push_task: PushTask,
+    /// The Claude Code processes of the project's worker agents.
+    pub workers: Supervisor,
     /// Commits each integration to the project's repository, moves the project folder to it and pushes it when the configuration asks.
     _auto_commit: AutoCommit,
 }
@@ -86,6 +88,15 @@ async fn refuse_old_layout(slug: &str, paths: &ProjectPaths) -> Result<(), FoldE
 impl ProjectHandle {
     /// Opens the project database, which applies its pending migrations. A missing database is not created: the registry only lists projects that `fld init` set up. The live state takes its intervals from the configuration read here; an invalid configuration gives it the defaults, and the commands that read the configuration report the error.
     pub async fn open(row: &ProjectRow, clock: Arc<dyn Clock>) -> Result<Self, FoldError> {
+        Self::open_with(row, clock, Launcher::default()).await
+    }
+
+    /// [`ProjectHandle::open`] with the programs its worker processes run.
+    pub async fn open_with(
+        row: &ProjectRow,
+        clock: Arc<dyn Clock>,
+        launcher: Launcher,
+    ) -> Result<Self, FoldError> {
         let paths = ProjectPaths::new(&row.root);
         let present = tokio::fs::try_exists(paths.db()).await.unwrap_or(false);
         if !present {
@@ -125,6 +136,14 @@ impl ProjectHandle {
         .with_objects(&paths, objects.clone());
         let push = PushTargets::new();
         let push_task = push::run(store.clone(), &bus, push.clone());
+        let workers = Supervisor::new(
+            store.clone(),
+            bus.clone(),
+            clock.clone(),
+            paths.clone(),
+            push.clone(),
+            launcher,
+        );
         let remote_lock = Arc::new(tokio::sync::Mutex::new(()));
         let git_attention = Arc::new(GitAttention::default());
         let auto_commit = jobs::auto_commit(
@@ -158,6 +177,7 @@ impl ProjectHandle {
             live,
             push,
             _push_task: push_task,
+            workers,
             _auto_commit: auto_commit,
         })
     }
@@ -169,6 +189,7 @@ impl ProjectHandle {
             .with_seen_presence(self.presence.clone())
             .with_push_targets(self.push.clone())
             .with_live(self.live.clone())
+            .with_workers(self.workers.clone())
     }
 
     /// The review service of this project. Every transport builds it here, per request or session, so it always shares the project's integration mutex, object lock and workspace locks, and knows the humans of `registry`.
@@ -205,9 +226,17 @@ pub struct Projects {
     slots: RwLock<HashMap<String, Slot>>,
     /// Serialises opens so one database never gets two writers.
     opening: tokio::sync::Mutex<()>,
+    /// The programs every project's worker processes run.
+    launcher: Launcher,
 }
 
 impl Projects {
+    #[must_use]
+    pub fn with_launcher(mut self, launcher: Launcher) -> Self {
+        self.launcher = launcher;
+        self
+    }
+
     pub fn slot(&self, slug: &str) -> Option<Slot> {
         self.slots
             .read()
@@ -228,7 +257,7 @@ impl Projects {
             .collect()
     }
 
-    /// Opens `row` unless it is already open, in which case the same handle comes back. A new handle runs its start-up sequence before any request can reach it: the database opens with SQLite's own WAL recovery, the workspaces are reconciled with their directories, and every session a previous run left open ends at the start time with its `session.ended`, so presence shows offline until the adapters reconnect. The handle's commit writer runs as it starts, which writes the commit of a revision an integration cut off after its own commit never got and brings the project folder to it, and changes nothing otherwise. No session of this run can exist yet, because a session starts only through an open handle. The daemon's jobs start after its projects are open.
+    /// Opens `row` unless it is already open, in which case the same handle comes back. A new handle runs its start-up sequence before any request can reach it: the database opens with SQLite's own WAL recovery, the workspaces are reconciled with their directories, and every session a previous run left open ends at the start time with its `session.ended`, so presence shows offline until the adapters reconnect, and every worker that was working or idle runs again with its session resumed. The handle's commit writer runs as it starts, which writes the commit of a revision an integration cut off after its own commit never got and brings the project folder to it, and changes nothing otherwise. No session of this run can exist yet, because a session starts only through an open handle. The daemon's jobs start after its projects are open.
     pub async fn open(
         &self,
         row: &ProjectRow,
@@ -238,11 +267,16 @@ impl Projects {
         if let Some(Slot::Open(handle)) = self.slot(&row.slug) {
             return Ok(handle);
         }
-        let outcome = ProjectHandle::open(row, clock).await.map(Arc::new);
+        let outcome = ProjectHandle::open_with(row, clock, self.launcher.clone())
+            .await
+            .map(Arc::new);
         if let Ok(handle) = &outcome {
             jobs::reconcile_workspaces(handle).await;
             if let Err(error) = handle.agents().close_orphan_sessions().await {
                 tracing::error!(project = %row.slug, %error, "could not end orphan sessions");
+            }
+            if let Err(error) = handle.workers.resume_after_restart().await {
+                tracing::error!(project = %row.slug, %error, "could not resume the workers");
             }
         }
         let slot = match &outcome {

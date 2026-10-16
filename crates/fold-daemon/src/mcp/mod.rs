@@ -128,6 +128,16 @@ impl FoldServer {
             (identity::REGISTER_WORKER, _) => identity::register_worker(self, &arguments).await?,
             (agents::LIST_AGENTS, _) => agents::list_agents(self, &arguments).await?,
             (agents::GET_ACTIVITY, Some(_)) => agents::get_activity(self, &arguments).await?,
+            (agents::DEFINE_AREA, Some(_)) => {
+                agents::define_area(self, as_worker.as_ref(), &arguments).await?
+            }
+            (agents::START_WORKER, Some(_)) => {
+                agents::start_worker(self, as_worker.as_ref(), &arguments).await?
+            }
+            (agents::STOP_WORKER, Some(_)) => {
+                agents::stop_worker(self, as_worker.as_ref(), &arguments).await?
+            }
+            (agents::LIST_WORKERS, Some(_)) => agents::list_workers(self, &arguments).await?,
             (events::GET_EVENTS, Some(worker)) => {
                 events::get_events(self, worker, &arguments).await?
             }
@@ -182,6 +192,15 @@ impl FoldServer {
             }
         }
         Ok(Some(value))
+    }
+
+    /// The acting agent of the current call, its worker resolved from `as`.
+    async fn actor(&self, as_worker: Option<&WorkerName>) -> Result<fold_core::Actor, FoldError> {
+        let session = self.session().await;
+        self.agents
+            .actor(&session, as_worker)
+            .await
+            .map_err(from_agent)
     }
 
     async fn resolve(

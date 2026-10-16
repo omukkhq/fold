@@ -125,6 +125,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/areas": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A named human defines an area over the tasks of one label. */
+        post: operations["define_area"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/board": {
         parameters: {
             query?: never;
@@ -796,6 +813,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/workers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The areas and every worker of the project. */
+        get: operations["list_workers"];
+        put?: never;
+        /** A named human starts an area lead or the review lead, which fold then runs and supervises. */
+        post: operations["start_worker"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/workers/{name}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A named human stops a worker. Its turn is interrupted and its process ends; it keeps its session. */
+        post: operations["stop_worker"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/workspaces": {
         parameters: {
             query?: never;
@@ -956,6 +1008,18 @@ export interface components {
              * @description The draft version the requester read and approves; an older one is `stale_version`.
              */
             expected_version: number;
+        };
+        /** @description A part of the project that one area lead owns through one task label. */
+        AreaEntry: {
+            /** @example frontend */
+            label: string;
+            /**
+             * @description The area lead's agent name; null until the first lead starts.
+             * @example web-lead
+             */
+            lead: string | null;
+            /** @example web */
+            name: string;
         };
         AttentionItem: {
             kind: components["schemas"]["AttentionKind"];
@@ -1352,6 +1416,15 @@ export interface components {
             /** @description One line, not empty. */
             title: string;
         };
+        DefineAreaBody: {
+            /**
+             * @description The task label whose tasks the area owns.
+             * @example frontend
+             */
+            label: string;
+            /** @example web */
+            name: string;
+        };
         DependencyBody: {
             /**
              * @description The task this task needs.
@@ -1446,7 +1519,7 @@ export interface components {
             workspace: string | null;
         };
         /** @enum {string} */
-        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared";
+        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed";
         /**
          * @description `needs`: this task needs the other task. `needed_by`: the other task needs this one.
          * @enum {string}
@@ -1477,7 +1550,7 @@ export interface components {
         ErrorEnvelope: {
             error: components["schemas"]["ErrorBody"];
         };
-        /** @description One frame of a project's event stream, told apart by `kind`: a stored event, a live workspace change, a live presence change, or the snapshot sent after a replay. */
+        /** @description One frame of a project's event stream, told apart by `kind`: a stored event, a live workspace change, a live presence change, a live worker step, or the snapshot sent after a replay. */
         EventEnvelope: (components["schemas"]["DurableEvent"] & {
             /** @enum {string} */
             kind: "event";
@@ -1487,6 +1560,9 @@ export interface components {
         }) | (components["schemas"]["PresenceChange"] & {
             /** @enum {string} */
             kind: "agent_presence_changed";
+        }) | (components["schemas"]["WorkerOutput"] & {
+            /** @enum {string} */
+            kind: "worker_output";
         }) | (components["schemas"]["Snapshot"] & {
             /** @enum {string} */
             kind: "snapshot";
@@ -2436,6 +2512,18 @@ export interface components {
             seq: number;
             workspaces: components["schemas"]["LiveWorkspace"][];
         };
+        /** @description A human starts a lead: `area_lead` with its area, or `review_lead`. */
+        StartWorkerBody: {
+            /** @description The area of an area lead. */
+            area?: string | null;
+            /** @description Added to the worker's first turn. */
+            instructions?: string | null;
+            /** @description The Claude Code model; leave it out for the role's model from `.fold/config.toml`. */
+            model?: string | null;
+            /** @description Leave it out for a name from the role and area, such as `web-lead`. */
+            name?: string | null;
+            role: components["schemas"]["WorkerRole"];
+        };
         /** @enum {string} */
         StateKindView: "revision" | "changeset" | "checkpoint" | "workspace" | "tree";
         StopHook: {
@@ -2757,6 +2845,46 @@ export interface components {
             /** @description Workspaces in state `active` or `missing`. */
             workspaces: components["schemas"]["WorkerWorkspace"][];
         };
+        /** @description The areas and every worker fold runs or ran. */
+        WorkerList: {
+            /** @description In name order. */
+            areas: components["schemas"]["AreaEntry"][];
+            /** @description In start order. */
+            workers: components["schemas"]["WorkerEntry"][];
+        };
+        /** @description One step a worker's Claude Code process reported on stdout: its kind, and the tool's name or the text's length, never the text or the tool's input. It is the `data` of the live `worker.output` event. */
+        WorkerOutput: {
+            /**
+             * @description The worker's agent name.
+             * @example web-coder
+             */
+            agent: string;
+            /**
+             * @description Such as `init`, `thinking`, `text`, `tool_use`, `tool_result`, `permission_request`, `result` or `result_error`.
+             * @example tool_use
+             */
+            step: string;
+            /**
+             * Format: int64
+             * @description The length in bytes of a `text` step's text or of a `result` step's final text.
+             */
+            text_length: number | null;
+            /**
+             * @description The tool of a `tool_use`, `permission_request` or `permission_denied` step.
+             * @example Bash
+             */
+            tool: string | null;
+        };
+        /**
+         * @description `starting` until Claude Code reports its session, `working` during a turn, `idle` between turns, `stopping` while fold ends the process, then `stopped` or `failed`.
+         * @enum {string}
+         */
+        WorkerProcessState: "starting" | "working" | "idle" | "stopping" | "stopped" | "failed";
+        /**
+         * @description The kinds of worker fold runs.
+         * @enum {string}
+         */
+        WorkerRole: "area_lead" | "review_lead" | "task_coder" | "batch_reviewer";
         WorkerWorkspace: {
             /**
              * @description The revision the workspace is based on.
@@ -3512,6 +3640,96 @@ export interface operations {
                 };
             };
             /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    define_area: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DefineAreaBody"];
+            };
+        };
+        responses: {
+            /** @description The new area */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AreaEntry"];
+                };
+            };
+            /** @description `invalid_request`, `invalid_name` or `invalid_label_name` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `label_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `area_exists` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -7518,6 +7736,243 @@ export interface operations {
                 };
             };
             /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    list_workers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The areas and the workers */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerList"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    start_worker: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartWorkerBody"];
+            };
+        };
+        responses: {
+            /** @description The started worker */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerEntry"];
+                };
+            };
+            /** @description `invalid_request` or `invalid_name` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `worker_start_denied`: a human starts only leads; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `area_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `area_has_lead`, `worker_exists`, `worker_limit_reached` or `invalid_config` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    stop_worker: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The worker's agent name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The worker after the stop */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerEntry"];
+                };
+            };
+            /** @description `invalid_name` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `worker_process_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
             503: {
                 headers: {
                     [name: string]: unknown;

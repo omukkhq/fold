@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE worker_processes SET model = COALESCE(?2, model), context_tokens = COALESCE(?3, context_tokens)\n         WHERE id = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "c5e118f9dd87181eecdfcd3f6713a7c572e1fe20536a5cd2d10e97b55de10435"
+}

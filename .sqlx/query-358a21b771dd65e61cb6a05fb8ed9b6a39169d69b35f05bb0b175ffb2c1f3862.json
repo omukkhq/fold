@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO worker_processes (agent_id, role, area_id, model, session_id, state, started_by, started_at)\n           VALUES (?, ?, ?, ?, ?, 'starting', ?, ?) RETURNING id AS \"id!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "worker_processes",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "358a21b771dd65e61cb6a05fb8ed9b6a39169d69b35f05bb0b175ffb2c1f3862"
+}

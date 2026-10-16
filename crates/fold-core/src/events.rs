@@ -114,6 +114,11 @@ define_event_types! {
     GIT_UNCOMMITTED_CHANGES = "git.uncommitted_changes",
     GIT_ATTENTION_CLEARED = "git.attention_cleared",
     AGENT_PRESENCE_CHANGED = "agent.presence_changed",
+    AREA_DEFINED = "area.defined",
+    WORKER_STARTED = "worker.started",
+    WORKER_STOPPED = "worker.stopped",
+    WORKER_FAILED = "worker.failed",
+    WORKER_OUTPUT = "worker.output",
 }
 
 impl EventType {
@@ -129,9 +134,11 @@ impl EventType {
         self.0
     }
 
-    /// `workspace.changed` and `agent.presence_changed` are the live types: they are sent on the bus and never stored.
+    /// `workspace.changed`, `agent.presence_changed` and `worker.output` are the live types: they are sent on the bus and never stored.
     pub fn is_live(self) -> bool {
-        self == types::WORKSPACE_CHANGED || self == types::AGENT_PRESENCE_CHANGED
+        self == types::WORKSPACE_CHANGED
+            || self == types::AGENT_PRESENCE_CHANGED
+            || self == types::WORKER_OUTPUT
     }
 }
 
@@ -328,7 +335,7 @@ pub struct Event {
     pub created_at: Timestamp,
 }
 
-/// A working-change or presence notice. It has no `seq` because it is never stored.
+/// A working-change, presence or worker-output notice. It has no `seq` because it is never stored.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LiveEvent {
     #[serde(rename = "type")]

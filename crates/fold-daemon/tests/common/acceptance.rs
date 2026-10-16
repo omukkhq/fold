@@ -12,6 +12,7 @@ use fold_daemon::http::assets::AssetSource;
 use fold_daemon::http::{router, socket_router};
 use fold_daemon::mcp::handshake::{self, Answer, PROTOCOL_VERSION};
 use fold_daemon::projects::{ProjectHandle, Projects};
+use fold_daemon::services::agents::Launcher;
 use fold_daemon::services::projects::{DEFAULT_SESSION_LIFETIME, InitializedProject, init_project};
 use fold_store::projects::{self, ProjectRow};
 use fold_store::testing::{TestProject, eventually};
@@ -58,6 +59,8 @@ pub struct Harness {
     pub handle: Arc<ProjectHandle>,
     sessions: BTreeMap<String, Session>,
     next_pid: u32,
+    /// The programs the project's worker processes run, kept for [`Harness::start_again`].
+    launcher: Launcher,
 }
 
 impl Harness {
@@ -76,6 +79,11 @@ impl Harness {
 
     /// The same project and sessions with no tag granted, so no agent may approve or integrate.
     pub async fn start_untagged() -> Self {
+        Self::start_with_launcher(Launcher::default()).await
+    }
+
+    /// [`Harness::start_untagged`] with the programs the project's worker processes run, such as a stand-in for Claude Code.
+    pub async fn start_with_launcher(launcher: Launcher) -> Self {
         let project = TestProject::new().await;
         let objects = ObjectStore::open(&project.paths().fold_dir()).unwrap();
         let mut tree = FlatTree::new();
@@ -109,7 +117,7 @@ impl Harness {
             .write(async |tx| projects::insert_project(tx, &row, project.now()).await)
             .await
             .unwrap();
-        let (state, handle) = open(&project, &row).await;
+        let (state, handle) = open(&project, &row, &launcher).await;
         let mut harness = Self {
             project,
             dir: TempDir::new().unwrap(),
@@ -118,6 +126,7 @@ impl Harness {
             handle,
             sessions: BTreeMap::new(),
             next_pid: 4000,
+            launcher,
         };
         for agent in AGENTS {
             harness.connect(agent).await;
@@ -141,7 +150,8 @@ impl Harness {
             name: initialized.name.clone(),
             root: initialized.root.to_string_lossy().into_owned(),
         };
-        let (state, handle) = open(&project, &row).await;
+        let launcher = Launcher::default();
+        let (state, handle) = open(&project, &row, &launcher).await;
         let mut harness = Self {
             project,
             dir: TempDir::new().unwrap(),
@@ -150,6 +160,7 @@ impl Harness {
             handle,
             sessions: BTreeMap::new(),
             next_pid: 4000,
+            launcher,
         };
         for agent in AGENTS {
             harness.connect(agent).await;
@@ -222,7 +233,7 @@ impl Harness {
         }
     }
 
-    /// Stops the project the way a stopping daemon does: the sessions end, the stream closes, the live state lets go of the workspaces and the database closes. [`Harness::start_again`] opens it again.
+    /// Stops the project the way a stopping daemon does: the sessions end, the stream closes, the live state lets go of the workspaces, the worker processes end with their rows unchanged and the database closes. [`Harness::start_again`] opens it again.
     pub async fn stop(&mut self) {
         let connected: Vec<String> = self.sessions.keys().cloned().collect();
         for agent in &connected {
@@ -232,6 +243,7 @@ impl Harness {
         for live in self.handle.live.all() {
             self.handle.live.detach(live.view.workspace).await;
         }
+        self.handle.workers.shutdown().await;
         self.handle
             .agents()
             .close_sessions_at_shutdown()
@@ -254,7 +266,7 @@ impl Harness {
 
     /// Opens the same files again the way a starting daemon does, through the project's start-up sequence, with no session connected.
     pub async fn start_again(&mut self) {
-        let (state, handle) = open(&self.project, &self.row).await;
+        let (state, handle) = open(&self.project, &self.row, &self.launcher).await;
         self.state = state;
         self.handle = handle;
     }
@@ -616,11 +628,15 @@ pub fn read_tree(dir: &Path) -> BTreeMap<String, Vec<u8>> {
     files
 }
 
-async fn open(project: &TestProject, row: &ProjectRow) -> (AppState, Arc<ProjectHandle>) {
+async fn open(
+    project: &TestProject,
+    row: &ProjectRow,
+    launcher: &Launcher,
+) -> (AppState, Arc<ProjectHandle>) {
     let clock = Arc::new(project.clock().clone());
     let state: AppState = Arc::new(DaemonState {
         registry: project.registry().clone(),
-        projects: Projects::default(),
+        projects: Projects::default().with_launcher(launcher.clone()),
         clock: clock.clone(),
         assets: AssetSource::Embedded,
         listen: "127.0.0.1".parse().unwrap(),
@@ -682,6 +698,11 @@ impl FakeInbox {
             .await
             .expect("a post within the wait")
             .unwrap()
+    }
+
+    /// The bytes of a connection that has already arrived, if any.
+    pub fn try_next(&mut self) -> Option<String> {
+        self.received.try_recv().ok()
     }
 }
 

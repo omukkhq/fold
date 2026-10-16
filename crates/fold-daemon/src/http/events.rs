@@ -158,6 +158,8 @@ fn live_envelope(event: &LiveEvent) -> Option<EventEnvelope> {
         serde_json::from_value(event.data.clone()).map(EventEnvelope::WorkspaceChanged)
     } else if event.event_type == types::AGENT_PRESENCE_CHANGED {
         serde_json::from_value(event.data.clone()).map(EventEnvelope::AgentPresenceChanged)
+    } else if event.event_type == types::WORKER_OUTPUT {
+        serde_json::from_value(event.data.clone()).map(EventEnvelope::WorkerOutput)
     } else {
         return None;
     };
@@ -171,7 +173,7 @@ fn live_envelope(event: &LiveEvent) -> Option<EventEnvelope> {
         .ok()
 }
 
-/// One frame of a project's event stream, told apart by `kind`: a stored event, a live workspace change, a live presence change, or the snapshot sent after a replay.
+/// One frame of a project's event stream, told apart by `kind`: a stored event, a live workspace change, a live presence change, a live worker step, or the snapshot sent after a replay.
 // The `event` variant serialises as the stored `Event` plus `kind`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -180,6 +182,7 @@ pub enum EventEnvelope {
     Event(Event),
     WorkspaceChanged(LiveWorkspace),
     AgentPresenceChanged(PresenceChange),
+    WorkerOutput(WorkerOutput),
     Snapshot(Snapshot),
 }
 
@@ -209,7 +212,7 @@ pub struct DurableEvent {
     pub created_at: Timestamp,
 }
 
-/// Every stored event type. The live types arrive only as their own variants: `workspace.changed` as `workspace_changed` and `agent.presence_changed` as `agent_presence_changed`.
+/// Every stored event type. The live types arrive only as their own variants: `workspace.changed` as `workspace_changed`, `agent.presence_changed` as `agent_presence_changed` and `worker.output` as `worker_output`.
 pub struct DurableEventType;
 
 impl DurableEventType {
@@ -243,6 +246,25 @@ pub struct PresenceChange {
     pub agent: String,
     #[schema(value_type = PresenceState)]
     pub presence: Presence,
+}
+
+/// One step a worker's Claude Code process reported on stdout: its kind, and the tool's name or the text's length, never the text or the tool's input. It is the `data` of the live `worker.output` event.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct WorkerOutput {
+    /// The worker's agent name.
+    #[schema(example = "web-coder")]
+    pub agent: String,
+    /// Such as `init`, `thinking`, `text`, `tool_use`, `tool_result`, `permission_request`, `result` or `result_error`.
+    #[schema(example = "tool_use")]
+    pub step: String,
+    /// The tool of a `tool_use`, `permission_request` or `permission_denied` step.
+    #[serde(default)]
+    #[schema(required = true, example = "Bash")]
+    pub tool: Option<String>,
+    /// The length in bytes of a `text` step's text or of a `result` step's final text.
+    #[serde(default)]
+    #[schema(required = true)]
+    pub text_length: Option<u64>,
 }
 
 /// The newest durable sequence number and every live workspace, sent after a replay so a client starts from current state.

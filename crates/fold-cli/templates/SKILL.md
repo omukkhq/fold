@@ -126,6 +126,23 @@ Write dependencies as edges with `add_dependency`, never as text in the descript
 
 A subagent works as a worker of your agent. The orchestrator calls `register_worker(name, parent?)` for each subagent and tells the subagent to pass `as` with that name in every tool call. A call without `as` acts as the main worker of the agent. Each worker holds its own claims and workspaces and gets its own checkpoints.
 
+## Worker agents
+
+fold can run agents for you. Each worker agent is a headless Claude Code session that fold starts, feeds with notices, watches and stops. It has its own agent name and works through the same tools as you.
+
+1. The main agent, which is the user's own interactive session, or a human defines each area with `define_area(name, label)`. The tasks with that label belong to the area. Create the label with `create_label` first.
+2. The main agent or a human starts the leads with `start_worker(role, name?, area?, model?, instructions?)`: one `area_lead` for each area and one `review_lead`. A start for an area whose lead is stopped resumes that lead.
+3. An area lead starts a `task_coder` with `start_worker(role, tasks[], model?, instructions?)` for tasks of its own area. A task without the area's label fails with `task_outside_area`.
+4. The review lead starts a `batch_reviewer` with `start_worker(role, proposals[], model?, instructions?)` for related proposals.
+5. Nobody else starts a worker. A subagent worker, a task coder, a batch reviewer or a lead of another kind gets `worker_start_denied` or `main_agent_required`.
+6. fold stops a task coder when each of its tasks has an open proposal, a batch reviewer when each of its proposals has a verdict, and either one after `idle_minutes` without a turn. Call `stop_worker(name)` to stop a worker. A stopped worker keeps its session, so fold can resume it.
+7. `list_workers` shows the areas with their leads and every worker with its role, state, tasks or proposals, turns, cost and context size.
+8. A start over the limits in `.fold/config.toml` fails with `worker_limit_reached`. By default 3 workers run at a time, at most 2 in one area.
+
+Claude Code runs each worker in its auto permission mode. When auto mode cannot decide on a tool call, fold refuses that call and the worker continues without it.
+
+A worker reads and writes project files only inside its own workspace under `.fold/ws/`. It never edits the files of the project folder, which are main, or another workspace, and it writes no files outside the project. fold checks every path that its own tools receive and every file edit of Claude Code's edit tools, but not shell commands, so each worker keeps this rule itself.
+
 ## Errors
 
 Every error has a stable `code`, a message and a hint that names the next tool. Branch on the code.
@@ -148,6 +165,11 @@ Every error has a stable `code`, a message and a hint that names the next tool. 
 | `requester_required` | Only the requester approves, asks for changes, edits or closes. Call `get_request` to see the requester, and ask with `send_message`. |
 | `drafter_required` | Only the agent of the drafter drafts or releases. Call `claim_request` first, or `get_request` to see the drafter. |
 | `invalid_draft` | Read `details.reason`, correct the cards or the edges, and submit again. |
+| `main_agent_required` | Only the main agent or a human defines areas and starts leads. Ask the main agent. |
+| `worker_start_denied` | Only an area lead starts task coders, and only the review lead starts batch reviewers. Ask that lead. |
+| `task_outside_area` | Start a task coder only for tasks with the label of your own area. Call `get_task` to see the labels. |
+| `area_has_lead` | The area's lead runs already. Send it a message instead. |
+| `worker_limit_reached` | Call `list_workers`. Wait until a worker stops, or stop one with `stop_worker`. |
 
 ## Never
 

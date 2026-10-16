@@ -154,6 +154,7 @@ fn document_declares_the_event_envelope() {
             ("event", "DurableEvent"),
             ("workspace_changed", "LiveWorkspace"),
             ("agent_presence_changed", "PresenceChange"),
+            ("worker_output", "WorkerOutput"),
             ("snapshot", "Snapshot"),
         ]
         .map(|(kind, target)| (kind.to_owned(), target.to_owned()))
@@ -173,6 +174,14 @@ fn document_declares_the_event_envelope() {
     assert_eq!(declared, durable);
     assert!(!declared.contains(types::WORKSPACE_CHANGED.as_str()));
     assert!(!declared.contains(types::AGENT_PRESENCE_CHANGED.as_str()));
+    assert!(!declared.contains(types::WORKER_OUTPUT.as_str()));
+    let output = schema(&doc, "WorkerOutput");
+    assert_eq!(
+        names(&output["required"]),
+        ["agent", "step", "tool", "text_length"]
+            .map(str::to_owned)
+            .into()
+    );
 
     let presence = schema(&doc, "PresenceChange");
     assert_eq!(

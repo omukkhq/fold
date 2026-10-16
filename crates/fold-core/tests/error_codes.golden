@@ -123,3 +123,13 @@ already_in_batch
 not_batch_member
 batch_conflict
 unattributed_lines
+area_not_found
+area_exists
+area_has_lead
+main_agent_required
+worker_start_denied
+worker_stop_denied
+task_outside_area
+worker_limit_reached
+worker_exists
+worker_process_not_found

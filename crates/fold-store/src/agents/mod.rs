@@ -9,6 +9,16 @@ use sqlx::{SqliteConnection, SqliteExecutor};
 use crate::error::StoreError;
 use crate::workspaces::WorkspaceState;
 
+mod workers;
+
+pub use workers::{
+    AreaRow, NewWorkerProcess, TurnTotals, WorkerProcessRow, bind_proposal, bind_task,
+    coders_of_task, find_area, find_worker_process, insert_area, insert_worker_process, label_id,
+    list_areas, list_worker_processes, mark_worker_working, proposals_without_verdict, record_exit,
+    record_turn, restart_worker_process, reviewers_of_proposal, running_counts, set_area_lead,
+    set_worker_context, set_worker_pid, set_worker_state, tasks_awaiting_proposal,
+};
+
 /// Row ids of these tables stay inside the daemon; the public handles are the names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentRow {

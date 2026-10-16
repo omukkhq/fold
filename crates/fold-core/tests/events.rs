@@ -85,6 +85,11 @@ fn all_equals_the_plans_event_types() {
         "git.uncommitted_changes",
         "git.attention_cleared",
         "agent.presence_changed",
+        "area.defined",
+        "worker.started",
+        "worker.stopped",
+        "worker.failed",
+        "worker.output",
     ]);
     assert_eq!(declared, expected);
 }
@@ -134,11 +139,15 @@ fn parse_accepts_declared_names_and_refuses_the_rest() {
 }
 
 #[test]
-fn workspace_changed_and_presence_changed_are_the_live_types() {
+fn workspace_changed_presence_changed_and_worker_output_are_the_live_types() {
     let live: Vec<_> = EventType::ALL.iter().filter(|t| t.is_live()).collect();
     assert_eq!(
         live,
-        vec![&types::WORKSPACE_CHANGED, &types::AGENT_PRESENCE_CHANGED]
+        vec![
+            &types::WORKSPACE_CHANGED,
+            &types::AGENT_PRESENCE_CHANGED,
+            &types::WORKER_OUTPUT
+        ]
     );
 }
 

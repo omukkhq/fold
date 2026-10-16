@@ -12,6 +12,8 @@ pub mod proposal_tools_support;
 #[cfg(test)]
 pub mod reviews_support;
 #[cfg(test)]
+pub mod workers_support;
+#[cfg(test)]
 pub mod workspaces_support;
 
 mod acceptance_10_requests;
@@ -115,6 +117,9 @@ mod task_read;
 mod task_views;
 mod tasks_service;
 mod web_tokens;
+mod workers;
+#[cfg(feature = "failpoints")]
+mod workers_failpoints;
 mod workspaces_compare;
 #[cfg(feature = "failpoints")]
 mod workspaces_failpoints;

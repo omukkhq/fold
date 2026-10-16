@@ -297,6 +297,24 @@ describe("patch rules", () => {
     expect(invalidated).toEqual([]);
   });
 
+  it("changes no cached query for a worker_output frame", () => {
+    const agents = [{ name: "web-coder", presence: "idle", tags: [] }];
+    client.setQueryData(keys.agents(slug), agents);
+    applyEvent(
+      client,
+      slug,
+      guarded({
+        kind: "worker_output",
+        agent: "web-coder",
+        step: "text",
+        tool: null,
+        text_length: 8,
+      }),
+    );
+    expect(client.getQueryData(keys.agents(slug))).toBe(agents);
+    expect(invalidated).toEqual([]);
+  });
+
   it("refetches an agent list that does not hold the agent and leaves other projects alone", () => {
     client.setQueryData(keys.agents(slug), [
       { name: "backend", presence: "idle" },

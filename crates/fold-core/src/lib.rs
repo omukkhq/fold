@@ -21,6 +21,7 @@ pub mod readiness;
 pub mod requests;
 pub mod reviews;
 pub mod revision;
+pub mod roles;
 pub mod stall;
 pub mod status;
 pub mod task;
@@ -28,7 +29,7 @@ pub mod time;
 pub mod tree;
 
 pub use actor::{Actor, AgentActor};
-pub use agents::{AgentName, HumanName, INTEGRATOR_TAG, NameError, Tag, WorkerName};
+pub use agents::{AgentName, AreaName, HumanName, INTEGRATOR_TAG, NameError, Tag, WorkerName};
 pub use clock::{Clock, ManualClock};
 pub use config::{CONFIG_TEMPLATE, GitConfig, IntegrationConfig, ProjectConfig, RemoteConfig};
 pub use error::{FoldError, codes};
@@ -50,6 +51,7 @@ pub use messages::{
 pub use policy::PolicyDenied;
 pub use presence::{ACTIVE_WINDOW_MS, Presence, SessionFact, presence_of};
 pub use projects::{choose_slug, slugify};
+pub use roles::{CacheTtl, Role, WorkerState};
 pub use status::TaskStatus;
 pub use task::{
     ChecklistName, DependencyOrigin, LabelColor, LabelName, StepText, TaskDescription, TaskTitle,

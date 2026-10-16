@@ -45,6 +45,9 @@ pub const STALL_TICK: Duration = Duration::from_secs(30);
 /// How often the automatic integration job looks for projects it does not listen to yet. Each project's listener reacts to its events, so this only bounds how late a project opened while the daemon runs gets its first look.
 pub const AUTO_INTEGRATE_TICK: Duration = Duration::from_secs(5);
 
+/// How often the idle job looks for short-lived workers idle past their role's `idle_minutes`.
+pub const WORKER_IDLE_TICK: Duration = Duration::from_secs(30);
+
 /// How many workspaces [`reconcile_workspaces`] scans at once.
 pub const RECONCILE_PARALLEL: usize = 4;
 
@@ -287,6 +290,47 @@ pub fn spawn_stalls(state: AppState, tick: Duration, stop: watch::Receiver<bool>
     Job {
         task,
         progress: watcher,
+    }
+}
+
+/// Stops the short-lived workers of every project that stayed idle past their role's `idle_minutes`, on every tick.
+pub fn spawn_worker_idle(state: AppState, tick: Duration, stop: watch::Receiver<bool>) -> Job {
+    let (progress, watcher) = watch::channel(JobProgress::default());
+    let task = tokio::spawn(worker_idle(state, tick, stop, progress));
+    Job {
+        task,
+        progress: watcher,
+    }
+}
+
+async fn worker_idle(
+    state: AppState,
+    tick: Duration,
+    mut stop: watch::Receiver<bool>,
+    progress: watch::Sender<JobProgress>,
+) {
+    let mut ticks = tokio::time::interval(tick);
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            _ = stop.changed() => break,
+            _ = ticks.tick() => {}
+        }
+        let mut stopped = 0;
+        for handle in state.projects.handles() {
+            match handle.workers.sweep_idle(handle.clock.now()).await {
+                Ok(agents) => stopped += agents.len(),
+                Err(error) => tracing::warn!(
+                    project = %handle.slug,
+                    code = crate::services::agents::code_of(&error),
+                    "the idle worker sweep failed; the next tick tries again"
+                ),
+            }
+        }
+        progress.send_modify(|seen| {
+            seen.checks += 1;
+            seen.cycles += u64::from(stopped > 0);
+        });
     }
 }
 

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE areas SET lead_agent_id = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "161f2093c0fca4888b3be564993f0e33b2b08c927075acc25df44792e34bc275"
+}

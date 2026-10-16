@@ -120,6 +120,15 @@ fn status_of(code: &str) -> Option<StatusCode> {
         codes::INVALID_COMMENT_RANGE | codes::UNKNOWN_COMMENT_PATH | codes::EMPTY_REVIEW => {
             Some(StatusCode::UNPROCESSABLE_ENTITY)
         }
+        codes::AREA_NOT_FOUND | codes::WORKER_PROCESS_NOT_FOUND => Some(StatusCode::NOT_FOUND),
+        codes::MAIN_AGENT_REQUIRED
+        | codes::WORKER_START_DENIED
+        | codes::WORKER_STOP_DENIED
+        | codes::TASK_OUTSIDE_AREA => Some(StatusCode::FORBIDDEN),
+        codes::AREA_EXISTS
+        | codes::AREA_HAS_LEAD
+        | codes::WORKER_LIMIT_REACHED
+        | codes::WORKER_EXISTS => Some(StatusCode::CONFLICT),
         _ => None,
     }
 }
@@ -385,6 +394,16 @@ mod tests {
             (codes::DRAFTER_REQUIRED, StatusCode::FORBIDDEN),
             (codes::ORCHESTRATOR_REQUIRED, StatusCode::FORBIDDEN),
             (codes::INVALID_DRAFT, StatusCode::BAD_REQUEST),
+            (codes::AREA_NOT_FOUND, StatusCode::NOT_FOUND),
+            (codes::WORKER_PROCESS_NOT_FOUND, StatusCode::NOT_FOUND),
+            (codes::MAIN_AGENT_REQUIRED, StatusCode::FORBIDDEN),
+            (codes::WORKER_START_DENIED, StatusCode::FORBIDDEN),
+            (codes::WORKER_STOP_DENIED, StatusCode::FORBIDDEN),
+            (codes::TASK_OUTSIDE_AREA, StatusCode::FORBIDDEN),
+            (codes::AREA_EXISTS, StatusCode::CONFLICT),
+            (codes::AREA_HAS_LEAD, StatusCode::CONFLICT),
+            (codes::WORKER_LIMIT_REACHED, StatusCode::CONFLICT),
+            (codes::WORKER_EXISTS, StatusCode::CONFLICT),
         ] {
             assert_eq!(status_of(code), Some(status));
         }

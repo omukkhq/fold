@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{FoldError, codes};
+use crate::roles::{CacheTtl, Role, WorkerLimits, is_command_word as plain_word};
 
 /// The commented file `fld init` writes to `.fold/config.toml`. Every value line is commented out and holds the default.
 pub const CONFIG_TEMPLATE: &str = include_str!("config_template.toml");
@@ -24,7 +25,67 @@ pub struct ProjectConfig {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub remotes: BTreeMap<String, RemoteConfig>,
     pub integration: IntegrationConfig,
+    pub workers: WorkersConfig,
+    /// The settings of each worker role by role name, as `[roles.<role>]` sections; a role without one takes its defaults.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub roles: BTreeMap<String, RoleConfig>,
 }
+
+/// The `[workers]` section: how many worker processes fold runs at once in the project and in one area.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WorkersConfig {
+    pub max: u64,
+    pub max_per_area: u64,
+}
+
+impl Default for WorkersConfig {
+    fn default() -> Self {
+        Self {
+            max: 3,
+            max_per_area: 2,
+        }
+    }
+}
+
+impl WorkersConfig {
+    pub fn limits(self) -> WorkerLimits {
+        WorkerLimits {
+            max: self.max,
+            max_per_area: self.max_per_area,
+        }
+    }
+}
+
+/// One `[roles.<role>]` section. Every key is optional.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoleConfig {
+    /// The Claude Code model name or alias, passed as `--model`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_ttl: Option<CacheTtl>,
+    /// Only for the short-lived roles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_minutes: Option<u64>,
+    /// The MCP servers the role may load, by name: `fold` and servers of the project's `.mcp.json`. Without it the role loads every server the user's own Claude Code loads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<Vec<String>>,
+}
+
+/// A role's settings with the defaults filled in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoleSettings {
+    pub model: Option<String>,
+    pub cache_ttl: CacheTtl,
+    /// `None` for a long-lived role, which never stops for being idle.
+    pub idle_minutes: Option<u64>,
+    pub mcp: Option<Vec<String>>,
+}
+
+/// How long a short-lived worker may stay idle before fold stops it, when its role sets no `idle_minutes`.
+pub const DEFAULT_IDLE_MINUTES: u64 = 15;
 
 /// The `[git]` section: the branch of the project folder's repository `.git` that every integration is committed to and the folder has checked out.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,6 +119,8 @@ pub struct RemoteConfig {
 pub const GIT_SECTION: &str = "git";
 pub const REMOTES_SECTION: &str = "remotes";
 pub const INTEGRATION_SECTION: &str = "integration";
+pub const WORKERS_SECTION: &str = "workers";
+pub const ROLES_SECTION: &str = "roles";
 
 /// The `[integration]` section.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,11 +150,24 @@ impl Default for ProjectConfig {
             git: GitConfig::default(),
             remotes: BTreeMap::new(),
             integration: IntegrationConfig::default(),
+            workers: WorkersConfig::default(),
+            roles: BTreeMap::new(),
         }
     }
 }
 
 impl ProjectConfig {
+    pub fn role(&self, role: Role) -> RoleSettings {
+        let section = self.roles.get(role.as_str()).cloned().unwrap_or_default();
+        RoleSettings {
+            model: section.model,
+            cache_ttl: section.cache_ttl.unwrap_or(role.default_cache_ttl()),
+            idle_minutes: (!role.is_long_lived())
+                .then(|| section.idle_minutes.unwrap_or(DEFAULT_IDLE_MINUTES)),
+            mcp: section.mcp,
+        }
+    }
+
     /// Parses the text of a config file. A refused key is named in `details.key`. The keys `remote` and `push_on_integrate` of `[git]` name an unnamed remote, which is read as the remote `origin` on the `[git]` branch.
     pub fn from_toml(text: &str) -> Result<Self, FoldError> {
         let mut table: toml::Table = toml::from_str(text)
@@ -109,6 +185,14 @@ impl ProjectConfig {
             }
             if key == INTEGRATION_SECTION {
                 check_integration_section(value)?;
+                continue;
+            }
+            if key == WORKERS_SECTION {
+                check_workers_section(value)?;
+                continue;
+            }
+            if key == ROLES_SECTION {
+                check_roles_section(value)?;
                 continue;
             }
             if !known.contains(key) {
@@ -260,6 +344,79 @@ fn check_integration_section(value: &toml::Value) -> Result<(), FoldError> {
     Ok(())
 }
 
+fn check_workers_section(value: &toml::Value) -> Result<(), FoldError> {
+    let table = value
+        .as_table()
+        .ok_or_else(|| refused(WORKERS_SECTION, "must be a table"))?;
+    for (key, value) in table {
+        let name = format!("{WORKERS_SECTION}.{key}");
+        match key.as_str() {
+            "max" | "max_per_area" => check_positive(&name, value)?,
+            _ => return Err(refused(&name, "is not a config key")),
+        }
+    }
+    Ok(())
+}
+
+fn check_roles_section(value: &toml::Value) -> Result<(), FoldError> {
+    let table = value
+        .as_table()
+        .ok_or_else(|| refused(ROLES_SECTION, "must be a table"))?;
+    for (role_name, value) in table {
+        let section = format!("{ROLES_SECTION}.{role_name}");
+        let role = Role::parse(role_name).ok_or_else(|| {
+            refused(
+                &section,
+                "is not a role: use area_lead, review_lead, task_coder or batch_reviewer",
+            )
+        })?;
+        let fields = value
+            .as_table()
+            .ok_or_else(|| refused(&section, "must be a table"))?;
+        for (key, value) in fields {
+            let name = format!("{section}.{key}");
+            match key.as_str() {
+                "model" => match value.as_str() {
+                    Some(model) if plain_word(model) => {}
+                    _ => return Err(refused(&name, "must be a model name such as sonnet")),
+                },
+                "cache_ttl" => {
+                    if value.as_str().and_then(CacheTtl::parse).is_none() {
+                        return Err(refused(&name, "must be \"1h\" or \"5m\""));
+                    }
+                }
+                "idle_minutes" if role.is_long_lived() => {
+                    return Err(refused(
+                        &name,
+                        "applies only to task_coder and batch_reviewer",
+                    ));
+                }
+                "idle_minutes" => check_positive(&name, value)?,
+                "mcp" => {
+                    let names = value
+                        .as_array()
+                        .ok_or_else(|| refused(&name, "must be a list of server names"))?;
+                    if !names
+                        .iter()
+                        .all(|server| server.as_str().is_some_and(plain_word))
+                    {
+                        return Err(refused(&name, "must be a list of server names"));
+                    }
+                }
+                _ => return Err(refused(&name, "is not a config key")),
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_positive(name: &str, value: &toml::Value) -> Result<(), FoldError> {
+    match value.as_integer() {
+        Some(number) if number > 0 => Ok(()),
+        _ => Err(refused(name, "must be a whole number above 0")),
+    }
+}
+
 fn check_branch_value(name: &str, value: &toml::Value) -> Result<(), FoldError> {
     match value.as_str() {
         Some(branch) => {
@@ -379,11 +536,96 @@ mod tests {
         // No remote exists by default, so the template names the section in a comment only.
         assert!(CONFIG_TEMPLATE.contains("`[remotes.<name>]`"));
         assert_eq!(named, fields);
-        assert_eq!(fields.len(), 10);
+        assert_eq!(fields.len(), 12);
         assert_eq!(known_keys().len(), 8);
         // Only comments: the file as written changes nothing.
         let as_written = ProjectConfig::from_toml(CONFIG_TEMPLATE).unwrap();
         assert_eq!(as_written, ProjectConfig::default());
+    }
+
+    #[test]
+    fn the_workers_and_roles_sections_set_limits_and_role_settings() {
+        let config = ProjectConfig::from_toml(
+            "[workers]\nmax = 5\nmax_per_area = 1\n[roles.task_coder]\nmodel = \"sonnet\"\ncache_ttl = \"1h\"\nidle_minutes = 3\nmcp = [\"fold\", \"pencil\"]\n[roles.area_lead]\ncache_ttl = \"5m\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            config.workers.limits(),
+            WorkerLimits {
+                max: 5,
+                max_per_area: 1
+            }
+        );
+        let coder = config.role(Role::TaskCoder);
+        assert_eq!(coder.model.as_deref(), Some("sonnet"));
+        assert_eq!(coder.cache_ttl, CacheTtl::OneHour);
+        assert_eq!(coder.idle_minutes, Some(3));
+        assert_eq!(
+            coder.mcp,
+            Some(vec!["fold".to_owned(), "pencil".to_owned()])
+        );
+        assert_eq!(config.role(Role::AreaLead).cache_ttl, CacheTtl::FiveMinutes);
+        let defaults = ProjectConfig::default();
+        assert_eq!(defaults.workers.limits().max, 3);
+        assert_eq!(defaults.workers.limits().max_per_area, 2);
+        let reviewer = defaults.role(Role::BatchReviewer);
+        assert_eq!(reviewer.cache_ttl, CacheTtl::OneHour);
+        assert_eq!(reviewer.idle_minutes, Some(DEFAULT_IDLE_MINUTES));
+        assert_eq!(reviewer.mcp, None);
+        let lead = defaults.role(Role::ReviewLead);
+        assert_eq!(lead.idle_minutes, None);
+        assert_eq!(lead.model, None);
+        assert_eq!(
+            defaults.role(Role::TaskCoder).cache_ttl,
+            CacheTtl::FiveMinutes
+        );
+    }
+
+    #[test]
+    fn a_wrong_value_in_the_workers_or_roles_sections_is_invalid_config() {
+        for (text, key) in [
+            ("workers = 3", "workers"),
+            ("[workers]\nmax = 0", "workers.max"),
+            ("[workers]\nmax_per_area = \"2\"", "workers.max_per_area"),
+            ("[workers]\nmin = 1", "workers.min"),
+            ("roles = 3", "roles"),
+            ("[roles]\nmain = {}", "roles.main"),
+            ("[roles]\ntask_coder = 3", "roles.task_coder"),
+            (
+                "[roles.task_coder]\nmodel = \"-x\"",
+                "roles.task_coder.model",
+            ),
+            ("[roles.task_coder]\nmodel = 3", "roles.task_coder.model"),
+            (
+                "[roles.task_coder]\ncache_ttl = \"2h\"",
+                "roles.task_coder.cache_ttl",
+            ),
+            (
+                "[roles.area_lead]\nidle_minutes = 5",
+                "roles.area_lead.idle_minutes",
+            ),
+            (
+                "[roles.task_coder]\nidle_minutes = 0",
+                "roles.task_coder.idle_minutes",
+            ),
+            ("[roles.task_coder]\nmcp = \"fold\"", "roles.task_coder.mcp"),
+            (
+                "[roles.task_coder]\nmcp = [\"a b\"]",
+                "roles.task_coder.mcp",
+            ),
+            (
+                "[roles.task_coder]\nprompt = \"x\"",
+                "roles.task_coder.prompt",
+            ),
+        ] {
+            let error = ProjectConfig::from_toml(text).unwrap_err();
+            assert_eq!(error.code(), "invalid_config", "{text}");
+            assert_eq!(
+                error.details().cloned().map(serde_json::Value::Object),
+                Some(serde_json::json!({"key": key})),
+                "{text}"
+            );
+        }
     }
 
     #[test]

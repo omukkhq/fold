@@ -210,6 +210,23 @@ describe("eventLine", () => {
       "reviewed rb-3",
     );
     expect(line("review.batch_closed", { batch: "rb-3" })).toBe("closed rb-3");
+    expect(line("area.defined", { area: "web", label: "ui" })).toBe(
+      "defined web over label ui",
+    );
+    expect(line("area.defined")).toBe("defined an area");
+    expect(
+      line("worker.started", { agent: "web-coder", role: "task_coder" }),
+    ).toBe("started web-coder as task coder");
+    expect(line("worker.started", { agent: "web-coder", resumed: true })).toBe(
+      "resumed web-coder",
+    );
+    expect(line("worker.started")).toBe("started a worker");
+    expect(line("worker.stopped", { agent: "web-coder" })).toBe(
+      "stopped web-coder",
+    );
+    expect(line("worker.failed", { agent: "web-coder" })).toBe(
+      "web-coder failed",
+    );
     expect(line("proposal.opened", { version: 1 })).toBe(
       "opened P-4 v1 for T-12",
     );

@@ -31,5 +31,6 @@ mod schema;
 mod store;
 mod tasks;
 mod test_project;
+mod workers_schema;
 mod workspace_conflicts;
 mod workspaces;

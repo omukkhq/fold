@@ -1,4 +1,7 @@
-use fold_core::{AgentName, FoldError, Tag, WorkerName};
+use fold_core::{
+    AgentName, AreaName, FoldError, LabelName, ProposalId, Role, Tag, TaskId, WorkerName, codes,
+};
+use fold_store::agents::{AreaRow, WorkerProcessRow};
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{JsonObject, Tool};
 use rmcp::schemars::JsonSchema;
@@ -9,11 +12,74 @@ use super::FoldServer;
 use super::error::from_agent;
 use super::identity::parse;
 use crate::services::agents::{
-    AgentOverview, ClaimSummary, OverviewFilter, ProposalSummary, WorkerOverview, WorkspaceSummary,
+    AgentOverview, ClaimSummary, OverviewFilter, ProposalSummary, StartWorker, WorkerOverview,
+    WorkspaceSummary,
 };
 
 pub const GET_ACTIVITY: &str = "get_activity";
 pub const LIST_AGENTS: &str = "list_agents";
+pub const DEFINE_AREA: &str = "define_area";
+pub const START_WORKER: &str = "start_worker";
+pub const STOP_WORKER: &str = "stop_worker";
+pub const LIST_WORKERS: &str = "list_workers";
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct DefineAreaInput {
+    /// The area's name, such as web: 1 to 32 characters of a-z, 0-9, - and _. It becomes part of its workers' names.
+    pub name: String,
+    /// The task label whose tasks the area owns, such as frontend. Create it with create_label first.
+    pub label: String,
+    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
+    #[serde(rename = "as", default)]
+    pub as_worker: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct StartWorkerInput {
+    /// area_lead or review_lead (started by the main agent), task_coder (started by an area lead) or batch_reviewer (started by the review lead).
+    pub role: String,
+    /// The worker's agent name. Leave it out for a name from the role and area, such as web-lead or web-coder-2.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The area of an area lead. A task coder takes its lead's area; leave it out for the other roles.
+    #[serde(default)]
+    pub area: Option<String>,
+    /// The tasks a task coder works on, such as T-12. Each must carry the area's label.
+    #[serde(default)]
+    pub tasks: Vec<String>,
+    /// The proposals a batch reviewer reviews, such as P-3.
+    #[serde(default)]
+    pub proposals: Vec<String>,
+    /// The Claude Code model, such as sonnet. Leave it out for the role's model from .fold/config.toml.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// What the worker should know beyond its role and its tasks; fold adds it to the worker's first turn.
+    #[serde(default)]
+    pub instructions: Option<String>,
+    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
+    #[serde(rename = "as", default)]
+    pub as_worker: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct StopWorkerInput {
+    /// The worker's agent name, such as web-coder.
+    pub name: String,
+    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
+    #[serde(rename = "as", default)]
+    pub as_worker: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct ListWorkersInput {
+    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
+    #[serde(rename = "as", default)]
+    pub as_worker: Option<String>,
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -46,7 +112,132 @@ pub fn tools() -> Vec<Tool> {
             "List every agent of the project in registration order with its tags, presence (active, idle or offline) and workers, each with its last call, claims and live workspaces.",
             schema_for_type::<ListAgentsInput>(),
         ),
+        Tool::new(
+            DEFINE_AREA,
+            "As the main agent, define an area: a part of the project that one area lead owns through one task label.",
+            schema_for_type::<DefineAreaInput>(),
+        ),
+        Tool::new(
+            START_WORKER,
+            "Start a worker agent that fold runs and supervises: the main agent starts an area lead or the review lead, an area lead starts task coders for tasks of its area, the review lead starts batch reviewers. Refused over the worker limits.",
+            schema_for_type::<StartWorkerInput>(),
+        ),
+        Tool::new(
+            STOP_WORKER,
+            "Stop a worker that fold runs: its turn is interrupted and its process ends. It keeps its session, so fold can resume it later.",
+            schema_for_type::<StopWorkerInput>(),
+        ),
+        Tool::new(
+            LIST_WORKERS,
+            "List the areas with their leads and every worker fold runs, with its role, state, bound tasks or proposals, turns, cost and context size.",
+            schema_for_type::<ListWorkersInput>(),
+        ),
     ]
+}
+
+fn area_json(area: &AreaRow) -> Value {
+    json!({
+        "name": area.name.as_str(),
+        "label": area.label.as_str(),
+        "lead": area.lead.as_ref().map(AgentName::as_str),
+    })
+}
+
+fn worker_process_json(row: &WorkerProcessRow) -> Value {
+    json!({
+        "name": row.agent.as_str(),
+        "role": row.role.as_str(),
+        "area": row.area.as_ref().map(AreaName::as_str),
+        "state": row.state.as_str(),
+        "model": row.model,
+        "tasks": row.tasks.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        "proposals": row.proposals.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        "turns": row.turns,
+        "cost_micro_usd": row.cost_micro_usd,
+        "context_tokens": row.context_tokens,
+    })
+}
+
+fn ids<T: std::str::FromStr>(texts: &[String], what: &str) -> Result<Vec<T>, FoldError> {
+    texts
+        .iter()
+        .map(|text| {
+            text.parse().map_err(|_| {
+                FoldError::new(codes::INVALID_ID, format!("{text:?} is not a {what} id"))
+            })
+        })
+        .collect()
+}
+
+pub async fn define_area(
+    server: &FoldServer,
+    as_worker: Option<&WorkerName>,
+    arguments: &JsonObject,
+) -> Result<Value, FoldError> {
+    let input: DefineAreaInput = parse(arguments)?;
+    let name = AreaName::parse(&input.name)?;
+    let label = LabelName::parse(&input.label)?;
+    let actor = server.actor(as_worker).await?;
+    let area = server
+        .agents
+        .define_area(&actor, &name, &label)
+        .await
+        .map_err(from_agent)?;
+    Ok(json!({ "area": area_json(&area) }))
+}
+
+pub async fn start_worker(
+    server: &FoldServer,
+    as_worker: Option<&WorkerName>,
+    arguments: &JsonObject,
+) -> Result<Value, FoldError> {
+    let input: StartWorkerInput = parse(arguments)?;
+    let role = Role::parse(&input.role).ok_or_else(|| {
+        FoldError::new(codes::INVALID_REQUEST, "role is not a worker role")
+            .with_hint("pass area_lead, review_lead, task_coder or batch_reviewer")
+    })?;
+    let request = StartWorker {
+        role: Some(role),
+        name: input.name.as_deref().map(AgentName::parse).transpose()?,
+        area: input.area.as_deref().map(AreaName::parse).transpose()?,
+        tasks: ids::<TaskId>(&input.tasks, "task")?,
+        proposals: ids::<ProposalId>(&input.proposals, "proposal")?,
+        model: input.model,
+        instructions: input.instructions,
+    };
+    let actor = server.actor(as_worker).await?;
+    let worker = server
+        .agents
+        .start_worker(&actor, request)
+        .await
+        .map_err(from_agent)?;
+    Ok(json!({ "worker": worker_process_json(&worker) }))
+}
+
+pub async fn stop_worker(
+    server: &FoldServer,
+    as_worker: Option<&WorkerName>,
+    arguments: &JsonObject,
+) -> Result<Value, FoldError> {
+    let input: StopWorkerInput = parse(arguments)?;
+    let name = AgentName::parse(&input.name)?;
+    let actor = server.actor(as_worker).await?;
+    let worker = server
+        .agents
+        .stop_worker(&actor, &name)
+        .await
+        .map_err(from_agent)?;
+    Ok(json!({ "worker": worker_process_json(&worker) }))
+}
+
+pub async fn list_workers(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
+    let _: ListWorkersInput = parse(arguments)?;
+    let areas = server.agents.list_areas().await.map_err(from_agent)?;
+    let workers = server.agents.list_workers().await.map_err(from_agent)?;
+    Ok(json!({
+        "areas": areas.iter().map(area_json).collect::<Vec<_>>(),
+        "workers": workers.iter().map(worker_process_json).collect::<Vec<_>>(),
+    }))
 }
 
 fn claim_json(claim: &ClaimSummary) -> Value {

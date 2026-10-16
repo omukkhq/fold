@@ -104,6 +104,22 @@ function approvedText(event: DurableEvent): string {
     : `approved ${request} as ${tasks.join(", ")}`;
 }
 
+/** A worker's agent name, and its role with spaces, such as `task coder`. */
+function workerOf(event: DurableEvent): string {
+  return text(event.data.agent) ?? "a worker";
+}
+
+function startedText(event: DurableEvent): string {
+  const worker = workerOf(event);
+  if (event.data.resumed === true) {
+    return `resumed ${worker}`;
+  }
+  const role = text(event.data.role);
+  return role === null
+    ? `started ${worker}`
+    : `started ${worker} as ${role.replaceAll("_", " ")}`;
+}
+
 function fixed(line: string): (event: DurableEvent) => string {
   return () => line;
 }
@@ -477,6 +493,22 @@ const SPECS: Record<EventType, Spec> = {
   "request.closed": {
     icon: X,
     text: (e) => `closed ${requestOf(e)}`,
+  },
+  "area.defined": {
+    icon: Tag,
+    text: (e) => {
+      const area = text(e.data.area) ?? "an area";
+      const label = text(e.data.label);
+      return label === null
+        ? `defined ${area}`
+        : `defined ${area} over label ${label}`;
+    },
+  },
+  "worker.started": { icon: Bot, text: startedText },
+  "worker.stopped": { icon: Bot, text: (e) => `stopped ${workerOf(e)}` },
+  "worker.failed": {
+    icon: TriangleAlert,
+    text: (e) => `${workerOf(e)} failed`,
   },
 };
 
