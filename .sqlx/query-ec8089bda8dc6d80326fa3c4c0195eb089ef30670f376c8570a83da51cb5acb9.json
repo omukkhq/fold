@@ -1,0 +1,33 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS (\n                      SELECT 1 FROM agent_tags t JOIN agents g ON g.id = t.agent_id\n                      WHERE g.name = ?1 AND t.tag = 'main'\n                  ) AS \"holds_main!: bool\",\n                  (SELECT w.role FROM worker_processes w JOIN agents g ON g.id = w.agent_id\n                   WHERE g.name = ?1) AS \"role?: String\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "holds_main!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "role?: String",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "worker_processes",
+            "name": "role"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "ec8089bda8dc6d80326fa3c4c0195eb089ef30670f376c8570a83da51cb5acb9"
+}

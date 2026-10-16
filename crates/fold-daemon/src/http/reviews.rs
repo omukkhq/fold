@@ -6,7 +6,9 @@ use fold_core::merge::{
 };
 use fold_core::policy::{Gate, GateState, GateStatus};
 use fold_core::reviews::{Side, Verdict};
-use fold_core::{FoldError, HumanName, ProposalId, RevisionId, TaskId, Timestamp, WorkspaceId};
+use fold_core::{
+    FoldError, HumanName, ProposalId, ReviewBatchId, RevisionId, TaskId, Timestamp, WorkspaceId,
+};
 use fold_store::reviews::ProposalState;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -21,8 +23,9 @@ use super::tasks::{HumanReviewMark, TaskStatus, TaskView, id, task_view};
 use super::workspaces::{ChangeSource, ComparedFile, ComparisonTotals};
 use crate::daemon::AppState;
 use crate::services::reviews::{
-    self as service, ChangeRange, CommentInput, CommentLocation, IntegrationOutcome,
-    ProposalFilter, ReviewCheckout, ReviewService, Turn, integration_conflicted,
+    self as service, ChangeRange, CheckoutTarget, CommentInput, CommentLocation,
+    IntegrationOutcome, ListedCheckout, ProposalFilter, ReviewService, Turn,
+    integration_conflicted,
 };
 
 pub mod batches;
@@ -632,6 +635,8 @@ pub struct ProposalDetail {
     pub last_reviewed_version: Option<u32>,
     /// What stands between the requesting human and integrating the selected version.
     pub gates: Vec<ProposalGate>,
+    /// A reviewer agent (the main agent, the review lead or a batch reviewer) approved the current version and no request for changes came after it. On a task with the human review mark a human approves only then; otherwise the approval is `agent_approval_required`.
+    pub agent_approved: bool,
     /// The latest conflict report of the selected version.
     #[schema(required = true)]
     pub conflict: Option<ConflictReportView>,
@@ -682,6 +687,7 @@ impl From<service::ProposalView> for ProposalDetail {
             },
             last_reviewed_version: view.last_reviewed,
             gates: view.gates.into_iter().map(ProposalGate::from).collect(),
+            agent_approved: view.agent_approved,
             conflict: detail.conflict.map(ConflictReportView::from),
             files: view.files.into_iter().map(ComparedFile::from).collect(),
             totals: view.totals.into(),
@@ -808,9 +814,20 @@ impl CommentBody {
     }
 }
 
-/// A human verdict on the current version. The web screens offer approve, request changes and comment; the route also takes reject, which closes the proposal.
+/// One comment on the version the human read, as its own `comment` review.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct AddCommentBody {
+    /// The version the human read and commented on. When the current version is another one, nothing is written and the answer is `stale_version`.
+    pub version: u32,
+    #[serde(flatten)]
+    pub comment: CommentBody,
+}
+
+/// A human verdict on the version the human read. The web screens offer approve, request changes and comment; the route also takes reject, which closes the proposal.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct ReviewBody {
+    /// The version the human read. When the current version is another one, nothing is written and the answer is `stale_version`.
+    pub version: u32,
     pub verdict: ReviewVerdict,
     /// May be empty only when the review carries a comment; a reject needs it.
     pub body: String,
@@ -871,7 +888,7 @@ pub struct ProposalListQuery {
     /// Only proposals in this state.
     #[serde(default)]
     pub state: Option<ProposalStateView>,
-    /// Only proposals without a review claim.
+    /// Only proposals that no reviewer holds; a review claim whose lease has run out counts as unclaimed.
     #[serde(default)]
     pub unclaimed: Option<bool>,
 }
@@ -1045,7 +1062,7 @@ pub async fn list_review_comments(
     }))
 }
 
-/// Adds one human comment to the current version, as a `comment` review; it never changes whose turn it is.
+/// Adds one human comment to the version the human read, as a `comment` review; it never changes whose turn it is.
 #[utoipa::path(
     post,
     path = "/api/v1/projects/{slug}/proposals/{id}/comments",
@@ -1054,13 +1071,13 @@ pub async fn list_review_comments(
         ("slug" = String, Path, description = "The project slug"),
         ("id" = String, Path, description = "The proposal id, such as P-3"),
     ),
-    request_body = CommentBody,
+    request_body = AddCommentBody,
     responses(
         (status = 201, description = "The comment", body = ReviewComment),
         (status = 400, description = "`invalid_request` (`details.field` names the field), `invalid_path`, `invalid_id` or `invalid_name`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 404, description = "`proposal_not_found` or `project_not_found`", body = ErrorEnvelope),
-        (status = 409, description = "`proposal_not_open` or `task_closed`", body = ErrorEnvelope),
+        (status = 409, description = "`stale_version` (`details.expected_version`, `details.current_version`), `proposal_not_open` or `task_closed`", body = ErrorEnvelope),
         (status = 422, description = "`unknown_comment_path` or `invalid_comment_range`: the lines are not in the file on that side", body = ErrorEnvelope),
         (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
@@ -1071,17 +1088,17 @@ pub async fn add_review_comment(
     human: Human,
     project: Project,
     Path((_slug, id)): Path<(String, String)>,
-    ApiJson(body): ApiJson<CommentBody>,
+    ApiJson(body): ApiJson<AddCommentBody>,
 ) -> Result<(StatusCode, Json<ReviewComment>), ApiError> {
     let proposal = proposal(&id)?;
-    let input = body.into_input("comment")?;
+    let input = body.comment.into_input("comment")?;
     let comment = service(&state, &project)
-        .add_comment(&human.actor(), proposal, input)
+        .add_comment(&human.actor(), proposal, body.version, input)
         .await?;
     Ok((StatusCode::CREATED, Json(comment.into())))
 }
 
-/// A human verdict on the current version with line comments. `request_changes` gives the turn to the author, `approve` counts for integration and `reject` closes the proposal.
+/// A human verdict on the version the human read, with line comments. `request_changes` gives the turn to the author, `approve` counts for integration and `reject` closes the proposal.
 #[utoipa::path(
     post,
     path = "/api/v1/projects/{slug}/proposals/{id}/reviews",
@@ -1093,10 +1110,10 @@ pub async fn add_review_comment(
     request_body = ReviewBody,
     responses(
         (status = 201, description = "The review", body = SubmittedReview),
-        (status = 400, description = "`invalid_request` (`details.field` names the field; `details.reason` is `version_changed` when a version arrived during the review), `invalid_path`, `invalid_id` or `invalid_name`", body = ErrorEnvelope),
+        (status = 400, description = "`invalid_request` (`details.field` names the field), `invalid_path`, `invalid_id` or `invalid_name`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 404, description = "`proposal_not_found` or `project_not_found`", body = ErrorEnvelope),
-        (status = 409, description = "`proposal_not_open` or `task_closed`", body = ErrorEnvelope),
+        (status = 409, description = "`stale_version` (`details.expected_version`, `details.current_version`), `agent_approval_required` (a human's approve on a task with the human review mark before a reviewer agent approved the version), `proposal_not_open` or `task_closed`", body = ErrorEnvelope),
         (status = 422, description = "`empty_review`, `unknown_comment_path` or `invalid_comment_range`", body = ErrorEnvelope),
         (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
@@ -1120,6 +1137,7 @@ pub async fn submit_review(
         .submit_review(
             &human.actor(),
             proposal,
+            body.version,
             body.verdict.into(),
             &body.body,
             comments,
@@ -1144,7 +1162,7 @@ pub async fn submit_review(
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 403, description = "`author_cannot_integrate`: the caller's agent wrote the proposal", body = ErrorEnvelope),
         (status = 404, description = "`proposal_not_found` or `project_not_found`", body = ErrorEnvelope),
-        (status = 409, description = "A gate refusal: `stale_version` (`details.expected_version`, `details.current_version`), `changes_requested`, `not_approved`, `human_approval_missing` (`details.reviewer`), `prerequisites_not_done` (`details.prerequisites`); or `proposal_not_open`, `integration_conflicted` (`details.files`: path and kind), `head_moved`", body = ErrorEnvelope),
+        (status = 409, description = "A gate refusal: `stale_version` (`details.expected_version`, `details.current_version`), `changes_requested`, `not_approved`, `human_approval_missing` (`details.reviewer`), `agent_approval_required` (a marked task whose version no reviewer agent approved), `prerequisites_not_done` (`details.prerequisites`); or `proposal_not_open`, `integration_conflicted` (`details.files`: path and kind), `head_moved`", body = ErrorEnvelope),
         (status = 503, description = "`project_unavailable`, or `integration_failed` (`details.cause`)", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )
@@ -1172,21 +1190,19 @@ pub async fn integrate_proposal(
     }
 }
 
-/// A read-only checkout of a proposal version for its reviewer. The daemon records no command run in it.
+/// A read-only checkout of a proposal version, or of a review batch, for its reviewer. The daemon records no command run in it.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ReviewCheckoutView {
     #[schema(value_type = String, example = "ws-12")]
     pub workspace: WorkspaceId,
-    /// Relative to the project root, such as `.fold/ws/review-p-4`.
+    /// Relative to the project root, such as `.fold/ws/review-p-4` or `.fold/ws/review-rb-3`.
     pub path: String,
-    #[schema(value_type = String, example = "P-4")]
-    pub proposal: ProposalId,
-    /// The proposal version the checkout holds.
-    pub version: u32,
+    /// What the checkout's files hold.
+    pub target: ReviewCheckoutTarget,
     /// The review worker that owns the checkout, such as `review/ci`.
     #[schema(required = true)]
     pub worker: Option<String>,
-    /// The base revision of the version.
+    /// The base revision: the version's base for a proposal checkout, the revision of main the members were merged onto for a batch checkout.
     #[schema(value_type = String, example = "r17")]
     pub base: RevisionId,
     /// UTC milliseconds.
@@ -1194,14 +1210,56 @@ pub struct ReviewCheckoutView {
     pub created_at: Timestamp,
 }
 
-impl From<ReviewCheckout> for ReviewCheckoutView {
-    fn from(checkout: ReviewCheckout) -> Self {
+/// One proposal version, or the members of a review batch merged onto main.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ReviewCheckoutTarget {
+    Proposal {
+        #[schema(value_type = String, example = "P-4")]
+        proposal: ProposalId,
+        /// The proposal version the checkout holds.
+        version: u32,
+    },
+    Batch {
+        #[schema(value_type = String, example = "rb-3")]
+        batch: ReviewBatchId,
+        /// The members the checkout holds, in merge order.
+        members: Vec<ReviewCheckoutMember>,
+    },
+}
+
+/// A member of a batch checkout at the version it joined the batch with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct ReviewCheckoutMember {
+    #[schema(value_type = String, example = "P-4")]
+    pub proposal: ProposalId,
+    pub version: u32,
+}
+
+impl From<CheckoutTarget> for ReviewCheckoutTarget {
+    fn from(target: CheckoutTarget) -> Self {
+        match target {
+            CheckoutTarget::Proposal { proposal, version } => {
+                ReviewCheckoutTarget::Proposal { proposal, version }
+            }
+            CheckoutTarget::Batch { batch, members } => ReviewCheckoutTarget::Batch {
+                batch,
+                members: members
+                    .into_iter()
+                    .map(|(proposal, version)| ReviewCheckoutMember { proposal, version })
+                    .collect(),
+            },
+        }
+    }
+}
+
+impl From<ListedCheckout> for ReviewCheckoutView {
+    fn from(checkout: ListedCheckout) -> Self {
         let workspace = checkout.workspace;
         Self {
             workspace: workspace.id,
             path: workspace.path,
-            proposal: checkout.proposal,
-            version: checkout.version,
+            target: checkout.target.into(),
             worker: workspace.worker.map(|worker| worker.as_str().to_owned()),
             base: workspace.base,
             created_at: workspace.created_at,
@@ -1215,7 +1273,7 @@ pub struct ReviewCheckoutList {
     pub checkouts: Vec<ReviewCheckoutView>,
 }
 
-/// The project's active review checkouts with their worker, directory and proposal version.
+/// The project's active review checkouts, of one proposal or of a review batch, with their worker, directory and the proposal versions they hold.
 #[utoipa::path(
     get,
     path = "/api/v1/projects/{slug}/reviews/checkouts",

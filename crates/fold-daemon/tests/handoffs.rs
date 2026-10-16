@@ -192,6 +192,7 @@ async fn a_lead_past_its_threshold_hands_off_to_a_fresh_session() {
     let turn = Turn::new();
     let fake = turn.fake();
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     let mut bus = harness.handle.bus.subscribe();
     let started = lead(&mut harness).await;
     let asked = grow_until_asked(&harness, &turn, &fake).await;
@@ -266,6 +267,7 @@ async fn a_lead_that_writes_no_note_starts_fresh_with_the_summary_alone() {
     let turn = Turn::new();
     let fake = turn.fake();
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     let started = lead(&mut harness).await;
     grow_until_asked(&harness, &turn, &fake).await;
     harness.send(MAIN, &[LEAD], "Still there?").await;
@@ -302,6 +304,7 @@ async fn a_note_written_during_a_turn_refreshes_the_lead_when_the_turn_ends() {
     let turn = Turn::new();
     let fake = turn.fake();
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     let started = lead(&mut harness).await;
     let note = "Mid-turn note. Next: split T-1.";
     // A lead calls write_handoff inside a turn, so the note is stored while the row is working and the refresh waits for the turn's end.

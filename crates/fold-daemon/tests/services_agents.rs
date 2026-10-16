@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fold_core::{
-    Actor, AgentActor, AgentName, EventFilter, FoldError, HumanName, Tag, TaskId, WorkerName, codes,
+    Actor, AgentActor, AgentName, EventFilter, FoldError, Tag, TaskId, WorkerName, codes,
 };
 use fold_daemon::services::agents::{AgentError, AgentService, SessionContext};
 use fold_daemon::services::events::{BusMessage, EventBus};
@@ -116,24 +116,21 @@ async fn a_second_session_binds_to_the_existing_agent_without_new_agent_events()
 }
 
 #[tokio::test]
-async fn the_integrator_tag_is_refused_before_anything_is_written() {
+async fn any_tag_but_main_is_a_label_the_agent_sets_on_itself() {
     let project = TestProject::new().await;
     let (service, _bus) = setup(&project);
     let mut ctx = service.start_session(1).await.unwrap();
-    let error = fold_error(
-        service
-            .register_agent(&mut ctx, &agent("boss"), &[tag("integrator")])
-            .await
-            .unwrap_err(),
-    );
-    assert_eq!(error.code(), codes::HUMAN_REQUIRED);
-    assert_eq!(ctx.agent, None);
-    assert!(stored(&project).await.is_empty());
-    assert!(
-        agents::find_agent(project.store().read(), &agent("boss"))
-            .await
-            .unwrap()
-            .is_none()
+    service
+        .register_agent(&mut ctx, &agent("boss"), &[tag("ops"), tag("ui")])
+        .await
+        .unwrap();
+    let boss = agents::find_agent(project.store().read(), &agent("boss"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        agents::tags(project.store().read(), boss.id).await.unwrap(),
+        vec![tag("ops"), tag("ui")]
     );
 }
 
@@ -503,10 +500,16 @@ async fn events_reach_the_bus_only_after_the_commit() {
     assert_eq!(seqs.len(), 3);
 
     // A refused command rolls back and publishes nothing.
-    let mut other = service.start_session(2).await.unwrap();
+    let mut holder = service.start_session(2).await.unwrap();
+    service
+        .register_agent(&mut holder, &agent("lead"), &[tag("main")])
+        .await
+        .unwrap();
+    while receiver.try_recv().is_ok() {}
+    let mut other = service.start_session(3).await.unwrap();
     let before = stored(&project).await.len();
     let error = service
-        .register_agent(&mut other, &agent("frontend"), &[tag("integrator")])
+        .register_agent(&mut other, &agent("frontend"), &[tag("main")])
         .await
         .unwrap_err();
     assert!(matches!(error, AgentError::Fold(_)));
@@ -553,11 +556,6 @@ async fn a_failed_write_after_an_append_stores_and_publishes_nothing() {
 }
 
 #[cfg(test)]
-fn human(name: &str) -> Actor {
-    Actor::human(HumanName::parse(name).unwrap())
-}
-
-#[cfg(test)]
 async fn registered(service: &AgentService, name: &str, tags: &[Tag]) -> SessionContext {
     let mut ctx = service.start_session(7).await.unwrap();
     service
@@ -591,134 +589,4 @@ async fn actor_carries_the_resolved_worker_and_the_current_tags() {
         fold_error(service.actor(&unbound, None).await.unwrap_err()).code(),
         codes::AGENT_NOT_REGISTERED
     );
-}
-
-#[tokio::test]
-async fn an_agent_registering_with_integrator_gets_human_required_even_when_it_has_other_tags() {
-    let project = TestProject::new().await;
-    let (service, _bus) = setup(&project);
-    let mut ctx = registered(&service, "review", &[tag("review")]).await;
-    let before = stored(&project).await.len();
-    let error = fold_error(
-        service
-            .register_agent(&mut ctx, &agent("review"), &[tag("ui"), tag("integrator")])
-            .await
-            .unwrap_err(),
-    );
-    assert_eq!(error.code(), codes::HUMAN_REQUIRED);
-    assert!(error.hint().is_some());
-    assert_eq!(stored(&project).await.len(), before);
-    let review = agents::find_agent(project.store().read(), &agent("review"))
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        agents::tags(project.store().read(), review.id)
-            .await
-            .unwrap(),
-        vec![tag("review")]
-    );
-}
-
-#[tokio::test]
-async fn set_integrator_with_an_agent_or_system_actor_gets_human_required() {
-    let project = TestProject::new().await;
-    let (service, _bus) = setup(&project);
-    let ctx = registered(&service, "review", &[]).await;
-    let me = service.actor(&ctx, None).await.unwrap();
-    for (actor, on) in [(me.clone(), true), (me, false), (Actor::System, true)] {
-        let error = fold_error(
-            service
-                .set_integrator(&actor, &agent("review"), on)
-                .await
-                .unwrap_err(),
-        );
-        assert_eq!(error.code(), codes::HUMAN_REQUIRED);
-    }
-    // The policy runs before the lookup, so an agent learns nothing about other agents.
-    let error = fold_error(
-        service
-            .set_integrator(&Actor::System, &agent("ghost"), true)
-            .await
-            .unwrap_err(),
-    );
-    assert_eq!(error.code(), codes::HUMAN_REQUIRED);
-    let types: Vec<String> = stored(&project).await.into_iter().map(|e| e.0).collect();
-    assert!(
-        !types.iter().any(|t| t.starts_with("agent.tag")),
-        "{types:?}"
-    );
-}
-
-#[tokio::test]
-async fn a_human_grants_and_removes_integrator_once_each() {
-    let project = TestProject::new().await;
-    let (service, bus) = setup(&project);
-    registered(&service, "review", &[tag("review")]).await;
-    let mut receiver = bus.subscribe();
-    let tanim = human("tanim");
-
-    let granted = service
-        .set_integrator(&tanim, &agent("review"), true)
-        .await
-        .unwrap();
-    assert_eq!(granted.agent, agent("review"));
-    assert_eq!(granted.tags, vec![tag("integrator"), tag("review")]);
-    let Ok(BusMessage::Durable(event)) = receiver.try_recv() else {
-        panic!("expected agent.tag_added on the bus");
-    };
-    assert_eq!(event.event_type.as_str(), "agent.tag_added");
-
-    let again = service
-        .set_integrator(&tanim, &agent("review"), true)
-        .await
-        .unwrap();
-    assert_eq!(again, granted);
-    assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
-
-    let removed = service
-        .set_integrator(&tanim, &agent("review"), false)
-        .await
-        .unwrap();
-    assert_eq!(removed.tags, vec![tag("review")]);
-    let absent = service
-        .set_integrator(&tanim, &agent("review"), false)
-        .await
-        .unwrap();
-    assert_eq!(absent, removed);
-
-    let tag_events: Vec<_> = stored(&project)
-        .await
-        .into_iter()
-        .filter(|e| e.0.starts_with("agent.tag"))
-        .collect();
-    assert_eq!(
-        tag_events,
-        vec![
-            (
-                "agent.tag_added".to_owned(),
-                "human:tanim".to_owned(),
-                serde_json::json!({"agent": "review", "tag": "integrator"})
-            ),
-            (
-                "agent.tag_removed".to_owned(),
-                "human:tanim".to_owned(),
-                serde_json::json!({"agent": "review", "tag": "integrator"})
-            ),
-        ]
-    );
-}
-
-#[tokio::test]
-async fn set_integrator_on_an_unknown_agent_is_agent_not_found() {
-    let project = TestProject::new().await;
-    let (service, _bus) = setup(&project);
-    let error = fold_error(
-        service
-            .set_integrator(&human("tanim"), &agent("ghost"), true)
-            .await
-            .unwrap_err(),
-    );
-    assert_eq!(error.code(), codes::AGENT_NOT_FOUND);
-    assert!(stored(&project).await.is_empty());
 }

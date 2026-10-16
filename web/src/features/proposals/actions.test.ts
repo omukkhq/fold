@@ -6,7 +6,17 @@ import {
   proposalSummary,
   review,
 } from "@/test/proposals";
-import { canComment, integrateBlock, visibleActions } from "./actions";
+import {
+  actedVersion,
+  AGENT_APPROVES_FIRST,
+  APPROVE_BODY,
+  approveBlock,
+  canComment,
+  humanVerdict,
+  integrateBlock,
+  visibleActions,
+} from "./actions";
+import { resolveView } from "./view";
 
 function proposal(fields: Partial<ProposalSummary> = {}) {
   return proposalDetail(
@@ -68,6 +78,7 @@ describe("integrateBlock", () => {
         gates: humanGates({
           human_review: { status: "unmet", code: "human_approval_missing" },
         }),
+        agent_approved: true,
       },
     );
     expect(integrateBlock(p, "r8")).toBe(
@@ -101,5 +112,65 @@ describe("integrateBlock", () => {
       gates: humanGates({ merge: { status: "checked_at_integration" } }),
     });
     expect(integrateBlock(p, null)).toBeNull();
+  });
+});
+
+describe("actedVersion and humanVerdict", () => {
+  const twoVersions = () => proposal({ current_version: 2 });
+
+  it("act on the version on screen, not the current version, so a version that arrived meanwhile is refused", () => {
+    const shownV1 = resolveView(twoVersions(), { version: 1 });
+    expect(actedVersion(shownV1)).toBe(1);
+    expect(humanVerdict(shownV1, "approve", APPROVE_BODY)).toEqual({
+      version: 1,
+      verdict: "approve",
+      body: APPROVE_BODY,
+    });
+    expect(humanVerdict(shownV1, "request_changes", "Add a test.")).toEqual({
+      version: 1,
+      verdict: "request_changes",
+      body: "Add a test.",
+    });
+  });
+
+  it("act on the current version when it is the one on screen", () => {
+    const shown = resolveView(twoVersions(), {});
+    expect(actedVersion(shown)).toBe(2);
+    expect(humanVerdict(shown, "approve", APPROVE_BODY).version).toBe(2);
+  });
+});
+
+describe("approveBlock", () => {
+  const mark = { reviewer: null, reason: "billing", set_by: "planner" };
+
+  it("blocks a human's Approve on a marked task until a reviewer agent approved the current version", () => {
+    const waiting = proposalDetail(
+      proposalSummary("P-4", { human_review: mark }),
+      { agent_approved: false },
+    );
+    expect(approveBlock(waiting)).toBe(AGENT_APPROVES_FIRST);
+    expect(AGENT_APPROVES_FIRST).toBe("A reviewer agent approves first.");
+    const approved = proposalDetail(
+      proposalSummary("P-4", { human_review: mark }),
+      { agent_approved: true },
+    );
+    expect(approveBlock(approved)).toBeNull();
+  });
+
+  it("blocks Integrate on a marked task with the same line, because integrating approves", () => {
+    const waiting = proposalDetail(
+      proposalSummary("P-4", { human_review: mark }),
+      { agent_approved: false },
+    );
+    expect(integrateBlock(waiting, "r8")).toBe(AGENT_APPROVES_FIRST);
+    const approved = proposalDetail(
+      proposalSummary("P-4", { human_review: mark }),
+      { agent_approved: true },
+    );
+    expect(integrateBlock(approved, "r8")).not.toBe(AGENT_APPROVES_FIRST);
+  });
+
+  it("never blocks Approve on a task without the mark", () => {
+    expect(approveBlock(proposal())).toBeNull();
   });
 });

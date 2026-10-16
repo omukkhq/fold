@@ -11,6 +11,7 @@ use fold_core::{
 };
 use fold_daemon::services::agents::AgentService;
 use fold_daemon::services::events::EventBus;
+use fold_daemon::services::reviews::ReviewService;
 use fold_daemon::services::tasks::{self, CreateTask, TaskError, TaskService};
 use fold_daemon::services::workspaces::{WorkspaceError, WorkspaceLocks, WorkspaceService};
 use fold_store::agents::WorkerRow;
@@ -163,6 +164,17 @@ impl Fixture {
             frontend,
             backend,
         }
+    }
+
+    /// A review service over the fixture's project and workspaces, for the tests that open a proposal.
+    pub fn reviews(&self) -> ReviewService {
+        ReviewService::new(
+            self.project.store().clone(),
+            self.bus.clone(),
+            Arc::new(self.project.clock().clone()),
+            self.workspaces.clone(),
+            Arc::default(),
+        )
     }
 
     pub fn dir(&self, path: &str) -> PathBuf {

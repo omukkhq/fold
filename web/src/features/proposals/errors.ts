@@ -55,6 +55,10 @@ const ENTRIES: Record<string, Entry> = {
         : `v${current} is now the current version. Read it, then try once more.`;
     },
   },
+  agent_approval_required: {
+    place: "inline",
+    text: "A reviewer agent approves this version first, then you can approve it.",
+  },
   not_approved: {
     place: "inline",
     text: "No approval counts for this version yet, so fold did not integrate it.",
@@ -117,10 +121,7 @@ const ENTRIES: Record<string, Entry> = {
   },
   invalid_request: {
     place: "inline",
-    text: (d) =>
-      d.reason === "version_changed"
-        ? "A new version arrived during the review. Read it first."
-        : "fold refused the request as written.",
+    text: "fold refused the request as written.",
   },
   proposal_not_found: {
     place: "banner",

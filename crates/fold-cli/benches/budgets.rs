@@ -123,13 +123,7 @@ async fn measure_with_daemon(
 
     let frontend = Session::open(host, &root, "frontend").await?;
     let backend = Session::open(host, &root, "backend").await?;
-    let review = Session::open(host, &root, "review").await?;
-    host.run(
-        &["agent", "tag", "review", "integrator"],
-        &root,
-        &[("FOLD_HUMAN", "bench")],
-    )
-    .await?;
+    let review = Session::open_main(host, &root, "review").await?;
 
     let agents = integration::Agents {
         frontend: &frontend,

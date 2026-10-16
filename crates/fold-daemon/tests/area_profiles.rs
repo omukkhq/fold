@@ -119,6 +119,7 @@ async fn start_coder(h: &Harness, task: &str, extra: Value) -> String {
 async fn a_task_coder_of_the_design_area_starts_with_the_areas_servers_model_and_instructions() {
     let fake = FakeClaude::new("result");
     let mut h = Harness::start_with_launcher(fake.launcher.clone()).await;
+    h.make_main(MAIN).await;
     let defined = design_area(
         &mut h,
         json!({"instructions": "  Draw screens in Pencil.  ", "model": "opus", "mcp": ["fold", "pencil"]}),
@@ -173,6 +174,7 @@ async fn a_task_coder_of_the_design_area_starts_with_the_areas_servers_model_and
 async fn a_changed_profile_reaches_the_next_start_and_never_a_running_worker() {
     let fake = FakeClaude::new("result");
     let mut h = Harness::start_with_launcher(fake.launcher.clone()).await;
+    h.make_main(MAIN).await;
     design_area(&mut h, json!({"model": "opus", "mcp": ["fold", "pencil"]})).await;
     let first = start_coder(&h, "T-1", json!({})).await;
     let before = first_run(&fake, &first).await;
@@ -239,6 +241,7 @@ async fn a_changed_profile_reaches_the_next_start_and_never_a_running_worker() {
 async fn a_project_role_prompt_comes_before_the_area_instructions() {
     let fake = FakeClaude::new("result");
     let mut h = Harness::start_with_launcher(fake.launcher.clone()).await;
+    h.make_main(MAIN).await;
     let roles = Path::new(h.root()).join(".fold/roles");
     std::fs::create_dir_all(&roles).unwrap();
     std::fs::write(roles.join("task_coder.md"), "You draw for this project.\n").unwrap();
@@ -258,6 +261,7 @@ async fn a_project_role_prompt_comes_before_the_area_instructions() {
 async fn only_the_main_agent_or_a_human_changes_a_profile_and_bad_values_are_refused() {
     let fake = FakeClaude::new("result");
     let mut h = Harness::start_with_launcher(fake.launcher.clone()).await;
+    h.make_main(MAIN).await;
     design_area(&mut h, json!({})).await;
     let denied = h
         .refused(
@@ -340,6 +344,7 @@ async fn only_the_main_agent_or_a_human_changes_a_profile_and_bad_values_are_ref
 #[tokio::test]
 async fn an_agent_outside_the_team_leaves_profiles_and_task_kinds_to_the_main_agent() {
     let h = Harness::start().await;
+    h.make_main(MAIN).await;
     h.call(
         MAIN,
         "create_label",

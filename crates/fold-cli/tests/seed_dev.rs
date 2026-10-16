@@ -95,6 +95,21 @@ fn cards(board: &Value) -> Vec<&Value> {
         .collect()
 }
 
+/// The board without each card's `activity` and `stalled` attention. The workspace watcher reports the seed's last file writes on its own schedule after the seed has ended, so those fields can change between two reads while no command runs.
+#[cfg(test)]
+fn stored_board(mut board: Value) -> Value {
+    for column in board["columns"].as_array_mut().unwrap() {
+        for card in column["cards"].as_array_mut().unwrap() {
+            let card = card.as_object_mut().unwrap();
+            card.remove("activity");
+            if let Some(Value::Array(items)) = card.get_mut("attention") {
+                items.retain(|item| item["kind"] != "stalled");
+            }
+        }
+    }
+    board
+}
+
 #[cfg(test)]
 fn has_attention(card: &Value, kind: &str) -> bool {
     card["attention"]
@@ -211,7 +226,7 @@ async fn the_seed_fills_every_column_and_every_state_of_the_review_screens() {
 async fn a_second_run_fails_with_seed_exists_and_changes_nothing() {
     let host = Host::new().await;
     assert!(host.seed().await.status.success());
-    let board = host.get("/board").await;
+    let board = stored_board(host.get("/board").await);
     let proposals = host.get("/proposals").await;
 
     let output = host.seed().await;
@@ -220,7 +235,7 @@ async fn a_second_run_fails_with_seed_exists_and_changes_nothing() {
     assert!(stdout.is_empty(), "{stdout}");
     assert!(stderr.contains("seed_exists"), "{stderr}");
     assert!(stderr.contains("make clean-keep-cargo"), "{stderr}");
-    assert_eq!(host.get("/board").await, board);
+    assert_eq!(stored_board(host.get("/board").await), board);
     assert_eq!(host.get("/proposals").await, proposals);
     assert!(Path::new(&host.project()).exists());
 }

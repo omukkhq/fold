@@ -1,8 +1,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::common::roles::give_role;
 use fold_core::object::ObjectKind;
 use fold_core::reviews::{HumanReviewMark, Verdict};
+use fold_core::roles::Role;
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
 use fold_core::{
     Actor, AgentActor, AgentName, Event, EventActor, EventFilter, FoldError, HumanName, ProposalId,
@@ -145,10 +147,7 @@ impl Fixture {
                 .await
                 .unwrap();
         }
-        agents
-            .set_integrator(&human("tanim"), &AgentName::parse("review").unwrap(), true)
-            .await
-            .unwrap();
+        give_role(project.store(), "review", Role::ReviewLead, None).await;
         let author = agent("frontend", &[]);
         workspaces.create_workspace(&author, t(1)).await.unwrap();
         let file = project.paths().root().join(".fold/ws/t-1/src/lib.rs");
@@ -176,8 +175,16 @@ impl Fixture {
             .clock()
             .advance(Duration::from_secs(1))
             .unwrap();
+        let read = self.reviews.get_proposal(p(1), None).await.unwrap();
         self.reviews
-            .submit_review(actor, p(1), verdict, "looked", Vec::new())
+            .submit_review(
+                actor,
+                p(1),
+                read.summary.current_version,
+                verdict,
+                "looked",
+                Vec::new(),
+            )
             .await
             .unwrap();
     }
@@ -268,7 +275,7 @@ async fn agent_cannot_clear_the_mark() {
     let fx = Fixture::new().await;
     fx.mark(&planner(), t(1), None).await;
     let before = fx.head().await;
-    for actor in [planner(), agent("review", &["integrator"]), Actor::System] {
+    for actor in [planner(), agent("review", &[]), Actor::System] {
         let error = refusal(fx.reviews.clear_human_review(&actor, t(1)).await);
         assert_eq!(error.code(), codes::HUMAN_REQUIRED, "{actor:?}");
         assert_eq!(error.details().unwrap()["task"], json!("T-1"));
@@ -522,15 +529,7 @@ async fn awaiting_human_review_lists_and_clears_after_a_human_approval() {
         fx.awaiting().await.is_empty(),
         "the human sees P-1 only once an agent approved it"
     );
-    fx.review(&agent("planner", &["integrator"]), Verdict::Approve)
-        .await;
-    assert!(
-        fx.awaiting().await.is_empty(),
-        "an agent that no longer holds integrator does not count"
-    );
-
-    fx.review(&agent("review", &["integrator"]), Verdict::Approve)
-        .await;
+    fx.review(&agent("review", &[]), Verdict::Approve).await;
     let waiting = fx.awaiting().await;
     assert_eq!(
         waiting,
@@ -556,32 +555,32 @@ async fn awaiting_human_review_lists_and_clears_after_a_human_approval() {
         "the proposal is with its author"
     );
 
-    fx.review(&human("tanim"), Verdict::Approve).await;
-    assert!(
-        fx.awaiting().await.is_empty(),
+    let early = refusal(
+        fx.reviews
+            .submit_review(&human("tanim"), p(1), 1, Verdict::Approve, "ok", Vec::new())
+            .await,
+    );
+    assert_eq!(
+        early.code(),
+        codes::AGENT_APPROVAL_REQUIRED,
         "no agent approved after the request_changes"
     );
 
-    fx.review(&agent("review", &["integrator"]), Verdict::Approve)
-        .await;
-    let back = fx.awaiting().await;
-    assert_eq!(back.len(), 1, "tanim approved before the agent did");
-    assert_eq!(back[0].since, marked_at);
-    fx.review(&human("tanim"), Verdict::Approve).await;
-    assert!(
-        fx.awaiting().await.is_empty(),
-        "tanim approved after the agent"
-    );
-
-    fx.review(&agent("review", &[]), Verdict::RequestChanges)
-        .await;
-    fx.review(&agent("review", &["integrator"]), Verdict::Approve)
-        .await;
+    fx.review(&agent("review", &[]), Verdict::Approve).await;
     assert_eq!(
         fx.awaiting().await.len(),
         1,
-        "a later request_changes withdrew it"
+        "tanim reviews after the agent"
     );
+    fx.review(&human("tanim"), Verdict::Approve).await;
+    assert!(fx.awaiting().await.is_empty(), "tanim's approval stands");
+
+    fx.review(&agent("review", &[]), Verdict::RequestChanges)
+        .await;
+    fx.review(&agent("review", &[]), Verdict::Approve).await;
+    let back = fx.awaiting().await;
+    assert_eq!(back.len(), 1, "a later request_changes withdrew it");
+    assert_eq!(back[0].since, marked_at);
 
     fx.reviews
         .clear_human_review(&human("tanim"), t(1))
@@ -597,8 +596,7 @@ async fn board_attention_carries_human_review_for_a_waiting_proposal() {
     fx.mark(&planner(), t(1), None).await;
     fx.mark(&planner(), t(2), None).await;
     assert!(fx.card_attention(t(1)).await.is_empty());
-    fx.review(&agent("review", &["integrator"]), Verdict::Approve)
-        .await;
+    fx.review(&agent("review", &[]), Verdict::Approve).await;
     assert_eq!(fx.card_attention(t(1)).await, [AttentionKind::HumanReview]);
     assert!(fx.card_attention(t(2)).await.is_empty());
     let detail = fx.tasks.get_view(t(1)).await.unwrap();
@@ -608,4 +606,83 @@ async fn board_attention_carries_human_review_for_a_waiting_proposal() {
     fx.review(&human("ana"), Verdict::Approve).await;
     assert!(fx.card_attention(t(1)).await.is_empty());
     assert!(fx.tasks.get_view(t(1)).await.unwrap().attention.is_empty());
+}
+
+/// Whether the proposal screen of P-1 shows a reviewer agent's approval of the current version.
+#[cfg(test)]
+async fn view(fx: &Fixture) -> bool {
+    fx.reviews
+        .view_proposal(&human("tanim"), p(1), None)
+        .await
+        .unwrap()
+        .agent_approved
+}
+
+#[tokio::test]
+async fn a_human_approves_a_marked_task_only_after_a_reviewer_agent() {
+    let fx = Fixture::new().await;
+    fx.mark(&planner(), t(1), None).await;
+    assert!(!view(&fx).await);
+    let reviews_before = fx.reviews.get_proposal(p(1), None).await.unwrap();
+
+    let refused = refusal(
+        fx.reviews
+            .submit_review(&human("tanim"), p(1), 1, Verdict::Approve, "ok", Vec::new())
+            .await,
+    );
+    assert_eq!(refused.code(), codes::AGENT_APPROVAL_REQUIRED);
+    assert!(refused.hint().unwrap_or_default().contains("review lead"));
+    assert_eq!(
+        fx.reviews.get_proposal(p(1), None).await.unwrap(),
+        reviews_before,
+        "a refused approval writes nothing"
+    );
+
+    // The human comments and asks for changes before any agent approval.
+    fx.review(&human("tanim"), Verdict::Comment).await;
+    fx.review(&human("tanim"), Verdict::RequestChanges).await;
+    // An agent without review rights does not open the human's approval.
+    fx.review(&agent("planner", &[]), Verdict::Comment).await;
+    assert!(!view(&fx).await);
+
+    fx.review(&agent("review", &[]), Verdict::Approve).await;
+    assert!(view(&fx).await);
+    fx.review(&human("tanim"), Verdict::Approve).await;
+
+    // A task without the mark takes a human approval at once.
+    fx.reviews
+        .clear_human_review(&human("tanim"), t(1))
+        .await
+        .unwrap();
+    fx.review(&agent("review", &[]), Verdict::RequestChanges)
+        .await;
+    fx.review(&human("ana"), Verdict::Approve).await;
+}
+
+#[tokio::test]
+async fn a_human_integrates_a_marked_task_only_after_a_reviewer_agent() {
+    let fx = Fixture::new().await;
+    fx.mark(&planner(), t(1), None).await;
+    let integrations = || async {
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM integrations")
+            .fetch_one(fx.project.store().read())
+            .await
+            .unwrap()
+    };
+
+    let refused = refusal(
+        fx.reviews
+            .integrate_proposal(&human("tanim"), p(1), Some(1))
+            .await,
+    );
+    assert_eq!(refused.code(), codes::AGENT_APPROVAL_REQUIRED);
+    assert!(refused.hint().unwrap_or_default().contains("review lead"));
+    assert_eq!(integrations().await, 0, "the refusal writes nothing");
+
+    fx.review(&agent("review", &[]), Verdict::Approve).await;
+    fx.reviews
+        .integrate_proposal(&human("tanim"), p(1), Some(1))
+        .await
+        .unwrap();
+    assert_eq!(fx.tasks.get(t(1)).await.unwrap().status, TaskStatus::Done);
 }

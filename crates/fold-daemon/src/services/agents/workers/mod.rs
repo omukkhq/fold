@@ -105,9 +105,9 @@ impl AgentService {
         })
     }
 
-    /// Who the actor is for the worker rules: a human, the main agent, an agent that is neither while the main agent exists, a supervised worker of some role, a subagent or the daemon.
+    /// Who the actor is for the worker rules: a human, the main agent, an agent that is neither, a supervised worker of some role, a subagent or the daemon.
     pub async fn starter(&self, actor: &Actor) -> Result<Starter, AgentError> {
-        let (supervised, main_exists) = match actor {
+        let supervised = match actor {
             Actor::Agent(agent) => {
                 let mut conn = self
                     .store
@@ -115,14 +115,13 @@ impl AgentService {
                     .acquire()
                     .await
                     .map_err(StoreError::from)?;
-                let supervised = agents::find_worker_process(&mut conn, &agent.agent)
+                agents::find_worker_process(&mut conn, &agent.agent)
                     .await?
-                    .map(|row| (row.role, row.area));
-                (supervised, agents::main_exists(&mut *conn).await?)
+                    .map(|row| (row.role, row.area))
             }
-            Actor::Human { .. } | Actor::System => (None, false),
+            Actor::Human { .. } | Actor::System => None,
         };
-        Ok(Starter::of(actor, supervised, main_exists))
+        Ok(Starter::of(actor, supervised))
     }
 
     /// Defines area `name` over the tasks labelled `label`, with its `profile`. The label must exist; an area name or label that another area has is refused with `area_exists`.
@@ -484,16 +483,13 @@ impl AgentService {
 
 /// [`AgentService::starter`] read inside a write transaction, so a command of another domain decides it with the rows it changes.
 pub(crate) async fn starter_of(tx: &mut WriteTx, actor: &Actor) -> Result<Starter, StoreError> {
-    let (supervised, main_exists) = match actor {
-        Actor::Agent(agent) => {
-            let supervised = agents::find_worker_process(tx.conn(), &agent.agent)
-                .await?
-                .map(|row| (row.role, row.area));
-            (supervised, agents::main_exists(tx.conn()).await?)
-        }
-        Actor::Human { .. } | Actor::System => (None, false),
+    let supervised = match actor {
+        Actor::Agent(agent) => agents::find_worker_process(tx.conn(), &agent.agent)
+            .await?
+            .map(|row| (row.role, row.area)),
+        Actor::Human { .. } | Actor::System => None,
     };
-    Ok(Starter::of(actor, supervised, main_exists))
+    Ok(Starter::of(actor, supervised))
 }
 
 /// The area a start binds: an area lead names its own, a task coder takes its lead's, the other roles have none. It also checks that each role gets only its own kind of binding.

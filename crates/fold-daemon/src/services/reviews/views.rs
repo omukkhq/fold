@@ -1,15 +1,15 @@
 use fold_core::claims::is_stale;
 use fold_core::merge::{Conflict, ReportFile};
 use fold_core::policy::{
-    CallerFacts, GateRefusal, GateState, IntegrateInput, ProposalFacts, gate_report,
+    AgentStanding, CallerFacts, GateRefusal, GateState, IntegrateInput, ProposalFacts, gate_report,
 };
-use fold_core::reviews::last_verdict_version;
+use fold_core::reviews::{deciding_approval, last_verdict_version};
 use fold_core::{
     Actor, FoldError, ProposalId, TaskDescription, TaskId, TaskStatus, TaskTitle, codes,
 };
-use fold_store::StoreError;
 use fold_store::reviews::{self, ProposalState};
 use fold_store::tasks::{self, TaskRef};
+use fold_store::{StoreError, agents};
 use fold_vcs::compare::{FileChange, Totals};
 use serde_json::json;
 
@@ -54,6 +54,8 @@ pub struct ProposalView {
     pub last_reviewed: Option<u32>,
     /// In the order the integration procedure checks the gates.
     pub gates: Vec<GateState>,
+    /// An agent that decides reviews, other than the author's, approved the current version and no request for changes came after it. On a task with the human review mark a human approves only then.
+    pub agent_approved: bool,
     /// The files the selected version changes against its base, in path order.
     pub files: Vec<FileChange>,
     pub totals: Totals,
@@ -67,7 +69,8 @@ impl ReviewService {
         proposal: ProposalId,
         version: Option<u32>,
     ) -> Result<ProposalView, ReviewError> {
-        let caller = caller_facts(caller)?;
+        let standing = agents::standing_of(self.store.read(), caller).await?;
+        let caller = caller_facts(caller, standing)?;
         let detail = self.get_proposal(proposal, version).await?;
         let now = self.clock.now();
         let mut read = self.store.read().begin().await.map_err(StoreError::from)?;
@@ -108,6 +111,7 @@ impl ReviewService {
                 comments.outdated = comments.outdated.saturating_add(review.comments);
             }
         }
+        let agent_approved = deciding_approval(&facts.reviews, &facts.proposal.author.agent());
         let gates = gate_report(&IntegrateInput {
             caller: &caller,
             proposal: &ProposalFacts {
@@ -141,18 +145,19 @@ impl ReviewService {
             comments,
             last_reviewed,
             gates,
+            agent_approved,
             files: comparison.files,
             totals: comparison.totals,
         })
     }
 }
 
-/// The gates read a caller; only an agent or a named human can integrate, so the system has no report.
-fn caller_facts(actor: &Actor) -> Result<CallerFacts, ReviewError> {
+/// The gates read a caller with the acting agent's `standing`; only an agent or a named human can integrate, so the system has no report.
+fn caller_facts(actor: &Actor, standing: AgentStanding) -> Result<CallerFacts, ReviewError> {
     match actor {
         Actor::Agent(agent) => Ok(CallerFacts::Agent {
             agent: agent.agent.clone(),
-            tags: agent.tags.clone(),
+            standing,
         }),
         Actor::Human { name } => Ok(CallerFacts::Human(name.clone())),
         Actor::System => Err(FoldError::from(GateRefusal::IntegratorRequired).into()),

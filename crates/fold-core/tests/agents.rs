@@ -1,6 +1,4 @@
-use fold_core::{
-    AgentName, EventActor, FoldError, HumanName, INTEGRATOR_TAG, NameError, Tag, WorkerName, codes,
-};
+use fold_core::{AgentName, EventActor, FoldError, HumanName, NameError, Tag, WorkerName, codes};
 use proptest::prelude::*;
 
 #[test]
@@ -23,12 +21,6 @@ fn agent_names_and_tags_follow_one_pattern() {
         assert_eq!(AgentName::parse(bad), Err(NameError::InvalidSegment));
         assert_eq!(Tag::parse(bad), Err(NameError::InvalidSegment));
     }
-}
-
-#[test]
-fn the_integrator_tag_is_recognised() {
-    assert!(Tag::parse(INTEGRATOR_TAG).unwrap().is_integrator());
-    assert!(!Tag::parse("review").unwrap().is_integrator());
 }
 
 #[test]

@@ -136,9 +136,10 @@ fn status_of(code: &str) -> Option<StatusCode> {
         | codes::PERMISSION_QUESTION_CLOSED => Some(StatusCode::CONFLICT),
         codes::INVALID_TASK_KIND => Some(StatusCode::BAD_REQUEST),
         codes::TASK_KIND_DENIED | codes::TASK_CHECK_DENIED => Some(StatusCode::FORBIDDEN),
-        codes::TASK_KIND_MISMATCH | codes::TASK_ALREADY_REPORTED | codes::TASK_NOT_REPORTED => {
-            Some(StatusCode::CONFLICT)
-        }
+        codes::TASK_KIND_MISMATCH
+        | codes::TASK_ALREADY_REPORTED
+        | codes::TASK_NOT_REPORTED
+        | codes::AGENT_APPROVAL_REQUIRED => Some(StatusCode::CONFLICT),
         _ => None,
     }
 }
@@ -424,6 +425,7 @@ mod tests {
             (codes::WORKER_EXISTS, StatusCode::CONFLICT),
             (codes::PERMISSION_QUESTION_NOT_FOUND, StatusCode::NOT_FOUND),
             (codes::PERMISSION_QUESTION_CLOSED, StatusCode::CONFLICT),
+            (codes::AGENT_APPROVAL_REQUIRED, StatusCode::CONFLICT),
         ] {
             assert_eq!(status_of(code), Some(status));
         }

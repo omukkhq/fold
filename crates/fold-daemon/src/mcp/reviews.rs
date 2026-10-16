@@ -171,9 +171,11 @@ pub struct ReviewCommentInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct SubmitReviewInput {
-    /// The proposal, such as P-3. The review is of its current version.
+    /// The proposal, such as P-3.
     pub id: String,
-    /// comment, request_changes, approve or reject. Only an agent with the integrator tag can approve or reject; reject closes the proposal.
+    /// The version you reviewed, such as 2 for v2: the version of your review checkout. When the current version is another one, nothing is written and the error is stale_version.
+    pub version: u32,
+    /// comment, request_changes, approve or reject. Only the main agent, the review lead and the batch reviewers it starts can approve or reject; reject closes the proposal.
     pub verdict: String,
     /// The review text. It may be empty only when the review carries a comment; a reject needs it. In the text `#` names a fold item (#T-12) and `@` names a file (@web/src/board.ts); the daemon parses nothing.
     pub body: String,
@@ -262,7 +264,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             SUBMIT_REVIEW,
-            "Review the current version of a proposal with a verdict, a text and line comments. request_changes gives the turn to the author; reject closes the proposal.",
+            "Review the version of a proposal you read, the version of your review checkout, with a verdict, a text and line comments. request_changes gives the turn to the author; reject closes the proposal. A version that is no longer current is refused with stale_version.",
             schema_for_type::<SubmitReviewInput>(),
         ),
         Tool::new(
@@ -272,7 +274,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             INTEGRATE_PROPOSAL,
-            "Integrate the current version of a proposal onto main; needs the integrator tag. Refusals: stale_version, changes_requested, not_approved, human_approval_missing, prerequisites_not_done (the gates are not met), author_cannot_integrate (your agent wrote it), integrator_required, and integration_conflicted (the version conflicts with main; details list the files and kinds).",
+            "Integrate the current version of a proposal onto main; only the main agent, the review lead and its batch reviewers may. Refusals: stale_version, changes_requested, not_approved, human_approval_missing, prerequisites_not_done (the gates are not met), author_cannot_integrate (your agent wrote it), integrator_required, and integration_conflicted (the version conflicts with main; details list the files and kinds).",
             schema_for_type::<IntegrateProposalInput>(),
         ),
         Tool::new(
@@ -751,7 +753,14 @@ async fn submit_review(
         .map(|(index, comment)| comment_input(index, comment))
         .collect::<Result<Vec<_>, _>>()?;
     let submitted = reviews
-        .submit_review(actor, proposal, verdict, &input.body, comments)
+        .submit_review(
+            actor,
+            proposal,
+            input.version,
+            verdict,
+            &input.body,
+            comments,
+        )
         .await
         .map_err(from_review)?;
     Ok(json!({

@@ -1,12 +1,14 @@
 #![cfg(test)]
 
+use crate::common::roles::give_role;
 use crate::reviews_support::{Fixture, LIB, README, by, human, names, p, refusal, t, ws};
 use fold_core::events::types;
 use fold_core::merge::{Conflict, ConflictReport, ReportEntryKind, ReportKind};
 use fold_core::object::ObjectKind;
 use fold_core::reviews::Verdict;
+use fold_core::roles::Role;
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
-use fold_core::{Actor, AgentName, RevisionId, TaskStatus, codes};
+use fold_core::{Actor, RevisionId, TaskStatus, codes};
 use fold_daemon::services::reviews::{
     IntegrationOutcome, ProposalDetail, PullIntegration, PullOutcome, Turn,
 };
@@ -58,26 +60,32 @@ async fn move_main(fx: &Fixture, files: &[(&str, &[u8])]) {
     assert!(matches!(outcome, PullOutcome::Succeeded { .. }));
 }
 
-/// `review` carries `integrator` and acts with it.
-async fn integrator(fx: &Fixture) -> Actor {
-    fx.agents
-        .set_integrator(&human(), &AgentName::parse("review").unwrap(), true)
-        .await
-        .unwrap();
+/// `review` is the review lead and acts with it.
+async fn review_lead(fx: &Fixture) -> Actor {
+    give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
     fx.agents.actor(&fx.review.ctx, None).await.unwrap()
 }
 
 async fn approve(fx: &Fixture, actor: &Actor) {
+    let version = fx.reviews.get_proposal(p(1), None).await.unwrap();
+    let version = version.summary.current_version;
     fx.reviews
-        .submit_review(actor, p(1), Verdict::Approve, "looks right", Vec::new())
+        .submit_review(
+            actor,
+            p(1),
+            version,
+            Verdict::Approve,
+            "looks right",
+            Vec::new(),
+        )
         .await
         .unwrap();
 }
 
-/// `P-1` approved by the integrator `review`, with main moved to `r2` so that its `src/lib.rs` conflicts. Returns the integrator.
+/// `P-1` approved by the review lead `review`, with main moved to `r2` so that its `src/lib.rs` conflicts. Returns the review lead.
 async fn conflicting(fx: &Fixture) -> Actor {
     fx.proposal().await;
-    let review = integrator(fx).await;
+    let review = review_lead(fx).await;
     approve(fx, &review).await;
     move_main(
         fx,
@@ -371,7 +379,7 @@ async fn binary_and_delete_versus_edit_conflicts_are_reported_by_kind() {
         .create_proposal(&author, t(1), "Change every file", None)
         .await
         .unwrap();
-    let review = integrator(&fx).await;
+    let review = review_lead(&fx).await;
     approve(&fx, &review).await;
     move_main(
         &fx,

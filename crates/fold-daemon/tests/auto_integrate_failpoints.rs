@@ -2,7 +2,7 @@
 
 use fold_core::{RevisionId, TaskStatus};
 
-use crate::auto_integrate::{Running, approve, head, integrator, state_of, status};
+use crate::auto_integrate::{Running, approve, head, review_lead, state_of, status};
 use crate::common::invariants::assert_consistent;
 use crate::proposal_tools_support::Fixture;
 
@@ -25,7 +25,7 @@ async fn stopped_inside(failpoint: &str, kept: bool) {
     let scenario = fail::FailScenario::setup();
     let mut fx = Fixture::new().await;
     let author = fx.agent("backend").await;
-    let review = integrator(&fx, "review").await;
+    let review = review_lead(&fx, "review").await;
     fx.proposal(&author, 1, "pub fn y() {}\n").await;
     let job = Running::start(&fx.state);
     job.runs(1).await;

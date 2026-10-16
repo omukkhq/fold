@@ -76,8 +76,10 @@ async fn an_active_checkout_lists_its_worker_path_and_version() {
     let row = &rows[0];
     assert_eq!(row["workspace"], checkout.workspace.id.to_string());
     assert_eq!(row["path"], ".fold/ws/review-p-1");
-    assert_eq!(row["proposal"], "P-1");
-    assert_eq!(row["version"], 1);
+    assert_eq!(
+        row["target"],
+        json!({"kind": "proposal", "proposal": "P-1", "version": 1})
+    );
     assert_eq!(row["worker"], "review");
     assert_eq!(row["base"], "r1");
     assert_eq!(row["created_at"], opened.project.now().as_millis());
@@ -85,5 +87,43 @@ async fn an_active_checkout_lists_its_worker_path_and_version() {
         row.get("last_command"),
         None::<&Value>,
         "the daemon records no command run in a checkout"
+    );
+}
+
+#[tokio::test]
+async fn a_batch_checkout_lists_its_batch_and_its_members_in_merge_order() {
+    let opened = proposed().await;
+    let (_, dir) = opened.create(2).await;
+    std::fs::write(dir.join("src/two.rs"), "pub fn two() {}\n").unwrap();
+    let reviews = reviews(&opened);
+    reviews
+        .create_proposal(&agent("frontend"), t(2), "Add two", None)
+        .await
+        .unwrap();
+    let batch = reviews
+        .create_review_batch(&agent("review"), vec![p(1), p(2)])
+        .await
+        .unwrap()
+        .id;
+    let checkout = reviews
+        .create_batch_checkout(&agent("review"), batch)
+        .await
+        .unwrap();
+
+    let (status, body) = opened.get("/reviews/checkouts").await;
+
+    assert_eq!(status, StatusCode::OK);
+    let rows = body["checkouts"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    let row = &rows[0];
+    assert_eq!(row["workspace"], checkout.workspace.id.to_string());
+    assert_eq!(row["path"], ".fold/ws/review-rb-1");
+    assert_eq!(row["worker"], "review");
+    assert_eq!(
+        row["target"],
+        json!({"kind": "batch", "batch": "rb-1", "members": [
+            {"proposal": "P-1", "version": 1},
+            {"proposal": "P-2", "version": 1},
+        ]})
     );
 }

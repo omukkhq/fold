@@ -24,14 +24,11 @@ async fn nothing_before_a_message(h: &Harness, inbox: &mut FakeInbox, agent: &st
     expect(inbox, &message_notice(&message)).await;
 }
 
-/// `agent` gives itself the `main` tag, as the user's own session does.
+/// `agent` gets the `main` tag from a handshake, as the session that `fld claude` starts does.
 async fn make_main(h: &Harness, agent: &str) {
+    h.make_main(agent).await;
     let registered = h
-        .call(
-            agent,
-            "register_agent",
-            json!({"name": agent, "tags": ["main"]}),
-        )
+        .call(agent, "register_agent", json!({"name": agent}))
         .await;
     assert!(registered.to_string().contains("\"main\""), "{registered}");
 }
@@ -154,6 +151,77 @@ async fn an_agents_request_reaches_only_the_main_agent() {
 }
 
 #[tokio::test]
+async fn an_area_lead_hears_of_a_new_request_and_claims_it_when_it_is_relevant() {
+    let h = Harness::start().await;
+    make_main(&h, MAIN).await;
+    crate::common::roles::give_role(
+        &h.handle.store,
+        "backend",
+        fold_core::roles::Role::AreaLead,
+        None,
+    )
+    .await;
+    let mut main = h.register_inbox(MAIN).await;
+    let mut lead = h.register_inbox("backend").await;
+    let mut review = h.register_inbox("review").await;
+
+    let request = human_request(&h, "The board query skips archived tasks").await;
+    expect(&mut main, "fold: RQ-1 created. Call claim_request.").await;
+    expect(&mut lead, "fold: RQ-1 created. Call claim_request.").await;
+    nothing_before_a_message(&h, &mut review, "review").await;
+
+    let claim = json!({"id": request.to_string(), "kind": "bug", "title": "Archived tasks"});
+    let refused = h.refused("review", "claim_request", claim.clone()).await;
+    assert_eq!(
+        refused["code"],
+        codes::ORCHESTRATOR_REQUIRED,
+        "the review lead drafts no request"
+    );
+    let claimed = h.call("backend", "claim_request", claim).await;
+    assert_eq!(claimed["drafter"], "backend", "{claimed}");
+}
+
+#[tokio::test]
+async fn a_hand_opened_session_neither_claims_a_request_nor_defines_an_area_without_a_main_agent() {
+    let h = Harness::start().await;
+    let request = human_request(&h, "Rename the board").await;
+    let claim = json!({"id": request.to_string(), "kind": "feature", "title": "Rename"});
+    for agent in ["frontend", "backend"] {
+        let refused = h.refused(agent, "claim_request", claim.clone()).await;
+        assert_eq!(refused["code"], codes::ORCHESTRATOR_REQUIRED, "{agent}");
+    }
+    h.call(
+        "frontend",
+        "create_label",
+        json!({"name": "ui", "color": "sage"}),
+    )
+    .await;
+    let refused = h
+        .refused(
+            "frontend",
+            "define_area",
+            json!({"name": "web", "label": "ui"}),
+        )
+        .await;
+    assert_eq!(refused["code"], codes::ORCHESTRATOR_REQUIRED);
+    assert!(
+        refused["hint"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("main agent"),
+        "{refused}"
+    );
+    let read = h
+        .call(
+            "frontend",
+            "get_request",
+            json!({"id": request.to_string()}),
+        )
+        .await;
+    assert_eq!(read["state"], "open", "{read}");
+}
+
+#[tokio::test]
 async fn approved_cards_go_to_the_lead_of_their_area_and_the_rest_to_the_main_agent() {
     let fake = FakeClaude::new("result");
     let h = Harness::start_with_launcher(fake.launcher.clone()).await;
@@ -247,6 +315,38 @@ async fn approved_cards_go_to_the_lead_of_their_area_and_the_rest_to_the_main_ag
 }
 
 #[tokio::test]
+async fn register_agent_never_gives_the_main_tag_and_only_a_handshake_does() {
+    let h = Harness::start_without_roles().await;
+    let refused = h
+        .refused(
+            "backend",
+            "register_agent",
+            json!({"name": "backend", "tags": ["main"]}),
+        )
+        .await;
+    assert_eq!(refused["code"], codes::MAIN_TAG_DENIED, "{refused}");
+    assert!(
+        refused["hint"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("fld claude"),
+        "{refused}"
+    );
+    let agents = h.call("backend", "list_agents", json!({})).await;
+    assert!(!agents.to_string().contains("\"main\""), "{agents}");
+
+    h.make_main(MAIN).await;
+    let repeated = h
+        .call(
+            MAIN,
+            "register_agent",
+            json!({"name": MAIN, "tags": ["main"]}),
+        )
+        .await;
+    assert!(repeated.to_string().contains("\"main\""), "{repeated}");
+}
+
+#[tokio::test]
 async fn one_agent_that_fold_did_not_start_holds_the_main_tag() {
     let fake = FakeClaude::new("result");
     let mut h = Harness::start_with_launcher(fake.launcher.clone()).await;
@@ -260,6 +360,10 @@ async fn one_agent_that_fold_did_not_start_holds_the_main_tag() {
         )
         .await;
     assert_eq!(taken["code"], codes::MAIN_TAG_DENIED);
+    assert_eq!(
+        taken["message"],
+        "only the session that fld claude starts takes the main tag"
+    );
     assert!(
         taken["hint"]
             .as_str()

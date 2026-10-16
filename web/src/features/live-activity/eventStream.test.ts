@@ -109,8 +109,7 @@ describe("checkoutRows", () => {
       {
         workspace: "ws-12",
         path: "ws/review-p-4",
-        proposal: "P-4",
-        version: 2,
+        target: { kind: "proposal", proposal: "P-4", version: 2 },
         worker: "review/quality",
         base: "r7",
         created_at: NOW,
@@ -118,8 +117,7 @@ describe("checkoutRows", () => {
       {
         workspace: "ws-13",
         path: "ws/review-p-5",
-        proposal: "P-5",
-        version: 1,
+        target: { kind: "proposal", proposal: "P-5", version: 1 },
         worker: null,
         base: "r7",
         created_at: NOW,
@@ -131,6 +129,27 @@ describe("checkoutRows", () => {
       where: "P-4 v2 in ws/review-p-4",
     });
     expect(rows[1]).toMatchObject({ worker: null });
+  });
+
+  it("names a batch checkout's batch and its members in merge order", () => {
+    const [batch] = checkoutRows([
+      {
+        workspace: "ws-15",
+        path: "ws/review-rb-3",
+        target: {
+          kind: "batch",
+          batch: "rb-3",
+          members: [
+            { proposal: "P-2", version: 1 },
+            { proposal: "P-3", version: 2 },
+          ],
+        },
+        worker: "review/batch",
+        base: "r7",
+        created_at: NOW,
+      },
+    ]);
+    expect(batch?.where).toBe("rb-3 · P-2 v1 + P-3 v2 in ws/review-rb-3");
   });
 
   it("marks the checkout as not recordable", () => {

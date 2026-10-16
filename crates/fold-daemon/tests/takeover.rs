@@ -9,6 +9,7 @@ use crate::adoption_support::{
 };
 use fold_core::{Actor, HumanName, codes};
 use fold_daemon::services::events::BusMessage;
+use fold_daemon::services::reviews::ReviewError;
 use fold_daemon::services::workspaces::WorkspaceRef;
 use fold_store::tasks::claims;
 use fold_store::workspaces::WorkspaceState;
@@ -124,6 +125,73 @@ async fn takeover_waits_for_the_lease_then_moves_the_claim_and_the_workspace() {
         .record_checkpoint(&by(&fx.backend), ws(1), Some("picked up"))
         .await
         .unwrap();
+}
+
+/// The open proposal goes to the new holder with the claim and the workspace. The old author can no longer add a version and the new holder answers a change request with the next one.
+#[tokio::test]
+async fn a_takeover_hands_the_open_proposal_to_the_new_holder() {
+    let fx = Fixture::new().await;
+    let reviews = fx.reviews();
+    let created = fx
+        .workspaces
+        .create_workspace(&by(&fx.frontend), t(1))
+        .await
+        .unwrap()
+        .workspace;
+    let dir = fx.dir(&created.path);
+    fs::write(dir.join("src/lib.rs"), EDITED).unwrap();
+    let proposal = reviews
+        .create_proposal(&by(&fx.frontend), t(1), "Edit the lib", None)
+        .await
+        .unwrap()
+        .summary
+        .id;
+    let at = fx.advance(LEASE);
+    let before = fx.last_seq().await;
+
+    fx.tasks
+        .takeover_claim(&by(&fx.backend), t(1))
+        .await
+        .unwrap();
+    let appended = fx.events_after(before).await;
+    assert_eq!(
+        names(&appended),
+        vec![
+            "claim.taken_over",
+            "workspace.adopted",
+            "proposal.author_changed"
+        ]
+    );
+    let changed = &appended[2];
+    assert_eq!(changed.actor.as_str(), "backend");
+    assert_eq!(
+        (changed.task, changed.proposal),
+        (Some(t(1)), Some(proposal))
+    );
+    assert_eq!(changed.created_at, at);
+    assert_eq!(
+        changed.data,
+        json!({"reason": "taken_over", "from": "frontend", "to": "backend"})
+    );
+    let detail = reviews.get_proposal(proposal, None).await.unwrap();
+    assert_eq!(detail.summary.author, fx.backend.name);
+    assert_eq!(detail.summary.current_version, 1);
+
+    fs::write(dir.join("src/lib.rs"), b"pub fn x() { done() }\n").unwrap();
+    let old = reviews
+        .update_proposal(&by(&fx.frontend), proposal, None)
+        .await
+        .unwrap_err();
+    let ReviewError::Fold(old) = old else {
+        panic!("expected a refusal, got {old:?}");
+    };
+    assert_eq!(old.code(), codes::NOT_PROPOSAL_AUTHOR);
+    let updated = reviews
+        .update_proposal(&by(&fx.backend), proposal, Some("picked up"))
+        .await
+        .unwrap();
+    assert_eq!(updated.summary.current_version, 2);
+    assert_eq!(updated.summary.author, fx.backend.name);
 }
 
 #[tokio::test]

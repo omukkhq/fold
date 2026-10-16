@@ -67,6 +67,7 @@ async fn submit(h: &Harness, version: u64) {
 #[tokio::test]
 async fn a_human_creates_asks_for_changes_edits_and_approves() {
     let h = Harness::start().await;
+    h.make_main("backend").await;
     let png: &[u8] = b"\x89PNG\r\n\x1a\nfake";
     let (status, created) = h
         .create_request_form(

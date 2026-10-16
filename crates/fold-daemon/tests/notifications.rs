@@ -1,6 +1,8 @@
 #![cfg(test)]
 
+use crate::common::roles::give_role;
 use crate::reviews_support;
+use fold_core::roles::Role;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -84,7 +86,7 @@ async fn until(mut done: impl FnMut() -> bool) {
     .expect("the condition within the wait");
 }
 
-/// The review fixture with the project's push delivery running. `review` carries `integrator`.
+/// The review fixture with the project's push delivery running. `review` is the review lead.
 struct Notified {
     fx: Fixture,
     targets: PushTargets,
@@ -103,16 +105,13 @@ impl Notified {
             sockets: TempDir::new().unwrap(),
             _push: push,
         };
-        notified.tag("review").await;
+        notified.lead("review").await;
         notified
     }
 
-    async fn tag(&self, agent: &str) {
-        self.fx
-            .agents
-            .set_integrator(&human(), &name(agent), true)
-            .await
-            .unwrap();
+    /// Makes `agent` a review lead, as if fold had started it as one.
+    async fn lead(&self, agent: &str) {
+        give_role(self.fx.project.store(), agent, Role::ReviewLead, None).await;
     }
 
     async fn actor(&self, agent: &reviews_support::Agent) -> Actor {
@@ -133,9 +132,17 @@ impl Notified {
     }
 
     async fn approve(&self, actor: &Actor) {
+        let read = self.fx.reviews.get_proposal(p(1), None).await.unwrap();
         self.fx
             .reviews
-            .submit_review(actor, p(1), Verdict::Approve, "ok", Vec::new())
+            .submit_review(
+                actor,
+                p(1),
+                read.summary.current_version,
+                Verdict::Approve,
+                "ok",
+                Vec::new(),
+            )
             .await
             .unwrap();
     }
@@ -306,9 +313,8 @@ async fn an_agent_with_several_roles_gets_one_message() {
 }
 
 #[tokio::test]
-async fn push_goes_to_integrators_on_proposal_opened() {
+async fn push_goes_to_the_review_lead_on_proposal_opened() {
     let n = Notified::new().await;
-    n.tag("backend").await;
     let mut review = n.inbox("review");
     let mut backend = n.inbox("backend");
 
@@ -316,7 +322,6 @@ async fn push_goes_to_integrators_on_proposal_opened() {
 
     let opened = "fold: P-1 opened for T-1. Call claim_review.";
     assert_eq!(review.next().await, opened);
-    assert_eq!(backend.next().await, opened);
 
     let reviewer = n.actor(&n.fx.review).await;
     n.fx.reviews.claim_review(&reviewer, p(1)).await.unwrap();
@@ -327,7 +332,12 @@ async fn push_goes_to_integrators_on_proposal_opened() {
         .unwrap();
     let version = "fold: P-1 has version 2. Call create_review_checkout.";
     assert_eq!(review.next().await, version);
-    assert_eq!(backend.next().await, version);
+    // `backend` leads no review, so the first notice it gets is the sentinel.
+    n.send(&agent("frontend"), &["backend"]).await;
+    assert_eq!(
+        backend.next().await,
+        "fold: message m-1 arrived. Call get_inbox."
+    );
 }
 
 #[tokio::test]
@@ -360,17 +370,20 @@ async fn push_failure_is_dropped_and_the_event_stays() {
 }
 
 #[tokio::test]
-async fn human_approval_pushes_the_review_claim_holder_else_every_integrator() {
+async fn human_approval_pushes_only_the_review_claim_holder() {
     let n = Notified::new().await;
-    n.tag("backend").await;
     n.fx.proposal().await;
     let mut review = n.inbox("review");
     let mut backend = n.inbox("backend");
+    let mut author = n.inbox("frontend");
     let approved = "fold: P-1 approved by a human. Call integrate_proposal.";
 
+    // Without a claim holder nobody is told, the review lead and the author's agent included.
     n.approve(&human()).await;
-    assert_eq!(review.next().await, approved);
-    assert_eq!(backend.next().await, approved);
+    n.send(&agent("backend"), &["review", "frontend"]).await;
+    let arrived = "fold: message m-1 arrived. Call get_inbox.";
+    assert_eq!(review.next().await, arrived);
+    assert_eq!(author.next().await, arrived);
 
     let reviewer = n.actor(&n.fx.review).await;
     n.fx.reviews.claim_review(&reviewer, p(1)).await.unwrap();
@@ -379,7 +392,7 @@ async fn human_approval_pushes_the_review_claim_holder_else_every_integrator() {
     n.send(&agent("frontend"), &["backend"]).await;
     assert_eq!(
         backend.next().await,
-        "fold: message m-1 arrived. Call get_inbox."
+        "fold: message m-2 arrived. Call get_inbox."
     );
 }
 

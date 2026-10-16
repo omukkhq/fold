@@ -350,11 +350,6 @@ async fn bad_input_is_refused_with_a_code() {
             json!({"name": "a", "as": "a//b"}),
             "invalid_name",
         ),
-        (
-            "register_agent",
-            json!({"name": "a", "tags": ["integrator"]}),
-            "human_required",
-        ),
     ];
     for (tool, arguments, code) in cases {
         let error = call_err(&client, tool, arguments.clone()).await;

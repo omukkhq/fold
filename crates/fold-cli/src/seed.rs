@@ -176,7 +176,8 @@ async fn build(socket: &Path, root: &Path, slug: &str) -> Result<Built, SeedErro
         human: DaemonClient::new(config, Some(HUMAN.to_owned())),
         frontend: Agent::connect(socket, root, "frontend", &["frontend"]).await?,
         backend: Agent::connect(socket, root, "backend", &["backend"]).await?,
-        review: Agent::connect(socket, root, "review", &["review"]).await?,
+        // `review` is the project's main agent, the only session opened without a role that may approve and integrate.
+        review: Agent::connect(socket, root, "review", &["main", "review"]).await?,
         counts: Counts::default(),
     };
     let outcome = seeder.scenario().await;
@@ -231,9 +232,6 @@ struct Seeder {
 
 impl Seeder {
     async fn scenario(&mut self) -> Result<(), SeedError> {
-        // The grant makes `dev` a known human, which the human-review mark and the question to a human need.
-        self.route(Method::PUT, "/agents/review/tags/integrator", None)
-            .await?;
         self.frontend
             .call("register_worker", json!({"name": "ui"}))
             .await?;
@@ -388,7 +386,7 @@ impl Seeder {
                 None,
             )
             .await?;
-        self.approve(&proposal, "The table and the helper look right.")
+        self.approve(&proposal, 1, "The table and the helper look right.")
             .await?;
         self.integrate(&proposal, 1).await
     }
@@ -542,8 +540,8 @@ impl Seeder {
             .await?;
 
         // Two proposals changed the same line of one file. The first integrates; the second gets its conflict report.
-        self.approve(&local_proposal, "Reads well.").await?;
-        self.approve(&relative_proposal, "Reads well.").await?;
+        self.approve(&local_proposal, 1, "Reads well.").await?;
+        self.approve(&relative_proposal, 1, "Reads well.").await?;
         self.integrate(&local_proposal, 1).await?;
         let refused = self
             .review
@@ -567,6 +565,7 @@ impl Seeder {
                 "submit_review",
                 json!({
                     "id": counts_proposal,
+                    "version": 1,
                     "verdict": "request_changes",
                     "body": "Keep the separator for small counts too.",
                     "comments": [{
@@ -599,6 +598,7 @@ impl Seeder {
                 "submit_review",
                 json!({
                     "id": login_proposal,
+                    "version": 1,
                     "verdict": "request_changes",
                     "body": "The form needs a failure path and a clearer name for the handler.",
                     "comments": [
@@ -641,6 +641,7 @@ impl Seeder {
             .await?;
         self.approve(
             &audit_proposal,
+            1,
             "Each write adds one entry, as the evidence says.",
         )
         .await
@@ -792,14 +793,14 @@ impl Seeder {
         Ok(())
     }
 
-    async fn approve(&self, proposal: &str, body: &str) -> Result<(), SeedError> {
+    async fn approve(&self, proposal: &str, version: u32, body: &str) -> Result<(), SeedError> {
         self.review
             .call("claim_review", json!({"id": proposal}))
             .await?;
         self.review
             .call(
                 "submit_review",
-                json!({"id": proposal, "verdict": "approve", "body": body}),
+                json!({"id": proposal, "version": version, "verdict": "approve", "body": body}),
             )
             .await?;
         Ok(())

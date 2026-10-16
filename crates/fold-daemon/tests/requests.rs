@@ -3,8 +3,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::common::roles::give_role;
 use fold_core::object::ObjectKind;
 use fold_core::requests::{DraftCard, DraftEdge, RequestKind, RequestState, Requester};
+use fold_core::roles::Role;
 use fold_core::{
     Actor, AgentActor, HumanName, RequestId, TaskId, TaskStatus, Timestamp, WorkerName, codes,
 };
@@ -87,7 +89,7 @@ struct Fixture {
     tasks: TaskService,
 }
 
-/// Agents `frontend` (main worker and its subagent `frontend/ui`), `backend` and `review`, each with a main worker. Nobody has a session.
+/// Agents `frontend` (main worker and its subagent `frontend/ui`), `backend` and `review`, each with a main worker. `frontend`, `backend` and `review` lead the areas `front`, `work` and `checks`, so each may claim a request. Nobody has a session.
 impl Fixture {
     async fn new() -> Self {
         let project = TestProject::new().await;
@@ -105,6 +107,9 @@ impl Fixture {
                  (1, 1, 'frontend', NULL, 0), (2, 1, 'frontend/ui', 1, 0), (3, 2, 'backend', NULL, 0), (4, 3, 'review', NULL, 0);",
         )
         .await;
+        give_role(project.store(), "frontend", Role::AreaLead, Some("front")).await;
+        give_role(project.store(), "backend", Role::AreaLead, None).await;
+        give_role(project.store(), "review", Role::AreaLead, Some("checks")).await;
         Self { project, tasks }
     }
 
@@ -279,7 +284,14 @@ async fn only_a_main_worker_claims_and_the_claim_sorts_and_names_the_request() {
     let id = fx
         .create(&human("tanim"), "The export button does nothing")
         .await;
-    for actor in [agent("frontend/ui"), human("tanim")] {
+    execute(
+        fx.project.store(),
+        "INSERT INTO agents (id, name, created_at) VALUES (4, 'docs', 0);
+         INSERT INTO workers (id, agent_id, name, parent_worker_id, created_at) VALUES (5, 4, 'docs', NULL, 0);",
+    )
+    .await;
+    // `docs` has neither the `main` tag nor a lead's role, as a session opened by hand.
+    for actor in [agent("frontend/ui"), agent("docs"), human("tanim")] {
         let error = fx
             .tasks
             .claim_request(&actor, id, RequestKind::Bug, "Export")

@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
+use fold_core::policy::AgentStanding;
+use fold_core::roles::Role;
 use fold_core::{
-    AgentName, CheckpointId, ProposalId, RevisionId, Tag, TaskId, Timestamp, WorkerName,
+    Actor, AgentName, CheckpointId, ProposalId, RevisionId, Tag, TaskId, Timestamp, WorkerName,
     WorkspaceId,
 };
 use sqlx::{SqliteConnection, SqliteExecutor};
@@ -424,30 +426,43 @@ pub async fn all_tags(executor: impl SqliteExecutor<'_>) -> Result<Vec<(i64, Tag
         .collect()
 }
 
-/// Whether some agent has the `main` tag, which makes it the one main agent of the project.
-pub async fn main_exists(executor: impl SqliteExecutor<'_>) -> Result<bool, StoreError> {
-    Ok(all_tags(executor)
-        .await?
-        .iter()
-        .any(|(_, tag)| tag.is_main()))
+/// The acting agent's standing for the rules that read more than its tags; a human or the system acts with [`AgentStanding::NO_RIGHTS`], because the rules decide for them without one.
+pub async fn standing_of(
+    executor: impl SqliteExecutor<'_>,
+    actor: &Actor,
+) -> Result<AgentStanding, StoreError> {
+    match actor {
+        Actor::Agent(agent) => standing(executor, &agent.agent).await,
+        Actor::Human { .. } | Actor::System => Ok(AgentStanding::NO_RIGHTS),
+    }
 }
 
-/// The actor label that granted each tag that has one, as `(agent_id, tag, granted_by)`.
-pub async fn tag_granters(
+/// Whether `agent` has the `main` tag and the role of its worker process. An unknown agent stands as one that fold does not supervise.
+async fn standing(
     executor: impl SqliteExecutor<'_>,
-) -> Result<Vec<(i64, Tag, String)>, StoreError> {
-    let rows = sqlx::query!(
-        r#"SELECT agent_id, tag, granted_by AS "granted_by!: String"
-           FROM agent_tags WHERE granted_by IS NOT NULL ORDER BY agent_id, tag"#
+    agent: &AgentName,
+) -> Result<AgentStanding, StoreError> {
+    let name = agent.as_str();
+    let row = sqlx::query!(
+        r#"SELECT EXISTS (
+                      SELECT 1 FROM agent_tags t JOIN agents g ON g.id = t.agent_id
+                      WHERE g.name = ?1 AND t.tag = 'main'
+                  ) AS "holds_main!: bool",
+                  (SELECT w.role FROM worker_processes w JOIN agents g ON g.id = w.agent_id
+                   WHERE g.name = ?1) AS "role?: String""#,
+        name
     )
-    .fetch_all(executor)
+    .fetch_one(executor)
     .await?;
-    rows.into_iter()
-        .map(|row| {
-            let tag = Tag::parse(&row.tag).map_err(|_| StoreError::Corrupt("agent_tags.tag"))?;
-            Ok((row.agent_id, tag, row.granted_by))
-        })
-        .collect()
+    let role = row
+        .role
+        .as_deref()
+        .map(|role| Role::parse(role).ok_or(StoreError::Corrupt("worker_processes.role")))
+        .transpose()?;
+    Ok(AgentStanding {
+        holds_main: row.holds_main,
+        role,
+    })
 }
 
 /// Every worker of every agent, ordered by name.

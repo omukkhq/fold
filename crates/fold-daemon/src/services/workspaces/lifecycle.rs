@@ -103,7 +103,7 @@ pub enum WorkspaceRef {
 pub enum ArchiveReason {
     Integrated,
     TaskArchived,
-    /// A review checkout whose proposal was closed by its author, an integrator or a human.
+    /// A review checkout whose proposal was closed by its author, an agent that decides reviews or a human.
     ProposalClosed,
     /// A review checkout whose proposal was rejected.
     ProposalRejected,

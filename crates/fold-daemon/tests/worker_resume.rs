@@ -1,8 +1,9 @@
 #![cfg(test)]
 
+use crate::common::roles::give_role;
+use fold_core::roles::Role;
 use std::time::Duration;
 
-use axum::http::{Method, StatusCode};
 use fold_core::{AgentName, WorkerState, codes};
 use fold_store::agents::WorkerProcessRow;
 use fold_store::testing::eventually;
@@ -66,17 +67,11 @@ async fn until_resumed(harness: &Harness, count: usize) -> Vec<(Option<String>, 
     .await
 }
 
-/// Area `web` over label `ui` with one task per title, its lead `web-lead`, and the task coder `web-coder` that the lead started for every task, connected and waiting for work. `review` holds the `integrator` tag.
+/// Area `web` over label `ui` with one task per title, its lead `web-lead`, and the task coder `web-coder` that the lead started for every task, connected and waiting for work. `review` is the review lead.
 async fn coder_for(fake: &FakeClaude, titles: &[&str], state: WorkerState) -> Harness {
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
-    let (status, answer) = harness
-        .socket(
-            Method::PUT,
-            &format!("/api/v1/projects/{SLUG}/agents/review/tags/integrator"),
-            None,
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "{answer}");
+    harness.make_main(MAIN).await;
+    give_role(&harness.handle.store, "review", Role::ReviewLead, None).await;
     harness
         .call(MAIN, "create_label", json!({"name": "ui", "color": "sage"}))
         .await;
@@ -126,13 +121,14 @@ async fn proposed_by_a_coder(fake: &FakeClaude, files: &[(&str, &str)]) -> (Harn
     (harness, work)
 }
 
-/// `review` asks for changes on the current version of `proposal`.
+/// `review` reads `proposal` and asks for changes on the version it read.
 async fn request_changes(harness: &Harness, proposal: &str, body: &str) {
+    let version = harness.version_of("review", proposal).await;
     harness
         .call(
             "review",
             "submit_review",
-            json!({"id": proposal, "verdict": "request_changes", "body": body}),
+            json!({"id": proposal, "version": version, "verdict": "request_changes", "body": body}),
         )
         .await;
 }
@@ -171,6 +167,7 @@ async fn requested_changes_resume_the_stopped_coder_with_the_comments_until_it_p
             "submit_review",
             json!({
                 "id": "P-1",
+                "version": 1,
                 "verdict": "request_changes",
                 "body": "Split the page.",
                 "comments": [{"path": "page.html", "side": "new", "start_line": 1, "end_line": 1, "body": "Use a heading."}]
@@ -279,7 +276,7 @@ async fn a_coder_whose_session_is_gone_starts_fresh_in_a_new_session() {
         .call(
             "review",
             "submit_review",
-            json!({"id": "P-1", "verdict": "request_changes", "body": "Split the page."}),
+            json!({"id": "P-1", "version": 1, "verdict": "request_changes", "body": "Split the page."}),
         )
         .await;
 
@@ -559,6 +556,7 @@ const LEAD: &str = "web-lead";
 /// Area `web` over label `ui` and its lead, started by the main agent and in `state`.
 async fn lead_in(fake: &FakeClaude, state: WorkerState) -> (Harness, WorkerProcessRow) {
     let harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     harness
         .call(MAIN, "create_label", json!({"name": "ui", "color": "sage"}))
         .await;
@@ -686,6 +684,7 @@ async fn a_start_of_a_stopped_lead_whose_session_is_gone_starts_it_fresh() {
 async fn a_daemon_start_that_finds_a_batch_reviewers_session_gone_starts_it_fresh() {
     let fake = FakeClaude::new("init").lost_sessions();
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     let task = harness.create_task(MAIN, "Draw the page").await;
     let work = harness.start_work("backend", &task).await;
     work.write(&[("page.html", "<p>page</p>\n")]);

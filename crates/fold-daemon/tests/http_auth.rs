@@ -5,7 +5,9 @@ use std::time::Duration;
 use axum::Router;
 use axum::body::Body;
 use axum::http::{HeaderMap, Method, Request, StatusCode, header};
-use fold_core::{AgentName, Clock, EventFilter, HumanName, ManualClock, Tag};
+use fold_core::{
+    AgentName, Clock, EventFilter, HumanName, ManualClock, Tag, TaskDescription, TaskTitle,
+};
 use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
 use fold_daemon::http::{openapi, router, socket_router};
@@ -14,6 +16,7 @@ use fold_daemon::services::agents::AgentService;
 use fold_daemon::services::projects::{
     DEFAULT_SESSION_LIFETIME, create_web_token, list_web_tokens, revoke_web_token,
 };
+use fold_daemon::services::tasks::CreateTask;
 use fold_daemon::{Daemon, DaemonConfig};
 use fold_store::events;
 use fold_store::projects::{self as registry, ProjectRow};
@@ -26,7 +29,8 @@ use tokio::net::TcpStream;
 use tower::ServiceExt;
 
 const SESSION: &str = "/api/v1/session";
-const INTEGRATOR: &str = "/api/v1/projects/demo/agents/review/tags/integrator";
+/// A bodiless write that only a named human makes; it succeeds once, because `T-1` is then archived.
+const ARCHIVE: &str = "/api/v1/projects/demo/tasks/T-1/archive";
 const THIRTY_DAYS: &str = "Max-Age=2592000";
 const ONE_YEAR: &str = "Max-Age=31536000";
 
@@ -40,7 +44,7 @@ struct Fixture {
 
 #[cfg(test)]
 impl Fixture {
-    /// A daemon state with the project `demo`, its agent `review` and a web folder, listening off loopback when `auth_required`.
+    /// A daemon state with the project `demo`, its agent `review`, the task `T-1` and a web folder, listening off loopback when `auth_required`.
     async fn new(auth_required: bool) -> Self {
         let project = TestProject::new().await;
         let web = TempDir::new().unwrap();
@@ -80,6 +84,19 @@ impl Fixture {
             )
             .await
             .unwrap();
+        let review = agents.actor(&ctx, None).await.unwrap();
+        handle
+            .tasks
+            .create_task(
+                &review,
+                CreateTask {
+                    title: TaskTitle::parse("Write the docs").unwrap(),
+                    description: TaskDescription::new("what to write"),
+                    labels: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
         Self {
             store: handle.store.clone(),
             project,
@@ -109,13 +126,13 @@ impl Fixture {
         sign_in_with(self.http(), &token).await
     }
 
-    /// The actor of every stored `agent.tag_*` event.
-    async fn tag_actors(&self) -> Vec<String> {
+    /// The actor of every stored `task.archived` event.
+    async fn archive_actors(&self) -> Vec<String> {
         events::read_after(self.store.read(), 0, &EventFilter::default(), 1000)
             .await
             .unwrap()
             .into_iter()
-            .filter(|e| e.event_type.as_str().starts_with("agent.tag"))
+            .filter(|e| e.event_type.as_str() == "task.archived")
             .map(|e| e.actor.to_string())
             .collect()
     }
@@ -543,17 +560,17 @@ async fn off_loopback_a_write_acts_as_the_session_human_and_ignores_fold_human()
     let session = fixture.sign_in("ana").await;
     let answer = send(
         fixture.http(),
-        Method::PUT,
-        INTEGRATOR,
+        Method::POST,
+        ARCHIVE,
         Some("fold_human=tanim"),
         None,
     )
     .await;
     assert_eq!(answer.code(), "auth_required");
     let cookie = format!("fold_human=tanim; {session}");
-    let answer = send(fixture.http(), Method::PUT, INTEGRATOR, Some(&cookie), None).await;
-    assert_eq!(answer.status, StatusCode::OK, "{:?}", answer.body);
-    assert_eq!(fixture.tag_actors().await, vec!["human:ana".to_owned()]);
+    let answer = send(fixture.http(), Method::POST, ARCHIVE, Some(&cookie), None).await;
+    assert_eq!(answer.status, StatusCode::NO_CONTENT, "{:?}", answer.body);
+    assert_eq!(fixture.archive_actors().await, vec!["human:ana".to_owned()]);
 }
 
 #[tokio::test]
@@ -592,7 +609,7 @@ async fn on_loopback_no_route_needs_a_cookie() {
 #[tokio::test]
 async fn on_loopback_a_name_sets_fold_human_and_a_write_needs_it() {
     let fixture = Fixture::new(false).await;
-    let answer = send(fixture.http(), Method::PUT, INTEGRATOR, None, None).await;
+    let answer = send(fixture.http(), Method::POST, ARCHIVE, None, None).await;
     assert_eq!(
         (answer.status, answer.code()),
         (StatusCode::UNAUTHORIZED, "human_name_required")
@@ -623,14 +640,17 @@ async fn on_loopback_a_name_sets_fold_human_and_a_write_needs_it() {
 
     let answer = send(
         fixture.http(),
-        Method::PUT,
-        INTEGRATOR,
+        Method::POST,
+        ARCHIVE,
         Some("fold_human=tanim"),
         None,
     )
     .await;
-    assert_eq!(answer.status, StatusCode::OK);
-    assert_eq!(fixture.tag_actors().await, vec!["human:tanim".to_owned()]);
+    assert_eq!(answer.status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        fixture.archive_actors().await,
+        vec!["human:tanim".to_owned()]
+    );
 }
 
 #[tokio::test]
@@ -811,8 +831,8 @@ async fn a_foreign_host_or_origin_cannot_reach_the_api() {
     let evil_host = [("host", "evil.example:7420")];
     let answer = send_with(
         fixture.http(),
-        Method::PUT,
-        INTEGRATOR,
+        Method::POST,
+        ARCHIVE,
         human,
         &evil_host,
         None,
@@ -828,8 +848,8 @@ async fn a_foreign_host_or_origin_cannot_reach_the_api() {
     ];
     let answer = send_with(
         fixture.http(),
-        Method::PUT,
-        INTEGRATOR,
+        Method::POST,
+        ARCHIVE,
         human,
         &evil_origin,
         None,
@@ -847,7 +867,7 @@ async fn a_foreign_host_or_origin_cannot_reach_the_api() {
     .await;
     assert_eq!(answer.code(), "host_not_allowed");
     assert!(answer.cookies().is_empty());
-    assert!(fixture.tag_actors().await.is_empty());
+    assert!(fixture.archive_actors().await.is_empty());
 
     let answer = send_with(fixture.http(), Method::GET, "/", None, &evil_host, None).await;
     assert_eq!(answer.status, StatusCode::OK);
@@ -867,9 +887,12 @@ async fn a_foreign_host_or_origin_cannot_reach_the_api() {
         ("host", "localhost:5173"),
         ("origin", "http://localhost:5173"),
     ];
-    let answer = send_with(fixture.http(), Method::PUT, INTEGRATOR, human, &local, None).await;
-    assert_eq!(answer.status, StatusCode::OK, "{:?}", answer.body);
-    assert_eq!(fixture.tag_actors().await, vec!["human:tanim".to_owned()]);
+    let answer = send_with(fixture.http(), Method::POST, ARCHIVE, human, &local, None).await;
+    assert_eq!(answer.status, StatusCode::NO_CONTENT, "{:?}", answer.body);
+    assert_eq!(
+        fixture.archive_actors().await,
+        vec!["human:tanim".to_owned()]
+    );
 }
 
 #[tokio::test]
@@ -878,8 +901,8 @@ async fn off_loopback_an_ip_host_passes_and_a_domain_name_is_refused() {
     let cookie = fixture.sign_in("ana").await;
     let answer = send_with(
         fixture.http(),
-        Method::PUT,
-        INTEGRATOR,
+        Method::POST,
+        ARCHIVE,
         Some(&cookie),
         &[
             ("host", "192.168.1.5:7420"),
@@ -888,11 +911,11 @@ async fn off_loopback_an_ip_host_passes_and_a_domain_name_is_refused() {
         None,
     )
     .await;
-    assert_eq!(answer.status, StatusCode::OK, "{:?}", answer.body);
+    assert_eq!(answer.status, StatusCode::NO_CONTENT, "{:?}", answer.body);
     let answer = send_with(
         fixture.http(),
-        Method::PUT,
-        INTEGRATOR,
+        Method::POST,
+        ARCHIVE,
         Some(&cookie),
         &[("host", "evil.example:7420")],
         None,
@@ -983,10 +1006,11 @@ async fn a_cross_origin_bodiless_write_without_the_client_header_is_refused() {
     );
 }
 
-/// Reads the body of an open event stream until it ends; false when it sends more chunks than a few keep-alive periods hold.
+/// Reads the body of an open event stream until it ends; false when it is still open after [`STREAM_END_TIMEOUT`] of wall time. The callers pause tokio's clock, so the keep-alive frames come as fast as they are read while the session check waits on SQLite; only a wall-clock deadline bounds the wait, never a count of frames.
 #[cfg(test)]
 async fn stream_ends(body: &mut Body) -> bool {
-    for _ in 0..8 {
+    let deadline = std::time::Instant::now() + STREAM_END_TIMEOUT;
+    while std::time::Instant::now() < deadline {
         match body.frame().await {
             Some(Ok(_)) => {}
             Some(Err(_)) | None => return true,
@@ -994,6 +1018,9 @@ async fn stream_ends(body: &mut Body) -> bool {
     }
     false
 }
+
+#[cfg(test)]
+const STREAM_END_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[cfg(test)]
 async fn open_stream(fixture: &Fixture, cookie: &str) -> Body {

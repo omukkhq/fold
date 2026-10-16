@@ -185,6 +185,14 @@ describe("eventLine", () => {
       "added v2 to P-4",
     );
     expect(line("proposal.version_added")).toBe("added a version to P-4");
+    expect(
+      line("proposal.author_changed", {
+        reason: "taken_over",
+        from: "frontend",
+        to: "backend",
+      }),
+    ).toBe("took over P-4 from frontend");
+    expect(line("proposal.author_changed")).toBe("took over P-4");
     expect(line("message.sent", { message: "m-31" })).toBe("sent m-31 on T-12");
     expect(line("message.acknowledged", { ids: ["m-31"] })).toBe(
       "acknowledged m-31",

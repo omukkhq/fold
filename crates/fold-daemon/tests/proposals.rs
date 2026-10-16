@@ -1,3 +1,5 @@
+use crate::common::roles::give_role;
+use fold_core::roles::Role;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -6,7 +8,7 @@ use fold_core::object::ObjectKind;
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
 use fold_core::{
     Actor, AgentActor, AgentName, Event, EventActor, EventFilter, EventType, FoldError, HumanName,
-    ProposalId, RevisionId, Tag, TaskDescription, TaskId, TaskStatus, TaskTitle, WorkerName,
+    ProposalId, RevisionId, TaskDescription, TaskId, TaskStatus, TaskTitle, WorkerName,
     WorkspaceId, codes,
 };
 use fold_daemon::services::agents::AgentService;
@@ -120,6 +122,10 @@ impl Fixture {
         }
         let frontend = register(&agents, "frontend").await;
         let backend = register(&agents, "backend").await;
+        register(&agents, "review").await;
+        // `backend` may not decide on a proposal; `review` does as the review lead.
+        give_role(project.store(), "backend", Role::TaskCoder, None).await;
+        give_role(project.store(), "review", Role::ReviewLead, None).await;
         Self {
             project,
             bus,
@@ -265,13 +271,14 @@ fn agent(name: &str) -> Actor {
     })
 }
 
+/// A worker of the agent `name`, which the fixture makes the review lead when it is `review`.
 #[cfg(test)]
-fn integrator(name: &str) -> Actor {
+fn review_lead(name: &str) -> Actor {
     let worker = WorkerName::parse(name).unwrap();
     Actor::Agent(AgentActor {
         agent: worker.agent(),
         worker,
-        tags: vec![Tag::parse("integrator").unwrap()],
+        tags: Vec::new(),
     })
 }
 
@@ -759,7 +766,7 @@ async fn update_proposal_refuses_others_and_proposals_that_are_not_open() {
     let fx = Fixture::new().await;
     fx.workspace(&fx.frontend, 1).await;
     fx.create(&fx.frontend).await.unwrap();
-    for actor in [by(&fx.backend), human(), integrator("review")] {
+    for actor in [by(&fx.backend), human(), review_lead("review")] {
         let error = refusal(fx.reviews.update_proposal(&actor, p(1), Some("x")).await);
         assert_eq!(error.code(), codes::NOT_PROPOSAL_AUTHOR);
         assert_eq!(
@@ -892,7 +899,7 @@ async fn close_proposal_returns_task_to_in_progress_and_archives_review_checkout
 }
 
 #[tokio::test]
-async fn close_proposal_is_for_the_author_agent_an_integrator_or_a_human() {
+async fn close_proposal_is_for_the_author_agent_a_deciding_agent_or_a_human() {
     let fx = Fixture::new().await;
     fx.workspace(&fx.frontend, 1).await;
     fx.create(&fx.frontend).await.unwrap();
@@ -911,7 +918,7 @@ async fn close_proposal_is_for_the_author_agent_an_integrator_or_a_human() {
     }
     let detail = fx
         .reviews
-        .close_proposal(&integrator("review"), p(1), "superseded")
+        .close_proposal(&review_lead("review"), p(1), "superseded")
         .await
         .unwrap();
     assert_eq!(detail.summary.state, ProposalState::Closed);
@@ -991,8 +998,9 @@ async fn list_proposals_filters_by_state_and_review_claim() {
         .create_proposal(&by(&fx.backend), t(2), "Add the API", None)
         .await
         .unwrap();
+    let renewed = fx.project.now().as_millis();
     fx.execute(&format!(
-        "INSERT INTO claims (kind, proposal_id, worker_id, acquired_at, renewed_at) VALUES ('review', 3, {}, 0, 0)",
+        "INSERT INTO claims (kind, proposal_id, worker_id, acquired_at, renewed_at) VALUES ('review', 3, {}, {renewed}, {renewed})",
         fx.frontend.id
     ))
     .await;
@@ -1021,6 +1029,21 @@ async fn list_proposals_filters_by_state_and_review_claim() {
         unclaimed: false,
     };
     assert_eq!(ids(closed).await, [p(1)]);
+
+    // A review claim whose lease has run out counts as unclaimed, since claim_review takes it over; the list still names its holder.
+    let lease = Duration::from_secs(LEASE_MINUTES * 60);
+    fx.project
+        .clock()
+        .advance(lease - Duration::from_millis(1))
+        .unwrap();
+    assert_eq!(ids(unclaimed).await, [p(2)]);
+    fx.project
+        .clock()
+        .advance(Duration::from_millis(1))
+        .unwrap();
+    assert_eq!(ids(unclaimed).await, [p(2), p(3)]);
+    let stale = fx.reviews.list_proposals(unclaimed).await.unwrap();
+    assert_eq!(stale[1].review_claim, Some(fx.frontend.name.clone()));
 }
 
 #[tokio::test]

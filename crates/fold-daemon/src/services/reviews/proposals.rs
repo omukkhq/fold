@@ -1,4 +1,5 @@
 use fold_core::checkpoint_policy::AutoReason;
+use fold_core::claims::stale_cutoff;
 use fold_core::events::types;
 use fold_core::merge::ConflictReport;
 use fold_core::object::ObjectHash;
@@ -14,7 +15,7 @@ use fold_store::reviews::{
 };
 use fold_store::tasks::{TaskRow, claims};
 use fold_store::workspaces::{self, WorkspaceRow, WorkspaceState};
-use fold_store::{StoreError, WriteTx, counters, tasks};
+use fold_store::{StoreError, WriteTx, agents, counters, tasks};
 use fold_vcs::restore::differs_from_latest;
 use serde_json::json;
 
@@ -156,7 +157,7 @@ pub struct ProposalDetail {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ProposalFilter {
     pub state: Option<ProposalState>,
-    /// Only proposals without an unreleased review claim.
+    /// Only proposals that no reviewer holds: without an unreleased review claim, or with one whose lease has run out.
     pub unclaimed: bool,
 }
 
@@ -383,7 +384,7 @@ impl ReviewService {
         self.get_proposal(proposal, None).await
     }
 
-    /// Closes an open proposal, by the author's agent, an agent with the `integrator` tag or a human. Its review claim is released and its review checkouts are archived; the task returns to In Progress because its workspace stays active. Closing is what allows `abandon_workspace` afterwards. `reason` is the closer's short explanation, which `proposal.closed` carries.
+    /// Closes an open proposal, by the author's agent, an agent that decides reviews (the main agent, the review lead or a batch reviewer) or a human. Its review claim is released and its review checkouts are archived; the task returns to In Progress because its workspace stays active. Closing is what allows `abandon_workspace` afterwards. `reason` is the closer's short explanation, which `proposal.closed` carries.
     pub async fn close_proposal(
         &self,
         actor: &Actor,
@@ -407,7 +408,8 @@ impl ReviewService {
             .write(async |tx| {
                 let row =
                     require_open(reviews::get_proposal(tx.conn(), proposal).await?, proposal)?;
-                if let Err(denied) = policy::can_close_proposal(actor, &row.author) {
+                let standing = agents::standing_of(tx.conn(), actor).await?;
+                if let Err(denied) = policy::can_close_proposal(actor, standing, &row.author) {
                     return Err(FoldError::from(denied)
                         .with_details([
                             ("proposal", json!(proposal.to_string())),
@@ -441,13 +443,18 @@ impl ReviewService {
         self.get_proposal(proposal, None).await
     }
 
-    /// Proposals in number order, filtered by state and by whether a reviewer holds them.
+    /// Proposals in number order, filtered by state and by whether a reviewer holds them. A review claim whose lease has run out counts as unclaimed, since `claim_review` takes it over.
     pub async fn list_proposals(
         &self,
         filter: ProposalFilter,
     ) -> Result<Vec<ProposalSummary>, ReviewError> {
+        let unclaimed_at = if filter.unclaimed {
+            Some(stale_cutoff(self.clock.now(), self.lease_minutes().await?))
+        } else {
+            None
+        };
         let mut tx = self.store.read().begin().await.map_err(StoreError::from)?;
-        let rows = reviews::list_proposals(&mut *tx, filter.state, filter.unclaimed).await?;
+        let rows = reviews::list_proposals(&mut *tx, filter.state, unclaimed_at).await?;
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
             let facts = match row.human_review {

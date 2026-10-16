@@ -258,7 +258,7 @@ describe("waitingSummary", () => {
     );
   });
 
-  it("waits for the named human until a human approves, naming who integrates", () => {
+  it("waits for the named human until a human approves, naming the roles that integrate", () => {
     const approved = [review(2, "review/quality", "approve")];
     expect(
       waitingSummary(
@@ -276,7 +276,7 @@ describe("waitingSummary", () => {
         ),
       ),
     ).toBe(
-      "Waiting for @tanim. When @tanim approves v2, @review/quality integrates, or @tanim can integrate here.",
+      "Waiting for @tanim. When @tanim approves v2, the main agent, the review lead or a batch reviewer integrates, or @tanim can integrate here.",
     );
     expect(
       waitingSummary(
@@ -286,11 +286,11 @@ describe("waitingSummary", () => {
         ),
       ),
     ).toBe(
-      "Waiting for a human. When a human approves v2, an integrator integrates, or a human can integrate here.",
+      "Waiting for a human. When a human approves v2, the main agent, the review lead or a batch reviewer integrates, or a human can integrate here.",
     );
   });
 
-  it("waits for a review, then for the prerequisites, then for an integrator", () => {
+  it("waits for a review, then for the prerequisites, then for an agent that may integrate", () => {
     expect(waitingSummary(proposal())).toBe("Waiting for a review of v2.");
     const approved = [review(2, "review/quality", "approve")];
     expect(
@@ -347,7 +347,7 @@ describe("waitingSummary", () => {
         ),
       ),
     ).toBe(
-      "Every gate is met. Next, @review/quality integrates, or a human can integrate here.",
+      "Every gate is met. Next, the main agent, the review lead or a batch reviewer integrates, or a human can integrate here.",
     );
   });
 });

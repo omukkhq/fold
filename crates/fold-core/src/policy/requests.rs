@@ -2,6 +2,7 @@ use crate::actor::{Actor, AgentActor};
 use crate::agents::{Tag, WorkerName};
 use crate::error::codes;
 use crate::requests::Requester;
+use crate::roles::Role;
 
 use super::PolicyDenied;
 
@@ -14,18 +15,19 @@ pub fn can_create_request(actor: &Actor) -> Result<Requester, PolicyDenied> {
     })
 }
 
-/// Turning a request into cards is an orchestrator's job, so only the main worker of an agent claims one: a subagent worker works inside its parent's plan, and a human answers the drafter instead. While some agent has the `main` tag (`main_exists`), the main agent handles every request, so only its main worker claims and every other agent is refused as no orchestrator. It returns the admitted agent, whose main worker becomes the drafter.
-pub fn can_claim_request(actor: &Actor, main_exists: bool) -> Result<&AgentActor, PolicyDenied> {
+/// Turning a request into cards is an orchestrator's job, so the main agent claims one, or an area lead that judges the request relevant to its area; fold does not check the request against the area. Only an agent's main worker claims: a subagent worker works inside its parent's plan, and a human answers the drafter instead. `role` is the role of the agent's worker process, `None` when fold does not supervise it. It returns the admitted agent, whose main worker becomes the drafter.
+pub fn can_claim_request(actor: &Actor, role: Option<Role>) -> Result<&AgentActor, PolicyDenied> {
     match actor {
         Actor::Agent(agent)
-            if agent.worker.is_main() && (!main_exists || agent.tags.iter().any(Tag::is_main)) =>
+            if agent.worker.is_main()
+                && (agent.tags.iter().any(Tag::is_main) || role == Some(Role::AreaLead)) =>
         {
             Ok(agent)
         }
         Actor::Agent(agent) if agent.worker.is_main() => Err(PolicyDenied {
             code: codes::ORCHESTRATOR_REQUIRED,
-            message: "only the agent with the main tag claims a request while it exists",
-            hint: "ask the main agent to call claim_request",
+            message: "only the main agent or an area lead claims a request",
+            hint: "ask the main agent or an area lead to call claim_request",
         }),
         Actor::Agent(_) | Actor::Human { .. } | Actor::System => Err(PolicyDenied {
             code: codes::ORCHESTRATOR_REQUIRED,
@@ -115,39 +117,41 @@ mod tests {
     }
 
     #[test]
-    fn only_a_main_worker_claims_a_request() {
-        let main = agent("frontend");
+    fn the_main_agent_or_an_area_lead_claims_a_request() {
+        let main = tagged("lead", MAIN_TAG);
         assert_eq!(
-            can_claim_request(&main, false).unwrap().worker.as_str(),
-            "frontend"
+            can_claim_request(&main, None).unwrap().worker.as_str(),
+            "lead"
         );
-        for actor in [agent("frontend/ui"), human("tanim"), Actor::System] {
-            let denied = can_claim_request(&actor, false).unwrap_err();
+        let area_lead = agent("web-lead");
+        assert_eq!(
+            can_claim_request(&area_lead, Some(Role::AreaLead))
+                .unwrap()
+                .worker
+                .as_str(),
+            "web-lead"
+        );
+        for (other, role) in [
+            (agent("backend"), None),
+            (tagged("backend", "review"), None),
+            (agent("review-lead"), Some(Role::ReviewLead)),
+            (agent("web-coder"), Some(Role::TaskCoder)),
+            (agent("reviewer-1"), Some(Role::BatchReviewer)),
+        ] {
+            let denied = can_claim_request(&other, role).unwrap_err();
+            assert_eq!(denied.code(), codes::ORCHESTRATOR_REQUIRED, "{other:?}");
+            assert!(denied.hint().contains("main agent or an area lead"));
+        }
+        for actor in [
+            tagged("lead/sub", MAIN_TAG),
+            agent("web-lead/plan"),
+            human("tanim"),
+            Actor::System,
+        ] {
+            let denied = can_claim_request(&actor, Some(Role::AreaLead)).unwrap_err();
             assert_eq!(denied.code(), codes::ORCHESTRATOR_REQUIRED);
             assert!(denied.hint().contains("claim_request"));
         }
-    }
-
-    #[test]
-    fn once_a_main_agent_exists_only_it_claims() {
-        let lead = tagged("lead", MAIN_TAG);
-        assert_eq!(
-            can_claim_request(&lead, true).unwrap().worker.as_str(),
-            "lead"
-        );
-        for other in [agent("backend"), tagged("backend", "review")] {
-            let denied = can_claim_request(&other, true).unwrap_err();
-            assert_eq!(denied.code(), codes::ORCHESTRATOR_REQUIRED);
-            assert!(denied.hint().contains("main agent"));
-        }
-        assert_eq!(
-            code(can_claim_request(&tagged("lead/sub", MAIN_TAG), true)),
-            Some(codes::ORCHESTRATOR_REQUIRED)
-        );
-        assert_eq!(
-            code(can_claim_request(&human("tanim"), true)),
-            Some(codes::ORCHESTRATOR_REQUIRED)
-        );
     }
 
     #[test]

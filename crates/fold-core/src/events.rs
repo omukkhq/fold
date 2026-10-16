@@ -129,6 +129,7 @@ define_event_types! {
     AREA_UPDATED = "area.updated",
     TASK_REPORTED = "task.reported",
     TASK_SENT_BACK = "task.sent_back",
+    PROPOSAL_AUTHOR_CHANGED = "proposal.author_changed",
 }
 
 impl EventType {

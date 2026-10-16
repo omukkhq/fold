@@ -31,10 +31,11 @@ async fn linked_tasks(h: &Harness, number: i64) -> i64 {
     .unwrap()
 }
 
-/// Acceptance 10, a human's request: a human creates a request with an attachment through HTTP, an orchestrator claims it from the push, asks in the request thread, drafts two cards with one edge, revises after the human asks for changes, and the human's approval of v2 creates two linked tasks whose columns fold calculates.
+/// Acceptance 10, a human's request: a human creates a request with an attachment through HTTP, the main agent `frontend` claims it from the push, asks in the request thread, drafts two cards with one edge, revises after the human asks for changes, and the human's approval of v2 creates two linked tasks whose columns fold calculates.
 #[tokio::test]
 async fn acceptance_10_a_human_request_becomes_two_tasks_through_a_drafted_and_revised_plan() {
     let h = Harness::start().await;
+    h.make_main("frontend").await;
     let board = h.create_task("backend", "Board layout").await;
     assert_eq!(board, "T-1");
     let mut frontend = h.register_inbox("frontend").await;
@@ -165,6 +166,14 @@ async fn acceptance_10_a_human_request_becomes_two_tasks_through_a_drafted_and_r
     assert_eq!(status, StatusCode::OK, "{approved}");
     assert_eq!(approved["request"]["state"], "approved");
     assert_eq!(approved["tasks"], json!(["T-2", "T-3"]));
+    // As the main agent, `frontend` first hears that the card without an area is ready.
+    assert_eq!(
+        frontend.next().await,
+        wire(
+            TOKEN,
+            "fold: T-2 is ready and has no area. Call update_task."
+        )
+    );
     assert_eq!(
         frontend.next().await,
         wire(
@@ -205,10 +214,17 @@ async fn acceptance_10_a_human_request_becomes_two_tasks_through_a_drafted_and_r
     assert_eq!(approvals[0].actor, "human:ana");
 }
 
-/// Acceptance 10, an agent's request: `backend` asks for a bug fix, `review` claims and drafts it, a human who did not create the request cannot approve it, and `backend` approves it.
+/// Acceptance 10, an agent's request: `backend` asks for a bug fix, `review`, an area lead that finds the request relevant, claims and drafts it, a human who did not create the request cannot approve it, and `backend` approves it.
 #[tokio::test]
 async fn acceptance_10_an_agent_request_is_approved_only_by_its_requester() {
-    let h = Harness::start().await;
+    let h = Harness::start_without_roles().await;
+    crate::common::roles::give_role(
+        &h.handle.store,
+        "review",
+        fold_core::roles::Role::AreaLead,
+        None,
+    )
+    .await;
     let created = h
         .call(
             "backend",

@@ -50,6 +50,7 @@ async fn limit_events(harness: &Harness) -> Vec<Value> {
 async fn the_main_agent_raises_the_coder_limit_and_the_next_start_follows_it() {
     let fake = FakeClaude::new("result");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     let config = std::path::Path::new(harness.root()).join(".fold/config.toml");
     std::fs::write(&config, BEFORE).unwrap();
     let lead = lead(&mut harness).await;
@@ -102,6 +103,7 @@ async fn the_main_agent_raises_the_coder_limit_and_the_next_start_follows_it() {
 async fn a_lead_and_an_empty_change_are_refused_and_a_human_sets_a_limit_over_http() {
     let fake = FakeClaude::new("result");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     let config = std::path::Path::new(harness.root()).join(".fold/config.toml");
     let lead = lead(&mut harness).await;
     let denied = harness
@@ -187,6 +189,7 @@ async fn a_lead_and_an_empty_change_are_refused_and_a_human_sets_a_limit_over_ht
 async fn a_limit_of_zero_starts_no_worker_and_a_limit_has_no_upper_bound() {
     let fake = FakeClaude::new("result");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     let config = std::path::Path::new(harness.root()).join(".fold/config.toml");
     let lead = lead(&mut harness).await;
     let set = harness
@@ -232,6 +235,7 @@ async fn a_limit_of_zero_starts_no_worker_and_a_limit_has_no_upper_bound() {
 async fn a_limit_change_waits_for_a_config_edit_in_progress_and_keeps_it() {
     let fake = FakeClaude::new("result");
     let harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     let config = std::path::Path::new(harness.root()).join(".fold/config.toml");
     std::fs::write(&config, BEFORE).unwrap();
 

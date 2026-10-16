@@ -1,4 +1,4 @@
-use fold_core::policy::{can_set_tag, can_take_main_tag};
+use fold_core::policy::{TagOrigin, can_take_main_tag};
 use fold_core::{
     Actor, AgentActor, EventActor, FoldError, HumanName, NameError, Tag, WorkerName, codes,
 };
@@ -18,55 +18,17 @@ fn human(name: &str) -> Actor {
     Actor::human(HumanName::parse(name).unwrap())
 }
 
-#[cfg(test)]
-fn tag(name: &str) -> Tag {
-    Tag::parse(name).unwrap()
-}
-
-#[test]
-fn only_a_human_sets_the_integrator_tag() {
-    let table = [
-        ("agent adds ui", agent("frontend", &[]), "ui", None),
-        (
-            "agent adds integrator",
-            agent("review", &["review"]),
-            "integrator",
-            Some(codes::HUMAN_REQUIRED),
-        ),
-        ("human adds integrator", human("tanim"), "integrator", None),
-        (
-            "system adds integrator",
-            Actor::System,
-            "integrator",
-            Some(codes::HUMAN_REQUIRED),
-        ),
-    ];
-    for (case, actor, name, expected) in table {
-        let result = can_set_tag(&actor, &tag(name), true);
-        assert_eq!(result.as_ref().err().map(|d| d.code()), expected, "{case}");
-    }
-}
-
-#[test]
-fn removing_integrator_also_needs_a_human() {
-    let integrator = agent("review", &["integrator"]);
-    let denied = can_set_tag(&integrator, &tag("integrator"), false).unwrap_err();
-    assert_eq!(denied.code(), codes::HUMAN_REQUIRED);
-    assert_eq!(
-        denied.to_string(),
-        "only a human can remove the integrator tag"
-    );
-    assert!(can_set_tag(&human("tanim"), &tag("integrator"), false).is_ok());
-    assert!(can_set_tag(&agent("frontend/ui", &[]), &tag("ui"), false).is_ok());
-}
-
 #[test]
 fn a_denial_becomes_a_fold_error_with_its_code_and_hint() {
-    let denied = can_set_tag(&Actor::System, &tag("integrator"), true).unwrap_err();
+    use fold_core::policy::can_push;
+    let denied = can_push(&agent("review", &[])).unwrap_err();
     let hint = denied.hint();
     let error = FoldError::from(denied);
     assert_eq!(error.code(), codes::HUMAN_REQUIRED);
-    assert_eq!(error.message(), "only a human can grant the integrator tag");
+    assert_eq!(
+        error.message(),
+        "only a human can push main to the Git remote"
+    );
     assert_eq!(error.hint(), Some(hint));
 }
 
@@ -129,7 +91,7 @@ fn only_the_owning_worker_abandons_a_workspace() {
     assert!(can_abandon_workspace(&agent("frontend/ui", &[]), Some(&owner)).is_ok());
     for actor in [
         agent("frontend", &[]),
-        agent("backend", &["integrator"]),
+        agent("backend", &["review"]),
         human("tanim"),
         Actor::System,
     ] {
@@ -144,7 +106,7 @@ fn only_the_owning_worker_abandons_a_workspace() {
 fn only_a_human_sends_feedback() {
     use fold_core::policy::can_send_feedback;
     assert!(can_send_feedback(&human("tanim")).is_ok());
-    for actor in [agent("frontend", &["integrator"]), Actor::System] {
+    for actor in [agent("frontend", &["review"]), Actor::System] {
         let denied = can_send_feedback(&actor).unwrap_err();
         assert_eq!(denied.code(), codes::HUMAN_REQUIRED);
         assert!(denied.hint().contains("send_message"));
@@ -171,7 +133,7 @@ fn only_a_human_or_the_daemon_pushes() {
     use fold_core::policy::can_push;
     assert!(can_push(&human("tanim")).is_ok());
     assert!(can_push(&Actor::System).is_ok());
-    let denied = can_push(&agent("frontend/ui", &["integrator"])).unwrap_err();
+    let denied = can_push(&agent("frontend/ui", &["review"])).unwrap_err();
     assert_eq!(denied.code(), codes::HUMAN_REQUIRED);
     assert!(denied.hint().contains("fld push"));
 }
@@ -183,7 +145,7 @@ fn only_the_owning_worker_changes_a_workspace() {
     assert!(can_change_workspace(&agent("frontend/ui", &[]), Some(&owner)).is_ok());
     for actor in [
         agent("frontend", &[]),
-        agent("backend", &["integrator"]),
+        agent("backend", &["review"]),
         human("tanim"),
         Actor::System,
     ] {
@@ -203,7 +165,7 @@ fn the_owning_worker_or_the_daemon_takes_an_automatic_checkpoint() {
     assert!(can_take_auto_checkpoint(&Actor::System, None).is_ok());
     for actor in [
         agent("frontend", &[]),
-        agent("backend", &["integrator"]),
+        agent("backend", &["review"]),
         human("tanim"),
     ] {
         let denied = can_take_auto_checkpoint(&actor, Some(&owner)).unwrap_err();
@@ -213,21 +175,50 @@ fn the_owning_worker_or_the_daemon_takes_an_automatic_checkpoint() {
 
 #[test]
 fn only_one_agent_that_fold_did_not_start_takes_the_main_tag() {
-    assert!(can_take_main_tag(false, false).is_ok());
-    for (supervised, held_by_other, message) in [
+    use TagOrigin::{Handshake, RegisterTool};
+    assert!(can_take_main_tag(Handshake, false, false, false).is_ok());
+    assert!(
+        can_take_main_tag(RegisterTool, true, false, false).is_ok(),
+        "the holder repeats its own tag"
+    );
+    for (origin, holds_main, supervised, held_by_other, message) in [
         (
+            Handshake,
+            false,
             true,
             false,
             "a worker that fold started cannot take the main tag",
         ),
-        (false, true, "another agent holds the main tag"),
         (
+            Handshake,
+            false,
+            false,
+            true,
+            "another agent holds the main tag",
+        ),
+        (
+            Handshake,
+            false,
             true,
             true,
             "a worker that fold started cannot take the main tag",
         ),
+        (
+            RegisterTool,
+            false,
+            false,
+            false,
+            "only the session that fld claude starts takes the main tag",
+        ),
+        (
+            RegisterTool,
+            false,
+            true,
+            false,
+            "a worker that fold started cannot take the main tag",
+        ),
     ] {
-        let denied = can_take_main_tag(supervised, held_by_other).unwrap_err();
+        let denied = can_take_main_tag(origin, holds_main, supervised, held_by_other).unwrap_err();
         assert_eq!(denied.code(), codes::MAIN_TAG_DENIED);
         assert_eq!(denied.to_string(), message);
         assert!(denied.hint().contains("register_agent"));

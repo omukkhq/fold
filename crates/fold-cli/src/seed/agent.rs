@@ -22,7 +22,7 @@ pub struct Agent {
 }
 
 impl Agent {
-    /// Connects as `name` from `root`, then registers the agent with `tags`.
+    /// Connects as `name` from `root` with `tags` in the handshake line, as `fld mcp` sends `FOLD_AGENT_TAGS`, then registers the agent. Only a handshake gives the `main` tag.
     pub async fn connect(
         socket: &Path,
         root: &Path,
@@ -41,7 +41,7 @@ impl Agent {
             cwd: root.to_owned(),
             pid: std::process::id(),
             agent: Some(name.to_owned()),
-            tags: Vec::new(),
+            tags: tags.iter().map(|tag| (*tag).to_owned()).collect(),
         };
         let mut line = serde_json::to_vec(&hello).map_err(|_| SeedError::Handshake)?;
         line.push(b'\n');
@@ -64,9 +64,7 @@ impl Agent {
         }
         let client = ().serve((read, write)).await.map_err(|_| SeedError::Handshake)?;
         let agent = Self { name, client };
-        agent
-            .call("register_agent", json!({"name": name, "tags": tags}))
-            .await?;
+        agent.call("register_agent", json!({"name": name})).await?;
         Ok(agent)
     }
 

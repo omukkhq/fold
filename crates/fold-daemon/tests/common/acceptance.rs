@@ -7,6 +7,7 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use fold_core::object::ObjectKind;
+use fold_core::roles::Role;
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
 use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
@@ -34,6 +35,9 @@ use tower::ServiceExt as _;
 
 /// The longest any single effect may take to appear.
 pub const WAIT: Duration = Duration::from_secs(10);
+
+/// The pid that the extra handshake of [`Harness::make_main`] sends; no other session uses it.
+const MAIN_HANDSHAKE_PID: u32 = 900_000;
 pub const SLUG: &str = "demo";
 /// The three sessions of the acceptance scenarios, in registration order.
 pub const AGENTS: [&str; 3] = ["frontend", "backend", "review"];
@@ -50,7 +54,7 @@ pub struct Session {
     server: JoinHandle<()>,
 }
 
-/// Project `demo` open in daemon state, with `r1` holding `README.md` and the project folder holding it as `fld init` leaves it, and one adapter session for each of [`AGENTS`], connected over in-memory streams through the same handshake `fld mcp` performs with `FOLD_AGENT` set. `review` holds `integrator`, granted by the human [`HUMAN`] over the socket.
+/// Project `demo` open in daemon state, with `r1` holding `README.md` and the project folder holding it as `fld init` leaves it, and one adapter session for each of [`AGENTS`], connected over in-memory streams through the same handshake `fld mcp` performs with `FOLD_AGENT` set. `review` is the review lead, as if fold had started it, and [`HUMAN`] is a known human.
 pub struct Harness {
     pub project: TestProject,
     /// Holds the fake inbox sockets.
@@ -66,24 +70,25 @@ pub struct Harness {
 
 impl Harness {
     pub async fn start() -> Self {
-        let harness = Self::start_untagged().await;
-        let (status, answer) = harness
-            .socket(
-                Method::PUT,
-                &format!("/api/v1/projects/{SLUG}/agents/review/tags/integrator"),
-                None,
-            )
+        let harness = Self::start_without_roles().await;
+        crate::common::roles::give_role(&harness.handle.store, "review", Role::ReviewLead, None)
             .await;
-        assert_eq!(status, StatusCode::OK, "{answer}");
+        fold_daemon::services::projects::ensure_human(
+            harness.project.registry(),
+            harness.project.clock(),
+            &fold_core::HumanName::parse(HUMAN).unwrap(),
+        )
+        .await
+        .unwrap();
         harness
     }
 
-    /// The same project and sessions with no tag granted, so no agent may approve or integrate.
-    pub async fn start_untagged() -> Self {
+    /// The same project and sessions with no worker role and no main agent, so no session may approve, reject or integrate.
+    pub async fn start_without_roles() -> Self {
         Self::start_with_launcher(Launcher::default()).await
     }
 
-    /// [`Harness::start_untagged`] with the programs the project's worker processes run, such as a stand-in for Claude Code.
+    /// [`Harness::start_without_roles`] with the programs the project's worker processes run, such as a stand-in for Claude Code.
     pub async fn start_with_launcher(launcher: Launcher) -> Self {
         let project = TestProject::new().await;
         let objects = ObjectStore::open(&project.paths().fold_dir()).unwrap();
@@ -296,6 +301,38 @@ impl Harness {
         };
         let params = CallToolRequestParams::new(tool.to_owned()).with_arguments(arguments);
         self.client(agent).call_tool(params).await.unwrap()
+    }
+
+    /// Gives `agent` the `main` tag, as `fld claude` gives it to the session it starts, so that agent does the main agent's work. Only a handshake carries the tag, so this opens one more session for `agent` with the tag in its handshake line and closes it again; the agent's own session stays.
+    pub async fn make_main(&self, agent: &str) {
+        let (client_end, server_end) = tokio::io::duplex(64 * 1024);
+        let server = tokio::spawn(handshake::accept(
+            self.state.clone(),
+            server_end,
+            Default::default(),
+        ));
+        let (read, mut write) = tokio::io::split(client_end);
+        let hello = json!({"fold": PROTOCOL_VERSION, "cwd": self.root(), "pid": MAIN_HANDSHAKE_PID, "agent": agent, "tags": ["main"]});
+        write
+            .write_all(format!("{hello}\n").as_bytes())
+            .await
+            .unwrap();
+        let mut read = BufReader::new(read);
+        let mut line = String::new();
+        tokio::time::timeout(WAIT, read.read_line(&mut line))
+            .await
+            .expect("the handshake answer within the wait")
+            .unwrap();
+        let answer: Answer = serde_json::from_str(&line).unwrap();
+        assert!(
+            answer.ok,
+            "the main handshake of {agent} was refused: {line}"
+        );
+        drop((read, write));
+        tokio::time::timeout(WAIT, server)
+            .await
+            .expect("the main handshake's session ends within the wait")
+            .unwrap();
     }
 
     /// The result body of a call that must succeed.
@@ -547,13 +584,23 @@ impl Harness {
         created["id"].as_str().unwrap().to_owned()
     }
 
-    /// `review` approves the current version of `proposal`.
+    /// The current version of `proposal` as `agent` reads it with `get_proposal`.
+    pub async fn version_of(&self, agent: &str, proposal: &str) -> u32 {
+        let read = self
+            .call(agent, "get_proposal", json!({"id": proposal}))
+            .await;
+        let current = read["current_version"].as_str().unwrap();
+        current.strip_prefix('v').unwrap().parse().unwrap()
+    }
+
+    /// `review` reads `proposal` and approves the version it read.
     pub async fn approve(&self, proposal: &str) {
+        let version = self.version_of("review", proposal).await;
         let submitted = self
             .call(
                 "review",
                 "submit_review",
-                json!({"id": proposal, "verdict": "approve", "body": "Looks right."}),
+                json!({"id": proposal, "version": version, "verdict": "approve", "body": "Looks right."}),
             )
             .await;
         assert_eq!(submitted["verdict"], "approve");

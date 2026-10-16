@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use fold_core::events::types;
 use fold_core::reviews::Verdict;
+use fold_core::roles::Role;
 use fold_core::{
     Actor, AgentName, EventFilter, ProposalId, RevisionId, TaskDescription, TaskStatus, TaskTitle,
     codes,
@@ -18,6 +19,7 @@ use fold_store::events;
 use fold_store::workspaces;
 use tokio::sync::watch;
 
+use crate::common::roles::give_role;
 use crate::proposal_tools_support::{Fixture, human, t};
 
 const WAIT: Duration = Duration::from_secs(20);
@@ -71,8 +73,13 @@ impl Running {
     }
 }
 
-/// Registers `name` and grants it `integrator`, returning its actor with the tag.
-pub async fn integrator(fx: &Fixture, name: &str) -> Actor {
+/// Registers `name` as the review lead, returning its actor.
+pub async fn review_lead(fx: &Fixture, name: &str) -> Actor {
+    with_role(fx, name, Role::ReviewLead).await
+}
+
+/// Registers `name` as a worker that fold started in `role`, returning its actor.
+async fn with_role(fx: &Fixture, name: &str, role: Role) -> Actor {
     let agents = fx.agents();
     let agent = AgentName::parse(name).unwrap();
     let mut session = agents.start_session(1).await.unwrap();
@@ -80,18 +87,32 @@ pub async fn integrator(fx: &Fixture, name: &str) -> Actor {
         .register_agent(&mut session, &agent, &[])
         .await
         .unwrap();
+    give_role(&fx.handle.store, name, role, None).await;
+    agents.actor(&session, None).await.unwrap()
+}
+
+/// Registers the main agent `main` with the `main` tag, as `fld claude` gives it, and returns its actor.
+async fn main_agent(fx: &Fixture) -> Actor {
+    let agents = fx.agents();
+    let mut session = agents.start_session(1).await.unwrap();
     agents
-        .set_integrator(&human("tanim"), &agent, true)
+        .register_agent(
+            &mut session,
+            &AgentName::parse("main").unwrap(),
+            &[fold_core::Tag::parse("main").unwrap()],
+        )
         .await
         .unwrap();
     agents.actor(&session, None).await.unwrap()
 }
 
 pub async fn approve(fx: &Fixture, reviewer: &Actor, proposal: u32) {
+    let read = fx.reviews().get_proposal(p(proposal), None).await.unwrap();
     fx.reviews()
         .submit_review(
             reviewer,
             p(proposal),
+            read.summary.current_version,
             Verdict::Approve,
             "looks right",
             Vec::new(),
@@ -178,7 +199,7 @@ fn git(dir: &Path, args: &[&str]) -> String {
 async fn an_approved_proposal_integrates_with_no_tool_call_and_gets_its_git_commit() {
     let fx = Fixture::new().await;
     let author = fx.agent("backend").await;
-    let review = integrator(&fx, "review").await;
+    let review = review_lead(&fx, "review").await;
     propose(&fx, &author, 1, "src/lib.rs", "pub fn y() {}\n").await;
     let job = Running::start(&fx.state);
     job.runs(1).await;
@@ -217,29 +238,23 @@ async fn an_approved_proposal_integrates_with_no_tool_call_and_gets_its_git_comm
 }
 
 #[tokio::test]
-async fn an_approval_integrates_once_its_agent_holds_integrator_again() {
+async fn only_the_agent_with_the_main_tag_approves_as_the_main_agent() {
     let fx = Fixture::new().await;
     let author = fx.agent("backend").await;
-    let review = integrator(&fx, "review").await;
+    // Nobody has the `main` tag, and `solo` has no role: it is no main agent and decides nothing.
+    let solo = fx.agent("solo").await;
     propose(&fx, &author, 1, "src/lib.rs", "pub fn y() {}\n").await;
-    approve(&fx, &review, 1).await;
-    let agent = AgentName::parse("review").unwrap();
-    fx.agents()
-        .set_integrator(&human("tanim"), &agent, false)
+    let refused = fx
+        .reviews()
+        .submit_review(&solo, p(1), 1, Verdict::Approve, "fine", Vec::new())
         .await
-        .unwrap();
+        .unwrap_err();
+    assert_eq!(refused.code(), Some(codes::INTEGRATOR_REQUIRED));
     let job = Running::start(&fx.state);
     job.runs(1).await;
-    assert_eq!(
-        head(&fx).await,
-        r(1),
-        "the approval counts by the tags held now"
-    );
 
-    fx.agents()
-        .set_integrator(&human("tanim"), &agent, true)
-        .await
-        .unwrap();
+    let main = main_agent(&fx).await;
+    approve(&fx, &main, 1).await;
     job.cycles(1).await;
     assert_eq!(head(&fx).await, r(2));
     assert_eq!(state_of(&fx, 1).await, "integrated");
@@ -250,7 +265,7 @@ async fn an_approval_integrates_once_its_agent_holds_integrator_again() {
 async fn a_marked_proposal_waits_for_the_human_after_the_agent_approval() {
     let fx = Fixture::new().await;
     let author = fx.agent("backend").await;
-    let review = integrator(&fx, "review").await;
+    let review = review_lead(&fx, "review").await;
     fx.reviews()
         .require_human_review(&review, t(1), None, "touches the public API")
         .await
@@ -288,10 +303,30 @@ async fn a_marked_proposal_waits_for_the_human_after_the_agent_approval() {
 }
 
 #[tokio::test]
+async fn a_human_approval_alone_integrates_a_ready_proposal() {
+    let fx = Fixture::new().await;
+    let author = fx.agent("backend").await;
+    propose(&fx, &author, 1, "src/lib.rs", "pub fn y() {}\n").await;
+    let job = Running::start(&fx.state);
+    job.runs(1).await;
+
+    approve(&fx, &human("tanim"), 1).await;
+    job.cycles(1).await;
+    assert_eq!(head(&fx).await, r(2));
+    assert_eq!(state_of(&fx, 1).await, "integrated");
+    assert_eq!(
+        count(&fx, "SELECT COUNT(*) FROM reviews").await,
+        1,
+        "no agent approved"
+    );
+    job.stop().await;
+}
+
+#[tokio::test]
 async fn two_dependent_proposals_integrate_in_dependency_order() {
     let fx = Fixture::new().await;
     let author = fx.agent("backend").await;
-    let review = integrator(&fx, "review").await;
+    let review = review_lead(&fx, "review").await;
     propose(&fx, &author, 1, "src/lib.rs", "pub fn y() {}\n").await;
     propose(&fx, &author, 2, "README.md", "# demo, exported\n").await;
     fx.handle
@@ -325,7 +360,7 @@ async fn two_dependent_proposals_integrate_in_dependency_order() {
 async fn a_conflict_leaves_the_proposal_open_and_is_recorded_once() {
     let fx = Fixture::new().await;
     let author = fx.agent("backend").await;
-    let review = integrator(&fx, "review").await;
+    let review = review_lead(&fx, "review").await;
     let other = fx.agent("frontend").await;
     propose(&fx, &author, 1, "src/lib.rs", "pub fn y() {}\n").await;
     propose(&fx, &other, 2, "src/lib.rs", "pub fn z() {}\n").await;
@@ -357,7 +392,14 @@ async fn a_conflict_leaves_the_proposal_open_and_is_recorded_once() {
 
     let before = job.checks();
     fx.reviews()
-        .submit_review(&review, p(2), Verdict::Comment, "still looking", Vec::new())
+        .submit_review(
+            &review,
+            p(2),
+            1,
+            Verdict::Comment,
+            "still looking",
+            Vec::new(),
+        )
         .await
         .unwrap();
     job.runs(before + 1).await;
@@ -374,7 +416,7 @@ async fn with_automatic_off_nothing_integrates_on_its_own() {
     let fx = Fixture::new().await;
     write_config(&fx, "[integration]\nautomatic = false\n");
     let author = fx.agent("backend").await;
-    let review = integrator(&fx, "review").await;
+    let review = review_lead(&fx, "review").await;
     propose(&fx, &author, 1, "src/lib.rs", "pub fn y() {}\n").await;
     let job = Running::start(&fx.state);
     job.runs(1).await;
@@ -405,7 +447,7 @@ async fn with_automatic_off_nothing_integrates_on_its_own() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_batch_review_integrates_its_approved_members_in_dependency_order() {
+async fn a_batch_reviewers_batch_integrates_its_approved_members_in_dependency_order() {
     let fx = Fixture::new().await;
     fx.handle
         .tasks
@@ -420,7 +462,8 @@ async fn a_batch_review_integrates_its_approved_members_in_dependency_order() {
         .await
         .unwrap();
     let author = fx.agent("backend").await;
-    let review = integrator(&fx, "review").await;
+    // A batch reviewer that the review lead started decides by its role.
+    let review = with_role(&fx, "reviewer-1", Role::BatchReviewer).await;
     fx.reviews()
         .require_human_review(&review, t(3), None, "touches the public API")
         .await

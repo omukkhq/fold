@@ -405,6 +405,15 @@ const SPECS: Record<EventType, Spec> = {
         : `added v${String(version)} to ${proposalOf(e)}`;
     },
   },
+  "proposal.author_changed": {
+    icon: GitPullRequest,
+    text: (e) => {
+      const from = text(e.data.from);
+      return from === null
+        ? `took over ${proposalOf(e)}`
+        : `took over ${proposalOf(e)} from ${from}`;
+    },
+  },
   "proposal.closed": {
     icon: X,
     text: (e) => `closed ${proposalOf(e)}`,

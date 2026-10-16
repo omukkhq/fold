@@ -1,3 +1,5 @@
+use crate::common::roles::give_role;
+use fold_core::roles::Role;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -117,6 +119,9 @@ impl Fixture {
         let frontend = register(&agents, "frontend").await;
         let backend = register(&agents, "backend").await;
         register(&agents, "review").await;
+        // `backend` reviews without the right to decide; `review` decides as the review lead.
+        give_role(project.store(), "backend", Role::TaskCoder, None).await;
+        give_role(project.store(), "review", Role::ReviewLead, None).await;
         workspaces
             .create_workspace(&agent("frontend", &[]), t(1))
             .await
@@ -161,6 +166,7 @@ impl Fixture {
             .unwrap();
     }
 
+    /// Reviews the version of `P-1` that is current when the call starts, as a reviewer that has just read it.
     async fn submit(
         &self,
         actor: &Actor,
@@ -172,9 +178,19 @@ impl Fixture {
             .clock()
             .advance(Duration::from_secs(1))
             .unwrap();
+        let version = self.current().await;
         self.reviews
-            .submit_review(actor, p(1), verdict, body, comments)
+            .submit_review(actor, p(1), version, verdict, body, comments)
             .await
+    }
+
+    async fn current(&self) -> u32 {
+        self.reviews
+            .get_proposal(p(1), None)
+            .await
+            .unwrap()
+            .summary
+            .current_version
     }
 
     async fn status(&self) -> TaskStatus {
@@ -236,8 +252,8 @@ fn agent(name: &str, tags: &[&str]) -> Actor {
 }
 
 #[cfg(test)]
-fn integrator() -> Actor {
-    agent("review", &["integrator"])
+fn review_lead() -> Actor {
+    agent("review", &[])
 }
 
 #[cfg(test)]
@@ -328,7 +344,7 @@ async fn approve_after_request_changes_returns_task_to_review() {
     .unwrap();
     assert_eq!(fx.status().await, TaskStatus::InProgress);
     let approved = fx
-        .submit(&integrator(), Verdict::Approve, "good now", Vec::new())
+        .submit(&review_lead(), Verdict::Approve, "good now", Vec::new())
         .await
         .unwrap();
     assert_eq!(approved.summary.turn, Some(Turn::WithReviewer));
@@ -355,7 +371,7 @@ async fn comment_after_request_changes_leaves_task_in_progress() {
     .await
     .unwrap();
     fx.reviews
-        .add_comment(&human(), p(1), lines("src/lib.rs", Side::New, 2, 2))
+        .add_comment(&human(), p(1), 1, lines("src/lib.rs", Side::New, 2, 2))
         .await
         .unwrap();
     assert_eq!(fx.status().await, TaskStatus::InProgress);
@@ -365,7 +381,7 @@ async fn comment_after_request_changes_leaves_task_in_progress() {
 #[tokio::test]
 async fn new_version_returns_task_to_review_and_starts_unapproved() {
     let fx = Fixture::new().await;
-    fx.submit(&integrator(), Verdict::Approve, "fine", Vec::new())
+    fx.submit(&review_lead(), Verdict::Approve, "fine", Vec::new())
         .await
         .unwrap();
     fx.submit(
@@ -392,7 +408,7 @@ async fn new_version_returns_task_to_review_and_starts_unapproved() {
     );
 
     let approved = fx
-        .submit(&integrator(), Verdict::Approve, "fine", Vec::new())
+        .submit(&review_lead(), Verdict::Approve, "fine", Vec::new())
         .await
         .unwrap();
     assert_eq!(approved.version, 2);
@@ -411,7 +427,12 @@ async fn comment_covers_a_single_line_and_a_range() {
     let fx = Fixture::new().await;
     let single = fx
         .reviews
-        .add_comment(&fx.reviewer(), p(1), lines("src/lib.rs", Side::New, 3, 3))
+        .add_comment(
+            &fx.reviewer(),
+            p(1),
+            1,
+            lines("src/lib.rs", Side::New, 3, 3),
+        )
         .await
         .unwrap();
     assert_eq!(single.id, rc(1));
@@ -467,24 +488,44 @@ async fn comment_covers_a_single_line_and_a_range() {
 async fn old_side_comment_checks_the_base_tree() {
     let fx = Fixture::new().await;
     fx.reviews
-        .add_comment(&fx.reviewer(), p(1), lines("src/lib.rs", Side::Old, 1, 1))
+        .add_comment(
+            &fx.reviewer(),
+            p(1),
+            1,
+            lines("src/lib.rs", Side::Old, 1, 1),
+        )
         .await
         .unwrap();
     let past = refusal(
         fx.reviews
-            .add_comment(&fx.reviewer(), p(1), lines("src/lib.rs", Side::Old, 2, 2))
+            .add_comment(
+                &fx.reviewer(),
+                p(1),
+                1,
+                lines("src/lib.rs", Side::Old, 2, 2),
+            )
             .await,
     );
     assert_eq!(past.code(), codes::INVALID_COMMENT_RANGE);
     let absent = refusal(
         fx.reviews
-            .add_comment(&fx.reviewer(), p(1), lines("src/new.rs", Side::Old, 1, 1))
+            .add_comment(
+                &fx.reviewer(),
+                p(1),
+                1,
+                lines("src/new.rs", Side::Old, 1, 1),
+            )
             .await,
     );
     assert_eq!(absent.code(), codes::UNKNOWN_COMMENT_PATH);
     let added = fx
         .reviews
-        .add_comment(&fx.reviewer(), p(1), lines("src/new.rs", Side::New, 1, 2))
+        .add_comment(
+            &fx.reviewer(),
+            p(1),
+            1,
+            lines("src/new.rs", Side::New, 1, 2),
+        )
         .await
         .unwrap();
     assert_eq!(added.location.unwrap().side, Side::New);
@@ -494,12 +535,35 @@ async fn old_side_comment_checks_the_base_tree() {
 async fn comments_show_outdated_on_a_later_version() {
     let fx = Fixture::new().await;
     fx.reviews
-        .add_comment(&fx.reviewer(), p(1), lines("src/lib.rs", Side::New, 4, 5))
+        .add_comment(
+            &fx.reviewer(),
+            p(1),
+            1,
+            lines("src/lib.rs", Side::New, 4, 5),
+        )
         .await
         .unwrap();
     fx.new_version("pub fn short() {}\n").await;
+    let seq = fx.last_seq().await;
+    let stale = refusal(
+        fx.reviews
+            .add_comment(
+                &fx.reviewer(),
+                p(1),
+                1,
+                lines("src/lib.rs", Side::New, 4, 5),
+            )
+            .await,
+    );
+    assert_eq!(stale.code(), codes::STALE_VERSION);
+    assert_eq!(fx.last_seq().await, seq);
     fx.reviews
-        .add_comment(&fx.reviewer(), p(1), lines("src/lib.rs", Side::New, 1, 1))
+        .add_comment(
+            &fx.reviewer(),
+            p(1),
+            2,
+            lines("src/lib.rs", Side::New, 1, 1),
+        )
         .await
         .unwrap();
 
@@ -518,17 +582,78 @@ async fn comments_show_outdated_on_a_later_version() {
     assert_eq!(error.code(), codes::PROPOSAL_NOT_FOUND);
 }
 
+/// The author adds v2 after the reviewer checked out v1. The approval of the checked-out version is refused before its comments are checked, so it never lands on a version nobody read and nothing is written; the reviewer checks out v2 and approves that.
+#[tokio::test]
+async fn a_version_added_between_the_checkout_and_the_verdict_refuses_the_approval() {
+    let fx = Fixture::new().await;
+    fx.reviews.claim_review(&review_lead(), p(1)).await.unwrap();
+    let checkout = fx
+        .reviews
+        .create_review_checkout(&review_lead(), p(1))
+        .await
+        .unwrap();
+    assert_eq!(checkout.version, 1);
+    fx.new_version("pub fn split() {}\n").await;
+    let seq = fx.last_seq().await;
+
+    let error = refusal(
+        fx.reviews
+            .submit_review(
+                &review_lead(),
+                p(1),
+                checkout.version,
+                Verdict::Approve,
+                "fine",
+                vec![lines("src/lib.rs", Side::New, 5, 5)],
+            )
+            .await,
+    );
+    assert_eq!(error.code(), codes::STALE_VERSION);
+    let details = error.details().unwrap();
+    assert_eq!(details.get("expected_version"), Some(&json!(1)));
+    assert_eq!(details.get("current_version"), Some(&json!(2)));
+    assert_eq!(fx.last_seq().await, seq);
+    assert_eq!(fx.count("SELECT COUNT(*) FROM reviews").await, 0);
+    assert_eq!(fx.count("SELECT COUNT(*) FROM review_comments").await, 0);
+    assert_eq!(fx.turn().await, Some(Turn::WithReviewer));
+
+    let checkout = fx
+        .reviews
+        .create_review_checkout(&review_lead(), p(1))
+        .await
+        .unwrap();
+    assert_eq!(checkout.version, 2);
+    let approved = fx
+        .reviews
+        .submit_review(
+            &review_lead(),
+            p(1),
+            checkout.version,
+            Verdict::Approve,
+            "fine",
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(approved.version, 2);
+}
+
 #[tokio::test]
 async fn reject_closes_the_proposal_with_the_reason() {
     let fx = Fixture::new().await;
     let empty = refusal(
-        fx.submit(&integrator(), Verdict::Reject, "  ", vec![whole("x")])
+        fx.submit(&review_lead(), Verdict::Reject, "  ", vec![whole("x")])
             .await,
     );
     assert_eq!(empty.code(), codes::EMPTY_REVIEW);
     let before = fx.last_seq().await;
     let rejected = fx
-        .submit(&integrator(), Verdict::Reject, "wrong approach", Vec::new())
+        .submit(
+            &review_lead(),
+            Verdict::Reject,
+            "wrong approach",
+            Vec::new(),
+        )
         .await
         .unwrap();
     assert_eq!(rejected.summary.state, ProposalState::Closed);
@@ -562,7 +687,7 @@ async fn author_agent_cannot_comment_or_approve() {
     let actors = [
         fx.author(),
         agent("frontend/other", &[]),
-        agent("frontend", &["integrator"]),
+        agent("frontend", &["review"]),
     ];
     for actor in &actors {
         for verdict in [Verdict::Comment, Verdict::Approve] {
@@ -575,7 +700,7 @@ async fn author_agent_cannot_comment_or_approve() {
         }
         let error = refusal(
             fx.reviews
-                .add_comment(actor, p(1), whole("self review"))
+                .add_comment(actor, p(1), 1, whole("self review"))
                 .await,
         );
         assert_eq!(error.code(), codes::AUTHOR_CANNOT_REVIEW);
@@ -584,7 +709,7 @@ async fn author_agent_cannot_comment_or_approve() {
 }
 
 #[tokio::test]
-async fn approve_needs_integrator_tag() {
+async fn approve_and_reject_need_the_right_to_decide() {
     let fx = Fixture::new().await;
     for verdict in [Verdict::Approve, Verdict::Reject] {
         let error = refusal(fx.submit(&fx.reviewer(), verdict, "ok", Vec::new()).await);
@@ -596,19 +721,20 @@ async fn approve_needs_integrator_tag() {
     );
     assert_eq!(system.code(), codes::HUMAN_REQUIRED);
     let approved = fx
-        .submit(&integrator(), Verdict::Approve, "ok", Vec::new())
+        .submit(&review_lead(), Verdict::Approve, "ok", Vec::new())
         .await
         .unwrap();
     assert_eq!(approved.verdict, Verdict::Approve);
     assert_eq!(fx.status().await, TaskStatus::Review);
+    // An unknown agent has no role and no `main` tag, so its approval is refused before its worker is looked up; a comment reaches the lookup.
     let unregistered = refusal(
-        fx.submit(
-            &agent("ghost", &["integrator"]),
-            Verdict::Approve,
-            "ok",
-            Vec::new(),
-        )
-        .await,
+        fx.submit(&agent("ghost", &[]), Verdict::Approve, "ok", Vec::new())
+            .await,
+    );
+    assert_eq!(unregistered.code(), codes::INTEGRATOR_REQUIRED);
+    let unregistered = refusal(
+        fx.submit(&agent("ghost", &[]), Verdict::Comment, "ok", Vec::new())
+            .await,
     );
     assert_eq!(unregistered.code(), codes::WORKER_NOT_FOUND);
 }
@@ -652,6 +778,7 @@ async fn range_past_end_of_file_is_refused() {
                 .add_comment(
                     &fx.reviewer(),
                     p(1),
+                    1,
                     lines("src/lib.rs", Side::New, start, end),
                 )
                 .await,
@@ -659,7 +786,12 @@ async fn range_past_end_of_file_is_refused() {
         assert_eq!(error.code(), codes::INVALID_COMMENT_RANGE, "{start}-{end}");
     }
     fx.reviews
-        .add_comment(&fx.reviewer(), p(1), lines("src/lib.rs", Side::New, 5, 5))
+        .add_comment(
+            &fx.reviewer(),
+            p(1),
+            1,
+            lines("src/lib.rs", Side::New, 5, 5),
+        )
         .await
         .unwrap();
     assert_eq!(fx.count("SELECT COUNT(*) FROM review_comments").await, 1);
@@ -678,7 +810,7 @@ async fn only_text_files_inside_the_tree_take_line_comments() {
     ] {
         let error = refusal(
             fx.reviews
-                .add_comment(&fx.reviewer(), p(1), lines(path, Side::New, 1, 1))
+                .add_comment(&fx.reviewer(), p(1), 1, lines(path, Side::New, 1, 1))
                 .await,
         );
         assert_eq!(error.code(), code, "{path:?}");
@@ -701,7 +833,7 @@ async fn only_text_files_inside_the_tree_take_line_comments() {
     assert_eq!(error.code(), codes::INVALID_REQUEST);
     let missing = refusal(
         fx.reviews
-            .submit_review(&fx.reviewer(), p(9), Verdict::Comment, "x", Vec::new())
+            .submit_review(&fx.reviewer(), p(9), 1, Verdict::Comment, "x", Vec::new())
             .await,
     );
     assert_eq!(missing.code(), codes::PROPOSAL_NOT_FOUND);
@@ -713,10 +845,10 @@ async fn only_text_files_inside_the_tree_take_line_comments() {
 async fn latest_verdict_agrees_with_the_status_cache() {
     let fx = Fixture::new().await;
     let steps = [
-        (integrator(), Verdict::Comment),
+        (review_lead(), Verdict::Comment),
         (fx.reviewer(), Verdict::RequestChanges),
         (human(), Verdict::Comment),
-        (integrator(), Verdict::Approve),
+        (review_lead(), Verdict::Approve),
         (fx.reviewer(), Verdict::RequestChanges),
         (human(), Verdict::Approve),
     ];
@@ -802,13 +934,13 @@ async fn review_events_commit_with_their_rows() {
     assert_eq!(fx.count("SELECT COUNT(*) FROM review_comments").await, 2);
     let next = fx
         .reviews
-        .add_comment(&fx.reviewer(), p(1), whole("after"))
+        .add_comment(&fx.reviewer(), p(1), 1, whole("after"))
         .await
         .unwrap();
     assert_eq!(next.id, rc(3));
 }
 
-/// A version added after the comment ranges were checked and before the review's transaction has other trees, so the review is refused instead of being filed against a version whose files it did not check. Nothing of the review is written, and the same review on the new version goes through.
+/// A version added after the comment ranges were checked and before the review's transaction has other trees, so the review of the version the reviewer read is refused with `stale_version` instead of being filed against a version whose files it did not check. Nothing of the review is written, and the same review on the new version goes through.
 #[cfg(feature = "failpoints")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_version_added_after_the_range_check_refuses_the_review() {
@@ -834,6 +966,7 @@ async fn a_version_added_after_the_range_check_refuses_the_review() {
             .submit_review(
                 &reviewer,
                 p(1),
+                1,
                 Verdict::RequestChanges,
                 "",
                 vec![lines("src/lib.rs", Side::New, 5, 5)],
@@ -854,10 +987,9 @@ async fn a_version_added_after_the_range_check_refuses_the_review() {
     fail::remove(FAILPOINT);
     scenario.teardown();
 
-    assert_eq!(error.code(), codes::INVALID_REQUEST);
+    assert_eq!(error.code(), codes::STALE_VERSION);
     let details = error.details().unwrap();
-    assert_eq!(details.get("reason"), Some(&json!("version_changed")));
-    assert_eq!(details.get("version"), Some(&json!(1)));
+    assert_eq!(details.get("expected_version"), Some(&json!(1)));
     assert_eq!(details.get("current_version"), Some(&json!(2)));
     assert_eq!(fx.last_seq().await, seq);
     assert_eq!(fx.count("SELECT COUNT(*) FROM reviews").await, 0);
@@ -885,4 +1017,67 @@ async fn a_version_added_after_the_range_check_refuses_the_review() {
         .unwrap();
     assert_eq!(submitted.version, 2);
     assert_eq!(fx.status().await, TaskStatus::InProgress);
+}
+
+/// A version added after a checkout's files were written and before its transaction leaves those files at the old version, so the checkout is refused with `stale_version`: no row names it and its directory is removed. The next call checks out the new version.
+#[cfg(feature = "failpoints")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_version_added_while_a_checkout_is_written_refuses_the_checkout() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    const FAILPOINT: &str = "review_checkout_after_files";
+    let fx = Fixture::new().await;
+    fx.reviews.claim_review(&review_lead(), p(1)).await.unwrap();
+    let scenario = fail::FailScenario::setup();
+    let reached = Arc::new(AtomicBool::new(false));
+    let open = Arc::new(AtomicBool::new(false));
+    let (held_reached, held_open) = (reached.clone(), open.clone());
+    fail::cfg_callback(FAILPOINT, move || {
+        held_reached.store(true, Ordering::SeqCst);
+        while !held_open.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    })
+    .unwrap();
+    let reviews = fx.reviews.clone();
+    let checkout =
+        tokio::spawn(async move { reviews.create_review_checkout(&review_lead(), p(1)).await });
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while !reached.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    fx.new_version("pub fn a() {}\n").await;
+    let seq = fx.last_seq().await;
+    open.store(true, Ordering::SeqCst);
+    let error = refusal(checkout.await.unwrap());
+    fail::remove(FAILPOINT);
+    scenario.teardown();
+
+    assert_eq!(error.code(), codes::STALE_VERSION);
+    let details = error.details().unwrap();
+    assert_eq!(details.get("expected_version"), Some(&json!(1)));
+    assert_eq!(details.get("current_version"), Some(&json!(2)));
+    assert_eq!(fx.last_seq().await, seq);
+    assert_eq!(
+        fx.count("SELECT COUNT(*) FROM workspaces WHERE kind = 'review'")
+            .await,
+        0
+    );
+    assert!(
+        !fx.project
+            .paths()
+            .root()
+            .join(".fold/ws/review-p-1")
+            .exists()
+    );
+
+    let checkout = fx
+        .reviews
+        .create_review_checkout(&review_lead(), p(1))
+        .await
+        .unwrap();
+    assert_eq!(checkout.version, 2);
 }

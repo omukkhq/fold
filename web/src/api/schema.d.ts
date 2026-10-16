@@ -107,24 +107,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/projects/{slug}/agents/{name}/tags/integrator": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /** Grants the integrator tag. Only a named human reaches this route; granting a present tag changes nothing. */
-        put: operations["grant_integrator"];
-        post?: never;
-        /** Removes the integrator tag. Only a named human reaches this route; removing an absent tag changes nothing. */
-        delete: operations["revoke_integrator"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/projects/{slug}/areas": {
         parameters: {
             query?: never;
@@ -392,7 +374,7 @@ export interface paths {
         /** The comments of a proposal in number order, each marked outdated when it was made on an earlier version. */
         get: operations["list_review_comments"];
         put?: never;
-        /** Adds one human comment to the current version, as a `comment` review; it never changes whose turn it is. */
+        /** Adds one human comment to the version the human read, as a `comment` review; it never changes whose turn it is. */
         post: operations["add_review_comment"];
         delete?: never;
         options?: never;
@@ -443,7 +425,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** A human verdict on the current version with line comments. `request_changes` gives the turn to the author, `approve` counts for integration and `reject` closes the proposal. */
+        /** A human verdict on the version the human read, with line comments. `request_changes` gives the turn to the author, `approve` counts for integration and `reject` closes the proposal. */
         post: operations["submit_review"];
         delete?: never;
         options?: never;
@@ -663,7 +645,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The project's active review checkouts with their worker, directory and proposal version. */
+        /** The project's active review checkouts, of one proposal or of a review batch, with their worker, directory and the proposal versions they hold. */
         get: operations["list_review_checkouts"];
         put?: never;
         post?: never;
@@ -1110,6 +1092,14 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description One comment on the version the human read, as its own `comment` review. */
+        AddCommentBody: components["schemas"]["CommentBody"] & {
+            /**
+             * Format: int32
+             * @description The version the human read and commented on. When the current version is another one, nothing is written and the answer is `stale_version`.
+             */
+            version: number;
+        };
         /** @description One attention item of a task the agent holds a claim on; `kind` is `stalled` or `stale_claim`. */
         AgentAttentionItem: {
             kind: components["schemas"]["AttentionKind"];
@@ -1122,11 +1112,6 @@ export interface components {
             attention: components["schemas"]["AgentAttentionItem"][];
             /** @description The newest events the agent's workers performed, newest first; empty unless `events` is asked for. */
             events: components["schemas"]["DurableEvent"][];
-            /**
-             * @description The actor that granted the `integrator` tag, such as `human:tanim`; null without the tag or when the tag records no granter.
-             * @example human:tanim
-             */
-            integrator_granted_by: string | null;
             /**
              * Format: int64
              * @description UTC milliseconds of the newest call of any of the agent's sessions; null before the first.
@@ -1167,11 +1152,6 @@ export interface components {
              * @description UTC milliseconds.
              */
             started_at: number;
-        };
-        AgentTagList: {
-            agent: string;
-            /** @description Every tag of the agent after the change, sorted. */
-            tags: string[];
         };
         AnswerWorkerQuestionBody: {
             behavior: components["schemas"]["Behavior"];
@@ -1733,7 +1713,7 @@ export interface components {
             workspace: string | null;
         };
         /** @enum {string} */
-        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back";
+        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed";
         /**
          * @description `needs`: this task needs the other task. `needed_by`: the other task needs this one.
          * @enum {string}
@@ -2267,6 +2247,8 @@ export interface components {
         };
         /** @description A proposal as the requesting human sees it. */
         ProposalDetail: {
+            /** @description A reviewer agent (the main agent, the review lead or a batch reviewer) approved the current version and no request for changes came after it. On a task with the human review mark a human approves only then; otherwise the approval is `agent_approval_required`. */
+            agent_approved: boolean;
             comments: components["schemas"]["CommentCounts"];
             conflict: components["schemas"]["ConflictReportView"] | null;
             /** @description The files the selected version changes against its base, in path order. */
@@ -2754,21 +2736,52 @@ export interface components {
              */
             version: number;
         };
-        /** @description A human verdict on the current version. The web screens offer approve, request changes and comment; the route also takes reject, which closes the proposal. */
+        /** @description A human verdict on the version the human read. The web screens offer approve, request changes and comment; the route also takes reject, which closes the proposal. */
         ReviewBody: {
             /** @description May be empty only when the review carries a comment; a reject needs it. */
             body: string;
             comments?: components["schemas"]["CommentBody"][];
             verdict: components["schemas"]["ReviewVerdict"];
+            /**
+             * Format: int32
+             * @description The version the human read. When the current version is another one, nothing is written and the answer is `stale_version`.
+             */
+            version: number;
         };
         ReviewCheckoutList: {
             /** @description The active review checkouts, oldest first. */
             checkouts: components["schemas"]["ReviewCheckoutView"][];
         };
-        /** @description A read-only checkout of a proposal version for its reviewer. The daemon records no command run in it. */
+        /** @description A member of a batch checkout at the version it joined the batch with. */
+        ReviewCheckoutMember: {
+            /** @example P-4 */
+            proposal: string;
+            /** Format: int32 */
+            version: number;
+        };
+        /** @description One proposal version, or the members of a review batch merged onto main. */
+        ReviewCheckoutTarget: {
+            /** @enum {string} */
+            kind: "proposal";
+            /** @example P-4 */
+            proposal: string;
+            /**
+             * Format: int32
+             * @description The proposal version the checkout holds.
+             */
+            version: number;
+        } | {
+            /** @example rb-3 */
+            batch: string;
+            /** @enum {string} */
+            kind: "batch";
+            /** @description The members the checkout holds, in merge order. */
+            members: components["schemas"]["ReviewCheckoutMember"][];
+        };
+        /** @description A read-only checkout of a proposal version, or of a review batch, for its reviewer. The daemon records no command run in it. */
         ReviewCheckoutView: {
             /**
-             * @description The base revision of the version.
+             * @description The base revision: the version's base for a proposal checkout, the revision of main the members were merged onto for a batch checkout.
              * @example r17
              */
             base: string;
@@ -2777,15 +2790,10 @@ export interface components {
              * @description UTC milliseconds.
              */
             created_at: number;
-            /** @description Relative to the project root, such as `.fold/ws/review-p-4`. */
+            /** @description Relative to the project root, such as `.fold/ws/review-p-4` or `.fold/ws/review-rb-3`. */
             path: string;
-            /** @example P-4 */
-            proposal: string;
-            /**
-             * Format: int32
-             * @description The proposal version the checkout holds.
-             */
-            version: number;
+            /** @description What the checkout's files hold. */
+            target: components["schemas"]["ReviewCheckoutTarget"];
             /** @description The review worker that owns the checkout, such as `review/ci`. */
             worker: string | null;
             /** @example ws-12 */
@@ -4068,164 +4076,6 @@ export interface operations {
             };
         };
     };
-    grant_integrator: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The project slug */
-                slug: string;
-                /** @description The agent name */
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The agent's tags after the grant */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AgentTagList"];
-                };
-            };
-            /** @description `invalid_name`: the human or agent name breaks the name pattern */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description `human_required`: the actor is not a human; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description `agent_not_found` or `project_not_found` */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Internal error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description The project failed to open */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    revoke_integrator: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The project slug */
-                slug: string;
-                /** @description The agent name */
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The agent's tags after the removal */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AgentTagList"];
-                };
-            };
-            /** @description `invalid_name`: the human or agent name breaks the name pattern */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description `human_required`: the actor is not a human; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description `agent_not_found` or `project_not_found` */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Internal error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description The project failed to open */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
     define_area: {
         parameters: {
             query?: never;
@@ -5460,7 +5310,7 @@ export interface operations {
             query?: {
                 /** @description Only proposals in this state. */
                 state?: components["schemas"]["ProposalStateView"];
-                /** @description Only proposals without a review claim. */
+                /** @description Only proposals that no reviewer holds; a review claim whose lease has run out counts as unclaimed. */
                 unclaimed?: boolean;
             };
             header?: never;
@@ -5724,7 +5574,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["CommentBody"];
+                "application/json": components["schemas"]["AddCommentBody"];
             };
         };
         responses: {
@@ -5773,7 +5623,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `proposal_not_open` or `task_closed` */
+            /** @description `stale_version` (`details.expected_version`, `details.current_version`), `proposal_not_open` or `task_closed` */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -5960,7 +5810,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description A gate refusal: `stale_version` (`details.expected_version`, `details.current_version`), `changes_requested`, `not_approved`, `human_approval_missing` (`details.reviewer`), `prerequisites_not_done` (`details.prerequisites`); or `proposal_not_open`, `integration_conflicted` (`details.files`: path and kind), `head_moved` */
+            /** @description A gate refusal: `stale_version` (`details.expected_version`, `details.current_version`), `changes_requested`, `not_approved`, `human_approval_missing` (`details.reviewer`), `agent_approval_required` (a marked task whose version no reviewer agent approved), `prerequisites_not_done` (`details.prerequisites`); or `proposal_not_open`, `integration_conflicted` (`details.files`: path and kind), `head_moved` */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -6016,7 +5866,7 @@ export interface operations {
                     "application/json": components["schemas"]["SubmittedReview"];
                 };
             };
-            /** @description `invalid_request` (`details.field` names the field; `details.reason` is `version_changed` when a version arrived during the review), `invalid_path`, `invalid_id` or `invalid_name` */
+            /** @description `invalid_request` (`details.field` names the field), `invalid_path`, `invalid_id` or `invalid_name` */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -6052,7 +5902,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `proposal_not_open` or `task_closed` */
+            /** @description `stale_version` (`details.expected_version`, `details.current_version`), `agent_approval_required` (a human's approve on a task with the human review mark before a reviewer agent approved the version), `proposal_not_open` or `task_closed` */
             409: {
                 headers: {
                     [name: string]: unknown;

@@ -1,7 +1,8 @@
 #![cfg(test)]
 
-use crate::proposal_tools_support::{Fixture, human, t};
-use fold_core::AgentName;
+use crate::common::roles::give_role;
+use crate::proposal_tools_support::{Fixture, t};
+use fold_core::roles::Role;
 use fold_daemon::mcp::FoldServer;
 use fold_daemon::services::events::EventService;
 use fold_daemon::services::messages::MessageService;
@@ -95,10 +96,7 @@ async fn a_reviewer_batches_checks_out_and_reviews_two_proposals_through_the_too
     let fx = Fixture::new().await;
     two_proposals(&fx).await;
     let review = connect(&fx, "review").await;
-    fx.agents()
-        .set_integrator(&human("tanim"), &AgentName::parse("review").unwrap(), true)
-        .await
-        .unwrap();
+    give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
 
     let created = ok(
         &review,

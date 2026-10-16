@@ -151,10 +151,11 @@ async fn acceptance_5_backend_proposal_is_reviewed_and_integrated_with_no_card_m
     assert_eq!(done.data["to"], "done");
 }
 
-/// Acceptance 5, human case: on a project where no agent carries `integrator`, a named human integrates over `review`'s earlier `request_changes` through the HTTP route. The integration counts as the human's approval of that version; an agent without the tag is still refused.
+/// Acceptance 5, human case: on a project with no main agent and no review lead, where `review` is a session opened without a role and may not approve or integrate, a named human integrates over `review`'s earlier `request_changes` through the HTTP route. The integration counts as the human's approval of that version; an agent without the right to decide is still refused.
 #[tokio::test]
-async fn acceptance_5_named_human_integrates_without_a_tag_over_an_earlier_request_changes() {
-    let harness = Harness::start_untagged().await;
+async fn acceptance_5_named_human_integrates_without_an_agent_approval_over_an_earlier_request_changes()
+ {
+    let harness = Harness::start_without_roles().await;
     let agents = harness.call("review", "list_agents", json!({})).await;
     assert!(
         agents["agents"]
@@ -177,7 +178,7 @@ async fn acceptance_5_named_human_integrates_without_a_tag_over_an_earlier_reque
         .call(
             "review",
             "submit_review",
-            json!({"id": proposal, "verdict": "request_changes", "body": "Add a test."}),
+            json!({"id": proposal, "version": 1, "verdict": "request_changes", "body": "Add a test."}),
         )
         .await;
     assert_eq!(requested["verdict"], "request_changes");

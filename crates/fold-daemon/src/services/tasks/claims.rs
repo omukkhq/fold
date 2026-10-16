@@ -13,7 +13,7 @@ use tokio::sync::OwnedMutexGuard;
 
 use super::{TaskError, TaskService, recompute, task_not_found};
 use crate::services::events::EventBuffer;
-use crate::services::workspaces::{AdoptReason, adopt_if_orphaned};
+use crate::services::workspaces::{AdoptReason, adopt_if_orphaned, hand_over_proposal};
 
 /// The implementation claim on a task as callers see it. `stale` is computed at read time from the project's lease.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,7 +156,7 @@ impl TaskService {
         Ok(())
     }
 
-    /// Moves the stale implementation claim on `task` and the task's live workspace to the actor's worker in one transaction: the old claim is released with `taken_over`, the new one inserted, `claim.taken_over` names both workers, and the workspace is adopted with `workspace.adopted`. Only the workspace's owner changes; its directory and files stay as they are. A claim whose lease has not run out is refused with `claim_not_stale`.
+    /// Moves the stale implementation claim on `task`, the task's live workspace and its open proposal to the actor's worker in one transaction: the old claim is released with `taken_over`, the new one inserted, `claim.taken_over` names both workers, the workspace is adopted with `workspace.adopted`, and the proposal changes author with `proposal.author_changed`. Only the workspace's owner changes; its directory and files stay as they are. A claim whose lease has not run out is refused with `claim_not_stale`.
     pub async fn takeover_claim(&self, actor: &Actor, task: TaskId) -> Result<Claimed, TaskError> {
         let claimant = policy::can_claim(actor).map_err(FoldError::from)?;
         let now = self.clock.now();
@@ -388,13 +388,14 @@ async fn takeover_in_tx(
             "to": worker.name.as_str(),
         }))?;
     buffer.append(tx, &event, now).await?;
+    let reason = AdoptReason::TakenOver;
     let adopted = match workspace {
         Some(workspace) => {
-            let reason = AdoptReason::TakenOver;
             adopt_if_orphaned(tx, buffer, task, workspace, worker, reason, now).await?
         }
         None => None,
     };
+    hand_over_proposal(tx, buffer, task, worker, reason, now).await?;
     buffer.extend(recompute(tx, &[task], now).await?.events);
     let was_adopted = adopted.is_some();
     let workspace = holder_workspace(tx, task, worker, adopted).await?;

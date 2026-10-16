@@ -269,11 +269,17 @@ async fn the_store_functions_open_version_and_retire_a_proposal() {
     )
     .await
     .unwrap();
-    let unclaimed = reviews::list_proposals(store.read(), None, true)
+    let live_at = Timestamp::from_millis(-1).unwrap();
+    let unclaimed = reviews::list_proposals(store.read(), None, Some(live_at))
         .await
         .unwrap();
     assert!(unclaimed.is_empty());
-    let claimed = reviews::list_proposals(store.read(), Some(ProposalState::Open), false)
+    let stale_at = Timestamp::from_millis(0).unwrap();
+    let stale = reviews::list_proposals(store.read(), None, Some(stale_at))
+        .await
+        .unwrap();
+    assert_eq!(stale.iter().map(|row| row.id).collect::<Vec<_>>(), [p(1)]);
+    let claimed = reviews::list_proposals(store.read(), Some(ProposalState::Open), None)
         .await
         .unwrap();
     assert_eq!(
@@ -308,7 +314,7 @@ async fn the_store_functions_open_version_and_retire_a_proposal() {
     assert_eq!(row.close_reason.as_deref(), Some("replaced"));
     assert_eq!(row.closed_at, Some(later));
     assert!(
-        reviews::list_proposals(store.read(), Some(ProposalState::Open), false)
+        reviews::list_proposals(store.read(), Some(ProposalState::Open), None)
             .await
             .unwrap()
             .is_empty()

@@ -146,6 +146,7 @@ describe("human writes", () => {
       },
     });
     const stored = await addComment("demo", "P-4", {
+      version: 2,
       path: "migrations/0004_reports.sql",
       side: "new",
       start_line: 2,
@@ -155,6 +156,7 @@ describe("human writes", () => {
     });
     expect(stored.id).toBe("rc-9");
     expect(calls[0]?.body).toEqual({
+      version: 2,
       path: "migrations/0004_reports.sql",
       side: "new",
       start_line: 2,
@@ -178,12 +180,14 @@ describe("human writes", () => {
       },
     });
     const answer = await submitReview("demo", "P-4", {
+      version: 2,
       verdict: "approve",
       body: "ok",
       comments: [],
     });
     expect(answer.version).toBe(2);
     expect(calls[0]?.body).toEqual({
+      version: 2,
       verdict: "approve",
       body: "ok",
       comments: [],

@@ -20,6 +20,18 @@ async fn nothing_before_a_message(h: &Harness, inbox: &mut FakeInbox, agent: &st
     expect(inbox, &message_notice(&message)).await;
 }
 
+/// Makes `agent` the lead of an area, as if the main agent had started it as one.
+#[cfg(test)]
+async fn lead_an_area(h: &Harness, agent: &str) {
+    crate::common::roles::give_role(
+        &h.handle.store,
+        agent,
+        fold_core::roles::Role::AreaLead,
+        None,
+    )
+    .await;
+}
+
 #[cfg(test)]
 fn cards() -> Value {
     json!([
@@ -36,6 +48,7 @@ fn draft(id: &str) -> Value {
 #[tokio::test]
 async fn each_request_step_pushes_the_agent_that_acts_next() {
     let h = Harness::start().await;
+    lead_an_area(&h, "backend").await;
     let mut frontend = h.register_inbox("frontend").await;
     let mut backend = h.register_inbox("backend").await;
     let mut review = h.register_inbox("review").await;
@@ -46,9 +59,9 @@ async fn each_request_step_pushes_the_agent_that_acts_next() {
         json!({"body": "The board is slow"}),
     )
     .await;
+    // The area lead `backend` hears of it; the review lead `review` drafts no request.
     let created = "fold: RQ-1 created. Call claim_request.";
     expect(&mut backend, created).await;
-    expect(&mut review, created).await;
 
     h.call(
         "backend",
@@ -103,8 +116,10 @@ async fn each_request_step_pushes_the_agent_that_acts_next() {
 }
 
 #[tokio::test]
-async fn a_human_request_reaches_every_agent_and_own_steps_push_nothing() {
+async fn a_human_request_reaches_the_main_agent_and_every_area_lead_and_own_steps_push_nothing() {
     let h = Harness::start().await;
+    h.make_main("frontend").await;
+    lead_an_area(&h, "backend").await;
     let mut frontend = h.register_inbox("frontend").await;
     let mut backend = h.register_inbox("backend").await;
     let mut review = h.register_inbox("review").await;
@@ -118,7 +133,6 @@ async fn a_human_request_reaches_every_agent_and_own_steps_push_nothing() {
     let created = "fold: RQ-1 created. Call claim_request.";
     expect(&mut frontend, created).await;
     expect(&mut backend, created).await;
-    expect(&mut review, created).await;
 
     h.call(
         "frontend",
@@ -133,6 +147,12 @@ async fn a_human_request_reaches_every_agent_and_own_steps_push_nothing() {
         .approve_request_draft(&ana, "RQ-1".parse().unwrap(), 1)
         .await
         .unwrap();
+    // As the main agent, `frontend` first hears that the card without an area is ready.
+    expect(
+        &mut frontend,
+        "fold: T-1 is ready and has no area. Call update_task.",
+    )
+    .await;
     expect(
         &mut frontend,
         "fold: RQ-1 approved as T-1, T-2. Call get_ready_tasks.",
@@ -147,7 +167,6 @@ async fn a_human_request_reaches_every_agent_and_own_steps_push_nothing() {
     .await;
     let created = "fold: RQ-2 created. Call claim_request.";
     expect(&mut frontend, created).await;
-    expect(&mut review, created).await;
     h.call(
         "backend",
         "claim_request",

@@ -51,6 +51,7 @@ describe("proposal keys and the event stream", () => {
   it.each([
     "proposal.opened",
     "proposal.version_added",
+    "proposal.author_changed",
     "proposal.closed",
     "review.submitted",
     "review.comment_added",

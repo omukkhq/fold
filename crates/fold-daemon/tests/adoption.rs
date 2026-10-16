@@ -40,6 +40,60 @@ async fn released_workspace(fx: &Fixture) {
     assert_eq!(fx.move_main(b"pub fn y() {}\n").await, r(2));
 }
 
+/// A worker that released its claim while its proposal waits for review leaves the proposal with the workspace: the next claimant adopts both and can add the next version.
+#[tokio::test]
+async fn the_next_claimant_takes_over_the_open_proposal_with_the_workspace() {
+    let fx = Fixture::new().await;
+    let reviews = fx.reviews();
+    fx.workspaces
+        .create_workspace(&by(&fx.frontend), t(1))
+        .await
+        .unwrap();
+    let dir = fx.dir(".fold/ws/t-1");
+    fs::write(dir.join("src/lib.rs"), EDITED).unwrap();
+    let proposal = reviews
+        .create_proposal(&by(&fx.frontend), t(1), "Edit the lib", None)
+        .await
+        .unwrap()
+        .summary
+        .id;
+    fx.tasks
+        .release_task(&by(&fx.frontend), t(1))
+        .await
+        .unwrap();
+    let seq = fx.last_seq().await;
+
+    fx.tasks.claim_task(&by(&fx.backend), t(1)).await.unwrap();
+    let appended = fx.events_after(seq).await;
+    assert_eq!(
+        names(&appended),
+        vec![
+            "claim.acquired",
+            "workspace.adopted",
+            "proposal.author_changed"
+        ]
+    );
+    assert_eq!(appended[2].proposal, Some(proposal));
+    assert_eq!(
+        appended[2].data,
+        json!({"reason": "released", "from": "frontend", "to": "backend"})
+    );
+    fs::write(dir.join("src/lib.rs"), b"pub fn x() { done() }\n").unwrap();
+    let updated = reviews
+        .update_proposal(&by(&fx.backend), proposal, None)
+        .await
+        .unwrap();
+    assert_eq!(updated.summary.current_version, 2);
+    assert_eq!(updated.summary.author, fx.backend.name);
+
+    let seq = fx.last_seq().await;
+    fx.tasks.claim_task(&by(&fx.backend), t(1)).await.unwrap();
+    assert!(
+        fx.events_after(seq).await.is_empty(),
+        "a repeat claim by the author hands nothing over"
+    );
+}
+
 #[tokio::test]
 async fn the_next_claimant_adopts_the_released_workspace_as_it_is() {
     let fx = Fixture::new().await;

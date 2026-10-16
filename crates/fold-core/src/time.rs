@@ -9,7 +9,7 @@ use time::format_description::well_known::Rfc3339;
 use crate::error::{FoldError, codes};
 
 /// `0000-01-01T00:00:00.000Z`.
-const MIN_MILLIS: i64 = -62_167_219_200_000;
+pub(crate) const MIN_MILLIS: i64 = -62_167_219_200_000;
 /// `9999-12-31T23:59:59.999Z`.
 const MAX_MILLIS: i64 = 253_402_300_799_999;
 

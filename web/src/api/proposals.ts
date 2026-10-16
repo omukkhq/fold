@@ -28,7 +28,7 @@ export type ConflictReport = Schemas["ConflictReportView"];
 export type ProposalDetail = Schemas["ProposalDetail"];
 export type ComparisonTotals = Schemas["ComparisonTotals"];
 /** A line comment, or a comment on the version as a whole when the four range fields are absent. */
-export type NewComment = Schemas["CommentBody"];
+export type NewComment = Schemas["AddCommentBody"];
 export type NewReview = Schemas["ReviewBody"];
 export type SubmittedReview = Schemas["SubmittedReview"];
 export type IntegrationResult = Schemas["IntegrationResult"];
@@ -123,7 +123,7 @@ export async function listComments(
   return comments;
 }
 
-/** The daemon stores the comment on the current version as a `comment` review of its own. */
+/** The daemon stores the comment as a `comment` review of its own on `comment.version`, the version the human read; another current version rejects with `stale_version`. */
 export async function addComment(
   slug: string,
   id: string,
@@ -137,7 +137,7 @@ export async function addComment(
   );
 }
 
-/** A verdict on the current version; rejects with the daemon's codes, such as `empty_review`. */
+/** A verdict on `review.version`, the version the human read; rejects with the daemon's codes, such as `stale_version` or `empty_review`. */
 export async function submitReview(
   slug: string,
   id: string,

@@ -581,10 +581,10 @@ async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError
             ctx.drafter = row.drafter.map(|drafter| drafter.worker.agent());
         }
         if kind == fold_core::events::types::REQUEST_CREATED {
-            ctx.agents = agents::list_agents(store.read())
+            ctx.area_leads = agents::list_areas(store.read())
                 .await?
                 .into_iter()
-                .map(|agent| agent.name)
+                .filter_map(|area| area.lead)
                 .collect();
             ctx.main_agents = tagged(store, Tag::is_main).await?;
         }
@@ -629,7 +629,7 @@ async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError
     if kind != fold_core::events::types::INTEGRATION_CONFLICTED
         && kind != fold_core::events::types::INTEGRATION_SUCCEEDED
     {
-        ctx.integrators = tagged(store, Tag::is_integrator).await?;
+        ctx.review_leads = review_leads(store).await?;
     }
     Ok(ctx)
 }
@@ -666,6 +666,17 @@ async fn integrated_reviewer(
     };
     let reviews = reviews::review_facts(store.read(), proposal, version).await?;
     Ok(fold_core::reviews::standing_agent_approval(&reviews))
+}
+
+/// The agents that fold started as the review lead.
+async fn review_leads(store: &Store) -> Result<std::collections::BTreeSet<AgentName>, StoreError> {
+    let mut conn = store.read().acquire().await?;
+    Ok(agents::list_worker_processes(&mut conn)
+        .await?
+        .into_iter()
+        .filter(|process| process.role == fold_core::roles::Role::ReviewLead)
+        .map(|process| process.agent)
+        .collect())
 }
 
 /// The agents with a tag `is_tag` accepts.

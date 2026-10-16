@@ -605,7 +605,7 @@ async fn other_foreign_keys_are_enforced() {
     let (_dir, store) = seeded().await;
     for sql in [
         "INSERT INTO workers (agent_id, name, created_at) VALUES (99, 'ghost', 0)",
-        "INSERT INTO agent_tags (agent_id, tag, created_at) VALUES (99, 'integrator', 0)",
+        "INSERT INTO agent_tags (agent_id, tag, created_at) VALUES (99, 'review', 0)",
         "INSERT INTO proposals (number, task_id, author_worker_id, title, created_at, updated_at) VALUES (9, 99, 1, 'p', 0, 0)",
         "INSERT INTO workspaces (number, task_id, kind, path, base_revision_id, state, created_at) VALUES (9, 2, 'task', 'p', 99, 'active', 0)",
         "INSERT INTO refs (name, revision_id) VALUES ('main', 99)",

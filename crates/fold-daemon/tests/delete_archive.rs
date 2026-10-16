@@ -91,7 +91,7 @@ impl Fixture {
             .await;
         fixture
             .run(
-                "INSERT INTO workers (id, agent_id, name, created_at) VALUES (1, 1, 'api', 1)",
+                "INSERT INTO workers (id, agent_id, name, created_at) VALUES (1, 1, 'backend/api', 1)",
                 &[],
             )
             .await;
@@ -542,7 +542,7 @@ async fn archive_removes_edges_and_linked_items_archives_the_workspace_releases_
     assert_eq!(released.len(), 1);
     assert_eq!(
         released[0].data,
-        json!({"kind": "implementation", "worker": "api", "reason": "task_archived"})
+        json!({"kind": "implementation", "worker": "backend/api", "reason": "task_archived"})
     );
     assert_eq!(of_type(&appended, types::DEPENDENCY_REMOVED).len(), 3);
     let items = of_type(&appended, types::CHECKLIST_ITEM_REMOVED);
@@ -718,4 +718,83 @@ async fn delete_after_a_missing_workspace_is_refused() {
     assert_eq!(code, "invalid_request");
     assert_eq!(details["reason"], json!("task_has_history"));
     assert_eq!(details["history"], json!(["workspace"]));
+}
+
+/// The linked items for T-1 on each owner's checklist, by owner number.
+#[cfg(test)]
+async fn linked_owners(fx: &Fixture) -> Vec<i64> {
+    sqlx::query_scalar(
+        "SELECT o.number FROM checklist_items i
+         JOIN checklists c ON c.id = i.checklist_id JOIN tasks o ON o.id = c.task_id
+         JOIN tasks l ON l.id = i.linked_task_id
+         WHERE l.number = 1 ORDER BY o.number",
+    )
+    .fetch_all(fx.project.store().read())
+    .await
+    .unwrap()
+}
+
+/// The tasks with a checklist edge to T-1, by number.
+#[cfg(test)]
+async fn checklist_edges(fx: &Fixture) -> Vec<i64> {
+    sqlx::query_scalar(
+        "SELECT o.number FROM dependencies d JOIN tasks o ON o.id = d.task_id
+         JOIN tasks n ON n.id = d.needs_task_id
+         WHERE n.number = 1 AND d.origin = 'checklist' ORDER BY o.number",
+    )
+    .fetch_all(fx.project.store().read())
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn archiving_a_task_keeps_the_linked_item_of_a_done_owner_and_removes_the_others() {
+    // T-2 and T-3 both link T-1; T-3 is Done, so its checklist is locked.
+    let fx = Fixture::new(3).await;
+    fx.linked_item(2, 1).await;
+    fx.linked_item(3, 1).await;
+    fx.complete(3).await;
+    assert_eq!(fx.status(3).await, Done);
+    let before = fx.head().await;
+
+    fx.tasks.archive_task(&agent(), t(1)).await.unwrap();
+
+    assert_eq!(linked_owners(&fx).await, [3]);
+    assert_eq!(checklist_edges(&fx).await, [3]);
+    assert_eq!(fx.status(3).await, Done);
+    let appended = fx.events_after(before).await;
+    let items = of_type(&appended, types::CHECKLIST_ITEM_REMOVED);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].task, Some(t(2)));
+    let edges = of_type(&appended, types::DEPENDENCY_REMOVED);
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0].task, Some(t(2)));
+}
+
+#[tokio::test]
+async fn deleting_a_task_a_done_owner_links_is_refused_and_changes_nothing() {
+    let fx = Fixture::new(3).await;
+    fx.linked_item(2, 1).await;
+    fx.linked_item(3, 1).await;
+    fx.complete(3).await;
+    let before = fx.head().await;
+
+    let (code, details, hint) = refusal(fx.tasks.delete_task(&agent(), t(1)).await.unwrap_err());
+
+    assert_eq!(code, "task_closed");
+    assert_eq!(
+        details,
+        json!({"reason": "done_checklist", "task": "T-1", "owner": "T-3"})
+    );
+    assert!(hint.contains("archive_task"), "{hint}");
+    assert_eq!(fx.head().await, before);
+    assert_eq!(linked_owners(&fx).await, [2, 3]);
+    assert_eq!(checklist_edges(&fx).await, [2, 3]);
+
+    // Without a Done owner the delete removes the linked item and its edge.
+    let fx = Fixture::new(2).await;
+    fx.linked_item(2, 1).await;
+    fx.tasks.delete_task(&agent(), t(1)).await.unwrap();
+    assert!(linked_owners(&fx).await.is_empty());
+    assert!(checklist_edges(&fx).await.is_empty());
 }

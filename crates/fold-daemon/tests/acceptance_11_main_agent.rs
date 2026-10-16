@@ -10,7 +10,7 @@ use fold_store::testing::eventually;
 use serde_json::{Value, json};
 
 use crate::auto_integrate::Running;
-use crate::common::acceptance::{HUMAN, Harness, SLUG, WAIT, Work, assert_in_order};
+use crate::common::acceptance::{HUMAN, Harness, WAIT, Work, assert_in_order};
 use crate::workers_support::{FakeClaude, Run};
 
 const BASE: &str = "/api/v1/projects/demo";
@@ -213,14 +213,6 @@ async fn acceptance_11_the_main_agent_runs_the_team_from_a_request_to_three_comm
         .call(MAIN, "start_worker", json!({"role": "review_lead"}))
         .await;
     assert_eq!(review_lead["worker"]["name"], REVIEW_LEAD, "{review_lead}");
-    let (status, granted) = h
-        .socket(
-            Method::PUT,
-            &format!("/api/v1/projects/{SLUG}/agents/{REVIEW_LEAD}/tags/integrator"),
-            None,
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "{granted}");
     let lead_run = &until_runs(&fake, LEAD, 1).await[0];
     assert!(
         lead_run.stdin[1].contains("area lead of area backend"),
@@ -323,7 +315,7 @@ async fn acceptance_11_the_main_agent_runs_the_team_from_a_request_to_three_comm
     h.call(
         REVIEW_LEAD,
         "submit_review",
-        json!({"id": "P-2", "verdict": "approve", "body": "The 404 is right."}),
+        json!({"id": "P-2", "version": 2, "verdict": "approve", "body": "The 404 is right."}),
     )
     .await;
 
@@ -354,7 +346,7 @@ async fn acceptance_11_the_main_agent_runs_the_team_from_a_request_to_three_comm
     h.call(
         REVIEW_LEAD,
         "submit_review",
-        json!({"id": "P-3", "verdict": "approve", "body": "Searches both."}),
+        json!({"id": "P-3", "version": 1, "verdict": "approve", "body": "Searches both."}),
     )
     .await;
 

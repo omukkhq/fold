@@ -100,6 +100,7 @@ fn all_equals_the_plans_event_types() {
         "area.updated",
         "task.reported",
         "task.sent_back",
+        "proposal.author_changed",
     ]);
     assert_eq!(declared, expected);
 }

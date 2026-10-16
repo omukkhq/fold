@@ -128,7 +128,7 @@ async fn acceptance_2_the_push_wakes_an_idle_session_and_skips_an_agent_without_
     assert_eq!(harness.inbox("review").await, [first, sentinel]);
 }
 
-/// Acceptance 2, session push: a proposal opened while `review` is idle wakes it through its inbox socket with a notice naming `claim_review`, because `review` carries `integrator`. The author's own agent hears nothing about its proposal.
+/// Acceptance 2, session push: a proposal opened while `review` is idle wakes it through its inbox socket with a notice naming `claim_review`, because `review` is the review lead. The author's own agent hears nothing about its proposal.
 #[tokio::test]
 async fn acceptance_2_a_proposal_opened_while_review_is_idle_wakes_it_through_the_push() {
     let harness = Harness::start().await;

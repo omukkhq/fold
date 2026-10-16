@@ -29,7 +29,7 @@ pub use batches::{
     SubmittedBatch,
 };
 pub use changes::{ChangeRange, ProposalChange};
-pub use checkouts::ReviewCheckout;
+pub use checkouts::{CheckoutTarget, ListedCheckout, ReviewCheckout};
 pub use claims::ReviewClaimView;
 pub use comments::{CommentInput, CommentLocation, CommentView};
 pub use human_review::{AwaitingHumanReview, awaiting_human_review};

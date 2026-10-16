@@ -111,7 +111,7 @@ struct Fixture {
 
 #[cfg(test)]
 impl Fixture {
-    /// Agents `backend` (tag review), `frontend` (tag ui) with child worker `frontend/ui`, and `review` (tags review, integrator-free); humans `ana` and `tanim`; tasks `T-1` and `T-2`.
+    /// Agents `backend` (tag review), `frontend` (tag ui) with child worker `frontend/ui`, and `review` (tag review); humans `ana` and `tanim`; tasks `T-1` and `T-2`.
     async fn new() -> Self {
         let project = TestProject::new().await;
         let bus = EventBus::new();

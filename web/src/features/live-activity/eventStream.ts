@@ -87,8 +87,20 @@ export interface CheckoutRow {
   workspace: string;
   /** Null for a checkout whose worker is gone. */
   worker: string | null;
-  /** `P-4 v2 in ws/review-p-4`. */
+  /** `P-4 v2 in ws/review-p-4`, or for a batch `rb-3 · P-2 v1 + P-3 v1 in ws/review-rb-3`. */
   where: string;
+}
+
+/** The proposal versions a checkout's files hold: one, or a batch's members in merge order. */
+function held(target: ReviewCheckout["target"]): string {
+  const version = (proposal: string, v: number) => `${proposal} v${String(v)}`;
+  if (target.kind === "proposal") {
+    return version(target.proposal, target.version);
+  }
+  const members = target.members
+    .map((member) => version(member.proposal, member.version))
+    .join(" + ");
+  return `${target.batch} · ${members}`;
 }
 
 export function checkoutRows(
@@ -97,7 +109,7 @@ export function checkoutRows(
   return checkouts.map((checkout) => ({
     workspace: checkout.workspace,
     worker: checkout.worker,
-    where: `${checkout.proposal} v${String(checkout.version)} in ${checkout.path}`,
+    where: `${held(checkout.target)} in ${checkout.path}`,
   }));
 }
 

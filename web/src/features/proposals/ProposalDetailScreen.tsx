@@ -36,8 +36,11 @@ import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { useNow } from "@/live/useNow";
 import {
+  actedVersion,
   APPROVE_BODY,
+  approveBlock,
   canComment,
+  humanVerdict,
   integrateBlock,
   visibleActions,
   type HumanAction,
@@ -342,6 +345,7 @@ export function ProposalDetailScreen({
           onSearch={onSearch}
           onComment={async ({ path, side, start_line, end_line, body }) => {
             await comment.mutateAsync({
+              version: view.version,
               path,
               side,
               start_line,
@@ -364,14 +368,17 @@ export function ProposalDetailScreen({
             pending,
             failure: shown?.place === "inline" ? shown.text : null,
             integrateBlock: integrateBlock(data, main),
+            approveBlock: approveBlock(data),
             onApprove: () => {
-              review.mutate({ verdict: "approve", body: APPROVE_BODY });
+              review.mutate(humanVerdict(view, "approve", APPROVE_BODY));
             },
             onIntegrate: () => {
-              integrate.mutate(summary.current_version);
+              integrate.mutate(actedVersion(view));
             },
             onRequestChanges: async (body) => {
-              await review.mutateAsync({ verdict: "request_changes", body });
+              await review.mutateAsync(
+                humanVerdict(view, "request_changes", body),
+              );
             },
           }}
         />

@@ -18,8 +18,18 @@ pub struct Session {
 impl Session {
     /// Starts the adapter in `cwd` as agent `agent` and registers the agent.
     pub async fn open(host: &Host, cwd: &Path, agent: &str) -> BenchResult<Self> {
+        Self::open_with_tags(host, cwd, agent, "").await
+    }
+
+    /// [`Session::open`] for the main agent, which takes the `main` tag in its handshake as `fld claude` gives it.
+    pub async fn open_main(host: &Host, cwd: &Path, agent: &str) -> BenchResult<Self> {
+        Self::open_with_tags(host, cwd, agent, "main").await
+    }
+
+    async fn open_with_tags(host: &Host, cwd: &Path, agent: &str, tags: &str) -> BenchResult<Self> {
         let mut command = host.fold(&["mcp"], cwd);
         command.env("FOLD_AGENT", agent);
+        command.env("FOLD_AGENT_TAGS", tags);
         let mut child = command.spawn()?;
         let (Some(stdout), Some(stdin)) = (child.stdout.take(), child.stdin.take()) else {
             return fail("the adapter has no standard streams");

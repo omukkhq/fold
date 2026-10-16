@@ -177,6 +177,7 @@ function seed(): void {
           renewed_at: 2,
           stale: false,
         },
+        agent_approved: true,
       },
     ),
   );
@@ -593,7 +594,13 @@ describe("Proposal detail", () => {
     expect(await screen.findByText("Since v1.")).toBeTruthy();
     expect(
       writes("POST /api/v1/projects/demo/proposals/P-4/comments")[0]?.body,
-    ).toMatchObject({ path: SCHEMA, side: "new", start_line: 4, end_line: 4 });
+    ).toMatchObject({
+      version: 2,
+      path: SCHEMA,
+      side: "new",
+      start_line: 4,
+      end_line: 4,
+    });
   });
 
   it("posts a comment on one line and on a run of lines with the range the selection gives, showing it after the server answers", async () => {
@@ -611,6 +618,7 @@ describe("Proposal detail", () => {
     expect(
       writes("POST /api/v1/projects/demo/proposals/P-4/comments")[0]?.body,
     ).toEqual({
+      version: 2,
       path: SCHEMA,
       side: "new",
       start_line: 4,
@@ -742,6 +750,23 @@ describe("Proposal detail", () => {
     ).toBeTruthy();
   });
 
+  it("disables Approve and Integrate on a marked task until a reviewer agent approved the version", async () => {
+    update("P-4", (p) => ({ ...p, agent_approved: false }));
+    renderAt("/p/demo/proposals/P-4");
+    const panel = await integration();
+    const approve = within(panel).getByRole("button", { name: "Approve v2" });
+    expect(approve).toHaveProperty("disabled", true);
+    expect(
+      within(panel).getAllByText("A reviewer agent approves first."),
+    ).toHaveLength(2);
+    expect(
+      within(panel).getByRole("button", { name: "Integrate" }),
+    ).toHaveProperty("disabled", true);
+    expect(writes("POST /api/v1/projects/demo/proposals/P-4/reviews")).toEqual(
+      [],
+    );
+  });
+
   it("shows Approve as pending, then the human approval once the server answers", async () => {
     const user = userEvent.setup();
     renderAt("/p/demo/proposals/P-4");
@@ -771,7 +796,11 @@ describe("Proposal detail", () => {
     ).toBeTruthy();
     expect(
       writes("POST /api/v1/projects/demo/proposals/P-4/reviews")[0]?.body,
-    ).toEqual({ verdict: "approve", body: "approved in the web interface" });
+    ).toEqual({
+      version: 2,
+      verdict: "approve",
+      body: "approved in the web interface",
+    });
   });
 
   it("needs a body for Request changes, shows it pending, then the verdict once the server answers", async () => {
@@ -1039,6 +1068,7 @@ describe("Proposal detail", () => {
           gates: humanGates({
             human_review: { status: "unmet", code: "human_approval_missing" },
           }),
+          agent_approved: true,
         },
       ),
     );

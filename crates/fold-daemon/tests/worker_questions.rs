@@ -157,6 +157,7 @@ async fn stored(harness: &Harness, kind: &str) -> Vec<Value> {
 async fn an_ask_rule_call_waits_for_one_question_and_the_humans_allow() {
     let fake = FakeClaude::new("permission_request");
     let harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     let lead = start_lead(&harness).await;
     let questions = until_questions(&harness, 1).await;
     assert_eq!(questions[0]["id"], "pq-1");
@@ -242,6 +243,7 @@ async fn an_ask_rule_call_waits_for_one_question_and_the_humans_allow() {
 async fn an_answer_never_decides_a_later_call_of_a_live_worker() {
     let fake = FakeClaude::new("permission_request");
     let harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     let lead = start_lead(&harness).await;
     until_questions(&harness, 1).await;
     let (status, answered) = answer(&harness, "pq-1", json!({"behavior": "allow"})).await;
@@ -261,6 +263,7 @@ async fn an_answer_never_decides_a_later_call_of_a_live_worker() {
 async fn a_denied_call_reaches_the_worker_with_the_humans_note() {
     let fake = FakeClaude::new("permission_deny");
     let harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     let lead = start_lead(&harness).await;
     until_questions(&harness, 1).await;
     let (status, answered) = answer(
@@ -282,6 +285,7 @@ async fn a_denied_call_reaches_the_worker_with_the_humans_note() {
 async fn a_stop_closes_the_open_question() {
     let fake = FakeClaude::new("permission_request");
     let harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     let lead = start_lead(&harness).await;
     until_questions(&harness, 1).await;
     harness
@@ -296,6 +300,7 @@ async fn a_stop_closes_the_open_question() {
 async fn a_restart_keeps_one_question_and_the_resumed_worker_gets_the_answer_first() {
     let fake = FakeClaude::new("permission_request");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     let lead = start_lead(&harness).await;
     until_questions(&harness, 1).await;
     let session = worker(&harness, &lead).await.session_id;
@@ -343,6 +348,7 @@ async fn a_restart_keeps_one_question_and_the_resumed_worker_gets_the_answer_fir
 async fn an_ask_user_question_becomes_a_question_with_choices_and_the_reply_answers_it() {
     let fake = FakeClaude::new("ask_question");
     let harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     let ana = fold_core::HumanName::parse("ana").unwrap();
     let now = harness.project.now();
     harness
@@ -526,6 +532,7 @@ async fn an_agent_asks_humans_a_question_with_choices() {
 async fn a_question_without_a_human_to_ask_is_denied_so_the_turn_goes_on() {
     let fake = FakeClaude::new("ask_question");
     let harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     let lead = start_lead(&harness).await;
     let run = until_answered(&fake, &lead, 1, 1).await.remove(0);
     let denied = responses(&run).remove(0);
@@ -543,6 +550,7 @@ async fn a_question_without_a_human_to_ask_is_denied_so_the_turn_goes_on() {
 async fn a_restart_while_a_question_with_choices_waits_resumes_the_worker_with_the_reply() {
     let fake = FakeClaude::new("ask_question");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     let ana = fold_core::HumanName::parse("ana").unwrap();
     let now = harness.project.now();
     harness

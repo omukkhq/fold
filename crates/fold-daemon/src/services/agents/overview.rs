@@ -2,8 +2,8 @@ use std::collections::{BTreeSet, HashMap};
 
 use fold_core::claims::is_stale;
 use fold_core::{
-    AgentName, CheckpointId, Event, FoldError, INTEGRATOR_TAG, Presence, ProposalId, RevisionId,
-    Tag, TaskId, Timestamp, WorkerName, WorkspaceId, codes, presence_of,
+    AgentName, CheckpointId, Event, FoldError, Presence, ProposalId, RevisionId, Tag, TaskId,
+    Timestamp, WorkerName, WorkspaceId, codes, presence_of,
 };
 use fold_store::agents::{self, ClaimKind};
 use fold_store::workspaces::WorkspaceState;
@@ -37,8 +37,6 @@ pub struct AgentOverview {
     pub open_session_count: u64,
     /// The connected sessions, oldest first.
     pub open_sessions: Vec<SessionSummary>,
-    /// The actor label that granted the `integrator` tag; `None` without the tag or when the tag records no granter.
-    pub integrator_granted_by: Option<String>,
     /// The `stalled` and `stale_claim` items of the tasks the agent's workers hold claims on, in worker and claim order.
     pub attention: Vec<AgentAttention>,
     /// The main worker first, then the children by name.
@@ -130,7 +128,6 @@ impl AgentService {
         }
         let tags = agents::all_tags(&mut *tx).await?;
         let mut workers = agents::all_workers(&mut *tx).await?;
-        let granters = agents::tag_granters(&mut *tx).await?;
         let mut sessions = agents::sessions_by_agent(&mut tx).await?;
         let mut open_rows = agents::open_sessions_by_agent(&mut *tx).await?;
         let claims = agents::held_claims(&mut *tx).await?;
@@ -146,12 +143,6 @@ impl AgentService {
         }
         tx.commit().await.map_err(StoreError::from)?;
         let stalled = stalled_tasks(self.live.as_ref());
-        let mut granter_of: HashMap<i64, String> = granters
-            .into_iter()
-            .filter(|(_, tag, _)| tag.as_str() == INTEGRATOR_TAG)
-            .map(|(agent_id, _, granted_by)| (agent_id, granted_by))
-            .collect();
-
         let mut tags_of: HashMap<i64, Vec<Tag>> = HashMap::new();
         for (agent_id, tag) in tags {
             tags_of.entry(agent_id).or_default().push(tag);
@@ -220,12 +211,9 @@ impl AgentService {
                 let sessions = sessions.remove(&row.id).unwrap_or_default();
                 let facts = facts(&sessions.open);
                 let tags = tags_of.remove(&row.id).unwrap_or_default();
-                let granter = granter_of.remove(&row.id);
                 let workers = workers_of.remove(&row.id).unwrap_or_default();
                 AgentOverview {
                     presence: presence_of(now, &facts),
-                    integrator_granted_by: granter
-                        .filter(|_| tags.iter().any(|tag| tag.as_str() == INTEGRATOR_TAG)),
                     tags,
                     last_call_at: sessions.newest_call,
                     open_session_count: u64::try_from(facts.len()).unwrap_or(u64::MAX),

@@ -11,7 +11,7 @@ use fold_store::reviews::batches::{
     self, BatchRow, BatchState, MemberRelease, MemberRow, NewBatchCheckout, NewLineOrigin,
 };
 use fold_store::reviews::{self, ProposalRow, ProposalState, ReviewTarget};
-use fold_store::{Store, StoreError, WriteTx, counters, tasks, workspaces};
+use fold_store::{Store, StoreError, WriteTx, agents, counters, tasks, workspaces};
 use fold_vcs::batch::{BatchMember, BatchMerge, FileOrigins};
 use fold_vcs::browse;
 use fold_vcs::compare::Totals;
@@ -22,7 +22,7 @@ use super::checkouts::remove_unnamed_dir;
 use super::claims::take_review_claim;
 use super::comments::{CommentInput, CommentLocation, MAX_BODY_CHARS, check_ranges, check_shape};
 use super::proposals::require_open;
-use super::verdicts::{BatchCommentLink, ReviewRecord, record_review};
+use super::verdicts::{BatchCommentLink, ReviewRecord, record_review, verdict_gate};
 use super::{ReviewError, ReviewService};
 use crate::services::events::EventBuffer;
 use crate::services::tasks::{recompute, worker_row};
@@ -471,6 +471,12 @@ impl ReviewService {
         let members = open_members(batches::members(read, batch).await?);
         for verdict in &verdicts {
             member_of(&members, batch, verdict.proposal)?;
+        }
+        let standing = agents::standing_of(read, actor).await?;
+        for verdict in &verdicts {
+            if let Some(proposal) = reviews::get_proposal(read, verdict.proposal).await? {
+                verdict_gate(actor, standing, verdict.verdict, &proposal)?;
+            }
         }
         let checkout = batches::active_batch_checkout(read, batch).await?;
         let mut by_member: BTreeMap<ProposalId, Vec<CommentInput>> = BTreeMap::new();

@@ -85,15 +85,16 @@ impl CommentView {
 }
 
 impl ReviewService {
-    /// Adds one comment to the current version of an open proposal, as a `comment` review with an empty body. It is the path for a line selected in the browser; it never changes whose turn it is.
+    /// Adds one comment to `version` of an open proposal, as a `comment` review with an empty body; another current version is `stale_version`, so the lines are never checked against a version the commenter did not read. It is the path for a line selected in the browser; it never changes whose turn it is.
     pub async fn add_comment(
         &self,
         actor: &Actor,
         proposal: ProposalId,
+        version: u32,
         input: CommentInput,
     ) -> Result<CommentView, ReviewError> {
         let submitted = self
-            .submit_review(actor, proposal, Verdict::Comment, "", vec![input])
+            .submit_review(actor, proposal, version, Verdict::Comment, "", vec![input])
             .await?;
         let current = submitted.summary.current_version;
         let id = submitted

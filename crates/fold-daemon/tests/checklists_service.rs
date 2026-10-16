@@ -706,6 +706,75 @@ async fn done_and_archived_tasks_take_no_new_items() {
     }
 }
 
+/// The checklists of a Done task record what its work covered, so every change to them is refused, not only a new item: more work belongs in a follow-up task.
+#[tokio::test]
+async fn a_done_task_locks_its_whole_checklist() {
+    let fx = Fixture::new(2).await;
+    let ticked = fx.add(1, step("ticked")).await;
+    let open = fx.add(1, step("open")).await;
+    fx.tasks
+        .update_checklist_item(
+            &agent(),
+            ticked,
+            ChecklistItemPatch {
+                text: None,
+                done: Some(true),
+            },
+        )
+        .await
+        .unwrap();
+    fx.complete(&[1]).await;
+    assert_eq!(fx.status(1).await, Done);
+    let before = fx.head().await;
+    let shape = fx.shape(1).await;
+
+    let patch = |text: Option<&str>, done: Option<bool>| ChecklistItemPatch {
+        text: text.map(|text| StepText::parse(text).unwrap()),
+        done,
+    };
+    let refusals = [
+        fx.tasks
+            .update_checklist_item(&agent(), ticked, patch(None, Some(false)))
+            .await
+            .unwrap_err(),
+        fx.tasks
+            .update_checklist_item(&agent(), open, patch(Some("edited"), None))
+            .await
+            .unwrap_err(),
+        fx.tasks
+            .remove_checklist_item(&agent(), open)
+            .await
+            .unwrap_err(),
+        fx.tasks
+            .move_checklist_item(&agent(), open, 0, None)
+            .await
+            .unwrap_err(),
+        fx.tasks
+            .move_checklist_item(&agent(), open, 0, Some(ChecklistName::parse("QA").unwrap()))
+            .await
+            .unwrap_err(),
+    ];
+    for error in refusals {
+        let TaskError::Fold(error) = error else {
+            panic!("expected a refusal, got {error:?}");
+        };
+        assert_eq!(error.code(), "task_closed");
+        assert_eq!(error.details().unwrap()["reason"], json!("done"));
+        assert!(error.hint().unwrap().contains("create_task"), "{error:?}");
+    }
+    assert_eq!(fx.head().await, before);
+    assert_eq!(fx.shape(1).await, shape);
+    assert!(
+        fx.tasks
+            .checklist_item(ticked)
+            .await
+            .unwrap()
+            .done_at
+            .is_some()
+    );
+    assert_eq!(fx.tasks.checklist_item(open).await.unwrap().done_at, None);
+}
+
 #[tokio::test]
 async fn an_archived_parent_keeps_its_linked_items_and_never_completes() {
     let fx = Fixture::new(2).await;

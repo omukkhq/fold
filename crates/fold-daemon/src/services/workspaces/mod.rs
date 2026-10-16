@@ -34,7 +34,7 @@ mod sync;
 mod sync_task;
 
 pub use adoption::AdoptReason;
-pub(crate) use adoption::adopt_if_orphaned;
+pub(crate) use adoption::{adopt_if_orphaned, hand_over_proposal};
 pub use attachments::WorkspaceFile;
 pub use auto::{AutoCheckpoint, QuietCheckpoint};
 pub(crate) use auto::{auto_checkpoint_in_tx, pruned_event};

@@ -1,21 +1,20 @@
 use axum::Json;
+use axum::extract::Query;
 use axum::extract::rejection::QueryRejection;
-use axum::extract::{Path, Query};
-use fold_core::{AgentName, Event, FoldError, Presence, codes};
+use fold_core::{Event, FoldError, Presence, codes};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 use super::Project;
-use super::actor::Human;
 use super::error::{ApiError, ErrorEnvelope};
 use super::events::DurableEvent;
 use super::tasks::AttentionKind;
 use crate::daemon::AppState;
 use crate::services::agents::{
-    AgentAttention, AgentOverview, AgentTags, ClaimSummary, OverviewFilter, ProposalSummary,
-    SessionSummary, WorkerOverview, WorkspaceSummary,
+    AgentAttention, AgentOverview, ClaimSummary, OverviewFilter, ProposalSummary, SessionSummary,
+    WorkerOverview, WorkspaceSummary,
 };
 
 pub mod questions;
@@ -24,7 +23,6 @@ pub mod workers;
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_agents))
-        .routes(routes!(grant_integrator, revoke_integrator))
         .merge(workers::routes())
         .merge(questions::routes())
 }
@@ -57,9 +55,6 @@ pub struct AgentEntry {
     pub sessions: u64,
     /// The connected sessions, oldest first.
     pub open_sessions: Vec<AgentSession>,
-    /// The actor that granted the `integrator` tag, such as `human:tanim`; null without the tag or when the tag records no granter.
-    #[schema(required = true, example = "human:tanim")]
-    pub integrator_granted_by: Option<String>,
     /// The `stalled` and `stale_claim` items of the tasks the agent's workers hold claims on. A `stalled` item shows only for an implementation claim, and a `stale_claim` item only for a claim of this agent that the lease sweeper marked.
     pub attention: Vec<AgentAttentionItem>,
     /// The main worker first, then the children by name.
@@ -279,7 +274,6 @@ impl From<AgentOverview> for AgentEntry {
                 .into_iter()
                 .map(AgentSession::from)
                 .collect(),
-            integrator_granted_by: agent.integrator_granted_by,
             attention: agent
                 .attention
                 .into_iter()
@@ -325,89 +319,4 @@ pub async fn list_agents(
     Ok(Json(AgentList {
         agents: agents.into_iter().map(AgentEntry::from).collect(),
     }))
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-pub struct AgentTagList {
-    pub agent: String,
-    /// Every tag of the agent after the change, sorted.
-    pub tags: Vec<String>,
-}
-
-impl From<AgentTags> for AgentTagList {
-    fn from(tags: AgentTags) -> Self {
-        Self {
-            agent: tags.agent.to_string(),
-            tags: tags.tags.iter().map(ToString::to_string).collect(),
-        }
-    }
-}
-
-async fn set_integrator(
-    human: &Human,
-    project: &Project,
-    name: &str,
-    on: bool,
-) -> Result<Json<AgentTagList>, ApiError> {
-    let agent = AgentName::parse(name).map_err(FoldError::from)?;
-    let tags = project
-        .0
-        .agents()
-        .set_integrator(&human.actor(), &agent, on)
-        .await?;
-    Ok(Json(tags.into()))
-}
-
-/// Grants the integrator tag. Only a named human reaches this route; granting a present tag changes nothing.
-#[utoipa::path(
-    put,
-    path = "/api/v1/projects/{slug}/agents/{name}/tags/integrator",
-    operation_id = "grant_integrator",
-    params(
-        ("slug" = String, Path, description = "The project slug"),
-        ("name" = String, Path, description = "The agent name"),
-    ),
-    responses(
-        (status = 200, description = "The agent's tags after the grant", body = AgentTagList),
-        (status = 400, description = "`invalid_name`: the human or agent name breaks the name pattern", body = ErrorEnvelope),
-        (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
-        (status = 403, description = "`human_required`: the actor is not a human", body = ErrorEnvelope),
-        (status = 404, description = "`agent_not_found` or `project_not_found`", body = ErrorEnvelope),
-        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
-        (status = 500, description = "Internal error", body = ErrorEnvelope),
-    )
-)]
-pub async fn grant_integrator(
-    human: Human,
-    project: Project,
-    Path((_slug, name)): Path<(String, String)>,
-) -> Result<Json<AgentTagList>, ApiError> {
-    set_integrator(&human, &project, &name, true).await
-}
-
-/// Removes the integrator tag. Only a named human reaches this route; removing an absent tag changes nothing.
-#[utoipa::path(
-    delete,
-    path = "/api/v1/projects/{slug}/agents/{name}/tags/integrator",
-    operation_id = "revoke_integrator",
-    params(
-        ("slug" = String, Path, description = "The project slug"),
-        ("name" = String, Path, description = "The agent name"),
-    ),
-    responses(
-        (status = 200, description = "The agent's tags after the removal", body = AgentTagList),
-        (status = 400, description = "`invalid_name`: the human or agent name breaks the name pattern", body = ErrorEnvelope),
-        (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
-        (status = 403, description = "`human_required`: the actor is not a human", body = ErrorEnvelope),
-        (status = 404, description = "`agent_not_found` or `project_not_found`", body = ErrorEnvelope),
-        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
-        (status = 500, description = "Internal error", body = ErrorEnvelope),
-    )
-)]
-pub async fn revoke_integrator(
-    human: Human,
-    project: Project,
-    Path((_slug, name)): Path<(String, String)>,
-) -> Result<Json<AgentTagList>, ApiError> {
-    set_integrator(&human, &project, &name, false).await
 }

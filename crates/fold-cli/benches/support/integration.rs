@@ -7,7 +7,7 @@ use super::fixture::{Sizes, append_line, path_of, prepend_line};
 use super::session::Session;
 use super::{BenchResult, fail};
 
-/// The three `fld mcp` sessions of the integration target. `review` carries the integrator tag.
+/// The three `fld mcp` sessions of the integration target. `review` is the main agent, so it approves and integrates.
 pub struct Agents<'a> {
     pub frontend: &'a Session,
     pub backend: &'a Session,
@@ -49,7 +49,7 @@ pub async fn measure(
                 .review
                 .call(
                     "submit_review",
-                    json!({ "id": proposal, "verdict": "approve", "body": "approved" }),
+                    json!({ "id": proposal, "version": 1, "verdict": "approve", "body": "approved" }),
                 )
                 .await?;
         }

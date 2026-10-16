@@ -80,7 +80,7 @@ describe("reads", () => {
         agents: [
           {
             name: "frontend",
-            tags: ["ui", "integrator"],
+            tags: ["ui", "review"],
             workers: [
               { name: "frontend", parent: null },
               { name: "frontend/ui", parent: "frontend" },
@@ -92,7 +92,7 @@ describe("reads", () => {
     );
     expect(await getMessageTargets("demo")).toEqual({
       agents: ["frontend", "frontend/ui", "backend"],
-      tags: ["integrator", "ui"],
+      tags: ["review", "ui"],
     });
   });
 

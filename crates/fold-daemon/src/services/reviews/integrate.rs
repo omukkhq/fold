@@ -3,7 +3,9 @@ use std::collections::HashSet;
 use fold_core::events::types;
 use fold_core::merge::{Conflict, ReportTrees};
 use fold_core::object::ObjectHash;
-use fold_core::policy::{CallerFacts, GateRefusal, IntegrateInput, ProposalFacts, can_integrate};
+use fold_core::policy::{
+    AgentStanding, CallerFacts, GateRefusal, IntegrateInput, ProposalFacts, can_integrate,
+};
 use fold_core::reviews::{Approver, ReviewFact, Verdict, latest_verdict};
 use fold_core::revision::{Revision, StoredRevision};
 use fold_core::{
@@ -15,7 +17,7 @@ use fold_store::reviews::{
 };
 use fold_store::tasks::claims::{self, ReleaseReason};
 use fold_store::tasks::completions::{self, CompletionKind};
-use fold_store::{StoreError, WriteTx, counters, tasks, workspaces};
+use fold_store::{StoreError, WriteTx, agents, counters, tasks, workspaces};
 use fold_vcs::integrate::MergeOutcome;
 use serde_json::json;
 
@@ -171,7 +173,7 @@ fn decide(
 }
 
 impl ReviewService {
-    /// Integrates the current version of an open proposal onto main, by an agent with the `integrator` tag that is not the author's agent, or by a named human, who approves in the same action. `expected_version` is the version the caller saw; another current version refuses with `stale_version`. A refusal by the open, version or caller gate writes nothing; a refusal by the approval, human review or prerequisite gate records a `refused` integration and `integration.refused`, then returns the gate's error. A clean merge moves main by compare-and-swap, records the integration, completes the task, retires the proposal, archives its workspaces and releases its claims in one transaction. A conflicting merge publishes nothing: it records a `conflicted` integration with its report, flags the proposal, tells the author's worker and returns the task to In Progress, then returns the conflicts.
+    /// Integrates the current version of an open proposal onto main, by an agent that decides reviews (the main agent, the review lead or a batch reviewer) and is not the author's agent, or by a named human, who approves in the same action. `expected_version` is the version the caller saw; another current version refuses with `stale_version`. A refusal by the open, version or caller gate, or of a human on a marked task whose version no reviewer agent approved (`agent_approval_required`), writes nothing; a refusal by the approval, human review or prerequisite gate records a `refused` integration and `integration.refused`, then returns the gate's error. A clean merge moves main by compare-and-swap, records the integration, completes the task, retires the proposal, archives its workspaces and releases its claims in one transaction. A conflicting merge publishes nothing: it records a `conflicted` integration with its report, flags the proposal, tells the author's worker and returns the task to In Progress, then returns the conflicts.
     pub async fn integrate_proposal(
         &self,
         actor: &Actor,
@@ -206,7 +208,7 @@ impl ReviewService {
         )
     }
 
-    /// Integrates, as fold, every open proposal whose current version is ready: an integrator agent approved it, the latest verdict asks for no changes, a marked task has a human approval given after the agent's, and every prerequisite is Done. Each integration is the same procedure an integrator runs. The open proposals are looked at in number order and looked at again after each integration, so a prerequisite's integration lets the proposals that need it follow in the same call. A proposal flagged with a conflict waits for its next version, which clears the flag. A failed attempt is logged by its code and left for the next call. Returns the integrations in the order they ran; a conflicted one recorded `integration.conflicted` and left its proposal open.
+    /// Integrates, as fold, every open proposal whose current version is ready: an agent that decides reviews or a human approved it, the latest verdict asks for no changes, a marked task has a human approval the mark accepts, and every prerequisite is Done. Each integration is the same procedure a deciding agent runs. The open proposals are looked at in number order and looked at again after each integration, so a prerequisite's integration lets the proposals that need it follow in the same call. A proposal flagged with a conflict waits for its next version, which clears the flag. A failed attempt is logged by its code and left for the next call. Returns the integrations in the order they ran; a conflicted one recorded `integration.conflicted` and left its proposal open.
     pub async fn integrate_ready(&self) -> Result<Vec<AutomaticIntegration>, ReviewError> {
         let mut done = Vec::new();
         let mut passed = HashSet::new();
@@ -236,7 +238,7 @@ impl ReviewService {
         passed: &HashSet<ProposalId>,
     ) -> Result<Option<(ProposalId, u32)>, ReviewError> {
         let mut read = self.store.read().begin().await.map_err(StoreError::from)?;
-        let open = reviews::list_proposals(&mut *read, Some(ProposalState::Open), false).await?;
+        let open = reviews::list_proposals(&mut *read, Some(ProposalState::Open), None).await?;
         let mut ready = None;
         for row in open {
             if row.conflicted || passed.contains(&row.id) {
@@ -403,8 +405,9 @@ impl ReviewService {
         expected_version: Option<u32>,
         automatic: bool,
     ) -> Result<Plan, Step> {
-        let caller = caller_facts(actor, automatic)?;
         let mut read = self.store.read().begin().await.map_err(StoreError::from)?;
+        let standing = agents::standing_of(&mut *read, actor).await?;
+        let caller = caller_facts(actor, standing, automatic)?;
         let facts = reviews::integration_facts(&mut read, proposal)
             .await?
             .ok_or_else(|| proposal_not_found(proposal))?;
@@ -423,7 +426,8 @@ impl ReviewService {
                 GateRefusal::ProposalNotOpen
                 | GateRefusal::StaleVersion { .. }
                 | GateRefusal::IntegratorRequired
-                | GateRefusal::AuthorCannotIntegrate => FoldError::from(refusal).into(),
+                | GateRefusal::AuthorCannotIntegrate
+                | GateRefusal::AgentApprovalRequired => FoldError::from(refusal).into(),
             });
         }
         Ok(Plan {
@@ -535,12 +539,16 @@ impl ReviewService {
     }
 }
 
-/// The caller as the gates see it. The daemon integrates only through the automatic integration, so `Actor::System` is refused on every other path.
-fn caller_facts(actor: &Actor, automatic: bool) -> Result<CallerFacts, Step> {
+/// The caller as the gates see it, with the acting agent's `standing`. The daemon integrates only through the automatic integration, so `Actor::System` is refused on every other path.
+fn caller_facts(
+    actor: &Actor,
+    standing: AgentStanding,
+    automatic: bool,
+) -> Result<CallerFacts, Step> {
     match actor {
         Actor::Agent(agent) => Ok(CallerFacts::Agent {
             agent: agent.agent.clone(),
-            tags: agent.tags.clone(),
+            standing,
         }),
         Actor::Human { name } => Ok(CallerFacts::Human(name.clone())),
         Actor::System if automatic => Ok(CallerFacts::Automatic),
@@ -683,7 +691,8 @@ impl Commit<'_> {
         let facts = reviews::integration_facts(tx.conn(), proposal)
             .await?
             .ok_or_else(|| proposal_not_found(proposal))?;
-        let caller = caller_facts(self.actor, automatic)?;
+        let standing = agents::standing_of(tx.conn(), self.actor).await?;
+        let caller = caller_facts(self.actor, standing, automatic)?;
         if facts.target.version_id != version_id
             || facts.live_workspace != self.plan.workspace
             || decide(&facts, &caller, expected_version).is_err()

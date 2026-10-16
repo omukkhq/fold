@@ -132,8 +132,7 @@ describe("EventStream", () => {
 const checkout = (over: Partial<ReviewCheckout> = {}): ReviewCheckout => ({
   workspace: "ws-12",
   path: "ws/review-p-4",
-  proposal: "P-4",
-  version: 2,
+  target: { kind: "proposal", proposal: "P-4", version: 2 },
   worker: "review/quality",
   base: "r7",
   created_at: Date.now(),
@@ -150,6 +149,31 @@ describe("ReviewCheckouts", () => {
     expect(row.textContent).toContain(
       "P-4 v2 in ws/review-p-4 · not recordable",
     );
+  });
+
+  it("shows a batch checkout as one row with its batch and members", async () => {
+    listReviewCheckouts.mockResolvedValue([
+      checkout({
+        workspace: "ws-15",
+        path: "ws/review-rb-3",
+        worker: "review/batch",
+        target: {
+          kind: "batch",
+          batch: "rb-3",
+          members: [
+            { proposal: "P-2", version: 1 },
+            { proposal: "P-3", version: 1 },
+          ],
+        },
+      }),
+    ]);
+    wrap(<ReviewCheckouts slug="demo" />);
+    await screen.findByText("@review/batch");
+    expect(
+      screen.getByText(
+        "rb-3 · P-2 v1 + P-3 v1 in ws/review-rb-3 · not recordable",
+      ),
+    ).toBeTruthy();
   });
 
   it("keeps one title for several checkouts", async () => {

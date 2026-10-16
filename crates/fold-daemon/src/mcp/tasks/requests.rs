@@ -205,7 +205,7 @@ pub fn tools() -> Vec<Tool> {
     vec![
         Tool::new(
             CREATE_REQUEST,
-            "Ask for work: a bug, a feature or a question, written as a message with optional files from your workspace. An orchestrator sorts and names it, then drafts the cards.",
+            "Ask for work: a bug, a feature or a question, written as a message with optional files from your workspace. The main agent or an area lead sorts and names it, then drafts the cards.",
             schema_for_type::<CreateRequestInput>(),
         ),
         Tool::new(
@@ -220,7 +220,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             CLAIM_REQUEST,
-            "As an orchestrator (an agent's main worker), take a request to draft: sort it as bug, feature or question and give it a title.",
+            "As the main agent, or as an area lead when the request concerns your area, take a request to draft: sort it as bug, feature or question and give it a title.",
             schema_for_type::<ClaimRequestInput>(),
         ),
         Tool::new(

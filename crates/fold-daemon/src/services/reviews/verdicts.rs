@@ -1,8 +1,10 @@
 use fold_core::events::types;
+use fold_core::policy::AgentStanding;
 use fold_core::reviews::{Reviewer, Verdict};
 use fold_core::{
     Actor, CommentId, FoldError, IdKind, NewEvent, ProposalId, ReviewBatchId, TaskId, codes, policy,
 };
+use fold_store::agents;
 use fold_store::reviews::{self, NewComment, ProposalRow, ReviewerRef, batches};
 use fold_store::{StoreError, WriteTx, counters, workspaces};
 use serde_json::json;
@@ -25,11 +27,12 @@ pub struct SubmittedReview {
 }
 
 impl ReviewService {
-    /// Reviews the current version of an open proposal with a verdict, a body and line comments, in one write transaction. The body may be empty only when the review carries a comment, and a reject needs a body, which becomes the close reason. Each comment's file and lines are checked against the version's base tree (side `old`) or its own tree (side `new`) before the transaction. `request_changes` puts the proposal with its author, so the task moves to In Progress; a later approval of the same version gives it back to the reviewer; `reject` closes the proposal and the task returns to In Progress.
+    /// Reviews `version` of an open proposal with a verdict, a body and line comments, in one write transaction. `version` is the version the reviewer read; when another version is current, before the comments are checked or inside the transaction, the review is `stale_version` and writes nothing, so a verdict never lands on a version its reviewer did not read. The body may be empty only when the review carries a comment, and a reject needs a body, which becomes the close reason. Each comment's file and lines are checked against the version's base tree (side `old`) or its own tree (side `new`) before the transaction. `request_changes` puts the proposal with its author, so the task moves to In Progress; a later approval of the same version gives it back to the reviewer; `reject` closes the proposal and the task returns to In Progress.
     pub async fn submit_review(
         &self,
         actor: &Actor,
         proposal: ProposalId,
+        version: u32,
         verdict: Verdict,
         body: &str,
         comments: Vec<CommentInput>,
@@ -40,10 +43,12 @@ impl ReviewService {
         }
         let read = self.store.read();
         let row = require_open(reviews::get_proposal(read, proposal).await?, proposal)?;
-        verdict_gate(actor, verdict, &row)?;
+        let standing = agents::standing_of(read, actor).await?;
+        verdict_gate(actor, standing, verdict, &row)?;
         let target = reviews::review_target(read, proposal)
             .await?
             .ok_or(StoreError::Corrupt("proposal_versions.version"))?;
+        require_version(proposal, version, target.version)?;
         check_ranges(&self.workspaces, &target, &comments).await?;
         #[cfg(feature = "failpoints")]
         fail::fail_point!("review_after_range_check");
@@ -57,9 +62,7 @@ impl ReviewService {
                 let current = reviews::review_target(tx.conn(), proposal)
                     .await?
                     .ok_or(StoreError::Corrupt("proposal_versions.version"))?;
-                if current.version != target.version {
-                    return Err(version_changed(proposal, target.version, current.version));
-                }
+                require_version(proposal, version, current.version)?;
                 let record = ReviewRecord {
                     row: &row,
                     version_id: current.version_id,
@@ -123,9 +126,15 @@ pub(super) async fn record_review(
     let (row, verdict, version) = (record.row, record.verdict, record.version);
     let proposal = row.id;
     let reviewer = actor.event_actor();
-    let by = match verdict_gate(actor, verdict, row)? {
+    let standing = agents::standing_of(tx.conn(), actor).await?;
+    let by = match verdict_gate(actor, standing, verdict, row)? {
         Reviewer::Agent(agent) => ReviewerRef::Worker(worker_row(tx, agent).await?.id),
-        Reviewer::Human(name) => ReviewerRef::Human(name),
+        Reviewer::Human(name) => {
+            if verdict == Verdict::Approve {
+                human_approval_gate(tx, proposal, version).await?;
+            }
+            ReviewerRef::Human(name)
+        }
     };
     let review_id = match record.batch {
         None => {
@@ -300,12 +309,36 @@ fn check_body(verdict: Verdict, body: &str, comments: usize) -> Result<String, R
     Ok(body.to_owned())
 }
 
-fn verdict_gate<'a>(
+/// A human approves a marked task only after a reviewer agent approved `version` (`policy::can_human_approve`). The mark and the reviews are read in the review's transaction, so an approval and a mark that land meanwhile count.
+async fn human_approval_gate(
+    tx: &mut WriteTx,
+    proposal: ProposalId,
+    version: u32,
+) -> Result<(), ReviewError> {
+    let row = reviews::get_proposal(tx.conn(), proposal)
+        .await?
+        .ok_or(StoreError::Corrupt("proposals.number"))?;
+    let facts = reviews::review_facts(tx.conn(), proposal, version).await?;
+    policy::can_human_approve(row.human_review.as_ref(), &facts, &row.author.agent()).map_err(
+        |denied| {
+            FoldError::from(denied)
+                .with_details([
+                    ("proposal", json!(proposal.to_string())),
+                    ("version", json!(version)),
+                ])
+                .into()
+        },
+    )
+}
+
+/// `standing` is the acting agent's, read by the caller.
+pub(super) fn verdict_gate<'a>(
     actor: &'a Actor,
+    standing: AgentStanding,
     verdict: Verdict,
     row: &ProposalRow,
 ) -> Result<Reviewer<'a>, ReviewError> {
-    policy::can_submit_verdict(actor, verdict, &row.author).map_err(|denied| {
+    policy::can_submit_verdict(actor, standing, verdict, &row.author).map_err(|denied| {
         FoldError::from(denied)
             .with_details([
                 ("proposal", json!(row.id.to_string())),
@@ -316,18 +349,24 @@ fn verdict_gate<'a>(
     })
 }
 
-/// The comments were checked against `checked`; a version added meanwhile has other trees, so the review is refused rather than filed against a version it did not read.
-fn version_changed(proposal: ProposalId, checked: u32, current: u32) -> ReviewError {
-    FoldError::new(
-        codes::INVALID_REQUEST,
-        format!("{proposal} gained v{current} while the review of v{checked} was checked"),
+/// `stale_version` unless `expected` is the current version. A version added after the reviewer read `expected` has other trees, so neither its verdict nor its line comments can be filed on it.
+pub(super) fn require_version(
+    proposal: ProposalId,
+    expected: u32,
+    current: u32,
+) -> Result<(), ReviewError> {
+    if expected == current {
+        return Ok(());
+    }
+    Err(FoldError::new(
+        codes::STALE_VERSION,
+        format!("{proposal} is at v{current}, not v{expected}"),
     )
     .with_details([
-        ("reason", json!("version_changed")),
         ("proposal", json!(proposal.to_string())),
-        ("version", json!(checked)),
+        ("expected_version", json!(expected)),
         ("current_version", json!(current)),
     ])
-    .with_hint("call get_proposal and review the current version")
-    .into()
+    .with_hint("call get_proposal, then create_review_checkout and review the current version")
+    .into())
 }

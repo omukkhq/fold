@@ -1,4 +1,6 @@
-use fold_core::{CheckpointId, ProposalId, RevisionId, TaskId, Timestamp, WorkerName, WorkspaceId};
+use fold_core::{
+    CheckpointId, ProposalId, ReviewBatchId, RevisionId, TaskId, Timestamp, WorkerName, WorkspaceId,
+};
 use sqlx::SqliteExecutor;
 
 use super::columns::{number, timestamp};
@@ -342,17 +344,30 @@ pub async fn list_live_task_workspaces(
     rows.into_iter().map(workspace_row).collect()
 }
 
-/// An active review checkout, its proposal and the proposal version its files hold.
+/// An active review checkout and the proposal versions its files hold.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReviewCheckoutRow {
     pub workspace: WorkspaceRow,
-    pub proposal: ProposalId,
-    pub version: u32,
+    pub target: CheckoutTarget,
 }
 
-/// Every active review checkout of the project, oldest first.
+/// What a review checkout holds: one proposal version, or the members of a review batch merged onto main.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CheckoutTarget {
+    Proposal {
+        proposal: ProposalId,
+        version: u32,
+    },
+    /// The members in merge order, each at the version it joined the batch with.
+    Batch {
+        batch: ReviewBatchId,
+        members: Vec<(ProposalId, u32)>,
+    },
+}
+
+/// Every active review checkout of the project, oldest first: the checkouts of one proposal and those of a review batch. A batch checkout holds the batch's members that have not left it; a member that leaves archives the checkout.
 pub async fn list_active_review_checkouts(
-    executor: impl SqliteExecutor<'_>,
+    executor: &mut sqlx::SqliteConnection,
 ) -> Result<Vec<ReviewCheckoutRow>, StoreError> {
     let rows = sqlx::query!(
         r#"SELECT w.number AS "number!: i64",
@@ -362,54 +377,82 @@ pub async fn list_active_review_checkouts(
                   w.kind,
                   w.path,
                   r.number AS "base!: i64",
-                  p.number AS "proposal!: i64",
+                  p.number AS "proposal?: i64",
                   w.state,
                   w.changed_files,
+                  (SELECT COUNT(*) FROM workspace_conflicts c WHERE c.workspace_id = w.id) AS "conflicted!: i64",
                   w.last_activity_at,
                   w.created_at,
                   w.closed_at,
-                  v.version AS "version!: i64"
+                  v.version AS "version?: i64",
+                  b.number AS "batch?: i64"
            FROM workspaces w
            JOIN tasks t ON t.id = w.task_id
            JOIN revisions r ON r.id = w.base_revision_id
-           JOIN proposal_versions v ON v.id = w.version_id
-           JOIN proposals p ON p.id = w.proposal_id
+           LEFT JOIN proposal_versions v ON v.id = w.version_id
+           LEFT JOIN proposals p ON p.id = w.proposal_id
+           LEFT JOIN review_batches b ON b.id = w.review_batch_id
            LEFT JOIN workers k ON k.id = w.worker_id
            WHERE w.kind = 'review' AND w.state = 'active'
            ORDER BY w.number"#
     )
-    .fetch_all(executor)
+    .fetch_all(&mut *executor)
     .await?;
-    rows.into_iter()
-        .map(|row| {
-            let workspace = workspace_row(RawWorkspace {
-                number: row.number,
-                task: row.task,
-                worker_id: row.worker_id,
-                worker: row.worker,
-                kind: row.kind,
-                path: row.path,
-                base: row.base,
-                proposal: Some(row.proposal),
-                state: row.state,
-                changed_files: row.changed_files,
-                conflicted: 0,
-                last_activity_at: row.last_activity_at,
-                created_at: row.created_at,
-                closed_at: row.closed_at,
-            })?;
-            let proposal = workspace
-                .proposal
-                .ok_or(StoreError::Corrupt("workspaces.proposal_id"))?;
-            let version = u32::try_from(row.version)
-                .map_err(|_| StoreError::Corrupt("proposal_versions.version"))?;
-            Ok(ReviewCheckoutRow {
-                workspace,
-                proposal,
-                version,
-            })
-        })
-        .collect()
+    let members = sqlx::query!(
+        r#"SELECT w.number AS "workspace!: i64",
+                  p.number AS "proposal!: i64",
+                  v.version AS "version!: i64"
+           FROM workspaces w
+           JOIN review_batch_members m ON m.batch_id = w.review_batch_id AND m.released_at IS NULL
+           JOIN proposals p ON p.id = m.proposal_id
+           JOIN proposal_versions v ON v.id = m.version_id
+           WHERE w.kind = 'review' AND w.state = 'active'
+           ORDER BY w.number, m.position"#
+    )
+    .fetch_all(&mut *executor)
+    .await?;
+    let version = |value: i64| {
+        u32::try_from(value).map_err(|_| StoreError::Corrupt("proposal_versions.version"))
+    };
+    let proposal =
+        |value: i64| ProposalId::try_from_db(value).ok_or(StoreError::Corrupt("proposals.number"));
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let target = match (row.proposal, row.version, row.batch) {
+            (Some(number), Some(held), None) => CheckoutTarget::Proposal {
+                proposal: proposal(number)?,
+                version: version(held)?,
+            },
+            (None, None, Some(batch)) => CheckoutTarget::Batch {
+                batch: ReviewBatchId::try_from_db(batch)
+                    .ok_or(StoreError::Corrupt("review_batches.number"))?,
+                members: members
+                    .iter()
+                    .filter(|member| member.workspace == row.number)
+                    .map(|member| Ok((proposal(member.proposal)?, version(member.version)?)))
+                    .collect::<Result<_, StoreError>>()?,
+            },
+            _ => return Err(StoreError::Corrupt("workspaces.review_batch_id")),
+        };
+        let workspace = workspace_row(RawWorkspace {
+            number: row.number,
+            task: row.task,
+            worker_id: row.worker_id,
+            worker: row.worker,
+            kind: row.kind,
+            path: row.path,
+            base: row.base,
+            proposal: row.proposal,
+            state: row.state,
+            changed_files: row.changed_files,
+            conflicted: row.conflicted,
+            last_activity_at: row.last_activity_at,
+            created_at: row.created_at,
+            closed_at: row.closed_at,
+        })?;
+        out.push(ReviewCheckoutRow { workspace, target });
+    }
+    Ok(out)
 }
 
 fn workspace_row(row: RawWorkspace) -> Result<WorkspaceRow, StoreError> {

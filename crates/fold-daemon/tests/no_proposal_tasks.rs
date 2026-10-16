@@ -70,6 +70,7 @@ async fn task(harness: &Harness, id: &str) -> Value {
 /// Area `web` over label `ui` with T-1, a task without a proposal, and T-2, which needs T-1; the area lead `web-lead` and the task coder `web-coder` it started for T-1, both connected.
 async fn designed_by_a_coder(fake: &FakeClaude) -> Harness {
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     harness
         .call(MAIN, "create_label", json!({"name": "ui", "color": "sage"}))
         .await;

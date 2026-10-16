@@ -16,6 +16,8 @@ pub enum ReleaseReason {
     Integrated,
     /// A lead check completed the task without a proposal.
     Completed,
+    /// The task was deleted with its claim rows, so only the `claim.released` event carries this reason.
+    TaskDeleted,
 }
 
 impl ReleaseReason {
@@ -26,6 +28,7 @@ impl ReleaseReason {
             ReleaseReason::TakenOver => "taken_over",
             ReleaseReason::Integrated => "integrated",
             ReleaseReason::Completed => "completed",
+            ReleaseReason::TaskDeleted => "task_deleted",
         }
     }
 }

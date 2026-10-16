@@ -227,13 +227,21 @@ fn archived(task: TaskId) -> TaskError {
     )
 }
 
-/// The open task that owns or takes an item: archived tasks are read-only.
+/// The open task that owns or takes an item. An archived task is read-only, and a Done task's checklists are locked, because they record what the integrated work covered; more work is a follow-up task.
 async fn open_task(tx: &mut WriteTx, task: TaskId) -> Result<TaskRow, TaskError> {
     let row = tasks::fetch(tx.conn(), task)
         .await?
         .ok_or_else(|| task_not_found(task))?;
     if row.archived_at.is_some() {
         return Err(archived(task));
+    }
+    if row.status == TaskStatus::Done {
+        return Err(refusal(
+            codes::TASK_CLOSED,
+            format!("{task} is done"),
+            [("reason", json!("done")), ("task", json!(task.to_string()))],
+            "the checklists of a Done task are locked; call create_task for the follow-up work",
+        ));
     }
     Ok(row)
 }
@@ -246,15 +254,7 @@ pub(super) async fn add_item_in_tx(
     item: &NewChecklistItem,
     now: Timestamp,
 ) -> Result<ChecklistItemId, TaskError> {
-    let row = open_task(tx, task).await?;
-    if row.status == TaskStatus::Done {
-        return Err(refusal(
-            codes::TASK_CLOSED,
-            format!("{task} is done"),
-            [("reason", json!("done")), ("task", json!(task.to_string()))],
-            "a Done task takes no new checklist items; call create_task for the follow-up work",
-        ));
-    }
+    open_task(tx, task).await?;
     let checklist = match &item.checklist {
         Some(name) => name.clone(),
         None => checklists::checklists(tx.conn(), task)

@@ -156,7 +156,7 @@ impl MessageService {
         self.send_with_choices(actor, input, request, None).await
     }
 
-    /// [`MessageService::send_linked`] for a question with `choices`: the recipients answer with a normal reply that names one choice, or with free text.
+    /// [`MessageService::send_linked`] for a question with `choices`: the recipients answer with a normal reply that names one choice, or with free text. Every send passes `policy::can_send_message`, which admits every registered agent, every named human and fold itself.
     pub async fn send_with_choices(
         &self,
         actor: &Actor,
@@ -164,6 +164,7 @@ impl MessageService {
         request: Option<RequestId>,
         choices: Option<MessageChoices>,
     ) -> Result<MessageView, MessageError> {
+        policy::can_send_message(actor).map_err(FoldError::from)?;
         let humans = projects::list_humans(self.registry.read()).await?;
         let sender = Sender::of(actor);
         let now = self.clock.now();

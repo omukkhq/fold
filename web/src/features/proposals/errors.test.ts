@@ -25,6 +25,14 @@ describe("describeFailure", () => {
     );
   });
 
+  it("shows a human approval that comes before a reviewer agent's on the action", () => {
+    expect(describeFailure(refusal("agent_approval_required"))).toEqual({
+      place: "inline",
+      text: "A reviewer agent approves this version first, then you can approve it.",
+      mapped: true,
+    });
+  });
+
   it("has an entry for every integrate gate code", () => {
     for (const code of [
       "not_approved",
@@ -73,14 +81,15 @@ describe("describeFailure", () => {
     ).toBe("A prerequisite is not Done, so fold did not integrate.");
   });
 
-  it("tells a version that arrived during the review from another invalid request", () => {
-    expect(
-      describeFailure(refusal("invalid_request", { reason: "version_changed" }))
-        .text,
-    ).toBe("A new version arrived during the review. Read it first.");
+  it("shows an invalid request in one sentence, and a version that arrived meanwhile as stale_version", () => {
     expect(
       describeFailure(refusal("invalid_request", { field: "body" })).text,
     ).toBe("fold refused the request as written.");
+    expect(
+      describeFailure(
+        refusal("stale_version", { expected_version: 2, current_version: 3 }),
+      ).text,
+    ).toBe("v3 is now the current version. Read it, then try once more.");
   });
 
   it("shows the comment refusals on the form and the session refusals in a banner", () => {

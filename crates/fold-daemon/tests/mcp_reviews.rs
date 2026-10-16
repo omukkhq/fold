@@ -4,8 +4,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::proposal_tools_support::{Fixture, human};
-use fold_core::AgentName;
+use crate::common::roles::give_role;
+use crate::proposal_tools_support::Fixture;
+use fold_core::roles::Role;
 use fold_daemon::mcp::{FoldServer, FooterPart, FooterSource};
 use fold_daemon::services::agents::SessionContext;
 use fold_daemon::services::events::EventService;
@@ -152,20 +153,17 @@ async fn open_p1(fx: &Fixture, frontend: &Client) -> Value {
     .await
 }
 
-/// Gives an existing agent the `integrator` tag, as a human does.
+/// Makes an existing agent a worker that fold started in `role`.
 #[cfg(test)]
-async fn grant_integrator(fx: &Fixture, name: &str) {
-    fx.agents()
-        .set_integrator(&human("tanim"), &AgentName::parse(name).unwrap(), true)
-        .await
-        .unwrap();
+async fn grant_role(fx: &Fixture, name: &str, role: Role) {
+    give_role(&fx.handle.store, name, role, None).await;
 }
 
-/// `review` carries `integrator`; its client reads its tags on every call.
+/// `review` is the review lead; its client reads its standing on every call.
 #[cfg(test)]
-async fn integrator(fx: &Fixture) -> Client {
+async fn review_lead(fx: &Fixture) -> Client {
     let review = connect(fx, "review").await;
-    grant_integrator(fx, "review").await;
+    grant_role(fx, "review", Role::ReviewLead).await;
     review
 }
 
@@ -225,7 +223,7 @@ async fn list_proposals_shows_turn_claim_and_mark() {
 async fn get_proposal_shows_versions_gates_and_files() {
     let fx = Fixture::new().await;
     let frontend = connect(&fx, "frontend").await;
-    let review = integrator(&fx).await;
+    let review = review_lead(&fx).await;
     open_p1(&fx, &frontend).await;
     let view = ok(&review, "get_proposal", json!({"id": "P-1"})).await;
     assert_eq!(view["id"], "P-1");
@@ -272,7 +270,7 @@ async fn get_proposal_shows_versions_gates_and_files() {
     ok(
         &review,
         "submit_review",
-        json!({"id": "P-1", "verdict": "approve", "body": "good", "comments": [
+        json!({"id": "P-1", "version": 1, "verdict": "approve", "body": "good", "comments": [
             {"path": "src/lib.rs", "start_line": 1, "end_line": 1, "side": "new", "body": "nice"},
         ]}),
     )
@@ -316,7 +314,7 @@ async fn a_reviewer_reads_only_the_change_since_the_last_verdict() {
     ok(
         &review,
         "submit_review",
-        json!({"id": "P-1", "verdict": "request_changes", "body": "add z"}),
+        json!({"id": "P-1", "version": 1, "verdict": "request_changes", "body": "add z"}),
     )
     .await;
     fx.write(1, "src/lib.rs", "pub fn y() {}\npub fn z() {}\n");
@@ -361,7 +359,7 @@ async fn a_reviewer_reads_only_the_change_since_the_last_verdict() {
     ok(
         &review,
         "submit_review",
-        json!({"id": "P-1", "verdict": "comment", "body": "", "comments": [
+        json!({"id": "P-1", "version": 2, "verdict": "comment", "body": "", "comments": [
             {"path": "src/lib.rs", "start_line": 2, "end_line": 2, "side": "new", "body": "document z"},
         ]}),
     )
@@ -384,10 +382,18 @@ async fn a_reviewer_reads_only_the_change_since_the_last_verdict() {
     let next = connect(&fx, "batch-reviewer-2").await;
     let view = ok(&next, "get_proposal", json!({"id": "P-1"})).await;
     assert_eq!(view["last_reviewed"], "v1");
+    let stale = err(
+        &next,
+        "submit_review",
+        json!({"id": "P-1", "version": 1, "verdict": "request_changes", "body": "test z"}),
+    )
+    .await;
+    assert_eq!(stale["code"], "stale_version");
+    assert_eq!(stale["details"]["current_version"], 2);
     ok(
         &next,
         "submit_review",
-        json!({"id": "P-1", "verdict": "request_changes", "body": "test z"}),
+        json!({"id": "P-1", "version": 2, "verdict": "request_changes", "body": "test z"}),
     )
     .await;
     let view = ok(&next, "get_proposal", json!({"id": "P-1"})).await;
@@ -519,21 +525,21 @@ async fn submit_review_returns_the_verdict_and_comment_ids() {
     let error = err(
         &frontend,
         "submit_review",
-        json!({"id": "P-1", "verdict": "comment", "body": "mine"}),
+        json!({"id": "P-1", "version": 1, "verdict": "comment", "body": "mine"}),
     )
     .await;
     assert_eq!(error["code"], "author_cannot_review");
     let error = err(
         &backend,
         "submit_review",
-        json!({"id": "P-1", "verdict": "maybe", "body": "?"}),
+        json!({"id": "P-1", "version": 1, "verdict": "maybe", "body": "?"}),
     )
     .await;
     assert_eq!(error["code"], "invalid_request");
     let error = err(
         &backend,
         "submit_review",
-        json!({"id": "P-1", "verdict": "comment", "body": "", "comments": [
+        json!({"id": "P-1", "version": 1, "verdict": "comment", "body": "", "comments": [
             {"path": "src/lib.rs", "start_line": 1, "body": "no side"},
         ]}),
     )
@@ -542,7 +548,7 @@ async fn submit_review_returns_the_verdict_and_comment_ids() {
     let error = err(
         &backend,
         "submit_review",
-        json!({"id": "P-1", "verdict": "comment", "body": "", "comments": [
+        json!({"id": "P-1", "version": 1, "verdict": "comment", "body": "", "comments": [
             {"path": "src/lib.rs", "start_line": 4, "end_line": 9, "side": "new", "body": "far"},
         ]}),
     )
@@ -551,7 +557,7 @@ async fn submit_review_returns_the_verdict_and_comment_ids() {
     let submitted = ok(
         &backend,
         "submit_review",
-        json!({"id": "P-1", "verdict": "request_changes", "body": "rename back", "comments": [
+        json!({"id": "P-1", "version": 1, "verdict": "request_changes", "body": "rename back", "comments": [
             {"path": "src/lib.rs", "start_line": 1, "end_line": 1, "side": "old", "body": "keep x"},
             {"body": "and add a test"},
         ]}),
@@ -579,7 +585,7 @@ async fn get_review_comments_marks_outdated_comments() {
     ok(
         &backend,
         "submit_review",
-        json!({"id": "P-1", "verdict": "comment", "body": "", "comments": [
+        json!({"id": "P-1", "version": 1, "verdict": "comment", "body": "", "comments": [
             {"path": "src/lib.rs", "start_line": 1, "end_line": 1, "side": "new", "body": "why y"},
         ]}),
     )
@@ -622,17 +628,17 @@ async fn get_review_comments_marks_outdated_comments() {
 async fn integrate_proposal_publishes_the_next_revision() {
     let fx = Fixture::new().await;
     let frontend = connect(&fx, "frontend").await;
-    let review = integrator(&fx).await;
+    let review = review_lead(&fx).await;
     open_p1(&fx, &frontend).await;
     let error = err(&review, "integrate_proposal", json!({"id": "P-1"})).await;
     assert_eq!(error["code"], "not_approved");
     ok(
         &review,
         "submit_review",
-        json!({"id": "P-1", "verdict": "approve", "body": "good"}),
+        json!({"id": "P-1", "version": 1, "verdict": "approve", "body": "good"}),
     )
     .await;
-    grant_integrator(&fx, "frontend").await;
+    grant_role(&fx, "frontend", Role::BatchReviewer).await;
     let error = err(&frontend, "integrate_proposal", json!({"id": "P-1"})).await;
     assert_eq!(error["code"], "author_cannot_integrate");
     let error = err(
@@ -665,7 +671,7 @@ async fn integrate_proposal_publishes_the_next_revision() {
 async fn integration_conflicted_lists_files_and_kinds() {
     let fx = Fixture::new().await;
     let frontend = connect(&fx, "frontend").await;
-    let review = integrator(&fx).await;
+    let review = review_lead(&fx).await;
     open_p1(&fx, &frontend).await;
     let backend = fx.agent("backend").await;
     fx.proposal(&backend, 2, "pub fn w() {}\n").await;
@@ -673,7 +679,7 @@ async fn integration_conflicted_lists_files_and_kinds() {
         ok(
             &review,
             "submit_review",
-            json!({"id": id, "verdict": "approve", "body": "good"}),
+            json!({"id": id, "version": 1, "verdict": "approve", "body": "good"}),
         )
         .await;
     }
@@ -745,6 +751,7 @@ async fn errors_carry_code_message_and_hint() {
     let fx = Fixture::new().await;
     let frontend = connect(&fx, "frontend").await;
     let review = connect(&fx, "review").await;
+    grant_role(&fx, "review", Role::TaskCoder).await;
     open_p1(&fx, &frontend).await;
     for (client, tool, arguments, code, tool_in_hint) in [
         (

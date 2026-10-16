@@ -1,4 +1,3 @@
-mod agent;
 mod claude;
 mod commands;
 mod doctor;
@@ -39,8 +38,6 @@ enum Command {
     Setup(service::SetupArgs),
     /// Delete unreferenced objects, prune checkpoints and remove closed workspace directories
     Gc(commands::gc::GcArgs),
-    /// Manage the agents of the project in the working directory
-    Agent(agent::AgentArgs),
     /// Start the daemon when needed, then continue the project's main agent: the Claude Code session that fld started last, or a new one
     Claude(claude::ClaudeArgs),
     /// Start the daemon when needed, then a new Claude Code session as the project's main agent; fld new claude is the same
@@ -73,7 +70,6 @@ enum Failure {
     Doctor(doctor::DoctorError),
     Service(service::ServiceError),
     Gc(commands::gc::GcError),
-    Agent(agent::AgentError),
     Claude(claude::ClaudeError),
     Token(token::TokenError),
     Remote(commands::remote::RemoteError),
@@ -98,9 +94,6 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
             out,
         )
         .map_err(Failure::Gc),
-        Some(Command::Agent(args)) => {
-            agent::run(&args, &serve::Dirs::from_env(), out).map_err(Failure::Agent)
-        }
         Some(Command::Claude(args)) => {
             claude::run(&args, claude::Session::Continue, &serve::Dirs::from_env())
                 .map_err(Failure::Claude)
@@ -146,10 +139,6 @@ fn main() -> anyhow::Result<()> {
             (Some(code), Some(hint)) => anyhow::anyhow!("{code}: {error}\nhint: {hint}"),
             (Some(code), None) => anyhow::anyhow!("{code}: {error}"),
             _ => error.into(),
-        }),
-        Err(Failure::Agent(error)) => Err(match error.code() {
-            Some(code) => anyhow::anyhow!("{code}: {error}"),
-            None => error.into(),
         }),
         Err(Failure::Claude(error)) => Err(match (error.code(), error.hint()) {
             (Some(code), Some(hint)) => anyhow::anyhow!("{code}: {error}\nhint: {hint}"),

@@ -1,5 +1,7 @@
 use fold_core::object::ObjectHash;
+use fold_core::policy::AgentStanding;
 use fold_core::reviews::{Approver, HumanReviewMark, ReviewFact, Side, Verdict};
+use fold_core::roles::Role;
 use fold_core::tree::ChangeCounts;
 use fold_core::{
     ChangesetId, CommentId, EventActor, HumanName, ProposalId, ReviewBatchId, RevisionId, TaskId,
@@ -239,6 +241,27 @@ pub async fn retire(
     Ok(updated == 1)
 }
 
+/// Makes the worker `worker_id` the author of the open proposal. False, with nothing changed, when the proposal is not open.
+pub async fn set_author(
+    tx: &mut WriteTx,
+    proposal: ProposalId,
+    worker_id: i64,
+    now: Timestamp,
+) -> Result<bool, StoreError> {
+    let (number, now) = (proposal.to_db(), now.as_millis());
+    let updated = sqlx::query!(
+        "UPDATE proposals SET author_worker_id = ?2, updated_at = ?3
+         WHERE number = ?1 AND state = 'open'",
+        number,
+        worker_id,
+        now
+    )
+    .execute(tx.conn())
+    .await?
+    .rows_affected();
+    Ok(updated == 1)
+}
+
 /// Releases the unreleased review claim on the proposal with `reason` stored as `release_reason`, and returns its holder; `None`, with nothing changed, when nobody holds one.
 pub async fn release_review_claim(
     tx: &mut WriteTx,
@@ -334,16 +357,16 @@ pub async fn get_proposal(
     executor: impl SqliteExecutor<'_>,
     proposal: ProposalId,
 ) -> Result<Option<ProposalRow>, StoreError> {
-    Ok(select(executor, Some(proposal), None, false).await?.pop())
+    Ok(select(executor, Some(proposal), None, None).await?.pop())
 }
 
-/// Proposals in number order, only those in `state` when it is given, and only those without an unreleased review claim when `unclaimed`.
+/// Proposals in number order, only those in `state` when it is given. With `unclaimed_at`, only those that no reviewer holds at that cutoff: no unreleased review claim, or one last renewed at or before it. The caller passes the time a lease renewed then would have run out, so a stale claim, which `claim_review` takes over, counts as unclaimed.
 pub async fn list_proposals(
     executor: impl SqliteExecutor<'_>,
     state: Option<ProposalState>,
-    unclaimed: bool,
+    unclaimed_at: Option<Timestamp>,
 ) -> Result<Vec<ProposalRow>, StoreError> {
-    select(executor, None, state, unclaimed).await
+    select(executor, None, state, unclaimed_at).await
 }
 
 /// One statement serves every read so the rows always map the same way.
@@ -351,10 +374,11 @@ async fn select(
     executor: impl SqliteExecutor<'_>,
     proposal: Option<ProposalId>,
     state: Option<ProposalState>,
-    unclaimed: bool,
+    unclaimed_at: Option<Timestamp>,
 ) -> Result<Vec<ProposalRow>, StoreError> {
     let proposal = proposal.map(ProposalId::to_db);
     let state = state.map(ProposalState::as_str);
+    let unclaimed_at = unclaimed_at.map(Timestamp::as_millis);
     let rows = sqlx::query!(
         r#"SELECT p.number AS "number!: i64",
                   t.number AS "task!: i64",
@@ -393,14 +417,15 @@ async fn select(
            JOIN workers w ON w.id = p.author_worker_id
            WHERE (?1 IS NULL OR p.number = ?1)
              AND (?2 IS NULL OR p.state = ?2)
-             AND (NOT ?3 OR NOT EXISTS (
+             AND (?3 IS NULL OR NOT EXISTS (
                      SELECT 1 FROM claims c
                      WHERE c.proposal_id = p.id AND c.kind = 'review' AND c.released_at IS NULL
+                       AND c.renewed_at > ?3
                  ))
            ORDER BY p.number"#,
         proposal,
         state,
-        unclaimed
+        unclaimed_at
     )
     .fetch_all(executor)
     .await?;
@@ -691,7 +716,7 @@ pub async fn comment_proposal(
         .transpose()
 }
 
-/// The reviews of one version of the proposal. `seq` is each review's place in `(created_at, id)` order, counted from 1: the order the status cache reads the latest verdict in, so `fold_core::reviews::latest_verdict` over these facts and the board never disagree. Each approver's weight comes from the agent's tags at the time of this read.
+/// The reviews of one version of the proposal. `seq` is each review's place in `(created_at, id)` order, counted from 1: the order the status cache reads the latest verdict in, so `fold_core::reviews::latest_verdict` over these facts and the board never disagree. Each approver's weight comes from the agent's `main` tag and worker role at the time of this read.
 pub async fn review_facts(
     executor: impl SqliteExecutor<'_>,
     proposal: ProposalId,
@@ -702,8 +727,9 @@ pub async fn review_facts(
         r#"SELECT r.verdict, w.name AS "worker?: String", r.reviewer_human,
                   EXISTS (
                       SELECT 1 FROM agent_tags a
-                      WHERE a.agent_id = w.agent_id AND a.tag = 'integrator'
-                  ) AS "integrator!: bool"
+                      WHERE a.agent_id = w.agent_id AND a.tag = 'main'
+                  ) AS "holds_main!: bool",
+                  (SELECT wp.role FROM worker_processes wp WHERE wp.agent_id = w.agent_id) AS "role?: String"
            FROM reviews r
            JOIN proposal_versions v ON v.id = r.version_id
            JOIN proposals p ON p.id = v.proposal_id
@@ -727,8 +753,24 @@ pub async fn review_facts(
                 Some(human) => Approver::Human(
                     HumanName::parse(human).map_err(|_| StoreError::Corrupt("reviews"))?,
                 ),
-                None if row.integrator => Approver::IntegratorAgent,
-                None => Approver::OtherAgent,
+                None => {
+                    let role = row
+                        .role
+                        .as_deref()
+                        .map(|role| {
+                            Role::parse(role).ok_or(StoreError::Corrupt("worker_processes.role"))
+                        })
+                        .transpose()?;
+                    let standing = AgentStanding {
+                        holds_main: row.holds_main,
+                        role,
+                    };
+                    if standing.decides_reviews() {
+                        Approver::DecidingAgent
+                    } else {
+                        Approver::OtherAgent
+                    }
+                }
             };
             Ok(ReviewFact {
                 verdict: parse_verdict(&row.verdict)?,

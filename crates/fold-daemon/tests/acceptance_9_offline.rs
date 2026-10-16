@@ -3,10 +3,10 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::common::acceptance::{HUMAN, Harness, Work, assert_in_order, read_tree};
+use crate::common::acceptance::{Harness, Work, assert_in_order, read_tree};
 use crate::common::invariants::assert_consistent;
 use crate::common::sse::Sse;
-use fold_core::{Actor, AgentName, GitConfig, HumanName, ProjectConfig};
+use fold_core::{GitConfig, ProjectConfig};
 use fold_daemon::http::events::EventEnvelope;
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -336,7 +336,14 @@ async fn flow() {
     assert!(harness.inbox("backend").await.is_empty());
     assert!(harness.inbox("frontend").await.is_empty());
 
-    // 5. Proposal and integration: a human grants integrator, review approves and integrates.
+    // 5. Proposal and integration: review, the review lead, approves and integrates.
+    crate::common::roles::give_role(
+        &harness.handle.store,
+        "review",
+        fold_core::roles::Role::ReviewLead,
+        None,
+    )
+    .await;
     let created = harness
         .call(
             "backend",
@@ -346,16 +353,6 @@ async fn flow() {
         .await;
     assert_eq!(created["status"], "review", "{created}");
     let proposal = created["id"].as_str().unwrap().to_owned();
-    harness
-        .handle
-        .agents()
-        .set_integrator(
-            &Actor::human(HumanName::parse(HUMAN).unwrap()),
-            &AgentName::parse("review").unwrap(),
-            true,
-        )
-        .await
-        .unwrap();
     harness
         .call("review", "claim_review", json!({"id": proposal}))
         .await;
@@ -475,7 +472,6 @@ async fn flow() {
             "message.sent",
             "message.acknowledged",
             "proposal.opened",
-            "agent.tag_added",
             "integration.succeeded",
             "main.advanced",
             "integration.succeeded",

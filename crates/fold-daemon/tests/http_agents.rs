@@ -4,12 +4,13 @@ use std::sync::Arc;
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
-use fold_core::{AgentName, EventFilter, HumanName, Tag, Timestamp};
+use fold_core::{AgentName, EventFilter, HumanName, Tag, TaskDescription, TaskTitle, Timestamp};
 use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
 use fold_daemon::http::{router, socket_router};
 use fold_daemon::projects::{ProjectHandle, Projects};
 use fold_daemon::services::agents::AgentService;
+use fold_daemon::services::tasks::CreateTask;
 use fold_store::events;
 use fold_store::projects::{self as registry, ProjectRow};
 use fold_store::testing::TestProject;
@@ -17,7 +18,8 @@ use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-const PATH: &str = "/api/v1/projects/demo/agents/review/tags/integrator";
+/// A bodiless write that only a named human makes; it succeeds once, because `T-1` is then archived.
+const PATH: &str = "/api/v1/projects/demo/tasks/T-1/archive";
 
 #[cfg(test)]
 struct Fixture {
@@ -68,6 +70,19 @@ impl Fixture {
             )
             .await
             .unwrap();
+        let review = agents.actor(&ctx, None).await.unwrap();
+        handle
+            .tasks
+            .create_task(
+                &review,
+                CreateTask {
+                    title: TaskTitle::parse("Write the docs").unwrap(),
+                    description: TaskDescription::new("what to write"),
+                    labels: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
         Self {
             project,
             state,
@@ -83,14 +98,14 @@ impl Fixture {
         socket_router(self.state.clone())
     }
 
-    /// `(type, actor, data)` of every stored `agent.tag_*` event.
-    async fn tag_events(&self) -> Vec<(String, String, Value)> {
+    /// The actor of every stored `task.archived` event.
+    async fn archive_actors(&self) -> Vec<String> {
         events::read_after(self.handle.store.read(), 0, &EventFilter::default(), 1000)
             .await
             .unwrap()
             .into_iter()
-            .filter(|e| e.event_type.as_str().starts_with("agent.tag"))
-            .map(|e| (e.event_type.to_string(), e.actor.to_string(), e.data))
+            .filter(|e| e.event_type.as_str() == "task.archived")
+            .map(|e| e.actor.to_string())
             .collect()
     }
 }
@@ -115,7 +130,10 @@ async fn call(
         .unwrap();
     let status = response.status();
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    (status, serde_json::from_slice(&bytes).unwrap())
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
 }
 
 #[cfg(test)]
@@ -124,28 +142,17 @@ fn code(body: &Value) -> &str {
 }
 
 #[tokio::test]
-async fn put_with_the_cookie_grants_integrator_as_that_human() {
+async fn a_write_with_the_cookie_acts_as_that_human() {
     let fixture = Fixture::new().await;
     let (status, body) = call(
         fixture.http(),
-        Method::PUT,
+        Method::POST,
         PATH,
         &[("cookie", "theme=dark; fold_human=tanim")],
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(
-        body,
-        json!({"agent": "review", "tags": ["integrator", "review"]})
-    );
-    assert_eq!(
-        fixture.tag_events().await,
-        vec![(
-            "agent.tag_added".to_owned(),
-            "human:tanim".to_owned(),
-            json!({"agent": "review", "tag": "integrator"})
-        )]
-    );
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    assert_eq!(fixture.archive_actors().await, ["human:tanim"]);
     let human = registry::find_human(
         fixture.project.registry().read(),
         &HumanName::parse("tanim").unwrap(),
@@ -157,10 +164,10 @@ async fn put_with_the_cookie_grants_integrator_as_that_human() {
 }
 
 #[tokio::test]
-async fn a_repeated_put_appends_no_second_event_and_keeps_the_human() {
+async fn a_repeated_write_keeps_the_human() {
     let fixture = Fixture::new().await;
     let cookie = [("cookie", "fold_human=tanim")];
-    call(fixture.http(), Method::PUT, PATH, &cookie).await;
+    call(fixture.http(), Method::POST, PATH, &cookie).await;
     let first = registry::find_human(
         fixture.project.registry().read(),
         &HumanName::parse("tanim").unwrap(),
@@ -171,10 +178,10 @@ async fn a_repeated_put_appends_no_second_event_and_keeps_the_human() {
         .project
         .clock()
         .set(Timestamp::from_millis(fixture.project.now().as_millis() + 5000).unwrap());
-    let (status, body) = call(fixture.http(), Method::PUT, PATH, &cookie).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["tags"], json!(["integrator", "review"]));
-    assert_eq!(fixture.tag_events().await.len(), 1);
+    let (status, body) = call(fixture.http(), Method::POST, PATH, &cookie).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(code(&body), "task_closed");
+    assert_eq!(fixture.archive_actors().await.len(), 1);
     let second = registry::find_human(
         fixture.project.registry().read(),
         &HumanName::parse("tanim").unwrap(),
@@ -189,13 +196,13 @@ async fn the_socket_takes_the_name_from_the_header() {
     let fixture = Fixture::new().await;
     let (status, body) = call(
         fixture.socket(),
-        Method::PUT,
+        Method::POST,
         PATH,
         &[("x-fold-human", "tanim")],
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(fixture.tag_events().await[0].1, "human:tanim");
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    assert_eq!(fixture.archive_actors().await, ["human:tanim"]);
 }
 
 #[tokio::test]
@@ -210,103 +217,58 @@ async fn a_request_without_a_name_gets_human_name_required() {
         (fixture.http(), vec![("cookie", "fold_human=; other=1")]),
         (fixture.socket(), vec![("x-fold-human", "")]),
     ] {
-        let (status, body) = call(router, Method::PUT, PATH, &headers).await;
+        let (status, body) = call(router, Method::POST, PATH, &headers).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{headers:?}");
         assert_eq!(code(&body), "human_name_required");
     }
-    assert!(fixture.tag_events().await.is_empty());
+    assert!(fixture.archive_actors().await.is_empty());
 }
 
 #[tokio::test]
 async fn an_invalid_name_gets_invalid_name() {
     let fixture = Fixture::new().await;
-    for (router, headers, path) in [
-        (fixture.http(), vec![("cookie", "fold_human=Tanim")], PATH),
-        (fixture.socket(), vec![("x-fold-human", "a b")], PATH),
-        (
-            fixture.socket(),
-            vec![("x-fold-human", "tanim")],
-            "/api/v1/projects/demo/agents/Review/tags/integrator",
-        ),
+    for (router, headers) in [
+        (fixture.http(), vec![("cookie", "fold_human=Tanim")]),
+        (fixture.socket(), vec![("x-fold-human", "a b")]),
     ] {
-        let (status, body) = call(router, Method::PUT, path, &headers).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{path} {headers:?}");
+        let (status, body) = call(router, Method::POST, PATH, &headers).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{headers:?}");
         assert_eq!(code(&body), "invalid_name");
     }
     let request = Request::builder()
         .header(CLIENT_HEADER, "test")
-        .method(Method::PUT)
+        .method(Method::POST)
         .uri(PATH)
         .header("x-fold-human", &b"t\xffm"[..])
         .body(Body::empty())
         .unwrap();
     let response = fixture.socket().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    assert!(fixture.tag_events().await.is_empty());
+    assert!(fixture.archive_actors().await.is_empty());
 }
 
 #[tokio::test]
-async fn an_unknown_agent_or_project_is_not_found() {
+async fn an_unknown_task_or_project_is_not_found() {
     let fixture = Fixture::new().await;
     let cookie = [("cookie", "fold_human=tanim")];
     let (status, body) = call(
         fixture.http(),
-        Method::PUT,
-        "/api/v1/projects/demo/agents/ghost/tags/integrator",
+        Method::POST,
+        "/api/v1/projects/demo/tasks/T-9/archive",
         &cookie,
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(code(&body), "agent_not_found");
-    assert_eq!(body["error"]["details"]["agent"], "ghost");
+    assert_eq!(code(&body), "task_not_found");
     let (status, body) = call(
         fixture.http(),
-        Method::DELETE,
-        "/api/v1/projects/other/agents/review/tags/integrator",
+        Method::POST,
+        "/api/v1/projects/other/tasks/T-1/archive",
         &cookie,
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(code(&body), "project_not_found");
-}
-
-#[tokio::test]
-async fn delete_removes_the_tag_once() {
-    let fixture = Fixture::new().await;
-    let header = [("x-fold-human", "tanim")];
-    call(fixture.socket(), Method::PUT, PATH, &header).await;
-    let (status, body) = call(fixture.socket(), Method::DELETE, PATH, &header).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body, json!({"agent": "review", "tags": ["review"]}));
-    let (status, _) = call(fixture.socket(), Method::DELETE, PATH, &header).await;
-    assert_eq!(status, StatusCode::OK);
-    let types: Vec<String> = fixture
-        .tag_events()
-        .await
-        .into_iter()
-        .map(|(event_type, actor, _)| {
-            assert_eq!(actor, "human:tanim");
-            event_type
-        })
-        .collect();
-    assert_eq!(types, ["agent.tag_added", "agent.tag_removed"]);
-}
-
-#[tokio::test]
-async fn both_routes_declare_their_errors() {
-    let doc = serde_json::to_value(fold_daemon::http::openapi()).unwrap();
-    let item = &doc["paths"]["/api/v1/projects/{slug}/agents/{name}/tags/integrator"];
-    for (method, operation_id) in [("put", "grant_integrator"), ("delete", "revoke_integrator")] {
-        let operation = &item[method];
-        assert_eq!(operation["operationId"], operation_id);
-        for status in ["200", "400", "401", "403", "404"] {
-            assert!(
-                operation["responses"][status].is_object(),
-                "{method} {status}"
-            );
-        }
-    }
-    assert!(fold_daemon::http::openapi::check_operations(&fold_daemon::http::openapi()).is_ok());
 }
 
 const AGENTS: &str = "/api/v1/projects/demo/agents";
@@ -372,7 +334,6 @@ async fn the_agents_route_returns_the_overview_in_registration_order() {
             "last_call_at": registered,
             "sessions": 1,
             "open_sessions": [{"started_at": registered, "pid": 2, "cwd": null}],
-            "integrator_granted_by": null,
             "attention": [],
             "workers": [
                 {"name": "backend", "parent": null, "last_call_at": null, "activity": null,
@@ -429,62 +390,6 @@ async fn open_sessions_carry_the_working_directory_of_the_handshake() {
     assert_eq!(
         body["agents"][1]["open_sessions"].as_array().unwrap().len(),
         1
-    );
-}
-
-#[tokio::test]
-async fn the_overview_names_the_human_that_granted_integrator() {
-    let fixture = Fixture::new().await;
-    let granter = async || {
-        let (_, body) = call(fixture.http(), Method::GET, AGENTS, &[]).await;
-        body["agents"][0]["integrator_granted_by"].clone()
-    };
-    assert_eq!(granter().await, Value::Null);
-
-    let (status, _) = call(
-        fixture.http(),
-        Method::PUT,
-        PATH,
-        &[("cookie", "fold_human=tanim")],
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(granter().await, "human:tanim");
-    let (status, _) = call(
-        fixture.socket(),
-        Method::PUT,
-        PATH,
-        &[("x-fold-human", "ana")],
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        granter().await,
-        "human:tanim",
-        "a repeat grant keeps the first granter"
-    );
-
-    let (status, _) = call(
-        fixture.socket(),
-        Method::DELETE,
-        PATH,
-        &[("x-fold-human", "ana")],
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(granter().await, Value::Null);
-    let (status, _) = call(
-        fixture.socket(),
-        Method::PUT,
-        PATH,
-        &[("x-fold-human", "ana")],
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        granter().await,
-        "human:ana",
-        "a grant after a removal records the new granter"
     );
 }
 
@@ -613,12 +518,12 @@ async fn an_invalid_configuration_fails_the_overview_and_leaves_the_project_open
     assert_eq!(code(&body), "invalid_config");
     let (status, body) = call(
         fixture.socket(),
-        Method::PUT,
+        Method::POST,
         PATH,
         &[("x-fold-human", "ana")],
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
 
     std::fs::write(fixture.project.paths().config(), "lease_minutes = 3\n").unwrap();
     let (status, body) = call(fixture.http(), Method::GET, AGENTS, &[]).await;

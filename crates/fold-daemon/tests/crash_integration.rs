@@ -1,12 +1,14 @@
 #![cfg(test)]
 
+use crate::common::roles::give_role;
+use fold_core::roles::Role;
 use std::path::Path;
 
 use crate::common::invariants::assert_consistent;
-use crate::reviews_support::{Fixture, human, names, p};
+use crate::reviews_support::{Fixture, names, p};
 use fold_core::events::types;
 use fold_core::reviews::Verdict;
-use fold_core::{Actor, AgentName, RevisionId, TaskStatus};
+use fold_core::{Actor, RevisionId, TaskStatus};
 use fold_daemon::services::reviews::IntegrationOutcome;
 use fold_store::workspaces;
 
@@ -14,16 +16,20 @@ fn r(number: u32) -> RevisionId {
     RevisionId::from_number(number).unwrap()
 }
 
-/// `P-1` approved by `review`, which carries `integrator` and acts with the returned actor.
+/// `P-1` approved by `review`, the review lead, which acts with the returned actor.
 async fn approved(fx: &Fixture) -> Actor {
     fx.proposal().await;
-    fx.agents
-        .set_integrator(&human(), &AgentName::parse("review").unwrap(), true)
-        .await
-        .unwrap();
+    give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
     let review = fx.agents.actor(&fx.review.ctx, None).await.unwrap();
     fx.reviews
-        .submit_review(&review, p(1), Verdict::Approve, "looks right", Vec::new())
+        .submit_review(
+            &review,
+            p(1),
+            1,
+            Verdict::Approve,
+            "looks right",
+            Vec::new(),
+        )
         .await
         .unwrap();
     review

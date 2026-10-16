@@ -1,3 +1,5 @@
+use crate::common::roles::give_role;
+use fold_core::roles::Role;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -150,7 +152,7 @@ fn recording(outcomes: mpsc::UnboundedSender<(PathBuf, Option<std::io::ErrorKind
 
 #[cfg(test)]
 impl Fixture {
-    /// Agents `frontend` (with the worker `frontend/ui`), `backend`, `docs` and `lead` (integrator), and the human `ana`.
+    /// Agents `frontend` (with the worker `frontend/ui`), `backend`, `docs` and `lead` (the review lead), and the human `ana`.
     async fn new() -> Self {
         let project = TestProject::new().await;
         let bus = EventBus::new();
@@ -171,14 +173,7 @@ impl Fixture {
         for agent in ["backend", "docs", "lead"] {
             register(&agents, agent, &[]).await;
         }
-        agents
-            .set_integrator(
-                &Actor::human(HumanName::parse("ana").unwrap()),
-                &name("lead"),
-                true,
-            )
-            .await
-            .unwrap();
+        give_role(project.store(), "lead", Role::ReviewLead, None).await;
         let now = project.now();
         let ana = HumanName::parse("ana").unwrap();
         project
@@ -330,13 +325,7 @@ async fn the_proposal_and_task_rules_read_their_context() {
             .unwrap(),
         )
         .await;
-    assert_eq!(
-        lead.next().await,
-        wire(
-            TOKEN,
-            "fold: P-3 approved by a human. Call integrate_proposal."
-        )
-    );
+    // Nobody holds the review claim, so the human approval reaches nobody; the sentinel below arrives first.
 
     let task = fixture
         .tasks

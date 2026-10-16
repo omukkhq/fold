@@ -1,14 +1,16 @@
 #![cfg(test)]
 
+use crate::common::roles::give_role;
 use crate::proposal_tools_support::{Fixture, human, t};
 use fold_core::reviews::{Side, Verdict};
+use fold_core::roles::Role;
 use fold_core::{
-    Actor, AgentActor, AgentName, FoldError, INTEGRATOR_TAG, ProposalId, ReviewBatchId, Tag,
-    TaskDescription, TaskTitle, WorkerName, codes,
+    Actor, AgentActor, AgentName, FoldError, ProposalId, ReviewBatchId, TaskDescription, TaskTitle,
+    WorkerName, codes,
 };
 use fold_daemon::services::reviews::{
-    BatchComment, BatchLines, BatchVerdict, CommentLocation, LeftOutReason, ProposalSummary,
-    ReviewError,
+    BatchComment, BatchLines, BatchVerdict, CheckoutTarget, CommentLocation, LeftOutReason,
+    ProposalSummary, ReviewError,
 };
 use fold_daemon::services::tasks::{CreateTask, TaskError};
 use fold_daemon::services::workspaces::WorkspaceRef;
@@ -35,7 +37,7 @@ fn details(error: &FoldError) -> Value {
     error.details().cloned().map_or(Value::Null, Value::Object)
 }
 
-/// Four open proposals, each by its own agent, and the reviewer `review` with the `integrator` tag. `T-1` needs `T-3`, so the merge order of all four is P-2, P-3, P-1, P-4.
+/// Four open proposals, each by its own agent, and the reviewer `review`, the review lead. `T-1` needs `T-3`, so the merge order of all four is P-2, P-3, P-1, P-4.
 ///
 /// - P-1 (T-1): `README.md` gains a first line, and `src/one.rs` is new.
 /// - P-2 (T-2): `README.md` gains a last line, and `src/two.rs` is new.
@@ -101,14 +103,11 @@ impl Scene {
             .await
             .unwrap();
         fx.agent("review").await;
-        fx.agents()
-            .set_integrator(&human("tanim"), &AgentName::parse("review").unwrap(), true)
-            .await
-            .unwrap();
+        give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
         let review = Actor::Agent(AgentActor {
             agent: AgentName::parse("review").unwrap(),
             worker: WorkerName::parse("review").unwrap(),
-            tags: vec![Tag::parse(INTEGRATOR_TAG).unwrap()],
+            tags: Vec::new(),
         });
         Self {
             fx,
@@ -302,13 +301,85 @@ async fn a_member_that_conflicts_is_refused_with_both_ids_until_it_is_removed() 
     assert_eq!(view.checkout, None, "a removal archives the checkout");
 }
 
+/// The project's checkout list shows a batch checkout next to the checkout of one proposal, with the members its files hold in merge order and each checkout's count of conflicted paths; a member that leaves archives the batch checkout, so the list drops it.
+#[tokio::test]
+async fn the_checkout_list_shows_a_batch_checkout_with_its_members() {
+    let scene = Scene::new().await;
+    let reviews = scene.fx.reviews();
+    let batch = scene.batch(&[1, 2, 3]).await;
+    let checkout = reviews
+        .create_batch_checkout(&scene.review, batch)
+        .await
+        .unwrap();
+    reviews.claim_review(&scene.review, p(4)).await.unwrap();
+    let single = reviews
+        .create_review_checkout(&scene.review, p(4))
+        .await
+        .unwrap();
+    fold_store::testing::execute(
+        scene.fx.project.store(),
+        &format!(
+            "INSERT INTO workspace_conflicts (workspace_id, path, kind)
+             SELECT id, CAST('README.md' AS BLOB), 'both_modified_text' FROM workspaces WHERE number = {}",
+            single.workspace.id.number()
+        ),
+    )
+    .await;
+
+    let listed = reviews.list_review_checkouts().await.unwrap();
+    let rows: Vec<_> = listed
+        .iter()
+        .map(|row| {
+            (
+                row.workspace.id,
+                row.workspace.conflicted,
+                row.target.clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (
+                checkout.workspace.id,
+                0,
+                CheckoutTarget::Batch {
+                    batch,
+                    members: vec![(p(2), 1), (p(3), 1), (p(1), 1)],
+                },
+            ),
+            (
+                single.workspace.id,
+                1,
+                CheckoutTarget::Proposal {
+                    proposal: p(4),
+                    version: 1,
+                },
+            ),
+        ]
+    );
+
+    reviews
+        .remove_from_batch(&scene.review, batch, p(3))
+        .await
+        .unwrap();
+    let listed = reviews.list_review_checkouts().await.unwrap();
+    assert_eq!(
+        listed
+            .iter()
+            .map(|row| row.workspace.id)
+            .collect::<Vec<_>>(),
+        [single.workspace.id]
+    );
+}
+
 #[tokio::test]
 async fn a_member_that_conflicts_with_main_is_refused_naming_main() {
     let scene = Scene::new().await;
     let reviews = scene.fx.reviews();
     reviews.claim_review(&scene.review, p(2)).await.unwrap();
     reviews
-        .submit_review(&scene.review, p(2), Verdict::Approve, "fine", Vec::new())
+        .submit_review(&scene.review, p(2), 1, Verdict::Approve, "fine", Vec::new())
         .await
         .unwrap();
     reviews
@@ -848,6 +919,7 @@ async fn a_batch_whose_members_all_integrate_closes_and_archives_its_checkout() 
             .submit_review(
                 &human("tanim"),
                 proposal,
+                1,
                 Verdict::Approve,
                 "fine",
                 Vec::new(),

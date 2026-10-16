@@ -88,7 +88,7 @@ const FOLD_TOOLS: [&str; 78] = [
 const PENDING_TOOLS: [&str; 0] = [];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 142] = [
+const FOLD_ERROR_CODES: [&str; 143] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -231,6 +231,7 @@ const FOLD_ERROR_CODES: [&str; 142] = [
     "task_already_reported",
     "task_not_reported",
     "task_check_denied",
+    "agent_approval_required",
 ];
 
 /// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.

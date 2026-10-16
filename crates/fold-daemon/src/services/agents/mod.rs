@@ -2,11 +2,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use fold_core::events::types;
-use fold_core::policy::SessionPeer;
+use fold_core::policy::{SessionPeer, TagOrigin};
 use fold_core::{
-    Actor, AgentActor, AgentName, Clock, EventActor, EventError, FoldError, INTEGRATOR_TAG,
-    NewEvent, ProjectConfig, ProjectPaths, Tag, TaskId, Timestamp, WorkerName, codes, policy,
-    presence_of,
+    Actor, AgentActor, AgentName, Clock, EventActor, EventError, FoldError, NewEvent,
+    ProjectConfig, ProjectPaths, Tag, TaskId, Timestamp, WorkerName, codes, policy, presence_of,
 };
 use fold_store::agents::{self, AgentRow, WorkerRow};
 use fold_store::{Store, StoreError, WriteTx};
@@ -90,13 +89,6 @@ pub struct Registered {
     pub main_worker: WorkerName,
     /// True when this call created the agent.
     pub created: bool,
-}
-
-/// An agent and its whole tag set after a tag command.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentTags {
-    pub agent: AgentName,
-    pub tags: Vec<Tag>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -215,35 +207,46 @@ impl AgentService {
         })
     }
 
-    /// Creates the agent and its main worker on first use, merges `tags` and binds the session. A repeat call changes nothing except the tags it adds. It keeps the session context instead of an `Actor` because it binds that session; the registering agent is the actor that `policy::can_set_tag` checks for each tag. A session under a worker's process tree binds only to that worker's agent; any other name appends `session.bind_refused` and fails.
+    /// Creates the agent and its main worker on first use, merges `tags` and binds the session. A repeat call changes nothing except the tags it adds. It keeps the session context instead of an `Actor` because it binds that session. A session under a worker's process tree binds only to that worker's agent; any other name appends `session.bind_refused` and fails. The tags come from the adapter's handshake, which carries the `main` tag of `fld claude`.
     pub async fn register_agent(
         &self,
         ctx: &mut SessionContext,
         name: &AgentName,
         tags: &[Tag],
     ) -> Result<Registered, AgentError> {
+        self.register(ctx, name, tags, TagOrigin::Handshake).await
+    }
+
+    /// [`AgentService::register_agent`] for the `register_agent` tool, whose tags the session names itself: it never gives the `main` tag to an agent that lacks it (`policy::can_take_main_tag`).
+    pub async fn register_agent_from_tool(
+        &self,
+        ctx: &mut SessionContext,
+        name: &AgentName,
+        tags: &[Tag],
+    ) -> Result<Registered, AgentError> {
+        self.register(ctx, name, tags, TagOrigin::RegisterTool)
+            .await
+    }
+
+    async fn register(
+        &self,
+        ctx: &mut SessionContext,
+        name: &AgentName,
+        tags: &[Tag],
+        origin: TagOrigin,
+    ) -> Result<Registered, AgentError> {
         if let Err(denied) = policy::can_bind_agent(&ctx.peer, name) {
             self.refuse_bind(ctx, name).await?;
             return Err(FoldError::from(denied).into());
-        }
-        let current = match agents::find_agent(self.store.read(), name).await? {
-            Some(agent) => agents::tags(self.store.read(), agent.id).await?,
-            None => Vec::new(),
-        };
-        let registering = Actor::Agent(AgentActor {
-            agent: name.clone(),
-            worker: WorkerName::main(name),
-            tags: current,
-        });
-        for tag in tags {
-            policy::can_set_tag(&registering, tag, true).map_err(FoldError::from)?;
         }
         let session_id = ctx.session_id;
         let now = self.clock.now();
         let mut buffer = EventBuffer::new();
         let registered = self
             .store
-            .write(async |tx| register_agent_in(tx, &mut buffer, session_id, name, tags, now).await)
+            .write(async |tx| {
+                register_agent_in(tx, &mut buffer, session_id, name, tags, origin, now).await
+            })
             .await?;
         self.bus.publish(buffer);
         ctx.agent = Some(name.clone());
@@ -351,54 +354,6 @@ impl AgentService {
             worker: worker.name,
             tags,
         }))
-    }
-
-    /// Grants (`on`) or removes `integrator` on `agent`. `policy::can_set_tag` runs first, so only a human gets past it. A grant of a present tag or a removal of an absent one changes nothing and appends no event.
-    pub async fn set_integrator(
-        &self,
-        actor: &Actor,
-        agent: &AgentName,
-        on: bool,
-    ) -> Result<AgentTags, AgentError> {
-        let tag = Tag::parse(INTEGRATOR_TAG).map_err(FoldError::from)?;
-        policy::can_set_tag(actor, &tag, on).map_err(FoldError::from)?;
-        let granter = actor.event_actor();
-        let now = self.clock.now();
-        let mut buffer = EventBuffer::new();
-        let tags = self
-            .store
-            .write(async |tx| {
-                let row = agents::find_agent(tx.conn(), agent).await?.ok_or_else(|| {
-                    FoldError::new(
-                        codes::AGENT_NOT_FOUND,
-                        format!("agent {agent} does not exist"),
-                    )
-                    .with_details([("agent", json!(agent.as_str()))])
-                    .with_hint("the agent registers itself with register_agent first")
-                })?;
-                let changed = if on {
-                    agents::add_tag(tx.conn(), row.id, &tag, Some(granter.as_str()), now).await?
-                } else {
-                    agents::remove_tag(tx.conn(), row.id, &tag).await?
-                };
-                if changed {
-                    let event_type = if on {
-                        types::AGENT_TAG_ADDED
-                    } else {
-                        types::AGENT_TAG_REMOVED
-                    };
-                    let event = NewEvent::new(event_type, actor.event_actor())?
-                        .data(json!({"agent": agent.as_str(), "tag": tag.as_str()}))?;
-                    buffer.append(tx, &event, now).await?;
-                }
-                Ok::<_, AgentError>(agents::tags(tx.conn(), row.id).await?)
-            })
-            .await?;
-        self.bus.publish(buffer);
-        Ok(AgentTags {
-            agent: agent.clone(),
-            tags,
-        })
     }
 
     /// The worker named by `as_worker`, or the agent's main worker when it is absent. A worker of another agent is reported as `worker_not_found`, so its existence is never revealed.
@@ -520,6 +475,7 @@ async fn register_agent_in(
     session_id: i64,
     name: &AgentName,
     tags: &[Tag],
+    origin: TagOrigin,
     now: Timestamp,
 ) -> Result<Registered, AgentError> {
     let session = agents::find_session(tx.conn(), session_id)
@@ -559,11 +515,16 @@ async fn register_agent_in(
         let supervised = agents::find_worker_process(tx.conn(), name)
             .await?
             .is_some();
-        let held_by_other = agents::all_tags(tx.conn())
+        let holders: Vec<i64> = agents::all_tags(tx.conn())
             .await?
-            .iter()
-            .any(|(holder, tag)| tag.is_main() && *holder != agent_id);
-        policy::can_take_main_tag(supervised, held_by_other).map_err(FoldError::from)?;
+            .into_iter()
+            .filter(|(_, tag)| tag.is_main())
+            .map(|(holder, _)| holder)
+            .collect();
+        let holds_main = holders.contains(&agent_id);
+        let held_by_other = holders.iter().any(|holder| *holder != agent_id);
+        policy::can_take_main_tag(origin, holds_main, supervised, held_by_other)
+            .map_err(FoldError::from)?;
     }
     for tag in tags {
         agents::add_tag(tx.conn(), agent_id, tag, None, now).await?;

@@ -1,8 +1,10 @@
 #![cfg(test)]
 
+use crate::common::roles::give_role;
 use crate::proposal_tools_support::{Fixture, human, t};
 use axum::body::Body;
 use axum::http::{HeaderMap, Method, Request, StatusCode};
+use fold_core::roles::Role;
 use fold_daemon::http::host::CLIENT_HEADER;
 use fold_daemon::http::{openapi, router};
 use http_body_util::BodyExt;
@@ -122,16 +124,8 @@ async fn list_proposals_returns_summaries_with_the_mark() {
 async fn an_agent_approval_waits_for_the_human_the_mark_names() {
     let fx = with_p1().await;
     let p1 = fold_core::ProposalId::from_number(1).unwrap();
-    fx.agent("review").await;
-    fx.agents()
-        .set_integrator(
-            &human("tanim"),
-            &fold_core::AgentName::parse("review").unwrap(),
-            true,
-        )
-        .await
-        .unwrap();
     let review = fx.agent("review").await;
+    give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
     // A human is known once a request named them.
     send(&fx, Method::GET, "/proposals/P-1", None, &[TANIM]).await;
     fx.reviews()
@@ -151,6 +145,7 @@ async fn an_agent_approval_waits_for_the_human_the_mark_names() {
         .submit_review(
             &review,
             p1,
+            1,
             fold_core::reviews::Verdict::Approve,
             "fine",
             Vec::new(),
@@ -164,7 +159,7 @@ async fn an_agent_approval_waits_for_the_human_the_mark_names() {
         &fx,
         Method::POST,
         "/proposals/P-1/reviews",
-        Some(json!({"verdict": "approve", "body": "seen"})),
+        Some(json!({"version": 1, "verdict": "approve", "body": "seen"})),
         &[ANA],
     )
     .await;
@@ -174,7 +169,7 @@ async fn an_agent_approval_waits_for_the_human_the_mark_names() {
         &fx,
         Method::POST,
         "/proposals/P-1/reviews",
-        Some(json!({"verdict": "approve", "body": "seen"})),
+        Some(json!({"version": 1, "verdict": "approve", "body": "seen"})),
         &[TANIM],
     )
     .await;
@@ -186,6 +181,7 @@ async fn an_agent_approval_waits_for_the_human_the_mark_names() {
         .submit_review(
             &review,
             p1,
+            1,
             fold_core::reviews::Verdict::RequestChanges,
             "one more thing",
             Vec::new(),
@@ -212,6 +208,7 @@ async fn the_proposal_diff_reads_the_change_since_an_earlier_version() {
         .submit_review(
             &human("tanim"),
             p1,
+            1,
             fold_core::reviews::Verdict::RequestChanges,
             "add z",
             Vec::new(),
@@ -224,6 +221,30 @@ async fn the_proposal_diff_reads_the_change_since_an_earlier_version() {
         .update_proposal(&frontend, p1, None)
         .await
         .unwrap();
+    let stale = send(
+        &fx,
+        Method::POST,
+        "/proposals/P-1/comments",
+        Some(json!({"version": 1, "body": "on what I read"})),
+        &[TANIM],
+    )
+    .await;
+    assert_eq!(
+        (stale.status, stale.code()),
+        (StatusCode::CONFLICT, "stale_version")
+    );
+    let stale = send(
+        &fx,
+        Method::POST,
+        "/proposals/P-1/reviews",
+        Some(json!({"version": 1, "verdict": "approve", "body": "fine"})),
+        &[TANIM],
+    )
+    .await;
+    assert_eq!(
+        (stale.status, stale.code()),
+        (StatusCode::CONFLICT, "stale_version")
+    );
 
     let answer = send(&fx, Method::GET, "/proposals/P-1", None, &[TANIM]).await;
     assert_eq!(answer.body["last_reviewed_version"], 1, "{}", answer.body);
@@ -385,7 +406,7 @@ async fn a_human_comment_is_added_and_listed() {
         &fx,
         Method::POST,
         "/proposals/P-1/comments",
-        Some(json!({"path": "src/lib.rs", "side": "new", "start_line": 1, "end_line": 1, "body": "why y"})),
+        Some(json!({"version": 1, "path": "src/lib.rs", "side": "new", "start_line": 1, "end_line": 1, "body": "why y"})),
         &[TANIM],
     )
     .await;
@@ -412,7 +433,7 @@ async fn a_human_comment_is_added_and_listed() {
         &fx,
         Method::POST,
         "/proposals/P-1/comments",
-        Some(json!({"reply_to": "rc-1", "body": "because"})),
+        Some(json!({"version": 1, "reply_to": "rc-1", "body": "because"})),
         &[ANA],
     )
     .await;
@@ -449,7 +470,7 @@ async fn a_human_comment_is_added_and_listed() {
         &fx,
         Method::POST,
         "/proposals/P-1/comments",
-        Some(json!({"path": "src/lib.rs", "side": "new", "start_line": 5, "end_line": 6, "body": "far"})),
+        Some(json!({"version": 1, "path": "src/lib.rs", "side": "new", "start_line": 5, "end_line": 6, "body": "far"})),
         &[TANIM],
     )
     .await;
@@ -461,7 +482,7 @@ async fn a_human_comment_is_added_and_listed() {
         &fx,
         Method::POST,
         "/proposals/P-1/comments",
-        Some(json!({"path": "src/lib.rs", "body": "no lines"})),
+        Some(json!({"version": 1, "path": "src/lib.rs", "body": "no lines"})),
         &[TANIM],
     )
     .await;
@@ -473,7 +494,7 @@ async fn a_human_comment_is_added_and_listed() {
         &fx,
         Method::POST,
         "/proposals/P-1/comments",
-        Some(json!({"body": "anonymous"})),
+        Some(json!({"version": 1, "body": "anonymous"})),
         &[],
     )
     .await;
@@ -490,7 +511,7 @@ async fn a_human_verdict_moves_the_turn() {
         &fx,
         Method::POST,
         "/proposals/P-1/reviews",
-        Some(json!({"verdict": "comment", "body": ""})),
+        Some(json!({"version": 1, "verdict": "comment", "body": ""})),
         &[TANIM],
     )
     .await;
@@ -502,7 +523,7 @@ async fn a_human_verdict_moves_the_turn() {
         &fx,
         Method::POST,
         "/proposals/P-1/reviews",
-        Some(json!({"verdict": "request_changes", "body": "rename back", "comments": [
+        Some(json!({"version": 1, "verdict": "request_changes", "body": "rename back", "comments": [
             {"path": "src/lib.rs", "side": "old", "start_line": 1, "end_line": 1, "body": "keep x"},
         ]})),
         &[TANIM],
@@ -518,7 +539,7 @@ async fn a_human_verdict_moves_the_turn() {
         &fx,
         Method::POST,
         "/proposals/P-1/reviews",
-        Some(json!({"verdict": "approve", "body": "fine after all"})),
+        Some(json!({"version": 1, "verdict": "approve", "body": "fine after all"})),
         &[ANA],
     )
     .await;
@@ -533,7 +554,7 @@ async fn a_human_verdict_moves_the_turn() {
         &fx,
         Method::POST,
         "/proposals/P-1/reviews",
-        Some(json!({"verdict": "reject", "body": "not this way"})),
+        Some(json!({"version": 1, "verdict": "reject", "body": "not this way"})),
         &[TANIM],
     )
     .await;
@@ -544,7 +565,7 @@ async fn a_human_verdict_moves_the_turn() {
         &fx,
         Method::POST,
         "/proposals/P-1/reviews",
-        Some(json!({"verdict": "approve", "body": "late"})),
+        Some(json!({"version": 1, "verdict": "approve", "body": "late"})),
         &[TANIM],
     )
     .await;
@@ -636,6 +657,32 @@ async fn integrate_refusals_answer_with_their_gate_codes() {
             t(1),
             Some(fold_core::HumanName::parse("tanim").unwrap()),
             "touches auth",
+        )
+        .await
+        .unwrap();
+    let answer = send(
+        &fx,
+        Method::POST,
+        "/proposals/P-1/integrate",
+        Some(json!({"expected_version": 1})),
+        &[TANIM],
+    )
+    .await;
+    assert_eq!(
+        (answer.status, answer.code()),
+        (StatusCode::CONFLICT, "agent_approval_required"),
+        "a human integrates a marked task only after a reviewer agent approved it"
+    );
+    let review = fx.agent("review").await;
+    give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
+    fx.reviews()
+        .submit_review(
+            &review,
+            fold_core::ProposalId::from_number(1).unwrap(),
+            1,
+            fold_core::reviews::Verdict::Approve,
+            "fine",
+            Vec::new(),
         )
         .await
         .unwrap();

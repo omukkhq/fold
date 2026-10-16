@@ -11,7 +11,10 @@ use fold_store::workspaces::{self, NewReviewCheckout};
 use fold_store::{Store, StoreError, counters};
 use serde_json::json;
 
+pub use fold_store::workspaces::CheckoutTarget;
+
 use super::proposals::require_open;
+use super::verdicts::require_version;
 use super::{ReviewError, ReviewService};
 use crate::services::events::EventBuffer;
 use crate::services::tasks::worker_row;
@@ -25,6 +28,13 @@ pub struct ReviewCheckout {
     pub version: u32,
 }
 
+/// An active review checkout as the project's list shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedCheckout {
+    pub workspace: WorkspaceView,
+    pub target: CheckoutTarget,
+}
+
 /// What the transaction of a create found: its own new row, or the active checkout another create of the same version and worker inserted first.
 enum Inserted {
     Created(WorkspaceId),
@@ -34,7 +44,7 @@ enum Inserted {
 impl ReviewService {
     /// A read-only copy of the current version of an open proposal for the actor's worker, under `.fold/ws/review-p-<n>`, so a review worker can read, build and test it without a task workspace. `policy::can_create_review_checkout` admits any worker of the agent that holds the review claim, and the checkout belongs to that worker. A repeat call for the same version and worker returns the active checkout; any other checkout of the proposal takes the next directory name. A checkout is never recorded, synced or restored and never moves the task.
     ///
-    /// The files are written and renamed into place before the transaction that inserts the row, so no row ever names a directory that is not complete; a failure to write them is `checkout_failed`. The transaction looks for the active checkout again before it takes a workspace number, so a repeat that finished second takes none; the partial unique index on active checkouts backs that rule. When the transaction fails, or finds the checkout another call inserted first, the new directory is removed again: no row names it.
+    /// The files are written and renamed into place before the transaction that inserts the row, so no row ever names a directory that is not complete; a failure to write them is `checkout_failed`. The transaction reads the current version again and refuses with `stale_version` when a version was added after the files were written, so a checkout never names a version that is not current when it is made. It looks for the active checkout again before it takes a workspace number, so a repeat that finished second takes none; the partial unique index on active checkouts backs that rule. When the transaction fails, or finds the checkout another call inserted first, the new directory is removed again: no row names it.
     pub async fn create_review_checkout(
         &self,
         actor: &Actor,
@@ -63,6 +73,8 @@ impl ReviewService {
             .place_review_checkout(proposal, taken, tree)
             .await
             .map_err(|error| checkout_failed(proposal, error))?;
+        #[cfg(feature = "failpoints")]
+        fail::fail_point!("review_checkout_after_files");
         let now = self.clock.now();
         let mut buffer = EventBuffer::new();
         let written = self
@@ -70,6 +82,7 @@ impl ReviewService {
             .write(async |tx| {
                 let found = reviews::get_proposal(tx.conn(), proposal).await?;
                 let row = require_open(found, proposal)?;
+                require_version(proposal, version, row.current_version)?;
                 let holder = reviews::unreleased_review_claim(tx.conn(), proposal).await?;
                 let reviewer = checkout_checks(actor, &row, holder.as_ref())?;
                 let worker = worker_row(tx, reviewer).await?;
@@ -126,15 +139,16 @@ impl ReviewService {
         self.checkout(id, proposal, version).await
     }
 
-    /// Every active review checkout of the project with the version it holds, oldest first. It reads only.
-    pub async fn list_review_checkouts(&self) -> Result<Vec<ReviewCheckout>, ReviewError> {
-        let rows = workspaces::list_active_review_checkouts(self.store.read()).await?;
+    /// Every active review checkout of the project with the proposal versions it holds, oldest first: the checkouts of one proposal and those of a review batch. It reads only.
+    pub async fn list_review_checkouts(&self) -> Result<Vec<ListedCheckout>, ReviewError> {
+        let mut tx = self.store.read().begin().await.map_err(StoreError::from)?;
+        let rows = workspaces::list_active_review_checkouts(&mut tx).await?;
+        tx.commit().await.map_err(StoreError::from)?;
         Ok(rows
             .into_iter()
-            .map(|row| ReviewCheckout {
+            .map(|row| ListedCheckout {
                 workspace: WorkspaceView::from(row.workspace),
-                proposal: row.proposal,
-                version: row.version,
+                target: row.target,
             })
             .collect())
     }

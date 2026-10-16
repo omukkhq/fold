@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::time::Timestamp;
+use crate::time::{MIN_MILLIS, Timestamp};
 
 /// A claim is stale once `lease_minutes` have passed since its last renewal. Staleness is computed when a claim is read and never stored by this rule. A `renewed_at` later than `now` is not stale.
 pub fn is_stale(renewed_at: Timestamp, now: Timestamp, lease_minutes: u64) -> bool {
@@ -14,6 +14,13 @@ pub fn near_stale_cutoff(now: Timestamp, lease_minutes: u64) -> Option<Timestamp
     let lease_millis = lease_minutes.saturating_mul(60_000);
     let warned_after = Duration::from_millis(lease_millis - lease_millis / 4);
     now.checked_sub(warned_after)
+}
+
+/// The renewal time at or before which a claim is stale at `now`, by the rule of `is_stale`, so a query can tell stale claims apart without reading each one. A lease longer than the timestamp range reaches back to its earliest value.
+pub fn stale_cutoff(now: Timestamp, lease_minutes: u64) -> Timestamp {
+    let lease = Duration::from_secs(lease_minutes.saturating_mul(60));
+    now.checked_sub(lease)
+        .unwrap_or(Timestamp::from_valid_millis(MIN_MILLIS))
 }
 
 #[cfg(test)]
@@ -55,6 +62,27 @@ mod tests {
             Some(at(-20 * MINUTE))
         );
         assert_eq!(near_stale_cutoff(now, u64::MAX), None);
+    }
+
+    #[test]
+    fn the_cutoff_splits_stale_renewals_from_live_ones() {
+        let now = at(1_000_000 + 30 * MINUTE);
+        let cutoff = stale_cutoff(now, 30);
+        assert_eq!(cutoff, at(1_000_000));
+        for renewed in [
+            cutoff,
+            at(1_000_000 - 1),
+            at(1_000_000 + 1),
+            now,
+            at(now.as_millis() + 1),
+        ] {
+            assert_eq!(renewed <= cutoff, is_stale(renewed, now, 30), "{renewed}");
+        }
+        assert_eq!(stale_cutoff(now, 0), now);
+        assert_eq!(
+            stale_cutoff(now, u64::MAX),
+            Timestamp::from_millis(MIN_MILLIS).unwrap()
+        );
     }
 
     #[test]

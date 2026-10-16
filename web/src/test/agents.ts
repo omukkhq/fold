@@ -58,7 +58,6 @@ export function agent(
     last_call_at: null,
     sessions: 1,
     open_sessions: [],
-    integrator_granted_by: null,
     attention: [],
     workers: [worker(name)],
     events: [],

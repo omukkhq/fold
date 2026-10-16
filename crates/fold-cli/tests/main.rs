@@ -15,7 +15,6 @@ pub mod limits;
 pub mod report;
 
 mod adapter;
-mod agent_tag;
 mod agents_section;
 mod bench_support;
 mod binary;

@@ -81,6 +81,8 @@ export interface ActionHandlers {
   failure: string | null;
   /** Why Integrate cannot work now, from the daemon's gate report; null when it can. */
   integrateBlock: string | null;
+  /** Why Approve cannot work now; null when it can. */
+  approveBlock: string | null;
   onApprove: () => void;
   onIntegrate: () => void;
   /** Resolves once the daemon has taken the verdict; rejects with its error. */
@@ -249,6 +251,7 @@ function HumanActions({
 }) {
   const [requesting, setRequesting] = useState(false);
   const blockId = useId();
+  const approveBlockId = useId();
   const v = `v${String(proposal.summary.current_version)}`;
   const busy = actions.pending !== null;
   if (!view.current) {
@@ -291,13 +294,21 @@ function HumanActions({
             <Button
               variant="primary"
               pending={actions.pending === "approve"}
-              disabled={busy}
+              disabled={busy || actions.approveBlock !== null}
+              aria-describedby={
+                actions.approveBlock === null ? undefined : approveBlockId
+              }
               icon={<Check aria-hidden="true" size={15} />}
               className="w-full justify-center"
               onClick={actions.onApprove}
             >
               Approve {v}
             </Button>
+          ) : null}
+          {shows("approve") && actions.approveBlock !== null ? (
+            <p id={approveBlockId} className="text-meta text-text-muted">
+              {actions.approveBlock}
+            </p>
           ) : null}
           <div className="flex gap-8">
             {shows("request_changes") ? (

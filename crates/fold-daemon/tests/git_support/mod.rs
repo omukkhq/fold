@@ -1,11 +1,13 @@
+use crate::common::roles::give_role;
+use fold_core::roles::Role;
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::reviews_support::{Fixture, human, p};
+use crate::reviews_support::{Fixture, p};
+use fold_core::Actor;
 use fold_core::reviews::Verdict;
-use fold_core::{Actor, AgentName};
 use fold_daemon::jobs::{AutoCommit, auto_commit};
 use fold_daemon::services::projects::RemoteContext;
 use fold_vcs::git::Git;
@@ -48,16 +50,20 @@ pub fn start_watched_job(fx: &Fixture, git: Git) -> (AutoCommit, RemoteContext) 
     (auto_commit(context.clone(), git), context)
 }
 
-/// `P-1` approved by `review`, which carries `integrator` and acts with the returned actor.
+/// `P-1` approved by `review`, the review lead, which acts with the returned actor.
 pub async fn approved(fx: &Fixture) -> Actor {
     fx.proposal().await;
-    fx.agents
-        .set_integrator(&human(), &AgentName::parse("review").unwrap(), true)
-        .await
-        .unwrap();
+    give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
     let review = fx.agents.actor(&fx.review.ctx, None).await.unwrap();
     fx.reviews
-        .submit_review(&review, p(1), Verdict::Approve, "looks right", Vec::new())
+        .submit_review(
+            &review,
+            p(1),
+            1,
+            Verdict::Approve,
+            "looks right",
+            Vec::new(),
+        )
         .await
         .unwrap();
     review

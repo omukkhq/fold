@@ -120,12 +120,10 @@ export function gateText(
   }
 }
 
-function integrators(p: ProposalDetail): Segment[] {
-  const holder = p.review_claim?.holder ?? p.summary.review_claim;
-  return holder
-    ? seg`${actorSegment(holder)} integrates`
-    : ["an integrator integrates"];
-}
+/** The review claim holder may be an agent without the right to integrate, so the line names the roles that have it. */
+const INTEGRATORS: Segment[] = [
+  "the main agent, the review lead or a batch reviewer integrates",
+];
 
 /**
  * The line under the gates that says what the proposal waits on, or null when nothing is left to wait for.
@@ -151,7 +149,7 @@ export function waitingSummary(p: ProposalDetail): Segments | null {
   }
   if (s.human_review && !s.human_approved) {
     const who = reviewerSegment(s.human_review.reviewer, "a human");
-    return seg`Waiting for ${who}. When ${who} approves ${v}, ${integrators(p)}, or ${who} can integrate here.`;
+    return seg`Waiting for ${who}. When ${who} approves ${v}, ${INTEGRATORS}, or ${who} can integrate here.`;
   }
   if (s.latest_verdict !== "approve") {
     return [`Waiting for a review of ${v}.`];
@@ -166,5 +164,5 @@ export function waitingSummary(p: ProposalDetail): Segments | null {
     ];
   }
   if (unmet) return ["Waiting on the gates above."];
-  return seg`Every gate is met. Next, ${integrators(p)}, or a human can integrate here.`;
+  return seg`Every gate is met. Next, ${INTEGRATORS}, or a human can integrate here.`;
 }

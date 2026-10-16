@@ -1,5 +1,7 @@
 #![cfg(test)]
 
+use crate::common::roles::give_role;
+use fold_core::roles::Role;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -109,6 +111,7 @@ async fn stored_events(harness: &Harness) -> Vec<(String, Value)> {
 async fn an_area_lead_starts_coders_only_for_tasks_of_its_own_area() {
     let fake = FakeClaude::new("result");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     areas(&harness).await;
     let lead = start_lead(&mut harness, "web").await;
     let started = harness
@@ -230,6 +233,7 @@ async fn an_area_lead_starts_coders_only_for_tasks_of_its_own_area() {
 async fn a_task_coder_stops_once_its_task_has_an_open_proposal() {
     let fake = FakeClaude::new("result");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     areas(&harness).await;
     let lead = start_lead(&mut harness, "web").await;
     harness
@@ -262,14 +266,8 @@ async fn a_task_coder_stops_once_its_task_has_an_open_proposal() {
 async fn a_coder_stops_when_its_last_proposal_opens_after_an_earlier_one_integrated() {
     let fake = FakeClaude::new("result");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
-    let (status, answer) = harness
-        .socket(
-            Method::PUT,
-            &format!("/api/v1/projects/{SLUG}/agents/review/tags/integrator"),
-            None,
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "{answer}");
+    harness.make_main(MAIN).await;
+    give_role(&harness.handle.store, "review", Role::ReviewLead, None).await;
     areas(&harness).await;
     harness
         .call(
@@ -313,6 +311,7 @@ async fn a_coder_stops_when_its_last_proposal_opens_after_an_earlier_one_integra
 async fn an_idle_coder_stops_after_its_idle_minutes_and_resumes_with_a_turn() {
     let fake = FakeClaude::new("result");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     areas(&harness).await;
     let lead = start_lead(&mut harness, "web").await;
     harness
@@ -381,6 +380,7 @@ async fn an_idle_coder_stops_after_its_idle_minutes_and_resumes_with_a_turn() {
 async fn a_fold_notice_reaches_a_worker_once_as_a_user_turn() {
     let fake = FakeClaude::new("result");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     areas(&harness).await;
     let lead = start_lead(&mut harness, "web").await;
     until_state(&harness, &lead, WorkerState::Idle).await;
@@ -425,6 +425,7 @@ async fn a_fold_notice_reaches_a_worker_once_as_a_user_turn() {
 async fn the_fifth_task_coder_and_the_fourth_batch_reviewer_are_refused_and_a_lead_never_is() {
     let fake = FakeClaude::new("result");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     areas(&harness).await;
     let task = harness.create_task(MAIN, "Write the docs").await;
     let work = harness.start_work("backend", &task).await;
@@ -490,6 +491,7 @@ async fn the_fifth_task_coder_and_the_fourth_batch_reviewer_are_refused_and_a_le
 async fn a_daemon_restart_resumes_a_working_lead() {
     let fake = FakeClaude::new("init");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     areas(&harness).await;
     let lead = start_lead(&mut harness, "web").await;
     let working = until_state(&harness, &lead, WorkerState::Working).await;
@@ -515,6 +517,7 @@ async fn a_daemon_restart_resumes_a_working_lead() {
 async fn a_role_that_names_its_mcp_servers_gets_only_those() {
     let fake = FakeClaude::new("result");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     let root = std::path::PathBuf::from(harness.root());
     std::fs::write(
         root.join(".fold/config.toml"),
@@ -588,6 +591,7 @@ async fn no_log_line_or_stored_event_holds_output_text() {
     let _guard = tracing::subscriber::set_default(subscriber);
     let fake = FakeClaude::new("result");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     let mut bus = harness.handle.bus.subscribe();
     areas(&harness).await;
     harness
@@ -630,6 +634,7 @@ async fn no_log_line_or_stored_event_holds_output_text() {
 async fn a_stop_escalates_to_signals_on_the_projects_clock() {
     let fake = FakeClaude::new("result").stubborn();
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     areas(&harness).await;
     let lead = start_lead(&mut harness, "web").await;
     until_state(&harness, &lead, WorkerState::Idle).await;
@@ -660,6 +665,7 @@ async fn a_stop_escalates_to_signals_on_the_projects_clock() {
 async fn a_human_defines_areas_and_starts_and_stops_leads_over_http() {
     let fake = FakeClaude::new("result");
     let harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     harness
         .call(MAIN, "create_label", json!({"name": "ui", "color": "sage"}))
         .await;
@@ -801,6 +807,7 @@ async fn a_human_defines_areas_and_starts_and_stops_leads_over_http() {
 async fn a_batch_reviewer_stops_once_its_batch_review_gives_every_proposal_a_verdict() {
     let fake = FakeClaude::new("result");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     for (number, title) in [(1, "Draw the page"), (2, "Serve the page")] {
         let task = harness.create_task(MAIN, title).await;
         assert_eq!(task, format!("T-{number}"));
@@ -867,6 +874,7 @@ async fn a_batch_reviewer_stops_once_its_batch_review_gives_every_proposal_a_ver
 async fn an_archived_task_stops_its_coder_at_once() {
     let fake = FakeClaude::new("result");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     areas(&harness).await;
     let lead = start_lead(&mut harness, "web").await;
     harness
@@ -889,6 +897,7 @@ async fn an_archived_task_stops_its_coder_at_once() {
 async fn a_restart_that_cannot_read_the_configuration_fails_each_worker_and_goes_on() {
     let fake = FakeClaude::new("result");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     areas(&harness).await;
     let leads = [
         start_lead(&mut harness, "web").await,

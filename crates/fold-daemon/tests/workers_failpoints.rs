@@ -57,6 +57,7 @@ async fn a_stop_before_the_process_starts_leaves_no_process_running() {
     let scenario = fail::FailScenario::setup();
     let fake = FakeClaude::new("init");
     let harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     let human = Actor::human(HumanName::parse("ana").unwrap());
     let lead = AgentName::parse("review-lead").unwrap();
     fail::cfg(BEFORE_SPAWN, "pause").unwrap();
@@ -127,6 +128,7 @@ async fn the_idle_sweep_leaves_a_worker_that_took_a_turn_after_the_rows_were_rea
     let scenario = fail::FailScenario::setup();
     let fake = FakeClaude::new("result");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     harness
         .call(MAIN, "create_label", json!({"name": "ui", "color": "sage"}))
         .await;
@@ -203,6 +205,7 @@ async fn an_answer_between_the_question_read_and_the_join_reaches_the_waiting_ca
     let scenario = fail::FailScenario::setup();
     let fake = FakeClaude::new("permission_request");
     let harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
     let human = Actor::human(HumanName::parse("ana").unwrap());
     let lead = AgentName::parse("review-lead").unwrap();
     fail::cfg(BEFORE_SPAWN, "pause").unwrap();

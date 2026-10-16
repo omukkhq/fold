@@ -503,10 +503,6 @@ async fn the_tags_of_the_handshake_register_the_main_agent_once() {
     other["tags"] = json!(["main"]);
     let (code, _) = refused(host.state(), format!("{other}\n").as_bytes()).await;
     assert_eq!(code, "main_tag_denied");
-    let mut granted = host.hello(&host.root, Some("lead"));
-    granted["tags"] = json!(["integrator"]);
-    let (code, _) = refused(host.state(), format!("{granted}\n").as_bytes()).await;
-    assert_eq!(code, "human_required");
     let mut bad = host.hello(&host.root, Some("lead"));
     bad["tags"] = json!(["Not a tag"]);
     let (code, _) = refused(host.state(), format!("{bad}\n").as_bytes()).await;

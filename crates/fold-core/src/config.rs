@@ -138,7 +138,7 @@ pub const ROLES_SECTION: &str = "roles";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct IntegrationConfig {
-    /// fold integrates each proposal that becomes ready by itself. With `false`, a proposal integrates only when an integrator or a human calls for it.
+    /// fold integrates each proposal that becomes ready by itself. With `false`, a proposal integrates only when an agent that decides reviews or a human calls for it.
     pub automatic: bool,
 }
 

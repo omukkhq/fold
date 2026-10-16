@@ -11,8 +11,8 @@ pub const MAX_NOTICE_LEN: usize = 200;
 /// The facts about an event's task and proposal that decide who gets a notice. The daemon loads them from the read pool after the event commits.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PushContext {
-    /// Every agent tagged `integrator`.
-    pub integrators: BTreeSet<AgentName>,
+    /// Every agent that fold started as the review lead.
+    pub review_leads: BTreeSet<AgentName>,
     /// The agent of the worker that authored the event's proposal.
     pub author: Option<AgentName>,
     /// The agent holding the unreleased review claim on the event's proposal.
@@ -25,13 +25,11 @@ pub struct PushContext {
     pub reviewer: Option<AgentName>,
     /// The event's proposal is integrated or closed.
     pub retired: bool,
-    /// Every registered agent, for an event that asks all of them.
-    pub agents: BTreeSet<AgentName>,
     /// The agent that decides on the event's request: the agent that created it, or its deputy once that agent's short-lived worker has stopped; `None` for a human.
     pub requester: Option<AgentName>,
     /// The agent of the worker drafting the event's request.
     pub drafter: Option<AgentName>,
-    /// For a task that turned ready, the leads of the areas whose label it carries.
+    /// For a task that turned ready, the leads of the areas whose label it carries; for a new request, the lead of every area.
     pub area_leads: BTreeSet<AgentName>,
     /// For a task that turned ready, the areas whose label it carries, led or not.
     pub areas: BTreeSet<AreaName>,
@@ -134,17 +132,11 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
                 format!("{proposal} changes requested"),
                 "get_review_comments",
             )),
-            "approve" if is_human(&event.actor) && !ctx.retired => {
-                let agents = match &ctx.review_claim {
-                    Some(holder) => vec![holder.clone()],
-                    None => ctx.integrators.iter().cloned().collect(),
-                };
-                Some((
-                    agents,
-                    format!("{proposal} approved by a human"),
-                    "integrate_proposal",
-                ))
-            }
+            "approve" if is_human(&event.actor) && !ctx.retired => Some((
+                ctx.review_claim.iter().cloned().collect(),
+                format!("{proposal} approved by a human"),
+                "integrate_proposal",
+            )),
             _ => None,
         };
     }
@@ -235,7 +227,7 @@ fn ready_route(task: TaskId, ctx: &PushContext) -> (Vec<AgentName>, String, &'st
     )
 }
 
-/// A request asks the main agent to claim it, or every agent while no agent has the `main` tag, and each later step goes to whoever acts next: the requester's agent reads a draft, the drafter's agent revises it or starts the approved tasks. A human requester reads the web, so nothing is pushed to one.
+/// A request asks the main agent and every area lead to claim it, so whoever finds it relevant drafts it, and each later step goes to whoever acts next: the requester's agent reads a draft, the drafter's agent revises it or starts the approved tasks. A human requester reads the web, so nothing is pushed to one.
 fn request_rule(
     event: &Event,
     ctx: &PushContext,
@@ -254,12 +246,7 @@ fn request_rule(
     let request = request_of(event)?;
     let drafter = || ctx.drafter.iter().cloned().collect();
     if kind == types::REQUEST_CREATED {
-        let claimers = if ctx.main_agents.is_empty() {
-            &ctx.agents
-        } else {
-            &ctx.main_agents
-        };
-        let agents = claimers.iter().cloned().collect();
+        let agents = ctx.main_agents.union(&ctx.area_leads).cloned().collect();
         return Some((agents, format!("{request} created"), "claim_request"));
     }
     if kind == types::REQUEST_DRAFT_SUBMITTED {
@@ -316,9 +303,9 @@ fn approved_text(request: RequestId, tasks: &[TaskId]) -> String {
     }
 }
 
-/// Every integrator but the author's agent, then the holder of the review claim.
+/// Every review lead but the author's agent, then the holder of the review claim.
 fn reviewers(ctx: &PushContext) -> Vec<AgentName> {
-    ctx.integrators
+    ctx.review_leads
         .iter()
         .filter(|agent| ctx.author.as_ref() != Some(*agent))
         .chain(&ctx.review_claim)
@@ -370,7 +357,7 @@ mod tests {
 
     fn ctx() -> PushContext {
         PushContext {
-            integrators: [name("lead"), name("review"), name("frontend")]
+            review_leads: [name("lead"), name("review"), name("frontend")]
                 .into_iter()
                 .collect(),
             author: Some(name("frontend")),
@@ -379,9 +366,6 @@ mod tests {
             recipients: [name("backend"), name("docs")].into_iter().collect(),
             reviewer: Some(name("review")),
             retired: false,
-            agents: [name("frontend"), name("backend"), name("review")]
-                .into_iter()
-                .collect(),
             requester: Some(name("frontend")),
             drafter: Some(name("backend")),
             area_leads: BTreeSet::new(),
@@ -408,7 +392,7 @@ mod tests {
     }
 
     #[test]
-    fn an_opened_proposal_reaches_every_integrator_but_the_authors_agent() {
+    fn an_opened_proposal_reaches_every_review_lead_but_the_authors_agent() {
         let notices = notice_for(&event(types::PROPOSAL_OPENED, "frontend/ui"), &ctx());
         assert_eq!(
             sent(&notices),
@@ -620,18 +604,12 @@ mod tests {
             sent(&notice_for(&event, &ctx())),
             vec![row("review", text, "integrate_proposal")]
         );
+        // Without a claim holder nobody is told: the automatic integration counts the human's approval, and the author's agent never integrates.
         let unclaimed = PushContext {
             review_claim: None,
             ..ctx()
         };
-        assert_eq!(
-            sent(&notice_for(&event, &unclaimed)),
-            vec![
-                row("frontend", text, "integrate_proposal"),
-                row("lead", text, "integrate_proposal"),
-                row("review", text, "integrate_proposal"),
-            ]
-        );
+        assert!(notice_for(&event, &unclaimed).is_empty());
     }
 
     #[test]
@@ -768,9 +746,12 @@ mod tests {
                 main_agents: [name("lead")].into_iter().collect(),
                 ..ctx()
             };
-            let notices = notice_for(&large(kind), &ctx());
+            let notices: Vec<Notice> = notice_for(&large(kind), &ctx())
+                .into_iter()
+                .chain(notice_for(&large(kind), &unled))
+                .collect();
             assert!(!notices.is_empty(), "{kind}");
-            for notice in notices.into_iter().chain(notice_for(&large(kind), &unled)) {
+            for notice in notices {
                 assert!(notice.text.len() <= MAX_NOTICE_LEN);
                 assert!(!notice.text.contains('\n'));
                 assert!(
@@ -783,9 +764,9 @@ mod tests {
     }
 
     #[test]
-    fn a_claim_holder_hears_of_an_opened_proposal_even_without_the_tag() {
+    fn a_claim_holder_hears_of_an_opened_proposal_even_if_it_leads_no_review() {
         let ctx = PushContext {
-            integrators: [name("lead")].into_iter().collect(),
+            review_leads: [name("lead")].into_iter().collect(),
             review_claim: Some(name("docs")),
             ..ctx()
         };
@@ -795,7 +776,7 @@ mod tests {
     }
 
     #[test]
-    fn a_new_version_reaches_the_claim_holder_and_the_integrators() {
+    fn a_new_version_reaches_the_claim_holder_and_the_review_leads() {
         let event = with_data(
             event(types::PROPOSAL_VERSION_ADDED, "frontend/ui"),
             json!({"version": 2, "changeset": "C-4"}),
@@ -874,26 +855,40 @@ mod tests {
     }
 
     #[test]
-    fn a_new_request_reaches_every_agent_but_the_requesters() {
-        let by_agent = request_event(
-            types::REQUEST_CREATED,
-            "frontend/ui",
-            json!({"request": "RQ-4", "attachments": 0}),
-        );
+    fn a_new_request_reaches_the_main_agent_and_every_area_lead() {
+        let leads = PushContext {
+            main_agents: [name("lead")].into_iter().collect(),
+            area_leads: [name("api-lead"), name("web-lead")].into_iter().collect(),
+            ..ctx()
+        };
         let text = "fold: RQ-4 created. Call claim_request.";
-        assert_eq!(
-            sent(&notice_for(&by_agent, &ctx())),
-            vec![
-                row("backend", text, "claim_request"),
-                row("review", text, "claim_request"),
-            ]
-        );
         let by_human = request_event(
             types::REQUEST_CREATED,
             "human:ana",
+            json!({"request": "RQ-4", "attachments": 0}),
+        );
+        assert_eq!(
+            sent(&notice_for(&by_human, &leads)),
+            vec![
+                row("api-lead", text, "claim_request"),
+                row("lead", text, "claim_request"),
+                row("web-lead", text, "claim_request"),
+            ]
+        );
+        let by_lead = request_event(
+            types::REQUEST_CREATED,
+            "web-lead",
             json!({"request": "RQ-4"}),
         );
-        assert_eq!(notice_for(&by_human, &ctx()).len(), 3);
+        assert_eq!(
+            notice_for(&by_lead, &leads).len(),
+            2,
+            "never the requester's own agent"
+        );
+        assert!(
+            notice_for(&by_human, &ctx()).is_empty(),
+            "without a main agent or an area lead nobody is asked"
+        );
     }
 
     #[test]

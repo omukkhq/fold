@@ -1034,6 +1034,7 @@ async fn a_reject_clears_the_proposal_of_the_state() {
         .submit_review(
             &human,
             proposal,
+            1,
             Verdict::Reject,
             "wrong approach",
             Vec::new(),
