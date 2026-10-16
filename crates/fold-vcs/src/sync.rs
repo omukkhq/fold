@@ -179,7 +179,7 @@ fn apply(
         let stale: Vec<RepoPath> = index
             .iter()
             .map(|(found, _)| found)
-            .filter(|found| at_or_below(found.as_bytes(), path.as_bytes()))
+            .filter(|found| found.is_at_or_below(path))
             .cloned()
             .collect();
         for found in stale {
@@ -252,11 +252,8 @@ fn plan(
     }
     // Main may track a path where a sidecar goes; the sidecar takes it, so the batch never writes a file and a directory at one path.
     let sidecars = &plan.sidecars;
-    plan.writes.retain(|(path, _)| {
-        !sidecars
-            .iter()
-            .any(|side| at_or_below(path.as_bytes(), side.as_bytes()))
-    });
+    plan.writes
+        .retain(|(path, _)| !sidecars.iter().any(|side| path.is_at_or_below(side)));
     Ok(plan)
 }
 
@@ -379,9 +376,11 @@ fn matches(
         };
         hash_object(ObjectKind::Blob, &target)
     } else {
-        match hash_stable(&dir, name)? {
+        match hash_stable(&dir, name, u64::MAX)? {
             Reading::Hashed(hash, _) => hash,
-            Reading::Unstable | Reading::Gone | Reading::Denied => return Ok(false),
+            Reading::Unstable | Reading::Gone | Reading::Denied | Reading::TooLarge => {
+                return Ok(false);
+            }
         }
     };
     Ok(hash == expected.hash)
@@ -530,9 +529,4 @@ fn holds_marker(root: &Path, path: &RepoPath) -> Result<bool, WorkspaceError> {
 
 fn read_blob(objects: &ObjectStore, hash: &ObjectHash) -> Result<Vec<u8>, FoldError> {
     Ok(objects.read_expecting(hash, ObjectKind::Blob)?.payload)
-}
-
-fn at_or_below(path: &[u8], prefix: &[u8]) -> bool {
-    path.strip_prefix(prefix)
-        .is_some_and(|rest| rest.is_empty() || rest.starts_with(b"/"))
 }

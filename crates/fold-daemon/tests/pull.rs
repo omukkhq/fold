@@ -841,3 +841,35 @@ async fn the_socket_route_pulls_for_the_named_human() {
         (StatusCode::OK, &Value::from("up_to_date"))
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_remote_that_never_answers_fails_at_the_deadline_and_frees_both_locks() {
+    let host = Host::new();
+    let project = host.project().await;
+    // The listener accepts and never answers.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!(
+        "git://127.0.0.1:{}/x.git",
+        listener.local_addr().unwrap().port()
+    );
+    project.set_remote(Path::new(&url), false);
+    let git = Git::default().with_network_timeout(Duration::from_millis(500));
+    // A second push and a pull get both locks again only when the first push let them go.
+    for _ in 0..2 {
+        let pushed = tokio::time::timeout(
+            Duration::from_secs(30),
+            push(&project.handle, &ana(), &git, None),
+        )
+        .await
+        .expect("the push outlived the deadline");
+        assert_eq!(pushed.unwrap_err().code(), Some(codes::GIT_FAILED));
+    }
+    let pulled = tokio::time::timeout(
+        Duration::from_secs(30),
+        pull(&project.handle, &ana(), &git, None),
+    )
+    .await
+    .expect("the pull outlived the deadline");
+    assert_eq!(pulled.unwrap_err().code(), Some(codes::GIT_FAILED));
+    drop(listener);
+}

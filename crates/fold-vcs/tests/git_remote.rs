@@ -7,8 +7,9 @@ use fold_core::{RevisionId, Timestamp, codes};
 use fold_vcs::git::{CommitId, Git};
 use fold_vcs::git_export::{ExportBase, ExportRevision, ExportTarget, Signature, write_commits};
 use fold_vcs::git_remote::{
-    branch_ref, create_local_remote, default_branch, fetch_branch, is_ancestor, merge_base,
-    prepare_mirror, push_branch, remote_ref, remove_remote, set_ref,
+    branch_ref, checked_out_branch, create_local_remote, default_branch, exclude_fold_dir,
+    fetch_branch, is_ancestor, merge_base, prepare_mirror, push_branch, remote_ref, remove_remote,
+    set_ref,
 };
 use fold_vcs::git_sync_map::SYNC_MAP_FILE;
 use fold_vcs::objects::ObjectStore;
@@ -550,4 +551,78 @@ fn remotes_are_named_and_removed_and_a_new_local_path_becomes_a_repository() {
             .code(),
         codes::INVALID_REQUEST
     );
+}
+
+#[test]
+fn git_commands_that_talk_to_a_remote_stop_at_the_deadline() {
+    let fixture = Fixture::new();
+    let mirror = fixture.mirror();
+    // The listener accepts and never answers.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!(
+        "git://127.0.0.1:{}/x.git",
+        listener.local_addr().unwrap().port()
+    );
+    let git = Git::default().with_network_timeout(std::time::Duration::from_millis(500));
+    prepare_mirror(&git, &mirror, "origin", &url).unwrap();
+    let started = std::time::Instant::now();
+    let error = fetch_branch(&git, &mirror, "origin", "main").unwrap_err();
+    assert_eq!(error.code(), codes::GIT_FAILED);
+    assert_eq!(error.details().unwrap()["timed_out"], true);
+    assert!(!error.to_string().contains("127.0.0.1"));
+    let error = default_branch(&git, &mirror, &url).unwrap_err();
+    assert_eq!(error.details().unwrap()["timed_out"], true);
+    fixture.write(None, &[fixture.revision(1, b"one\n")]);
+    let error = push_branch(&git, &mirror, "origin", &fixture.main_commit(), "main").unwrap_err();
+    assert_eq!(error.details().unwrap()["timed_out"], true);
+    assert!(started.elapsed() < std::time::Duration::from_secs(30));
+}
+
+#[test]
+fn a_failed_init_of_a_new_local_remote_leaves_no_directory_behind() {
+    let fixture = Fixture::new();
+    let remote = fixture.path("remote.git");
+    // A directory cannot be executed, so `init` fails after the folder exists.
+    let broken = Git::new(fixture.path(""));
+    let error = create_local_remote(&broken, remote.to_str().unwrap(), "main").unwrap_err();
+    assert_eq!(error.code(), codes::GIT_FAILED);
+    assert!(!remote.exists());
+    create_local_remote(&fixture.git, remote.to_str().unwrap(), "main").unwrap();
+    assert!(remote.join("HEAD").is_file());
+}
+
+#[test]
+fn only_exit_one_of_symbolic_ref_means_a_detached_head() {
+    let fixture = Fixture::new();
+    let mirror = fixture.mirror();
+    assert_eq!(
+        checked_out_branch(&fixture.git, &mirror).unwrap(),
+        Some("main".to_owned())
+    );
+    std::fs::write(
+        mirror.join("HEAD"),
+        "0123456789abcdef0123456789abcdef01234567\n",
+    )
+    .unwrap();
+    assert_eq!(checked_out_branch(&fixture.git, &mirror).unwrap(), None);
+    let error = checked_out_branch(&fixture.git, &fixture.path("absent")).unwrap_err();
+    assert_eq!(error.code(), codes::GIT_FAILED);
+}
+
+#[test]
+fn the_fold_line_is_appended_to_info_exclude_once_and_keeps_what_was_there() {
+    let fixture = Fixture::new();
+    let repo = fixture.path("repo");
+    let exclude = repo.join("info/exclude");
+    exclude_fold_dir(&repo).unwrap();
+    assert_eq!(std::fs::read_to_string(&exclude).unwrap(), "/.fold/\n");
+    for (before, after) in [
+        ("*.log\n", "*.log\n/.fold/\n"),
+        ("*.log", "*.log\n/.fold/\n"),
+    ] {
+        std::fs::write(&exclude, before).unwrap();
+        exclude_fold_dir(&repo).unwrap();
+        exclude_fold_dir(&repo).unwrap();
+        assert_eq!(std::fs::read_to_string(&exclude).unwrap(), after);
+    }
 }

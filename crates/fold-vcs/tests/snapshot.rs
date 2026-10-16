@@ -370,6 +370,28 @@ fn an_unreadable_directory_keeps_every_base_file() {
     );
 }
 
+#[test]
+fn an_unreadable_directory_beside_a_sibling_that_begins_with_its_name_keeps_every_base_file() {
+    for sibling in ["locked-note", "locked.md", "locked x", "locked+1"] {
+        let mut fx = fixture();
+        write(&fx.root, "locked/file", b"x");
+        write(&fx.root, "locked/deep/other", b"y");
+        write(&fx.root, sibling, b"z");
+        let first = fx.snap(None);
+        fs::set_permissions(fx.root.join("locked"), fs::Permissions::from_mode(0o000)).unwrap();
+        let readable = fs::read_dir(fx.root.join("locked")).is_ok();
+        let next = fx.snap(Some(first.tree));
+        fs::set_permissions(fx.root.join("locked"), fs::Permissions::from_mode(0o755)).unwrap();
+        if readable {
+            return;
+        }
+        assert_eq!(next.tree, first.tree, "{sibling}");
+        assert_eq!(next.entries, first.entries, "{sibling}");
+        assert_eq!(next.warnings.len(), 1, "{sibling}");
+        assert_eq!(next.warnings[0].path.to_string(), "locked");
+    }
+}
+
 fn scan_then_record(
     fx: &mut Fixture,
     base_tree: ObjectHash,

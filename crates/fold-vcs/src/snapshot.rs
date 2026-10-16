@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::io::{self, Read};
-use std::ops::Bound;
 use std::path::Path;
 
 use fold_core::FoldError;
@@ -149,32 +148,20 @@ fn store_trees(
 /// Replaces everything `current` has at and below `path` with what `base` has there.
 pub(crate) fn keep_base(current: &mut FlatTree, base: &FlatTree, path: &RepoPath) {
     remove_below(current, path);
-    for (found, entry) in at_or_below(base, path) {
+    for (found, entry) in path.at_or_below(base) {
         current.insert(found.clone(), *entry);
     }
 }
 
 /// Removes everything `current` has at and below `path`.
 pub(crate) fn remove_below(current: &mut FlatTree, path: &RepoPath) {
-    let stale: Vec<Vec<u8>> = at_or_below(current, path)
+    let stale: Vec<Vec<u8>> = path
+        .at_or_below(current)
         .map(|(found, _)| found.clone())
         .collect();
     for found in stale {
         current.remove(&found);
     }
-}
-
-fn at_or_below<'t>(
-    tree: &'t FlatTree,
-    path: &RepoPath,
-) -> impl Iterator<Item = (&'t Vec<u8>, &'t FlatEntry)> {
-    let path = path.as_bytes().to_vec();
-    tree.range::<[u8], _>((Bound::Included(path.as_slice()), Bound::Unbounded))
-        .take_while(move |(found, _)| {
-            found
-                .strip_prefix(path.as_slice())
-                .is_some_and(|rest| rest.is_empty() || rest.starts_with(b"/"))
-        })
 }
 
 /// Stores the blob of one entry unless the object store already holds it. False when the file no longer has the hash the scan found, or is no longer where the scan found it. The file is reached from the root through directory handles, so a parent swapped for a symlink since the scan is never read through. It is read only when it is still a regular file of the size the scan recorded, and never past that size.

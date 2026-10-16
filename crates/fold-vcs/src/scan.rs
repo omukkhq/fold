@@ -223,6 +223,8 @@ pub(crate) enum Reading {
     Unstable,
     Gone,
     Denied,
+    /// The file held more than the limit when it was read.
+    TooLarge,
 }
 
 impl<'a, 'o> Walk<'a, 'o> {
@@ -302,10 +304,15 @@ impl<'a, 'o> Walk<'a, 'o> {
         Ok(())
     }
 
+    /// A missing path or parent is gone. A parent the scan cannot enter for another reason, such as one without search permission, is an error, so the caller can scan the whole workspace and keep what it knew there.
     fn touched(&mut self, root: &Path, path: &RepoPath) -> Result<(), WorkspaceError> {
-        let Ok(Some((parent, name))) = open_parent(root, path) else {
-            self.drop_below(path);
-            return Ok(());
+        let (parent, name) = match open_parent(root, path) {
+            Ok(Some(found)) => found,
+            Ok(None) | Err(WorkspaceError::InvalidPath(_)) => {
+                self.drop_below(path);
+                return Ok(());
+            }
+            Err(error) => return Err(error),
         };
         let meta = match parent.metadata(name) {
             Ok(meta) => meta,
@@ -330,7 +337,7 @@ impl<'a, 'o> Walk<'a, 'o> {
             .index
             .iter()
             .map(|(path, _)| path)
-            .filter(|path| prefix.is_none_or(|prefix| is_at_or_below(path, prefix)))
+            .filter(|path| prefix.is_none_or(|prefix| path.is_at_or_below(prefix)))
             .filter(|path| !self.seen.contains(*path))
             .cloned()
             .collect();
@@ -395,7 +402,7 @@ impl<'a, 'o> Walk<'a, 'o> {
             .and_then(|_| self.index.is_fresh(path, meta));
         let (hash, meta) = match cached {
             Some(hash) => (hash, meta.clone()),
-            None => match hash_stable(parent, name)? {
+            None => match hash_stable(parent, name, self.opts.max_file_bytes)? {
                 Reading::Hashed(hash, meta) => {
                     self.out.hashed += 1;
                     (hash, *meta)
@@ -411,6 +418,10 @@ impl<'a, 'o> Walk<'a, 'o> {
                 }
                 Reading::Denied => {
                     self.skip(path.clone(), SkipReason::Unreadable);
+                    return Ok(());
+                }
+                Reading::TooLarge => {
+                    self.skip(path.clone(), SkipReason::TooLarge);
                     return Ok(());
                 }
             },
@@ -477,15 +488,9 @@ impl<'a, 'o> Walk<'a, 'o> {
     }
 }
 
-fn is_at_or_below(path: &RepoPath, prefix: &RepoPath) -> bool {
-    let (path, prefix) = (path.as_bytes(), prefix.as_bytes());
-    path.strip_prefix(prefix)
-        .is_some_and(|rest| rest.is_empty() || rest.starts_with(b"/"))
-}
-
-/// Hashes the file `name` in `dir` as a blob. The read counts only when the size and modification time are the same before and after it, and the name still holds a regular file; otherwise it is read again, up to three times in all.
-pub(crate) fn hash_stable(dir: &DirHandle, name: &[u8]) -> io::Result<Reading> {
-    read_stable_into(dir, name, None)
+/// Hashes the file `name` in `dir` as a blob, reading at most `max_bytes` bytes. The read counts only when the size and modification time are the same before and after it, and the name still holds the same regular file; otherwise it is read again, up to three times in all.
+pub(crate) fn hash_stable(dir: &DirHandle, name: &[u8], max_bytes: u64) -> io::Result<Reading> {
+    read_stable_into(dir, name, max_bytes, None)
 }
 
 /// What a stable read of one workspace file found.
@@ -497,17 +502,22 @@ pub enum StableRead {
     Unstable,
     Gone,
     Denied,
+    /// The file held more than the limit when it was read.
+    TooLarge,
 }
 
-/// Reads the whole file `name` in `dir` with the scanner's stable read: a read counts only when the file did not change while it was read, and a changed file is read again, three tries at most. A symlink in the file's place is not followed.
-pub(crate) fn read_stable(dir: &DirHandle, name: &[u8]) -> io::Result<StableRead> {
+/// Reads the whole file `name` in `dir`, at most `max_bytes` bytes, with the scanner's stable read: a read counts only when the file did not change while it was read, and a changed file is read again, three tries at most. A symlink in the file's place is not followed.
+pub(crate) fn read_stable(dir: &DirHandle, name: &[u8], max_bytes: u64) -> io::Result<StableRead> {
     let mut content = Vec::new();
-    Ok(match read_stable_into(dir, name, Some(&mut content))? {
-        Reading::Hashed(hash, _) => StableRead::Read(content, hash),
-        Reading::Unstable => StableRead::Unstable,
-        Reading::Gone => StableRead::Gone,
-        Reading::Denied => StableRead::Denied,
-    })
+    Ok(
+        match read_stable_into(dir, name, max_bytes, Some(&mut content))? {
+            Reading::Hashed(hash, _) => StableRead::Read(content, hash),
+            Reading::Unstable => StableRead::Unstable,
+            Reading::Gone => StableRead::Gone,
+            Reading::Denied => StableRead::Denied,
+            Reading::TooLarge => StableRead::TooLarge,
+        },
+    )
 }
 
 /// What reading one file of a workspace found.
@@ -544,11 +554,12 @@ pub fn read_working_file(
     if meta.len() > max_bytes {
         return Ok(WorkingFile::TooLarge(meta.len()));
     }
-    Ok(match read_stable(&dir, name)? {
-        StableRead::Read(bytes, _) if bytes.len() as u64 > max_bytes => {
-            WorkingFile::TooLarge(bytes.len() as u64)
-        }
+    Ok(match read_stable(&dir, name, max_bytes)? {
         StableRead::Read(bytes, _) => WorkingFile::Read(bytes),
+        StableRead::TooLarge => {
+            let grown = dir.metadata(name).map_or(0, |meta| meta.len());
+            WorkingFile::TooLarge(grown.max(max_bytes.saturating_add(1)))
+        }
         StableRead::Gone => WorkingFile::Missing,
         StableRead::Unstable => WorkingFile::Unstable,
         StableRead::Denied => {
@@ -560,13 +571,14 @@ pub fn read_working_file(
 fn read_stable_into(
     dir: &DirHandle,
     name: &[u8],
+    max_bytes: u64,
     mut content: Option<&mut Vec<u8>>,
 ) -> io::Result<Reading> {
     for _ in 0..READ_TRIES {
         if let Some(content) = content.as_deref_mut() {
             content.clear();
         }
-        let (mut file, before) = match dir.open_regular(name) {
+        let (file, before) = match dir.open_regular(name) {
             Ok(Some(opened)) => opened,
             Ok(None) => continue,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Reading::Gone),
@@ -578,8 +590,10 @@ fn read_stable_into(
         let mut hasher = ObjectHasher::new(ObjectKind::Blob);
         let mut buffer = vec![0u8; READ_BUFFER];
         let mut total = 0u64;
+        // One byte past the limit is enough to know the file is too large.
+        let mut limited = (&file).take(max_bytes.saturating_add(1));
         loop {
-            match file.read(&mut buffer) {
+            match limited.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(read) => {
                     hasher.update(&buffer[..read]);
@@ -591,6 +605,9 @@ fn read_stable_into(
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
                 Err(error) => return Err(error),
             }
+        }
+        if total > max_bytes {
+            return Ok(Reading::TooLarge);
         }
         #[cfg(test)]
         AFTER_READ.with_borrow_mut(|hook| {
@@ -604,12 +621,28 @@ fn read_stable_into(
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Reading::Gone),
             Err(error) => return Err(error),
         };
-        let same = |a: &Metadata, b: &Metadata| a.len() == b.len() && mtime_ns(a) == mtime_ns(b);
+        let same = |a: &Metadata, b: &Metadata| {
+            a.len() == b.len() && mtime_ns(a) == mtime_ns(b) && same_identity(a, b)
+        };
         if end.is_file() && same(&before, &after) && same(&after, &end) && after.len() == total {
             return Ok(Reading::Hashed(hasher.finish(), Box::new(end)));
         }
     }
     Ok(Reading::Unstable)
+}
+
+/// Whether both describe the same file: an atomic replace can keep the size and modification time while the name now holds another inode. A side without an inode number matches anything, as in the stat index.
+fn same_identity(a: &Metadata, b: &Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        a.ino() == 0 || b.ino() == 0 || (a.dev() == b.dev() && a.ino() == b.ino())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (a, b);
+        true
+    }
 }
 
 #[cfg(test)]
@@ -706,6 +739,104 @@ mod tests {
             [b"steady".to_vec()]
         );
         assert!(index.lookup(&moving).is_none());
+    }
+
+    /// Runs `body` while the first read of a file named `name` on this thread is followed by `change`.
+    fn with_change_after_first_read<T>(
+        name: &'static str,
+        change: impl FnOnce() + 'static,
+        body: impl FnOnce() -> T,
+    ) -> T {
+        let mut change = Some(change);
+        AFTER_READ.set(Some(Box::new(move |read: &[u8], _: &std::fs::File| {
+            if read == name.as_bytes()
+                && let Some(change) = change.take()
+            {
+                change();
+            }
+        })));
+        let out = body();
+        AFTER_READ.set(None);
+        out
+    }
+
+    #[test]
+    fn a_file_replaced_with_the_same_size_and_time_during_its_read_is_read_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("ws");
+        fs::create_dir(&root).unwrap();
+        let note = root.join("note");
+        fs::write(&note, b"old!").unwrap();
+        let mtime = fs::metadata(&note).unwrap().modified().unwrap();
+        let rules = IgnoreRules::new(&root);
+        let opts = ScanOptions {
+            rules: &rules,
+            max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+            caps: HOST,
+            recorded: None,
+        };
+        let mut index = StatIndex::empty(HOST);
+        let replacement = dir.path().join("replacement");
+        let target = note.clone();
+        let found = with_change_after_first_read(
+            "note",
+            move || {
+                fs::write(&replacement, b"new!").unwrap();
+                let file = fs::File::options().write(true).open(&replacement).unwrap();
+                file.set_modified(mtime).unwrap();
+                drop(file);
+                fs::rename(&replacement, &target).unwrap();
+            },
+            || scan(&root, &mut index, &opts),
+        )
+        .unwrap();
+        assert_eq!(fs::metadata(&note).unwrap().modified().unwrap(), mtime);
+        let new = hash_object(ObjectKind::Blob, b"new!");
+        assert_eq!(found.entries[b"note".as_slice()].hash, new);
+        let path = RepoPath::parse(b"note").unwrap();
+        assert_eq!(index.lookup(&path).unwrap().hash, new);
+    }
+
+    #[test]
+    fn a_file_that_grows_past_the_limit_during_its_read_is_too_large() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("ws");
+        fs::create_dir(&root).unwrap();
+        let log = root.join("log");
+        fs::write(&log, [1u8; 8]).unwrap();
+        fs::write(root.join("small"), [2u8; 8]).unwrap();
+        let rules = IgnoreRules::new(&root);
+        let opts = ScanOptions {
+            rules: &rules,
+            max_file_bytes: 16,
+            caps: HOST,
+            recorded: None,
+        };
+        let mut index = StatIndex::empty(HOST);
+        let grown = log.clone();
+        let found = with_change_after_first_read(
+            "log",
+            move || {
+                use std::io::Write;
+                let mut file = fs::File::options().append(true).open(&grown).unwrap();
+                file.write_all(&[3u8; 32]).unwrap();
+            },
+            || scan(&root, &mut index, &opts),
+        )
+        .unwrap();
+        let path = RepoPath::parse(b"log").unwrap();
+        assert_eq!(
+            found.skipped,
+            [Skipped {
+                path: path.clone(),
+                reason: SkipReason::TooLarge,
+            }]
+        );
+        assert_eq!(
+            found.entries.keys().cloned().collect::<Vec<_>>(),
+            [b"small".to_vec()]
+        );
+        assert!(index.lookup(&path).is_none());
     }
 
     #[test]

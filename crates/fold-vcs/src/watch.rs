@@ -10,7 +10,7 @@ use fold_core::WorkspaceId;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::ignore::{FOLDIGNORE, GITIGNORE, IgnoreRules};
-use crate::paths::{RepoPath, is_reserved_name, os_bytes, os_path};
+use crate::paths::{RepoPath, entries_at_or_below, is_reserved_name, os_bytes, os_path};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WatchConfig {
@@ -708,15 +708,10 @@ impl Workspace {
 
     /// The watched directories directly inside the directory `key`.
     fn children(&self, key: &[u8]) -> Vec<Vec<u8>> {
-        let mut prefix = key.to_vec();
-        if !prefix.is_empty() {
-            prefix.push(b'/');
-        }
-        self.watched
-            .range(prefix.clone()..)
+        let start = if key.is_empty() { 0 } else { key.len() + 1 };
+        entries_at_or_below(&self.watched, key)
             .map(|(dir, _)| dir)
-            .take_while(|dir| dir.starts_with(&prefix))
-            .filter(|dir| dir.len() > prefix.len() && !dir[prefix.len()..].contains(&b'/'))
+            .filter(|dir| dir.len() > start && !dir[start..].contains(&b'/'))
             .cloned()
             .collect()
     }
@@ -763,15 +758,8 @@ impl Workspace {
 
     /// Drops the watch on the directory `key` and on every directory below it; an empty key drops them all.
     fn unwatch_below(&mut self, backend: &mut dyn WatchBackend, key: &[u8]) {
-        let below: Vec<Vec<u8>> = self
-            .watched
-            .range(key.to_vec()..)
-            .map(|(dir, _)| dir)
-            .take_while(|dir| dir.starts_with(key))
-            .filter(|dir| {
-                key.is_empty() || dir.len() == key.len() || dir.get(key.len()) == Some(&b'/')
-            })
-            .cloned()
+        let below: Vec<Vec<u8>> = entries_at_or_below(&self.watched, key)
+            .map(|(dir, _)| dir.clone())
             .collect();
         for dir in below {
             if let Some((full, _)) = self.watched.remove(&dir) {

@@ -1,5 +1,5 @@
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use fold_core::{FoldError, RevisionId, codes};
@@ -25,10 +25,12 @@ pub struct SyncLock {
 pub struct SyncMap {
     path: PathBuf,
     entries: Vec<(RevisionId, CommitId)>,
+    /// The bytes of the file that hold whole lines; anything after them is a torn append that the next append overwrites.
+    valid_len: u64,
 }
 
 impl SyncMap {
-    /// Reads the map in `fold_dir`; a missing file is an empty map.
+    /// Reads the map in `fold_dir`; a missing file is an empty map. An unterminated last line is the leftover of an append that stopped half way, so it is dropped.
     pub fn load(fold_dir: &Path) -> Result<Self, FoldError> {
         let path = fold_dir.join(SYNC_MAP_FILE);
         let text = match fs::read(&path) {
@@ -36,11 +38,13 @@ impl SyncMap {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
             Err(error) => return Err(io_error(&error)),
         };
-        let text = String::from_utf8(text).map_err(|_| invalid(1))?;
+        let whole = text
+            .iter()
+            .rposition(|&byte| byte == b'\n')
+            .map_or(0, |index| index + 1);
+        let valid_len = whole as u64;
+        let text = String::from_utf8(text[..whole].to_vec()).map_err(|_| invalid(1))?;
         let mut entries: Vec<(RevisionId, CommitId)> = Vec::new();
-        if !text.is_empty() && !text.ends_with('\n') {
-            return Err(invalid(text.lines().count()));
-        }
         for (index, line) in text.lines().enumerate() {
             let entry = parse_line(line).ok_or_else(|| invalid(index + 1))?;
             if entries.last().is_some_and(|(last, _)| *last >= entry.0) {
@@ -48,7 +52,11 @@ impl SyncMap {
             }
             entries.push(entry);
         }
-        Ok(Self { path, entries })
+        Ok(Self {
+            path,
+            entries,
+            valid_len,
+        })
     }
 
     /// Waits for the project's Git sync lock, then reads the map. A command that appends holds the lock from before it reads the map until after it appends, so two writers never both continue the same commit. It is the operating system's file lock, so it holds between processes and ends with the process that holds it.
@@ -110,15 +118,26 @@ impl SyncMap {
             return Ok(());
         }
         let created = !self.path.exists();
+        let valid_len = self.valid_len;
         let written = OpenOptions::new()
             .create(true)
-            .append(true)
+            .truncate(false)
+            .write(true)
             .open(&self.path)
             .and_then(|mut file| {
-                file.write_all(text.as_bytes())?;
-                file.sync_all()
+                let appended = file
+                    .set_len(valid_len)
+                    .and_then(|()| file.seek(SeekFrom::Start(valid_len)))
+                    .and_then(|_| file.write_all(text.as_bytes()))
+                    .and_then(|()| file.sync_all());
+                if appended.is_err() {
+                    // A half-written line would stop every later append; cut the file back to its last whole line.
+                    let _ = file.set_len(valid_len);
+                }
+                appended
             });
         written.map_err(|error| io_error(&error))?;
+        self.valid_len += text.len() as u64;
         if created && let Some(dir) = self.path.parent() {
             sync_dir(dir).map_err(|error| io_error(&error))?;
         }
@@ -203,11 +222,10 @@ mod tests {
     #[test]
     fn damaged_files_name_the_bad_line() {
         let dir = tempfile::tempdir().unwrap();
-        let cases: [(Vec<u8>, usize); 6] = [
+        let cases: [(Vec<u8>, usize); 5] = [
             (b"r1 abc\n".to_vec(), 1),
             (b"\xff\n".to_vec(), 1),
             (format!("r1 {A}\nr1 {B}\n").into_bytes(), 2),
-            (format!("r1 {A}").into_bytes(), 1),
             (format!("x1 {A}\n").into_bytes(), 1),
             (b"r1\n".to_vec(), 1),
         ];
@@ -217,6 +235,31 @@ mod tests {
             assert_eq!(error.code(), codes::GIT_SYNC_MAP_INVALID);
             assert_eq!(error.details().unwrap()["line"], line);
         }
+    }
+
+    #[test]
+    fn a_torn_last_line_is_dropped_and_the_next_append_rewrites_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(SYNC_MAP_FILE);
+        for torn in [&format!("r2 {B}")[..], "r2 bb"] {
+            let mut bytes = format!("r1 {A}\n").into_bytes();
+            bytes.extend_from_slice(torn.as_bytes());
+            bytes.push(0xff);
+            fs::write(&file, bytes).unwrap();
+            let mut map = SyncMap::load(dir.path()).unwrap();
+            assert_eq!(map.entries(), &[(rev(1), commit(A))]);
+            map.append(&[(rev(2), commit(B))]).unwrap();
+            assert_eq!(
+                fs::read_to_string(&file).unwrap(),
+                format!("r1 {A}\nr2 {B}\n")
+            );
+            assert_eq!(SyncMap::load(dir.path()).unwrap(), map);
+        }
+        fs::write(&file, format!("r1 {A}")).unwrap();
+        let mut map = SyncMap::load(dir.path()).unwrap();
+        assert!(map.entries().is_empty());
+        map.append(&[(rev(1), commit(A))]).unwrap();
+        assert_eq!(fs::read_to_string(&file).unwrap(), format!("r1 {A}\n"));
     }
 
     #[test]
@@ -251,6 +294,7 @@ mod tests {
         let mut map = SyncMap {
             path: dir.path().join(SYNC_MAP_FILE),
             entries: Vec::new(),
+            valid_len: 0,
         };
         let error = map.append(&[(rev(1), commit(A))]).unwrap_err();
         assert_eq!(error.code(), codes::WORKSPACE_IO);

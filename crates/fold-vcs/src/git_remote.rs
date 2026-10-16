@@ -68,7 +68,13 @@ pub fn exclude_fold_dir(repo: &Path) -> Result<(), FoldError> {
         "\n"
     };
     fs::create_dir_all(repo.join("info"))
-        .and_then(|()| fs::write(&exclude, format!("{text}{separator}{EXCLUDE_LINE}\n")))
+        .and_then(|()| {
+            let mut file = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&exclude)?;
+            io::Write::write_all(&mut file, format!("{separator}{EXCLUDE_LINE}\n").as_bytes())
+        })
         .map_err(|error| repository_io(&error))
 }
 
@@ -123,13 +129,20 @@ pub fn index_to(git: &Git, paths: &ProjectPaths, commit: &CommitId) -> Result<()
 
 /// The branch `HEAD` of `repo` names, or `None` when `HEAD` is detached. Blocking.
 pub fn checked_out_branch(git: &Git, repo: &Path) -> Result<Option<String>, FoldError> {
-    let out = match git.output(repo, &["symbolic-ref", "-q", "HEAD"], "symbolic-ref") {
-        Ok(out) => out,
-        // `-q` exits 1, with nothing on stderr, for a detached `HEAD`.
-        Err(error) if error.code() == codes::GIT_FAILED => return Ok(None),
-        Err(error) => return Err(error),
-    };
-    let text = String::from_utf8(out).map_err(|_| unexpected_output("symbolic-ref"))?;
+    let mut command = git.command(repo);
+    command
+        .args(["symbolic-ref", "-q", "HEAD"])
+        .stdout(Stdio::piped());
+    let output = Git::spawn(&mut command, "symbolic-ref")?
+        .wait_with_output()
+        .map_err(|error| wait_error(&error, "symbolic-ref"))?;
+    match output.status.code() {
+        Some(0) => {}
+        // `-q` exits 1, with nothing on stderr, for a detached `HEAD`; any other code is a failure.
+        Some(1) => return Ok(None),
+        _ => return Err(failed("symbolic-ref", output.status)),
+    }
+    let text = String::from_utf8(output.stdout).map_err(|_| unexpected_output("symbolic-ref"))?;
     Ok(text
         .trim_end()
         .strip_prefix("refs/heads/")
@@ -257,7 +270,7 @@ pub fn remove_remote(git: &Git, mirror: &Path, name: &str) -> Result<(), FoldErr
 /// The branch the `HEAD` of the repository at `url` points to, or `None` when it has no `HEAD` branch, as an empty repository has none. `mirror` is the repository Git runs in. Blocking.
 pub fn default_branch(git: &Git, mirror: &Path, url: &str) -> Result<Option<String>, FoldError> {
     check_remote(url)?;
-    let out = git.output(mirror, &["ls-remote", "--symref", url, "HEAD"], "ls-remote")?;
+    let out = git.network_output(mirror, &["ls-remote", "--symref", url, "HEAD"], "ls-remote")?;
     let text = String::from_utf8(out).map_err(|_| unexpected_output("ls-remote"))?;
     Ok(text.lines().find_map(|line| {
         let (target, name) = line.strip_prefix("ref: ")?.split_once('\t')?;
@@ -277,7 +290,7 @@ pub fn fetch_branch(
     check_branch(branch)?;
     let head = format!("refs/heads/{branch}");
     let tracking = remote_ref(name, branch);
-    let listed = git.status(
+    let listed = git.network_status(
         mirror,
         &["ls-remote", "--exit-code", "--heads", name, &head],
         "ls-remote",
@@ -292,7 +305,7 @@ pub fn fetch_branch(
         _ => return Err(failed("ls-remote", listed)),
     }
     let refspec = format!("+{head}:{tracking}");
-    git.output(
+    git.network_output(
         mirror,
         &["fetch", "--quiet", "--no-tags", name, &refspec],
         "fetch",
@@ -307,7 +320,10 @@ pub fn create_local_remote(git: &Git, url: &str, branch: &str) -> Result<(), Fol
         return Ok(());
     }
     fs::create_dir_all(path).map_err(|error| repository_io(&error))?;
-    git.init_bare(path, branch)
+    git.init_bare(path, branch).inspect_err(|_| {
+        // A half-made directory would make every retry see an existing path and skip the creation.
+        let _ = fs::remove_dir_all(path);
+    })
 }
 
 /// The best common ancestor of `a` and `b`, or `None` when their histories share no commit. Blocking.
@@ -395,17 +411,15 @@ pub fn push_branch(
     command
         .args(["push", "--porcelain", name, &refspec])
         .stdout(Stdio::piped());
-    let output = Git::spawn(&mut command, "push")?
-        .wait_with_output()
-        .map_err(|error| wait_error(&error, "push"))?;
-    if output.status.success() {
+    let (status, stdout) = git.network_run(command, "push")?;
+    if status.success() {
         return Ok(());
     }
     // Only the status flag and summary of each ref line are read: the `To <url>` line can hold credentials.
-    if rejected(&output.stdout) {
+    if rejected(&stdout) {
         return Err(remote_ahead(branch, None));
     }
-    Err(failed("push", output.status))
+    Err(failed("push", status))
 }
 
 /// Whether a porcelain ref line reports a push the remote refused because it is not a fast-forward of its branch.

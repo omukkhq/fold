@@ -1,6 +1,8 @@
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt;
 use std::io;
+use std::ops::Bound;
 use std::path::{Path, PathBuf};
 
 use fold_core::tree::{TreeError, validate_name};
@@ -105,6 +107,21 @@ impl RepoPath {
         }
     }
 
+    /// True for this path itself and every path inside it. A sibling that only begins with the same bytes, such as `src-old` or `src.rs` beside `src`, is not inside it.
+    pub fn is_at_or_below(&self, ancestor: &Self) -> bool {
+        self.0
+            .strip_prefix(ancestor.0.as_slice())
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(b"/"))
+    }
+
+    /// The entries of `map` at this path and below it, in key order.
+    pub fn at_or_below<'m, V>(
+        &self,
+        map: &'m BTreeMap<Vec<u8>, V>,
+    ) -> impl Iterator<Item = (&'m Vec<u8>, &'m V)> + use<'m, V> {
+        entries_at_or_below(map, &self.0)
+    }
+
     /// The path of the entry `name` inside `parent`, or the top-level entry when `parent` is `None`.
     pub fn child(parent: Option<&Self>, name: &[u8]) -> Result<Self, WorkspaceError> {
         match parent {
@@ -117,6 +134,26 @@ impl RepoPath {
             None => Self::parse(name),
         }
     }
+}
+
+/// The entries of `map` at the path `prefix` and below it; an empty `prefix` is the workspace root and gives every entry. Keys sort bytewise, and a sibling such as `src-old`, `src.rs`, `src x` or `src+` sorts between `src` and `src/`, so the entries below are the range from `src/` up to `src0`, the byte after `/`.
+pub(crate) fn entries_at_or_below<'m, V>(
+    map: &'m BTreeMap<Vec<u8>, V>,
+    prefix: &[u8],
+) -> impl Iterator<Item = (&'m Vec<u8>, &'m V)> + use<'m, V> {
+    let (exact, bounds) = if prefix.is_empty() {
+        (None, (Bound::Unbounded, Bound::Unbounded))
+    } else {
+        let mut lower = prefix.to_vec();
+        lower.push(b'/');
+        let mut upper = prefix.to_vec();
+        upper.push(b'/' + 1);
+        (
+            map.get_key_value(prefix),
+            (Bound::Included(lower), Bound::Excluded(upper)),
+        )
+    };
+    exact.into_iter().chain(map.range::<Vec<u8>, _>(bounds))
 }
 
 impl fmt::Display for RepoPath {
@@ -202,6 +239,49 @@ mod tests {
         );
         assert_eq!(RepoPath::child(None, b"c").unwrap().to_string(), "c");
         assert!(RepoPath::child(Some(&parent), b"..").is_err());
+    }
+
+    fn path(text: &str) -> RepoPath {
+        RepoPath::parse(text.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn a_sibling_that_begins_with_the_same_name_is_never_at_or_below_it() {
+        for sibling in ["src-old", "src.rs", "src x", "src+1", "src0", "srcs/lib.rs"] {
+            let mut map = BTreeMap::new();
+            for key in ["sr", "src", sibling, "src/a", "src/deep/b", "srd"] {
+                map.insert(key.as_bytes().to_vec(), ());
+            }
+            let found: Vec<&[u8]> = path("src")
+                .at_or_below(&map)
+                .map(|(key, ())| key.as_slice())
+                .collect();
+            assert_eq!(
+                found,
+                [b"src".as_slice(), b"src/a", b"src/deep/b"],
+                "{sibling}"
+            );
+            assert!(!path(sibling).is_at_or_below(&path("src")), "{sibling}");
+        }
+        assert!(path("src").is_at_or_below(&path("src")));
+        assert!(path("src/lib.rs").is_at_or_below(&path("src")));
+        assert!(!path("lib.rs").is_at_or_below(&path("src")));
+    }
+
+    #[test]
+    fn the_entries_below_a_directory_come_back_without_its_own_key_or_from_the_root() {
+        let mut map = BTreeMap::new();
+        for key in ["a", "lib-x", "lib/b", "lib/c/d"] {
+            map.insert(key.as_bytes().to_vec(), ());
+        }
+        let below = |prefix: &[u8]| -> Vec<Vec<u8>> {
+            entries_at_or_below(&map, prefix)
+                .map(|(key, ())| key.clone())
+                .collect()
+        };
+        assert_eq!(below(b"lib"), [b"lib/b".to_vec(), b"lib/c/d".to_vec()]);
+        assert_eq!(below(b"").len(), 4);
+        assert!(below(b"none").is_empty());
     }
 
     #[test]

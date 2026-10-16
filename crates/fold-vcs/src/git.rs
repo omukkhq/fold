@@ -1,9 +1,12 @@
 use std::ffi::OsStr;
 use std::fmt;
-use std::io;
+use std::io::{self, Read};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::str::FromStr;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use fold_core::{FoldError, codes};
 use serde_json::json;
@@ -24,7 +27,11 @@ const REPOSITORY_VARIABLES: &[&str] = &[
 #[derive(Debug, Clone)]
 pub struct Git {
     program: PathBuf,
+    network_timeout: Duration,
 }
+
+/// How long a Git command that talks to a remote may run before fold kills it.
+pub const NETWORK_TIMEOUT: Duration = Duration::from_secs(120);
 
 impl Default for Git {
     fn default() -> Self {
@@ -36,7 +43,92 @@ impl Git {
     pub fn new(program: impl Into<PathBuf>) -> Self {
         Self {
             program: program.into(),
+            network_timeout: NETWORK_TIMEOUT,
         }
+    }
+
+    /// The same program with another deadline for the commands that talk to a remote.
+    pub fn with_network_timeout(mut self, timeout: Duration) -> Self {
+        self.network_timeout = timeout;
+        self
+    }
+
+    /// Runs a command that talks to a remote and kills it, with every process it started, when it outlives the network deadline, so a remote that never answers cannot hold the caller's locks. The standard output is returned when `command` pipes it. The group is only ever signalled while the child is not yet reaped, so its id cannot have passed to another process.
+    pub(crate) fn network_run(
+        &self,
+        mut command: Command,
+        what: &'static str,
+    ) -> Result<(ExitStatus, Vec<u8>), FoldError> {
+        command.process_group(0);
+        let mut child = Self::spawn(&mut command, what)?;
+        let deadline = Instant::now() + self.network_timeout;
+        let stdout = match child.stdout.take() {
+            None => Vec::new(),
+            Some(mut stdout) => {
+                let (sender, receiver) = mpsc::channel();
+                std::thread::spawn(move || {
+                    let mut bytes = Vec::new();
+                    let read = stdout.read_to_end(&mut bytes).map(|_| bytes);
+                    let _ = sender.send(read);
+                });
+                // A helper that outlives Git can keep the pipe open, so the output too must arrive before the deadline.
+                match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                    Ok(Ok(bytes)) => bytes,
+                    Ok(Err(error)) => {
+                        kill_group(&mut child);
+                        return Err(wait_error(&error, what));
+                    }
+                    Err(_) => {
+                        kill_group(&mut child);
+                        return Err(timed_out(what, self.network_timeout));
+                    }
+                }
+            }
+        };
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) if Instant::now() >= deadline => {
+                    kill_group(&mut child);
+                    return Err(timed_out(what, self.network_timeout));
+                }
+                Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+                Err(error) => {
+                    kill_group(&mut child);
+                    return Err(wait_error(&error, what));
+                }
+            }
+        };
+        Ok((status, stdout))
+    }
+
+    /// The standard output of a network command that must succeed.
+    pub(crate) fn network_output<S: AsRef<OsStr>>(
+        &self,
+        repo: &Path,
+        args: &[S],
+        what: &'static str,
+    ) -> Result<Vec<u8>, FoldError> {
+        let mut command = self.command(repo);
+        command.args(args).stdout(Stdio::piped());
+        let (status, stdout) = self.network_run(command, what)?;
+        if status.success() {
+            Ok(stdout)
+        } else {
+            Err(failed(what, status))
+        }
+    }
+
+    /// The exit status of a network command whose non-zero codes mean different answers.
+    pub(crate) fn network_status<S: AsRef<OsStr>>(
+        &self,
+        repo: &Path,
+        args: &[S],
+        what: &'static str,
+    ) -> Result<ExitStatus, FoldError> {
+        let mut command = self.command(repo);
+        command.args(args);
+        Ok(self.network_run(command, what)?.0)
     }
 
     /// A command that runs in `repo` with no input and its output discarded; a caller that reads the output pipes it.
@@ -358,6 +450,31 @@ pub(crate) fn unexpected_output(what: &'static str) -> FoldError {
         format!("git {what} gave output fold cannot read"),
     )
     .with_details([("command", json!(what))])
+}
+
+fn kill_group(child: &mut Child) {
+    if let Ok(pid) = i32::try_from(child.id())
+        && pid > 1
+    {
+        // SAFETY: `kill` takes plain integers and touches no memory. The child leads its own process group (`process_group(0)`), and every caller signals before it reaps the child, so the group id is still the child's own and `-pid` reaches it and the helpers it started and nothing else. `pid > 1`, so `-pid` never means every process.
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn timed_out(what: &'static str, limit: Duration) -> FoldError {
+    FoldError::new(
+        codes::GIT_FAILED,
+        format!(
+            "git {what} did not finish within {} seconds",
+            limit.as_secs()
+        ),
+    )
+    .with_hint("check that the remote is reachable, then try again")
+    .with_details([("command", json!(what)), ("timed_out", json!(true))])
 }
 
 /// The exit status only: Git's own message can quote file content, so it is never kept.

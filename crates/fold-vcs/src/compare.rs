@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::io;
 use std::path::{Path, PathBuf};
 
-use fold_core::object::{ObjectHash, ObjectKind};
+use fold_core::object::{ObjectHash, ObjectKind, hash_object};
 pub use fold_core::tree::ChangeKind;
 use fold_core::tree::{FlatEntry, FlatTree, flatten};
 use fold_core::{FoldError, codes};
@@ -15,7 +16,7 @@ use crate::index::StatIndex;
 use crate::objects::ObjectStore;
 use crate::paths::{RepoPath, WorkspaceError, open_parent};
 use crate::platform::Capabilities;
-use crate::scan::{self, DEFAULT_MAX_FILE_BYTES, ScanOptions, Skipped, StableRead};
+use crate::scan::{self, DEFAULT_MAX_FILE_BYTES, Reading, ScanOptions, Skipped, StableRead};
 use crate::snapshot::{Warning, WarningReason, keep_base, load_tree, remove_below};
 
 /// One changed path. A hash is `None` on the side where the path does not exist. Line counts are zero for a binary file.
@@ -61,7 +62,7 @@ pub struct FileDiff {
     pub hunks: Vec<Hunk>,
 }
 
-/// One side of a comparison: the entries of a recorded tree, or the scanned working files of a workspace. A working side reads a file from the object store when the store holds its blob, and otherwise from the workspace with the scanner's stable read, so a file that changed after the scan is compared as it is now.
+/// One side of a comparison: the entries of a recorded tree, or the scanned working files of a workspace. A working side reads a file from the object store when the store holds its blob, and otherwise from the workspace with the scanner's stable read. Content that no longer has the hash the scan recorded is reported as changed, so the caller scans and compares again.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct State {
     entries: FlatTree,
@@ -535,7 +536,7 @@ fn content(
     if let Some(root) = &state.working
         && !objects.contains(&entry.hash).map_err(FoldError::from)?
     {
-        return read_working(root, path);
+        return read_working(root, path, &entry.hash);
     }
     Ok(objects
         .read_expecting(&entry.hash, ObjectKind::Blob)
@@ -543,8 +544,8 @@ fn content(
         .payload)
 }
 
-/// A symlink gives its target text and is never followed.
-fn read_working(root: &Path, path: &RepoPath) -> Result<Vec<u8>, FoldError> {
+/// A symlink gives its target text and is never followed. The content counts only when it still has the hash the scan recorded, so a file changed since never gives line counts for that hash. A file that went or changed is reported as changed, so the caller compares again; any other failure, such as a file it may not read, is returned as it is.
+fn read_working(root: &Path, path: &RepoPath, expected: &ObjectHash) -> Result<Vec<u8>, FoldError> {
     let changed = || {
         FoldError::new(
             codes::WORKSPACE_IO,
@@ -552,17 +553,48 @@ fn read_working(root: &Path, path: &RepoPath) -> Result<Vec<u8>, FoldError> {
         )
         .with_details([("path", json!(path.to_string()))])
     };
+    let failed = |error: io::Error| FoldError::from(WorkspaceError::from(error));
     let Some((dir, name)) = open_parent(root, path)? else {
         return Err(changed());
     };
-    let meta = dir.metadata(name).map_err(|_| changed())?;
-    if meta.file_type().is_symlink() {
-        return dir.read_link(name).ok().flatten().ok_or_else(changed);
+    let meta = match dir.metadata(name) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(changed()),
+        Err(error) => return Err(failed(error)),
+    };
+    let (bytes, hash) = if meta.file_type().is_symlink() {
+        let target = match dir.read_link(name) {
+            Ok(Some(target)) => target,
+            Ok(None) => return Err(changed()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(changed()),
+            Err(error) => return Err(failed(error)),
+        };
+        let hash = hash_object(ObjectKind::Blob, &target);
+        (target, hash)
+    } else {
+        let denied = || failed(io::ErrorKind::PermissionDenied.into());
+        // A file that grew since the scan would be read whole only to fail the hash check, so a large one is hashed first without keeping its content, and the read never goes past the size that hash was found at.
+        let limit = if meta.len() > MAX_INLINE_BYTES as u64 {
+            match scan::hash_stable(&dir, name, u64::MAX).map_err(failed)? {
+                Reading::Hashed(hash, end) if hash == *expected => end.len(),
+                Reading::Denied => return Err(denied()),
+                _ => return Err(changed()),
+            }
+        } else {
+            MAX_INLINE_BYTES as u64
+        };
+        match scan::read_stable(&dir, name, limit).map_err(failed)? {
+            StableRead::Read(bytes, hash) => (bytes, hash),
+            StableRead::Unstable | StableRead::Gone | StableRead::TooLarge => {
+                return Err(changed());
+            }
+            StableRead::Denied => return Err(denied()),
+        }
+    };
+    if hash != *expected {
+        return Err(changed());
     }
-    match scan::read_stable(&dir, name).map_err(WorkspaceError::from)? {
-        StableRead::Read(bytes, _) => Ok(bytes),
-        StableRead::Unstable | StableRead::Gone | StableRead::Denied => Err(changed()),
-    }
+    Ok(bytes)
 }
 
 #[cfg(test)]
@@ -671,6 +703,43 @@ mod tests {
     }
 
     #[test]
+    fn a_moved_directory_beside_a_file_that_begins_with_its_name_leaves_no_old_entries() {
+        let ws = workspace();
+        fs::create_dir(ws.root.join("utils")).unwrap();
+        fs::write(ws.root.join("utils/a.ts"), b"a\n").unwrap();
+        fs::write(ws.root.join("utils/b.ts"), b"b\n").unwrap();
+        fs::write(ws.root.join("utils.ts"), b"index\n").unwrap();
+        let rules = IgnoreRules::new(&ws.root);
+        let opts = opts(&rules, DEFAULT_MAX_FILE_BYTES);
+        let mut index = StatIndex::empty(HOST);
+        let mut current = FlatTree::new();
+        refresh_working(&ws.root, &mut index, &mut current, &ws.base, None, &opts).unwrap();
+
+        fs::rename(ws.root.join("utils"), ws.root.join("lib")).unwrap();
+        let touched = [path("utils"), path("lib")];
+        refresh_working(
+            &ws.root,
+            &mut index,
+            &mut current,
+            &ws.base,
+            Some(&touched),
+            &opts,
+        )
+        .unwrap();
+        assert_eq!(
+            names(&current),
+            [
+                "a.txt",
+                "big.bin",
+                "lib/a.ts",
+                "lib/b.ts",
+                "src/lib.rs",
+                "utils.ts"
+            ]
+        );
+    }
+
+    #[test]
     fn a_touched_ignore_file_widens_the_refresh_to_its_folder() {
         let ws = workspace();
         let rules = IgnoreRules::new(&ws.root);
@@ -766,6 +835,69 @@ mod tests {
         let again = compare_cached(&ws.objects, &from, &to, &mut cache).unwrap();
         assert_eq!(again, plain);
         assert!(compare(&ws.objects, &from, &to).is_err());
+    }
+
+    #[test]
+    fn a_working_file_that_changed_since_the_scan_gives_no_counts() {
+        let ws = workspace();
+        let rules = IgnoreRules::new(&ws.root);
+        let opts = opts(&rules, DEFAULT_MAX_FILE_BYTES);
+        let mut index = StatIndex::empty(HOST);
+        let mut current = FlatTree::new();
+        fs::write(ws.root.join("new.txt"), b"x\n").unwrap();
+        refresh_working(&ws.root, &mut index, &mut current, &ws.base, None, &opts).unwrap();
+        let from = State::recorded(ws.base.clone());
+        let to = State::working(ws.root.clone(), current.clone());
+        let mut cache = LineCache::new(8);
+
+        fs::write(ws.root.join("new.txt"), b"y\nz\n").unwrap();
+        let changed = compare_cached(&ws.objects, &from, &to, &mut cache).unwrap_err();
+        assert_eq!(changed.code(), codes::WORKSPACE_IO);
+        assert!(changed.message().contains("compare again"));
+        assert!(cache.is_empty());
+
+        fs::write(ws.root.join("new.txt"), b"x\n").unwrap();
+        fs::set_permissions(
+            ws.root.join("new.txt"),
+            std::os::unix::fs::PermissionsExt::from_mode(0o000),
+        )
+        .unwrap();
+        let readable = fs::read(ws.root.join("new.txt")).is_ok();
+        let denied = compare_cached(&ws.objects, &from, &to, &mut cache);
+        fs::set_permissions(
+            ws.root.join("new.txt"),
+            std::os::unix::fs::PermissionsExt::from_mode(0o644),
+        )
+        .unwrap();
+        if !readable {
+            let denied = denied.unwrap_err();
+            assert_eq!(denied.code(), codes::WORKSPACE_IO);
+            assert!(!denied.message().contains("compare again"));
+        }
+        let counted = compare_cached(&ws.objects, &from, &to, &mut cache).unwrap();
+        assert_eq!(counted.totals.added_lines, 1);
+        assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn a_large_working_file_is_hashed_before_it_is_kept_in_memory() {
+        let ws = workspace();
+        let rules = IgnoreRules::new(&ws.root);
+        let opts = opts(&rules, DEFAULT_MAX_FILE_BYTES);
+        let mut index = StatIndex::empty(HOST);
+        let mut current = FlatTree::new();
+        let lines = MAX_INLINE_BYTES / 2 + 1;
+        fs::write(ws.root.join("large.txt"), "x\n".repeat(lines)).unwrap();
+        refresh_working(&ws.root, &mut index, &mut current, &ws.base, None, &opts).unwrap();
+        let from = State::recorded(ws.base.clone());
+        let to = State::working(ws.root.clone(), current);
+
+        let counted = compare(&ws.objects, &from, &to).unwrap();
+        assert_eq!(counted.totals.added_lines, u32::try_from(lines).unwrap());
+
+        fs::write(ws.root.join("large.txt"), "y\n".repeat(lines * 2)).unwrap();
+        let changed = compare(&ws.objects, &from, &to).unwrap_err();
+        assert!(changed.message().contains("compare again"));
     }
 
     #[test]

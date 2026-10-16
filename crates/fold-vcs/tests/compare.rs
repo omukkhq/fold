@@ -278,8 +278,10 @@ fn a_working_side_reads_files_the_store_does_not_hold_from_disk() {
         b"fn a() {}\nfn b() {}\nfn c() {}\n",
     )
     .unwrap();
-    let again = compare(&objects, &from, &to).unwrap();
-    assert_eq!(again.files[1].added_lines, 2);
+    // The working side names the hash the scan found, so content that no longer has it gives no counts.
+    let edited = compare(&objects, &from, &to).unwrap_err();
+    assert_eq!(edited.code(), "workspace_io");
+    assert_eq!(edited.details().unwrap()["path"], "src/lib.rs");
 
     fs::remove_file(root.join("src/lib.rs")).unwrap();
     let error = compare(&objects, &from, &to).unwrap_err();

@@ -329,6 +329,26 @@ fn an_unreadable_directory_is_skipped() {
 }
 
 #[test]
+fn a_partial_rescan_below_an_unsearchable_directory_fails_instead_of_dropping_its_files() {
+    let (_dir, root) = workspace();
+    write(&root, "locked/file", b"x");
+    write(&root, "open", b"x");
+    let mut index = StatIndex::empty(HOST);
+    run(&root, &mut index);
+    fs::set_permissions(root.join("locked"), fs::Permissions::from_mode(0o000)).unwrap();
+    let readable = fs::read_dir(root.join("locked")).is_ok();
+    let rules = IgnoreRules::new(&root);
+    let opts = options(&rules, HOST, DEFAULT_MAX_FILE_BYTES);
+    let found = rescan_paths(&root, &mut index, &[rp("locked/file")], &opts);
+    fs::set_permissions(root.join("locked"), fs::Permissions::from_mode(0o755)).unwrap();
+    if readable {
+        return;
+    }
+    assert!(found.is_err());
+    assert!(index.lookup(&rp("locked/file")).is_some());
+}
+
+#[test]
 fn global_git_excludes_have_no_effect() {
     if let Ok(root) = std::env::var("FOLD_TEST_GLOBAL_ROOT") {
         let found = tracked(Path::new(&root));

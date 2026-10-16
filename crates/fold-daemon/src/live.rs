@@ -1078,7 +1078,7 @@ impl Scanner {
             None => self.warnings.clear(),
             Some(targets) => self
                 .warnings
-                .retain(|path, _| !targets.iter().any(|target| at_or_below(path, target))),
+                .retain(|path, _| !targets.iter().any(|target| path.is_at_or_below(target))),
         }
         for skipped in refreshed.skipped {
             self.warnings
@@ -1115,12 +1115,6 @@ fn same_content(before: &FlatTree, after: &FlatTree) -> bool {
             .all(|((a, a_entry), (b, b_entry))| a == b && a_entry.hash == b_entry.hash)
 }
 
-fn at_or_below(path: &RepoPath, target: &RepoPath) -> bool {
-    path.as_bytes()
-        .strip_prefix(target.as_bytes())
-        .is_some_and(|rest| rest.is_empty() || rest.starts_with(b"/"))
-}
-
 async fn blocking<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, FoldError> + Send + 'static,
 ) -> Result<T, FoldError> {
@@ -1140,14 +1134,6 @@ mod tests {
 
     fn path(text: &str) -> RepoPath {
         RepoPath::parse(text.as_bytes()).unwrap()
-    }
-
-    #[test]
-    fn a_path_is_at_or_below_its_own_folders_only() {
-        assert!(at_or_below(&path("src"), &path("src")));
-        assert!(at_or_below(&path("src/lib.rs"), &path("src")));
-        assert!(!at_or_below(&path("srcs/lib.rs"), &path("src")));
-        assert!(!at_or_below(&path("lib.rs"), &path("src")));
     }
 
     #[test]
