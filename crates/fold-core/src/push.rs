@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use crate::agents::AgentName;
+use crate::agents::{AgentName, AreaName};
 use crate::events::{Event, EventActor, types};
 use crate::ids::{MessageId, RequestId, TaskId};
 use crate::status::TaskStatus;
@@ -27,10 +27,16 @@ pub struct PushContext {
     pub retired: bool,
     /// Every registered agent, for an event that asks all of them.
     pub agents: BTreeSet<AgentName>,
-    /// The agent that created the event's request; `None` when a human did.
+    /// The agent that decides on the event's request: the agent that created it, or its deputy once that agent's short-lived worker has stopped; `None` for a human.
     pub requester: Option<AgentName>,
     /// The agent of the worker drafting the event's request.
     pub drafter: Option<AgentName>,
+    /// For a task that turned ready, the leads of the areas whose label it carries.
+    pub area_leads: BTreeSet<AgentName>,
+    /// For a task that turned ready, the areas whose label it carries, led or not.
+    pub areas: BTreeSet<AreaName>,
+    /// Every agent tagged `main`.
+    pub main_agents: BTreeSet<AgentName>,
 }
 
 /// One line for one agent's Claude Code session. `text` holds public ids and the next tool only.
@@ -154,11 +160,14 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
         if to != TaskStatus::Todo.as_str() {
             return None;
         }
-        return Some((
-            ctx.implementation_claim.iter().cloned().collect(),
-            format!("{task} is ready"),
-            "create_workspace",
-        ));
+        if let Some(holder) = &ctx.implementation_claim {
+            return Some((
+                vec![holder.clone()],
+                format!("{task} is ready"),
+                "create_workspace",
+            ));
+        }
+        return Some(ready_route(task, ctx));
     }
     if let Some(rule) = request_rule(event, ctx) {
         return Some(rule);
@@ -179,7 +188,31 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
     None
 }
 
-/// A request asks every agent to claim it, and each later step goes to whoever acts next: the requester's agent reads a draft, the drafter's agent revises it or starts the approved tasks. A human requester reads the web, so nothing is pushed to one.
+/// A ready task nobody claimed goes to whoever starts its builder. The lead of its area starts a task coder; while the area has no lead, the main agent starts one; a task in no area waits for the main agent to give it an area label. Both an approved request card and a dependent of an integrated task turn ready through `task.status_changed`, so this one rule routes them.
+fn ready_route(task: TaskId, ctx: &PushContext) -> (Vec<AgentName>, String, &'static str) {
+    let main = || ctx.main_agents.iter().cloned().collect();
+    if !ctx.area_leads.is_empty() {
+        return (
+            ctx.area_leads.iter().cloned().collect(),
+            format!("{task} is ready in your area"),
+            "start_worker",
+        );
+    }
+    if let Some(area) = ctx.areas.first() {
+        return (
+            main(),
+            format!("{task} is ready in area {area}, which has no lead"),
+            "start_worker",
+        );
+    }
+    (
+        main(),
+        format!("{task} is ready and has no area"),
+        "update_task",
+    )
+}
+
+/// A request asks the main agent to claim it, or every agent while no agent has the `main` tag, and each later step goes to whoever acts next: the requester's agent reads a draft, the drafter's agent revises it or starts the approved tasks. A human requester reads the web, so nothing is pushed to one.
 fn request_rule(
     event: &Event,
     ctx: &PushContext,
@@ -198,7 +231,12 @@ fn request_rule(
     let request = request_of(event)?;
     let drafter = || ctx.drafter.iter().cloned().collect();
     if kind == types::REQUEST_CREATED {
-        let agents = ctx.agents.iter().cloned().collect();
+        let claimers = if ctx.main_agents.is_empty() {
+            &ctx.agents
+        } else {
+            &ctx.main_agents
+        };
+        let agents = claimers.iter().cloned().collect();
         return Some((agents, format!("{request} created"), "claim_request"));
     }
     if kind == types::REQUEST_DRAFT_SUBMITTED {
@@ -323,6 +361,9 @@ mod tests {
                 .collect(),
             requester: Some(name("frontend")),
             drafter: Some(name("backend")),
+            area_leads: BTreeSet::new(),
+            areas: BTreeSet::new(),
+            main_agents: BTreeSet::new(),
         }
     }
 
@@ -413,6 +454,79 @@ mod tests {
             ..ctx()
         };
         assert!(notice_for(&event, &unclaimed).is_empty());
+    }
+
+    fn ready(implementation_claim: Option<&str>, leads: &[&str], areas: &[&str]) -> PushContext {
+        PushContext {
+            implementation_claim: implementation_claim.map(name),
+            area_leads: leads.iter().map(|lead| name(lead)).collect(),
+            areas: areas
+                .iter()
+                .map(|area| AreaName::parse(area).unwrap())
+                .collect(),
+            main_agents: [name("lead")].into_iter().collect(),
+            ..ctx()
+        }
+    }
+
+    #[test]
+    fn a_ready_task_nobody_claimed_goes_to_the_lead_of_its_area() {
+        let event = with_data(
+            event(types::TASK_STATUS_CHANGED, "fold"),
+            json!({"from": "backlog", "to": "todo"}),
+        );
+        assert_eq!(
+            sent(&notice_for(
+                &event,
+                &ready(None, &["backend-lead"], &["backend"])
+            )),
+            vec![row(
+                "backend-lead",
+                "fold: T-12 is ready in your area. Call start_worker.",
+                "start_worker"
+            )]
+        );
+        assert_eq!(
+            sent(&notice_for(
+                &event,
+                &ready(Some("backend-coder"), &["backend-lead"], &["backend"])
+            )),
+            vec![row(
+                "backend-coder",
+                "fold: T-12 is ready. Call create_workspace.",
+                "create_workspace"
+            )],
+            "the claim holder builds it, so its lead hears nothing"
+        );
+    }
+
+    #[test]
+    fn a_ready_task_without_a_led_area_goes_to_the_main_agent() {
+        let event = with_data(
+            event(types::TASK_STATUS_CHANGED, "fold"),
+            json!({"from": "backlog", "to": "todo"}),
+        );
+        assert_eq!(
+            sent(&notice_for(&event, &ready(None, &[], &["backend"]))),
+            vec![row(
+                "lead",
+                "fold: T-12 is ready in area backend, which has no lead. Call start_worker.",
+                "start_worker"
+            )]
+        );
+        assert_eq!(
+            sent(&notice_for(&event, &ready(None, &[], &[]))),
+            vec![row(
+                "lead",
+                "fold: T-12 is ready and has no area. Call update_task.",
+                "update_task"
+            )]
+        );
+        let no_main = PushContext {
+            main_agents: BTreeSet::new(),
+            ..ready(None, &[], &[])
+        };
+        assert!(notice_for(&event, &no_main).is_empty());
     }
 
     #[test]
@@ -583,9 +697,16 @@ mod tests {
             types::REQUEST_CHANGES_REQUESTED,
             types::REQUEST_APPROVED,
         ] {
+            let long = AreaName::parse(&"a".repeat(32)).unwrap();
+            let unled = PushContext {
+                implementation_claim: None,
+                areas: [long].into_iter().collect(),
+                main_agents: [name("lead")].into_iter().collect(),
+                ..ctx()
+            };
             let notices = notice_for(&large(kind), &ctx());
             assert!(!notices.is_empty(), "{kind}");
-            for notice in notices {
+            for notice in notices.into_iter().chain(notice_for(&large(kind), &unled)) {
                 assert!(notice.text.len() <= MAX_NOTICE_LEN);
                 assert!(!notice.text.contains('\n'));
                 assert!(
@@ -709,6 +830,28 @@ mod tests {
             json!({"request": "RQ-4"}),
         );
         assert_eq!(notice_for(&by_human, &ctx()).len(), 3);
+    }
+
+    #[test]
+    fn a_new_request_reaches_only_the_main_agent_once_there_is_one() {
+        let with_main = PushContext {
+            main_agents: [name("lead")].into_iter().collect(),
+            ..ctx()
+        };
+        for actor in ["review", "review/batch", "human:ana"] {
+            let created = request_event(types::REQUEST_CREATED, actor, json!({"request": "RQ-5"}));
+            assert_eq!(
+                sent(&notice_for(&created, &with_main)),
+                vec![row(
+                    "lead",
+                    "fold: RQ-5 created. Call claim_request.",
+                    "claim_request"
+                )],
+                "{actor}"
+            );
+        }
+        let own = request_event(types::REQUEST_CREATED, "lead", json!({"request": "RQ-5"}));
+        assert!(notice_for(&own, &with_main).is_empty());
     }
 
     #[test]

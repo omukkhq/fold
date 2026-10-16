@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO agent_tags (agent_id, tag, created_at, granted_by) VALUES (?, ?, ?, ?)\n         ON CONFLICT (agent_id, tag) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "666b25fc3072b7655a0ba7b94a96a2885cb986755696225cd5a0096eeaa7e3ea"
+}

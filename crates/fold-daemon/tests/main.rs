@@ -100,6 +100,7 @@ mod recompute_guard;
 mod reconcile;
 #[cfg(feature = "failpoints")]
 mod reconcile_failpoints;
+mod request_routing;
 mod requests;
 mod restart_sessions;
 mod review_batches;

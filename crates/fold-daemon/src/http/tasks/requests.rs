@@ -11,7 +11,7 @@ use fold_core::requests::{
     DraftCard, DraftEdge, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, Requester, attachment_too_large,
     check_attachment_count, valid_media_type,
 };
-use fold_core::{FoldError, RequestId, codes};
+use fold_core::{FoldError, LabelName, RequestId, codes};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use utoipa::{IntoParams, ToSchema};
@@ -156,6 +156,10 @@ pub struct DraftCardView {
     pub title: String,
     /// Markdown in the task template.
     pub description: String,
+    /// The label of the area whose lead builds the card; approval gives the task this label. Absent for a card the main agent routes itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "backend")]
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -256,6 +260,7 @@ impl From<service::RequestDetail> for RequestDetailView {
                             key: card.key,
                             title: card.title,
                             description: card.description,
+                            label: card.label.map(|label| label.as_str().to_owned()),
                         })
                         .collect(),
                     edges: draft
@@ -682,12 +687,20 @@ pub async fn edit_request_draft(
         cards: body
             .cards
             .into_iter()
-            .map(|card| DraftCard {
-                key: card.key,
-                title: card.title,
-                description: card.description,
+            .map(|card| {
+                Ok(DraftCard {
+                    key: card.key,
+                    title: card.title,
+                    description: card.description,
+                    label: card
+                        .label
+                        .as_deref()
+                        .map(LabelName::parse)
+                        .transpose()
+                        .map_err(FoldError::from)?,
+                })
             })
-            .collect(),
+            .collect::<Result<_, FoldError>>()?,
         edges: body
             .edges
             .into_iter()

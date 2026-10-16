@@ -17,6 +17,9 @@ const RESERVED_AGENT_NAMES: &[&str] = &[
 /// The tag that makes an agent the integrator. Only a human can grant it.
 pub const INTEGRATOR_TAG: &str = "integrator";
 
+/// The tag of the main agent: the user's own interactive session, which handles requests. While an agent has it, only that agent claims requests and fold sends it the new requests and the ready tasks no area lead owns.
+pub const MAIN_TAG: &str = "main";
+
 /// The messages never repeat the rejected text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum NameError {
@@ -100,6 +103,10 @@ segment_newtype!(
 impl Tag {
     pub fn is_integrator(&self) -> bool {
         self.0 == INTEGRATOR_TAG
+    }
+
+    pub fn is_main(&self) -> bool {
+        self.0 == MAIN_TAG
     }
 }
 

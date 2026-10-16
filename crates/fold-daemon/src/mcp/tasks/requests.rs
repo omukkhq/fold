@@ -1,7 +1,7 @@
 use fold_core::requests::{
     DraftCard, DraftEdge, MAX_ATTACHMENT_BYTES, RequestKind, RequestState, Requester,
 };
-use fold_core::{Actor, FoldError, RequestId, WorkspaceId, codes};
+use fold_core::{Actor, FoldError, LabelName, RequestId, WorkspaceId, codes};
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{JsonObject, Tool};
 use rmcp::schemars::JsonSchema;
@@ -106,6 +106,9 @@ pub struct CardInput {
     pub title: String,
     /// The task description in Markdown, in the task template. In message text `#` names a fold item and `@` names a file; the daemon parses nothing.
     pub description: String,
+    /// The label of the area that builds this card, such as backend; the main agent sets it. Approval gives the task this label, and fold sends the ready task to the area's lead. Create the label with create_label first. Leave it out for a task that the main agent routes itself.
+    #[serde(default)]
+    pub label: Option<String>,
 }
 
 /// One dependency between two cards of a draft.
@@ -310,16 +313,23 @@ fn state(text: &str) -> Result<RequestState, FoldError> {
     })
 }
 
-fn draft(cards: Vec<CardInput>, edges: Vec<EdgeInput>, note: Option<String>) -> SubmitDraft {
-    SubmitDraft {
+fn draft(
+    cards: Vec<CardInput>,
+    edges: Vec<EdgeInput>,
+    note: Option<String>,
+) -> Result<SubmitDraft, FoldError> {
+    Ok(SubmitDraft {
         cards: cards
             .into_iter()
-            .map(|card| DraftCard {
-                key: card.key,
-                title: card.title,
-                description: card.description,
+            .map(|card| {
+                Ok(DraftCard {
+                    key: card.key,
+                    title: card.title,
+                    description: card.description,
+                    label: card.label.as_deref().map(LabelName::parse).transpose()?,
+                })
             })
-            .collect(),
+            .collect::<Result<_, FoldError>>()?,
         edges: edges
             .into_iter()
             .map(|edge| DraftEdge {
@@ -328,7 +338,20 @@ fn draft(cards: Vec<CardInput>, edges: Vec<EdgeInput>, note: Option<String>) -> 
             })
             .collect(),
         note,
+    })
+}
+
+/// A card names its label only when it has one.
+fn card_json(card: &DraftCard) -> Value {
+    let mut value = json!({
+        "key": card.key,
+        "title": card.title,
+        "description": card.description,
+    });
+    if let Some(label) = &card.label {
+        value["label"] = json!(label.as_str());
     }
+    value
 }
 
 /// The compact line of a request in a list.
@@ -393,11 +416,7 @@ fn detail_json(detail: &RequestDetail, version: Option<u32>) -> Result<Value, Fo
             "version": draft.version,
             "author": draft.author,
             "note": draft.note,
-            "cards": draft.cards.iter().map(|card| json!({
-                "key": card.key,
-                "title": card.title,
-                "description": card.description,
-            })).collect::<Vec<_>>(),
+            "cards": draft.cards.iter().map(card_json).collect::<Vec<_>>(),
             "edges": draft.edges.iter().map(|edge| json!({
                 "prerequisite": edge.prerequisite,
                 "dependent": edge.dependent,
@@ -537,7 +556,7 @@ async fn submit_request_draft(
         .submit_request_draft(
             actor,
             request_id(&input.id)?,
-            draft(input.cards, input.edges, input.note),
+            draft(input.cards, input.edges, input.note)?,
             kind,
             input.title.as_deref(),
         )
@@ -571,7 +590,7 @@ async fn edit_request_draft(
         .edit_request_draft(
             actor,
             request_id(&input.id)?,
-            draft(input.cards, input.edges, input.note),
+            draft(input.cards, input.edges, input.note)?,
         )
         .await
         .map_err(from_task)?;

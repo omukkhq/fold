@@ -69,7 +69,7 @@ pub fn can_push(actor: &Actor) -> Result<(), PolicyDenied> {
     }
 }
 
-/// Only a human grants or removes `integrator`, because the integrator moves main. Any other tag is a free label that an agent sets on itself at registration.
+/// Only a human grants or removes `integrator`, because the integrator moves main. Any other tag is a label that an agent sets on itself at registration, and `main` also passes [`can_take_main_tag`].
 pub fn can_set_tag(actor: &Actor, tag: &Tag, add: bool) -> Result<(), PolicyDenied> {
     if !tag.is_integrator() || actor.is_human() {
         return Ok(());
@@ -83,6 +83,25 @@ pub fn can_set_tag(actor: &Actor, tag: &Tag, add: bool) -> Result<(), PolicyDeni
         },
         hint: "ask a human to run fld agent tag <agent> integrator",
     })
+}
+
+/// The main agent is the user's own interactive session, so a worker that fold started (`supervised`) never takes `main`, and while another agent holds it (`held_by_other`) nobody else does. The database holds the second rule too, with a unique index on the tag.
+pub fn can_take_main_tag(supervised: bool, held_by_other: bool) -> Result<(), PolicyDenied> {
+    if supervised {
+        return Err(PolicyDenied {
+            code: codes::MAIN_TAG_DENIED,
+            message: "a worker that fold started cannot take the main tag",
+            hint: "call register_agent without the main tag",
+        });
+    }
+    if held_by_other {
+        return Err(PolicyDenied {
+            code: codes::MAIN_TAG_DENIED,
+            message: "another agent holds the main tag",
+            hint: "call register_agent without the main tag, and send_message to the main agent",
+        });
+    }
+    Ok(())
 }
 
 /// Only the worker that owns a workspace abandons it, because abandoning gives up that worker's own work. `owner` is the workspace's worker; a human, the system and every other worker are refused.

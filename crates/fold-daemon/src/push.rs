@@ -7,11 +7,11 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
 use fold_core::push::{MAX_NOTICE_LEN, Notice, PushContext, is_pushed, notice_for, request_of};
-use fold_core::requests::Requester;
-use fold_core::{AgentName, Event, FoldError, INTEGRATOR_TAG, Timestamp, codes};
+use fold_core::requests::{Requester, deputy};
+use fold_core::{AgentName, Event, FoldError, Tag, TaskId, TaskStatus, Timestamp, codes};
 use fold_store::reviews;
 use fold_store::tasks::{claims, requests};
-use fold_store::{Store, StoreError, agents, events};
+use fold_store::{Store, StoreError, agents, events, tasks};
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
@@ -557,6 +557,16 @@ async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError
                 Requester::Agent(agent) => Some(agent),
                 Requester::Human(_) => None,
             };
+            if let Some(agent) = &ctx.requester
+                && let Some(process) = agents::find_worker_process(&mut conn, agent).await?
+                && !process.state.is_running()
+                && let Some(deputy) = deputy(process.role, &process.started_by)
+            {
+                ctx.requester = match deputy {
+                    Requester::Agent(agent) => Some(agent),
+                    Requester::Human(_) => None,
+                };
+            }
             ctx.drafter = row.drafter.map(|drafter| drafter.worker.agent());
         }
         if kind == fold_core::events::types::REQUEST_CREATED {
@@ -565,6 +575,7 @@ async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError
                 .into_iter()
                 .map(|agent| agent.name)
                 .collect();
+            ctx.main_agents = tagged(store, Tag::is_main).await?;
         }
         return Ok(ctx);
     }
@@ -573,6 +584,10 @@ async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError
             ctx.implementation_claim = claims::unreleased_for_task(store.read(), task)
                 .await?
                 .map(|claim| claim.worker.agent());
+            let to = event.data.get("to").and_then(serde_json::Value::as_str);
+            if ctx.implementation_claim.is_none() && to == Some(TaskStatus::Todo.as_str()) {
+                route(store, task, &mut ctx).await?;
+            }
         }
         return Ok(ctx);
     }
@@ -589,9 +604,22 @@ async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError
     if kind != fold_core::events::types::INTEGRATION_CONFLICTED
         && kind != fold_core::events::types::INTEGRATION_SUCCEEDED
     {
-        ctx.integrators = integrators(store).await?;
+        ctx.integrators = tagged(store, Tag::is_integrator).await?;
     }
     Ok(ctx)
+}
+
+/// The areas whose label the ready task carries, their leads and the main agents, which take the task when no lead does.
+async fn route(store: &Store, task: TaskId, ctx: &mut PushContext) -> Result<(), StoreError> {
+    let labels = tasks::labels_for(store.read(), task).await?;
+    for area in agents::list_areas(store.read()).await? {
+        if labels.iter().any(|label| label.name == area.label) {
+            ctx.area_leads.extend(area.lead);
+            ctx.areas.insert(area.name);
+        }
+    }
+    ctx.main_agents = tagged(store, Tag::is_main).await?;
+    Ok(())
 }
 
 /// The integration released the review claim, so the holder is read from the released row; without one, the agent whose approval of the integrated version stands.
@@ -615,11 +643,15 @@ async fn integrated_reviewer(
     Ok(fold_core::reviews::standing_agent_approval(&reviews))
 }
 
-async fn integrators(store: &Store) -> Result<std::collections::BTreeSet<AgentName>, StoreError> {
+/// The agents with a tag `is_tag` accepts.
+async fn tagged(
+    store: &Store,
+    is_tag: fn(&Tag) -> bool,
+) -> Result<std::collections::BTreeSet<AgentName>, StoreError> {
     let tagged: Vec<i64> = agents::all_tags(store.read())
         .await?
         .into_iter()
-        .filter(|(_, tag)| tag.as_str() == INTEGRATOR_TAG)
+        .filter(|(_, tag)| is_tag(tag))
         .map(|(agent, _)| agent)
         .collect();
     Ok(agents::list_agents(store.read())

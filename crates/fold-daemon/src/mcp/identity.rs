@@ -21,7 +21,7 @@ pub fn is_identity_tool(name: &str) -> bool {
 pub struct RegisterAgentInput {
     /// Your agent name: 1 to 32 characters of a-z, 0-9, - and _, starting with a letter or digit. The first call creates the agent; later calls reuse it.
     pub name: String,
-    /// Role or capability tags to add to the agent, such as frontend or review. Tags are only added, never removed.
+    /// Role or capability tags to add to the agent, such as frontend or review. Tags are only added, never removed. The main tag makes the agent the main agent: one agent at most has it, and never a worker that fold started.
     #[serde(default)]
     pub tags: Vec<String>,
     /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.

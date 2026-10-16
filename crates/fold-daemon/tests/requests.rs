@@ -60,6 +60,7 @@ fn draft(cards: &[&str], edges: &[(&str, &str)]) -> SubmitDraft {
                 key: (*key).to_owned(),
                 title: format!("Build {key}"),
                 description: format!("**Scope** the {key} part"),
+                label: None,
             })
             .collect(),
         edges: edges

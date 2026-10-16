@@ -1,6 +1,6 @@
 use fold_core::object::ObjectHash;
 use fold_core::requests::{Draft, DraftCard, DraftEdge, RequestKind, RequestState, Requester};
-use fold_core::{RequestId, TaskId, Timestamp, WorkerName};
+use fold_core::{LabelName, RequestId, TaskId, Timestamp, WorkerName};
 use sqlx::SqliteConnection;
 
 use crate::error::StoreError;
@@ -432,7 +432,7 @@ pub async fn close(
     expect_one(result.rows_affected())
 }
 
-/// Inserts draft `version` with its cards and edges. A version that exists fails on `request_drafts.request_id, request_drafts.version`.
+/// Inserts draft `version` with its cards and edges. A version that exists fails on `request_drafts.request_id, request_drafts.version`. The caller checks that each card label exists; a missing one is stored as no label.
 pub async fn insert_draft(
     tx: &mut WriteTx,
     request: RequestId,
@@ -461,14 +461,16 @@ pub async fn insert_draft(
     for (index, card) in draft.cards().iter().enumerate() {
         let position =
             i64::try_from(index + 1).map_err(|_| StoreError::Invalid("too many cards"))?;
+        let label = card.label.as_ref().map(LabelName::as_str);
         sqlx::query!(
-            "INSERT INTO request_draft_cards (draft_id, key, position, title, description)
-             VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO request_draft_cards (draft_id, key, position, title, description, label_id)
+             VALUES (?, ?, ?, ?, ?, (SELECT id FROM labels WHERE name = ?))",
             draft_id,
             card.key,
             position,
             card.title,
-            card.description
+            card.description,
+            label
         )
         .execute(tx.conn())
         .await?;
@@ -504,18 +506,28 @@ pub async fn drafts(
     let mut drafts = Vec::with_capacity(heads.len());
     for head in heads {
         let cards = sqlx::query!(
-            "SELECT key, title, description FROM request_draft_cards WHERE draft_id = ? ORDER BY position",
+            r#"SELECT c.key, c.title, c.description, l.name AS "label?: String"
+               FROM request_draft_cards c LEFT JOIN labels l ON l.id = c.label_id
+               WHERE c.draft_id = ? ORDER BY c.position"#,
             head.id
         )
         .fetch_all(&mut *conn)
         .await?
         .into_iter()
-        .map(|row| DraftCard {
-            key: row.key,
-            title: row.title,
-            description: row.description,
+        .map(|row| {
+            let label = row
+                .label
+                .map(|name| LabelName::parse(&name))
+                .transpose()
+                .map_err(|_| StoreError::Corrupt("labels.name"))?;
+            Ok(DraftCard {
+                key: row.key,
+                title: row.title,
+                description: row.description,
+                label,
+            })
         })
-        .collect();
+        .collect::<Result<_, StoreError>>()?;
         let edges = sqlx::query!(
             "SELECT prerequisite_key, dependent_key FROM request_draft_edges WHERE draft_id = ? ORDER BY id",
             head.id

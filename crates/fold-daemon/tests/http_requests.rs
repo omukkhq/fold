@@ -448,6 +448,16 @@ async fn bad_input_is_refused_with_its_code() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(refused["error"]["code"], "invalid_request");
     assert_eq!(refused["error"]["details"]["reason"], "state");
+    let (status, refused) = h
+        .http(
+            Method::POST,
+            &format!("{BASE}/requests/RQ-1/drafts"),
+            Some(&json!({"cards": [{"key": "c1", "title": "Index", "description": "Add it.", "label": "a\nb"}]})),
+            "ana",
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(refused["error"]["code"], "invalid_label_name");
 }
 
 #[test]

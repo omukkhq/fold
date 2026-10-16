@@ -8,7 +8,10 @@ use crate::agents::{AgentName, HumanName};
 use crate::claims::is_stale;
 use crate::dag::{Dag, EdgeRefusal};
 use crate::error::{FoldError, codes};
+use crate::events::EventActor;
 use crate::ids::{RequestId, TaskId};
+use crate::roles::Role;
+use crate::task::LabelName;
 use crate::time::Timestamp;
 
 /// The most cards one draft holds.
@@ -245,6 +248,22 @@ impl Requester {
     }
 }
 
+/// Who decides for a requester that fold supervises, beside the requester: the starter of a short-lived worker, because fold stops that worker once its work is done, often before a draft is ready. `role` and `started_by` come from the requester's worker process. A long-lived worker decides alone, and so does a worker the daemon itself started.
+pub fn deputy(role: Role, started_by: &str) -> Option<Requester> {
+    if role.is_long_lived() {
+        return None;
+    }
+    let by = EventActor::parse(started_by).ok()?;
+    match by.agent() {
+        Some(agent) => AgentName::parse(agent).ok().map(Requester::Agent),
+        None => by
+            .as_str()
+            .strip_prefix("human:")
+            .and_then(|name| HumanName::parse(name).ok())
+            .map(Requester::Human),
+    }
+}
+
 impl fmt::Display for Requester {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.label())
@@ -419,6 +438,8 @@ pub struct DraftCard {
     pub key: String,
     pub title: String,
     pub description: String,
+    /// The label of the area whose lead builds the card; approval gives the task this label, so fold sends the ready task to that lead. `None` sends it to the main agent.
+    pub label: Option<LabelName>,
 }
 
 /// The dependent card needs the prerequisite card.
@@ -582,6 +603,7 @@ pub fn validate_draft(cards: Vec<DraftCard>, edges: Vec<DraftEdge>) -> Result<Dr
             key: card.key.clone(),
             title: title.to_owned(),
             description: card.description.clone(),
+            label: card.label.clone(),
         });
     }
     let mut graph: Vec<(TaskId, TaskId)> = Vec::with_capacity(edges.len());
@@ -636,6 +658,7 @@ mod tests {
             key: key.to_owned(),
             title: format!("Card {key}"),
             description: "**Scope** one thing".to_owned(),
+            label: None,
         }
     }
 
@@ -877,6 +900,7 @@ mod tests {
     fn a_valid_draft_keeps_its_order_and_trims_titles() {
         let mut first = card("c1");
         first.title = "  Add the route  ".to_owned();
+        first.label = Some(LabelName::parse("backend").unwrap());
         let draft = validate_draft(
             vec![first, card("c2"), card("c3")],
             vec![edge("c1", "c2"), edge("c2", "c3"), edge("c1", "c3")],
@@ -885,6 +909,11 @@ mod tests {
         let keys: Vec<&str> = draft.cards().iter().map(|card| card.key.as_str()).collect();
         assert_eq!(keys, ["c1", "c2", "c3"]);
         assert_eq!(draft.cards()[0].title, "Add the route");
+        assert_eq!(
+            draft.cards()[0].label.as_ref().map(LabelName::as_str),
+            Some("backend")
+        );
+        assert_eq!(draft.cards()[1].label, None);
         assert_eq!(draft.edges().len(), 3);
         let most: Vec<DraftCard> = (1..=20).map(|n| card(&format!("c{n}"))).collect();
         assert!(validate_draft(most, Vec::new()).is_ok());
@@ -1054,5 +1083,20 @@ mod tests {
             excerpt(&"a".repeat(EXCERPT_CHARS)),
             "a".repeat(EXCERPT_CHARS)
         );
+    }
+
+    #[test]
+    fn the_starter_of_a_short_lived_worker_is_its_deputy() {
+        let lead = Some(Requester::parse("web-lead").unwrap());
+        assert_eq!(deputy(Role::TaskCoder, "web-lead"), lead);
+        assert_eq!(deputy(Role::TaskCoder, "web-lead/sub"), lead);
+        assert_eq!(
+            deputy(Role::BatchReviewer, "human:ana"),
+            Requester::parse("human:ana")
+        );
+        assert_eq!(deputy(Role::AreaLead, "frontend"), None);
+        assert_eq!(deputy(Role::ReviewLead, "human:ana"), None);
+        assert_eq!(deputy(Role::TaskCoder, "fold"), None);
+        assert_eq!(deputy(Role::TaskCoder, "not a label"), None);
     }
 }

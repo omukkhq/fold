@@ -1467,6 +1467,11 @@ export interface components {
              * @example c1
              */
             key: string;
+            /**
+             * @description The label of the area whose lead builds the card; approval gives the task this label. Absent for a card the main agent routes itself.
+             * @example backend
+             */
+            label?: string | null;
             title: string;
         };
         DraftChangesBody: {

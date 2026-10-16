@@ -133,3 +133,4 @@ task_outside_area
 worker_limit_reached
 worker_exists
 worker_process_not_found
+main_tag_denied

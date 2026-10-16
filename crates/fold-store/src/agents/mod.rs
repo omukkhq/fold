@@ -124,7 +124,8 @@ pub async fn add_tag(
     let tag = tag.as_str();
     let created_at = now.as_millis();
     let result = sqlx::query!(
-        "INSERT OR IGNORE INTO agent_tags (agent_id, tag, created_at, granted_by) VALUES (?, ?, ?, ?)",
+        "INSERT INTO agent_tags (agent_id, tag, created_at, granted_by) VALUES (?, ?, ?, ?)
+         ON CONFLICT (agent_id, tag) DO NOTHING",
         agent_id,
         tag,
         created_at,

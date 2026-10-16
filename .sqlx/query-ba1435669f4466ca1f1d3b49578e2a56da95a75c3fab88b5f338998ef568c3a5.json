@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO request_draft_cards (draft_id, key, position, title, description, label_id)\n             VALUES (?, ?, ?, ?, ?, (SELECT id FROM labels WHERE name = ?))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "ba1435669f4466ca1f1d3b49578e2a56da95a75c3fab88b5f338998ef568c3a5"
+}

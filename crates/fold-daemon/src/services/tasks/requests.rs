@@ -4,21 +4,23 @@ use fold_core::events::types;
 use fold_core::object::{ObjectHash, ObjectKind};
 use fold_core::requests::{
     AttachmentFacts, DraftCard, DraftEdge, RequestKind, RequestState, RequestStep, Requester,
-    check_attachments, drafter_lapsed, excerpt, request_text, request_title, validate_draft,
+    check_attachments, deputy, drafter_lapsed, excerpt, request_text, request_title,
+    validate_draft,
 };
 use fold_core::{
     Actor, DependencyOrigin, FoldError, IdKind, MessageId, NewEvent, RequestId, TaskDescription,
     TaskId, TaskTitle, Timestamp, WorkerName, codes, policy,
 };
-use fold_store::messages;
 use fold_store::tasks::requests::{self, NewAttachment, NewRequest, RequestRow};
 pub use fold_store::tasks::requests::{AttachmentRow as RequestAttachment, RequestFilter};
 use fold_store::{StoreError, WriteTx, counters};
+use fold_store::{agents, messages};
 use fold_vcs::objects::ObjectStore;
 use serde_json::json;
 
 use super::{
-    CreateTask, TaskError, TaskService, add_edge_in_tx, create_in_tx, recompute, worker_row,
+    CreateTask, TaskError, TaskService, add_edge_in_tx, create_in_tx, recompute, require_labels,
+    worker_row,
 };
 use crate::services::events::EventBuffer;
 
@@ -246,7 +248,7 @@ impl TaskService {
         Ok((Some(guard), hashes))
     }
 
-    /// Makes the actor's main worker the drafter, sorts the request as `kind` and names it `title`; an `open` request becomes `drafting`. A request whose drafter's agent has had no open session for `lease_minutes` is taken over (`taken_over: true`); any other held request is `already_claimed`. A repeat claim by the drafter changes nothing.
+    /// Makes the actor's main worker the drafter, sorts the request as `kind` and names it `title`; an `open` request becomes `drafting`. While an agent has the `main` tag, only that agent claims (`main_agent_required`). A request whose drafter's agent has had no open session for `lease_minutes` is taken over (`taken_over: true`); any other held request is `already_claimed`. A repeat claim by the drafter changes nothing.
     pub async fn claim_request(
         &self,
         actor: &Actor,
@@ -254,13 +256,18 @@ impl TaskService {
         kind: RequestKind,
         title: &str,
     ) -> Result<RequestView, TaskError> {
-        let claimant = policy::can_claim_request(actor).map_err(FoldError::from)?;
         let title = request_title(title)?;
         let lease_minutes = self.lease_minutes().await?;
         let now = self.clock.now();
         let mut buffer = EventBuffer::new();
         self.store
             .write(async |tx| {
+                let main_exists = agents::all_tags(tx.conn())
+                    .await?
+                    .iter()
+                    .any(|(_, tag)| tag.is_main());
+                let claimant =
+                    policy::can_claim_request(actor, main_exists).map_err(FoldError::from)?;
                 let worker = worker_row(tx, claimant).await?;
                 let row = open_row(tx, request).await?;
                 let next = row.state.after(RequestStep::Claim, request)?;
@@ -328,7 +335,7 @@ impl TaskService {
         self.request_view(request).await
     }
 
-    /// Adds the next draft version written by the drafter's agent, which may re-sort and rename the request. The request becomes `draft_ready`.
+    /// Adds the next draft version written by the drafter's agent, which may re-sort and rename the request. The request becomes `draft_ready`. A card label that does not exist is `label_not_found`.
     pub async fn submit_request_draft(
         &self,
         actor: &Actor,
@@ -373,13 +380,21 @@ impl TaskService {
                         RequestStep::Submit
                     }
                     Role::Requester => {
-                        policy::is_requester(actor, &row.requester).map_err(FoldError::from)?;
+                        let deputy = requester_deputy(tx, &row.requester).await?;
+                        policy::is_requester(actor, &row.requester, deputy.as_ref())
+                            .map_err(FoldError::from)?;
                         RequestStep::Edit
                     }
                 };
                 let next = row.state.after(step, request)?;
                 let checked = validate_draft(draft.cards.clone(), draft.edges.clone())
                     .map_err(FoldError::from)?;
+                let labels: Vec<_> = checked
+                    .cards()
+                    .iter()
+                    .filter_map(|card| card.label.clone())
+                    .collect();
+                require_labels(tx, &labels).await?;
                 let note = match &draft.note {
                     Some(note) => request_text(note, "note", true)?,
                     None => None,
@@ -431,7 +446,9 @@ impl TaskService {
         self.store
             .write(async |tx| {
                 let row = open_row(tx, request).await?;
-                policy::is_requester(actor, &row.requester).map_err(FoldError::from)?;
+                let deputy = requester_deputy(tx, &row.requester).await?;
+                policy::is_requester(actor, &row.requester, deputy.as_ref())
+                    .map_err(FoldError::from)?;
                 let next = row.state.after(RequestStep::RequestChanges, request)?;
                 require_latest(&row, version)?;
                 let comment = request_text(comment, "comment", false)?.unwrap_or_default();
@@ -462,7 +479,9 @@ impl TaskService {
             .store
             .write(async |tx| {
                 let row = open_row(tx, request).await?;
-                policy::is_requester(actor, &row.requester).map_err(FoldError::from)?;
+                let deputy = requester_deputy(tx, &row.requester).await?;
+                policy::is_requester(actor, &row.requester, deputy.as_ref())
+                    .map_err(FoldError::from)?;
                 let next = row.state.after(RequestStep::Approve, request)?;
                 require_latest(&row, expected_version)?;
                 let draft = requests::drafts(tx.conn(), request)
@@ -477,7 +496,7 @@ impl TaskService {
                         title: TaskTitle::parse(&card.title)
                             .map_err(|_| StoreError::Corrupt("request_draft_cards.title"))?,
                         description: TaskDescription::new(card.description.clone()),
-                        labels: Vec::new(),
+                        labels: card.label.iter().cloned().collect(),
                     };
                     let task = create_in_tx(tx, &mut buffer, actor, &input, now).await?;
                     requests::set_task_request(tx, task, request).await?;
@@ -536,7 +555,9 @@ impl TaskService {
         self.store
             .write(async |tx| {
                 let row = open_row(tx, request).await?;
-                policy::is_requester(actor, &row.requester).map_err(FoldError::from)?;
+                let deputy = requester_deputy(tx, &row.requester).await?;
+                policy::is_requester(actor, &row.requester, deputy.as_ref())
+                    .map_err(FoldError::from)?;
                 row.state.after(RequestStep::Close, request)?;
                 let reason = request_text(reason, "reason", false)?.unwrap_or_default();
                 requests::close(tx, request, &reason, now).await?;
@@ -717,6 +738,19 @@ async fn next_request_id(tx: &mut WriteTx) -> Result<RequestId, TaskError> {
 }
 
 /// The request read in the command's transaction, refused when it does not exist or only reads.
+/// The deputy of an agent requester that fold supervises, from its worker process.
+async fn requester_deputy(
+    tx: &mut WriteTx,
+    requester: &Requester,
+) -> Result<Option<Requester>, StoreError> {
+    let Requester::Agent(agent) = requester else {
+        return Ok(None);
+    };
+    Ok(agents::find_worker_process(tx.conn(), agent)
+        .await?
+        .and_then(|process| deputy(process.role, &process.started_by)))
+}
+
 async fn open_row(tx: &mut WriteTx, request: RequestId) -> Result<RequestRow, TaskError> {
     let row = requests::fetch(tx.conn(), request)
         .await?

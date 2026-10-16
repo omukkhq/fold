@@ -29,7 +29,9 @@ pub mod time;
 pub mod tree;
 
 pub use actor::{Actor, AgentActor};
-pub use agents::{AgentName, AreaName, HumanName, INTEGRATOR_TAG, NameError, Tag, WorkerName};
+pub use agents::{
+    AgentName, AreaName, HumanName, INTEGRATOR_TAG, MAIN_TAG, NameError, Tag, WorkerName,
+};
 pub use clock::{Clock, ManualClock};
 pub use config::{CONFIG_TEMPLATE, GitConfig, IntegrationConfig, ProjectConfig, RemoteConfig};
 pub use error::{FoldError, codes};

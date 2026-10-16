@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT key, title, description FROM request_draft_cards WHERE draft_id = ? ORDER BY position",
+  "query": "SELECT c.key, c.title, c.description, l.name AS \"label?: String\"\n               FROM request_draft_cards c LEFT JOIN labels l ON l.id = c.label_id\n               WHERE c.draft_id = ? ORDER BY c.position",
   "describe": {
     "columns": [
       {
@@ -35,6 +35,17 @@
             "name": "description"
           }
         }
+      },
+      {
+        "name": "label?: String",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "labels",
+            "name": "name"
+          }
+        }
       }
     ],
     "parameters": {
@@ -43,8 +54,9 @@
     "nullable": [
       false,
       false,
-      false
+      false,
+      true
     ]
   },
-  "hash": "6e51a905938485144e335eac9122b1290913315ff3df3852445d90f6d3a1f3bc"
+  "hash": "73e9da11148d42b1c168944ca8fc14c73217c1bbca6ac5fc6c87e3aaaace62d4"
 }

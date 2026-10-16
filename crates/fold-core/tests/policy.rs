@@ -1,4 +1,4 @@
-use fold_core::policy::can_set_tag;
+use fold_core::policy::{can_set_tag, can_take_main_tag};
 use fold_core::{
     Actor, AgentActor, EventActor, FoldError, HumanName, NameError, Tag, WorkerName, codes,
 };
@@ -208,5 +208,28 @@ fn the_owning_worker_or_the_daemon_takes_an_automatic_checkpoint() {
     ] {
         let denied = can_take_auto_checkpoint(&actor, Some(&owner)).unwrap_err();
         assert_eq!(denied.code(), codes::NOT_WORKSPACE_OWNER, "{actor:?}");
+    }
+}
+
+#[test]
+fn only_one_agent_that_fold_did_not_start_takes_the_main_tag() {
+    assert!(can_take_main_tag(false, false).is_ok());
+    for (supervised, held_by_other, message) in [
+        (
+            true,
+            false,
+            "a worker that fold started cannot take the main tag",
+        ),
+        (false, true, "another agent holds the main tag"),
+        (
+            true,
+            true,
+            "a worker that fold started cannot take the main tag",
+        ),
+    ] {
+        let denied = can_take_main_tag(supervised, held_by_other).unwrap_err();
+        assert_eq!(denied.code(), codes::MAIN_TAG_DENIED);
+        assert_eq!(denied.to_string(), message);
+        assert!(denied.hint().contains("register_agent"));
     }
 }

@@ -520,6 +520,16 @@ async fn register_agent_in(
             (id, true)
         }
     };
+    if tags.iter().any(Tag::is_main) {
+        let supervised = agents::find_worker_process(tx.conn(), name)
+            .await?
+            .is_some();
+        let held_by_other = agents::all_tags(tx.conn())
+            .await?
+            .iter()
+            .any(|(holder, tag)| tag.is_main() && *holder != agent_id);
+        policy::can_take_main_tag(supervised, held_by_other).map_err(FoldError::from)?;
+    }
     for tag in tags {
         agents::add_tag(tx.conn(), agent_id, tag, None, now).await?;
     }
