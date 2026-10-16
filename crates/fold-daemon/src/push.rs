@@ -588,6 +588,12 @@ async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError
         }
         return Ok(ctx);
     }
+    if kind == fold_core::events::types::PROJECT_PAUSED
+        || kind == fold_core::events::types::PROJECT_RESUMED
+    {
+        ctx.main_agents = tagged(store, Tag::is_main).await?;
+        return Ok(ctx);
+    }
     if kind == fold_core::events::types::TASK_REPORTED {
         if let Some(task) = event.task {
             route(store, task, &mut ctx).await?;

@@ -52,7 +52,14 @@ export function areaEntry(
 }
 
 export function workerList(fields: Partial<WorkerList> = {}): WorkerList {
-  return { areas: [], workers: [], roles: [], limits: null, ...fields };
+  return {
+    areas: [],
+    workers: [],
+    roles: [],
+    limits: null,
+    pause: { paused_since: null, paused_by: null },
+    ...fields,
+  };
 }
 
 export function permissionQuestion(

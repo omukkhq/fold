@@ -8,6 +8,7 @@ import {
   agentStateText,
   chipAgents,
   chipStateText,
+  isPaused,
 } from "./agentChips";
 
 interface ChipOptions {
@@ -70,12 +71,19 @@ describe("chipStateText", () => {
 
   it("shows the counts while the stream is live", () => {
     expect(
-      chipStateText(agent({ working: 2 }), status({ state: "live" }), now),
+      chipStateText(
+        agent({ working: 2 }),
+        status({ state: "live" }),
+        now,
+        false,
+      ),
     ).toBe("2 working");
   });
 
   it("shows a dash before the first connection", () => {
-    expect(chipStateText(agent({ working: 2 }), INITIAL_STATUS, now)).toBe("—");
+    expect(
+      chipStateText(agent({ working: 2 }), INITIAL_STATUS, now, false),
+    ).toBe("—");
   });
 
   it("shows the time of the last sync to the minute while reconnecting", () => {
@@ -84,14 +92,32 @@ describe("chipStateText", () => {
         agent({ working: 2 }),
         status({ state: "reconnecting", lastEventAt: synced }),
         now,
+        true,
       ),
     ).toBe("as of 14:12");
   });
 
   it("shows a dash while reconnecting when nothing was ever synced", () => {
     expect(
-      chipStateText(agent({}), status({ state: "reconnecting" }), now),
+      chipStateText(agent({}), status({ state: "reconnecting" }), now, false),
     ).toBe("—");
+  });
+
+  it("says paused for every agent but the main agent while the project is paused", () => {
+    const live = status({ state: "live" });
+    expect(chipStateText(agent({ working: 2 }), live, now, true)).toBe(
+      "paused",
+    );
+    const main = { ...agent({ name: "main", working: 1 }), tags: ["main"] };
+    expect(chipStateText(main, live, now, true)).toBe("1 working");
+  });
+});
+
+describe("isPaused", () => {
+  it("reads the overview's paused_since", () => {
+    expect(isPaused(undefined)).toBe(false);
+    expect(isPaused(null)).toBe(false);
+    expect(isPaused(1_792_000_000_000)).toBe(true);
   });
 });
 

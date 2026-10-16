@@ -140,7 +140,8 @@ fn status_of(code: &str) -> Option<StatusCode> {
         codes::TASK_KIND_MISMATCH
         | codes::TASK_ALREADY_REPORTED
         | codes::TASK_NOT_REPORTED
-        | codes::AGENT_APPROVAL_REQUIRED => Some(StatusCode::CONFLICT),
+        | codes::AGENT_APPROVAL_REQUIRED
+        | codes::PROJECT_PAUSED => Some(StatusCode::CONFLICT),
         _ => None,
     }
 }
@@ -369,6 +370,7 @@ mod tests {
             (codes::PERMISSION_QUESTION_NOT_FOUND, StatusCode::NOT_FOUND),
             (codes::PERMISSION_QUESTION_CLOSED, StatusCode::CONFLICT),
             (codes::AGENT_APPROVAL_REQUIRED, StatusCode::CONFLICT),
+            (codes::PROJECT_PAUSED, StatusCode::CONFLICT),
         ] {
             assert_eq!(status_of(code), Some(status));
         }

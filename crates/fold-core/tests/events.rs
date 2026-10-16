@@ -101,6 +101,8 @@ fn all_equals_the_plans_event_types() {
         "task.reported",
         "task.sent_back",
         "proposal.author_changed",
+        "project.paused",
+        "project.resumed",
     ]);
     assert_eq!(declared, expected);
 }

@@ -202,10 +202,16 @@ async fn a_send_back_answers_the_open_report_once_and_a_new_report_opens_again()
         "Changed the colours"
     );
     assert!(
-        reports::owed_send_backs(store.read())
-            .await
-            .unwrap()
-            .is_empty()
+        reports::owed_send_backs(
+            store.read(),
+            &[
+                fold_core::WorkerState::Stopped,
+                fold_core::WorkerState::Failed
+            ]
+        )
+        .await
+        .unwrap()
+        .is_empty()
     );
     let history = store
         .write(async |tx| tasks::history(tx.conn(), id(1)).await)

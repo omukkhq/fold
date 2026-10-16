@@ -202,7 +202,7 @@ impl TaskService {
     }
 
     async fn lease_minutes(&self) -> Result<u64, TaskError> {
-        Ok(self.lease.minutes().await?)
+        Ok(self.lease.staleness_minutes(&self.store).await?)
     }
 
     /// Shares the workspace locks of the project's `WorkspaceService`. A service without them adopts or archives a workspace while a workspace command may still be writing its files.

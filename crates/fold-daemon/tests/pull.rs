@@ -766,6 +766,24 @@ async fn push_on_integrate_pushes_after_an_integration_and_records_a_failure() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn push_on_integrate_still_pushes_while_the_agents_are_paused() {
+    let host = Host::new();
+    let project = host.project().await;
+    let remote = host.remote();
+    project.set_remote(&remote, true);
+    project.handle.agents().pause_project(&ana()).await.unwrap();
+    let mut bus = project.handle.bus.subscribe();
+
+    let first = project.integrate_task(&[("a.txt", "one\n")]).await;
+
+    let pushed = next_event(&mut bus, types::REMOTE_PUSHED).await;
+    assert_eq!(pushed.data["last"], first.to_string());
+    assert_eq!(git(&remote, &["show", "main:a.txt"]), "one\n");
+    let pause = project.handle.agents().pause_state().await.unwrap();
+    assert!(pause.paused_since.is_some());
+}
+
 #[tokio::test]
 async fn the_socket_route_pulls_for_the_named_human() {
     let host = Host::new();

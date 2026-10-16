@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT paused_at, paused_by, resumed_at FROM project_pause WHERE id = 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "paused_at",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "project_pause",
+            "name": "paused_at"
+          }
+        }
+      },
+      {
+        "name": "paused_by",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "project_pause",
+            "name": "paused_by"
+          }
+        }
+      },
+      {
+        "name": "resumed_at",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "project_pause",
+            "name": "resumed_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "83a82122a910d90da77c6c7878410683c20ecfe141d5bd0b2b29eb23e02cd6ed"
+}

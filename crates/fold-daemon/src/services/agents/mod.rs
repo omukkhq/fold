@@ -40,8 +40,8 @@ pub use overview::{
 };
 pub use presence::SeenPresence;
 pub use workers::{
-    Launcher, RESTART_TURN, StartWorker, StopTimeouts, Supervisor, WorkerLimitsChanged,
-    new_session_id,
+    Launcher, PAUSE_TURN, PauseState, RESTART_TURN, StartWorker, StopTimeouts, Supervisor,
+    WorkerLimitsChanged, new_session_id,
 };
 pub(crate) use workers::{code_of, starter_of};
 
@@ -185,7 +185,7 @@ impl AgentService {
     }
 
     async fn lease_minutes(&self) -> Result<u64, AgentError> {
-        Ok(self.lease.minutes().await?)
+        Ok(self.lease.staleness_minutes(&self.store).await?)
     }
 
     /// Inserts a session row that records no working directory. The session has no agent until `register_agent` binds it, and no event is stored until then.

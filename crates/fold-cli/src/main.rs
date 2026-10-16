@@ -53,6 +53,10 @@ enum Command {
     Hook(hook::HookArgs),
     /// Bring the commits of the Git remote into main; a conflict becomes a sync task
     Pull(commands::remote::PullArgs),
+    /// Pause every agent of the project: fold stops each worker, keeps its session and starts none until fld resume
+    Pause(commands::pause::PauseArgs),
+    /// Resume the agents of a paused project: each stopped worker runs again in its own session
+    Resume(commands::pause::PauseArgs),
     /// Development helpers
     #[cfg(feature = "dev-seed")]
     #[command(hide = true)]
@@ -116,6 +120,12 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         }
         Some(Command::Pull(args)) => {
             commands::remote::run_pull(&args, out).map_err(Failure::Remote)
+        }
+        Some(Command::Pause(args)) => {
+            commands::pause::run_pause(&args, out).map_err(Failure::Remote)
+        }
+        Some(Command::Resume(args)) => {
+            commands::pause::run_resume(&args, out).map_err(Failure::Remote)
         }
         #[cfg(feature = "dev-seed")]
         Some(Command::Dev(args)) => {

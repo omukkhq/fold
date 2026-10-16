@@ -315,3 +315,37 @@ fn push_goes_through_the_daemon_and_needs_git_on_its_path() {
     assert!(!output.status.success());
     assert!(stderr(&output).contains("git_not_found"), "{output:?}");
 }
+
+#[test]
+fn pause_and_resume_go_through_the_daemon() {
+    let sandbox = Sandbox::new();
+    let project = sandbox.project();
+    let _daemon = sandbox.serve(&system_path());
+    let socket = sandbox.socket();
+    let run = |command: &str| {
+        sandbox.fold(&[
+            command,
+            "--socket",
+            socket.to_str().unwrap(),
+            "--project",
+            project.to_str().unwrap(),
+        ])
+    };
+    let paused = run("pause");
+    assert!(paused.status.success(), "{paused:?}");
+    assert_eq!(
+        stdout(&paused),
+        "the agents are paused by @ana: every worker is stopped and keeps its session; run fld resume to start them again\n"
+    );
+    assert_eq!(
+        stdout(&run("pause")),
+        stdout(&paused),
+        "a second pause changes nothing"
+    );
+    let resumed = run("resume");
+    assert!(resumed.status.success(), "{resumed:?}");
+    assert_eq!(
+        stdout(&resumed),
+        "the agents run: fold starts and resumes workers as usual\n"
+    );
+}

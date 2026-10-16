@@ -405,22 +405,35 @@ fn post_project(args: &PushArgs, action: &str) -> Result<Response, RemoteError> 
         }
         None => String::new(),
     };
+    post_to_project(
+        args.socket.as_deref(),
+        args.project.as_deref(),
+        &format!("{action}{query}"),
+    )
+}
+
+/// Sends `POST /api/v1/projects/<slug>/<action>` for the project at or above `project`, the current directory by default, over the socket as the human in the environment, starting the daemon when none runs.
+pub(crate) fn post_to_project(
+    socket: Option<&Path>,
+    project: Option<&Path>,
+    action: &str,
+) -> Result<Response, RemoteError> {
     let dirs = Dirs::from_env();
     let host = init::host_paths(&dirs)?;
-    let start = args.project.clone().unwrap_or_else(|| PathBuf::from("."));
+    let start = project.map_or_else(|| PathBuf::from("."), Path::to_path_buf);
     let dir = std::fs::canonicalize(&start).map_err(RemoteError::Cwd)?;
-    let config = serve::client_config(args.socket.as_deref(), &dirs)?;
+    let config = serve::client_config(socket, &dirs)?;
     let client = DaemonClient::new(config, daemon_client::human_from_env().ok());
     let runtime = serve::current_thread_runtime().map_err(RemoteError::Runtime)?;
     runtime.block_on(async {
         let slug = slug_for_dir_on_host(&host, &dir).await?;
-        let path = format!("/api/v1/projects/{slug}/{action}{query}");
+        let path = format!("/api/v1/projects/{slug}/{action}");
         Ok::<_, RemoteError>(client.request(Method::POST, &path, None).await?)
     })
 }
 
 /// The error a refusal carries.
-fn refusal(response: &Response) -> Result<(), RemoteError> {
+pub(crate) fn refusal(response: &Response) -> Result<(), RemoteError> {
     if response.is_success() {
         return Ok(());
     }

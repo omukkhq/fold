@@ -1,4 +1,4 @@
-use fold_core::{AgentName, TaskId, Timestamp, WorkerName};
+use fold_core::{AgentName, TaskId, Timestamp, WorkerName, WorkerState};
 use sqlx::{SqliteConnection, SqliteExecutor};
 
 use crate::columns::time;
@@ -201,7 +201,7 @@ pub async fn latest_for_task(
     Ok(for_task(executor, task, 1).await?.pop())
 }
 
-/// A send-back that waits for the task coder who wrote the report: the coder's process is stopped or failed and has not started since the task was sent back.
+/// A send-back that waits for the task coder who wrote the report: the coder's process is in one of the asked states, such as stopped or failed, and has not started since the task was sent back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwedSendBack {
     pub agent: AgentName,
@@ -211,7 +211,15 @@ pub struct OwedSendBack {
 /// The send-backs no start of their coder has served yet, such as one the worker limits refused: each start moves `started_at`, so a send-back newer than it is still owed. Only the newest report of a task counts, so a task reported again owes nothing.
 pub async fn owed_send_backs(
     executor: impl SqliteExecutor<'_>,
+    states: &[WorkerState],
 ) -> Result<Vec<OwedSendBack>, StoreError> {
+    let states = serde_json::Value::from(
+        states
+            .iter()
+            .map(|state| state.as_str())
+            .collect::<Vec<_>>(),
+    )
+    .to_string();
     let rows = sqlx::query!(
         r#"SELECT g.name AS "agent!: String", t.number AS "task!: i64"
            FROM task_reports r
@@ -220,10 +228,11 @@ pub async fn owed_send_backs(
            JOIN worker_processes w ON w.agent_id = k.agent_id
            JOIN agents g ON g.id = w.agent_id
            WHERE r.resolution = 'sent_back' AND r.resolved_at > w.started_at
-             AND w.role = 'task_coder' AND w.state IN ('stopped', 'failed')
+             AND w.role = 'task_coder' AND w.state IN (SELECT value FROM json_each(?1))
              AND t.archived_at IS NULL
              AND r.id = (SELECT MAX(x.id) FROM task_reports x WHERE x.task_id = r.task_id)
-           ORDER BY w.id, t.number"#
+           ORDER BY w.id, t.number"#,
+        states
     )
     .fetch_all(executor)
     .await?;

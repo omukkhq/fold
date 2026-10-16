@@ -239,6 +239,8 @@ describe("eventLine", () => {
     );
     expect(line("area.updated")).toBe("changed the profile of an area");
     expect(line("workers.limits_changed")).toBe("changed the worker limits");
+    expect(line("project.paused")).toBe("paused every agent of the project");
+    expect(line("project.resumed")).toBe("resumed the agents of the project");
     expect(line("task.reported")).toBe(
       "reported T-12 finished for a lead check",
     );

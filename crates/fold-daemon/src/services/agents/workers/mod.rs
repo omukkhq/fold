@@ -20,10 +20,12 @@ use crate::services::projects::load_config;
 mod handoff;
 mod limits;
 mod output;
+mod pause;
 mod process;
 
 pub use limits::WorkerLimitsChanged;
-pub use process::{Launcher, RESTART_TURN, StopTimeouts, Supervisor};
+pub use pause::PauseState;
+pub use process::{Launcher, PAUSE_TURN, RESTART_TURN, StopTimeouts, Supervisor};
 
 /// The most default names tried for one start before the start gives up.
 const MAX_NAME_ATTEMPTS: u32 = 100;
@@ -77,6 +79,24 @@ fn not_supervised(agent: &AgentName) -> AgentError {
     .with_details([("agent", json!(agent.as_str()))])
     .with_hint("call list_workers")
     .into()
+}
+
+/// Refuses a start inside the transaction that would move a row to `starting` while the project's agents are paused. An automatic resume that this refuses stays owed and is served at the resume.
+pub(super) async fn refuse_while_paused(tx: &mut WriteTx) -> Result<(), AgentError> {
+    if agents::pause_state(tx.conn()).await?.is_paused() {
+        return Err(FoldError::new(
+            codes::PROJECT_PAUSED,
+            "the agents of this project are paused, so fold starts no worker",
+        )
+        .with_hint("start it again after resume_project; only the user decides when to resume")
+        .into());
+    }
+    Ok(())
+}
+
+/// Whether `error` is the refusal of [`refuse_while_paused`].
+pub(super) fn is_paused_refusal(error: &AgentError) -> bool {
+    matches!(error, AgentError::Fold(error) if error.code() == codes::PROJECT_PAUSED)
 }
 
 fn area_not_found(area: &AreaName) -> AgentError {
@@ -268,6 +288,7 @@ impl AgentService {
         let started = self
             .store
             .write(async |tx| {
+                refuse_while_paused(tx).await?;
                 let area_row = match &area {
                     Some(area) => Some(
                         agents::find_area(tx.conn(), area)

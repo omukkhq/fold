@@ -162,6 +162,7 @@ define_codes! {
     TASK_NOT_REPORTED = "task_not_reported",
     TASK_CHECK_DENIED = "task_check_denied",
     AGENT_APPROVAL_REQUIRED = "agent_approval_required",
+    PROJECT_PAUSED = "project_paused",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

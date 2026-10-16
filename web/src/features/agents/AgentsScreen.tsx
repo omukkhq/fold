@@ -1,6 +1,7 @@
 import { skipToken, useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { Bot, Terminal, UserPlus } from "lucide-react";
 import { useState } from "react";
+import { PausedBanner } from "@/app/PausedBanner";
 import { boardCards, boardQuery } from "@/api/board";
 import { keys } from "@/api/keys";
 import {
@@ -74,63 +75,66 @@ export function AgentsScreen({
         };
 
   return (
-    <div className="flex flex-col gap-16 px-24 pt-20 pb-24">
-      <div className="flex items-start justify-between gap-16">
-        <div className="flex flex-col gap-4">
-          <h1 className="text-screen leading-snug font-semibold text-text">
-            Agents
-          </h1>
-          <p className="text-body text-text-muted">
-            The main agent, the area leads, the review lead and their
-            short-lived workers. fold starts, watches and stops every worker;
-            the agents decide what to start.
-          </p>
-        </div>
-        {startLead === null ? null : (
-          <Button
-            icon={<UserPlus aria-hidden="true" size={15} />}
-            onClick={startLead}
-          >
-            Start a lead
-          </Button>
-        )}
-      </div>
-      {isEmptyTeam(groups) ? (
-        <EmptyTeam onStartLead={startLead} />
-      ) : (
-        <div className="flex items-start gap-16">
-          <TeamTable
-            slug={slug}
-            groups={groups}
-            human={human}
-            noLeads={hasNoLeads(groups)}
-            mainName={mainAgentName(groups)}
-            onStartLead={startLead}
-          />
-          {asking === undefined ? null : (
-            <PermissionPanel
-              key={asking}
-              slug={slug}
-              id={asking}
-              open={open}
-              row={askingRow(groups, open, asking)}
-              human={human}
-              now={now}
-              onClose={() => {
-                onSearch({});
-              }}
-            />
+    <div className="flex flex-col">
+      <PausedBanner slug={slug} />
+      <div className="flex flex-col gap-16 px-24 pt-20 pb-24">
+        <div className="flex items-start justify-between gap-16">
+          <div className="flex flex-col gap-4">
+            <h1 className="text-screen leading-snug font-semibold text-text">
+              Agents
+            </h1>
+            <p className="text-body text-text-muted">
+              The main agent, the area leads, the review lead and their
+              short-lived workers. fold starts, watches and stops every worker;
+              the agents decide what to start.
+            </p>
+          </div>
+          {startLead === null ? null : (
+            <Button
+              icon={<UserPlus aria-hidden="true" size={15} />}
+              onClick={startLead}
+            >
+              Start a lead
+            </Button>
           )}
         </div>
-      )}
-      <StartLeadDialog
-        slug={slug}
-        open={starting}
-        onOpenChange={setStarting}
-        areas={workers.areas}
-        roles={workers.roles}
-        labels={labels.data ?? []}
-      />
+        {isEmptyTeam(groups) ? (
+          <EmptyTeam onStartLead={startLead} />
+        ) : (
+          <div className="flex items-start gap-16">
+            <TeamTable
+              slug={slug}
+              groups={groups}
+              human={human}
+              noLeads={hasNoLeads(groups)}
+              mainName={mainAgentName(groups)}
+              onStartLead={startLead}
+            />
+            {asking === undefined ? null : (
+              <PermissionPanel
+                key={asking}
+                slug={slug}
+                id={asking}
+                open={open}
+                row={askingRow(groups, open, asking)}
+                human={human}
+                now={now}
+                onClose={() => {
+                  onSearch({});
+                }}
+              />
+            )}
+          </div>
+        )}
+        <StartLeadDialog
+          slug={slug}
+          open={starting}
+          onOpenChange={setStarting}
+          areas={workers.areas}
+          roles={workers.roles}
+          labels={labels.data ?? []}
+        />
+      </div>
     </div>
   );
 }

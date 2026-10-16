@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { errorReply, stubFetch } from "../test/stubFetch";
 import { isApiError } from "./errors";
-import { getProject, listProjects } from "./projects";
+import {
+  getProject,
+  listProjects,
+  pauseProject,
+  resumeProject,
+} from "./projects";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -23,6 +28,19 @@ describe("projects", () => {
       true,
       false,
     ]);
+  });
+
+  it("pauses and resumes the agents of a project", async () => {
+    const paused = { paused_since: 1_760_000_000_000, paused_by: "human:ana" };
+    const calls = stubFetch({
+      "POST /api/v1/projects/demo/pause": { body: paused },
+      "POST /api/v1/projects/demo/resume": {
+        body: { paused_since: null, paused_by: null },
+      },
+    });
+    expect(await pauseProject("demo")).toEqual(paused);
+    expect((await resumeProject("demo")).paused_since).toBeNull();
+    expect(calls.map((call) => call.method)).toEqual(["POST", "POST"]);
   });
 
   it("reads one project by slug", async () => {

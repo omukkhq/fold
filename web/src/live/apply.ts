@@ -34,6 +34,7 @@ const DOMAINS = new Set([
   "git",
   "message",
   "request",
+  "project",
 ]);
 
 export function domainOf(type: string): string | null {
@@ -411,6 +412,8 @@ function invalidationKeys(
       return type === "git.committed"
         ? [repository, keys.git(slug), keys.proposals(slug), keys.tasks(slug)]
         : [repository, keys.git(slug), keys.project(slug)];
+    case "project":
+      return [keys.project(slug), keys.workers(slug), keys.agents(slug)];
     case "request":
       return type === "request.approved"
         ? [

@@ -130,6 +130,8 @@ define_event_types! {
     TASK_REPORTED = "task.reported",
     TASK_SENT_BACK = "task.sent_back",
     PROPOSAL_AUTHOR_CHANGED = "proposal.author_changed",
+    PROJECT_PAUSED = "project.paused",
+    PROJECT_RESUMED = "project.resumed",
 }
 
 impl EventType {

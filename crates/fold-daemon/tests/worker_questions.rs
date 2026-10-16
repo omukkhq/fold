@@ -8,7 +8,9 @@ use fold_core::{
     Role, WorkerName, WorkerState, codes,
 };
 use fold_daemon::push::PushTargets;
-use fold_daemon::services::agents::{AgentError, AgentService, StartWorker, Supervisor};
+use fold_daemon::services::agents::{
+    AgentError, AgentService, PAUSE_TURN, StartWorker, Supervisor,
+};
 use fold_daemon::services::events::EventBus;
 use fold_daemon::services::messages::{Feedback, MessageService};
 use fold_store::agents::WorkerProcessRow;
@@ -342,6 +344,50 @@ async fn a_restart_keeps_one_question_and_the_resumed_worker_gets_the_answer_fir
     assert_eq!(
         questions[0]["id"], "pq-2",
         "the stored answer took only the repeat of the lost request"
+    );
+}
+
+#[tokio::test]
+async fn an_answer_given_during_a_pause_reaches_the_worker_with_the_pause_note_at_the_resume() {
+    let fake = FakeClaude::new("permission_request");
+    let harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    let lead = start_lead(&harness).await;
+    until_questions(&harness, 1).await;
+    let session = worker(&harness, &lead).await.session_id;
+    let ana = Actor::human(HumanName::parse("ana").unwrap());
+    harness.handle.agents().pause_project(&ana).await.unwrap();
+    eventually(WAIT, async || {
+        if harness.handle.workers.is_running(&name(&lead)) {
+            Err(())
+        } else {
+            Ok(())
+        }
+    })
+    .await;
+
+    let (status, answered) = answer(&harness, "pq-1", json!({"behavior": "allow"})).await;
+    assert_eq!(status, StatusCode::OK, "{answered}");
+    assert_eq!(
+        fake.runs_of(&lead).len(),
+        1,
+        "a paused worker hears nothing"
+    );
+
+    harness.handle.agents().resume_project(&ana).await.unwrap();
+    let runs = until_answered(&fake, &lead, 2, 1).await;
+    let resumed = &runs[1];
+    assert_eq!(resumed.flag("--resume"), Some(session.as_str()));
+    assert!(
+        resumed.stdin[1].contains(PAUSE_TURN),
+        "{}",
+        resumed.stdin[1]
+    );
+    assert!(resumed.stdin[1].contains("The human allowed it. Run it again now."));
+    let again = responses(resumed).remove(0);
+    assert_eq!(
+        again["behavior"], "allow",
+        "the repeated call takes the stored answer"
     );
 }
 

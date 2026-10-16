@@ -14,6 +14,7 @@ import {
   ListChecks,
   MessageSquare,
   Milestone,
+  Pause,
   Play,
   Tag,
   TriangleAlert,
@@ -566,6 +567,14 @@ const SPECS: Record<EventType, Spec> = {
   "workers.limits_changed": {
     icon: Bot,
     text: () => "changed the worker limits",
+  },
+  "project.paused": {
+    icon: Pause,
+    text: () => "paused every agent of the project",
+  },
+  "project.resumed": {
+    icon: Play,
+    text: () => "resumed the agents of the project",
   },
   "worker.started": { icon: Bot, text: startedText },
   "worker.stopped": { icon: Bot, text: (e) => `stopped ${workerOf(e)}` },

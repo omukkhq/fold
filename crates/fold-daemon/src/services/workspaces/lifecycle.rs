@@ -173,7 +173,7 @@ impl WorkspaceService {
     ) -> Result<CreatedWorkspace, WorkspaceError> {
         let claimant = policy::can_claim(actor).map_err(FoldError::from)?;
         let now = self.clock.now();
-        let lease_minutes = self.lease.minutes().await?;
+        let lease_minutes = self.lease.staleness_minutes(&self.store).await?;
         let plan = match self
             .check_create(claimant, task, now, lease_minutes)
             .await?

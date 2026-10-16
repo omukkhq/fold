@@ -68,6 +68,21 @@ pub fn can_update_area(starter: &Starter) -> Result<(), PolicyDenied> {
     }
 }
 
+/// A pause stops every worker of the project, so only the main agent, on the user's word, or a named human pauses or resumes.
+pub fn can_pause_project(starter: &Starter) -> Result<(), PolicyDenied> {
+    match starter {
+        Starter::Human | Starter::MainAgent => Ok(()),
+        Starter::Unsupervised => Err(not_the_main_agent(
+            "ask the main agent to call pause_project or resume_project",
+        )),
+        _ => Err(PolicyDenied {
+            code: codes::MAIN_AGENT_REQUIRED,
+            message: "only the main agent or a human can pause or resume the agents",
+            hint: "ask the user; the main agent calls pause_project or resume_project",
+        }),
+    }
+}
+
 /// The worker limits bound the whole project's processes, so the main agent or a named human changes them.
 pub fn can_set_worker_limits(starter: &Starter) -> Result<(), PolicyDenied> {
     match starter {
@@ -294,6 +309,9 @@ mod tests {
         let denied = can_set_worker_limits(&Starter::Unsupervised).unwrap_err();
         assert_eq!(denied.code(), codes::ORCHESTRATOR_REQUIRED);
         assert!(denied.hint().contains("set_worker_limits"));
+        let denied = can_pause_project(&Starter::Unsupervised).unwrap_err();
+        assert_eq!(denied.code(), codes::ORCHESTRATOR_REQUIRED);
+        assert!(denied.hint().contains("pause_project"));
         let denied = can_update_area(&Starter::Unsupervised).unwrap_err();
         assert_eq!(denied.code(), codes::ORCHESTRATOR_REQUIRED);
         assert!(denied.hint().contains("update_area"));
@@ -323,6 +341,7 @@ mod tests {
             assert!(can_define_area(&starter).is_ok());
             assert!(can_update_area(&starter).is_ok());
             assert!(can_set_worker_limits(&starter).is_ok());
+            assert!(can_pause_project(&starter).is_ok());
             assert!(can_start_worker(&starter, Role::AreaLead).is_ok());
             assert!(can_start_worker(&starter, Role::ReviewLead).is_ok());
             assert!(can_start_worker(&starter, Role::TaskCoder).is_err());
@@ -344,6 +363,10 @@ mod tests {
             );
             assert_eq!(
                 can_set_worker_limits(&starter).unwrap_err().code(),
+                codes::MAIN_AGENT_REQUIRED
+            );
+            assert_eq!(
+                can_pause_project(&starter).unwrap_err().code(),
                 codes::MAIN_AGENT_REQUIRED
             );
             assert_eq!(

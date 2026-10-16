@@ -92,6 +92,7 @@ mod notifications;
 mod openapi;
 mod presence_events;
 mod project_git;
+mod project_pause;
 mod projects;
 mod proposals;
 mod pull;

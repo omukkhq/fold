@@ -21,6 +21,7 @@ import {
   costText,
   hasNoLeads,
   heldBatch,
+  isPausedWorker,
   isEmptyTeam,
   mainAgentName,
   mainPill,
@@ -222,6 +223,34 @@ describe("steps", () => {
       }),
     );
     expect(group?.rows[0]?.model).toBe("opus");
+  });
+
+  it("shows a paused worker as paused, with no Stop, until the resume", () => {
+    expect(isPausedWorker("working", true)).toBe(true);
+    expect(isPausedWorker("idle", true)).toBe(true);
+    expect(isPausedWorker("starting", true)).toBe(true);
+    expect(isPausedWorker("stopping", true)).toBe(false);
+    expect(isPausedWorker("working", false)).toBe(false);
+    const workers = [
+      workerProcess("web-lead", { state: "working" }),
+      workerProcess("web-coder", { state: "stopped", role: "task_coder" }),
+    ];
+    const [group] = teamGroups(
+      input({
+        workers: workerList({
+          workers,
+          pause: { paused_since: 1_760_000_000_000, paused_by: "human:ana" },
+        }),
+      }),
+    );
+    expect(group?.rows[0]).toMatchObject({
+      pill: { label: "paused", tone: "paused" },
+      step: { text: "paused · resumes in its own session" },
+      stop: null,
+    });
+    expect(pillSpec("paused").fill).toBe("bg-warning-soft");
+    const [running] = teamGroups(input({ workers: workerList({ workers }) }));
+    expect(running?.rows[0]?.pill).toEqual(workerPill("working"));
   });
 
   it("offers Stop to a live process and a pending stop while it stops", () => {

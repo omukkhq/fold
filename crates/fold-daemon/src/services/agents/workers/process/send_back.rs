@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use fold_core::events::types;
-use fold_core::{AgentName, EventActor, NewEvent, Role, TaskId, codes};
+use fold_core::{AgentName, EventActor, NewEvent, Role, TaskId, WorkerState, codes};
 use fold_store::StoreError;
 use fold_store::agents;
 use fold_store::tasks::reports::{self, Resolution};
@@ -11,6 +11,7 @@ use serde_json::json;
 use super::resume::SessionStart;
 use super::{Input, Supervisor, lock};
 use crate::services::agents::AgentError;
+use crate::services::agents::workers::is_paused_refusal;
 use crate::services::events::EventBuffer;
 
 /// A sent-back task with the note that sent it back.
@@ -42,7 +43,12 @@ impl Supervisor {
 
     /// Resumes the coders of every send-back that no start of theirs has served yet, such as one the worker limits refused.
     pub(super) async fn resume_owed_send_backs(self) {
-        let owed = match reports::owed_send_backs(self.inner.store.read()).await {
+        let owed = match reports::owed_send_backs(
+            self.inner.store.read(),
+            &[WorkerState::Stopped, WorkerState::Failed],
+        )
+        .await
+        {
             Ok(owed) => owed,
             Err(error) => {
                 tracing::warn!(
@@ -61,6 +67,69 @@ impl Supervisor {
                 tracing::warn!(%agent, code = crate::services::agents::code_of(&error), "could not resume the coder of a sent-back task");
             }
         }
+    }
+
+    /// The send-backs recorded since each working, idle or starting task coder's process started, as the turn text that tells the coder of them, by coder: what a paused coder missed.
+    pub(super) async fn send_backs_owed_to_paused(&self) -> BTreeMap<AgentName, String> {
+        let owed = match reports::owed_send_backs(
+            self.inner.store.read(),
+            &[
+                WorkerState::Working,
+                WorkerState::Idle,
+                WorkerState::Starting,
+            ],
+        )
+        .await
+        {
+            Ok(owed) => owed,
+            Err(error) => {
+                tracing::warn!(
+                    code = error.log_code(),
+                    "could not read the send-backs owed to paused coders"
+                );
+                return BTreeMap::new();
+            }
+        };
+        let mut by_agent: BTreeMap<AgentName, Vec<SentBack>> = BTreeMap::new();
+        for owed in owed {
+            let latest = reports::latest_for_task(self.inner.store.read(), owed.task).await;
+            if let Ok(Some(report)) = latest {
+                by_agent.entry(owed.agent).or_default().push(SentBack {
+                    task: owed.task,
+                    by: report.resolved_by.unwrap_or_default(),
+                    note: report.send_back_note.unwrap_or_default(),
+                });
+            }
+        }
+        by_agent
+            .into_iter()
+            .map(|(agent, found)| (agent, sections(&found)))
+            .collect()
+    }
+
+    /// The send-backs that a task coder, caught by a pause before its process read its first turn, still owes on its bound tasks, as turn text: a task whose newest report is a send-back of the coder's report, which only a new report clears.
+    pub(super) async fn send_backs_of_unstarted(
+        &self,
+        row: &fold_store::agents::WorkerProcessRow,
+    ) -> Result<Option<String>, AgentError> {
+        if row.role != Role::TaskCoder {
+            return Ok(None);
+        }
+        let mut found = Vec::new();
+        for task in &row.tasks {
+            let latest = reports::latest_for_task(self.inner.store.read(), *task).await?;
+            if let Some(report) = latest
+                && report.resolution == Some(Resolution::SentBack)
+                && report.worker.agent() == row.agent
+            {
+                found.push(SentBack {
+                    task: *task,
+                    by: report.resolved_by.unwrap_or_default(),
+                    note: report.send_back_note.unwrap_or_default(),
+                });
+            }
+        }
+        Ok((!found.is_empty()).then(|| sections(&found)))
     }
 
     async fn resume_reporter(&self, agent: &AgentName, tasks: &[TaskId]) -> Result<(), AgentError> {
@@ -102,6 +171,8 @@ impl Supervisor {
         let turn = resume_turn(&found);
         let watch = match self.resume(agent, turn.clone(), &bound).await {
             Ok(watch) => watch,
+            // The send-back stays owed, and the resume serves it.
+            Err(error) if is_paused_refusal(&error) => return Ok(()),
             // A start outside this path, such as `resume_worker`, came first; the coder takes this turn as its next one.
             Err(AgentError::Fold(error)) if error.code() == codes::WORKER_EXISTS => {
                 if let Some(run) = lock(&self.inner.running).get(agent) {

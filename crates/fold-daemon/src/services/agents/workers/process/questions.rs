@@ -473,7 +473,10 @@ impl Supervisor {
             return Ok(());
         };
         drop(conn);
-        if !matches!(row.state, WorkerState::Working | WorkerState::Idle) {
+        // The resume of a pause runs the worker with this answer, from the stored question.
+        if !matches!(row.state, WorkerState::Working | WorkerState::Idle)
+            || self.is_paused().await?
+        {
             return Ok(());
         }
         let now = self.inner.clock.now();
@@ -488,8 +491,26 @@ impl Supervisor {
         Ok(())
     }
 
+    /// The newest question of the worker that a human answered at or after `paused_at`, which the worker never heard of because the pause had ended its process.
+    pub(super) async fn answered_during_pause(
+        &self,
+        row: &fold_store::agents::WorkerProcessRow,
+        paused_at: fold_core::Timestamp,
+    ) -> Result<Option<QuestionRow>, AgentError> {
+        let questions = agents::questions_of_worker(self.inner.store.read(), row.id).await?;
+        Ok(questions
+            .into_iter()
+            .filter(|question| {
+                question
+                    .answer
+                    .as_ref()
+                    .is_some_and(|answer| answer.created_at >= paused_at)
+            })
+            .max_by_key(|question| question.id))
+    }
+
     /// Keeps an answered question for the first repeat of its call by the resumed worker.
-    fn replay(&self, question: &QuestionRow) {
+    pub(super) fn replay(&self, question: &QuestionRow) {
         lock(&self.inner.replays)
             .entry(question.agent.clone())
             .or_default()
@@ -497,7 +518,10 @@ impl Supervisor {
     }
 
     /// The user turn that tells a resumed worker the answer to its question.
-    async fn answer_turn(&self, question: &QuestionRow) -> Result<Option<String>, AgentError> {
+    pub(super) async fn answer_turn(
+        &self,
+        question: &QuestionRow,
+    ) -> Result<Option<String>, AgentError> {
         let Some(answer) = &question.answer else {
             return Ok(None);
         };

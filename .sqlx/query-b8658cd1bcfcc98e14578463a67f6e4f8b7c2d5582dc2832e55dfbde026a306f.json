@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO project_pause (id, paused_at, paused_by) VALUES (1, ?1, ?2)\n         ON CONFLICT (id) DO UPDATE SET paused_at = ?1, paused_by = ?2 WHERE paused_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "b8658cd1bcfcc98e14578463a67f6e4f8b7c2d5582dc2832e55dfbde026a306f"
+}

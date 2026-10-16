@@ -61,6 +61,8 @@ pub fn is_pushed(event: &Event) -> bool {
         types::REQUEST_APPROVED,
         types::TASK_REPORTED,
         types::TASK_SENT_BACK,
+        types::PROJECT_PAUSED,
+        types::PROJECT_RESUMED,
     ]
     .contains(&event.event_type)
 }
@@ -182,6 +184,21 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
             ctx.implementation_claim.iter().cloned().collect(),
             format!("{task} was sent back"),
             "get_task",
+        ));
+    }
+    if kind == types::PROJECT_PAUSED {
+        return Some((
+            ctx.main_agents.iter().cloned().collect(),
+            "the agents are paused: every worker is stopped; start no work until a resume"
+                .to_owned(),
+            "list_workers",
+        ));
+    }
+    if kind == types::PROJECT_RESUMED {
+        return Some((
+            ctx.main_agents.iter().cloned().collect(),
+            "the agents are resumed: the paused workers run again".to_owned(),
+            "list_workers",
         ));
     }
     if let Some(rule) = request_rule(event, ctx) {
@@ -653,6 +670,32 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["frontend", "review"]
         );
+    }
+
+    #[test]
+    fn a_pause_and_a_resume_reach_the_main_agent_but_not_the_one_who_acted() {
+        let mut ctx = ctx();
+        ctx.main_agents = [name("main")].into_iter().collect();
+        let paused = event(types::PROJECT_PAUSED, "human:rafeed");
+        assert!(is_pushed(&paused));
+        assert_eq!(
+            sent(&notice_for(&paused, &ctx)),
+            vec![row(
+                "main",
+                "fold: the agents are paused: every worker is stopped; start no work until a resume. Call list_workers.",
+                "list_workers"
+            )]
+        );
+        let resumed = event(types::PROJECT_RESUMED, "human:rafeed");
+        assert_eq!(
+            sent(&notice_for(&resumed, &ctx)),
+            vec![row(
+                "main",
+                "fold: the agents are resumed: the paused workers run again. Call list_workers.",
+                "list_workers"
+            )]
+        );
+        assert!(notice_for(&event(types::PROJECT_PAUSED, "main"), &ctx).is_empty());
     }
 
     #[test]

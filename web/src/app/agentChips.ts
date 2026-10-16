@@ -35,14 +35,22 @@ export function agentStateText(agent: ProjectAgent): string {
   return stalled > 0 ? `${text} · ${String(stalled)} stalled` : text;
 }
 
-/** While the stream is down the counts may be old, so the chip says when they were true; before the first connection it says nothing. */
+/** Whether the project's agents are paused, from the overview's `paused_since`; `undefined` while the project is not read yet. */
+export function isPaused(pausedSince: number | null | undefined): boolean {
+  return pausedSince !== null && pausedSince !== undefined;
+}
+
+/** While the stream is down the counts may be old, so the chip says when they were true; before the first connection it says nothing. While the project is paused, fold runs no worker process, so every agent but the main agent, whose session fold does not stop, reads `paused`. */
 export function chipStateText(
   agent: ProjectAgent,
   status: LiveStatus,
   now: number,
+  paused: boolean,
 ): string {
   if (status.state === "live") {
-    return agentStateText(agent);
+    return paused && !agent.tags.includes("main")
+      ? "paused"
+      : agentStateText(agent);
   }
   const at = status.state === "reconnecting" ? syncedAt(status) : null;
   return at === null ? "—" : `as of ${formatAsOfMinute(now, at)}`;

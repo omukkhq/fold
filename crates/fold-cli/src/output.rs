@@ -23,6 +23,11 @@ pub fn shell_quote(path: &std::path::Path) -> String {
     }
 }
 
+/// `@ana` for the actor label `human:ana`, `@frontend` for an agent: a person as every screen shows one.
+pub fn person(actor: &str) -> String {
+    format!("@{}", actor.strip_prefix("human:").unwrap_or(actor))
+}
+
 /// `r1: 3 files, 120 bytes`
 pub fn revision_summary(revision: &impl Display, files: usize, bytes: u64) -> String {
     let noun = if files == 1 { "file" } else { "files" };
@@ -67,6 +72,12 @@ pub fn web_token_line(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_person_is_written_as_at_name() {
+        assert_eq!(person("human:ana"), "@ana");
+        assert_eq!(person("frontend"), "@frontend");
+    }
 
     #[test]
     fn a_path_with_special_characters_is_quoted_for_the_shell() {

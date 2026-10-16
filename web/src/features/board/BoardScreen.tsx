@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { agentBarQuery } from "@/api/agentBar";
 import { boardCards, boardQuery } from "@/api/board";
+import { PausedBanner } from "@/app/PausedBanner";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { ReconnectingBanner } from "@/components/states/ReconnectingBanner";
 import { cn } from "@/lib/cn";
@@ -66,6 +67,7 @@ export function BoardScreen({ slug, search, onSearch }: BoardScreenProps) {
 
   return (
     <div className="flex flex-1 flex-col">
+      <PausedBanner slug={slug} />
       {asOf === null ? null : (
         <ReconnectingBanner
           asOf={asOf}

@@ -104,6 +104,7 @@ async fn baseline_creates_every_table_of_the_data_model() {
         "message_question_headers",
         "message_recipients",
         "messages",
+        "project_pause",
         "proposal_versions",
         "proposals",
         "refs",

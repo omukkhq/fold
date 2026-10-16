@@ -17,10 +17,10 @@ use serde_json::{Value, json};
 use crate::common::acceptance::{Harness, SLUG, StoredEvent, WAIT, Work};
 use crate::workers_support::{FakeClaude, Run};
 
-const MAIN: &str = "frontend";
-const CODER: &str = "web-coder";
+pub const MAIN: &str = "frontend";
+pub const CODER: &str = "web-coder";
 
-async fn worker(harness: &Harness, agent: &str) -> WorkerProcessRow {
+pub async fn worker(harness: &Harness, agent: &str) -> WorkerProcessRow {
     harness
         .handle
         .agents()
@@ -29,7 +29,7 @@ async fn worker(harness: &Harness, agent: &str) -> WorkerProcessRow {
         .unwrap()
 }
 
-async fn until_state(harness: &Harness, agent: &str, state: WorkerState) -> WorkerProcessRow {
+pub async fn until_state(harness: &Harness, agent: &str, state: WorkerState) -> WorkerProcessRow {
     eventually(WAIT, async || {
         let row = worker(harness, agent).await;
         if row.state == state {
@@ -42,7 +42,7 @@ async fn until_state(harness: &Harness, agent: &str, state: WorkerState) -> Work
 }
 
 /// The runs of `agent` once there are `count` of them and the newest has read its first turn.
-async fn until_runs(fake: &FakeClaude, agent: &str, count: usize) -> Vec<Run> {
+pub async fn until_runs(fake: &FakeClaude, agent: &str, count: usize) -> Vec<Run> {
     eventually(WAIT, async || {
         let runs = fake.runs_of(agent);
         match runs.last() {
@@ -73,7 +73,7 @@ async fn until_resumed(harness: &Harness, count: usize) -> Vec<(Option<String>, 
 }
 
 /// Area `web` over label `ui` with one task per title, its lead `web-lead`, and the task coder `web-coder` that the lead started for every task, connected and waiting for work. `review` is the review lead.
-async fn coder_for(fake: &FakeClaude, titles: &[&str], state: WorkerState) -> Harness {
+pub async fn coder_for(fake: &FakeClaude, titles: &[&str], state: WorkerState) -> Harness {
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
     harness.make_main(MAIN).await;
     give_role(&harness.handle.store, "review", Role::ReviewLead, None).await;
@@ -116,7 +116,7 @@ async fn coder_for(fake: &FakeClaude, titles: &[&str], state: WorkerState) -> Ha
 }
 
 /// [`coder_for`] one task `T-1`, for which the coder writes `files` in its workspace and proposes `P-1`, after which fold stops it.
-async fn proposed_by_a_coder(fake: &FakeClaude, files: &[(&str, &str)]) -> (Harness, Work) {
+pub async fn proposed_by_a_coder(fake: &FakeClaude, files: &[(&str, &str)]) -> (Harness, Work) {
     let harness = coder_for(fake, &["Draw the page"], WorkerState::Idle).await;
     let work = harness.start_work(CODER, "T-1").await;
     work.write(files);
@@ -127,7 +127,7 @@ async fn proposed_by_a_coder(fake: &FakeClaude, files: &[(&str, &str)]) -> (Harn
 }
 
 /// `review` reads `proposal` and asks for changes on the version it read.
-async fn request_changes(harness: &Harness, proposal: &str, body: &str) {
+pub async fn request_changes(harness: &Harness, proposal: &str, body: &str) {
     let version = harness.version_of("review", proposal).await;
     harness
         .call(

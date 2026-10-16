@@ -92,6 +92,11 @@ export function startFailure(error: unknown, values: StartLeadValues): Failure {
       };
     case "worker_start_denied":
       return { code, text: "A human starts only the leads." };
+    case "project_paused":
+      return {
+        code,
+        text: "The agents of this project are paused. Resume them first, then start the lead.",
+      };
     default:
       return { code, text: failureText(error) };
   }

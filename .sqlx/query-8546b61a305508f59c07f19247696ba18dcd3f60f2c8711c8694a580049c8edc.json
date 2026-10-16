@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT g.name AS \"agent!: String\", t.number AS \"task!: i64\"\n           FROM task_reports r\n           JOIN tasks t ON t.id = r.task_id\n           JOIN workers k ON k.id = r.worker_id\n           JOIN worker_processes w ON w.agent_id = k.agent_id\n           JOIN agents g ON g.id = w.agent_id\n           WHERE r.resolution = 'sent_back' AND r.resolved_at > w.started_at\n             AND w.role = 'task_coder' AND w.state IN (SELECT value FROM json_each(?1))\n             AND t.archived_at IS NULL\n             AND r.id = (SELECT MAX(x.id) FROM task_reports x WHERE x.task_id = r.task_id)\n           ORDER BY w.id, t.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "agent!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "task!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "8546b61a305508f59c07f19247696ba18dcd3f60f2c8711c8694a580049c8edc"
+}

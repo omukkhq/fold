@@ -9,7 +9,7 @@ use super::WorkspaceError;
 use crate::projects::ProjectHandle;
 use crate::services::projects::load_config;
 
-/// Decides the stalled flag of every live workspace of `project` at `now`, with the project's `stall_minutes`, and sets it in the live state. A flag that changes publishes `workspace.changed`; nothing is stored and nothing else follows. Returns how many flags changed.
+/// Decides the stalled flag of every live workspace of `project` at `now`, with the project's `stall_minutes`, and sets it in the live state. A flag that changes publishes `workspace.changed`; nothing is stored and nothing else follows. Returns how many flags changed. While the project's agents are paused no flag changes, and after a resume the stall time counts from the resume at the earliest, so the paused time never stalls a worker.
 pub async fn check_stalls(
     project: &ProjectHandle,
     now: Timestamp,
@@ -17,6 +17,10 @@ pub async fn check_stalls(
     let stall_minutes = load_config(&project.paths).await?.stall_minutes;
     let live = project.live.all();
     if live.is_empty() {
+        return Ok(0);
+    }
+    let pause = agents::pause_state(project.store.read()).await?;
+    if pause.is_paused() {
         return Ok(0);
     }
     let holders = implementation_holders(&project.store).await?;
@@ -35,7 +39,8 @@ pub async fn check_stalls(
             now,
             has_impl_claim,
             workspace,
-            view.last_activity_at,
+            view.last_activity_at
+                .max(pause.resumed_at.unwrap_or(view.last_activity_at)),
             stall_minutes,
         );
         if stalled == view.stalled

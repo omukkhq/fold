@@ -50,6 +50,12 @@ pub struct ProjectOverview {
     pub last_change_at: Option<Timestamp>,
     /// What needs a person in the project as a whole, beside the attention items of its tasks; empty when nothing does.
     pub attention: Vec<ProjectAttentionKind>,
+    /// UTC milliseconds of the pause of the project's agents, while they are paused; null otherwise.
+    #[schema(value_type = Option<i64>, required = true)]
+    pub paused_since: Option<Timestamp>,
+    /// Who paused the agents, such as `human:ana` or the main agent's name, while they are paused; null otherwise.
+    #[schema(required = true)]
+    pub paused_by: Option<String>,
 }
 
 /// Why the project, rather than one of its tasks, needs a person. The daemon decides every kind. `outside_commits`: the Git branch of main has commits fold did not write, so the project folder stops following main until a human runs `fld pull`. `uncommitted_changes`: the project folder has changes that are not committed, so it follows main again once the human commits or stashes them.
@@ -111,6 +117,8 @@ impl From<projects::ProjectOverview> for ProjectOverview {
             head: overview.head.map(|head| head.to_string()),
             last_change_at: overview.last_change_at,
             attention: overview.attention.into_iter().map(Into::into).collect(),
+            paused_since: overview.paused_since,
+            paused_by: overview.paused_by,
         }
     }
 }

@@ -6,13 +6,14 @@ use std::time::Duration;
 
 use axum::http::{Method, StatusCode};
 use fold_core::{Actor, AgentName, HumanName, IdKind, PermissionQuestionId, Role, WorkerState};
-use fold_daemon::services::agents::StartWorker;
+use fold_daemon::services::agents::{PAUSE_TURN, StartWorker};
 use fold_store::agents::{self, NewQuestion, QuestionKind};
 use fold_store::testing::eventually;
 use fold_store::{StoreError, counters};
 use serde_json::{Value, json};
 
 use crate::common::acceptance::{Harness, SLUG, WAIT};
+use crate::worker_resume::{CODER, proposed_by_a_coder, request_changes};
 use crate::workers_support::{FakeClaude, Run};
 
 const BEFORE_SPAWN: &str = "worker_launch_before_spawn";
@@ -119,6 +120,162 @@ async fn a_stop_before_the_process_starts_leaves_no_process_running() {
         .filter(|event| event.kind == "worker.stopped")
         .count();
     assert_eq!(stops, 1);
+    scenario.teardown();
+}
+
+/// A pause that lands after the start committed but before its process is known finds nothing to end; the launch ends the process itself, keeps the row `starting` with its session, and the resume runs it in that session.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pause_before_the_process_starts_keeps_the_row_for_the_resume() {
+    let scenario = fail::FailScenario::setup();
+    let fake = FakeClaude::new("init");
+    let harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    let human = Actor::human(HumanName::parse("ana").unwrap());
+    let lead = AgentName::parse("review-lead").unwrap();
+    fail::cfg(BEFORE_SPAWN, "pause").unwrap();
+    let agents = harness.handle.agents();
+    let starter = human.clone();
+    let start = tokio::spawn(async move {
+        agents
+            .start_worker(
+                &starter,
+                StartWorker {
+                    role: Some(Role::ReviewLead),
+                    ..StartWorker::default()
+                },
+            )
+            .await
+    });
+    eventually(WAIT, async || {
+        match harness.handle.agents().get_worker(&lead).await {
+            Ok(row) if row.state == WorkerState::Starting => Ok(()),
+            other => Err(other.map(|row| row.state).ok()),
+        }
+    })
+    .await;
+    harness.handle.agents().pause_project(&human).await.unwrap();
+    fail::remove(BEFORE_SPAWN);
+    start.await.unwrap().unwrap();
+    eventually(WAIT, async || {
+        if harness.handle.workers.is_running(&lead) {
+            Err(())
+        } else {
+            Ok(())
+        }
+    })
+    .await;
+    let kept = harness.handle.agents().get_worker(&lead).await.unwrap();
+    assert_eq!(kept.state, WorkerState::Starting);
+    assert_eq!(kept.pid, None);
+    let runs = fake.runs_of(lead.as_str());
+    assert_eq!(runs.len(), 1, "the launch started its process and ended it");
+    assert!(
+        runs[0]
+            .stdin
+            .iter()
+            .all(|line| !line.contains("\"type\":\"user\"")),
+        "{:?}",
+        runs[0].stdin
+    );
+    let ended = harness
+        .events()
+        .await
+        .into_iter()
+        .filter(|event| event.kind == "worker.stopped" || event.kind == "worker.failed")
+        .count();
+    assert_eq!(ended, 0);
+
+    harness
+        .handle
+        .agents()
+        .resume_project(&human)
+        .await
+        .unwrap();
+    let runs = eventually(WAIT, async || {
+        let runs = fake.runs_of(lead.as_str());
+        match runs.get(1) {
+            Some(run) if run.stdin.iter().any(|line| line.contains(PAUSE_TURN)) => Ok(runs),
+            _ => Err(runs.len()),
+        }
+    })
+    .await;
+    assert_eq!(runs[1].flag("--resume"), Some(kept.session_id.as_str()));
+    let turn = runs[1]
+        .stdin
+        .iter()
+        .find(|line| line.contains(PAUSE_TURN))
+        .unwrap();
+    assert!(
+        turn.contains("fold started you as review-lead, the review lead."),
+        "the first turn the pause kept from the process follows the pause note: {turn}"
+    );
+    scenario.teardown();
+}
+
+/// A coder that requested changes resume and a pause caught before its process read the turn still hears of the changes at the resume, although its row started after the review.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pause_that_catches_an_automatic_resume_keeps_the_owed_changes_for_the_resume() {
+    let scenario = fail::FailScenario::setup();
+    let fake = FakeClaude::new("result");
+    let (harness, _work) = proposed_by_a_coder(&fake, &[("page.html", "<p>page</p>\n")]).await;
+    let coder = AgentName::parse(CODER).unwrap();
+    let human = Actor::human(HumanName::parse("ana").unwrap());
+    harness
+        .project
+        .clock()
+        .advance(Duration::from_secs(1))
+        .unwrap();
+    fail::cfg(BEFORE_SPAWN, "pause").unwrap();
+    request_changes(&harness, "P-1", "Split the page.").await;
+    eventually(WAIT, async || {
+        match harness.handle.agents().get_worker(&coder).await {
+            Ok(row) if row.state == WorkerState::Starting => Ok(()),
+            other => Err(other.map(|row| row.state).ok()),
+        }
+    })
+    .await;
+    harness.handle.agents().pause_project(&human).await.unwrap();
+    fail::remove(BEFORE_SPAWN);
+    eventually(WAIT, async || {
+        let row = harness.handle.agents().get_worker(&coder).await.unwrap();
+        if fake.runs_of(CODER).len() == 2 && !harness.handle.workers.is_running(&coder) {
+            Ok(row)
+        } else {
+            Err(row.state)
+        }
+    })
+    .await;
+    assert_eq!(
+        harness
+            .handle
+            .agents()
+            .get_worker(&coder)
+            .await
+            .unwrap()
+            .state,
+        WorkerState::Starting
+    );
+
+    harness
+        .handle
+        .agents()
+        .resume_project(&human)
+        .await
+        .unwrap();
+    let runs = eventually(WAIT, async || {
+        let runs = fake.runs_of(CODER);
+        match runs.get(2) {
+            Some(run) if run.stdin.iter().any(|line| line.contains(PAUSE_TURN)) => Ok(runs),
+            _ => Err(runs.len()),
+        }
+    })
+    .await;
+    let turn = runs[2]
+        .stdin
+        .iter()
+        .find(|line| line.contains(PAUSE_TURN))
+        .unwrap();
+    assert!(turn.contains("Split the page."), "{turn}");
     scenario.teardown();
 }
 

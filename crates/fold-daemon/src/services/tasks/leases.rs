@@ -11,7 +11,7 @@ use crate::services::events::EventBuffer;
 impl TaskService {
     /// How many unreleased claims the workers of agent `agent_id` hold that are near stale now (see [`near_stale_cutoff`]), with the project's lease. Every tool call's footer counts them, so the lease comes from [`crate::services::projects::Lease::recent_minutes`].
     pub async fn claims_near_stale(&self, agent_id: i64) -> Result<u64, TaskError> {
-        let lease_minutes = self.lease.recent_minutes().await?;
+        let lease_minutes = self.lease.recent_staleness_minutes(&self.store).await?;
         let Some(cutoff) = near_stale_cutoff(self.clock.now(), lease_minutes) else {
             return Ok(0);
         };

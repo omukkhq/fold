@@ -471,6 +471,8 @@ async fn the_server_lists_described_tools_and_sends_the_workflow() {
             "stop_worker",
             "list_workers",
             "set_worker_limits",
+            "pause_project",
+            "resume_project",
             "write_handoff",
             "get_events",
             "wait_for_events",

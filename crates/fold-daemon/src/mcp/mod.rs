@@ -189,6 +189,12 @@ impl FoldServer {
             (agents::SET_WORKER_LIMITS, Some(_)) => {
                 agents::set_worker_limits(self, as_worker, arguments).await?
             }
+            (agents::PAUSE_PROJECT, Some(_)) => {
+                agents::pause_project(self, as_worker, arguments).await?
+            }
+            (agents::RESUME_PROJECT, Some(_)) => {
+                agents::resume_project(self, as_worker, arguments).await?
+            }
             (agents::WRITE_HANDOFF, Some(_)) => {
                 agents::write_handoff(self, as_worker, arguments).await?
             }

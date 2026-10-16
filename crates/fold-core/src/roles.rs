@@ -491,6 +491,15 @@ mod tests {
     }
 
     #[test]
+    fn every_role_prompt_says_that_only_the_main_agent_pauses() {
+        for role in Role::ALL {
+            let prompt = role.prompt();
+            assert!(prompt.contains("resumed you after a pause"), "{role}");
+            assert!(prompt.contains("only the main agent does"), "{role}");
+        }
+    }
+
+    #[test]
     fn every_role_prompt_keeps_the_worker_in_its_workspace() {
         for role in Role::ALL {
             let prompt = role.prompt();

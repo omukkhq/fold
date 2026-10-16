@@ -1,5 +1,6 @@
 import { AgentChips } from "./AgentChips";
 import { NeedsYou } from "./NeedsYou";
+import { PauseControl } from "./PauseControl";
 import { Wordmark } from "@/components/Wordmark";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 import { StreamStatus } from "./StreamStatus";
@@ -15,6 +16,7 @@ export function TopBar({ slug }: { slug: string }) {
       </div>
       <div className="flex items-center gap-16">
         <StreamStatus />
+        <PauseControl slug={slug} />
         <NeedsYou slug={slug} />
         <AgentChips slug={slug} />
         <ThemeToggle />

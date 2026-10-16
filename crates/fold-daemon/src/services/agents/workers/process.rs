@@ -8,7 +8,7 @@ use std::time::Duration;
 use fold_core::config::RoleSettings;
 use fold_core::events::types;
 use fold_core::layout::{AGENT_ENV, AGENT_TAGS_ENV, MCP_COMMAND, MCP_SERVER_NAME, MCP_SERVERS_KEY};
-use fold_core::roles::area_prompt;
+use fold_core::roles::{StartFacts, area_prompt, first_turn};
 use fold_core::{
     AgentName, AreaName, Clock, EventActor, LiveEvent, NewEvent, ProjectPaths, WorkerState, codes,
 };
@@ -148,6 +148,8 @@ struct Inner {
     replays: Mutex<HashMap<AgentName, Vec<i64>>>,
     /// The host registry, whose humans receive a worker's `AskUserQuestion` call as a question message.
     registry: Mutex<Option<Store>>,
+    /// The workers whose session was gone and whose fresh start a pause refused, with the starter's instructions; the resume of the pause starts each fresh.
+    held_lost: Mutex<HashMap<AgentName, Option<String>>>,
 }
 
 impl Drop for Inner {
@@ -202,6 +204,7 @@ impl Supervisor {
                 pending: Mutex::new(HashMap::new()),
                 replays: Mutex::new(HashMap::new()),
                 registry: Mutex::new(None),
+                held_lost: Mutex::new(HashMap::new()),
             }),
         };
         let receiver = supervisor.inner.bus.subscribe();
@@ -376,7 +379,7 @@ impl Supervisor {
             reaped: Arc::clone(&reaped),
         };
         lock(&self.inner.running).insert(row.agent.clone(), run.clone());
-        // A stop that came after the start committed but before the process was in `running` found no process to end. The row is read only now that the process is there, so either that stop sees the process or this check sees the stop.
+        // A stop or a pause that came after the start committed but before the process was in `running` found no process to end. The row is read only now that the process is there, so either that stop or pause sees the process or this check sees it.
         let idle = turn.is_none();
         let now = self.inner.clock.now();
         let current = self
@@ -388,17 +391,18 @@ impl Supervisor {
                     .is_some_and(|current| {
                         current.id == row.id && current.state == WorkerState::Starting
                     });
-                if starting {
+                let paused = agents::pause_state(tx.conn()).await?.is_paused();
+                if starting && !paused {
                     agents::set_worker_pid(tx, row.id, pid).await?;
                     if idle {
                         agents::set_worker_state(tx, row.id, WorkerState::Idle, now).await?;
                     }
                 }
-                Ok::<_, StoreError>(starting)
+                Ok::<_, StoreError>((starting, paused))
             })
             .await;
-        let starting = match current {
-            Ok(starting) => starting,
+        let (starting, paused) = match current {
+            Ok(found) => found,
             Err(error) => {
                 self.forget(&process);
                 tracing::warn!(agent = %row.agent, code = error.log_code(), "could not record a worker's process");
@@ -408,7 +412,11 @@ impl Supervisor {
             }
         };
         tokio::spawn(drain(stderr));
-        if !starting {
+        // A paused project keeps the row `starting` for the resume, as a daemon stop keeps a running row.
+        if paused {
+            detached.store(true, Ordering::SeqCst);
+        }
+        if !starting || paused {
             tokio::spawn(self.clone().feed(stdin, inputs, process.clone()));
             tokio::spawn(
                 self.clone()
@@ -843,27 +851,36 @@ impl Supervisor {
         }
     }
 
-    /// Ends every worker process the way a stop does, all at once, at the daemon's stop, but keeps each row's state, so the next start resumes the workers that were working or idle.
+    /// Ends every worker process at the daemon's stop; see [`Supervisor::detach_all`].
     pub async fn shutdown(&self) {
-        let working: Vec<AgentName> = match self.inner.store.read().acquire().await {
+        self.detach_all(false).await;
+    }
+
+    /// Ends every worker process the way a stop does, all at once, but keeps each row's state, so the next daemon start or the resume of a pause runs the workers that were working or idle again in their own sessions. A pause leaves a worker that is `stopping` to finish its stop.
+    pub(super) async fn detach_all(&self, leave_stopping: bool) {
+        let rows = match self.inner.store.read().acquire().await {
             Ok(mut conn) => agents::list_worker_processes(&mut conn)
                 .await
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|row| row.state == WorkerState::Working)
-                .map(|row| row.agent)
-                .collect(),
+                .unwrap_or_default(),
             Err(_) => Vec::new(),
+        };
+        let state_of = |agent: &AgentName| {
+            rows.iter()
+                .find(|row| row.agent == *agent)
+                .map(|row| row.state)
         };
         let running: Vec<(AgentName, Running)> = lock(&self.inner.running)
             .iter()
+            .filter(|(agent, _)| {
+                !(leave_stopping && state_of(agent) == Some(WorkerState::Stopping))
+            })
             .map(|(agent, run)| (agent.clone(), run.clone()))
             .collect();
         let mut stops = tokio::task::JoinSet::new();
         for (agent, run) in running {
+            let working = state_of(&agent) == Some(WorkerState::Working);
             run.detached.store(true, Ordering::SeqCst);
             let supervisor = self.clone();
-            let working = working.contains(&agent);
             stops.spawn(async move { supervisor.terminate(&run, working).await });
         }
         while stops.join_next().await.is_some() {}
@@ -925,11 +942,14 @@ impl Supervisor {
         Ok(done)
     }
 
-    /// Stops every short-lived worker that has been idle for its role's `idle_minutes` at `now`. A worker is stopped only while it is still idle since the same moment, so one that took a turn after the rows were read keeps running. A worker that cannot be stopped is logged and the sweep goes on. Returns the agents it stopped.
+    /// Stops every short-lived worker that has been idle for its role's `idle_minutes` at `now`, except while the project's agents are paused: a resume gives each worker a new idle time. A worker is stopped only while it is still idle since the same moment, so one that took a turn after the rows were read keeps running. A worker that cannot be stopped is logged and the sweep goes on. Returns the agents it stopped.
     pub async fn sweep_idle(
         &self,
         now: fold_core::Timestamp,
     ) -> Result<Vec<AgentName>, AgentError> {
+        if self.is_paused().await? {
+            return Ok(Vec::new());
+        }
         let config = load_config(&self.inner.paths).await?;
         let mut conn = self
             .inner
@@ -975,6 +995,9 @@ impl Supervisor {
 
     /// Runs again, after a daemon start, every worker that was working or idle when the daemon stopped: `--resume` of its session, with a turn that tells a working one to go on. A worker whose session is gone starts again in a new one, a lead with its latest hand-off note. A worker with an open question waits without a process until a human answers it, and then resumes with the answer as its first turn. A worker left `starting` ends `failed` and one left `stopping` ends `stopped`. A row that cannot be served is logged and the next row is served. Requested changes, conflicts and send-backs that the worker limits held back are then served.
     pub async fn resume_after_restart(&self) -> Result<(), AgentError> {
+        if self.is_paused().await? {
+            return Ok(());
+        }
         let mut conn = self
             .inner
             .store
@@ -985,7 +1008,7 @@ impl Supervisor {
         let rows = agents::list_worker_processes(&mut conn).await?;
         drop(conn);
         for row in rows {
-            if let Err(error) = self.resume_row(&row).await {
+            if let Err(error) = self.restart_row(&row).await {
                 tracing::warn!(agent = %row.agent, code = super::code_of(&error), "could not serve a worker after the daemon start");
             }
         }
@@ -995,27 +1018,151 @@ impl Supervisor {
     }
 
     /// What a daemon start does with one row; see [`Supervisor::resume_after_restart`].
-    async fn resume_row(&self, row: &WorkerProcessRow) -> Result<(), AgentError> {
+    async fn restart_row(&self, row: &WorkerProcessRow) -> Result<(), AgentError> {
         match row.state {
             WorkerState::Working | WorkerState::Idle => {
-                if self.waits_for_answer(row).await? {
-                    return Ok(());
-                }
                 let turn = (row.state == WorkerState::Working).then(|| RESTART_TURN.to_owned());
-                let now = self.inner.clock.now();
-                self.inner
-                    .store
-                    .write(async |tx| agents::restart_worker_process(tx, row.id, now).await)
-                    .await?;
-                if let Some(watch) = self.launch(row, true, turn).await? {
-                    tokio::spawn(self.clone().restart_lost(row.agent.clone(), watch, None));
-                }
+                self.relaunch(row, turn, None).await?;
             }
             WorkerState::Starting => self.fail(row.id, &row.agent, "daemon_restart").await?,
             WorkerState::Stopping => self.stopped_without_process(row).await?,
             WorkerState::Stopped | WorkerState::Failed => {}
         }
         Ok(())
+    }
+
+    /// Runs a worker whose row kept its state without a process again in its own session with `--resume`, after a daemon start or a pause; a worker whose session is gone starts again in a new one, which also gets `lost` after its own note. A worker with an open question waits without a process until a human answers it.
+    async fn relaunch(
+        &self,
+        row: &WorkerProcessRow,
+        turn: Option<String>,
+        lost: Option<String>,
+    ) -> Result<(), AgentError> {
+        if self.waits_for_answer(row).await? {
+            return Ok(());
+        }
+        let now = self.inner.clock.now();
+        self.inner
+            .store
+            .write(async |tx| agents::restart_worker_process(tx, row.id, now).await)
+            .await?;
+        if let Some(watch) = self.launch(row, true, turn).await? {
+            tokio::spawn(self.clone().restart_lost(row.agent.clone(), watch, lost));
+        }
+        Ok(())
+    }
+
+    pub(super) async fn is_paused(&self) -> Result<bool, StoreError> {
+        Ok(agents::pause_state(self.inner.store.read())
+            .await?
+            .is_paused())
+    }
+
+    /// Ends a pause that began at `paused_at`: each worker that was working, idle or starting runs again in its own session with [`PAUSE_TURN`], followed by the first turn a starting worker never read, the answer to a question a human answered during the pause, and the requested changes, conflicts and send-backs its coder missed; a worker left `stopping` ends `stopped`. The resumes, send-backs and fresh starts of lost sessions that the pause held back are then served. A row that cannot be served is logged and the next row is served.
+    pub(super) async fn resume_after_pause(
+        &self,
+        paused_at: fold_core::Timestamp,
+    ) -> Result<(), AgentError> {
+        let mut conn = self
+            .inner
+            .store
+            .read()
+            .acquire()
+            .await
+            .map_err(StoreError::from)?;
+        let rows = agents::list_worker_processes(&mut conn).await?;
+        drop(conn);
+        let mut owed = self.owed_to_running().await;
+        let mut sent_back = self.send_backs_owed_to_paused().await;
+        for row in rows {
+            if self.is_running(&row.agent) {
+                continue;
+            }
+            let served = match row.state {
+                WorkerState::Working | WorkerState::Idle | WorkerState::Starting => {
+                    let owed_here = owed.remove(&row.agent);
+                    let sent_back_here = sent_back.remove(&row.agent);
+                    match self
+                        .unpaused_turn(&row, paused_at, owed_here, sent_back_here)
+                        .await
+                    {
+                        Ok((parts, first)) => {
+                            self.relaunch(&row, Some(parts.join("\n\n")), first).await
+                        }
+                        Err(error) => Err(error),
+                    }
+                }
+                WorkerState::Stopping => self.stopped_without_process(&row).await,
+                WorkerState::Stopped | WorkerState::Failed => Ok(()),
+            };
+            if let Err(error) = served {
+                tracing::warn!(agent = %row.agent, code = super::code_of(&error), "could not resume a worker after a pause");
+            }
+        }
+        let lost: Vec<(AgentName, Option<String>)> = lock(&self.inner.held_lost).drain().collect();
+        for (agent, instructions) in lost {
+            tokio::spawn(self.clone().start_lost(agent, instructions));
+        }
+        tokio::spawn(self.clone().resume_pending());
+        tokio::spawn(self.clone().resume_owed_send_backs());
+        Ok(())
+    }
+
+    /// The parts of the turn that ends a pause for `row`: [`PAUSE_TURN`], then the first turn of a `starting` worker, whose process never read it, the answer to its question that a human gave during the pause, which the worker's repeat of the call then takes, and the work owed to it. A running worker owes `owed` and `sent_back`, recorded since its process started; a `starting` worker owes what its bound proposals and reports still ask for, because the turn that told of it went unread. The first turn also comes back on its own, for a worker whose session turns out to be gone.
+    async fn unpaused_turn(
+        &self,
+        row: &WorkerProcessRow,
+        paused_at: fold_core::Timestamp,
+        owed: Option<Vec<resume::Found>>,
+        sent_back: Option<String>,
+    ) -> Result<(Vec<String>, Option<String>), AgentError> {
+        let mut parts = vec![PAUSE_TURN.to_owned()];
+        let first = if row.state == WorkerState::Starting {
+            Some(self.rebuilt_first_turn(row).await?)
+        } else {
+            None
+        };
+        if let Some(first) = &first {
+            parts.push(first.clone());
+        }
+        if let Some(question) = self.answered_during_pause(row, paused_at).await?
+            && let Some(answer) = self.answer_turn(&question).await?
+        {
+            self.replay(&question);
+            parts.push(answer);
+        }
+        let (owed, sent_back) = if row.state == WorkerState::Starting {
+            let owed = self.owed_to_unstarted(row).await?;
+            (
+                (!owed.is_empty()).then_some(owed),
+                self.send_backs_of_unstarted(row).await?,
+            )
+        } else {
+            (owed, sent_back)
+        };
+        if let Some(found) = owed {
+            parts.push(resume::notice_turn(&found));
+        }
+        parts.extend(sent_back);
+        Ok((parts, first))
+    }
+
+    /// The first turn of a start, from the row's role, area and bound tasks and proposals. fold never stores a starter's instructions, so this turn goes without them.
+    async fn rebuilt_first_turn(&self, row: &WorkerProcessRow) -> Result<String, AgentError> {
+        let label = match &row.area {
+            Some(area) => agents::find_area(self.inner.store.read(), area)
+                .await?
+                .map(|area| area.label),
+            None => None,
+        };
+        Ok(first_turn(&StartFacts {
+            role: row.role,
+            name: &row.agent,
+            area: row.area.as_ref().zip(label.as_ref()),
+            tasks: &row.tasks,
+            proposals: &row.proposals,
+            instructions: None,
+        }))
     }
 
     /// Does from the stored state what the events the watcher missed would have done: answers each `ask` question whose messages all have their replies, stops each short-lived worker whose work is done, tells each running coder about changes requested of it, and serves the resumes and send-backs the limits held back.
@@ -1079,6 +1226,9 @@ impl Supervisor {
 
 /// The turn a worker that was working gets after a daemon restart resumed its session.
 pub const RESTART_TURN: &str = "fold restarted while you were working. Check your claims and your workspace, then continue your work.";
+
+/// The first turn of each worker that the resume of a pause runs again in its own session. Its claims kept their leases through the pause.
+pub const PAUSE_TURN: &str = "fold resumed you after a pause of every agent of the project. Your claims kept their leases. Check your inbox, your claims and your workspace, then continue your work.";
 
 fn stopped_event(
     row: &WorkerProcessRow,

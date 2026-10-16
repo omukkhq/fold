@@ -125,6 +125,18 @@ pub async fn renew(
     Ok(result.rows_affected())
 }
 
+/// Gives every unreleased claim of the project a full lease from `now` and clears its stale mark, as the end of a pause does.
+pub async fn renew_all(tx: &mut WriteTx, now: Timestamp) -> Result<u64, StoreError> {
+    let now = now.as_millis();
+    let result = sqlx::query!(
+        "UPDATE claims SET renewed_at = ?, stale_at = NULL WHERE released_at IS NULL",
+        now
+    )
+    .execute(tx.conn())
+    .await?;
+    Ok(result.rows_affected())
+}
+
 /// Releases the unreleased implementation claim that `worker_id` holds on `task`. When that worker holds none there it changes nothing and fails with `StoreError::Invalid`.
 pub async fn release(
     tx: &mut WriteTx,

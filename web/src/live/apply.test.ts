@@ -601,6 +601,20 @@ describe("invalidation rules", () => {
     expect(hit(keys.workers(slug))).toBe(true);
   });
 
+  it("refreshes the project, the workers and the agents for a pause and a resume", () => {
+    for (const type of ["project.paused", "project.resumed"]) {
+      invalidated = [];
+      applyEvent(client, slug, ev(type));
+      for (const key of [
+        keys.project(slug),
+        keys.workers(slug),
+        keys.agents(slug),
+      ]) {
+        expect(hit(key)).toBe(true);
+      }
+    }
+  });
+
   it("refreshes the workers for a new or changed area", () => {
     for (const type of ["area.defined", "area.updated"]) {
       invalidated = [];

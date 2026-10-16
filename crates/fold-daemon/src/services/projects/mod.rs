@@ -676,6 +676,25 @@ impl Lease {
             Lease::Config(config) => with_fix_hint(config.recent().await),
         }
     }
+
+    /// [`Lease::minutes`] for deciding whether a claim is stale: while the project's agents are paused no claim goes stale and none can be taken over, so the lease has no end.
+    pub async fn staleness_minutes(&self, store: &Store) -> Result<u64, ProjectError> {
+        let minutes = self.minutes().await?;
+        endless_while_paused(store, minutes).await
+    }
+
+    /// [`Lease::recent_minutes`] with the rule of [`Lease::staleness_minutes`].
+    pub async fn recent_staleness_minutes(&self, store: &Store) -> Result<u64, ProjectError> {
+        let minutes = self.recent_minutes().await?;
+        endless_while_paused(store, minutes).await
+    }
+}
+
+async fn endless_while_paused(store: &Store, minutes: u64) -> Result<u64, ProjectError> {
+    let paused = fold_store::agents::pause_state(store.read())
+        .await?
+        .is_paused();
+    Ok(if paused { u64::MAX } else { minutes })
 }
 
 impl ConfigLease {
@@ -880,6 +899,10 @@ pub struct ProjectOverview {
     pub last_change_at: Option<Timestamp>,
     /// What needs a person in the project as a whole, beside the attention items of its tasks.
     pub attention: Vec<ProjectAttention>,
+    /// When the project's agents were paused, while they are.
+    pub paused_since: Option<Timestamp>,
+    /// The event actor label of whoever paused them, while they are paused.
+    pub paused_by: Option<String>,
 }
 
 /// Why the project, rather than one of its tasks, needs a person. The daemon decides every kind.
@@ -980,6 +1003,7 @@ pub async fn overview(handle: &ProjectHandle) -> Result<ProjectOverview, Project
         .filter(|(_, presence)| *presence != Presence::Offline)
         .collect();
     agents.sort_by(|a, b| a.0.cmp(&b.0));
+    let pause = fold_store::agents::pause_state(pool).await?;
     Ok(ProjectOverview {
         counts,
         agents,
@@ -988,6 +1012,8 @@ pub async fn overview(handle: &ProjectHandle) -> Result<ProjectOverview, Project
             .map(|revision| revision.number),
         last_change_at: fold_store::events::newest_at(pool).await?,
         attention: handle.git_attention.kinds(),
+        paused_since: pause.paused_at,
+        paused_by: pause.paused_by,
     })
 }
 

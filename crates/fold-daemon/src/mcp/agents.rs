@@ -16,8 +16,8 @@ use super::FoldServer;
 use super::error::from_agent;
 use super::parse;
 use crate::services::agents::{
-    AgentOverview, ClaimSummary, OverviewFilter, ProposalSummary, StartWorker, WorkerOverview,
-    WorkspaceSummary,
+    AgentOverview, ClaimSummary, OverviewFilter, PauseState, ProposalSummary, StartWorker,
+    WorkerOverview, WorkspaceSummary,
 };
 
 pub const GET_ACTIVITY: &str = "get_activity";
@@ -29,6 +29,16 @@ pub const STOP_WORKER: &str = "stop_worker";
 pub const LIST_WORKERS: &str = "list_workers";
 pub const SET_WORKER_LIMITS: &str = "set_worker_limits";
 pub const WRITE_HANDOFF: &str = "write_handoff";
+pub const PAUSE_PROJECT: &str = "pause_project";
+pub const RESUME_PROJECT: &str = "resume_project";
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct PauseProjectInput {
+    /// The worker that makes this call. Leave it out: only the main agent's main worker pauses or resumes.
+    #[serde(rename = "as", default)]
+    pub as_worker: Option<String>,
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -217,6 +227,16 @@ pub fn tools() -> Vec<Tool> {
             schema_for_type::<SetWorkerLimitsInput>(),
         ),
         Tool::new(
+            PAUSE_PROJECT,
+            "As the main agent, and only when the user asks, pause every agent of the project, for example before the user sleeps or loses power or internet. fold interrupts and stops each worker, keeps its session, starts no worker until resume_project, and freezes the claim leases; approved proposals still integrate and push. Start no work yourself while paused.",
+            schema_for_type::<PauseProjectInput>(),
+        ),
+        Tool::new(
+            RESUME_PROJECT,
+            "As the main agent, and only when the user asks, end a pause: every unreleased claim gets a full lease, each worker the pause stopped runs again in its own session, and the starts the pause held back run.",
+            schema_for_type::<PauseProjectInput>(),
+        ),
+        Tool::new(
             WRITE_HANDOFF,
             "As an area lead or the review lead, store your hand-off note when fold asks for it; fold then starts you again with a fresh context whose first turn holds the note and the current fold state.",
             schema_for_type::<WriteHandoffInput>(),
@@ -379,12 +399,51 @@ pub async fn set_worker_limits(
     Ok(json!({ "limits": limits_json(changed.new), "previous": limits_json(changed.old) }))
 }
 
+fn pause_json(state: &PauseState) -> Value {
+    json!({
+        "paused": state.paused_since.is_some(),
+        "paused_since": state.paused_since.map(|at| at.as_millis()),
+        "paused_by": state.paused_by,
+    })
+}
+
+pub async fn pause_project(
+    server: &FoldServer,
+    as_worker: Option<&WorkerName>,
+    arguments: &JsonObject,
+) -> Result<Value, FoldError> {
+    let _: PauseProjectInput = parse(arguments)?;
+    let actor = server.actor(as_worker).await?;
+    let state = server
+        .agents
+        .pause_project(&actor)
+        .await
+        .map_err(from_agent)?;
+    Ok(pause_json(&state))
+}
+
+pub async fn resume_project(
+    server: &FoldServer,
+    as_worker: Option<&WorkerName>,
+    arguments: &JsonObject,
+) -> Result<Value, FoldError> {
+    let _: PauseProjectInput = parse(arguments)?;
+    let actor = server.actor(as_worker).await?;
+    let state = server
+        .agents
+        .resume_project(&actor)
+        .await
+        .map_err(from_agent)?;
+    Ok(pause_json(&state))
+}
+
 pub async fn list_workers(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
     let _: ListWorkersInput = parse(arguments)?;
     let areas = server.agents.list_areas().await.map_err(from_agent)?;
     let workers = server.agents.list_workers().await.map_err(from_agent)?;
     let mut notes = server.agents.latest_handoffs().await.map_err(from_agent)?;
     let config = server.agents.worker_config().await;
+    let pause = server.agents.pause_state().await.map_err(from_agent)?;
     let mut listed = Vec::with_capacity(workers.len());
     for worker in &workers {
         let mut value = worker_process_json(worker);
@@ -400,6 +459,7 @@ pub async fn list_workers(server: &FoldServer, arguments: &JsonObject) -> Result
         "areas": areas.iter().map(area_json).collect::<Vec<_>>(),
         "workers": listed,
         "limits": config.as_ref().map_or(Value::Null, |config| limits_json(config.workers.limits())),
+        "pause": pause_json(&pause),
     }))
 }
 

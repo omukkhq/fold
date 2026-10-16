@@ -146,7 +146,11 @@ impl ReviewService {
 
     /// The review claim follows the same lease as the implementation claims of `workspaces`, which in the daemon reads the project's `config.toml` on each use.
     async fn lease_minutes(&self) -> Result<u64, ReviewError> {
-        Ok(self.workspaces.lease().minutes().await?)
+        Ok(self
+            .workspaces
+            .lease()
+            .staleness_minutes(&self.store)
+            .await?)
     }
 
     /// The host registry, which says which humans exist. Without it no human is known, so a mark that names a reviewer is refused with `unknown_human`.

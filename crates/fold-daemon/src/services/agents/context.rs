@@ -71,7 +71,7 @@ impl AgentService {
         };
         facts.registered = true;
         facts.unread = messages::unread_count(self.store.read(), row.id).await?;
-        let lease_minutes = self.lease_minutes().await?;
+        let lease_minutes = self.lease.minutes().await?;
         let now = self.clock.now();
         let filter = OverviewFilter {
             agent: Some(agent.clone()),

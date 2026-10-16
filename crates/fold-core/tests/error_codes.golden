@@ -146,3 +146,4 @@ task_already_reported
 task_not_reported
 task_check_denied
 agent_approval_required
+project_paused

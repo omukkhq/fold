@@ -84,6 +84,7 @@ describe("failures", () => {
     ["area_not_found", "no area named backend"],
     ["invalid_config", "fld doctor"],
     ["worker_start_denied", "only the leads"],
+    ["project_paused", "Resume them first"],
     ["human_name_required", "Tell fold your name"],
   ])("words %s", (code, text) => {
     const failure = startFailure(new ApiError(code, ""), values);

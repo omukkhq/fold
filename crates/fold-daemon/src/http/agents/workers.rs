@@ -4,7 +4,7 @@ use axum::http::StatusCode;
 use fold_core::roles::{
     AreaProfile, AreaProfileChange, AreaProfileRequest, WorkerLimits, WorkerLimitsChange,
 };
-use fold_core::{AgentName, AreaName, FoldError, LabelName, ProjectConfig, Role};
+use fold_core::{AgentName, AreaName, FoldError, LabelName, ProjectConfig, Role, Timestamp};
 use fold_store::agents::{AreaRow, WorkerProcessRow};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -15,7 +15,7 @@ use super::super::Project;
 use super::super::actor::Human;
 use super::super::error::{ApiError, ApiJson, ErrorEnvelope, fold};
 use crate::daemon::AppState;
-use crate::services::agents::StartWorker;
+use crate::services::agents::{PauseState, StartWorker};
 
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -24,6 +24,8 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(define_area))
         .routes(routes!(update_area))
         .routes(routes!(set_worker_limits))
+        .routes(routes!(pause_project))
+        .routes(routes!(resume_project))
 }
 
 /// The areas and every worker fold runs or ran.
@@ -38,6 +40,27 @@ pub struct WorkerList {
     /// The current worker limits; null when fold cannot read `.fold/config.toml`.
     #[schema(required = true)]
     pub limits: Option<LimitsEntry>,
+    pub pause: PauseEntry,
+}
+
+/// Whether the project's agents are paused. While paused, fold runs no worker process; a worker that was working, idle or starting keeps that state and runs again in its own session at the resume.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PauseEntry {
+    /// UTC milliseconds of the pause; null while the agents are not paused.
+    #[schema(value_type = Option<i64>, required = true)]
+    pub paused_since: Option<Timestamp>,
+    /// Who paused the agents, such as `human:ana` or the main agent's name; null while they are not paused.
+    #[schema(required = true)]
+    pub paused_by: Option<String>,
+}
+
+impl From<PauseState> for PauseEntry {
+    fn from(state: PauseState) -> Self {
+        Self {
+            paused_since: state.paused_since,
+            paused_by: state.paused_by,
+        }
+    }
 }
 
 /// The `[workers]` limits: how many short-lived workers run at once.
@@ -350,6 +373,7 @@ pub async fn list_workers(project: Project) -> Result<Json<WorkerList>, ApiError
             .collect(),
         roles,
         limits: config.as_ref().map(|config| config.workers.limits().into()),
+        pause: agents.pause_state().await?.into(),
     }))
 }
 
@@ -366,7 +390,7 @@ pub async fn list_workers(project: Project) -> Result<Json<WorkerList>, ApiError
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 403, description = "`worker_start_denied`: a human starts only leads", body = ErrorEnvelope),
         (status = 404, description = "`area_not_found` or `project_not_found`", body = ErrorEnvelope),
-        (status = 409, description = "`area_has_lead`, `worker_exists`, `worker_limit_reached` or `invalid_config`", body = ErrorEnvelope),
+        (status = 409, description = "`area_has_lead`, `worker_exists`, `worker_limit_reached`, `project_paused` or `invalid_config`", body = ErrorEnvelope),
         (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )
@@ -546,6 +570,44 @@ pub async fn set_worker_limits(
         .set_worker_limits(&human.actor(), change)
         .await?;
     Ok(Json(changed.new.into()))
+}
+
+/// A named human pauses every agent of the project: each worker's turn is interrupted and its process ends, it keeps its session, and fold starts no worker until the resume. Claims keep their leases; approved proposals still integrate and push. Pausing a paused project changes nothing.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/pause",
+    operation_id = "pause_project",
+    params(("slug" = String, Path, description = "The project slug")),
+    responses(
+        (status = 200, description = "The pause state after the pause", body = PauseEntry),
+        (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
+        (status = 404, description = "`project_not_found`", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn pause_project(human: Human, project: Project) -> Result<Json<PauseEntry>, ApiError> {
+    let state = project.0.agents().pause_project(&human.actor()).await?;
+    Ok(Json(state.into()))
+}
+
+/// A named human ends the pause: every unreleased claim gets a full lease, each worker the pause stopped runs again in its own session, and the starts the pause held back run. Resuming a project that is not paused changes nothing.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/resume",
+    operation_id = "resume_project",
+    params(("slug" = String, Path, description = "The project slug")),
+    responses(
+        (status = 200, description = "The pause state after the resume", body = PauseEntry),
+        (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
+        (status = 404, description = "`project_not_found`", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn resume_project(human: Human, project: Project) -> Result<Json<PauseEntry>, ApiError> {
+    let state = project.0.agents().resume_project(&human.actor()).await?;
+    Ok(Json(state.into()))
 }
 
 #[cfg(test)]

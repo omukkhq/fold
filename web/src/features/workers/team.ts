@@ -20,7 +20,8 @@ export type PillTone =
   | "failed"
   | "starting"
   | "stopped"
-  | "ready";
+  | "ready"
+  | "paused";
 
 export interface PillSpec {
   fill: string;
@@ -52,6 +53,7 @@ const PILLS: Record<PillTone, PillSpec> = {
     text: "text-text-faint",
   },
   ready: { fill: "bg-success-soft", dot: "bg-success", text: "text-success" },
+  paused: { fill: "bg-warning-soft", dot: "bg-warning", text: "text-text" },
 };
 
 export function pillSpec(tone: PillTone): PillSpec {
@@ -67,6 +69,15 @@ export interface StatePill {
 export function workerPill(state: WorkerState): StatePill {
   return { label: state, tone: state };
 }
+
+/** While the project's agents are paused, a worker that was working, idle or starting has no process and runs again in its own session at the resume. */
+export function isPausedWorker(state: WorkerState, paused: boolean): boolean {
+  return (
+    paused && (state === "working" || state === "idle" || state === "starting")
+  );
+}
+
+const PAUSED_PILL: StatePill = { label: "paused", tone: "paused" };
 
 /** The main agent has no process fold runs; its pill is the agent's presence. */
 export function mainPill(presence: AgentView["presence"]): StatePill {
@@ -364,6 +375,22 @@ function boundOf(
 }
 
 function workerRow(
+  worker: WorkerProcess,
+  input: TeamInput,
+  child: boolean,
+): TeamRow {
+  if (isPausedWorker(worker.state, input.workers.pause.paused_since !== null)) {
+    return {
+      ...runningRow(worker, input, child),
+      pill: PAUSED_PILL,
+      step: faint("paused · resumes in its own session"),
+      stop: null,
+    };
+  }
+  return runningRow(worker, input, child);
+}
+
+function runningRow(
   worker: WorkerProcess,
   input: TeamInput,
   child: boolean,

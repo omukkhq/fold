@@ -143,9 +143,11 @@ impl Supervisor {
                 let Some(current) = agents::find_worker_process(tx.conn(), agent).await? else {
                     return Ok::<_, AgentError>(None);
                 };
+                // A pause keeps the row as it is, and its resume runs the lead again in the session it had.
                 if current.id != row.id
                     || current.session_id != row.session_id
                     || !current.state.is_running()
+                    || agents::pause_state(tx.conn()).await?.is_paused()
                 {
                     return Ok(None);
                 }
