@@ -5,13 +5,17 @@ use std::path::{Path, PathBuf};
 use fold_daemon::services::agents::Launcher;
 use tempfile::TempDir;
 
-/// A stand-in for `claude -p` in stream-json mode, so no test needs Claude Code. It records its arguments, environment, working directory and every stdin line under `FOLD_FAKE_CLAUDE_DIR`, answers `initialize` and `interrupt` as Claude Code does, replays the fixture `FOLD_FAKE_CLAUDE_TURN` for each user turn, and exits when stdin closes. With `FOLD_FAKE_CLAUDE_STUBBORN` set it ignores SIGINT and a closed stdin, so only SIGTERM or SIGKILL ends it.
+/// A stand-in for `claude -p` in stream-json mode, so no test needs Claude Code. It records its arguments, environment, working directory and every stdin line under `FOLD_FAKE_CLAUDE_DIR`, answers `initialize` and `interrupt` as Claude Code does, replays the fixture `FOLD_FAKE_CLAUDE_TURN` for each user turn, and exits when stdin closes. With `FOLD_FAKE_CLAUDE_STUBBORN` set it ignores SIGINT and a closed stdin, so only SIGTERM or SIGKILL ends it. With `FOLD_FAKE_CLAUDE_LOST` naming a fixture, a run with `--resume` answers its first user turn with that fixture and exits with code 1, as Claude Code does for a session it cannot find.
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
 dir="$FOLD_FAKE_CLAUDE_DIR"
 for arg in "$@"; do printf '%s\n' "$arg"; done > "$dir/$$.args"
 env > "$dir/$$.env"
 pwd > "$dir/$$.cwd"
 if [ -n "$FOLD_FAKE_CLAUDE_STUBBORN" ]; then trap '' INT; fi
+lost=""
+if [ -n "$FOLD_FAKE_CLAUDE_LOST" ]; then
+  for arg in "$@"; do [ "$arg" = "--resume" ] && lost=1; done
+fi
 while IFS= read -r line; do
   printf '%s\n' "$line" >> "$dir/$$.stdin"
   id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
@@ -22,6 +26,7 @@ while IFS= read -r line; do
       printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{"still_queued":[]}}}\n' "$id"
       printf '%s\n' '{"type":"result","subtype":"error_during_execution","is_error":true,"num_turns":1,"session_id":"fake","total_cost_usd":0}' ;;
     *'"type":"user"'*)
+      if [ -n "$lost" ]; then cat "$FOLD_FAKE_CLAUDE_LOST"; exit 1; fi
       cat "$FOLD_FAKE_CLAUDE_TURN" ;;
   esac
 done
@@ -99,6 +104,16 @@ impl FakeClaude {
         self.launcher
             .env
             .push(("FOLD_FAKE_CLAUDE_STUBBORN".to_owned(), "1".to_owned()));
+        self
+    }
+
+    /// Every `--resume` finds no session, so fold must start the worker in a new one.
+    #[must_use]
+    pub fn lost_sessions(mut self) -> Self {
+        self.launcher.env.push((
+            "FOLD_FAKE_CLAUDE_LOST".to_owned(),
+            fixture("error_result").to_string_lossy().into_owned(),
+        ));
         self
     }
 

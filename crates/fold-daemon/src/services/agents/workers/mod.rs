@@ -51,7 +51,7 @@ pub(crate) fn code_of(error: &AgentError) -> &'static str {
     }
 }
 
-/// A fresh Claude Code session id for a new worker or a lead's fresh context.
+/// A fresh Claude Code session id for a new worker, a lead's fresh context or a worker whose session is gone.
 fn new_session() -> Result<String, AgentError> {
     let mut bytes = [0_u8; 16];
     getrandom::fill(&mut bytes).map_err(|_| {
@@ -418,45 +418,7 @@ impl AgentService {
         turn: String,
     ) -> Result<WorkerProcessRow, AgentError> {
         let supervisor = self.supervisor()?.clone();
-        let config = load_config(supervisor.paths()).await?;
-        let limits = config.workers.limits();
-        let now = self.clock.now();
-        let mut buffer = EventBuffer::new();
-        let row = self
-            .store
-            .write(async |tx| {
-                let row = agents::find_worker_process(tx.conn(), agent)
-                    .await?
-                    .ok_or_else(|| not_supervised(agent))?;
-                if row.state.is_running() {
-                    return Err(FoldError::new(
-                        codes::WORKER_EXISTS,
-                        format!("worker {agent} is already running"),
-                    )
-                    .with_details([("agent", json!(agent.as_str()))])
-                    .with_hint("call list_workers")
-                    .into());
-                }
-                let (running, in_area) = agents::running_counts(tx.conn(), row.area_id).await?;
-                check_limits(
-                    limits,
-                    running,
-                    row.area.as_ref().map(|area| (area, in_area)),
-                )?;
-                agents::restart_worker_process(tx.conn(), row.id, now).await?;
-                let event = NewEvent::new(types::WORKER_STARTED, fold_core::EventActor::fold())?
-                    .data(json!({
-                        "agent": agent.as_str(),
-                        "role": row.role.as_str(),
-                        "area": row.area.as_ref().map(AreaName::as_str),
-                        "resumed": true,
-                    }))?;
-                buffer.append(tx, &event, now).await?;
-                Ok::<_, AgentError>(row)
-            })
-            .await?;
-        self.bus.publish(buffer);
-        supervisor.launch(&row, true, Some(turn)).await?;
+        supervisor.resume(agent, turn, &[]).await?;
         self.get_worker(agent).await
     }
 }

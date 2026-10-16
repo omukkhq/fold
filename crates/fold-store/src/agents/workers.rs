@@ -593,7 +593,7 @@ pub async fn reviewers_of_proposal(
         .collect()
 }
 
-/// How many bound tasks of the worker still wait for its work: not Done, and with no proposal that is open or integrated. A proposal can integrate before fold looks, so an integrated one counts as sent.
+/// How many bound tasks of the worker still wait for its work. A task is finished when it is Done, when it has an integrated proposal (a proposal can integrate before fold looks), or when it has an open proposal that is not conflicted and whose latest verdict on its newest version is not `request_changes`, read with the rule `reviews::get_proposal` uses. A requested change or a conflict therefore keeps the coder bound until it sends the next version.
 pub async fn tasks_awaiting_proposal(
     executor: impl SqliteExecutor<'_>,
     worker_process_id: i64,
@@ -601,14 +601,89 @@ pub async fn tasks_awaiting_proposal(
     let missing = sqlx::query_scalar!(
         r#"SELECT COUNT(*) AS "count!: i64" FROM worker_tasks b JOIN tasks t ON t.id = b.task_id
            WHERE b.worker_process_id = ? AND t.status <> 'done'
+             AND NOT EXISTS (SELECT 1 FROM proposals p WHERE p.task_id = b.task_id AND p.state = 'integrated')
              AND NOT EXISTS (
-                 SELECT 1 FROM proposals p WHERE p.task_id = b.task_id AND p.state IN ('open', 'integrated')
+                 SELECT 1 FROM proposals p
+                 WHERE p.task_id = b.task_id AND p.state = 'open' AND NOT p.conflicted
+                   AND COALESCE((
+                       SELECT r.verdict FROM reviews r
+                       WHERE r.version_id = (
+                                 SELECT v.id FROM proposal_versions v
+                                 WHERE v.proposal_id = p.id
+                                 ORDER BY v.version DESC
+                                 LIMIT 1
+                             )
+                         AND r.verdict <> 'comment'
+                       ORDER BY r.created_at DESC, r.id DESC
+                       LIMIT 1
+                   ), '') <> 'request_changes'
              )"#,
         worker_process_id
     )
     .fetch_one(executor)
     .await?;
     count(missing, "worker_tasks")
+}
+
+/// The newest version of an open proposal that waits on its author, a stopped or failed task coder, for a change that coder has not been started for since.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingResume {
+    pub agent: AgentName,
+    pub proposal: ProposalId,
+    pub version: u32,
+    /// The latest verdict on the version requests changes, given after the coder last started.
+    pub changes: bool,
+    /// The proposal is conflicted, by an integration of the version after the coder last started.
+    pub conflict: bool,
+}
+
+/// The requested changes and conflicts that no start of their author has served: each starts the row again and moves `started_at`, so a change recorded later than `started_at` is still owed. A resume that the worker limits refused leaves the row as it was, so it stays here until a start succeeds.
+pub async fn pending_resumes(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Vec<PendingResume>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT g.name AS "agent!: String", p.number AS "proposal!: i64", v.version AS "version!: i64",
+                  COALESCE((
+                      SELECT r.verdict FROM reviews r
+                      WHERE r.version_id = v.id AND r.verdict <> 'comment'
+                      ORDER BY r.created_at DESC, r.id DESC
+                      LIMIT 1
+                  ), '') = 'request_changes'
+                  AND EXISTS (
+                      SELECT 1 FROM reviews r
+                      WHERE r.version_id = v.id AND r.verdict = 'request_changes' AND r.created_at > w.started_at
+                  ) AS "changes!: bool",
+                  p.conflicted AND EXISTS (
+                      SELECT 1 FROM integrations i
+                      WHERE i.version_id = v.id AND i.result = 'conflicted' AND i.created_at > w.started_at
+                  ) AS "conflict!: bool"
+           FROM worker_processes w
+           JOIN agents g ON g.id = w.agent_id
+           JOIN worker_tasks b ON b.worker_process_id = w.id
+           JOIN proposals p ON p.task_id = b.task_id AND p.state = 'open'
+           JOIN workers k ON k.id = p.author_worker_id AND k.agent_id = w.agent_id
+           JOIN proposal_versions v ON v.proposal_id = p.id
+           WHERE w.role = 'task_coder' AND w.state IN ('stopped', 'failed')
+             AND v.version = (SELECT MAX(x.version) FROM proposal_versions x WHERE x.proposal_id = p.id)
+           ORDER BY w.id, p.number"#
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .filter(|row| row.changes || row.conflict)
+        .map(|row| {
+            Ok(PendingResume {
+                agent: AgentName::parse(&row.agent)
+                    .map_err(|_| StoreError::Corrupt("agents.name"))?,
+                proposal: ProposalId::try_from_db(row.proposal)
+                    .ok_or(StoreError::Corrupt("proposals.number"))?,
+                version: u32::try_from(row.version)
+                    .map_err(|_| StoreError::Corrupt("proposal_versions.version"))?,
+                changes: row.changes,
+                conflict: row.conflict,
+            })
+        })
+        .collect()
 }
 
 /// How many bound proposals of the worker are open and have no verdict on their newest version. A comment is not a verdict.

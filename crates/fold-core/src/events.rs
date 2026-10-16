@@ -121,6 +121,7 @@ define_event_types! {
     WORKER_FAILED = "worker.failed",
     WORKER_OUTPUT = "worker.output",
     WORKER_REFRESHED = "worker.refreshed",
+    WORKER_RESUMED = "worker.resumed",
 }
 
 impl EventType {

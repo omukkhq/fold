@@ -119,6 +119,7 @@ mod task_read;
 mod task_views;
 mod tasks_service;
 mod web_tokens;
+mod worker_resume;
 mod workers;
 #[cfg(feature = "failpoints")]
 mod workers_failpoints;

@@ -23,6 +23,7 @@ pub use workers::{
     record_turn, restart_worker_process, reviewers_of_proposal, running_counts, set_area_lead,
     set_worker_context, set_worker_pid, set_worker_state, tasks_awaiting_proposal,
 };
+pub use workers::{PendingResume, pending_resumes};
 
 /// Row ids of these tables stay inside the daemon; the public handles are the names.
 #[derive(Debug, Clone, PartialEq, Eq)]

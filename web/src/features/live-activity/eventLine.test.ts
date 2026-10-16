@@ -233,6 +233,20 @@ describe("eventLine", () => {
     expect(
       line("worker.refreshed", { agent: "web-lead", handoff: false }),
     ).toBe("gave web-lead a fresh context");
+    expect(
+      line("worker.resumed", {
+        agent: "web-coder",
+        reason: "changes",
+        resumed: true,
+      }),
+    ).toBe("resumed web-coder for changes to P-4");
+    expect(
+      line("worker.resumed", {
+        agent: "web-coder",
+        reason: "conflict",
+        resumed: false,
+      }),
+    ).toBe("restarted web-coder in a new session for the conflict on P-4");
     expect(line("proposal.opened", { version: 1 })).toBe(
       "opened P-4 v1 for T-12",
     );

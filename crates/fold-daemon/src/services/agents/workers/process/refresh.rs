@@ -183,7 +183,8 @@ impl Supervisor {
             return Ok(());
         };
         let turn = self.refresh_turn(&fresh, note.as_deref()).await?;
-        self.launch(&fresh, false, Some(turn)).await
+        self.launch(&fresh, false, Some(turn)).await?;
+        Ok(())
     }
 
     /// The first turn of the fresh session: the note and the open tasks and proposals of the lead's area (every one for the review lead), with its unread count.

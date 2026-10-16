@@ -120,6 +120,19 @@ function startedText(event: DurableEvent): string {
     : `started ${worker} as ${role.replaceAll("_", " ")}`;
 }
 
+/** A coder handed its proposal again: `resumed` is false when its session was gone and it started in a new one. */
+function resumedText(event: DurableEvent): string {
+  const worker = workerOf(event);
+  const proposal = proposalOf(event);
+  const why =
+    event.data.reason === "conflict"
+      ? `the conflict on ${proposal}`
+      : `changes to ${proposal}`;
+  return event.data.resumed === false
+    ? `restarted ${worker} in a new session for ${why}`
+    : `resumed ${worker} for ${why}`;
+}
+
 function fixed(line: string): (event: DurableEvent) => string {
   return () => line;
 }
@@ -524,6 +537,7 @@ const SPECS: Record<EventType, Spec> = {
         ? `gave ${workerOf(e)} a fresh context with its hand-off note`
         : `gave ${workerOf(e)} a fresh context`,
   },
+  "worker.resumed": { icon: Bot, text: resumedText },
 };
 
 /** Every stored event type this build writes a line for. */

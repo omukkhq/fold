@@ -27,6 +27,9 @@ use crate::services::events::{BusMessage, EventBuffer, EventBus};
 use crate::services::projects::load_config;
 
 mod refresh;
+mod resume;
+
+pub(super) use resume::StartWatch;
 
 /// The programs a worker process runs. The daemon reads no environment variable, so a test points `claude` at a stand-in here.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,6 +132,8 @@ struct Inner {
     watch: Mutex<Option<JoinHandle<()>>>,
     /// The leads whose fresh start is under way, so a note and a turn end that both ask for it start one session.
     refreshing: Mutex<HashSet<AgentName>>,
+    /// Held while a coder is resumed, so two events that resume the same coder start it once.
+    resuming: tokio::sync::Mutex<()>,
 }
 
 impl Drop for Inner {
@@ -151,6 +156,10 @@ struct Process {
     /// The row's cost before this process, to which the process's running total adds.
     base_cost: u64,
     generation: u64,
+    /// The process runs with `--resume`.
+    resumed: bool,
+    /// Whether the process's session went on (`true`) or was not found (`false`); `None` until its first output tells.
+    session: Arc<watch::Sender<Option<bool>>>,
 }
 
 impl Supervisor {
@@ -177,6 +186,7 @@ impl Supervisor {
                 requests: AtomicU64::new(0),
                 watch: Mutex::new(None),
                 refreshing: Mutex::new(HashSet::new()),
+                resuming: tokio::sync::Mutex::new(()),
             }),
         };
         let receiver = supervisor.inner.bus.subscribe();
@@ -206,13 +216,13 @@ impl Supervisor {
         &self.inner.paths
     }
 
-    /// Runs Claude Code for the row, which a committed command left in state `starting`: a new session, or `--resume` of the row's session. `turn` is the first user turn; without one a resumed worker waits idle for its next notice. A process that cannot start leaves the row `failed` with `worker.failed`.
+    /// Runs Claude Code for the row, which a committed command left in state `starting`: a new session, or `--resume` of the row's session. `turn` is the first user turn; without one a resumed worker waits idle for its next notice. A process that cannot start leaves the row `failed` with `worker.failed` and gives no [`StartWatch`].
     pub(super) async fn launch(
         &self,
         row: &WorkerProcessRow,
         resume: bool,
         turn: Option<String>,
-    ) -> Result<(), AgentError> {
+    ) -> Result<Option<StartWatch>, AgentError> {
         let config = load_config(&self.inner.paths).await?;
         let settings = config.role(row.role);
         let launcher = lock(&self.inner.launcher).clone();
@@ -222,7 +232,7 @@ impl Supervisor {
             Err(_) => {
                 tracing::warn!(agent = %row.agent, "could not write the worker's files");
                 self.fail(row.id, &row.agent, "files").await?;
-                return Ok(());
+                return Ok(None);
             }
         };
         let mut command = Command::new(&launcher.claude);
@@ -276,14 +286,14 @@ impl Supervisor {
             Err(_) => {
                 tracing::warn!(agent = %row.agent, "could not start Claude Code for a worker");
                 self.fail(row.id, &row.agent, "spawn").await?;
-                return Ok(());
+                return Ok(None);
             }
         };
         let (Some(stdin), Some(stdout), Some(stderr)) =
             (child.stdin.take(), child.stdout.take(), child.stderr.take())
         else {
             self.fail(row.id, &row.agent, "spawn").await?;
-            return Ok(());
+            return Ok(None);
         };
         let pid = child.id();
         let generation = self.inner.generation.fetch_add(1, Ordering::SeqCst) + 1;
@@ -291,11 +301,18 @@ impl Supervisor {
         let (exit, exited) = watch::channel(false);
         let detached = Arc::new(AtomicBool::new(false));
         let reaped = Arc::new(AtomicBool::new(false));
+        let (session, sessions) = watch::channel(None);
         let process = Process {
             id: row.id,
             agent: row.agent.clone(),
             base_cost: row.cost_micro_usd,
             generation,
+            resumed: resume,
+            session: Arc::new(session),
+        };
+        let start = StartWatch {
+            session: sessions,
+            exited: exited.clone(),
         };
         let run = Running {
             generation,
@@ -343,7 +360,7 @@ impl Supervisor {
             );
             let supervisor = self.clone();
             tokio::spawn(async move { supervisor.terminate(&run, false).await });
-            return Ok(());
+            return Ok(None);
         }
         let initialize = ClaudeInput::ControlRequest {
             request_id: self.request_id(),
@@ -364,7 +381,7 @@ impl Supervisor {
             self.clone()
                 .drive(child, stdout, process, exit, detached, reaped),
         );
-        Ok(())
+        Ok(Some(start))
     }
 
     /// Drops the agent's entry in `running` when it is still the one of `process`.
@@ -490,9 +507,22 @@ impl Supervisor {
         };
         let LineEffect {
             step,
-            change,
+            mut change,
             reply,
         } = effect_of(&message);
+        if let Some(went) = resume::session_signal(&message, process.resumed) {
+            process.session.send_if_modified(|seen| {
+                let first = seen.is_none();
+                if first {
+                    *seen = Some(went);
+                }
+                first
+            });
+            // A lost session ran no turn, so its error result counts none.
+            if !went {
+                change = RowChange::None;
+            }
+        }
         if let Some(reply) = reply
             && let Ok(line) = reply.to_line()
         {
@@ -748,11 +778,11 @@ impl Supervisor {
         }
     }
 
-    /// The short-lived workers whose work `event` finished: a task coder once every bound task is Done or has an open or integrated proposal, a batch reviewer once every bound proposal has a verdict or is no longer open.
+    /// The short-lived workers whose work `event` finished: a task coder once no bound task awaits its work (see [`agents::tasks_awaiting_proposal`]), checked when it opens a proposal or sends a new version; a batch reviewer once every bound proposal has a verdict or is no longer open.
     async fn done_workers(&self, event: &fold_core::Event) -> Result<Vec<AgentName>, StoreError> {
         let kind = event.event_type;
         let mut done = Vec::new();
-        if kind == types::PROPOSAL_OPENED
+        if (kind == types::PROPOSAL_OPENED || kind == types::PROPOSAL_VERSION_ADDED)
             && let Some(task) = event.task
         {
             for coder in agents::coders_of_task(self.inner.store.read(), task).await? {
@@ -854,7 +884,7 @@ impl Supervisor {
         Ok(stopped)
     }
 
-    /// Runs again, after a daemon start, every worker that was working or idle when the daemon stopped: `--resume` of its session, with a turn that tells a working one to go on. A worker left `starting` ends `failed` and one left `stopping` ends `stopped`.
+    /// Runs again, after a daemon start, every worker that was working or idle when the daemon stopped: `--resume` of its session, with a turn that tells a working one to go on. A task coder whose session is gone starts again in a new one. A worker left `starting` ends `failed` and one left `stopping` ends `stopped`. Requested changes and conflicts that the worker limits held back are then served.
     pub async fn resume_after_restart(&self) -> Result<(), AgentError> {
         let mut conn = self
             .inner
@@ -876,13 +906,17 @@ impl Supervisor {
                             agents::restart_worker_process(tx.conn(), row.id, now).await
                         })
                         .await?;
-                    self.launch(&row, true, turn).await?;
+                    let watch = self.launch(&row, true, turn).await?;
+                    if let Some(watch) = watch.filter(|_| row.role == fold_core::Role::TaskCoder) {
+                        tokio::spawn(self.clone().restart_lost(row.agent.clone(), watch));
+                    }
                 }
                 WorkerState::Starting => self.fail(row.id, &row.agent, "daemon_restart").await?,
                 WorkerState::Stopping => self.stopped_without_process(&row).await?,
                 WorkerState::Stopped | WorkerState::Failed => {}
             }
         }
+        tokio::spawn(self.clone().resume_pending());
         Ok(())
     }
 }
@@ -955,6 +989,14 @@ async fn watch_done(
                     tracing::warn!(%agent, code = super::code_of(&error), "could not stop a finished worker");
                 }
             });
+        }
+        let items = resume::resume_items(&event);
+        if !items.is_empty() {
+            tokio::spawn(supervisor.clone().resume_authors(items));
+        }
+        // A freed worker slot can serve a resume that the limits refused earlier.
+        if event.event_type == types::WORKER_STOPPED || event.event_type == types::WORKER_FAILED {
+            tokio::spawn(supervisor.resume_pending());
         }
     }
 }

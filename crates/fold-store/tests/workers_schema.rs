@@ -346,3 +346,62 @@ async fn a_project_has_one_review_lead() {
     );
     process(&store, 5, Role::BatchReviewer, None, "s3").await;
 }
+
+#[tokio::test]
+async fn a_new_session_comes_only_with_a_new_start() {
+    let (_dir, store) = seeded().await;
+    exec(
+        &store,
+        "INSERT INTO areas (id, name, label_id, created_by, created_at) VALUES (1, 'web', 1, 'main', 0)",
+    )
+    .await
+    .unwrap();
+    let coder = process(&store, 2, Role::TaskCoder, Some(1), "s2").await;
+    store
+        .write(async |tx| {
+            agents::set_worker_state(tx.conn(), coder, WorkerState::Working, at(15)).await
+        })
+        .await
+        .unwrap();
+    for change in [
+        format!("UPDATE worker_processes SET session_id = 's3' WHERE id = {coder}"),
+        format!(
+            "UPDATE worker_processes SET session_id = 's3', state = 'idle', idle_since = 20 WHERE id = {coder}"
+        ),
+    ] {
+        let refused = exec(&store, &change).await.unwrap_err();
+        assert!(
+            refused.to_string().contains("worker_processes_fixed"),
+            "{change}"
+        );
+    }
+    exec(
+        &store,
+        &format!(
+            "UPDATE worker_processes SET session_id = 's2b', state = 'starting' WHERE id = {coder}"
+        ),
+    )
+    .await
+    .expect("a running row moves to starting with a new session");
+    store
+        .write(async |tx| {
+            agents::record_exit(tx.conn(), coder, WorkerState::Failed, Some(1), at(30)).await?;
+            agents::refresh_session(tx.conn(), coder, "s3", at(40)).await
+        })
+        .await
+        .unwrap();
+    let mut conn = store.read().acquire().await.unwrap();
+    let rows = agents::list_worker_processes(&mut conn).await.unwrap();
+    assert_eq!(rows[0].session_id, "s3");
+    assert_eq!(rows[0].state, WorkerState::Starting);
+    assert_eq!(rows[0].started_at, at(40));
+    assert_eq!((rows[0].stopped_at, rows[0].exit_code), (None, None));
+    for column in ["agent_id = 3", "started_by = 'main'", "role = 'area_lead'"] {
+        let change = format!("UPDATE worker_processes SET {column} WHERE id = {coder}");
+        let refused = exec(&store, &change).await.unwrap_err();
+        assert!(
+            refused.to_string().contains("worker_processes_fixed"),
+            "{change}"
+        );
+    }
+}
