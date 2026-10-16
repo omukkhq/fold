@@ -26,6 +26,7 @@ import {
   answerFailure,
   answerLine,
   inputView,
+  whyAsksText,
   shownQuestion,
   toolIcon,
   type ToolIcon,
@@ -177,8 +178,7 @@ function QuestionBody({
         </Section>
         <Section title="Why fold asks">
           <p className="text-bar text-text-muted">
-            Claude Code&apos;s auto mode was unsure about this call, so the
-            worker waits for a human.
+            {whyAsksText(question.tool)}
           </p>
         </Section>
       </div>

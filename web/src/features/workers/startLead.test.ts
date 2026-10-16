@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "@/api/errors";
 import {
-  roleCacheTtl,
+  defaultModelText,
   startFailure,
   startLeadBody,
   startLeadDefaults,
@@ -110,14 +110,17 @@ describe("failures", () => {
   });
 });
 
-describe("roleCacheTtl", () => {
-  it("reads the role's cache time from the project config", () => {
+describe("defaultModelText", () => {
+  it("names the model the config sets for the role", () => {
     const roles = [
-      { role: "area_lead" as const, cache_ttl: "1h" },
-      { role: "task_coder" as const, cache_ttl: "5m" },
+      { role: "area_lead" as const, cache_ttl: "1h", model: "opus" },
+      { role: "review_lead" as const, cache_ttl: "1h", model: null },
     ];
-    expect(roleCacheTtl(roles, "area_lead")).toBe("1h");
-    expect(roleCacheTtl(roles, "review_lead")).toBeNull();
-    expect(roleCacheTtl([], "area_lead")).toBeNull();
+    expect(defaultModelText(roles, "area_lead")).toBe(
+      "The role's model from the project config (opus)",
+    );
+    expect(defaultModelText(roles, "review_lead")).toBe(
+      "The role's model from the project config",
+    );
   });
 });

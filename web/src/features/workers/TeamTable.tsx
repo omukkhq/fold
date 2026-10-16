@@ -26,7 +26,6 @@ const HEADS = [
   "Model",
   "Turns",
   "Cost",
-  "Cache hits",
   "Context",
   "Current step",
 ] as const;
@@ -152,7 +151,6 @@ function Row({
       <td className={cn(CELL, NUMBER)}>{row.model}</td>
       <td className={cn(CELL, NUMBER)}>{row.turns}</td>
       <td className={cn(CELL, NUMBER)}>{row.cost}</td>
-      <td className={cn(CELL, NUMBER)}>{row.cacheHits}</td>
       <td className={cn(CELL, NUMBER)}>{row.context}</td>
       <td className={CELL}>
         <StepText step={row.step} />

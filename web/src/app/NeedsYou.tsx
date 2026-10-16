@@ -77,6 +77,9 @@ function Line({
             {line.task ? (
               <span className="font-mono text-label">{line.task}</span>
             ) : null}
+            {line.title ? (
+              <span className="min-w-0 truncate">{line.title}</span>
+            ) : null}
             <span>{formatAsOfMinute(now, line.since)}</span>
             <span className="text-text-faint">· {line.hint}</span>
           </span>

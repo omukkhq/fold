@@ -4,6 +4,7 @@ use fold_core::{
     TaskId, Timestamp,
 };
 use fold_store::agents::{self, QuestionKind};
+use fold_store::reviews;
 use fold_store::tasks::requests::{self, RequestFilter};
 use fold_store::{Store, StoreError, messages};
 
@@ -62,6 +63,8 @@ pub struct NeedsYouItem {
     pub choices: Vec<Choice>,
     /// The short header of a `Question`.
     pub header: Option<String>,
+    /// The proposal title of a `HumanReview`; the request title of a `RequestDraft`, which the claim gave it before any draft.
+    pub title: Option<String>,
 }
 
 impl NeedsYouItem {
@@ -79,6 +82,7 @@ impl NeedsYouItem {
             human: None,
             choices: Vec::new(),
             header: None,
+            title: None,
         }
     }
 }
@@ -133,6 +137,7 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
         let mut item = NeedsYouItem::new(NeedsYouKind::RequestDraft, request.updated_at);
         item.request = Some(request.id);
         item.human = Some(human);
+        item.title = request.title;
         items.push(item);
     }
     for waiting in awaiting_human_review(store).await? {
@@ -140,6 +145,10 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
         item.task = Some(waiting.task);
         item.proposal = Some(waiting.proposal);
         item.human = waiting.reviewer;
+        let mut conn = store.read().acquire().await?;
+        item.title = reviews::get_proposal(&mut *conn, waiting.proposal)
+            .await?
+            .map(|proposal| proposal.title);
         items.push(item);
     }
     items.sort_by_key(|item| item.since);

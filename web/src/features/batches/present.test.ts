@@ -114,7 +114,7 @@ describe("batch texts", () => {
     expect(checkoutView(batch({ checkout, members }))).toEqual({
       label: "ready",
       tone: "ready",
-      line: "ws-12 · r17 + P-3 + P-4",
+      line: "ws-12 · main r17 + P-3 + P-4",
       path: ".fold/ws/review-rb-3",
     });
     expect(checkoutView(batch())).toEqual({
@@ -129,7 +129,7 @@ describe("batch texts", () => {
 
   it("sums up a worker and finds the review lead", () => {
     expect(workerTotals(workerProcess("r", { turns: 21 }))).toBe(
-      "21 turns · $5.87 · cache 91% · context 164k",
+      "21 turns · $5.87 · context 164k",
     );
     expect(workerTotals(workerProcess("r", { turns: 1 }))).toContain(
       "1 turn ·",
@@ -144,14 +144,12 @@ describe("batch texts", () => {
     expect(reviewLead([])).toBeNull();
   });
 
-  it("names the reviewer's role, model and cache time it has", () => {
+  it("names the reviewer's role and the model it has", () => {
     const reviewer = workerProcess("r", {
       role: "batch_reviewer",
       model: "sonnet",
     });
-    expect(reviewerLine(reviewer)).toBe("Batch reviewer · sonnet · cache 1h");
-    expect(reviewerLine({ ...reviewer, model: null, cache_ttl: null })).toBe(
-      "Batch reviewer",
-    );
+    expect(reviewerLine(reviewer)).toBe("Batch reviewer · sonnet");
+    expect(reviewerLine({ ...reviewer, model: null })).toBe("Batch reviewer");
   });
 });

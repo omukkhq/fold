@@ -123,12 +123,12 @@ describe("BatchScreen", () => {
     expect(within(table).getByText("@web-styles")).toBeTruthy();
     const checkout = screen.getByRole("region", { name: "Batch checkout" });
     expect(within(checkout).getByText("ready")).toBeTruthy();
-    expect(within(checkout).getByText("ws-12 · r17 + P-3 + P-4")).toBeTruthy();
+    expect(
+      within(checkout).getByText("ws-12 · main r17 + P-3 + P-4"),
+    ).toBeTruthy();
     expect(within(checkout).getByText(".fold/ws/review-rb-3")).toBeTruthy();
     const card = await screen.findByRole("region", { name: "Reviewer" });
-    expect(
-      within(card).getByText("Batch reviewer · sonnet · cache 1h"),
-    ).toBeTruthy();
+    expect(within(card).getByText("Batch reviewer · sonnet")).toBeTruthy();
     expect(within(card).getByText(/21 turns/)).toBeTruthy();
     expect(screen.getByText("@review")).toBeTruthy();
     expect(screen.getByText(/2 proposals, one verdict each/)).toBeTruthy();
@@ -170,9 +170,7 @@ describe("BatchScreen", () => {
 
   it("offers Stop reviewer only to a named human", async () => {
     await setup(rb3, {}, { human: null, authenticated: true });
-    expect(
-      await screen.findByText("Batch reviewer · sonnet · cache 1h"),
-    ).toBeTruthy();
+    expect(await screen.findByText("Batch reviewer · sonnet")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Stop reviewer" })).toBeNull();
   });
 

@@ -3,7 +3,6 @@ import type { ReviewBatch, ReviewBatchMember } from "@/api/reviews";
 import type { WorkerProcess } from "@/api/workers";
 import { reviewerActor } from "@/people/names";
 import {
-  cacheHitsText,
   contextText,
   costText,
   roleName,
@@ -108,7 +107,7 @@ export function memberCountText(batch: ReviewBatch): string {
 export interface CheckoutView {
   label: string;
   tone: PillTone;
-  /** `ws-12 · r17 + P-3 + P-4`; null without a checkout. */
+  /** `ws-12 · main r17 + P-3 + P-4`; null without a checkout. */
   line: string | null;
   path: string | null;
 }
@@ -119,7 +118,7 @@ export function checkoutView(batch: ReviewBatch): CheckoutView {
     .map((m) => m.proposal);
   const checkout = batch.checkout;
   const line = checkout
-    ? [`${checkout.workspace} · ${checkout.base}`, ...members].join(" + ")
+    ? [`${checkout.workspace} · main ${checkout.base}`, ...members].join(" + ")
     : null;
   const path = checkout?.path ?? null;
   if (batch.state === "submitted") {
@@ -133,23 +132,18 @@ export function checkoutView(batch: ReviewBatch): CheckoutView {
     : { label: "no checkout", tone: "starting", line, path };
 }
 
-/** `21 turns · $1.64 · cache 90% · context 84k`. */
+/** `21 turns · $1.64 · context 84k`. */
 export function workerTotals(worker: WorkerProcess): string {
   return [
     `${String(worker.turns)} turn${worker.turns === 1 ? "" : "s"}`,
     costText(worker.cost_micro_usd),
-    `cache ${cacheHitsText(worker.cache_read_tokens, worker.cache_write_tokens)}`,
     `context ${contextText(worker.context_tokens)}`,
   ].join(" · ");
 }
 
-/** `Batch reviewer · sonnet · cache 1h`, leaving out what the daemon does not know. */
+/** `Batch reviewer · sonnet`, leaving out what the daemon does not know. */
 export function reviewerLine(worker: WorkerProcess): string {
-  return [
-    roleName(worker.role),
-    worker.model,
-    worker.cache_ttl === null ? null : `cache ${worker.cache_ttl}`,
-  ]
+  return [roleName(worker.role), worker.model]
     .filter((part) => part !== null)
     .join(" · ");
 }

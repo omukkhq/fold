@@ -203,6 +203,19 @@ async fn a_human_creates_asks_for_changes_edits_and_approves() {
     assert_eq!(refused["error"]["details"]["reason"], "request_thread");
 
     submit(&h, 1).await;
+    let (status, waiting) = h
+        .http(Method::GET, &format!("{BASE}/needs-you"), None, "ana")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{waiting}");
+    let drafts: Vec<&Value> = waiting["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["kind"] == "request_draft")
+        .collect();
+    assert_eq!(drafts.len(), 1, "{waiting}");
+    assert_eq!(drafts[0]["request"], "RQ-1");
+    assert_eq!(drafts[0]["title"], "Faster board");
     let (status, changed) = h
         .http(
             Method::POST,

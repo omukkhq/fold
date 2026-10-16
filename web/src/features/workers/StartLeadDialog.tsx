@@ -20,7 +20,7 @@ import { ErrorNote } from "./parts";
 import {
   LEAD_DESCRIPTIONS,
   MODELS,
-  roleCacheTtl,
+  defaultModelText,
   startFailure,
   startLeadBody,
   startLeadDefaults,
@@ -65,7 +65,6 @@ export function StartLeadDialog({
     defaultValues: startLeadDefaults(areas.map((a) => a.name)),
   });
   const role = useWatch({ control, name: "role" });
-  const cacheTtl = roleCacheTtl(roles, role);
 
   const close = () => {
     reset(startLeadDefaults(areas.map((a) => a.name)));
@@ -252,9 +251,7 @@ export function StartLeadDialog({
                     onBlur={field.onBlur}
                     disabled={isSubmitting}
                   >
-                    <option value="">
-                      The role&apos;s model from the project config
-                    </option>
+                    <option value="">{defaultModelText(roles, role)}</option>
                     {MODELS.map((model) => (
                       <option key={model} value={model}>
                         {model}
@@ -263,23 +260,6 @@ export function StartLeadDialog({
                   </Select>
                 )}
               />
-              {cacheTtl === null ? null : (
-                <div
-                  role="group"
-                  aria-labelledby={`${ids}-cache`}
-                  className="flex flex-col gap-6"
-                >
-                  <span id={`${ids}-cache`} className={FIELD_LABEL}>
-                    Cache time
-                  </span>
-                  <p className={cn(controlClasses, "py-8 text-text-muted")}>
-                    {cacheTtl}
-                  </p>
-                  <p className="text-meta text-text-faint">
-                    Set per role in .fold/config.toml.
-                  </p>
-                </div>
-              )}
               <div className="flex flex-col gap-6">
                 <label htmlFor={`${ids}-instructions`} className={FIELD_LABEL}>
                   Instructions

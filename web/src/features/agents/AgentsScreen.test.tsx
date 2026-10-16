@@ -50,8 +50,8 @@ const team = workerList({
     workerProcess("review", { role: "review_lead", area: null, state: "idle" }),
   ],
   roles: [
-    { role: "area_lead", cache_ttl: "1h" },
-    { role: "review_lead", cache_ttl: "1h" },
+    { role: "area_lead", cache_ttl: "1h", model: null },
+    { role: "review_lead", cache_ttl: "1h", model: null },
   ],
 });
 
@@ -167,9 +167,10 @@ describe("AgentsScreen", () => {
     ).toBeTruthy();
     expect(within(table).getByText("Review")).toBeTruthy();
     const lead = row("web-lead");
-    expect(within(lead).getByText("Area lead · cache 1h")).toBeTruthy();
+    expect(within(lead).getByText("Area lead")).toBeTruthy();
     expect(within(lead).getByText("$5.87")).toBeTruthy();
-    expect(within(lead).getByText("91%")).toBeTruthy();
+    expect(within(lead).queryByText("91%")).toBeNull();
+    expect(within(table).queryByText(/cache/i)).toBeNull();
     expect(within(lead).getByText("164k")).toBeTruthy();
     const coder = row("web-coder");
     expect(within(coder).getByText("T-12")).toBeTruthy();
@@ -302,8 +303,7 @@ describe("AgentsScreen", () => {
     await setup([agent("main")], team);
     await userEvent.click(startButton());
     const dialog = screen.getByRole("dialog", { name: "Start a lead" });
-    const cache = within(dialog).getByRole("group", { name: "Cache time" });
-    expect(within(cache).getByText("1h")).toBeTruthy();
+    expect(within(dialog).queryByText("Cache time")).toBeNull();
     await userEvent.click(
       within(dialog).getByRole("button", { name: "Start lead" }),
     );

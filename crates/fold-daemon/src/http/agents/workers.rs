@@ -39,6 +39,9 @@ pub struct RoleEntry {
     /// The prompt cache time of the role's workers, `1h` or `5m`.
     #[schema(example = "1h")]
     pub cache_ttl: String,
+    /// The model of the role's workers from `[roles.<role>] model`; null when the role sets none and Claude Code picks.
+    #[schema(required = true, example = "sonnet")]
+    pub model: Option<String>,
 }
 
 /// A part of the project that one area lead owns through one task label.
@@ -243,9 +246,13 @@ pub async fn list_workers(project: Project) -> Result<Json<WorkerList>, ApiError
     let roles = config.as_ref().map_or_else(Vec::new, |config| {
         Role::ALL
             .into_iter()
-            .map(|role| RoleEntry {
-                role: role.into(),
-                cache_ttl: config.role(role).cache_ttl.as_str().to_owned(),
+            .map(|role| {
+                let settings = config.role(role);
+                RoleEntry {
+                    role: role.into(),
+                    cache_ttl: settings.cache_ttl.as_str().to_owned(),
+                    model: settings.model,
+                }
             })
             .collect()
     });

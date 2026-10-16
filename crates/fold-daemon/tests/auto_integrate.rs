@@ -269,6 +269,9 @@ async fn a_marked_proposal_waits_for_the_human_after_the_agent_approval() {
         1,
         "the human sees it after the agent approval"
     );
+    let items = fx.handle.agents().needs_you().await.unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].title.as_deref(), Some("Change it"));
     assert_eq!(count(&fx, "SELECT COUNT(*) FROM integrations").await, 0);
 
     approve(&fx, &human("tanim"), 1).await;

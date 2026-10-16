@@ -6,6 +6,7 @@ import {
   answerLine,
   asksText,
   inputView,
+  whyAsksText,
   shownQuestion,
   toolIcon,
 } from "./permission";
@@ -81,6 +82,14 @@ describe("answers", () => {
     ).toContain("no permission question");
     expect(answerFailure(new ApiError("human_name_required", "")).code).toBe(
       "human_name_required",
+    );
+  });
+});
+
+describe("whyAsksText", () => {
+  it("names the tool and that the permission rules asked, not the input", () => {
+    expect(whyAsksText("Bash")).toBe(
+      "Claude Code's permission rules asked for a human before the worker used Bash. The call runs only if you allow it.",
     );
   });
 });

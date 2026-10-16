@@ -11,6 +11,8 @@ export interface NeedsYouLine {
   chip: string | null;
   text: string;
   task: string | null;
+  /** The second line's title: the proposal title of a review, the request title of a draft. */
+  title: string | null;
   since: number;
   hint: string;
   href: string;
@@ -39,6 +41,12 @@ export function itemsFor(
   );
 }
 
+/** The title as the second line shows it, trimmed; null for a blank or missing title. The line cuts a long one to its width. */
+export function titleText(title: string | null): string | null {
+  const text = title?.trim() ?? "";
+  return text === "" ? null : text;
+}
+
 /** `asks about Chart library` with the question's header, else what kind of answer it wants. */
 export function questionText(
   item: Pick<NeedsYouItem, "header" | "choices">,
@@ -52,6 +60,10 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
     key: `${item.kind}:${item.message ?? item.question ?? item.proposal ?? item.request ?? String(index)}`,
     kind: item.kind,
     task: item.task,
+    title:
+      item.kind === "human_review" || item.kind === "request_draft"
+        ? titleText(item.title)
+        : null,
     since: item.since,
   };
   switch (item.kind) {

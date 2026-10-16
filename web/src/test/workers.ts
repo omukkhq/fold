@@ -67,6 +67,7 @@ export function needsItem(fields: Partial<NeedsYouItem> = {}): NeedsYouItem {
     human: null,
     choices: [],
     header: null,
+    title: null,
     ...fields,
   };
 }

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { apiErrorCode } from "@/api/errors";
 import type { RoleEntry, StartWorkerBody } from "@/api/workers";
 import { failureText } from "@/format/failure";
+import { roleModel } from "./team";
 
 /** The Claude Code model aliases the dialog offers; an empty choice leaves the role's model from the project config. */
 export const MODELS = ["opus", "sonnet", "haiku"] as const;
@@ -39,12 +40,15 @@ export function startLeadBody(values: StartLeadValues): StartWorkerBody {
   return body;
 }
 
-/** The cache time a start gives the role, from the project config; a start does not choose it. */
-export function roleCacheTtl(
+/** The empty model choice: the role's model from the project config, named when the config sets one. */
+export function defaultModelText(
   roles: readonly RoleEntry[],
   role: StartLeadValues["role"],
-): string | null {
-  return roles.find((entry) => entry.role === role)?.cache_ttl ?? null;
+): string {
+  const model = roleModel(roles, role);
+  return model === null
+    ? "The role's model from the project config"
+    : `The role's model from the project config (${model})`;
 }
 
 export const LEAD_DESCRIPTIONS: Record<StartLeadValues["role"], string> = {

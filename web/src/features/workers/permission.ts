@@ -48,6 +48,11 @@ export function asksText(tool: string): string {
   return tool === "Bash" ? "asks to run Bash" : `asks to use ${tool}`;
 }
 
+/** Why the worker waits: Claude Code's permission rules asked for a human before the tool call ran. It names only the tool, never the call's input. */
+export function whyAsksText(tool: string): string {
+  return `Claude Code's permission rules asked for a human before the worker used ${tool}. The call runs only if you allow it.`;
+}
+
 export interface AnswerLine {
   allowed: boolean;
   lead: string;

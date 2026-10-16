@@ -732,14 +732,24 @@ async fn a_human_defines_areas_and_starts_and_stops_leads_over_http() {
     assert_eq!(
         listed["roles"],
         json!([
-            {"role": "area_lead", "cache_ttl": "1h"},
-            {"role": "review_lead", "cache_ttl": "1h"},
-            {"role": "task_coder", "cache_ttl": "5m"},
-            {"role": "batch_reviewer", "cache_ttl": "1h"},
+            {"role": "area_lead", "cache_ttl": "1h", "model": null},
+            {"role": "review_lead", "cache_ttl": "1h", "model": null},
+            {"role": "task_coder", "cache_ttl": "5m", "model": null},
+            {"role": "batch_reviewer", "cache_ttl": "1h", "model": null},
         ])
     );
     let config = std::path::Path::new(harness.root()).join(".fold/config.toml");
     let kept = std::fs::read_to_string(&config).ok();
+    std::fs::write(&config, "[roles.task_coder]\nmodel = \"haiku\"\n").unwrap();
+    let (_, modelled) = harness
+        .socket(
+            Method::GET,
+            &format!("/api/v1/projects/{SLUG}/workers"),
+            None,
+        )
+        .await;
+    assert_eq!(modelled["roles"][2]["model"], "haiku");
+    assert_eq!(modelled["roles"][0]["model"], Value::Null);
     std::fs::write(&config, "[roles.task_coder]\ncache_ttl = \"2h\"\n").unwrap();
     let (status, unreadable) = harness
         .socket(

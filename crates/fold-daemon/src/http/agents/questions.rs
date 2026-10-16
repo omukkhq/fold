@@ -177,6 +177,9 @@ pub struct NeedsYouEntry {
     /// The short header of a `question`, such as `Chart library`.
     #[schema(required = true, example = "Chart library")]
     pub header: Option<String>,
+    /// The second line of a `human_review` (the proposal title) and of a `request_draft` (the request title, which the claim gave it).
+    #[schema(required = true, example = "Database schema for reports")]
+    pub title: Option<String>,
 }
 
 impl From<NeedsYouItem> for NeedsYouEntry {
@@ -208,6 +211,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             human: item.human.map(|human| human.to_string()),
             choices: item.choices.into_iter().map(MessageChoice::from).collect(),
             header: item.header,
+            title: item.title,
         }
     }
 }

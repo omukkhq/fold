@@ -2014,6 +2014,11 @@ export interface components {
              */
             thread: string | null;
             /**
+             * @description The second line of a `human_review` (the proposal title) and of a `request_draft` (the request title, which the claim gave it).
+             * @example Database schema for reports
+             */
+            title: string | null;
+            /**
              * @description The tool of a `permission`.
              * @example Bash
              */
@@ -2713,6 +2718,11 @@ export interface components {
              * @example 1h
              */
             cache_ttl: string;
+            /**
+             * @description The model of the role's workers from `[roles.<role>] model`; null when the role sets none and Claude Code picks.
+             * @example sonnet
+             */
+            model: string | null;
             role: components["schemas"]["WorkerRole"];
         };
         /** @description A token off loopback, a name on loopback. */

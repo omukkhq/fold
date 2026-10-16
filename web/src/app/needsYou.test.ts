@@ -4,6 +4,7 @@ import {
   itemsFor,
   needsYouGroups,
   questionText,
+  titleText,
   waitingText,
 } from "./needsYou";
 
@@ -33,12 +34,14 @@ const items = [
     screen: "proposal",
     proposal: "P-4",
     human: "tanim",
+    title: "Database schema for reports",
   }),
   needsItem({
     kind: "request_draft",
     screen: "request",
     request: "RQ-5",
     human: "ana",
+    title: "Can the board show who changed a card?",
   }),
 ];
 
@@ -74,11 +77,13 @@ describe("needsYouGroups", () => {
       chip: "P-4",
       person: null,
       text: "needs your review",
+      title: "Database schema for reports",
       href: "/p/demo/proposals/P-4",
     });
     expect(drafts?.lines[0]).toMatchObject({
       chip: "RQ-5",
       text: "has a draft ready to approve",
+      title: "Can the board show who changed a card?",
       href: "/p/demo/requests/RQ-5",
     });
   });
@@ -111,6 +116,19 @@ describe("needsYouGroups", () => {
     );
     expect(questionText({ header: null, choices })).toBe("asks you to choose");
     expect(questionText({ header: null, choices: [] })).toBe("asks a question");
+  });
+
+  it("trims a title for the second line and leaves a blank one out", () => {
+    expect(titleText("  Padded  ")).toBe("Padded");
+    expect(titleText("   ")).toBeNull();
+    expect(titleText(null)).toBeNull();
+  });
+
+  it("gives a question or a permission no title", () => {
+    const [group] = needsYouGroups("demo", [
+      needsItem({ kind: "permission", agent: "w", title: "ignored" }),
+    ]);
+    expect(group?.lines[0]?.title).toBeNull();
   });
 
   it("counts what waits", () => {

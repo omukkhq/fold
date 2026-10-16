@@ -3,6 +3,7 @@ import type { BoardCard, BoardLabel } from "@/api/board";
 import type { ReviewBatch } from "@/api/reviews";
 import type {
   AreaEntry,
+  RoleEntry,
   WorkerList,
   WorkerProcess,
   WorkerQuestion,
@@ -90,16 +91,6 @@ export function roleName(role: WorkerRole): string {
   return ROLE_NAMES[role];
 }
 
-/** `Task coder · cache 5m`; the cache time is left out while fold cannot read the config. */
-export function roleLine(
-  worker: Pick<WorkerProcess, "role" | "cache_ttl">,
-): string {
-  const name = roleName(worker.role);
-  return worker.cache_ttl === null
-    ? name
-    : `${name} · cache ${worker.cache_ttl}`;
-}
-
 /** The agent of an actor such as `web-lead/sub`: its first segment. */
 export function actorAgent(actor: string): string {
   const slash = actor.indexOf("/");
@@ -147,7 +138,7 @@ export interface TeamRow {
   /** A child row is a short-lived worker, drawn under its lead. */
   child: boolean;
   role: string;
-  /** The role with its cache time, as the row draws it. */
+  /** The line under the worker's name, as the row draws it. */
   roleLine: string;
   pill: StatePill;
   /** The worker waits for a human to answer a permission question. */
@@ -156,7 +147,6 @@ export interface TeamRow {
   model: string;
   turns: string;
   cost: string;
-  cacheHits: string;
   context: string;
   step: Step;
   stop: StopControl;
@@ -190,12 +180,6 @@ const NONE = "-";
 /** `$5.87`; the daemon counts millionths of a US dollar. */
 export function costText(micro: number): string {
   return `$${(micro / 1_000_000).toFixed(2)}`;
-}
-
-/** The share of cached prompt tokens that were read from the cache rather than written to it. */
-export function cacheHitsText(read: number, write: number): string {
-  const total = read + write;
-  return total === 0 ? NONE : `${String(Math.round((read * 100) / total))}%`;
 }
 
 /** `164k`; a worker without a request yet has no context. */
@@ -237,7 +221,11 @@ function faint(text: string): Step {
 }
 
 /** The live step while the process works; otherwise a sentence about the process. */
-export function workerStep(worker: WorkerProcess, steps: WorkerSteps): Step {
+export function workerStep(
+  worker: WorkerProcess,
+  steps: WorkerSteps,
+  waitsForCoders = false,
+): Step {
   const live = steps[worker.name];
   switch (worker.state) {
     case "working":
@@ -247,7 +235,9 @@ export function workerStep(worker: WorkerProcess, steps: WorkerSteps): Step {
     case "stopping":
       return faint("waiting for the process to exit");
     case "idle":
-      return faint("waiting for its next turn");
+      return faint(
+        waitsForCoders ? "waiting for coders" : "waiting for its next turn",
+      );
     default:
       return faint(
         worker.exit_code === null
@@ -362,21 +352,21 @@ function workerRow(
     name: worker.name,
     child,
     role: roleName(worker.role),
-    roleLine: roleLine(worker),
+    roleLine: roleName(worker.role),
     pill: workerPill(worker.state),
     asks: input.questions.some(
       (q) => q.worker === worker.name && q.answer === null,
     ),
     bound: boundOf(worker, input, input.workers.areas),
-    model: worker.model ?? NONE,
+    model: worker.model ?? roleModel(input.workers.roles, worker.role) ?? NONE,
     turns: String(worker.turns),
     cost: costText(worker.cost_micro_usd),
-    cacheHits: cacheHitsText(
-      worker.cache_read_tokens,
-      worker.cache_write_tokens,
-    ),
     context: contextText(worker.context_tokens),
-    step: workerStep(worker, input.steps),
+    step: workerStep(
+      worker,
+      input.steps,
+      waitsForCoders(worker, input.workers.workers),
+    ),
     stop: stopControl(worker.state),
   };
 }
@@ -396,14 +386,37 @@ function mainRow(agent: AgentView, human: string | null): TeamRow {
     model: NONE,
     turns: NONE,
     cost: NONE,
-    cacheHits: NONE,
     context: NONE,
     step: faint(NONE),
     stop: null,
   };
 }
 
+/** The model `[roles.<role>] model` sets; null when the role sets none or the daemon could not read the config. */
+export function roleModel(
+  roles: readonly RoleEntry[],
+  role: WorkerRole,
+): string | null {
+  return roles.find((entry) => entry.role === role)?.model ?? null;
+}
+
 const LEADS: readonly WorkerRole[] = ["area_lead", "review_lead"];
+
+/** A lead between turns waits for the coders or batch reviewers it started while one of them starts or works. */
+export function waitsForCoders(
+  lead: WorkerProcess,
+  workers: readonly WorkerProcess[],
+): boolean {
+  return (
+    LEADS.includes(lead.role) &&
+    workers.some(
+      (w) =>
+        !LEADS.includes(w.role) &&
+        actorAgent(w.started_by) === lead.name &&
+        (w.state === "working" || w.state === "starting"),
+    )
+  );
+}
 
 /**
  * The team as W09 draws it: the main agents first, then one group per area with its lead and the task coders under it, then the review lead with its batch reviewers.

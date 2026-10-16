@@ -15,7 +15,6 @@ import {
   areaNote,
   askingRow,
   batchedProposals,
-  cacheHitsText,
   contextText,
   costText,
   hasNoLeads,
@@ -25,12 +24,13 @@ import {
   mainPill,
   ownedTasks,
   pillSpec,
-  roleLine,
+  roleModel,
   roleName,
   stepOf,
   stopControl,
   teamGroups,
   workerPill,
+  waitsForCoders,
   workerStep,
   workspaceOf,
   type TeamInput,
@@ -59,11 +59,9 @@ function input(fields: Partial<TeamInput> = {}): TeamInput {
 }
 
 describe("numbers", () => {
-  it("words cost, cache hits and context as the frame does", () => {
+  it("words cost and context as the frame does", () => {
     expect(costText(5_870_000)).toBe("$5.87");
     expect(costText(0)).toBe("$0.00");
-    expect(cacheHitsText(910, 90)).toBe("91%");
-    expect(cacheHitsText(0, 0)).toBe("-");
     expect(contextText(164_000)).toBe("164k");
     expect(contextText(640)).toBe("640");
     expect(contextText(0)).toBe("-");
@@ -88,13 +86,6 @@ describe("pills", () => {
     expect(roleName("review_lead")).toBe("Review lead");
     expect(roleName("task_coder")).toBe("Task coder");
     expect(roleName("batch_reviewer")).toBe("Batch reviewer");
-  });
-
-  it("adds the cache time of the role when fold could read the config", () => {
-    expect(roleLine({ role: "task_coder", cache_ttl: "5m" })).toBe(
-      "Task coder · cache 5m",
-    );
-    expect(roleLine({ role: "area_lead", cache_ttl: null })).toBe("Area lead");
   });
 
   it("takes the agent of a worker actor", () => {
@@ -174,6 +165,40 @@ describe("steps", () => {
       workerStep(workerProcess("w", { state: "failed", exit_code: 101 }), {})
         .text,
     ).toBe("exit code 101");
+  });
+
+  it("says an idle lead waits for coders only while its coders start or work", () => {
+    const lead = workerProcess("web-lead", { state: "idle" });
+    const coder = (state: "working" | "idle", by = "web-lead") =>
+      workerProcess("c", { role: "task_coder", started_by: by, state });
+    expect(workerStep(lead, {}, true).text).toBe("waiting for coders");
+    expect(workerStep(lead, {}).text).toBe("waiting for its next turn");
+    expect(waitsForCoders(lead, [lead, coder("working")])).toBe(true);
+    expect(waitsForCoders(lead, [lead, coder("idle")])).toBe(false);
+    expect(waitsForCoders(lead, [lead, coder("working", "other")])).toBe(false);
+    const other = workerProcess("o", { started_by: "web-lead" });
+    expect(waitsForCoders(lead, [lead, other])).toBe(false);
+    const coderRow = coder("working");
+    expect(waitsForCoders(coderRow, [coderRow])).toBe(false);
+  });
+
+  it("reads a role's model from the project config", () => {
+    const roles = [
+      { role: "area_lead", cache_ttl: "1h", model: "opus" },
+      { role: "task_coder", cache_ttl: "5m", model: null },
+    ] as const;
+    expect(roleModel(roles, "area_lead")).toBe("opus");
+    expect(roleModel(roles, "task_coder")).toBeNull();
+    expect(roleModel(roles, "review_lead")).toBeNull();
+    const [group] = teamGroups(
+      input({
+        workers: workerList({
+          roles: [...roles],
+          workers: [workerProcess("web-lead", { model: null })],
+        }),
+      }),
+    );
+    expect(group?.rows[0]?.model).toBe("opus");
   });
 
   it("offers Stop to a live process and a pending stop while it stops", () => {
@@ -291,7 +316,7 @@ describe("teamGroups", () => {
     expect(web?.rows[0]?.bound).toEqual({ kind: "text", text: "2 tasks" });
     expect(web?.rows[1]).toMatchObject({
       role: "Task coder",
-      roleLine: "Task coder · cache 1h",
+      roleLine: "Task coder",
       asks: true,
       model: "-",
       bound: { kind: "ids", text: "T-12 · ws-7, T-13", batch: null },
