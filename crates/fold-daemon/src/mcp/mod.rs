@@ -138,6 +138,9 @@ impl FoldServer {
                 agents::stop_worker(self, as_worker.as_ref(), &arguments).await?
             }
             (agents::LIST_WORKERS, Some(_)) => agents::list_workers(self, &arguments).await?,
+            (agents::SET_WORKER_LIMITS, Some(_)) => {
+                agents::set_worker_limits(self, as_worker.as_ref(), &arguments).await?
+            }
             (agents::WRITE_HANDOFF, Some(_)) => {
                 agents::write_handoff(self, as_worker.as_ref(), &arguments).await?
             }

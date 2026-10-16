@@ -1,3 +1,4 @@
+use fold_core::roles::{WorkerLimits, WorkerLimitsChange};
 use fold_core::{
     AgentName, AreaName, FoldError, LabelName, ProposalId, Role, Tag, TaskId, WorkerName, codes,
 };
@@ -22,6 +23,7 @@ pub const DEFINE_AREA: &str = "define_area";
 pub const START_WORKER: &str = "start_worker";
 pub const STOP_WORKER: &str = "stop_worker";
 pub const LIST_WORKERS: &str = "list_workers";
+pub const SET_WORKER_LIMITS: &str = "set_worker_limits";
 pub const WRITE_HANDOFF: &str = "write_handoff";
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -77,6 +79,26 @@ pub struct StopWorkerInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct ListWorkersInput {
+    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
+    #[serde(rename = "as", default)]
+    pub as_worker: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct SetWorkerLimitsInput {
+    /// The most task coders that run at once, a whole number from 1 to 20. Leave it out to keep the limit.
+    #[serde(default)]
+    pub task_coder: Option<u64>,
+    /// The most batch reviewers that run at once, a whole number from 1 to 20. Leave it out to keep the limit.
+    #[serde(default)]
+    pub batch_reviewer: Option<u64>,
+    /// The most task coders that run at once in one area, a whole number from 1 to 20. Leave it out to keep the limit.
+    #[serde(default)]
+    pub max_per_area: Option<u64>,
+    /// True removes the limit of one area, so an area has no limit of its own. Do not combine it with max_per_area.
+    #[serde(default)]
+    pub clear_max_per_area: bool,
     /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
     #[serde(rename = "as", default)]
     pub as_worker: Option<String>,
@@ -142,6 +164,11 @@ pub fn tools() -> Vec<Tool> {
             LIST_WORKERS,
             "List the areas with their leads and every worker fold runs, with its role, state, bound tasks or proposals, turns, cost, context size and newest hand-off note.",
             schema_for_type::<ListWorkersInput>(),
+        ),
+        Tool::new(
+            SET_WORKER_LIMITS,
+            "As the main agent, change how many task coders and batch reviewers run at once, for example when the user asks for more or fewer agents. Each limit is a whole number from 1 to 20. The new limits apply to the next start; a running worker is never stopped by a lower limit. Say the new numbers back to the user.",
+            schema_for_type::<SetWorkerLimitsInput>(),
         ),
         Tool::new(
             WRITE_HANDOFF,
@@ -246,6 +273,35 @@ pub async fn stop_worker(
     Ok(json!({ "worker": worker_process_json(&worker) }))
 }
 
+fn limits_json(limits: WorkerLimits) -> Value {
+    json!({
+        "task_coder": limits.task_coder,
+        "batch_reviewer": limits.batch_reviewer,
+        "max_per_area": limits.max_per_area,
+    })
+}
+
+pub async fn set_worker_limits(
+    server: &FoldServer,
+    as_worker: Option<&WorkerName>,
+    arguments: &JsonObject,
+) -> Result<Value, FoldError> {
+    let input: SetWorkerLimitsInput = parse(arguments)?;
+    let change = WorkerLimitsChange::from_request(
+        input.task_coder,
+        input.batch_reviewer,
+        input.max_per_area,
+        input.clear_max_per_area,
+    )?;
+    let actor = server.actor(as_worker).await?;
+    let changed = server
+        .agents
+        .set_worker_limits(&actor, change)
+        .await
+        .map_err(from_agent)?;
+    Ok(json!({ "limits": limits_json(changed.new), "previous": limits_json(changed.old) }))
+}
+
 pub async fn list_workers(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
     let _: ListWorkersInput = parse(arguments)?;
     let areas = server.agents.list_areas().await.map_err(from_agent)?;
@@ -270,6 +326,7 @@ pub async fn list_workers(server: &FoldServer, arguments: &JsonObject) -> Result
     Ok(json!({
         "areas": areas.iter().map(area_json).collect::<Vec<_>>(),
         "workers": listed,
+        "limits": config.as_ref().map_or(Value::Null, |config| limits_json(config.workers.limits())),
     }))
 }
 

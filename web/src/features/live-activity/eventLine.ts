@@ -527,6 +527,10 @@ const SPECS: Record<EventType, Spec> = {
         : `defined ${area} over label ${label}`;
     },
   },
+  "workers.limits_changed": {
+    icon: Bot,
+    text: () => "changed the worker limits",
+  },
   "worker.started": { icon: Bot, text: startedText },
   "worker.stopped": { icon: Bot, text: (e) => `stopped ${workerOf(e)}` },
   "worker.failed": {

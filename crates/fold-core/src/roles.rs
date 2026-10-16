@@ -192,6 +192,107 @@ impl WorkerLimits {
     }
 }
 
+/// The most one worker limit can be set to.
+pub const MAX_WORKER_LIMIT: u64 = 20;
+
+/// What a change does to `max_per_area`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AreaLimitChange {
+    #[default]
+    Keep,
+    Set(u64),
+    Clear,
+}
+
+/// A request to change the `[workers]` limits: a limit left out stays as it is.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WorkerLimitsChange {
+    pub task_coder: Option<u64>,
+    pub batch_reviewer: Option<u64>,
+    pub max_per_area: AreaLimitChange,
+}
+
+impl WorkerLimitsChange {
+    /// The change a request asks for; a value together with a clear of the same limit is refused.
+    pub fn from_request(
+        task_coder: Option<u64>,
+        batch_reviewer: Option<u64>,
+        max_per_area: Option<u64>,
+        clear_max_per_area: bool,
+    ) -> Result<Self, FoldError> {
+        let max_per_area = match (max_per_area, clear_max_per_area) {
+            (Some(_), true) => {
+                return Err(FoldError::new(
+                    codes::INVALID_REQUEST,
+                    "max_per_area and clear_max_per_area cannot be combined",
+                )
+                .with_hint(
+                    "pass max_per_area to set the limit, or clear_max_per_area to remove it",
+                ));
+            }
+            (Some(limit), false) => AreaLimitChange::Set(limit),
+            (None, true) => AreaLimitChange::Clear,
+            (None, false) => AreaLimitChange::Keep,
+        };
+        Ok(Self {
+            task_coder,
+            batch_reviewer,
+            max_per_area,
+        })
+    }
+
+    /// Refuses a change that sets nothing and a value outside 1 to [`MAX_WORKER_LIMIT`].
+    pub fn check(&self) -> Result<(), FoldError> {
+        let area = match self.max_per_area {
+            AreaLimitChange::Set(value) => Some(value),
+            AreaLimitChange::Keep | AreaLimitChange::Clear => None,
+        };
+        if self.task_coder.is_none()
+            && self.batch_reviewer.is_none()
+            && self.max_per_area == AreaLimitChange::Keep
+        {
+            return Err(FoldError::new(
+                codes::INVALID_REQUEST,
+                "set_worker_limits needs at least one limit",
+            )
+            .with_hint("pass task_coder, batch_reviewer, max_per_area or clear_max_per_area"));
+        }
+        for (name, value) in [
+            ("task_coder", self.task_coder),
+            ("batch_reviewer", self.batch_reviewer),
+            ("max_per_area", area),
+        ] {
+            if let Some(value) = value
+                && !(1..=MAX_WORKER_LIMIT).contains(&value)
+            {
+                return Err(FoldError::new(
+                    codes::INVALID_REQUEST,
+                    format!("{name} must be a whole number from 1 to {MAX_WORKER_LIMIT}"),
+                )
+                .with_details([
+                    ("limit", serde_json::json!(name)),
+                    ("max", serde_json::json!(MAX_WORKER_LIMIT)),
+                ])
+                .with_hint(format!("pass {name} between 1 and {MAX_WORKER_LIMIT}")));
+            }
+        }
+        Ok(())
+    }
+
+    /// The limits after the change.
+    pub fn apply(&self, limits: WorkerLimits) -> WorkerLimits {
+        WorkerLimits {
+            task_coder: self.task_coder.unwrap_or(limits.task_coder),
+            batch_reviewer: self.batch_reviewer.unwrap_or(limits.batch_reviewer),
+            max_per_area: match self.max_per_area {
+                AreaLimitChange::Keep => limits.max_per_area,
+                AreaLimitChange::Set(value) => Some(value),
+                AreaLimitChange::Clear => None,
+            },
+        }
+    }
+}
+
 /// Refuses one more running worker of `role` when its role or its area is full. `running` counts the running workers of `role`, and `in_area` is the worker's area with the running workers of `role` in it, `None` for a worker without an area. A lead is never refused.
 pub fn check_limits(
     limits: WorkerLimits,
@@ -212,7 +313,7 @@ pub fn check_limits(
             ("max", serde_json::json!(max)),
         ])
         .with_hint(format!(
-            "the {role} limit is {max}: wait until a {role} stops, stop one with stop_worker, or raise [workers] {role} in .fold/config.toml"
+            "the {role} limit is {max}: wait until a {role} stops, stop one with stop_worker, or ask the main agent or a human to raise it with set_worker_limits"
         )));
     }
     if let Some(((area, count), max)) = in_area.zip(limits.max_per_area)
@@ -228,7 +329,7 @@ pub fn check_limits(
             ("max_per_area", serde_json::json!(max)),
         ])
         .with_hint(format!(
-            "the limit of area {area} is {max}: wait until a {role} of the area stops, stop one with stop_worker, or raise [workers] max_per_area in .fold/config.toml"
+            "the limit of area {area} is {max}: wait until a {role} of the area stops, stop one with stop_worker, or ask the main agent or a human to raise it with set_worker_limits"
         )));
     }
     Ok(())
@@ -340,6 +441,64 @@ mod tests {
     }
 
     #[test]
+    fn a_limits_change_takes_one_to_twenty_and_needs_a_limit() {
+        let set = |task_coder| WorkerLimitsChange {
+            task_coder: Some(task_coder),
+            ..WorkerLimitsChange::default()
+        };
+        assert!(set(1).check().is_ok());
+        assert!(set(MAX_WORKER_LIMIT).check().is_ok());
+        for bad in [0, MAX_WORKER_LIMIT + 1] {
+            assert_eq!(set(bad).check().unwrap_err().code(), codes::INVALID_REQUEST);
+        }
+        let area = WorkerLimitsChange {
+            max_per_area: AreaLimitChange::Set(21),
+            ..WorkerLimitsChange::default()
+        };
+        assert_eq!(area.check().unwrap_err().code(), codes::INVALID_REQUEST);
+        assert_eq!(
+            WorkerLimitsChange::default().check().unwrap_err().code(),
+            codes::INVALID_REQUEST
+        );
+        let clear = WorkerLimitsChange::from_request(None, None, None, true).unwrap();
+        assert!(clear.check().is_ok());
+        assert_eq!(
+            WorkerLimitsChange::from_request(None, None, Some(2), true)
+                .unwrap_err()
+                .code(),
+            codes::INVALID_REQUEST
+        );
+    }
+
+    #[test]
+    fn a_limits_change_keeps_what_it_leaves_out() {
+        let limits = WorkerLimits {
+            task_coder: 4,
+            batch_reviewer: 3,
+            max_per_area: Some(2),
+        };
+        let change = WorkerLimitsChange::from_request(Some(9), None, None, false).unwrap();
+        assert_eq!(
+            change.apply(limits),
+            WorkerLimits {
+                task_coder: 9,
+                ..limits
+            }
+        );
+        let change = WorkerLimitsChange::from_request(None, Some(5), None, true).unwrap();
+        assert_eq!(
+            change.apply(limits),
+            WorkerLimits {
+                batch_reviewer: 5,
+                max_per_area: None,
+                ..limits
+            }
+        );
+        let change = WorkerLimitsChange::from_request(None, None, Some(6), false).unwrap();
+        assert_eq!(change.apply(limits).max_per_area, Some(6));
+    }
+
+    #[test]
     fn roles_and_states_round_trip_their_names() {
         for role in Role::ALL {
             assert_eq!(Role::parse(role.as_str()), Some(role));
@@ -408,6 +567,7 @@ mod tests {
         );
         assert_eq!(full.details().unwrap()["max"], serde_json::json!(4));
         assert!(full.hint().unwrap().contains("task_coder limit is 4"));
+        assert!(full.hint().unwrap().contains("set_worker_limits"));
         assert!(check_limits(limits, Role::BatchReviewer, 2, None).is_ok());
         let reviewers = check_limits(limits, Role::BatchReviewer, 3, None).unwrap_err();
         assert!(
@@ -433,6 +593,7 @@ mod tests {
             serde_json::json!("web")
         );
         assert!(area_full.hint().unwrap().contains("limit of area web is 2"));
+        assert!(area_full.hint().unwrap().contains("set_worker_limits"));
     }
 
     #[test]

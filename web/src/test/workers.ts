@@ -34,7 +34,7 @@ export function workerProcess(
 }
 
 export function workerList(fields: Partial<WorkerList> = {}): WorkerList {
-  return { areas: [], workers: [], roles: [], ...fields };
+  return { areas: [], workers: [], roles: [], limits: null, ...fields };
 }
 
 export function permissionQuestion(

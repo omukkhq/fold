@@ -15,12 +15,14 @@ use serde_json::json;
 
 use super::{AgentError, AgentService, main_actor};
 use crate::services::events::EventBuffer;
-use crate::services::projects::{Lease, load_config};
+use crate::services::projects::load_config;
 
 mod handoff;
+mod limits;
 mod output;
 mod process;
 
+pub use limits::WorkerLimitsChanged;
 pub use process::{Launcher, RESTART_TURN, StopTimeouts, Supervisor};
 
 /// The name of fold's own server in a worker's MCP configuration and in a role's `mcp` list.
@@ -179,12 +181,7 @@ impl AgentService {
 
     /// The project's worker settings from `.fold/config.toml`, or its defaults when there is no file; `None` when the service knows no project folder or the file does not parse, so a list still answers.
     pub async fn worker_config(&self) -> Option<ProjectConfig> {
-        let paths = match (&self.workers, &self.lease) {
-            (Some(supervisor), _) => supervisor.paths(),
-            (None, Lease::Config(paths)) => paths,
-            (None, Lease::Minutes(_)) => return None,
-        };
-        load_config(paths).await.ok()
+        load_config(self.config_paths()?).await.ok()
     }
 
     pub async fn list_workers(&self) -> Result<Vec<WorkerProcessRow>, AgentError> {

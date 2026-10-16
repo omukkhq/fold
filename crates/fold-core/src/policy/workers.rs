@@ -59,6 +59,21 @@ pub fn can_define_area(starter: &Starter) -> Result<(), PolicyDenied> {
     }
 }
 
+/// The worker limits bound the whole project's processes, so the main agent or a named human changes them.
+pub fn can_set_worker_limits(starter: &Starter) -> Result<(), PolicyDenied> {
+    match starter {
+        Starter::Human | Starter::MainAgent => Ok(()),
+        Starter::Unsupervised => Err(not_the_main_agent(
+            "ask the main agent to call set_worker_limits",
+        )),
+        _ => Err(PolicyDenied {
+            code: codes::MAIN_AGENT_REQUIRED,
+            message: "only the main agent or a human can change the worker limits",
+            hint: "ask the main agent to call set_worker_limits",
+        }),
+    }
+}
+
 /// The main agent or a named human starts the leads; an area lead starts the task coders of its own area; the review lead starts the batch reviewers. A subagent worker, a short-lived worker and a lead of another kind start nothing.
 pub fn can_start_worker(starter: &Starter, role: Role) -> Result<(), PolicyDenied> {
     match (role, starter) {
@@ -217,6 +232,9 @@ mod tests {
         let denied = can_define_area(&Starter::Unsupervised).unwrap_err();
         assert_eq!(denied.code(), codes::ORCHESTRATOR_REQUIRED);
         assert!(denied.hint().contains("define_area"));
+        let denied = can_set_worker_limits(&Starter::Unsupervised).unwrap_err();
+        assert_eq!(denied.code(), codes::ORCHESTRATOR_REQUIRED);
+        assert!(denied.hint().contains("set_worker_limits"));
         for role in [Role::AreaLead, Role::ReviewLead] {
             let denied = can_start_worker(&Starter::Unsupervised, role).unwrap_err();
             assert_eq!(denied.code(), codes::ORCHESTRATOR_REQUIRED);
@@ -241,6 +259,7 @@ mod tests {
     fn only_the_main_agent_or_a_human_defines_areas_and_starts_leads() {
         for starter in [Starter::Human, Starter::MainAgent] {
             assert!(can_define_area(&starter).is_ok());
+            assert!(can_set_worker_limits(&starter).is_ok());
             assert!(can_start_worker(&starter, Role::AreaLead).is_ok());
             assert!(can_start_worker(&starter, Role::ReviewLead).is_ok());
             assert!(can_start_worker(&starter, Role::TaskCoder).is_err());
@@ -254,6 +273,10 @@ mod tests {
         ] {
             assert_eq!(
                 can_define_area(&starter).unwrap_err().code(),
+                codes::MAIN_AGENT_REQUIRED
+            );
+            assert_eq!(
+                can_set_worker_limits(&starter).unwrap_err().code(),
                 codes::MAIN_AGENT_REQUIRED
             );
             assert_eq!(

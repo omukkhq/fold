@@ -15,6 +15,7 @@ import {
 const DOMAINS = new Set([
   "agent",
   "worker",
+  "workers",
   "session",
   "task",
   "label",
@@ -340,6 +341,8 @@ function invalidationKeys(
         keys.workerQuestions(slug),
         keys.needsYou(slug),
       ];
+    case "workers":
+      return [keys.workers(slug)];
     case "label":
       return [board, keys.labels(slug), ...taskKey];
     case "task":

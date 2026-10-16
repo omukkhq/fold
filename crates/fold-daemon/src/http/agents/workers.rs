@@ -1,6 +1,7 @@
 use axum::Json;
 use axum::extract::Path;
 use axum::http::StatusCode;
+use fold_core::roles::{WorkerLimits, WorkerLimitsChange};
 use fold_core::{AgentName, AreaName, FoldError, LabelName, ProjectConfig, Role};
 use fold_store::agents::{AreaRow, WorkerProcessRow};
 use serde::{Deserialize, Serialize};
@@ -19,6 +20,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(list_workers, start_worker))
         .routes(routes!(stop_worker))
         .routes(routes!(define_area))
+        .routes(routes!(set_worker_limits))
 }
 
 /// The areas and every worker fold runs or ran.
@@ -30,6 +32,50 @@ pub struct WorkerList {
     pub workers: Vec<WorkerEntry>,
     /// Each role with the cache time a new worker of the role gets; empty when fold cannot read `.fold/config.toml`.
     pub roles: Vec<RoleEntry>,
+    /// The current worker limits; null when fold cannot read `.fold/config.toml`.
+    #[schema(required = true)]
+    pub limits: Option<LimitsEntry>,
+}
+
+/// The `[workers]` limits: how many short-lived workers run at once.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct LimitsEntry {
+    /// The most task coders that run at once.
+    #[schema(example = 4)]
+    pub task_coder: u64,
+    /// The most batch reviewers that run at once.
+    #[schema(example = 3)]
+    pub batch_reviewer: u64,
+    /// The most task coders that run at once in one area; null when an area has no limit of its own.
+    #[schema(required = true, example = 2)]
+    pub max_per_area: Option<u64>,
+}
+
+impl From<WorkerLimits> for LimitsEntry {
+    fn from(limits: WorkerLimits) -> Self {
+        Self {
+            task_coder: limits.task_coder,
+            batch_reviewer: limits.batch_reviewer,
+            max_per_area: limits.max_per_area,
+        }
+    }
+}
+
+/// A change of the worker limits; a limit left out stays as it is.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SetWorkerLimitsBody {
+    /// A whole number from 1 to 20.
+    #[serde(default)]
+    pub task_coder: Option<u64>,
+    /// A whole number from 1 to 20.
+    #[serde(default)]
+    pub batch_reviewer: Option<u64>,
+    /// A whole number from 1 to 20.
+    #[serde(default)]
+    pub max_per_area: Option<u64>,
+    /// True removes the limit of one area.
+    #[serde(default)]
+    pub clear_max_per_area: bool,
 }
 
 /// A worker role's settings from `.fold/config.toml`.
@@ -263,6 +309,7 @@ pub async fn list_workers(project: Project) -> Result<Json<WorkerList>, ApiError
             .map(|row| WorkerEntry::new(row, config.as_ref()))
             .collect(),
         roles,
+        limits: config.as_ref().map(|config| config.workers.limits().into()),
     }))
 }
 
@@ -376,6 +423,42 @@ pub async fn define_area(
         .define_area(&human.actor(), &name, &label)
         .await?;
     Ok((StatusCode::CREATED, Json(area.into())))
+}
+
+/// A named human changes the worker limits. The new limits apply to the next start; running workers keep running.
+#[utoipa::path(
+    patch,
+    path = "/api/v1/projects/{slug}/worker-limits",
+    operation_id = "set_worker_limits",
+    params(("slug" = String, Path, description = "The project slug")),
+    request_body = SetWorkerLimitsBody,
+    responses(
+        (status = 200, description = "The limits after the change", body = LimitsEntry),
+        (status = 400, description = "`invalid_request`: no limit, or a limit outside 1 to 20", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
+        (status = 404, description = "`project_not_found`", body = ErrorEnvelope),
+        (status = 409, description = "`invalid_config`", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn set_worker_limits(
+    human: Human,
+    project: Project,
+    ApiJson(body): ApiJson<SetWorkerLimitsBody>,
+) -> Result<Json<LimitsEntry>, ApiError> {
+    let change = fold(WorkerLimitsChange::from_request(
+        body.task_coder,
+        body.batch_reviewer,
+        body.max_per_area,
+        body.clear_max_per_area,
+    ))?;
+    let changed = project
+        .0
+        .agents()
+        .set_worker_limits(&human.actor(), change)
+        .await?;
+    Ok(Json(changed.new.into()))
 }
 
 #[cfg(test)]

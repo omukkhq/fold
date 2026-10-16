@@ -81,7 +81,7 @@ export function startFailure(error: unknown, values: StartLeadValues): Failure {
     case "worker_limit_reached":
       return {
         code,
-        text: "fold runs as many workers as the project allows. Stop one first, or raise the limit in .fold/config.toml.",
+        text: "fold runs as many workers as the project allows. Stop one first, or ask the main agent to raise the limit.",
       };
     case "area_not_found":
       return { code, text: `The project has no area named ${area}.` };

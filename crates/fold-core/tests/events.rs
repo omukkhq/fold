@@ -95,6 +95,7 @@ fn all_equals_the_plans_event_types() {
         "worker.resumed",
         "worker.permission_asked",
         "worker.permission_answered",
+        "workers.limits_changed",
     ]);
     assert_eq!(declared, expected);
 }

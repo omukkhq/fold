@@ -214,6 +214,7 @@ describe("eventLine", () => {
       "defined web over label ui",
     );
     expect(line("area.defined")).toBe("defined an area");
+    expect(line("workers.limits_changed")).toBe("changed the worker limits");
     expect(
       line("worker.started", { agent: "web-coder", role: "task_coder" }),
     ).toBe("started web-coder as task coder");

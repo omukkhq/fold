@@ -38,7 +38,9 @@ pub use overview::{
 };
 pub use presence::SeenPresence;
 pub(crate) use workers::code_of;
-pub use workers::{FOLD_SERVER, Launcher, RESTART_TURN, StartWorker, StopTimeouts, Supervisor};
+pub use workers::{
+    FOLD_SERVER, Launcher, RESTART_TURN, StartWorker, StopTimeouts, Supervisor, WorkerLimitsChanged,
+};
 
 #[derive(Debug, Error)]
 pub enum AgentError {

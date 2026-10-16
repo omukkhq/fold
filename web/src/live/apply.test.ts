@@ -557,6 +557,11 @@ describe("invalidation rules", () => {
     }
   });
 
+  it("refreshes the workers for a change of the worker limits", () => {
+    applyEvent(client, slug, ev("workers.limits_changed"));
+    expect(hit(keys.workers(slug))).toBe(true);
+  });
+
   it("refreshes the needs-you list for the events that change it", () => {
     const cases: [string, Record<string, unknown>][] = [
       ["message.sent", {}],
