@@ -16,6 +16,7 @@ use super::Project;
 use super::actor::Human;
 use super::error::{ApiError, ApiJson, ErrorEnvelope};
 use super::events::DurableEventType;
+use super::reviews::ReviewVerdict;
 use crate::daemon::AppState;
 use crate::services::tasks::{self as service, ItemContent};
 
@@ -469,27 +470,6 @@ pub struct TaskChangeset {
     pub message: String,
     /// UTC milliseconds.
     pub created_at: i64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ReviewVerdict {
-    Comment,
-    RequestChanges,
-    Approve,
-    Reject,
-}
-
-impl From<fold_core::reviews::Verdict> for ReviewVerdict {
-    fn from(verdict: fold_core::reviews::Verdict) -> Self {
-        use fold_core::reviews::Verdict as V;
-        match verdict {
-            V::Comment => Self::Comment,
-            V::RequestChanges => Self::RequestChanges,
-            V::Approve => Self::Approve,
-            V::Reject => Self::Reject,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]

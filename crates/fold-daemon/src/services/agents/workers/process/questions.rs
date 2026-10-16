@@ -1,9 +1,12 @@
 use fold_core::events::types;
-use fold_core::messages::chosen_answer;
+use fold_core::messages::{
+    MAX_CHOICE_DESCRIPTION_LEN, MAX_QUESTION_HEADER_LEN, chosen_answer, short_line,
+};
 use fold_core::roles::{PermissionBehavior, ask_answer_turn, permission_answer_turn};
 use fold_core::{
-    Actor, AgentName, Event, EventActor, FoldError, HumanName, IdKind, MessageBody, MessageChoices,
-    MessageId, NewEvent, PermissionQuestionId, WorkerName, WorkerState, codes, policy,
+    Actor, AgentName, Choice, Event, EventActor, FoldError, HumanName, IdKind, MessageBody,
+    MessageChoices, MessageId, NewEvent, PermissionQuestionId, WorkerName, WorkerState, codes,
+    policy,
 };
 use fold_store::agents::{self, NewQuestion, QuestionKind, QuestionRow};
 use fold_store::{StoreError, counters, messages, projects};
@@ -245,14 +248,25 @@ impl Supervisor {
         let humans = projects::list_humans(registry.read()).await?;
         let mut bodies = Vec::with_capacity(asked.questions.len());
         for question in &asked.questions {
-            let labels: Vec<&str> = question
+            // A description or header that fold would refuse is left out, so the question keeps its options.
+            let options: Vec<Choice> = question
                 .options
                 .iter()
-                .map(|option| option.label.as_str())
+                .map(|option| Choice {
+                    label: option.label.clone(),
+                    description: option
+                        .description
+                        .as_deref()
+                        .and_then(|text| short_line(text, MAX_CHOICE_DESCRIPTION_LEN)),
+                })
                 .collect();
+            let header = question
+                .header
+                .as_deref()
+                .and_then(|text| short_line(text, MAX_QUESTION_HEADER_LEN));
             bodies.push((
                 MessageBody::parse(question.question.clone())?,
-                MessageChoices::parse(&labels).ok(),
+                MessageChoices::parse(&options, header.as_deref()).ok(),
             ));
         }
         let worker = WorkerName::main(&process.agent);

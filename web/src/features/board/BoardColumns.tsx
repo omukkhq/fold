@@ -136,9 +136,7 @@ export function EmptyColumns({ slug }: { slug: string }) {
               title="No tasks yet"
               action={
                 <>
-                  <Mono className="block whitespace-pre-wrap text-meta text-text">
-                    {"FOLD_AGENT=frontend \\\n  claude --name frontend"}
-                  </Mono>
+                  <Mono className="block text-code text-text">fld claude</Mono>
                   <HrefLink
                     href={newTaskPath(slug)}
                     className={cn(
@@ -157,8 +155,8 @@ export function EmptyColumns({ slug }: { slug: string }) {
                 </>
               }
             >
-              Give an orchestrator a goal; it creates the tasks here. You can
-              also add one yourself.
+              Run the command below, then give the main agent a goal. It creates
+              the tasks here. You can also add one yourself.
             </EmptyPanel>
           ) : null}
         </Column>

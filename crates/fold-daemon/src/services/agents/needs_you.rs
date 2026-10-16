@@ -1,7 +1,7 @@
 use fold_core::requests::{RequestState, Requester};
 use fold_core::{
-    AgentName, HumanName, MessageId, PermissionQuestionId, ProposalId, RequestId, Sender, TaskId,
-    Timestamp,
+    AgentName, Choice, HumanName, MessageId, PermissionQuestionId, ProposalId, RequestId, Sender,
+    TaskId, Timestamp,
 };
 use fold_store::agents::{self, QuestionKind};
 use fold_store::tasks::requests::{self, RequestFilter};
@@ -59,7 +59,9 @@ pub struct NeedsYouItem {
     pub request: Option<RequestId>,
     /// The human a human review or a request draft waits for; `None` when any human may answer.
     pub human: Option<HumanName>,
-    pub choices: Vec<String>,
+    pub choices: Vec<Choice>,
+    /// The short header of a `Question`.
+    pub header: Option<String>,
 }
 
 impl NeedsYouItem {
@@ -76,6 +78,7 @@ impl NeedsYouItem {
             request: None,
             human: None,
             choices: Vec::new(),
+            header: None,
         }
     }
 }
@@ -101,6 +104,7 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
         item.proposal = row.proposal;
         item.request = row.request;
         item.choices = row.choices;
+        item.header = row.header;
         items.push(item);
     }
     for question in agents::open_questions(&mut *conn).await? {

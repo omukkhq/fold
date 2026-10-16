@@ -30,7 +30,7 @@ Addresses for `send_message(to[], body, task?, proposal?, request?, reply_to?, c
 - `humans` is every human.
 - `all` is every agent.
 
-To ask a human to choose, send the question to `humans` or `human:<name>` with 2 to 6 short options in `choices`. The human answers with a reply that names one option, or with free text.
+To ask a human to choose, send the question to `humans` or `human:<name>` with 2 to 6 options in `choices`. Each option is a short label, or `{label, description}` with one line that says what the option means; the human sees the description under the label. The human answers with a reply that names one label, or with free text.
 
 To answer a message, pass its id as `reply_to`: the reply joins its thread. `get_inbox` lists your unread messages, `get_thread(thread)` shows one conversation, and `get_thread(request)` shows the clarification thread of a request. Call `acknowledge_message(id, up_to?)` when you have read a message. With `up_to` true it acknowledges every message up to `id`.
 

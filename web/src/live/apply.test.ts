@@ -297,20 +297,18 @@ describe("patch rules", () => {
     expect(invalidated).toEqual([]);
   });
 
-  it("changes no cached query for a worker_output frame", () => {
+  it("records a worker_output frame as the worker's latest step and refetches nothing", () => {
     const agents = [{ name: "web-coder", presence: "idle", tags: [] }];
     client.setQueryData(keys.agents(slug), agents);
-    applyEvent(
-      client,
-      slug,
-      guarded({
-        kind: "worker_output",
-        agent: "web-coder",
-        step: "text",
-        tool: null,
-        text_length: 8,
-      }),
-    );
+    const frame = (agent: string, step: string, tool: string | null) =>
+      guarded({ kind: "worker_output", agent, step, tool, text_length: null });
+    applyEvent(client, slug, frame("web-coder", "text", null));
+    applyEvent(client, slug, frame("web-lead", "tool_use", "Agent"));
+    applyEvent(client, slug, frame("web-coder", "tool_use", "Edit"));
+    expect(client.getQueryData(keys.workerSteps(slug))).toEqual({
+      "web-coder": { step: "tool_use", tool: "Edit" },
+      "web-lead": { step: "tool_use", tool: "Agent" },
+    });
     expect(client.getQueryData(keys.agents(slug))).toBe(agents);
     expect(invalidated).toEqual([]);
   });
@@ -547,6 +545,50 @@ describe("invalidation rules", () => {
     expect(hit(keys.agents(slug))).toBe(true);
   });
 
+  it("refreshes the workers, their questions and the needs-you list for worker events", () => {
+    applyEvent(client, slug, ev("worker.permission_asked"));
+    for (const key of [
+      keys.agents(slug),
+      keys.workers(slug),
+      keys.workerQuestions(slug),
+      keys.needsYou(slug),
+    ]) {
+      expect(hit(key)).toBe(true);
+    }
+  });
+
+  it("refreshes the needs-you list for the events that change it", () => {
+    const cases: [string, Record<string, unknown>][] = [
+      ["message.sent", {}],
+      ["review.submitted", { proposal: "P-3" }],
+      ["task.human_review_set", { task: "T-3" }],
+      ["proposal.opened", { proposal: "P-3" }],
+      ["request.draft_submitted", { data: { request: "RQ-4" } }],
+      ["request.approved", { data: { request: "RQ-4", tasks: [] } }],
+    ];
+    for (const [type, extra] of cases) {
+      invalidated = [];
+      applyEvent(client, slug, ev(type, extra));
+      expect(hit(keys.needsYou(slug)), type).toBe(true);
+    }
+    invalidated = [];
+    applyEvent(client, slug, ev("task.updated", { task: "T-3" }));
+    expect(hit(keys.needsYou(slug))).toBe(false);
+  });
+
+  it("refreshes the batches for batch, proposal and review events", () => {
+    applyEvent(client, slug, ev("review.batch_created", { proposal: "P-3" }));
+    expect(hit(keys.reviewBatches(slug))).toBe(true);
+    expect(hit(keys.workers(slug))).toBe(true);
+    expect(hit(keys.proposal(slug, "P-3"))).toBe(true);
+    expect(hit(keys.board(slug))).toBe(false);
+    for (const type of ["review.submitted", "proposal.version_added"]) {
+      invalidated = [];
+      applyEvent(client, slug, ev(type));
+      expect(hit(keys.reviewBatches(slug)), type).toBe(true);
+    }
+  });
+
   it("covers the remaining domains", () => {
     const cases: [string, readonly unknown[]][] = [
       ["agent.registered", keys.agents(slug)],
@@ -681,13 +723,14 @@ describe("invalidateProject", () => {
       observe(keys.board(slug)),
       observe(keys.task(slug, "T-1")),
       observe(keys.workspaceLive(slug, "ws-1")),
+      observe(keys.workerSteps(slug)),
       observe(keys.board("other")),
       observe(keys.projects()),
     ];
     await vi.waitFor(() => {
       expect(client.isFetching()).toBe(0);
     });
-    expect(fetched).toHaveLength(5);
+    expect(fetched).toHaveLength(6);
     fetched.length = 0;
     invalidateProject(client, slug);
     await vi.waitFor(() => {

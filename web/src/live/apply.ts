@@ -9,6 +9,7 @@ import {
   type LiveWorkspace,
   type PresenceChanged,
   type StoredEvent,
+  type WorkerOutput,
 } from "./envelope";
 
 const DOMAINS = new Set([
@@ -330,12 +331,21 @@ function invalidationKeys(
 
   switch (domain) {
     case "agent":
-    case "worker":
     case "session":
       return [keys.agents(slug)];
+    case "worker":
+      return [
+        keys.agents(slug),
+        keys.workers(slug),
+        keys.workerQuestions(slug),
+        keys.needsYou(slug),
+      ];
     case "label":
       return [board, keys.labels(slug), ...taskKey];
     case "task":
+      return type.startsWith("task.human_review_")
+        ? [board, ...taskKey, keys.needsYou(slug)]
+        : [board, ...taskKey];
     case "dependency":
     case "checklist":
       return [board, ...taskKey];
@@ -354,11 +364,26 @@ function invalidationKeys(
     case "changeset":
       return [keys.workspaces(slug), ...workspaceKey, ...taskKey];
     case "proposal":
-      return type === "proposal.integrated"
-        ? [keys.proposals(slug), ...proposalKey, ...taskKey, repository, board]
-        : [keys.proposals(slug), ...proposalKey, ...taskKey, board];
+      return [
+        keys.proposals(slug),
+        ...proposalKey,
+        ...taskKey,
+        board,
+        keys.reviewBatches(slug),
+        keys.needsYou(slug),
+        ...(type === "proposal.integrated" ? [repository] : []),
+      ];
     case "review":
-      return [keys.proposals(slug), ...proposalKey, ...taskKey, board];
+      return type.startsWith("review.batch_")
+        ? [keys.reviewBatches(slug), keys.workers(slug), ...proposalKey]
+        : [
+            keys.proposals(slug),
+            ...proposalKey,
+            ...taskKey,
+            board,
+            keys.reviewBatches(slug),
+            keys.needsYou(slug),
+          ];
     case "integration":
       return [
         ...(proposal === null ? [] : [keys.proposals(slug), ...proposalKey]),
@@ -382,10 +407,11 @@ function invalidationKeys(
             ...requestKey,
             board,
             ...createdTasks(event).map((t) => keys.task(slug, t)),
+            keys.needsYou(slug),
           ]
-        : [keys.requests(slug), ...requestKey];
+        : [keys.requests(slug), ...requestKey, keys.needsYou(slug)];
     default:
-      return [keys.messages(slug), board, ...requestKey];
+      return [keys.messages(slug), board, ...requestKey, keys.needsYou(slug)];
   }
 }
 
@@ -430,17 +456,37 @@ function applyPresence(
   }
 }
 
-/** Refetches every observed query of the project after stored events went missing. Live workspace state comes only from the stream, so it is left for the next snapshot. */
+const STREAM_ONLY = new Set<unknown>([
+  keys.workspaceLiveAll("")[1],
+  keys.endedWorkspaces("")[1],
+  keys.workerSteps("")[1],
+]);
+
+/** Refetches every observed query of the project after stored events went missing. Live workspace state and worker steps come only from the stream, so they are left for the next frames. */
 export function invalidateProject(
   queryClient: QueryClient,
   slug: string,
 ): void {
   void queryClient.invalidateQueries({
     queryKey: [slug],
-    predicate: (query) =>
-      query.queryKey[1] !== keys.workspaceLiveAll(slug)[1] &&
-      query.queryKey[1] !== keys.endedWorkspaces(slug)[1],
+    predicate: (query) => !STREAM_ONLY.has(query.queryKey[1]),
   });
+}
+
+/** The latest step of each worker, by agent name, as the live `worker.output` frames report it. */
+export type WorkerSteps = Readonly<
+  Record<string, Pick<WorkerOutput, "step" | "tool">>
+>;
+
+function applyWorkerOutput(
+  queryClient: QueryClient,
+  slug: string,
+  frame: WorkerOutput,
+): void {
+  queryClient.setQueryData<WorkerSteps>(keys.workerSteps(slug), (old) => ({
+    ...old,
+    [frame.agent]: { step: frame.step, tool: frame.tool },
+  }));
 }
 
 /** A malformed patch falls through to the invalidation of its domain. */
@@ -506,7 +552,7 @@ export function applyEvent(
     return;
   }
   if (event.kind === "worker_output") {
-    // No cached query holds a worker's steps; the stored worker events refresh the agents.
+    applyWorkerOutput(queryClient, slug, event);
     return;
   }
   const durable: DurableEvent = {

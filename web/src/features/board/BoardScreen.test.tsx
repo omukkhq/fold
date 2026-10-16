@@ -332,7 +332,7 @@ describe("BoardScreen", () => {
     expect(client.getQueryState(keys.board("demo"))?.isInvalidated).toBe(false);
   });
 
-  it("filters by blocked and Needs you, and the URL carries the filter", async () => {
+  it("filters by blocked and Attention, and the URL carries the filter", async () => {
     const { router } = setup();
     await screen.findByRole("region", { name: "Backlog" });
     await userEvent.click(screen.getByRole("button", { name: "Blocked only" }));
@@ -343,7 +343,7 @@ describe("BoardScreen", () => {
     await userEvent.click(screen.getByRole("button", { name: "Blocked only" }));
     expect(router.state.location.search).toEqual({});
 
-    await userEvent.click(screen.getByRole("button", { name: /^Needs you/ }));
+    await userEvent.click(screen.getByRole("button", { name: /^Attention/ }));
     expect(router.state.location.search).toEqual({ needs: true });
     expect(tasksIn("Todo")).toEqual(["T-6"]);
     expect(tasksIn("Review")).toEqual(["T-3"]);
@@ -403,16 +403,16 @@ describe("BoardScreen", () => {
     setup(boardView([]));
     const panel = await screen.findByRole("region", { name: "No tasks yet" });
     expect(within(column("Todo")).getByText("No tasks yet")).toBeTruthy();
-    expect(panel.textContent).toContain("claude --name frontend");
+    expect(panel.textContent).toContain("fld claude");
     expect(screen.getByText("0 tasks")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Needs you · 0" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Attention · 0" })).toBeTruthy();
   });
 
   it("shows skeleton columns while the board loads", async () => {
     setup(null);
     await screen.findByText("Loading the board…");
-    expect(screen.getByRole("button", { name: /^Needs you/ }).textContent).toBe(
-      "Needs you–",
+    expect(screen.getByRole("button", { name: /^Attention/ }).textContent).toBe(
+      "Attention–",
     );
     expect(screen.getAllByRole("status", { name: "Loading" })).toHaveLength(15);
     expect(within(column("Done")).getByText("–")).toBeTruthy();

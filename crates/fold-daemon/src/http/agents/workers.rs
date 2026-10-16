@@ -1,7 +1,7 @@
 use axum::Json;
 use axum::extract::Path;
 use axum::http::StatusCode;
-use fold_core::{AgentName, AreaName, FoldError, LabelName, Role};
+use fold_core::{AgentName, AreaName, FoldError, LabelName, ProjectConfig, Role};
 use fold_store::agents::{AreaRow, WorkerProcessRow};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -28,6 +28,17 @@ pub struct WorkerList {
     pub areas: Vec<AreaEntry>,
     /// In start order.
     pub workers: Vec<WorkerEntry>,
+    /// Each role with the cache time a new worker of the role gets; empty when fold cannot read `.fold/config.toml`.
+    pub roles: Vec<RoleEntry>,
+}
+
+/// A worker role's settings from `.fold/config.toml`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RoleEntry {
+    pub role: WorkerRole,
+    /// The prompt cache time of the role's workers, `1h` or `5m`.
+    #[schema(example = "1h")]
+    pub cache_ttl: String,
 }
 
 /// A part of the project that one area lead owns through one task label.
@@ -101,7 +112,10 @@ impl From<fold_core::WorkerState> for WorkerProcessState {
 }
 
 /// One worker agent and its supervised Claude Code process. The totals add up over every process of the worker.
+///
+/// The agents route has its own `WorkerEntry`, so the schema takes another name: two schemas of one name leave only one in the OpenAPI document.
 #[derive(Debug, Serialize, ToSchema)]
+#[schema(as = WorkerProcessEntry)]
 pub struct WorkerEntry {
     /// The worker's agent name.
     #[schema(example = "web-coder")]
@@ -137,10 +151,14 @@ pub struct WorkerEntry {
     /// The exit code of the last process; a signal counts as 128 plus its number.
     #[schema(required = true)]
     pub exit_code: Option<i64>,
+    /// The prompt cache time of the worker's role from `.fold/config.toml`, `1h` or `5m`; null when fold cannot read the file.
+    #[schema(required = true, example = "5m")]
+    pub cache_ttl: Option<String>,
 }
 
-impl From<WorkerProcessRow> for WorkerEntry {
-    fn from(row: WorkerProcessRow) -> Self {
+impl WorkerEntry {
+    fn new(row: WorkerProcessRow, config: Option<&ProjectConfig>) -> Self {
+        let cache_ttl = config.map(|config| config.role(row.role).cache_ttl.as_str().to_owned());
         Self {
             name: row.agent.to_string(),
             role: row.role.into(),
@@ -158,6 +176,7 @@ impl From<WorkerProcessRow> for WorkerEntry {
             cache_write_tokens: row.cache_write_tokens,
             context_tokens: row.context_tokens,
             exit_code: row.exit_code,
+            cache_ttl,
         }
     }
 }
@@ -220,9 +239,23 @@ pub async fn list_workers(project: Project) -> Result<Json<WorkerList>, ApiError
     let agents = project.0.agents();
     let areas = agents.list_areas().await?;
     let workers = agents.list_workers().await?;
+    let config = agents.worker_config().await;
+    let roles = config.as_ref().map_or_else(Vec::new, |config| {
+        Role::ALL
+            .into_iter()
+            .map(|role| RoleEntry {
+                role: role.into(),
+                cache_ttl: config.role(role).cache_ttl.as_str().to_owned(),
+            })
+            .collect()
+    });
     Ok(Json(WorkerList {
         areas: areas.into_iter().map(AreaEntry::from).collect(),
-        workers: workers.into_iter().map(WorkerEntry::from).collect(),
+        workers: workers
+            .into_iter()
+            .map(|row| WorkerEntry::new(row, config.as_ref()))
+            .collect(),
+        roles,
     }))
 }
 
@@ -267,12 +300,13 @@ pub async fn start_worker(
         instructions: body.instructions,
         ..StartWorker::default()
     };
-    let worker = project
-        .0
-        .agents()
-        .start_worker(&human.actor(), request)
-        .await?;
-    Ok((StatusCode::CREATED, Json(worker.into())))
+    let agents = project.0.agents();
+    let worker = agents.start_worker(&human.actor(), request).await?;
+    let config = agents.worker_config().await;
+    Ok((
+        StatusCode::CREATED,
+        Json(WorkerEntry::new(worker, config.as_ref())),
+    ))
 }
 
 /// A named human stops a worker. Its turn is interrupted and its process ends; it keeps its session.
@@ -299,12 +333,10 @@ pub async fn stop_worker(
     Path((_slug, name)): Path<(String, String)>,
 ) -> Result<Json<WorkerEntry>, ApiError> {
     let name = fold(AgentName::parse(&name))?;
-    let worker = project
-        .0
-        .agents()
-        .stop_worker(&human.actor(), &name)
-        .await?;
-    Ok(Json(worker.into()))
+    let agents = project.0.agents();
+    let worker = agents.stop_worker(&human.actor(), &name).await?;
+    let config = agents.worker_config().await;
+    Ok(Json(WorkerEntry::new(worker, config.as_ref())))
 }
 
 /// A named human defines an area over the tasks of one label.

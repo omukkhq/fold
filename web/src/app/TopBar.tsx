@@ -1,4 +1,5 @@
 import { AgentChips } from "./AgentChips";
+import { NeedsYou } from "./NeedsYou";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 import { StreamStatus } from "./StreamStatus";
 import { ThemeToggle } from "./ThemeToggle";
@@ -13,6 +14,7 @@ export function TopBar({ slug }: { slug: string }) {
       </div>
       <div className="flex items-center gap-16">
         <StreamStatus />
+        <NeedsYou slug={slug} />
         <AgentChips slug={slug} />
         <ThemeToggle />
       </div>

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO message_question_headers (message_id, header)\n             VALUES ((SELECT id FROM messages WHERE number = ?1), ?2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "071c7c8726c34b6f9e8c9f7dd1b54ebdbf3e3c117965ac751e1fa68262440afd"
+}

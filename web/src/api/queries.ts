@@ -7,7 +7,9 @@ import { countAwaitingHuman, listThreads } from "./messages";
 import { getProject, listProjects } from "./projects";
 import { getProposal, listComments, listProposals } from "./proposals";
 import { getRequest, getThread, listRequests } from "./requests";
+import { getReviewBatch, listReviewBatches } from "./reviews";
 import { getSession } from "./session";
+import { listNeedsYou, listWorkerQuestions, listWorkers } from "./workers";
 import { getWorkspace } from "./workspaces";
 
 export const projectsQuery = () =>
@@ -120,5 +122,40 @@ export const requestThreadQuery = (slug: string, id: string, thread: string) =>
   queryOptions({
     queryKey: keys.requestThread(slug, id, thread),
     queryFn: () => getThread(slug, thread),
+    staleTime: Infinity,
+  });
+
+export const workersQuery = (slug: string) =>
+  queryOptions({
+    queryKey: keys.workers(slug),
+    queryFn: () => listWorkers(slug),
+    staleTime: Infinity,
+  });
+
+export const workerQuestionsQuery = (slug: string) =>
+  queryOptions({
+    queryKey: keys.workerQuestions(slug),
+    queryFn: () => listWorkerQuestions(slug),
+    staleTime: Infinity,
+  });
+
+export const needsYouQuery = (slug: string) =>
+  queryOptions({
+    queryKey: keys.needsYou(slug),
+    queryFn: () => listNeedsYou(slug),
+    staleTime: Infinity,
+  });
+
+export const reviewBatchesQuery = (slug: string) =>
+  queryOptions({
+    queryKey: keys.reviewBatches(slug),
+    queryFn: () => listReviewBatches(slug),
+    staleTime: Infinity,
+  });
+
+export const reviewBatchQuery = (slug: string, id: string) =>
+  queryOptions({
+    queryKey: keys.reviewBatch(slug, id),
+    queryFn: () => getReviewBatch(slug, id),
     staleTime: Infinity,
   });

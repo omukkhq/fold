@@ -1,8 +1,8 @@
 use std::collections::{BTreeSet, HashMap};
 
 use fold_core::{
-    AddressedAs, AgentName, Directory, DirectoryAgent, HumanName, MessageId, ProposalId, Recipient,
-    RequestId, Sender, Tag, Target, TaskId, Timestamp, WorkerName,
+    AddressedAs, AgentName, Choice, Directory, DirectoryAgent, HumanName, MessageId, ProposalId,
+    Recipient, RequestId, Sender, Tag, Target, TaskId, Timestamp, WorkerName,
 };
 use sqlx::{SqliteConnection, SqliteExecutor};
 
@@ -58,7 +58,9 @@ pub struct MessageRow {
     pub created_at: Timestamp,
     pub recipients: Vec<RecipientRow>,
     /// The options of a multiple-choice question, in order; empty for any other message.
-    pub choices: Vec<String>,
+    pub choices: Vec<Choice>,
+    /// The short header of a multiple-choice question.
+    pub header: Option<String>,
 }
 
 /// Inserts the message. A sender worker, task or proposal that does not exist leaves its column empty, which the sender check or the caller's earlier lookup refuses.
@@ -106,20 +108,33 @@ pub async fn insert(tx: &mut WriteTx, message: &NewMessage<'_>) -> Result<(), St
     Ok(())
 }
 
-/// Stores the options of a question message, in their order.
+/// Stores the options of a question message, in their order, and its header.
 pub async fn insert_choices(
     tx: &mut WriteTx,
     message: MessageId,
-    labels: &[String],
+    options: &[Choice],
+    header: Option<&str>,
 ) -> Result<(), StoreError> {
     let number = message.to_db();
-    for (position, label) in (1_i64..).zip(labels) {
+    for (position, option) in (1_i64..).zip(options) {
+        let description = option.description.as_deref();
         sqlx::query!(
-            "INSERT INTO message_choices (message_id, position, label)
-             VALUES ((SELECT id FROM messages WHERE number = ?1), ?2, ?3)",
+            "INSERT INTO message_choices (message_id, position, label, description)
+             VALUES ((SELECT id FROM messages WHERE number = ?1), ?2, ?3, ?4)",
             number,
             position,
-            label
+            option.label,
+            description
+        )
+        .execute(tx.conn())
+        .await?;
+    }
+    if let Some(header) = header {
+        sqlx::query!(
+            "INSERT INTO message_question_headers (message_id, header)
+             VALUES ((SELECT id FROM messages WHERE number = ?1), ?2)",
+            number,
+            header
         )
         .execute(tx.conn())
         .await?;
@@ -350,7 +365,7 @@ pub async fn inbox(
     let choices = choices_of(conn, &numbers).await?;
     rows.into_iter()
         .map(|row| {
-            let labels = choices.get(&row.number).cloned().unwrap_or_default();
+            let asked = choices.get(&row.number).cloned().unwrap_or_default();
             let message = RawMessage {
                 number: row.number,
                 thread_id: row.thread_id,
@@ -364,7 +379,7 @@ pub async fn inbox(
                 body: row.body,
                 created_at: row.created_at,
             }
-            .into_row(Vec::new(), labels)?;
+            .into_row(Vec::new(), asked)?;
             Ok(InboxRow {
                 row: row.row,
                 worker: WorkerName::parse(&row.recipient)
@@ -666,7 +681,7 @@ impl RawMessage {
     fn into_row(
         self,
         recipients: Vec<RecipientRow>,
-        choices: Vec<String>,
+        asked: Asked,
     ) -> Result<MessageRow, StoreError> {
         let sender = match (self.sender_kind.as_str(), self.worker, self.sender_human) {
             ("worker", Some(worker), None) => Sender::Worker(
@@ -693,7 +708,8 @@ impl RawMessage {
             body: self.body,
             created_at: time(self.created_at, "messages.created_at")?,
             recipients,
-            choices,
+            choices: asked.choices,
+            header: asked.header,
         })
     }
 }
@@ -778,26 +794,48 @@ pub async fn first_human_reply(
     .transpose()
 }
 
-/// The choices of each message whose number is in the JSON list `numbers`, in order.
+/// The options and the header of a question message.
+#[derive(Debug, Clone, Default)]
+struct Asked {
+    choices: Vec<Choice>,
+    header: Option<String>,
+}
+
+/// The choices and the header of each message whose number is in the JSON list `numbers`, the choices in order.
 async fn choices_of(
     conn: &mut SqliteConnection,
     numbers: &str,
-) -> Result<HashMap<i64, Vec<String>>, StoreError> {
-    let labels = sqlx::query!(
-        r#"SELECT m.number, c.label
+) -> Result<HashMap<i64, Asked>, StoreError> {
+    let options = sqlx::query!(
+        r#"SELECT m.number, c.label, c.description
            FROM message_choices c
            JOIN messages m ON m.id = c.message_id
            WHERE m.number IN (SELECT value FROM json_each(?))
            ORDER BY m.number, c.position"#,
         numbers
     )
+    .fetch_all(&mut *conn)
+    .await?;
+    let headers = sqlx::query!(
+        r#"SELECT m.number, h.header
+           FROM message_question_headers h
+           JOIN messages m ON m.id = h.message_id
+           WHERE m.number IN (SELECT value FROM json_each(?))"#,
+        numbers
+    )
     .fetch_all(conn)
     .await?;
-    let mut choices: HashMap<i64, Vec<String>> = HashMap::new();
-    for row in labels {
-        choices.entry(row.number).or_default().push(row.label);
+    let mut asked: HashMap<i64, Asked> = HashMap::new();
+    for row in options {
+        asked.entry(row.number).or_default().choices.push(Choice {
+            label: row.label,
+            description: row.description,
+        });
     }
-    Ok(choices)
+    for row in headers {
+        asked.entry(row.number).or_default().header = Some(row.header);
+    }
+    Ok(asked)
 }
 
 fn message_id(number: i64, column: &'static str) -> Result<MessageId, StoreError> {

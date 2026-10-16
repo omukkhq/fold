@@ -36,7 +36,7 @@ export interface NeedsYouLook {
   pill: string | null;
 }
 
-/** The Needs you button: ink with a count while items wait, ink with `–` while the board loads, plain at zero. */
+/** The Attention button: ink with a count while items wait, ink with `–` while the board loads, plain at zero. */
 export function needsYouLook(count: number | null): NeedsYouLook {
   if (count === null) {
     return { variant: "primary", pill: "–" };

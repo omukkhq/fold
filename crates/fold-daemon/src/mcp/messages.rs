@@ -2,8 +2,8 @@ use std::future::Future;
 use std::pin::Pin;
 
 use fold_core::{
-    Actor, Address, FoldError, MessageBody, MessageChoices, MessageId, ProposalId, RequestId,
-    TaskId, Timestamp, codes,
+    Actor, Address, Choice, FoldError, MessageBody, MessageChoices, MessageId, ProposalId,
+    RequestId, TaskId, Timestamp, codes,
 };
 use fold_store::agents::WorkerRow;
 use rmcp::handler::server::common::schema_for_type;
@@ -42,12 +42,50 @@ pub struct SendMessageInput {
     /// Link the message to this request, such as RQ-4, to ask or answer about it: the message joins the request's clarification thread. A reply takes its parent's request when left out.
     #[serde(default)]
     pub request: Option<String>,
-    /// Make the message a multiple-choice question: 2 to 6 short single-line options. The recipient answers with a reply that names one option, or with free text. Ask a human with to: ["humans"] or ["human:<name>"].
+    /// Make the message a multiple-choice question: 2 to 6 options, each a short single-line label or {label, description}. The recipient answers with a reply that names one option, or with free text. Ask a human with to: ["humans"] or ["human:<name>"].
     #[serde(default)]
-    pub choices: Option<Vec<String>>,
+    pub choices: Option<Vec<ChoiceInput>>,
     /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
     #[serde(rename = "as", default)]
     pub as_worker: Option<String>,
+}
+
+/// One option of a question: a plain label, or a label with a one-line description that the human sees under it.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(untagged)]
+pub enum ChoiceInput {
+    /// A short single-line label, such as "Recharts".
+    Label(String),
+    Described {
+        /// A short single-line label, such as "Recharts".
+        label: String,
+        /// One line of at most 300 characters that says what the option means, such as "Ready-made bar components; adds about 90 kB".
+        #[serde(default)]
+        description: Option<String>,
+    },
+}
+
+impl From<ChoiceInput> for Choice {
+    fn from(input: ChoiceInput) -> Self {
+        match input {
+            ChoiceInput::Label(label) => Choice::label(label),
+            ChoiceInput::Described { label, description } => Choice { label, description },
+        }
+    }
+}
+
+/// The options as agents read them: each `{label, description?}`.
+fn choices_json(choices: &[Choice]) -> Value {
+    json!(
+        choices
+            .iter()
+            .map(|choice| match &choice.description {
+                Some(description) => json!({"label": choice.label, "description": description}),
+                None => json!({"label": choice.label}),
+            })
+            .collect::<Vec<_>>()
+    )
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -168,7 +206,10 @@ fn inbox_json(item: &InboxItem) -> Value {
     );
     object.insert("body".into(), json!(item.body));
     if !item.choices.is_empty() {
-        object.insert("choices".into(), json!(item.choices));
+        object.insert("choices".into(), choices_json(&item.choices));
+    }
+    if let Some(header) = &item.header {
+        object.insert("header".into(), json!(header));
     }
     object.insert("sent_at".into(), json!(millis(item.sent_at)));
     Value::Object(object)
@@ -197,7 +238,10 @@ fn thread_json(message: &MessageView) -> Value {
     );
     object.insert("body".into(), json!(message.body));
     if !message.choices.is_empty() {
-        object.insert("choices".into(), json!(message.choices));
+        object.insert("choices".into(), choices_json(&message.choices));
+    }
+    if let Some(header) = &message.header {
+        object.insert("header".into(), json!(header));
     }
     object.insert("sent_at".into(), json!(millis(message.sent_at)));
     Value::Object(object)
@@ -227,8 +271,10 @@ pub async fn send_message(
         .transpose()?;
     let choices = input
         .choices
-        .as_deref()
-        .map(MessageChoices::parse)
+        .map(|options| {
+            let options: Vec<Choice> = options.into_iter().map(Choice::from).collect();
+            MessageChoices::parse(&options, None)
+        })
         .transpose()?;
     let actor = actor(server, worker).await?;
     let sent = server

@@ -18,6 +18,12 @@ import { replySchema, type ReplyValues } from "./compose";
 import { deliveryLines, recipientActors } from "./delivery";
 import { replyPlaceholder } from "./filters";
 import { MessageBody } from "./MessageBody";
+import { chosenAnswers, isQuestion } from "./question";
+import {
+  QuestionBadge,
+  QuestionChoices,
+  QuestionHeader,
+} from "./QuestionChoices";
 import { threadTitle } from "./title";
 
 interface ThreadPanelProps {
@@ -30,6 +36,7 @@ interface ThreadPanelProps {
 
 export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
   const last = thread.messages.at(-1);
+  const chosen = chosenAnswers(thread);
   const {
     control,
     handleSubmit,
@@ -86,6 +93,12 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
       <ol className="flex flex-1 flex-col gap-12 p-18">
         {thread.messages.map((message) => (
           <li key={message.id} className="flex flex-col gap-4">
+            {isQuestion(message) ? (
+              <QuestionBadge thread={thread} question={message} />
+            ) : null}
+            {isQuestion(message) && message.header !== null ? (
+              <QuestionHeader header={message.header} />
+            ) : null}
             <article className="flex flex-col gap-4 rounded-m bg-surface px-12 py-10 inset-ring inset-ring-border-subtle">
               <p className="flex items-center gap-8 font-mono text-caption text-text-muted">
                 <PersonName name={message.sender} slot="messageHead" />
@@ -103,7 +116,25 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
                   {formatAsOf(now, message.sent_at)}
                 </span>
               </p>
-              <MessageBody body={message.body} slug={slug} />
+              {chosen.has(message.id) ? (
+                <div className="flex flex-col gap-4">
+                  <p className="text-body font-semibold text-text">
+                    {message.body.trim()}
+                  </p>
+                  <p className="text-code text-text-muted">
+                    Chosen option of the question above.
+                  </p>
+                </div>
+              ) : (
+                <MessageBody body={message.body} slug={slug} />
+              )}
+              {isQuestion(message) ? (
+                <QuestionChoices
+                  thread={thread}
+                  question={message}
+                  onReply={onReply}
+                />
+              ) : null}
             </article>
             <ul className="flex flex-col gap-2">
               {deliveryLines(message, now).map((line) => (

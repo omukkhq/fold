@@ -340,6 +340,7 @@ describe("the task's messages", () => {
     task: "T-2",
     sent_at: 1_000,
     choices: [],
+    header: null,
     ...over,
   });
   const thread = (messages: MessageView[]) => ({

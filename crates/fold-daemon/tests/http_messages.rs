@@ -258,6 +258,7 @@ async fn the_list_filters_by_agent_task_proposal_and_awaiting_human() {
         [
             "body",
             "choices",
+            "header",
             "id",
             "proposal",
             "recipients",

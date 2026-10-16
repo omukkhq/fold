@@ -94,6 +94,7 @@ export function requestMessage(
     proposal: null,
     request: "RQ-4",
     choices: [],
+    header: null,
     body,
     sent_at: T0 + n * 1000,
     recipients: [

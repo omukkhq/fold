@@ -360,7 +360,14 @@ async fn an_ask_user_question_becomes_a_question_with_choices_and_the_reply_answ
     assert_eq!(waiting[0]["kind"], "question");
     assert_eq!(waiting[0]["screen"], "messages");
     assert_eq!(waiting[0]["agent"], lead);
-    assert_eq!(waiting[0]["choices"], json!(["Red", "Blue"]));
+    assert_eq!(
+        waiting[0]["choices"],
+        json!([
+            {"label": "Red", "description": "Use red for the fold probe."},
+            {"label": "Blue", "description": "Use blue for the fold probe."},
+        ])
+    );
+    assert_eq!(waiting[0]["header"], "Fold probe");
     let message = waiting[0]["message"].as_str().unwrap().to_owned();
     assert!(
         open_questions(&harness).await.is_empty(),
@@ -380,7 +387,14 @@ async fn an_ask_user_question_becomes_a_question_with_choices_and_the_reply_answ
         thread["messages"][0]["body"],
         "Which colour should the fold probe use?"
     );
-    assert_eq!(thread["messages"][0]["choices"], json!(["Red", "Blue"]));
+    assert_eq!(
+        thread["messages"][0]["choices"],
+        json!([
+            {"label": "Red", "description": "Use red for the fold probe."},
+            {"label": "Blue", "description": "Use blue for the fold probe."},
+        ])
+    );
+    assert_eq!(thread["messages"][0]["header"], "Fold probe");
     assert!(stored(&harness, "worker.permission_asked").await.is_empty());
 
     let (status, reply) = harness
@@ -429,17 +443,23 @@ async fn an_agent_asks_humans_a_question_with_choices() {
         .call(
             MAIN,
             "send_message",
-            json!({"to": ["humans"], "body": "Ship the page today?", "choices": ["Yes", "No, tomorrow"]}),
+            json!({
+                "to": ["humans"],
+                "body": "Ship the page today?",
+                "choices": ["Yes", {"label": "No, tomorrow", "description": " After the review. "}],
+            }),
         )
         .await;
     let id = sent["id"].as_str().unwrap().to_owned();
     let thread = harness
         .call(MAIN, "get_thread", json!({"thread": id}))
         .await;
-    assert_eq!(
-        thread["messages"][0]["choices"],
-        json!(["Yes", "No, tomorrow"])
-    );
+    let options = json!([
+        {"label": "Yes"},
+        {"label": "No, tomorrow", "description": "After the review."},
+    ]);
+    assert_eq!(thread["messages"][0]["choices"], options);
+    assert!(thread["messages"][0].get("header").is_none());
     let plain = harness
         .call(
             MAIN,
@@ -464,6 +484,18 @@ async fn an_agent_asks_humans_a_question_with_choices() {
         .await;
     assert_eq!(refused["code"], codes::INVALID_REQUEST);
     assert_eq!(refused["details"]["reason"], "choices");
+    let refused = harness
+        .refused(
+            MAIN,
+            "send_message",
+            json!({
+                "to": ["humans"],
+                "body": "Pick",
+                "choices": ["a", {"label": "b", "description": "one\ntwo"}],
+            }),
+        )
+        .await;
+    assert_eq!(refused["details"]["reason"], "choices");
     harness
         .call(
             MAIN,
@@ -475,7 +507,14 @@ async fn an_agent_asks_humans_a_question_with_choices() {
     assert_eq!(waiting.len(), 1);
     assert_eq!(waiting[0]["message"], id);
     assert_eq!(waiting[0]["agent"], MAIN);
-    assert_eq!(waiting[0]["choices"], json!(["Yes", "No, tomorrow"]));
+    assert_eq!(
+        waiting[0]["choices"],
+        json!([
+            {"label": "Yes", "description": null},
+            {"label": "No, tomorrow", "description": "After the review."},
+        ])
+    );
+    assert_eq!(waiting[0]["header"], Value::Null);
 }
 
 #[tokio::test]

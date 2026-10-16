@@ -1,7 +1,7 @@
 use fold_core::events::types;
 use fold_core::{
-    Actor, AddressedAs, FoldError, MessageId, NewEvent, ProposalId, RequestId, Sender, TaskId,
-    Timestamp, WorkerName, codes, policy,
+    Actor, AddressedAs, Choice, FoldError, MessageId, NewEvent, ProposalId, RequestId, Sender,
+    TaskId, Timestamp, WorkerName, codes, policy,
 };
 use fold_store::agents::WorkerRow;
 use fold_store::messages::{self, InboxRow};
@@ -29,7 +29,9 @@ pub struct InboxItem {
     /// The first time an inbox returned the row.
     pub delivered_at: Timestamp,
     /// The options of a multiple-choice question; empty for any other message.
-    pub choices: Vec<String>,
+    pub choices: Vec<Choice>,
+    /// The short header of a multiple-choice question.
+    pub header: Option<String>,
 }
 
 fn item(row: InboxRow, now: Timestamp) -> InboxItem {
@@ -48,6 +50,7 @@ fn item(row: InboxRow, now: Timestamp) -> InboxItem {
         sent_at: message.created_at,
         delivered_at: row.delivered_at.unwrap_or(now),
         choices: message.choices,
+        header: message.header,
     }
 }
 

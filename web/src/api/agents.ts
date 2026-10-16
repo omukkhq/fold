@@ -1,5 +1,5 @@
 import { api } from "./client";
-import { expectOk, unwrap } from "./result";
+import { unwrap } from "./result";
 import type { components } from "./schema";
 
 type Schemas = components["schemas"];
@@ -29,21 +29,4 @@ export async function listAgents(
     }),
   );
   return agents;
-}
-
-/** Grants or removes the `integrator` tag. Rejects with the daemon's codes, such as `agent_not_found`. */
-export async function setIntegrator(
-  slug: string,
-  agent: string,
-  enabled: boolean,
-): Promise<void> {
-  const params = { params: { path: { slug, name: agent } } };
-  await expectOk(
-    enabled
-      ? api.PUT("/api/v1/projects/{slug}/agents/{name}/tags/integrator", params)
-      : api.DELETE(
-          "/api/v1/projects/{slug}/agents/{name}/tags/integrator",
-          params,
-        ),
-  );
 }

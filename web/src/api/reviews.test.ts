@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { errorReply, stubFetch } from "@/test/stubFetch";
 import { isApiError } from "./errors";
-import { listReviewCheckouts } from "./reviews";
+import { batch } from "@/test/workers";
+import {
+  getReviewBatch,
+  listReviewBatches,
+  listReviewCheckouts,
+} from "./reviews";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -38,6 +43,30 @@ describe("listReviewCheckouts", () => {
     });
     await expect(listReviewCheckouts("demo")).rejects.toSatisfy((e: unknown) =>
       isApiError(e, "project_not_found"),
+    );
+  });
+});
+
+describe("review batches", () => {
+  it("lists the batches and reads one", async () => {
+    const one = batch();
+    stubFetch({
+      "GET /api/v1/projects/demo/reviews/batches": { body: { batches: [one] } },
+      "GET /api/v1/projects/demo/reviews/batches/rb-3": { body: one },
+    });
+    expect(await listReviewBatches("demo")).toEqual([one]);
+    expect(await getReviewBatch("demo", "rb-3")).toEqual(one);
+  });
+
+  it("rejects an unknown batch with its code", async () => {
+    stubFetch({
+      "GET /api/v1/projects/demo/reviews/batches/rb-9": errorReply(
+        404,
+        "review_batch_not_found",
+      ),
+    });
+    await expect(getReviewBatch("demo", "rb-9")).rejects.toSatisfy(
+      (e: unknown) => isApiError(e, "review_batch_not_found"),
     );
   });
 });

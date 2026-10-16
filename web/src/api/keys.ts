@@ -58,6 +58,15 @@ export const keys = {
   reviewCheckouts: (slug: string) =>
     [slug, "workspaces", "review-checkouts"] as const,
   workspaceLiveAll: (slug: string) => [slug, "workspace-live"] as const,
+  workers: (slug: string) => [slug, "workers"] as const,
+  workerQuestions: (slug: string) => [slug, "worker-questions"] as const,
+  /** Each worker's latest step, written only by the event stream. */
+  workerSteps: (slug: string) => [slug, "worker-steps"] as const,
+  needsYou: (slug: string) => [slug, "needs-you"] as const,
+  reviewBatches: (slug: string) => [slug, "review-batches"] as const,
+  /** Under the batches prefix, so every event that refreshes the batches also refreshes the open batch. */
+  reviewBatch: (slug: string, batch: string) =>
+    [slug, "review-batches", batch] as const,
   /** The workspaces a stored event ended since the last snapshot, written only by the event stream. */
   endedWorkspaces: (slug: string) => [slug, "ended-workspaces"] as const,
 };

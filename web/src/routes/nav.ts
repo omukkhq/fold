@@ -29,9 +29,10 @@ export function navPath(slug: string, entry: NavEntry): string {
   return `/p/${slug}/${entry.segment}`;
 }
 
-/** The task dialog route renders the board beneath it, so `t/...` belongs to Board. */
+/** The task dialog route renders the board beneath it, so `t/...` belongs to Board; a review batch groups proposals, so `batches/...` belongs to Proposals. */
 const SEGMENT_OWNER: Readonly<Record<string, NavId>> = {
   t: "board",
+  batches: "proposals",
 };
 
 /** The entry that owns a `/p/<slug>/...` path; the diff and bare project paths belong to none. */

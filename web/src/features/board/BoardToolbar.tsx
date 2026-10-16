@@ -93,7 +93,7 @@ export function BoardToolbar({
             search.needs && "outline-2 outline-offset-2 outline-primary",
           )}
         >
-          Needs you
+          Attention
           {needs.pill === null ? (
             " · 0"
           ) : (

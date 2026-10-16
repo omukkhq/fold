@@ -217,6 +217,13 @@ async fn an_area_lead_starts_coders_only_for_tasks_of_its_own_area() {
         .map(|worker| worker["name"].as_str().unwrap())
         .collect();
     assert_eq!(names, ["web-lead", "web-coder"]);
+    let ttls: Vec<&str> = listed["workers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|worker| worker["cache_ttl"].as_str().unwrap())
+        .collect();
+    assert_eq!(ttls, ["1h", "5m"]);
 }
 
 #[tokio::test]
@@ -677,6 +684,7 @@ async fn a_human_defines_areas_and_starts_and_stops_leads_over_http() {
     assert_eq!(status, StatusCode::CREATED, "{started}");
     assert_eq!(started["name"], "ui-lead");
     assert_eq!(started["started_by"], "human:ana");
+    assert_eq!(started["cache_ttl"], "1h");
     let (status, coder) = harness
         .socket(
             Method::POST,
@@ -705,6 +713,37 @@ async fn a_human_defines_areas_and_starts_and_stops_leads_over_http() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(listed["areas"][0]["lead"], "ui-lead");
     assert_eq!(listed["workers"][0]["turns"], 1);
+    assert_eq!(listed["workers"][0]["cache_ttl"], "1h");
+    assert_eq!(
+        listed["roles"],
+        json!([
+            {"role": "area_lead", "cache_ttl": "1h"},
+            {"role": "review_lead", "cache_ttl": "1h"},
+            {"role": "task_coder", "cache_ttl": "5m"},
+            {"role": "batch_reviewer", "cache_ttl": "1h"},
+        ])
+    );
+    let config = std::path::Path::new(harness.root()).join(".fold/config.toml");
+    let kept = std::fs::read_to_string(&config).ok();
+    std::fs::write(&config, "[roles.task_coder]\ncache_ttl = \"2h\"\n").unwrap();
+    let (status, unreadable) = harness
+        .socket(
+            Method::GET,
+            &format!("/api/v1/projects/{SLUG}/workers"),
+            None,
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a config fold cannot read still lists the workers"
+    );
+    assert_eq!(unreadable["workers"][0]["cache_ttl"], Value::Null);
+    assert_eq!(unreadable["roles"], json!([]));
+    match kept {
+        Some(text) => std::fs::write(&config, text).unwrap(),
+        None => std::fs::remove_file(&config).unwrap(),
+    }
     let (status, unknown) = harness
         .socket(
             Method::POST,

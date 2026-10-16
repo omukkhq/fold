@@ -30,6 +30,7 @@ describe("activeNav", () => {
     ["/p/demo/activity", "activity"],
     ["/p/demo/proposals", "proposals"],
     ["/p/demo/proposals/P-3", "proposals"],
+    ["/p/demo/batches/rb-3", "proposals"],
     ["/p/demo/requests", "requests"],
     ["/p/demo/requests/RQ-4", "requests"],
     ["/p/demo/agents", "agents"],
@@ -57,6 +58,7 @@ describe("switchProjectPath", () => {
     ["/p/demo/proposals/P-3", "/p/ledger/proposals"],
     ["/p/demo/requests/RQ-4", "/p/ledger/requests"],
     ["/p/demo/t/T-12", "/p/ledger/board"],
+    ["/p/demo/batches/rb-3", "/p/ledger/proposals"],
     ["/p/demo/diff", "/p/ledger/board"],
     ["/p/demo", "/p/ledger/board"],
   ])("%s goes to %s", (path, target) => {

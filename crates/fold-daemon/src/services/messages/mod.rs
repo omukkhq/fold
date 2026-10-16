@@ -3,9 +3,9 @@ use std::sync::Arc;
 use fold_core::events::types;
 use fold_core::messages::resolve;
 use fold_core::{
-    Actor, Address, AddressedAs, AgentActor, Clock, EventError, FoldError, HumanName, IdKind,
-    MessageBody, MessageChoices, MessageId, NewEvent, ProposalId, Recipient, RequestId, Sender,
-    Target, TaskId, Timestamp, WorkerName, codes, policy,
+    Actor, Address, AddressedAs, AgentActor, Choice, Clock, EventError, FoldError, HumanName,
+    IdKind, MessageBody, MessageChoices, MessageId, NewEvent, ProposalId, Recipient, RequestId,
+    Sender, Target, TaskId, Timestamp, WorkerName, codes, policy,
 };
 use fold_store::messages::{self, MessageHead, MessageRow, NewMessage, RecipientRow};
 use fold_store::tasks::claims;
@@ -81,7 +81,9 @@ pub struct MessageView {
     pub sent_at: Timestamp,
     pub recipients: Vec<RecipientView>,
     /// The options of a multiple-choice question, in order; empty for any other message.
-    pub choices: Vec<String>,
+    pub choices: Vec<Choice>,
+    /// The short header of a multiple-choice question.
+    pub header: Option<String>,
 }
 
 fn recipient_view(row: RecipientRow) -> RecipientView {
@@ -106,6 +108,7 @@ fn message_view(row: MessageRow) -> MessageView {
         sent_at: row.created_at,
         recipients: row.recipients.into_iter().map(recipient_view).collect(),
         choices: row.choices,
+        header: row.header,
     }
 }
 
@@ -351,11 +354,15 @@ async fn write_message(
     for recipient in &draft.recipients {
         messages::insert_recipient(tx, id, recipient).await?;
     }
-    let choices: Vec<String> = draft
+    let choices: Vec<Choice> = draft
         .choices
-        .map(|choices| choices.labels().to_vec())
+        .map(|choices| choices.options().to_vec())
         .unwrap_or_default();
-    messages::insert_choices(tx, id, &choices).await?;
+    let header = draft
+        .choices
+        .and_then(MessageChoices::header)
+        .map(str::to_owned);
+    messages::insert_choices(tx, id, &choices, header.as_deref()).await?;
     let names: Vec<String> = draft
         .recipients
         .iter()
@@ -401,6 +408,7 @@ async fn write_message(
             })
             .collect(),
         choices,
+        header,
     })
 }
 

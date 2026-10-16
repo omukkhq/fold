@@ -5,8 +5,8 @@ use fold_core::roles::{
     session_uuid,
 };
 use fold_core::{
-    Actor, AgentName, AreaName, FoldError, LabelName, NewEvent, ProposalId, Role, TaskId,
-    WorkerName, codes,
+    Actor, AgentName, AreaName, FoldError, LabelName, NewEvent, ProjectConfig, ProposalId, Role,
+    TaskId, WorkerName, codes,
 };
 use fold_store::agents::{self, AreaRow, NewWorkerProcess, WorkerProcessRow};
 use fold_store::tasks;
@@ -15,7 +15,7 @@ use serde_json::json;
 
 use super::{AgentError, AgentService, main_actor};
 use crate::services::events::EventBuffer;
-use crate::services::projects::load_config;
+use crate::services::projects::{Lease, load_config};
 
 mod handoff;
 mod output;
@@ -174,6 +174,16 @@ impl AgentService {
 
     pub async fn list_areas(&self) -> Result<Vec<AreaRow>, AgentError> {
         Ok(agents::list_areas(self.store.read()).await?)
+    }
+
+    /// The project's worker settings from `.fold/config.toml`, or its defaults when there is no file; `None` when the service knows no project folder or the file does not parse, so a list still answers.
+    pub async fn worker_config(&self) -> Option<ProjectConfig> {
+        let paths = match (&self.workers, &self.lease) {
+            (Some(supervisor), _) => supervisor.paths(),
+            (None, Lease::Config(paths)) => paths,
+            (None, Lease::Minutes(_)) => return None,
+        };
+        load_config(paths).await.ok()
     }
 
     pub async fn list_workers(&self) -> Result<Vec<WorkerProcessRow>, AgentError> {

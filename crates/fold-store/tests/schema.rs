@@ -100,6 +100,7 @@ async fn baseline_creates_every_table_of_the_data_model() {
         "integrations",
         "labels",
         "message_choices",
+        "message_question_headers",
         "message_recipients",
         "messages",
         "proposal_versions",

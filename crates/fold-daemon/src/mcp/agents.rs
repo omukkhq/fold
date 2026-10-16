@@ -250,9 +250,13 @@ pub async fn list_workers(server: &FoldServer, arguments: &JsonObject) -> Result
     let _: ListWorkersInput = parse(arguments)?;
     let areas = server.agents.list_areas().await.map_err(from_agent)?;
     let workers = server.agents.list_workers().await.map_err(from_agent)?;
+    let config = server.agents.worker_config().await;
     let mut listed = Vec::with_capacity(workers.len());
     for worker in &workers {
         let mut value = worker_process_json(worker);
+        value["cache_ttl"] = config.as_ref().map_or(Value::Null, |config| {
+            json!(config.role(worker.role).cache_ttl.as_str())
+        });
         let note = server
             .agents
             .latest_handoff(&worker.agent)

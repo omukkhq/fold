@@ -48,8 +48,8 @@ pub use layout::{
     HostPaths, ProjectPaths, review_batch_checkout_path, review_checkout_path, task_workspace_path,
 };
 pub use messages::{
-    Address, AddressError, AddressedAs, Directory, DirectoryAgent, MessageBody, MessageChoices,
-    Recipient, ResolveError, Sender, Target,
+    Address, AddressError, AddressedAs, Choice, Directory, DirectoryAgent, MessageBody,
+    MessageChoices, Recipient, ResolveError, Sender, Target,
 };
 pub use policy::PolicyDenied;
 pub use presence::{ACTIVE_WINDOW_MS, Presence, SessionFact, presence_of};

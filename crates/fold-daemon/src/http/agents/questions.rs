@@ -11,6 +11,7 @@ use utoipa_axum::routes;
 use super::super::Project;
 use super::super::actor::Human;
 use super::super::error::{ApiError, ApiJson, ErrorEnvelope};
+use super::super::messages::MessageChoice;
 use crate::daemon::AppState;
 use crate::services::agents::{NeedsYouItem, NeedsYouKind, Screen};
 
@@ -172,7 +173,10 @@ pub struct NeedsYouEntry {
     #[schema(required = true, example = "tanim")]
     pub human: Option<String>,
     /// The options of a `question` with choices; empty otherwise.
-    pub choices: Vec<String>,
+    pub choices: Vec<MessageChoice>,
+    /// The short header of a `question`, such as `Chart library`.
+    #[schema(required = true, example = "Chart library")]
+    pub header: Option<String>,
 }
 
 impl From<NeedsYouItem> for NeedsYouEntry {
@@ -202,7 +206,8 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             proposal: item.proposal.map(|id| id.to_string()),
             request: item.request.map(|id| id.to_string()),
             human: item.human.map(|human| human.to_string()),
-            choices: item.choices,
+            choices: item.choices.into_iter().map(MessageChoice::from).collect(),
+            header: item.header,
         }
     }
 }

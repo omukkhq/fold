@@ -25,3 +25,25 @@ export async function listReviewCheckouts(
   );
   return checkouts;
 }
+
+export type ReviewBatch = components["schemas"]["ReviewBatch"];
+export type ReviewBatchMember = components["schemas"]["ReviewBatchMember"];
+
+/** The project's review batches in number order. */
+export async function listReviewBatches(slug: string): Promise<ReviewBatch[]> {
+  const { batches } = await unwrap(
+    api.GET("/api/v1/projects/{slug}/reviews/batches", {
+      params: { path: { slug } },
+    }),
+  );
+  return batches;
+}
+
+/** One review batch. Rejects with `review_batch_not_found` for an unknown id. */
+export function getReviewBatch(slug: string, id: string): Promise<ReviewBatch> {
+  return unwrap(
+    api.GET("/api/v1/projects/{slug}/reviews/batches/{id}", {
+      params: { path: { slug, id } },
+    }),
+  );
+}

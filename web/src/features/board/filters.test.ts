@@ -71,7 +71,7 @@ describe("applyFilters", () => {
     ]);
   });
 
-  it("matches Needs you on any attention item", () => {
+  it("matches Attention on any attention item", () => {
     expect(tasks(applyFilters(cards, { needs: true }))).toEqual([
       "T-3",
       "T-4",

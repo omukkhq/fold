@@ -303,4 +303,45 @@ async fn an_ask_question_links_its_messages_and_is_only_allowed() {
         count(&store, "SELECT COUNT(*) FROM message_choices").await,
         1
     );
+    exec(
+        &store,
+        "INSERT INTO message_choices (message_id, position, label, description) VALUES (1, 2, 'Blue', 'Use blue.')",
+    )
+    .await
+    .unwrap();
+    let blank = exec(
+        &store,
+        "INSERT INTO message_choices (message_id, position, label, description) VALUES (1, 3, 'Green', ' ')",
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        blank.constraint().as_deref(),
+        Some("message_choices_description_present")
+    );
+    exec(
+        &store,
+        "INSERT INTO message_question_headers (message_id, header) VALUES (1, 'Colour')",
+    )
+    .await
+    .unwrap();
+    let second = exec(
+        &store,
+        "INSERT INTO message_question_headers (message_id, header) VALUES (1, 'Again')",
+    )
+    .await
+    .unwrap_err();
+    assert!(second.unique_violation());
+    for operation in [
+        "UPDATE message_question_headers SET header = 'x'",
+        "DELETE FROM message_question_headers",
+    ] {
+        let error = exec(&store, operation).await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("message_question_headers is append-only"),
+            "{error}"
+        );
+    }
 }

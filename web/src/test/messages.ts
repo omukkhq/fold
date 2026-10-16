@@ -29,6 +29,7 @@ export function message(
     proposal: null,
     request: null,
     choices: [],
+    header: null,
     ...fields,
   };
 }

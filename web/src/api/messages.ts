@@ -7,6 +7,7 @@ type Schemas = components["schemas"];
 
 export type RecipientView = Schemas["RecipientView"];
 export type MessageView = Schemas["MessageView"];
+export type MessageChoice = Schemas["MessageChoice"];
 export type ThreadView = Schemas["ThreadView"];
 
 /** A human reply (`reply_to`) or feedback linked to a task. The daemon picks the recipients. */

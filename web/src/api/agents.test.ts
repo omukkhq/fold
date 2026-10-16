@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { errorReply, stubFetch } from "../test/stubFetch";
-import { listAgents, setIntegrator } from "./agents";
+import { listAgents } from "./agents";
 import { isApiError } from "./errors";
 
 afterEach(() => {
@@ -27,32 +27,6 @@ describe("listAgents", () => {
     });
     await expect(listAgents("ghost")).rejects.toSatisfy((e: unknown) =>
       isApiError(e, "project_not_found"),
-    );
-  });
-});
-
-describe("setIntegrator", () => {
-  const route = "/api/v1/projects/demo/agents/frontend/tags/integrator";
-
-  it("grants with PUT and removes with DELETE", async () => {
-    const calls = stubFetch({
-      [`PUT ${route}`]: { body: { agent: "frontend", tags: ["integrator"] } },
-      [`DELETE ${route}`]: { body: { agent: "frontend", tags: [] } },
-    });
-    await setIntegrator("demo", "frontend", true);
-    await setIntegrator("demo", "frontend", false);
-    expect(calls.map((c) => c.method)).toEqual(["PUT", "DELETE"]);
-  });
-
-  it("rejects with agent_not_found for an unknown agent", async () => {
-    stubFetch({
-      "PUT /api/v1/projects/demo/agents/nobody/tags/integrator": errorReply(
-        404,
-        "agent_not_found",
-      ),
-    });
-    await expect(setIntegrator("demo", "nobody", true)).rejects.toSatisfy(
-      (e: unknown) => isApiError(e, "agent_not_found"),
     );
   });
 });

@@ -452,18 +452,28 @@ fn a_reply_to_your_own_message_or_to_fold_goes_to_the_other_recipients() {
     assert!(reply_addresses(&tanim, &[Target::Human(human("tanim"))], &tanim).is_empty());
 }
 
+#[cfg(test)]
+fn labels(labels: &[&str]) -> Vec<fold_core::Choice> {
+    labels
+        .iter()
+        .copied()
+        .map(fold_core::Choice::label)
+        .collect()
+}
+
 #[test]
 fn choices_are_two_to_six_distinct_single_lines() {
     use fold_core::messages::{MessageChoices, chosen_answer};
-    let choices = MessageChoices::parse(&[" Red ", "Blue"]).unwrap();
+    let choices = MessageChoices::parse(&labels(&[" Red ", "Blue"]), None).unwrap();
     assert_eq!(choices.labels(), ["Red", "Blue"]);
-    let reason = |labels: &[&str]| {
-        MessageChoices::parse(labels)
+    assert_eq!(choices.header(), None);
+    let reason = |options: &[&str]| {
+        MessageChoices::parse(&labels(options), None)
             .unwrap_err()
             .details()
             .and_then(|details| details.get("reason").cloned())
     };
-    for labels in [
+    for options in [
         &["one"][..],
         &["a", "b", "c", "d", "e", "f", "g"][..],
         &["a", " "][..],
@@ -471,14 +481,74 @@ fn choices_are_two_to_six_distinct_single_lines() {
         &["Red", "red"][..],
     ] {
         assert_eq!(
-            reason(labels),
+            reason(options),
             Some(serde_json::json!("choices")),
-            "{labels:?}"
+            "{options:?}"
         );
     }
     let long = "x".repeat(101);
-    assert!(MessageChoices::parse(&["a", long.as_str()]).is_err());
+    assert!(MessageChoices::parse(&labels(&["a", long.as_str()]), None).is_err());
     let labels = choices.labels();
-    assert_eq!(chosen_answer(labels, " blue \n"), "Blue");
-    assert_eq!(chosen_answer(labels, "green, please"), "green, please");
+    assert_eq!(chosen_answer(&labels, " blue \n"), "Blue");
+    assert_eq!(chosen_answer(&labels, "green, please"), "green, please");
+}
+
+#[test]
+fn choices_keep_one_line_descriptions_and_a_short_header() {
+    use fold_core::Choice;
+    use fold_core::messages::{MessageChoices, short_line};
+    let option = |label: &str, description: Option<&str>| Choice {
+        label: label.to_owned(),
+        description: description.map(str::to_owned),
+    };
+    let choices = MessageChoices::parse(
+        &[
+            option("Recharts", Some(" Ready-made bar components. ")),
+            option("Plain SVG", Some("  ")),
+        ],
+        Some(" Chart library "),
+    )
+    .unwrap();
+    assert_eq!(
+        choices.options(),
+        [
+            option("Recharts", Some("Ready-made bar components.")),
+            option("Plain SVG", None),
+        ]
+    );
+    assert_eq!(choices.header(), Some("Chart library"));
+    assert_eq!(
+        MessageChoices::parse(&[option("a", None), option("b", None)], Some(""))
+            .unwrap()
+            .header(),
+        None
+    );
+    let long = "x".repeat(301);
+    for (options, header) in [
+        (vec![option("a", Some("one\ntwo")), option("b", None)], None),
+        (
+            vec![option("a", Some(long.as_str())), option("b", None)],
+            None,
+        ),
+        (vec![option("a", None), option("b", None)], Some("a\nb")),
+        (
+            vec![option("a", None), option("b", None)],
+            Some("a header longer than forty characters, really"),
+        ),
+    ] {
+        let error = MessageChoices::parse(&options, header).unwrap_err();
+        assert_eq!(
+            error
+                .details()
+                .and_then(|details| details.get("reason").cloned()),
+            Some(serde_json::json!("choices"))
+        );
+    }
+    assert_eq!(
+        short_line(" Fold probe ", 12),
+        Some("Fold probe".to_owned())
+    );
+    assert_eq!(short_line("Fold probe header", 12), None);
+    assert_eq!(short_line("a\nb", 12), None);
+    assert_eq!(short_line(" ", 12), None);
 }

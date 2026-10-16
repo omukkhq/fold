@@ -415,13 +415,45 @@ pub const MAX_CHOICES: usize = 6;
 /// The longest option label, in characters.
 pub const MAX_CHOICE_LEN: usize = 100;
 
-/// The options of a multiple-choice question from an agent to a human: 2 to 6 distinct single-line labels. The human answers with a normal reply that names one label, or with free text.
+/// The longest option description, in characters.
+pub const MAX_CHOICE_DESCRIPTION_LEN: usize = 300;
+
+/// The longest question header, in characters. Claude Code's `AskUserQuestion` keeps its headers to 12.
+pub const MAX_QUESTION_HEADER_LEN: usize = 40;
+
+/// One option of a multiple-choice question, as Claude Code's `AskUserQuestion` draws it: a short label and an optional one-line description.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MessageChoices(Vec<String>);
+pub struct Choice {
+    pub label: String,
+    pub description: Option<String>,
+}
+
+impl Choice {
+    pub fn label(label: impl Into<String>) -> Choice {
+        Choice {
+            label: label.into(),
+            description: None,
+        }
+    }
+}
+
+/// `text` trimmed when it is one line of at most `max` characters; `None` for empty, multi-line or too long text.
+pub fn short_line(text: &str, max: usize) -> Option<String> {
+    let text = text.trim();
+    (!text.is_empty() && !text.contains(['\n', '\r']) && text.chars().count() <= max)
+        .then(|| text.to_owned())
+}
+
+/// The options of a multiple-choice question from an agent to a human: 2 to 6 options with distinct single-line labels, and an optional short header. The human answers with a normal reply that names one label, or with free text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageChoices {
+    options: Vec<Choice>,
+    header: Option<String>,
+}
 
 impl MessageChoices {
-    /// Trims each label. Too few or too many options, an empty, multi-line or too long label, or two labels that differ only in case are `invalid_request` with `details.reason = "choices"`.
-    pub fn parse<S: AsRef<str>>(labels: &[S]) -> Result<MessageChoices, FoldError> {
+    /// Trims each label, description and the header; an empty description or header counts as none. Too few or too many options, an empty, multi-line or too long label, a multi-line or too long description or header, or two labels that differ only in case are `invalid_request` with `details.reason = "choices"`.
+    pub fn parse(options: &[Choice], header: Option<&str>) -> Result<MessageChoices, FoldError> {
         let invalid = |message: &str| {
             FoldError::new(codes::INVALID_REQUEST, message)
                 .with_details([("reason", json!("choices"))])
@@ -429,13 +461,19 @@ impl MessageChoices {
                     "pass {MIN_CHOICES} to {MAX_CHOICES} short single-line choices"
                 ))
         };
-        if !(MIN_CHOICES..=MAX_CHOICES).contains(&labels.len()) {
+        if !(MIN_CHOICES..=MAX_CHOICES).contains(&options.len()) {
             return Err(invalid("a question has 2 to 6 choices"));
         }
+        let optional = |text: Option<&str>, max: usize, message: &str| match text.map(str::trim) {
+            None | Some("") => Ok(None),
+            Some(text) => short_line(text, max)
+                .map(Some)
+                .ok_or_else(|| invalid(message)),
+        };
         let mut seen = HashSet::new();
-        let mut kept = Vec::with_capacity(labels.len());
-        for label in labels {
-            let label = label.as_ref().trim();
+        let mut kept = Vec::with_capacity(options.len());
+        for option in options {
+            let label = option.label.trim();
             if label.is_empty() || label.contains(['\n', '\r']) {
                 return Err(invalid("a choice is one line of text"));
             }
@@ -445,13 +483,40 @@ impl MessageChoices {
             if !seen.insert(label.to_lowercase()) {
                 return Err(invalid("the choices repeat a label"));
             }
-            kept.push(label.to_owned());
+            let description = optional(
+                option.description.as_deref(),
+                MAX_CHOICE_DESCRIPTION_LEN,
+                "a choice's description is one line of at most 300 characters",
+            )?;
+            kept.push(Choice {
+                label: label.to_owned(),
+                description,
+            });
         }
-        Ok(MessageChoices(kept))
+        let header = optional(
+            header,
+            MAX_QUESTION_HEADER_LEN,
+            "a question's header is one line of at most 40 characters",
+        )?;
+        Ok(MessageChoices {
+            options: kept,
+            header,
+        })
     }
 
-    pub fn labels(&self) -> &[String] {
-        &self.0
+    pub fn options(&self) -> &[Choice] {
+        &self.options
+    }
+
+    pub fn labels(&self) -> Vec<String> {
+        self.options
+            .iter()
+            .map(|option| option.label.clone())
+            .collect()
+    }
+
+    pub fn header(&self) -> Option<&str> {
+        self.header.as_deref()
     }
 }
 

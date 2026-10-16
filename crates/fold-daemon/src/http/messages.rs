@@ -2,7 +2,7 @@ use axum::Json;
 use axum::extract::rejection::QueryRejection;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use fold_core::{Address, FoldError, MessageBody, MessageId, RequestId, TaskId};
+use fold_core::{Address, Choice, FoldError, MessageBody, MessageId, RequestId, TaskId};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::router::OpenApiRouter;
@@ -71,8 +71,30 @@ pub struct MessageView {
     /// UTC milliseconds.
     pub sent_at: i64,
     pub recipients: Vec<RecipientView>,
-    /// The options of a multiple-choice question, in order; empty for any other message. A human answers with a reply whose body names one option, or with free text.
-    pub choices: Vec<String>,
+    /// The options of a multiple-choice question, in order; empty for any other message. A human answers with a reply whose body names one option's label, or with free text.
+    pub choices: Vec<MessageChoice>,
+    /// The short header of a multiple-choice question, such as `Chart library`.
+    #[schema(required = true, example = "Chart library")]
+    pub header: Option<String>,
+}
+
+/// One option of a multiple-choice question.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MessageChoice {
+    #[schema(example = "Recharts")]
+    pub label: String,
+    /// One line that says what the option means; null for an option without one.
+    #[schema(required = true, example = "Ready-made bar and line components.")]
+    pub description: Option<String>,
+}
+
+impl From<Choice> for MessageChoice {
+    fn from(choice: Choice) -> Self {
+        Self {
+            label: choice.label,
+            description: choice.description,
+        }
+    }
 }
 
 impl From<service::MessageView> for MessageView {
@@ -97,7 +119,12 @@ impl From<service::MessageView> for MessageView {
                     acknowledged_at: recipient.acknowledged_at.map(|time| time.as_millis()),
                 })
                 .collect(),
-            choices: message.choices,
+            choices: message
+                .choices
+                .into_iter()
+                .map(MessageChoice::from)
+                .collect(),
+            header: message.header,
         }
     }
 }

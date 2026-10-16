@@ -81,6 +81,7 @@
   --width-git-commit: 56px;
   --width-project-agents: 260px;
   --width-project-state: 170px;
+  --width-needs-you: 400px;
 }
 
 :root {

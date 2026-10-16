@@ -1911,12 +1911,27 @@ export interface components {
             /** @example ws-9 */
             workspace: string;
         };
+        /** @description One option of a multiple-choice question. */
+        MessageChoice: {
+            /**
+             * @description One line that says what the option means; null for an option without one.
+             * @example Ready-made bar and line components.
+             */
+            description: string | null;
+            /** @example Recharts */
+            label: string;
+        };
         /** @description A stored message with public ids only. */
         MessageView: {
             /** @description Plain text. */
             body: string;
-            /** @description The options of a multiple-choice question, in order; empty for any other message. A human answers with a reply whose body names one option, or with free text. */
-            choices: string[];
+            /** @description The options of a multiple-choice question, in order; empty for any other message. A human answers with a reply whose body names one option's label, or with free text. */
+            choices: components["schemas"]["MessageChoice"][];
+            /**
+             * @description The short header of a multiple-choice question, such as `Chart library`.
+             * @example Chart library
+             */
+            header: string | null;
             /** @example m-31 */
             id: string;
             /** @example P-3 */
@@ -1959,7 +1974,12 @@ export interface components {
              */
             agent: string | null;
             /** @description The options of a `question` with choices; empty otherwise. */
-            choices: string[];
+            choices: components["schemas"]["MessageChoice"][];
+            /**
+             * @description The short header of a `question`, such as `Chart library`.
+             * @example Chart library
+             */
+            header: string | null;
             /**
              * @description The human a `human_review` or `request_draft` waits for; null when any human may answer.
              * @example tanim
@@ -2686,6 +2706,15 @@ export interface components {
             /** @description The hash of the revision's root tree. */
             tree: string;
         };
+        /** @description A worker role's settings from `.fold/config.toml`. */
+        RoleEntry: {
+            /**
+             * @description The prompt cache time of the role's workers, `1h` or `5m`.
+             * @example 1h
+             */
+            cache_ttl: string;
+            role: components["schemas"]["WorkerRole"];
+        };
         /** @description A token off loopback, a name on loopback. */
         SessionRequest: components["schemas"]["TokenSignIn"] | components["schemas"]["NameSignIn"];
         SessionStartContext: {
@@ -3056,8 +3085,10 @@ export interface components {
         WorkerList: {
             /** @description In name order. */
             areas: components["schemas"]["AreaEntry"][];
+            /** @description Each role with the cache time a new worker of the role gets; empty when fold cannot read `.fold/config.toml`. */
+            roles: components["schemas"]["RoleEntry"][];
             /** @description In start order. */
-            workers: components["schemas"]["WorkerEntry"][];
+            workers: components["schemas"]["WorkerProcessEntry"][];
         };
         /** @description One step a worker's Claude Code process reported on stdout: its kind, and the tool's name or the text's length, never the text or the tool's input. It is the `data` of the live `worker.output` event. */
         WorkerOutput: {
@@ -3081,6 +3112,72 @@ export interface components {
              * @example Bash
              */
             tool: string | null;
+        };
+        /**
+         * @description One worker agent and its supervised Claude Code process. The totals add up over every process of the worker.
+         *
+         *     The agents route has its own `WorkerEntry`, so the schema takes another name: two schemas of one name leave only one in the OpenAPI document.
+         */
+        WorkerProcessEntry: {
+            /**
+             * @description Null for the review lead and batch reviewers.
+             * @example web
+             */
+            area: string | null;
+            /** Format: int64 */
+            cache_read_tokens: number;
+            /**
+             * @description The prompt cache time of the worker's role from `.fold/config.toml`, `1h` or `5m`; null when fold cannot read the file.
+             * @example 5m
+             */
+            cache_ttl: string | null;
+            /** Format: int64 */
+            cache_write_tokens: number;
+            /**
+             * Format: int64
+             * @description The tokens of the newest request: the size of the worker's context.
+             */
+            context_tokens: number;
+            /**
+             * Format: int64
+             * @description The cost Claude Code reported, in millionths of a US dollar.
+             */
+            cost_micro_usd: number;
+            /**
+             * Format: int64
+             * @description The exit code of the last process; a signal counts as 128 plus its number.
+             */
+            exit_code: number | null;
+            /** @description The model Claude Code reported, or the one fold asked for; null for Claude Code's default before the first turn. */
+            model: string | null;
+            /**
+             * @description The worker's agent name.
+             * @example web-coder
+             */
+            name: string;
+            /** @description The proposals a batch reviewer is bound to. */
+            proposals: string[];
+            role: components["schemas"]["WorkerRole"];
+            /**
+             * Format: int64
+             * @description UTC milliseconds of the newest process start.
+             */
+            started_at: number;
+            /** @description The actor that started the worker, such as `human:tanim` or `main`. */
+            started_by: string;
+            state: components["schemas"]["WorkerProcessState"];
+            /**
+             * Format: int64
+             * @description UTC milliseconds; null while the process runs.
+             */
+            stopped_at: number | null;
+            /** @description The tasks a task coder is bound to. */
+            tasks: string[];
+            /**
+             * Format: int64
+             * @description Finished turns.
+             */
+            turns: number;
         };
         /**
          * @description `starting` until Claude Code reports its session, `working` during a turn, `idle` between turns, `stopping` while fold ends the process, then `stopped` or `failed`.
@@ -8363,7 +8460,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["WorkerEntry"];
+                    "application/json": components["schemas"]["WorkerProcessEntry"];
                 };
             };
             /** @description `invalid_request` or `invalid_name` */
@@ -8451,7 +8548,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["WorkerEntry"];
+                    "application/json": components["schemas"]["WorkerProcessEntry"];
                 };
             };
             /** @description `invalid_name` */

@@ -10,6 +10,12 @@ const FRAMES: [PersonSlot, string, string][] = [
   ["authorCell", "text-bar", "text-bar"],
   ["waitingLine", "text-code", "text-bar"],
   ["foot", "text-bar", "text-bar"],
+  ["teamRow", "text-body", "text-bar"],
+  ["teamNote", "text-card", "text-bar"],
+  ["needsYouLine", "text-body", "text-body"],
+  ["panelName", "text-section", "text-section"],
+  ["answeredBy", "text-body", "text-body"],
+  ["batchHead", "text-card", "text-card"],
 ];
 
 describe("slotSize", () => {
