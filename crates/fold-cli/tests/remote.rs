@@ -38,10 +38,6 @@ impl Sandbox {
     /// `fld <args>` in the sandbox with no real home, no runtime directory and `path` as `PATH`.
     fn command(&self, path: &str, args: &[&str]) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fld"));
-        // Coverage runs name the profile file through this variable.
-        if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
-            command.env("LLVM_PROFILE_FILE", profile);
-        }
         command
             .args(args)
             .current_dir(self.dir.path())
@@ -53,6 +49,10 @@ impl Sandbox {
             .env("PATH", path)
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_CONFIG_GLOBAL", "/dev/null");
+        // Coverage runs name the profile file through this variable. `env_clear` drops every variable set before it, so it comes after.
+        if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
+            command.env("LLVM_PROFILE_FILE", profile);
+        }
         command
     }
 

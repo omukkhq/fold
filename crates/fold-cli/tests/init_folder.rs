@@ -34,10 +34,6 @@ impl Sandbox {
 
     fn fold_in(&self, cwd: &Path, args: &[&str]) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fld"));
-        // Coverage runs name the profile file through this variable.
-        if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
-            command.env("LLVM_PROFILE_FILE", profile);
-        }
         command
             .args(args)
             .current_dir(cwd)
@@ -49,9 +45,12 @@ impl Sandbox {
                 std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".to_owned()),
             )
             .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .output()
-            .unwrap()
+            .env("GIT_CONFIG_GLOBAL", "/dev/null");
+        // Coverage runs name the profile file through this variable. `env_clear` drops every variable set before it, so it comes after.
+        if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
+            command.env("LLVM_PROFILE_FILE", profile);
+        }
+        command.output().unwrap()
     }
 }
 

@@ -25,10 +25,6 @@ impl Sandbox {
     /// The environment holds no real home and no runtime directory, so no run touches the user's registry or a real daemon. `path` is the `PATH` the binary sees.
     fn fold_in(&self, cwd: &Path, path: &str, args: &[&str]) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fld"));
-        // Coverage runs name the profile file through this variable.
-        if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
-            command.env("LLVM_PROFILE_FILE", profile);
-        }
         command
             .args(args)
             .current_dir(cwd)
@@ -37,9 +33,12 @@ impl Sandbox {
             .env("XDG_DATA_HOME", self.path("data"))
             .env("PATH", path)
             .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .output()
-            .unwrap()
+            .env("GIT_CONFIG_GLOBAL", "/dev/null");
+        // Coverage runs name the profile file through this variable. `env_clear` drops every variable set before it, so it comes after.
+        if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
+            command.env("LLVM_PROFILE_FILE", profile);
+        }
+        command.output().unwrap()
     }
 
     fn fold(&self, args: &[&str]) -> Output {

@@ -171,12 +171,16 @@ fn a_run_without_arguments_reports_the_platform_checks() {
 #[test]
 fn a_host_without_a_home_stops_with_the_invalid_host_paths_code() {
     let sandbox = Sandbox::new().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_fld"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fld"));
+    command
         .arg("doctor")
         .env_clear()
-        .current_dir(sandbox.dir.path())
-        .output()
-        .unwrap();
+        .current_dir(sandbox.dir.path());
+    // Coverage runs name the profile file through this variable. `env_clear` drops every variable set before it, so it comes after.
+    if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
+        command.env("LLVM_PROFILE_FILE", profile);
+    }
+    let output = command.output().unwrap();
     assert_eq!(output.status.code(), Some(1));
     assert!(stderr(&output).contains("invalid_host_paths"));
 }
