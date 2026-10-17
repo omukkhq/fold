@@ -7,7 +7,13 @@ import { attentionView, mainLine } from "./attention";
 import { changeKind, fileLabel, visibleFiles } from "./files";
 import { checkpointHref, taskHref, workingFileHref } from "./links";
 import { createLiveStatesStore, shownAsOf } from "./liveStates";
-import { buildPanels, lastActivity, seedLive, workerOf } from "./panels";
+import {
+  buildPanels,
+  lastActivity,
+  panelHeading,
+  seedLive,
+  workerOf,
+} from "./panels";
 import { recordedItems } from "./recorded";
 
 const live = (
@@ -185,6 +191,21 @@ describe("panels", () => {
         live: null,
       }),
     ).toBe(3);
+  });
+
+  it("heads a task workspace with its task and the main workspace with its own name", () => {
+    expect(panelHeading(workspaceEntry("ws-1"))).toEqual({
+      task: "T-1",
+      title: "Title T-1",
+    });
+    expect(
+      panelHeading(workspaceEntry("ws-1", { task: "T-4", task_title: null })),
+    ).toEqual({ task: "T-4", title: "T-4" });
+    expect(
+      panelHeading(
+        workspaceEntry("ws-2", { task: null, task_title: null, kind: "main" }),
+      ),
+    ).toEqual({ task: null, title: "Main workspace" });
   });
 
   it("names the live worker, else the owner, else nobody", () => {

@@ -122,14 +122,25 @@ async fn the_main_agent_opens_one_main_workspace_without_a_task_and_reuses_it() 
     assert_eq!(created.workspace, Some(view.id));
     assert_eq!(created.data["kind"], "main");
 
-    // The main workspace has no live state, so the change list of the web routes refuses it.
-    let changes = fx.workspaces.changes(view.id).await;
-    assert_eq!(
-        workspace_refusal(changes).code(),
-        codes::WORKSPACE_NOT_ACTIVE
-    );
-    let entry = fx.workspaces.workspace_entry(view.id).await;
-    assert_eq!(workspace_refusal(entry).code(), codes::WORKSPACE_NOT_ACTIVE);
+    // The web routes list the main workspace with the task workspaces, with no task and no attention.
+    let entry = fx.workspaces.workspace_entry(view.id).await.unwrap();
+    assert_eq!(entry.workspace.kind, WorkspaceKind::Main);
+    assert_eq!(entry.task_title, None);
+    assert!(entry.attention.is_empty());
+    let task_ws = fx
+        .workspaces
+        .create_workspace(&by(&fx.backend.worker), t(1))
+        .await
+        .unwrap();
+    let listed: Vec<_> = fx
+        .workspaces
+        .list_workspaces()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|entry| (entry.workspace.id, entry.task_title.is_some()))
+        .collect();
+    assert_eq!(listed, [(view.id, false), (task_ws.workspace.id, true)]);
     assert_consistent(&fx.project).await;
 }
 

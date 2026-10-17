@@ -27,8 +27,9 @@ pub async fn check_stalls(
     let mut changed = 0;
     for state in live {
         let view = &state.view;
-        let has_impl_claim = holders
-            .get(&view.task)
+        let has_impl_claim = view
+            .task
+            .and_then(|task| holders.get(&task))
             .is_some_and(|holder| holder.as_str() == view.worker);
         let workspace = if state.missing {
             WorkspaceFact::Missing

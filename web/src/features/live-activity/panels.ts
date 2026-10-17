@@ -54,6 +54,17 @@ export function lastActivity(panel: Panel): number {
   );
 }
 
+/** The task and the title a panel heads with; the main workspace belongs to no task, so it names itself. */
+export function panelHeading(entry: WorkspaceEntry): {
+  task: string | null;
+  title: string;
+} {
+  if (entry.task === null) {
+    return { task: null, title: "Main workspace" };
+  }
+  return { task: entry.task, title: entry.task_title ?? entry.task };
+}
+
 /** The worker the live state names, else the owner of the row; null for a workspace whose worker is gone. */
 export function workerOf(panel: Panel): string | null {
   return panel.live?.worker ?? panel.entry.owner;

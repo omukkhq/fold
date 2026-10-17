@@ -98,6 +98,47 @@ async fn acceptance_12_the_main_agent_changes_main_directly_after_the_users_ok()
         )
         .await;
     assert_eq!(paths(&compared), ["AGENTS.md"]);
+    // The web lists the main workspace with the task workspaces, with its working changes and its diff.
+    let (status, listed) = h
+        .http(Method::GET, "/api/v1/projects/demo/workspaces", None, HUMAN)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let entry = listed["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == ws.as_str())
+        .unwrap();
+    assert_eq!(entry["kind"], "main");
+    assert_eq!(entry["task"], Value::Null);
+    assert_eq!(entry["task_title"], Value::Null);
+    assert_eq!(entry["owner"], MAIN);
+    assert_eq!(entry["live"]["task"], Value::Null);
+    let (status, changes) = h
+        .http(
+            Method::GET,
+            &format!("/api/v1/projects/demo/workspaces/{ws}/changes"),
+            None,
+            HUMAN,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{changes}");
+    let changed: Vec<&str> = changes["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|file| file["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(changed, ["AGENTS.md"]);
+    let (status, diff) = h
+        .http(
+            Method::GET,
+            &format!("/api/v1/projects/demo/diff?from=r1&to={ws}&path=AGENTS.md"),
+            None,
+            HUMAN,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{diff}");
 
     for (agent, code) in [
         ("frontend", codes::ORCHESTRATOR_REQUIRED),

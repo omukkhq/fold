@@ -7,7 +7,7 @@ import { attentionView } from "./attention";
 import { IdLink } from "./IdLink";
 import { taskHref } from "./links";
 import { mainLine } from "./attention";
-import { lastActivity, workerOf, type Panel } from "./panels";
+import { lastActivity, panelHeading, workerOf, type Panel } from "./panels";
 import { recordedItems } from "./recorded";
 import { EditingPill, MissingBadge } from "./StatePill";
 import { MainZone, RecordedZone, WorkingZone } from "./Zones";
@@ -24,6 +24,7 @@ export function WorkspacePanel({ slug, panel, now }: WorkspacePanelProps) {
   const attention = attentionView(entry.attention, activity, now);
   const worker = workerOf(panel);
   const base = live?.base ?? entry.base;
+  const heading = panelHeading(entry);
   const repository = useQuery(repositoryQuery(slug)).data;
   return (
     <section
@@ -38,9 +39,11 @@ export function WorkspacePanel({ slug, panel, now }: WorkspacePanelProps) {
             <PersonName name={worker} className="text-bar" />
           )}
         </span>
-        <IdLink href={taskHref(slug, entry.task)}>{entry.task}</IdLink>
+        {heading.task === null ? null : (
+          <IdLink href={taskHref(slug, heading.task)}>{heading.task}</IdLink>
+        )}
         <h2 className="min-w-0 flex-1 truncate text-body font-semibold text-text">
-          {entry.task_title}
+          {heading.title}
         </h2>
         <span className="font-mono text-meta text-text-muted">
           {entry.id} · base {base}

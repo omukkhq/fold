@@ -70,7 +70,7 @@ export function isLiveWorkspace(value: unknown): value is LiveWorkspace {
   return (
     isRecord(value) &&
     typeof value.workspace === "string" &&
-    typeof value.task === "string" &&
+    isNullableString(value.task) &&
     typeof value.worker === "string" &&
     typeof value.base === "string" &&
     Array.isArray(value.files) &&

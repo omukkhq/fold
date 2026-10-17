@@ -101,8 +101,9 @@ pub struct WorkspaceLive {
 pub struct LiveWorkspace {
     #[schema(value_type = String, example = "ws-9")]
     pub workspace: WorkspaceId,
-    #[schema(value_type = String, example = "T-12")]
-    pub task: TaskId,
+    /// The workspace's task; null for the main workspace, which belongs to no task.
+    #[schema(value_type = Option<String>, required = true, example = "T-12")]
+    pub task: Option<TaskId>,
     /// The worker label, `agent` or `agent/worker`.
     #[schema(example = "frontend/ui")]
     pub worker: String,
@@ -403,7 +404,7 @@ impl LiveState {
         }
     }
 
-    /// Starts the watcher and the pipeline of an active task workspace and returns the state of its first scan. Called after the commit that created the workspace. Attaching an attached workspace only rescans it. A review checkout is refused: nothing in it is ever recorded, so it has no live state and the live job never reaches it. The main workspace is refused too.
+    /// Starts the watcher and the pipeline of an active task workspace and returns the state of its first scan. Called after the commit that created the workspace. Attaching an attached workspace only rescans it. A review checkout is refused: nothing in it is ever recorded, so it has no live state and the live job never reaches it.
     pub async fn attach(
         &self,
         workspace: WorkspaceId,
@@ -436,9 +437,7 @@ impl LiveState {
             .with_details([("reason", json!("review_checkout"))])
             .into());
         }
-        let Some(task) = row.task else {
-            return Err(main_without_live(workspace).into());
-        };
+        let task = row.task;
         if row.state != WorkspaceState::Active {
             return Err(FoldError::new(
                 codes::WORKSPACE_NOT_ACTIVE,
@@ -674,19 +673,6 @@ impl LiveState {
     }
 }
 
-/// The main workspace has no live state: its change reaches main only after the user saw it in the conversation, so the stream and the board never show its working files.
-fn main_without_live(workspace: WorkspaceId) -> FoldError {
-    FoldError::new(
-        codes::WORKSPACE_NOT_ACTIVE,
-        format!("{workspace} is the main workspace, which has no live state"),
-    )
-    .with_details([
-        ("workspace", json!(workspace)),
-        ("reason", json!("main_workspace")),
-    ])
-    .with_hint("compare the workspace with its base revision through compare_revisions")
-}
-
 fn not_attached(workspace: WorkspaceId) -> FoldError {
     FoldError::new(
         codes::WORKSPACE_NOT_ACTIVE,
@@ -791,7 +777,7 @@ struct Seed {
 
 struct Pipeline {
     workspace: WorkspaceId,
-    task: TaskId,
+    task: Option<TaskId>,
     store: Store,
     bus: EventBus,
     clock: Arc<dyn Clock>,

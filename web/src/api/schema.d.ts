@@ -1111,7 +1111,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The project's active and missing task workspaces with their live states and the attention items of their tasks. */
+        /** The project's active and missing task workspaces and its live main workspace, with their live states and the attention items of their tasks. */
         get: operations["list_workspaces"];
         put?: never;
         post?: never;
@@ -1145,7 +1145,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The working changes of an active task workspace after a full scan, compared against its own base revision. */
+        /** The working changes of an active task workspace or of the main workspace after a full scan, compared against its own base revision. */
         get: operations["get_workspace_changes"];
         put?: never;
         post?: never;
@@ -1162,7 +1162,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The entries of one directory of an active task workspace as its files are now, for suggesting `@ws-N:` paths. */
+        /** The entries of one directory of an active task workspace or of the main workspace as its files are now, for suggesting `@ws-N:` paths. */
         get: operations["read_workspace_tree"];
         put?: never;
         post?: never;
@@ -2166,8 +2166,11 @@ export interface components {
             stalled: boolean;
             /** @description A one-line change summary, such as `3 files: 2 modified, 1 added (+40 -5)`, or `no changes`. */
             summary: string;
-            /** @example T-12 */
-            task: string;
+            /**
+             * @description The workspace's task; null for the main workspace, which belongs to no task.
+             * @example T-12
+             */
+            task: string | null;
             /**
              * @description The worker label, `agent` or `agent/worker`.
              * @example frontend/ui
@@ -3679,7 +3682,7 @@ export interface components {
          * @enum {string}
          */
         WorkerWorkspaceState: "active" | "missing";
-        /** @description The working changes of an active task workspace, read after a full scan. */
+        /** @description The working changes of an active task workspace or of the main workspace, read after a full scan. */
         WorkspaceChangesView: components["schemas"]["LiveWorkspace"] & {
             /** @description Always `working`. */
             source: components["schemas"]["ChangeSource"];
@@ -3737,16 +3740,19 @@ export interface components {
             /** @example P-3 */
             proposal: string | null;
             state: components["schemas"]["WorkspaceStateView"];
-            /** @example T-12 */
-            task: string;
-            /** @description The title of the task. */
-            task_title: string;
+            /**
+             * @description Null for the main workspace, which belongs to no task.
+             * @example T-12
+             */
+            task: string | null;
+            /** @description The title of the task; null for the main workspace. */
+            task_title: string | null;
             watch: components["schemas"]["WatchModeView"] | null;
         };
         /** @enum {string} */
         WorkspaceKindView: "task" | "review" | "main";
         WorkspaceListView: {
-            /** @description The active and missing task workspaces, by id. */
+            /** @description The active and missing task workspaces and the live main workspace, by id. */
             workspaces: components["schemas"]["WorkspaceEntryView"][];
         };
         /** @enum {string} */
@@ -10110,7 +10116,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The live task workspaces */
+            /** @description The live task workspaces and the live main workspace */
             200: {
                 headers: {
                     [name: string]: unknown;

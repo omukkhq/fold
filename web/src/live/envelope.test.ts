@@ -191,6 +191,11 @@ describe("isEventEnvelope", () => {
     }
   });
 
+  it("accepts the live state of the main workspace, which has no task", () => {
+    expect(isEventEnvelope({ ...changed(), task: null })).toBe(true);
+    expect(isLiveWorkspace({ ...workspace(), task: null })).toBe(true);
+  });
+
   it("refuses a live workspace with any field missing or wrong", () => {
     for (const key of Object.keys(workspace())) {
       expect(isEventEnvelope(without(changed(), key)), key).toBe(false);

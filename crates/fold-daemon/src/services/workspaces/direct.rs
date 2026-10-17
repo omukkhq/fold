@@ -27,7 +27,7 @@ pub struct OpenedMainWorkspace {
 impl WorkspaceService {
     /// Opens the main workspace for the main agent's worker: a copy of the current main revision under `.fold/ws/`, which belongs to no task. Only the main agent opens one (`policy::can_change_main_directly`). The project has at most one live main workspace: an open call while one is live returns it, and when another session held the main tag before, its worker gives the workspace to the actor's worker with its files as they are.
     ///
-    /// As for a task workspace, the files are written and renamed into place before the transaction that inserts the row, and the directory is removed again when the transaction fails. The main workspace has no live state, so nothing streams its working files.
+    /// As for a task workspace, the files are written and renamed into place before the transaction that inserts the row, the directory is removed again when the transaction fails, and the live state starts after the commit.
     pub async fn open_main_workspace(
         &self,
         actor: &Actor,
@@ -82,6 +82,11 @@ impl WorkspaceService {
         let saved = tokio::task::spawn_blocking(move || index.save(&index_path)).await;
         if !matches!(saved, Ok(Ok(()))) {
             tracing::warn!(workspace = %id, "the stat index was not saved; the next scan rebuilds it");
+        }
+        if let Some(live) = &self.live
+            && let Err(error) = live.attach(id).await
+        {
+            tracing::warn!(workspace = %id, code = error.log_code(), "the live state did not start");
         }
         Ok(OpenedMainWorkspace {
             workspace: self.get(WorkspaceRef::Workspace(id)).await?,

@@ -543,7 +543,7 @@ fn workspace_row(row: RawWorkspace) -> Result<WorkspaceRow, StoreError> {
     })
 }
 
-/// Moves a live task workspace between `active` and `missing` as its directory comes and goes: `present` moves a missing one to `active`, and an absent directory moves an active one to `missing`. Both states keep the workspace the task's live one, so nothing else changes. False, with nothing changed, when the workspace is not a task workspace in the other state.
+/// Moves a live task workspace or the main workspace between `active` and `missing` as its directory comes and goes: `present` moves a missing one to `active`, and an absent directory moves an active one to `missing`. Both states keep the workspace live, so nothing else changes. False, with nothing changed, when the workspace is neither a task workspace nor the main workspace in the other state.
 pub async fn set_directory_present(
     tx: &mut WriteTx,
     workspace: WorkspaceId,
@@ -563,7 +563,7 @@ pub async fn set_directory_present(
     };
     let changed = sqlx::query!(
         "UPDATE workspaces SET state = ?3
-         WHERE number = ?1 AND kind = 'task' AND state = ?2",
+         WHERE number = ?1 AND kind IN ('task', 'main') AND state = ?2",
         workspace,
         from,
         to

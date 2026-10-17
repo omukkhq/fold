@@ -210,7 +210,7 @@ fn new_event(event_type: EventType) -> NewEvent {
 fn live_workspace(number: u32, summary: &str) -> LiveWorkspace {
     LiveWorkspace {
         workspace: WorkspaceId::from_number(number).unwrap(),
-        task: TaskId::from_number(number).unwrap(),
+        task: Some(TaskId::from_number(number).unwrap()),
         worker: "frontend".to_owned(),
         base: RevisionId::from_number(1).unwrap(),
         files: vec![ChangedFile {

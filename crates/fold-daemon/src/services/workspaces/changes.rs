@@ -15,9 +15,8 @@ use crate::services::tasks::{AttentionItem, attention, stalled_tasks};
 #[derive(Debug, Clone)]
 pub struct WorkspaceEntry {
     pub workspace: WorkspaceView,
-    /// The workspace's task: the routes list no main workspace.
-    pub task: TaskId,
-    pub task_title: TaskTitle,
+    /// `None` for the main workspace, which belongs to no task.
+    pub task_title: Option<TaskTitle>,
     /// `None` for a missing or closed workspace, a review checkout, and an active one whose live state did not start.
     pub live: Option<Arc<WorkspaceLive>>,
     pub attention: Vec<AttentionItem>,
@@ -32,14 +31,17 @@ pub struct WorkspaceChanges {
 }
 
 impl WorkspaceService {
-    /// Every task workspace in state `active` or `missing`, by id.
+    /// Every task workspace in state `active` or `missing`, and the live main workspace, by id.
     pub async fn list_workspaces(&self) -> Result<Vec<WorkspaceEntry>, WorkspaceError> {
-        let rows = workspaces::list_live_task_workspaces(self.store.read()).await?;
+        let read = self.store.read();
+        let mut rows = workspaces::list_live_task_workspaces(read).await?;
+        rows.extend(workspaces::live_main_workspace(read).await?);
+        rows.sort_by_key(|row| row.id);
         let views: Vec<WorkspaceView> = rows.into_iter().map(WorkspaceView::from).collect();
         self.entries(views).await
     }
 
-    /// One task workspace or review checkout in any state, in the shape of a list entry. An unknown id is `workspace_not_found`; the main workspace, which has no task, is `workspace_not_active`.
+    /// One workspace in any state, in the shape of a list entry. An unknown id is `workspace_not_found`.
     pub async fn workspace_entry(
         &self,
         workspace: WorkspaceId,
@@ -47,9 +49,6 @@ impl WorkspaceService {
         let row = workspaces::get_workspace(self.store.read(), workspace)
             .await?
             .ok_or_else(|| not_found(workspace))?;
-        if row.kind == WorkspaceKind::Main {
-            return Err(not_active(workspace, row.kind, row.state).into());
-        }
         let mut entries = self.entries(vec![WorkspaceView::from(row)]).await?;
         entries.pop().ok_or_else(|| not_found(workspace).into())
     }
@@ -76,17 +75,22 @@ impl WorkspaceService {
         views
             .into_iter()
             .map(|workspace| {
-                let task = workspace
+                let task_title = workspace
                     .task
-                    .ok_or(StoreError::Corrupt("workspaces.task_id"))?;
-                let task_title = titles
-                    .get(&task)
-                    .cloned()
-                    .ok_or(StoreError::Corrupt("workspaces.task_id"))?;
+                    .map(|task| {
+                        titles
+                            .get(&task)
+                            .cloned()
+                            .ok_or(StoreError::Corrupt("workspaces.task_id"))
+                    })
+                    .transpose()?;
+                let attention = workspace
+                    .task
+                    .and_then(|task| items.get(&task).cloned())
+                    .unwrap_or_default();
                 Ok(WorkspaceEntry {
-                    task,
                     live: self.live.as_ref().and_then(|live| live.get(workspace.id)),
-                    attention: items.get(&task).cloned().unwrap_or_default(),
+                    attention,
                     task_title,
                     workspace,
                 })
@@ -94,7 +98,7 @@ impl WorkspaceService {
             .collect()
     }
 
-    /// The live state of an active task workspace after a full scan, so a change the watcher has not delivered yet is in it. An unknown id is `workspace_not_found`; a missing or closed workspace, a review checkout, the main workspace, or a service without live state is `workspace_not_active`.
+    /// The live state of an active task workspace or of the main workspace after a full scan, so a change the watcher has not delivered yet is in it. An unknown id is `workspace_not_found`; a missing or closed workspace, a review checkout, or a service without live state is `workspace_not_active`.
     pub async fn changes(
         &self,
         workspace: WorkspaceId,
@@ -103,7 +107,7 @@ impl WorkspaceService {
         let row = workspaces::get_workspace(read, workspace)
             .await?
             .ok_or_else(|| not_found(workspace))?;
-        if row.kind != WorkspaceKind::Task || row.state != WorkspaceState::Active {
+        if row.kind == WorkspaceKind::Review || row.state != WorkspaceState::Active {
             return Err(not_active(workspace, row.kind, row.state).into());
         }
         let Some(live) = &self.live else {
@@ -130,10 +134,6 @@ fn not_active(workspace: WorkspaceId, kind: WorkspaceKind, state: WorkspaceState
         (WorkspaceKind::Review, _) => (
             "a review checkout".to_owned(),
             "compare the proposal's changeset C-<n> with compare_revisions instead",
-        ),
-        (WorkspaceKind::Main, _) => (
-            "the main workspace, which has no live state".to_owned(),
-            "compare ws-<n> with its base revision r<n> through compare_revisions instead",
         ),
         (_, WorkspaceState::Missing) => (
             state.as_str().to_owned(),
@@ -165,13 +165,6 @@ mod tests {
         let review = not_active(ws, WorkspaceKind::Review, WorkspaceState::Active);
         assert_eq!(review.code(), codes::WORKSPACE_NOT_ACTIVE);
         assert!(review.message().contains("review checkout"));
-        let main = not_active(ws, WorkspaceKind::Main, WorkspaceState::Active);
-        assert!(main.message().contains("main workspace"));
-        assert!(
-            main.hint()
-                .unwrap_or_default()
-                .contains("compare_revisions")
-        );
         let missing = not_active(ws, WorkspaceKind::Task, WorkspaceState::Missing);
         assert!(missing.hint().unwrap_or_default().contains("checkpoints"));
         let closed = not_active(ws, WorkspaceKind::Task, WorkspaceState::Archived);

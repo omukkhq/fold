@@ -421,10 +421,12 @@ impl From<WorkspaceState> for WorkspaceStateView {
 pub struct WorkspaceEntryView {
     #[schema(value_type = String, example = "ws-9")]
     pub id: WorkspaceId,
-    #[schema(value_type = String, example = "T-12")]
-    pub task: TaskId,
-    /// The title of the task.
-    pub task_title: String,
+    /// Null for the main workspace, which belongs to no task.
+    #[schema(value_type = Option<String>, required = true, example = "T-12")]
+    pub task: Option<TaskId>,
+    /// The title of the task; null for the main workspace.
+    #[schema(required = true)]
+    pub task_title: Option<String>,
     /// The worker that owns the workspace, such as `frontend/ui`.
     #[schema(required = true)]
     pub owner: Option<String>,
@@ -465,8 +467,8 @@ impl From<WorkspaceEntry> for WorkspaceEntryView {
         let workspace = entry.workspace;
         Self {
             id: workspace.id,
-            task: entry.task,
-            task_title: entry.task_title.as_str().to_owned(),
+            task: workspace.task,
+            task_title: entry.task_title.map(|title| title.as_str().to_owned()),
             owner: workspace.worker.map(|worker| worker.as_str().to_owned()),
             kind: workspace.kind.into(),
             path: workspace.path,
@@ -487,7 +489,7 @@ impl From<WorkspaceEntry> for WorkspaceEntryView {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct WorkspaceListView {
-    /// The active and missing task workspaces, by id.
+    /// The active and missing task workspaces and the live main workspace, by id.
     pub workspaces: Vec<WorkspaceEntryView>,
 }
 
@@ -556,7 +558,7 @@ impl From<WatchMode> for WatchModeView {
     }
 }
 
-/// The entries of one directory of an active task workspace as its files are now, for suggesting `@ws-N:` paths.
+/// The entries of one directory of an active task workspace or of the main workspace as its files are now, for suggesting `@ws-N:` paths.
 #[utoipa::path(
     get,
     path = "/api/v1/projects/{slug}/workspaces/{id}/tree",
@@ -587,7 +589,7 @@ pub async fn read_workspace_tree(
     Ok(Json(workspace_tree_view(path, entries)))
 }
 
-/// The working changes of an active task workspace, read after a full scan.
+/// The working changes of an active task workspace or of the main workspace, read after a full scan.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct WorkspaceChangesView {
     /// Always `working`.
@@ -754,14 +756,14 @@ pub async fn read_revision_file(
     Ok(Json(file_view(path, content)))
 }
 
-/// The project's active and missing task workspaces with their live states and the attention items of their tasks.
+/// The project's active and missing task workspaces and its live main workspace, with their live states and the attention items of their tasks.
 #[utoipa::path(
     get,
     path = "/api/v1/projects/{slug}/workspaces",
     operation_id = "list_workspaces",
     params(("slug" = String, Path, description = "The project slug")),
     responses(
-        (status = 200, description = "The live task workspaces", body = WorkspaceListView),
+        (status = 200, description = "The live task workspaces and the live main workspace", body = WorkspaceListView),
         (status = 404, description = "The slug is not registered", body = ErrorEnvelope),
         (status = 503, description = "The project failed to open", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
@@ -801,7 +803,7 @@ pub async fn get_workspace(
     Ok(Json(entry.into()))
 }
 
-/// The working changes of an active task workspace after a full scan, compared against its own base revision.
+/// The working changes of an active task workspace or of the main workspace after a full scan, compared against its own base revision.
 #[utoipa::path(
     get,
     path = "/api/v1/projects/{slug}/workspaces/{id}/changes",

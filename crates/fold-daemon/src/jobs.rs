@@ -53,10 +53,18 @@ pub const WORKER_IDLE_TICK: Duration = Duration::from_secs(30);
 /// How many workspaces [`reconcile_workspaces`] scans at once.
 pub const RECONCILE_PARALLEL: usize = 4;
 
-/// Reconciles every task workspace in state `active` or `missing` with its directory when a project opens, before it serves requests: see [`WorkspaceService::reconcile_workspace`]. Up to [`RECONCILE_PARALLEL`] run at once. A workspace whose reconciliation fails is logged and left as it was; the others go on. Returns what was done, by workspace id.
+/// Reconciles every task workspace in state `active` or `missing`, and the live main workspace, with its directory when a project opens, before it serves requests: see [`WorkspaceService::reconcile_workspace`]. Up to [`RECONCILE_PARALLEL`] run at once. A workspace whose reconciliation fails is logged and left as it was; the others go on. Returns what was done, by workspace id.
 pub async fn reconcile_workspaces(handle: &ProjectHandle) -> Vec<Reconciliation> {
     let service = WorkspaceService::for_project(handle);
-    let rows = match workspaces::list_live_task_workspaces(handle.store.read()).await {
+    let read = handle.store.read();
+    let listed = match workspaces::list_live_task_workspaces(read).await {
+        Ok(mut rows) => workspaces::live_main_workspace(read).await.map(|main| {
+            rows.extend(main);
+            rows
+        }),
+        Err(error) => Err(error),
+    };
+    let rows = match listed {
         Ok(rows) => rows,
         Err(error) => {
             tracing::error!(project = %handle.slug, code = error.log_code(), "the workspaces were not reconciled");

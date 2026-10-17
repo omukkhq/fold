@@ -398,7 +398,7 @@ async fn adds_edits_deletes_and_renames_show_in_the_live_state() {
     let mut bus = fx.bus.subscribe();
     let (id, dir) = fx.create(&fx.frontend, 1).await;
     let first = fx.live.get(id).unwrap();
-    assert_eq!(first.view.task, t(1));
+    assert_eq!(first.view.task, Some(t(1)));
     assert_eq!(first.view.worker, "frontend");
     assert_eq!(first.view.base.number(), 1);
     assert!(first.view.files.is_empty());
