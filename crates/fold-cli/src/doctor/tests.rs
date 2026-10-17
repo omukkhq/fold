@@ -1034,6 +1034,36 @@ fn a_missing_project_directory_fails_alone() {
     assert!(checks[0].fix.as_deref().unwrap().contains("gone"));
 }
 
+#[test]
+fn a_project_folder_without_its_fold_data_fails_alone_with_the_init_that_replaces_it() {
+    let fixture = Fixture::new();
+    let host = fixture.linux_host(RECOMMENDED_WATCHES);
+    let root = fixture.project("my app");
+    std::fs::remove_dir_all(root.join(".fold")).unwrap();
+    let checks = project_report(&host, &root, at(0));
+    assert_eq!(checks.len(), 1);
+    let check = &checks[0];
+    assert_eq!((check.name, check.status), ("fold data", Status::Fail));
+    assert_eq!(
+        check.message,
+        format!(
+            "{} is missing: the fold data of the project was deleted",
+            root.join(".fold").display()
+        )
+    );
+    let quoted = output::shell_quote(&root);
+    assert_eq!(
+        check.fix.as_deref(),
+        Some(format!("cd {quoted} && fld init --from-git").as_str())
+    );
+    std::fs::remove_dir_all(root.join(".git")).unwrap();
+    let checks = project_report(&host, &root, at(0));
+    assert_eq!(
+        checks[0].fix.as_deref(),
+        Some(format!("cd {quoted} && fld init").as_str())
+    );
+}
+
 // Claude Code files
 
 #[test]

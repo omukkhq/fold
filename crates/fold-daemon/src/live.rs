@@ -1116,7 +1116,14 @@ struct Scanner {
 }
 
 impl Scanner {
+    /// A project whose database is gone, as after its `.fold/` was deleted, is refused, so the scan never makes `.fold/` again.
     fn open(paths: &ProjectPaths, caps: Capabilities, seed: &Seed) -> Result<Self, FoldError> {
+        if !paths.db().is_file() {
+            return Err(FoldError::new(
+                codes::PROJECT_UNAVAILABLE,
+                "the project database is missing",
+            ));
+        }
         let objects = ObjectStore::open(&paths.fold_dir()).map_err(FoldError::from)?;
         let base = vcs::load_flat(&objects, &seed.base_tree)?;
         let index = StatIndex::load(&paths.workspace_index(seed.workspace), caps);

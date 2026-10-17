@@ -147,6 +147,62 @@ async fn init_registers_with_a_running_daemon() {
     daemon.shutdown().await;
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn init_in_a_folder_whose_fold_data_was_deleted_replaces_the_project_in_the_running_daemon() {
+    let sandbox = Arc::new(Sandbox::new());
+    let daemon = start_daemon(&sandbox, "data").await;
+    let socket = daemon.socket_path().to_string_lossy().into_owned();
+    let project = sandbox.path("scratch");
+    let init = |args: Vec<String>| fold_blocking(sandbox.clone(), args);
+    let first = init(vec![
+        "init".into(),
+        project.to_string_lossy().into_owned(),
+        "--socket".into(),
+        socket.clone(),
+    ])
+    .await;
+    assert!(first.status.success(), "{first:?}");
+    let Some(fold_daemon::projects::Slot::Open(old)) = daemon.state().projects.slot("scratch")
+    else {
+        panic!("the daemon opened the project");
+    };
+
+    for dir in [".fold", ".git"] {
+        std::fs::remove_dir_all(project.join(dir)).unwrap();
+    }
+    // The open project can write these into `.fold/` again before init runs.
+    for dir in [".fold/index", ".fold/objects/tmp"] {
+        std::fs::create_dir_all(project.join(dir)).unwrap();
+    }
+    let (sandbox_again, cwd) = (sandbox.clone(), project.clone());
+    let second = tokio::task::spawn_blocking(move || {
+        sandbox_again.fold_in(&cwd, &["init", "--socket", &socket], &[])
+    })
+    .await
+    .unwrap();
+    assert!(second.status.success(), "{second:?}");
+    let text = stdout(&second);
+    assert!(
+        text.contains(
+            "replaced the registration of the project whose .fold was deleted; the slug scratch stays\n"
+        ),
+        "{text}"
+    );
+    assert!(text.ends_with("opened by the running daemon\n"), "{text}");
+    assert!(old.store.read().is_closed());
+    let Some(fold_daemon::projects::Slot::Open(new)) = daemon.state().projects.slot("scratch")
+    else {
+        panic!("the daemon opened the new project");
+    };
+    assert!(!Arc::ptr_eq(&old, &new));
+    assert!(!new.database_replaced().await);
+    let listed = get_projects(daemon.socket_path()).await;
+    assert_eq!(listed["projects"].as_array().unwrap().len(), 1);
+    assert_eq!(listed["projects"][0]["slug"], "scratch");
+    assert_eq!(listed["projects"][0]["available"], true);
+    daemon.shutdown().await;
+}
+
 #[test]
 fn init_without_a_daemon_skips_the_call() {
     let sandbox = Sandbox::new();

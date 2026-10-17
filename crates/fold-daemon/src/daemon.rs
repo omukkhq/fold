@@ -17,7 +17,7 @@ use crate::config::DaemonConfig;
 use crate::http::{self, assets::AssetSource};
 use crate::jobs::{self, Job};
 use crate::mcp;
-use crate::projects::{ProjectHandle, Projects, resume_workers};
+use crate::projects::{Projects, resume_workers};
 use crate::services::agents::Launcher;
 use crate::socket::SocketServer;
 
@@ -169,7 +169,7 @@ impl Daemon {
             Err(error) => {
                 for handle in state.projects.handles() {
                     handle.bus.close();
-                    stop_project(&handle).await;
+                    handle.stop().await;
                 }
                 let _ = state.registry.close().await;
                 return Err(error);
@@ -229,20 +229,6 @@ async fn bind_socket(
     )
     .await
     .map_err(DaemonError::io("bind the socket"))
-}
-
-/// Closes one project after its workers stopped and its bus closed: the live state of its workspaces is written and let go, its commit writer and push delivery end, every open session ends and its database is checkpointed and closed.
-async fn stop_project(handle: &ProjectHandle) {
-    for live in handle.live.all() {
-        handle.live.detach(live.view.workspace).await;
-    }
-    handle.stop_tasks(DRAIN_TIMEOUT).await;
-    if let Err(error) = handle.agents().close_sessions_at_shutdown().await {
-        tracing::error!(project = %handle.slug, %error, "could not end sessions");
-    }
-    if let Err(error) = handle.store.close().await {
-        tracing::error!(project = %handle.slug, %error, "could not close the project database");
-    }
 }
 
 /// A started daemon. Dropping it without [`RunningDaemon::shutdown`] leaves the sockets to the runtime that is dropped with it.
@@ -310,7 +296,7 @@ impl RunningDaemon {
             abort.abort();
         }
         for handle in &handles {
-            stop_project(handle).await;
+            handle.stop().await;
         }
         if let Err(error) = self.state.registry.close().await {
             tracing::error!(%error, "could not close the registry database");

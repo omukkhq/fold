@@ -682,6 +682,9 @@ fn project_checks(
         )];
     }
     let paths = ProjectPaths::new(root);
+    if std::fs::symlink_metadata(paths.fold_dir()).is_err() {
+        return vec![fold_data_check(&paths)];
+    }
     let watch_applicable =
         watch_limit_verdict(host.platform.linux, host.probe.inotify_max_watches())
             != WatchLimit::NotApplicable;
@@ -703,6 +706,23 @@ fn project_checks(
     let home = host.dirs.home.as_deref().map(absolute_dir);
     checks.extend(shadowing_checks(root, home.as_deref()));
     checks
+}
+
+/// A project folder without `.fold/` holds no project, and `fld init` there makes a new one in place of the registration. A folder that keeps its Git repository takes `--from-git`, as init refuses a plain init of a repository.
+fn fold_data_check(paths: &ProjectPaths) -> Check {
+    let init = if paths.git_dir().is_dir() {
+        "fld init --from-git"
+    } else {
+        "fld init"
+    };
+    Check::fail(
+        "fold data",
+        format!(
+            "{} is missing: the fold data of the project was deleted",
+            paths.fold_dir().display()
+        ),
+        format!("cd {} && {init}", output::shell_quote(paths.root())),
+    )
 }
 
 #[derive(Debug, Default)]

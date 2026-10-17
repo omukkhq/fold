@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::os::unix::fs::MetadataExt;
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
@@ -8,6 +9,7 @@ use fold_store::projects::ProjectRow;
 use fold_vcs::git::Git;
 use fold_vcs::platform::Capabilities;
 
+use crate::daemon::DRAIN_TIMEOUT;
 use crate::jobs::{self, AutoCommit};
 use crate::live::{LiveConfig, LiveState};
 use crate::push::{self, PushTargets, PushTask};
@@ -56,6 +58,8 @@ pub struct ProjectHandle {
     pub workers: Supervisor,
     /// Commits each integration to the project's repository, moves the project folder to it and pushes it when the configuration asks.
     auto_commit: AutoCommit,
+    /// The device and inode of the database file this handle opened. SQLite keeps reading a file that was deleted, so only this tells the handle's database from a new one at the same path.
+    database_file: Option<(u64, u64)>,
 }
 
 impl std::fmt::Debug for ProjectHandle {
@@ -115,6 +119,10 @@ impl ProjectHandle {
             tracing::warn!(project = %row.slug, code = error.log_code(), "project failed to open");
             unavailable(&row.slug)
         })?;
+        let database_file = tokio::fs::metadata(paths.db())
+            .await
+            .ok()
+            .map(|meta| (meta.dev(), meta.ino()));
         let bus = EventBus::new();
         let capabilities = Arc::new(OnceLock::new());
         let live = LiveState::new(
@@ -182,7 +190,40 @@ impl ProjectHandle {
             push_task,
             workers,
             auto_commit,
+            database_file,
         })
+    }
+
+    /// True when the project's database file is gone or is another file than the one this handle opened, as after the project's `.fold/` was deleted, with or without a new `fld init` in the folder. A file that cannot be read for another reason is not replaced, so a passing permission problem never closes a working project.
+    pub async fn database_replaced(&self) -> bool {
+        let Some(opened) = self.database_file else {
+            return false;
+        };
+        match tokio::fs::metadata(self.paths.db()).await {
+            Ok(meta) => (meta.dev(), meta.ino()) != opened,
+            Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+        }
+    }
+
+    /// Ends the worker processes, closes the bus and then the project, as the daemon's stop does for each project, so nothing of the handle runs on after it.
+    pub(crate) async fn close(&self) {
+        self.workers.shutdown().await;
+        self.bus.close();
+        self.stop().await;
+    }
+
+    /// Closes the project after its workers stopped and its bus closed: the live state of its workspaces is written and let go, its commit writer and push delivery end, every open session ends and its database is checkpointed and closed.
+    pub(crate) async fn stop(&self) {
+        for live in self.live.all() {
+            self.live.detach(live.view.workspace).await;
+        }
+        self.stop_tasks(DRAIN_TIMEOUT).await;
+        if let Err(error) = self.agents().close_sessions_at_shutdown().await {
+            tracing::error!(project = %self.slug, %error, "could not end sessions");
+        }
+        if let Err(error) = self.store.close().await {
+            tracing::error!(project = %self.slug, %error, "could not close the project database");
+        }
     }
 
     /// Waits up to `timeout` for the commit writer and the push delivery to end after [`EventBus::close`], then aborts them, so neither outlives the project's database.
@@ -278,7 +319,7 @@ impl Projects {
             .collect()
     }
 
-    /// Opens `row` unless it is already open, in which case the same handle comes back. A new handle runs its start-up sequence before any request can reach it: the database opens with SQLite's own WAL recovery, the workspaces are reconciled with their directories, and every session a previous run left open ends at the start time with its `session.ended`, so presence shows offline until the adapters reconnect. The handle's commit writer runs as it starts, which writes the commit of a revision an integration cut off after its own commit never got and brings the project folder to it, and changes nothing otherwise. No session of this run can exist yet, because a session starts only through an open handle. Once the handle is in place, every worker that was working or idle runs again with its session resumed; a resumed worker's adapter connects through the daemon's socket, which is bound by then, and its handshake opens this same project, so the resume runs after the open has let go of its lock.
+    /// Opens `row` unless it is already open, in which case the same handle comes back. An open handle whose database was deleted or replaced is closed first, with its workers, and leaves the slot, so the folder opens again as it is now: a new project that `fld init` made there opens fresh, and a folder without one is unavailable. A new handle runs its start-up sequence before any request can reach it: the database opens with SQLite's own WAL recovery, the workspaces are reconciled with their directories, and every session a previous run left open ends at the start time with its `session.ended`, so presence shows offline until the adapters reconnect. The handle's commit writer runs as it starts, which writes the commit of a revision an integration cut off after its own commit never got and brings the project folder to it, and changes nothing otherwise. No session of this run can exist yet, because a session starts only through an open handle. Once the handle is in place, every worker that was working or idle runs again with its session resumed; a resumed worker's adapter connects through the daemon's socket, which is bound by then, and its handshake opens this same project, so the resume runs after the open has let go of its lock.
     pub async fn open(
         &self,
         row: &ProjectRow,
@@ -308,7 +349,12 @@ impl Projects {
     ) -> Result<(Arc<ProjectHandle>, bool), FoldError> {
         let _opening = self.opening.lock().await;
         if let Some(Slot::Open(handle)) = self.slot(&row.slug) {
-            return Ok((handle, false));
+            if !handle.database_replaced().await {
+                return Ok((handle, false));
+            }
+            tracing::warn!(project = %row.slug, "project database was deleted or replaced; the open project closes");
+            unpoisoned(self.slots.write()).remove(&row.slug);
+            handle.close().await;
         }
         let outcome = ProjectHandle::open_with(row, clock, self.launcher.clone())
             .await

@@ -70,6 +70,18 @@ pub async fn insert_project(
     Ok(())
 }
 
+/// Deletes the registration of `slug` at `root`, inside the write that registers the project that replaces it. True when the row went.
+pub async fn delete_project(tx: &mut WriteTx, slug: &str, root: &str) -> Result<bool, StoreError> {
+    let result = sqlx::query!(
+        "DELETE FROM projects WHERE slug = ? AND root = ?",
+        slug,
+        root
+    )
+    .execute(tx.conn())
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
 /// A named human of the host registry. Humans belong to the host, not to one project.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HumanRow {

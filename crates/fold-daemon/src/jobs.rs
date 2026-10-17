@@ -223,6 +223,10 @@ pub struct QuietCheckpoints {
 impl QuietCheckpoints {
     /// Takes a `Quiet` checkpoint, as the daemon, of every live workspace of `project` that [`quiet_checkpoint_due`] finds due at the project clock's `now`, and returns how many it recorded. A workspace another operation holds is left for a later run. A workspace that still equals its base and has no checkpoint has nothing to go back to, so it gets none.
     pub async fn run(&mut self, project: &ProjectHandle) -> usize {
+        // A checkpoint writes objects, which would make the deleted `.fold/` again.
+        if project.database_replaced().await {
+            return 0;
+        }
         let config = match projects::load_config(&project.paths).await {
             Ok(config) => config,
             Err(error) => {

@@ -762,6 +762,35 @@ async fn shutdown_ends_every_worker_at_once() {
 }
 
 #[tokio::test]
+async fn opening_a_project_whose_fold_data_was_deleted_ends_its_workers() {
+    let fake = FakeClaude::new("result");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    let lead = start_lead(&mut harness, "web").await;
+    until_state(&harness, &lead, WorkerState::Idle).await;
+    let run = fake.runs_of(&lead).remove(0);
+    std::fs::remove_dir_all(harness.project.paths().fold_dir()).unwrap();
+    let state = harness.state.clone();
+    let open =
+        tokio::spawn(async move { fold_daemon::services::projects::open(&state, SLUG).await });
+    let clock = harness.project.clock().clone();
+    eventually(WAIT, async || {
+        if open.is_finished() {
+            Ok(())
+        } else {
+            clock.advance(Duration::from_secs(6)).unwrap();
+            Err(clock.now())
+        }
+    })
+    .await;
+    let error = open.await.unwrap().unwrap_err();
+    assert_eq!(error.code(), Some(codes::PROJECT_UNAVAILABLE));
+    assert!(fake.saw_eof(&run));
+    assert!(harness.handle.store.read().is_closed());
+}
+
+#[tokio::test]
 async fn a_line_that_is_not_utf8_or_too_long_does_not_stop_the_reader() {
     let fake = FakeClaude::new("result").noisy();
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;

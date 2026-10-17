@@ -1,10 +1,12 @@
 #![cfg(test)]
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::common::invariants::assert_store_consistent;
 use fold_core::object::{ObjectKind, hash_object};
 use fold_core::{HostPaths, ManualClock, ProjectPaths};
+use fold_daemon::projects::ProjectHandle;
 use fold_daemon::services::projects::{InitializedProject, ProjectError, init_project};
 use fold_store::{Store, projects};
 use fold_vcs::objects::ObjectStore;
@@ -132,6 +134,41 @@ async fn an_init_stopped_before_the_registry_insert_finishes_on_the_next_run() {
     let again = host.init().await.unwrap_err();
     assert_eq!(again.code(), Some("project_exists"));
     assert_eq!(host.registered().await, ["app"]);
+    scenario.teardown();
+}
+
+#[tokio::test]
+async fn a_replacing_init_stopped_before_the_registry_change_leaves_the_old_row_on_the_new_project()
+{
+    let scenario = fail::FailScenario::setup();
+    let host = Host::new();
+    host.init().await.unwrap();
+    let paths = host.project_paths();
+    std::fs::remove_dir_all(paths.fold_dir()).unwrap();
+    std::fs::remove_dir_all(paths.git_dir()).unwrap();
+    host.stopped_at("init_before_register").await;
+    assert!(paths.db().is_file());
+    assert_eq!(host.registered().await, ["app"]);
+
+    // The old row names the folder, which holds a complete project again, so it is that project.
+    let error = host.init().await.unwrap_err();
+    assert_eq!(error.code(), Some("project_exists"));
+    assert_eq!(host.registered().await, ["app"]);
+    assert_project_consistent(&paths).await;
+    let registry = Store::open_registry(&host.paths.registry_db())
+        .await
+        .unwrap();
+    let row = projects::find_project(registry.read(), "app")
+        .await
+        .unwrap()
+        .unwrap();
+    registry.close().await.unwrap();
+    let handle = ProjectHandle::open(&row, Arc::new(host.clock.clone()))
+        .await
+        .unwrap();
+    assert!(!handle.database_replaced().await);
+    handle.bus.close();
+    handle.store.close().await.unwrap();
     scenario.teardown();
 }
 

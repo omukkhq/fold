@@ -306,7 +306,7 @@ pub async fn show_git(Project(handle): Project) -> Result<Json<ProjectGit>, ApiE
     Ok(Json(projects::git_status(&handle).await?.into()))
 }
 
-/// Opens a project that was registered after the daemon started. Socket only; an open project answers the same again.
+/// Opens a project that was registered after the daemon started. Socket only; an open project answers the same again, unless its database was deleted or replaced: the daemon then closes it and opens the folder as it is now.
 #[utoipa::path(
     post,
     path = "/api/v1/projects",

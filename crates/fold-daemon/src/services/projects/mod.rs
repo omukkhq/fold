@@ -93,6 +93,8 @@ pub struct InitializedProject {
     pub git_commit: Option<CommitId>,
     /// True when this init finished one that had stopped before it registered the project. `imported` then holds what `revision` records, with no skipped paths: the stopped run's list is gone.
     pub resumed: bool,
+    /// True when the registry held the folder for a project whose `.fold/` was deleted: this project took that registration's place and its slug.
+    pub replaced: bool,
 }
 
 /// Files a caller writes into a new project's folder before init records it, so they are part of `r1` and its first commit. It returns the files and folders it created, which a failed init removes; a file it changed stays changed. Blocking.
@@ -113,7 +115,7 @@ struct Created {
     files: Vec<PathBuf>,
 }
 
-/// Makes `root` a fold project whose folder is main: creates `.fold/`, migrates the project database, writes the commented config, records the folder's files, less the ignore rules, as `r1`, runs `git init` and writes `r1`'s commit, and only then registers the project under a free slug. A folder that is a Git repository is refused with a hint to use `--from-git`. A folder that is inside another repository's working tree is refused with a hint to use `--from-git` at that repository's top, so no repository is nested in another. When the folder has no `.gitignore`, init writes `.foldignore` and makes `.gitignore` a symlink to it before the folder's files are recorded, so both are in `r1` and its commit and the folder is clean after init; an existing `.gitignore` is kept. Init is a host command, so it has no actor and appends no event. A failure after `.fold/` exists removes `.fold/` and what init wrote beside it, never a file of the folder. A `.fold/` that the registry does not know is an init that stopped part-way: when its database is complete the init finishes it, and otherwise it is refused with `project_incomplete` and nothing is removed.
+/// Makes `root` a fold project whose folder is main: creates `.fold/`, migrates the project database, writes the commented config, records the folder's files, less the ignore rules, as `r1`, runs `git init` and writes `r1`'s commit, and only then registers the project under a free slug. A folder that is a Git repository is refused with a hint to use `--from-git`. A folder that is inside another repository's working tree is refused with a hint to use `--from-git` at that repository's top, so no repository is nested in another. When the folder has no `.gitignore`, init writes `.foldignore` and makes `.gitignore` a symlink to it before the folder's files are recorded, so both are in `r1` and its commit and the folder is clean after init; an existing `.gitignore` is kept. Init is a host command, so it has no actor and appends no event. A failure after `.fold/` exists removes `.fold/` and what init wrote beside it, never a file of the folder. A `.fold/` that the registry does not know is an init that stopped part-way: when its database is complete the init finishes it, and otherwise it is refused with `project_incomplete` and nothing is removed. A registered folder that holds `.fold/` is refused with `project_exists`; a registered folder without `.fold/` holds no project, so the new project replaces that registration in the transaction that registers it and keeps its slug.
 pub async fn init_project(
     host: &HostPaths,
     root: &Path,
@@ -315,16 +317,19 @@ async fn create_and_register(
     start: Start,
     clock: &dyn Clock,
 ) -> Result<InitializedProject, ProjectError> {
-    if projects::find_by_root(registry.read(), root_text)
-        .await?
-        .is_some()
-    {
-        return Err(exists(root).into());
-    }
+    let registered = projects::find_by_root(registry.read(), root_text).await?;
     let paths = ProjectPaths::new(root);
-    if !create_fold_dir(&paths).await? {
+    let mut made = create_fold_dir(&paths).await?;
+    if !made && registered.is_some() && remove_leftovers(&paths).await? {
+        made = create_fold_dir(&paths).await?;
+    }
+    if !made {
+        if registered.is_some() {
+            return Err(registered_refusal(&paths).await.into());
+        }
         return finish_stopped(registry, &paths, root_text, name, git, clock).await;
     }
+    let replaces = registered.map(|row| row.slug);
     let _init = match lock_fold_dir(&paths).await {
         Ok(lock) => lock,
         Err(error) => {
@@ -338,6 +343,7 @@ async fn create_and_register(
         &paths,
         root_text,
         name,
+        replaces.as_deref(),
         git,
         start,
         &mut created,
@@ -367,6 +373,7 @@ async fn populate_and_register(
     paths: &ProjectPaths,
     root_text: &str,
     name: String,
+    replaces: Option<&str>,
     git: &Git,
     start: Start,
     created: &mut Created,
@@ -398,7 +405,7 @@ async fn populate_and_register(
         "init_before_register"
     )
     .into()));
-    let row = register(registry, root_text, name, now).await?;
+    let (row, replaced) = register(registry, root_text, name, replaces, now).await?;
     Ok(InitializedProject {
         slug: row.slug,
         name: row.name,
@@ -407,27 +414,37 @@ async fn populate_and_register(
         imported,
         git_commit,
         resumed: false,
+        replaced,
     })
 }
 
-/// Inserts the registry row under a free slug made from `name`.
+/// Inserts the registry row under a free slug made from `name`. With `replaces`, the slug of the folder's registration whose `.fold/` was deleted, that row goes in the same transaction and the new row takes its slug, so the web addresses of the project stay; a row that changed since init read it stays, and the insert then refuses the folder with `project_exists`. The flag tells whether a row went.
 async fn register(
     registry: &Store,
     root_text: &str,
     name: String,
+    replaces: Option<&str>,
     now: Timestamp,
-) -> Result<ProjectRow, ProjectError> {
+) -> Result<(ProjectRow, bool), ProjectError> {
     let base = slugify(&name);
     registry
-        .write(async |tx| -> Result<ProjectRow, ProjectError> {
+        .write(async |tx| -> Result<(ProjectRow, bool), ProjectError> {
+            let replaced = match replaces {
+                Some(slug) => projects::delete_project(tx, slug, root_text).await?,
+                None => false,
+            };
             let existing: BTreeSet<String> = projects::slugs(tx).await?.into_iter().collect();
+            let slug = match replaces {
+                Some(slug) if replaced => slug.to_owned(),
+                _ => choose_slug(&base, &existing),
+            };
             let row = ProjectRow {
-                slug: choose_slug(&base, &existing),
+                slug,
                 name,
                 root: root_text.to_owned(),
             };
             match projects::insert_project(tx, &row, now).await {
-                Ok(()) => Ok(row),
+                Ok(()) => Ok((row, replaced)),
                 Err(error) if error.unique_violation() => Err(exists(Path::new(root_text)).into()),
                 Err(error) => Err(error.into()),
             }
@@ -483,7 +500,7 @@ async fn finish_stopped(
     let Some((imported, git_commit)) = finished else {
         return Err(incomplete(paths).into());
     };
-    let row = register(registry, root_text, name, clock.now()).await?;
+    let (row, _) = register(registry, root_text, name, None, clock.now()).await?;
     Ok(InitializedProject {
         slug: row.slug,
         name: row.name,
@@ -492,6 +509,7 @@ async fn finish_stopped(
         imported,
         git_commit,
         resumed: true,
+        replaced: false,
     })
 }
 
@@ -855,6 +873,86 @@ fn exists(root: &Path) -> FoldError {
     .with_hint("open the project that exists there instead of running init again")
 }
 
+/// Removes the `.fold/` of a registered folder when it has no database and holds only what a daemon that still had the project open writes after `.fold/` was deleted, so the folder holds no project and the init goes on. Any other content keeps `.fold/` as it is, and so does a running init, which holds the lock.
+async fn remove_leftovers(paths: &ProjectPaths) -> Result<bool, ProjectError> {
+    let Some(_init) = try_lock_fold_dir(paths).await? else {
+        return Ok(false);
+    };
+    let paths = paths.clone();
+    let removed = tokio::task::spawn_blocking(move || {
+        if std::fs::symlink_metadata(paths.db()).is_ok() || !only_leftovers(&paths)? {
+            return Ok(false);
+        }
+        std::fs::remove_dir_all(paths.fold_dir())?;
+        Ok(true)
+    })
+    .await;
+    flatten(removed).map_err(|error| io_error(&error))
+}
+
+/// True when every file below `.fold/` is one that a project handle on a deleted database can write: a stat index below `index/`, a staged object below `objects/tmp/`, a capability probe, or an empty WAL or shared-memory file. Directories may be anywhere; a symbolic link or a published object is project content.
+fn only_leftovers(paths: &ProjectPaths) -> io::Result<bool> {
+    let fold = paths.fold_dir();
+    let index = paths.index();
+    let staged = paths.objects().join("tmp");
+    let empty_journals = ["-wal", "-shm"].map(|suffix| {
+        let mut name = paths.db().into_os_string();
+        name.push(suffix);
+        PathBuf::from(name)
+    });
+    let mut pending = vec![fold.clone()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir)? {
+            let path = entry?.path();
+            let meta = std::fs::symlink_metadata(&path)?;
+            if meta.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            let probe = path.strip_prefix(&fold).ok().and_then(|relative| {
+                relative
+                    .components()
+                    .next()
+                    .and_then(|first| first.as_os_str().to_str())
+            });
+            let leftover = meta.is_file()
+                && (path.starts_with(&index)
+                    || path.starts_with(&staged)
+                    || probe.is_some_and(|first| first.starts_with("probe-"))
+                    || (empty_journals.contains(&path) && meta.len() == 0));
+            if !leftover {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
+/// The refusal of an init in a registered folder that holds `.fold/`: `project_exists` while the project database is there, and `project_incomplete` when `.fold/` has no database but holds more than [`remove_leftovers`] removes.
+async fn registered_refusal(paths: &ProjectPaths) -> FoldError {
+    let db = paths.db();
+    let missing = tokio::task::spawn_blocking(move || std::fs::symlink_metadata(db).is_err())
+        .await
+        .unwrap_or(false);
+    if missing {
+        FoldError::new(
+            codes::PROJECT_INCOMPLETE,
+            format!(
+                "{} is registered, but its project database {} is missing",
+                paths.root().display(),
+                paths.db().display()
+            ),
+        )
+        .with_hint(format!(
+            "restore {} from a backup, or delete {} and run fld init again to make a new project there",
+            paths.db().display(),
+            paths.fold_dir().display()
+        ))
+    } else {
+        exists(paths.root())
+    }
+}
+
 fn incomplete(paths: &ProjectPaths) -> FoldError {
     FoldError::new(
         codes::PROJECT_INCOMPLETE,
@@ -1090,6 +1188,29 @@ pub async fn slug_for_dir_on_host(host: &HostPaths, cwd: &Path) -> Result<String
     let slug = slug_for_dir(&registry, cwd).await;
     registry.close().await?;
     slug
+}
+
+/// The slug the host registry holds for the folder `root` when the folder has no `.fold/fold.db`, as after its fold data was deleted; an init there replaces that registration when `.fold/` is gone too. `None` when the folder or the registry does not exist, the folder is not registered or it holds the database. It reads the registry without a running daemon, so `fld init` can have the daemon let go of the old project before the new one is created.
+pub async fn deleted_project_slug(
+    host: &HostPaths,
+    root: &Path,
+) -> Result<Option<String>, ProjectError> {
+    let (given, registry_db) = (root.to_owned(), host.registry_db());
+    let found = blocking(move || {
+        let Ok(root) = std::fs::canonicalize(given) else {
+            return Ok(None);
+        };
+        let without_data = std::fs::symlink_metadata(ProjectPaths::new(&root).db()).is_err();
+        Ok((without_data && registry_db.is_file()).then_some(root))
+    })
+    .await?;
+    let Some(root_text) = found.as_deref().and_then(Path::to_str) else {
+        return Ok(None);
+    };
+    let registry = Store::open_registry(&host.registry_db()).await?;
+    let row = projects::find_by_root(registry.read(), root_text).await;
+    registry.close().await?;
+    Ok(row?.map(|row| row.slug))
 }
 
 /// The registered root of the project that holds `cwd`, read from the host registry without a running daemon.

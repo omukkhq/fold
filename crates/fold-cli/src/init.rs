@@ -8,7 +8,8 @@ use fold_cli::daemon_client::{self, ClientConfig, ClientError, DaemonClient, Res
 use fold_core::{FoldError, HostPaths, ProjectPaths, codes};
 use fold_daemon::SystemClock;
 use fold_daemon::services::projects::{
-    FolderFiles, ProjectError, init_new_project, init_project_from_git, root_for_dir_on_host,
+    FolderFiles, ProjectError, deleted_project_slug, init_new_project, init_project_from_git,
+    root_for_dir_on_host,
 };
 use fold_vcs::git::Git;
 use hyper::Method;
@@ -128,6 +129,13 @@ pub(crate) fn initialise(
     let socket = socket_path(args.socket.as_deref(), dirs);
     let runtime = current_thread_runtime().map_err(InitError::Runtime)?;
     let name = args.name.as_deref();
+    if let Ok(Some(socket)) = &socket {
+        let deleted = runtime.block_on(deleted_project_slug(&host, dir))?;
+        if let Some(slug) = deleted {
+            // The daemon closes a project whose database was deleted when it is asked to open it, so the old project and its workers are gone before init creates the new one there.
+            let _ = runtime.block_on(register(&client(socket.clone()), &slug));
+        }
+    }
     let project = runtime.block_on(async {
         if args.from_git {
             init_project_from_git(&host, dir, name, Git::default(), &SystemClock).await
@@ -141,6 +149,15 @@ pub(crate) fn initialise(
         out,
         &format!("initialised project {} at {root}", project.slug),
     )?;
+    if project.replaced {
+        output::line(
+            out,
+            &format!(
+                "replaced the registration of the project whose .fold was deleted; the slug {} stays",
+                project.slug
+            ),
+        )?;
+    }
     if project.resumed {
         output::line(
             out,
