@@ -7,7 +7,7 @@ import {
   commitsByRevision,
   eventRows,
   liveDot,
-} from "./eventStream";
+} from "./eventStreamModel";
 
 function event(seq: number, over: Partial<DurableEvent> = {}): DurableEvent {
   return {

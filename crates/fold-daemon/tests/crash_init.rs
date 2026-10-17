@@ -75,7 +75,8 @@ async fn assert_project_consistent(paths: &ProjectPaths) {
 /// Every file below `dir` with its content, the database's WAL and shared-memory files left out, since opening the database may create them.
 fn files(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     let mut found = Vec::new();
-    let mut pending = vec![dir.to_path_buf()];
+    // Canonical like the project paths: macOS reaches its temporary folders through the `/var` symlink.
+    let mut pending = vec![dir.canonicalize().unwrap()];
     while let Some(at) = pending.pop() {
         for entry in std::fs::read_dir(&at).unwrap() {
             let path = entry.unwrap().path();

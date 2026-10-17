@@ -208,14 +208,15 @@ async fn accept_one(listener: &tokio::net::UnixListener) -> String {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn init_names_its_human_in_the_request() {
-    use std::os::unix::fs::MetadataExt;
-
     let sandbox = Arc::new(Sandbox::new());
     let socket = sandbox.path("fake.sock");
     let listener = tokio::net::UnixListener::bind(&socket).unwrap();
-    let uid = std::fs::metadata("/proc/self").unwrap().uid();
-    let passwd = std::fs::read_to_string("/etc/passwd").unwrap();
-    let account = fold_cli::daemon_client::account_name(&passwd, uid).unwrap();
+    let id = std::process::Command::new("id")
+        .arg("-un")
+        .output()
+        .unwrap();
+    let account = String::from_utf8(id.stdout).unwrap().trim().to_owned();
+    assert!(!account.is_empty());
     for (project, env, human) in [
         (
             "lead-project",

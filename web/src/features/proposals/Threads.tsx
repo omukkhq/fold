@@ -9,7 +9,7 @@ import { MentionTextarea } from "@/mentions/MentionTextarea";
 import { formatAsOfMinute } from "@/format/time";
 import { cn } from "@/lib/cn";
 import { commentSchema, type CommentValues } from "./compose";
-import { commentNote, composerTitle, type CommentThread } from "./threads";
+import { commentNote, composerTitle, type CommentThread } from "./threadsModel";
 
 export function ThreadBox({
   slug,

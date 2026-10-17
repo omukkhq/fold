@@ -516,6 +516,18 @@ fn systemd_available(host: &Host) -> bool {
 fn service_manager_check(host: &Host) -> Check {
     if systemd_available(host) {
         Check::ok("service manager", "systemd user services are available")
+    } else if host.launchctl().is_some() {
+        let installed = host.agent_path().filter(|path| path.is_file());
+        Check::ok(
+            "service manager",
+            format!(
+                "launchd user agents are available; fold's agent is {}",
+                installed.map_or_else(
+                    || "not installed".to_owned(),
+                    |path| path.display().to_string()
+                )
+            ),
+        )
     } else {
         Check::warn(
             "service manager",

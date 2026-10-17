@@ -50,7 +50,7 @@ import { integrationOf, mainHead } from "./integration";
 import { ProposalHeader } from "./ProposalHeader";
 import { SidePanel } from "./SidePanel";
 import { CommentComposer, ThreadBox } from "./Threads";
-import { buildThreads, heldLines, placeThreads } from "./threads";
+import { buildThreads, heldLines, placeThreads } from "./threadsModel";
 import {
   OLD_SIDE_NOTE,
   commentsOnSide,

@@ -80,7 +80,12 @@ pub(crate) struct Dirs {
     pub(crate) config_home: Option<PathBuf>,
     pub(crate) data_home: Option<PathBuf>,
     pub(crate) runtime_dir: Option<PathBuf>,
+    /// True on macOS, which sets no `XDG_RUNTIME_DIR`: the runtime directory is then [`LIBRARY_RUNTIME_DIR`] below the home directory.
+    pub(crate) library_runtime: bool,
 }
+
+/// The macOS runtime directory below the home directory. It is per user and outside `$TMPDIR`, which macOS empties of files left untouched for days, a running daemon's socket included; the path stays well inside the 104 bytes macOS allows a socket path.
+pub(crate) const LIBRARY_RUNTIME_DIR: &str = "Library/Application Support/fold/run";
 
 impl Dirs {
     pub(crate) fn from_env() -> Self {
@@ -94,6 +99,7 @@ impl Dirs {
             config_home: var("XDG_CONFIG_HOME"),
             data_home: var("XDG_DATA_HOME"),
             runtime_dir: var("XDG_RUNTIME_DIR"),
+            library_runtime: cfg!(target_os = "macos"),
         }
     }
 
@@ -115,13 +121,13 @@ impl Dirs {
     }
 }
 
-/// `$XDG_RUNTIME_DIR/fold`, which holds the daemon lock, the start lock and the default socket.
+/// `$XDG_RUNTIME_DIR/fold`, which holds the daemon lock, the start lock and the default socket. On macOS without `XDG_RUNTIME_DIR` it is [`LIBRARY_RUNTIME_DIR`] below the home directory.
 pub(crate) fn runtime_dir(dirs: &Dirs) -> Result<PathBuf, ServeError> {
-    let base = dirs
-        .runtime_dir
-        .clone()
-        .ok_or(DaemonError::RuntimeDirMissing)?;
-    Ok(base.join("fold"))
+    match (&dirs.runtime_dir, &dirs.home) {
+        (Some(base), _) => Ok(base.join("fold")),
+        (None, Some(home)) if dirs.library_runtime => Ok(home.join(LIBRARY_RUNTIME_DIR)),
+        (None, _) => Err(DaemonError::RuntimeDirMissing.into()),
+    }
 }
 
 /// The current-thread runtime that runs the one async exchange of a command.
@@ -276,6 +282,7 @@ mod tests {
             config_home: None,
             data_home: None,
             runtime_dir: Some("/run/user/1000".into()),
+            library_runtime: false,
         }
     }
 
@@ -411,5 +418,34 @@ mod tests {
             ..dirs()
         };
         assert!(runtime_dir(&no_runtime).is_err());
+    }
+
+    #[test]
+    fn on_macos_the_runtime_directory_falls_back_to_the_library_folder() {
+        let library = Dirs {
+            runtime_dir: None,
+            library_runtime: true,
+            ..dirs()
+        };
+        assert_eq!(
+            runtime_dir(&library).unwrap(),
+            Path::new("/home/ana/Library/Application Support/fold/run")
+        );
+        let config = build_config(&args(None, None), &library, &FileConfig::default()).unwrap();
+        assert_eq!(
+            config.socket,
+            Path::new("/home/ana/Library/Application Support/fold/run/fold.sock")
+        );
+        let set = Dirs {
+            library_runtime: true,
+            ..dirs()
+        };
+        assert_eq!(runtime_dir(&set).unwrap(), Path::new("/run/user/1000/fold"));
+        let homeless = Dirs {
+            home: None,
+            ..library
+        };
+        assert!(runtime_dir(&homeless).is_err());
+        assert_eq!(Dirs::from_env().library_runtime, cfg!(target_os = "macos"));
     }
 }

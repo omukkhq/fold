@@ -2,7 +2,7 @@ import { ScanEye } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "../../lib/cn";
 import { PersonName } from "../../people/PersonName";
-import { checkoutText } from "./eventStream";
+import { checkoutText } from "./eventStreamModel";
 import { useReviewCheckouts } from "./useEventStream";
 
 const ROW = "flex flex-wrap items-center gap-12 px-16 py-12";

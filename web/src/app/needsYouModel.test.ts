@@ -6,7 +6,7 @@ import {
   questionText,
   titleText,
   waitingText,
-} from "./needsYou";
+} from "./needsYouModel";
 
 const items = [
   needsItem({

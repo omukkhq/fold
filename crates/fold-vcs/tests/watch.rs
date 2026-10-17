@@ -88,6 +88,12 @@ fn changed_until(
     seen
 }
 
+/// Writes a marker file and waits for its batch. FSEvents may still report changes made just before its stream started, and they arrive before the marker's; inotify reports none of them.
+fn settle(rx: &Receiver<WatchEvent>, id: WorkspaceId, root: &Path) {
+    fs::write(root.join("settled"), b"").unwrap();
+    changed_until(rx, id, &["settled"]);
+}
+
 fn workspace_dir(parent: &tempfile::TempDir, name: &str) -> PathBuf {
     let root = parent.path().join(name);
     fs::create_dir(&root).unwrap();
@@ -100,6 +106,7 @@ struct FakeState {
     limit: Option<usize>,
     unsupported: bool,
     backslash: bool,
+    subtrees: bool,
 }
 
 #[derive(Clone, Default)]
@@ -124,8 +131,18 @@ impl Fake {
         fake
     }
 
+    fn subtrees() -> Self {
+        let fake = Self::default();
+        fake.0.lock().unwrap().subtrees = true;
+        fake
+    }
+
     fn watched(&self) -> usize {
         self.0.lock().unwrap().watched.len()
+    }
+
+    fn watched_paths(&self) -> Vec<PathBuf> {
+        self.0.lock().unwrap().watched.iter().cloned().collect()
     }
 }
 
@@ -152,6 +169,60 @@ impl WatchBackend for Fake {
     fn backslash_separates(&self) -> bool {
         self.0.lock().unwrap().backslash
     }
+
+    fn watches_subtrees(&self) -> bool {
+        self.0.lock().unwrap().subtrees
+    }
+}
+
+#[test]
+fn a_backend_that_watches_subtrees_gets_only_the_roots() {
+    let parent = tempfile::tempdir().unwrap();
+    let root = workspace_dir(&parent, "one");
+    let other = workspace_dir(&parent, "two");
+    fs::create_dir_all(root.join("src/deep")).unwrap();
+    fs::create_dir(root.join("gone")).unwrap();
+    let fake = Fake::subtrees();
+    let (hub, rx) = with_backend(fake.clone(), config(50, 1_000));
+    hub.add_workspace(ws(1), &root, rules(&root));
+    hub.add_workspace(ws(2), &other, rules(&other));
+    assert_eq!(fake.watched_paths(), vec![root.clone(), other.clone()]);
+    assert_eq!(
+        hub.watched_dirs(ws(1)),
+        vec![
+            root.clone(),
+            root.join("gone"),
+            root.join("src"),
+            root.join("src/deep")
+        ]
+    );
+
+    // A change deep in the tree arrives on the root's watch alone.
+    let notifier = hub.notifier();
+    fs::write(root.join("src/deep/a"), b"a").unwrap();
+    notifier.send(Ok(
+        Event::new(EventKind::Create(CreateKind::File)).add_path(root.join("src/deep/a"))
+    ));
+    assert_eq!(
+        changed_until(&rx, ws(1), &["src/deep/a"]),
+        BTreeSet::from([path("src/deep/a")])
+    );
+
+    // A removed directory leaves the hub's record; the root keeps its watch.
+    fs::remove_dir(root.join("gone")).unwrap();
+    notifier.send(Ok(
+        Event::new(EventKind::Remove(RemoveKind::Folder)).add_path(root.join("gone"))
+    ));
+    changed_until(&rx, ws(1), &["gone"]);
+    assert_eq!(
+        hub.watched_dirs(ws(1)),
+        vec![root.clone(), root.join("src"), root.join("src/deep")]
+    );
+    assert_eq!(fake.watched_paths(), vec![root.clone(), other.clone()]);
+
+    hub.remove_workspace(ws(1));
+    assert_eq!(fake.watched_paths(), vec![other]);
+    hub.shutdown();
 }
 
 #[test]
@@ -260,6 +331,7 @@ fn ignored_directories_cost_no_watch_and_no_event() {
         hub.watched_dirs(ws(1)),
         vec![root.to_path_buf(), root.join("src")]
     );
+    settle(&rx, ws(1), root);
     fs::write(root.join("build/out.o"), b"o").unwrap();
     fs::write(root.join("build/deep/out.o"), b"o").unwrap();
     fs::write(root.join(".git/HEAD"), b"h").unwrap();

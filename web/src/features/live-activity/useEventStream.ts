@@ -9,7 +9,7 @@ import {
   eventRows,
   type CheckoutRow,
   type EventRow,
-} from "./eventStream";
+} from "./eventStreamModel";
 
 export interface EventStreamView {
   status: "pending" | "error" | "ready";

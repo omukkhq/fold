@@ -1,5 +1,5 @@
 import { cn } from "@/lib/cn";
-import { SKELETON_BARS } from "./skeleton";
+import { SKELETON_BARS } from "./skeletonModel";
 
 interface SkeletonProps {
   className?: string;

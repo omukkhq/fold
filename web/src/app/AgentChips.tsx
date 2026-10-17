@@ -12,7 +12,7 @@ import {
   chipAgents,
   chipStateText,
   isPaused,
-} from "./agentChips";
+} from "./agentChipsModel";
 import { HrefLink } from "./HrefLink";
 
 const MINUTE_MS = 60_000;

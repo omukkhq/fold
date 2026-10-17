@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 /// The ignored test that the outer test runs inside the namespace.
+#[cfg(target_os = "linux")]
 const INNER: &str = "acceptance_9_offline::acceptance_9_offline_inner";
 /// Set by the outer test on the child, so the inner test proves the isolation only where it is promised.
 const NAMESPACE_VAR: &str = "FOLD_TEST_OFFLINE_NAMESPACE";

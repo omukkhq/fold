@@ -1,7 +1,7 @@
 import { CommitId } from "@/components/mono/CommitId";
 import { PersonName } from "@/people/PersonName";
 import { cn } from "../../lib/cn";
-import { liveDot } from "./eventStream";
+import { liveDot } from "./eventStreamModel";
 import { useEventStream } from "./useEventStream";
 
 const DOT: Record<ReturnType<typeof liveDot>["tone"], string> = {

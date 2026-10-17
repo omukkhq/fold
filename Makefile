@@ -130,7 +130,10 @@ sqlx-prepare: sqlx-scratch ## Refresh the .sqlx query metadata after changing a 
 sqlx-check: sqlx-scratch ## Fail when the .sqlx query metadata is stale
 	SQLX_OFFLINE=false DATABASE_URL=$(SQLX_DB_URL) cargo sqlx prepare --workspace --check -- --all-targets
 
+# macOS file systems ignore case, so an import of ./Card would find card.ts when it sits next to Card.tsx.
 check-web-sources: web-install
+	@dupes=$$(git ls-files web/src | sed -E 's/\.[^./]+$$//' | sort -u | sort -f | uniq -di); \
+		[ -z "$$dupes" ] || { echo "web/src has module names that differ only in case, which clash on macOS: $$dupes" >&2; exit 1; }
 	cd web && bun run typecheck
 	cd web && bun run lint
 	cd web && bun run format:check

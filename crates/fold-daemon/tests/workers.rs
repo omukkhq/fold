@@ -678,12 +678,14 @@ async fn a_stop_escalates_to_signals_on_the_projects_clock() {
     );
 }
 
-/// Whether `pid` is gone or only waits to be reaped.
+/// Whether `pid` is gone or only waits to be reaped. `ps` prints the state of a listed process and nothing for one that is gone, on Linux and on macOS.
 fn ended(pid: u32) -> bool {
-    std::fs::read_to_string(format!("/proc/{pid}/stat")).map_or(true, |stat| {
-        stat.rsplit_once(')')
-            .is_some_and(|(_, rest)| rest.trim_start().starts_with('Z'))
-    })
+    let output = std::process::Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+        .unwrap();
+    let state = String::from_utf8_lossy(&output.stdout);
+    state.trim().is_empty() || state.trim_start().starts_with('Z')
 }
 
 #[tokio::test]

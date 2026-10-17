@@ -130,22 +130,31 @@ pub async fn list_agents(client: &Client) -> Value {
     serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap()
 }
 
+/// The process table with each process's arguments. sysinfo reads it on every platform; macOS has no `/proc`.
+fn processes() -> sysinfo::System {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, UpdateKind};
+    let mut system = sysinfo::System::new();
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always),
+    );
+    system
+}
+
 /// The pids of the `fld serve` processes that use `socket`.
 pub fn daemons(socket: &Path) -> Vec<i32> {
-    let socket = socket.to_string_lossy().into_owned();
-    std::fs::read_dir("/proc")
-        .unwrap()
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            let pid: i32 = entry.file_name().to_str()?.parse().ok()?;
-            let cmdline = std::fs::read(entry.path().join("cmdline")).ok()?;
-            let args: Vec<String> = cmdline
-                .split(|byte| *byte == 0)
-                .map(|arg| String::from_utf8_lossy(arg).into_owned())
-                .collect();
-            let ours = args.iter().any(|arg| arg == "serve") && args.contains(&socket);
-            ours.then_some(pid)
+    let socket = socket.as_os_str();
+    processes()
+        .processes()
+        .iter()
+        // On Linux sysinfo lists every thread of a process as well.
+        .filter(|(_, process)| process.thread_kind().is_none())
+        .filter(|(_, process)| {
+            let args = process.cmd();
+            args.iter().any(|arg| arg == "serve") && args.iter().any(|arg| arg == socket)
         })
+        .filter_map(|(pid, _)| i32::try_from(pid.as_u32()).ok())
         .collect()
 }
 
@@ -157,10 +166,16 @@ impl DaemonGuard {
         let pids = std::mem::take(&mut self.0);
         terminate(&pids);
         fold_store::testing::eventually(std::time::Duration::from_secs(10), async || {
+            let table = processes();
             let alive: Vec<i32> = pids
                 .iter()
                 .copied()
-                .filter(|pid| Path::new(&format!("/proc/{pid}")).exists() && !zombie(*pid))
+                .filter(|pid| {
+                    u32::try_from(*pid)
+                        .ok()
+                        .and_then(|pid| table.process(sysinfo::Pid::from_u32(pid)))
+                        .is_some_and(|process| process.status() != sysinfo::ProcessStatus::Zombie)
+                })
                 .collect();
             if alive.is_empty() { Ok(()) } else { Err(alive) }
         })
@@ -180,16 +195,6 @@ fn terminate(pids: &[i32]) {
             let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
         }
     }
-}
-
-fn zombie(pid: i32) -> bool {
-    std::fs::read_to_string(format!("/proc/{pid}/stat"))
-        .map(|stat| {
-            stat.rsplit(") ")
-                .next()
-                .is_some_and(|rest| rest.starts_with('Z'))
-        })
-        .unwrap_or(false)
 }
 
 /// The files `fld init` writes into a new project's folder that are there now, and their bytes as `r1` counts them: a symlink by its target. A `.gitignore` counts only as the symlink init makes, never as the folder's own file.

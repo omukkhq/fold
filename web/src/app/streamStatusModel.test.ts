@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { INITIAL_STATUS, type LiveStatus } from "../live/status";
-import { streamView, syncedAt } from "./streamStatus";
+import { streamView, syncedAt } from "./streamStatusModel";
 
 const status = (patch: Partial<LiveStatus>): LiveStatus => ({
   ...INITIAL_STATUS,

@@ -27,8 +27,9 @@ impl Sandbox {
         sandbox
     }
 
+    /// Below the canonical folder, the form fold records and prints: macOS reaches its temporary folders through the `/var` symlink.
     fn path(&self, name: &str) -> PathBuf {
-        self.dir.path().join(name)
+        self.dir.path().canonicalize().unwrap().join(name)
     }
 
     fn socket(&self) -> PathBuf {

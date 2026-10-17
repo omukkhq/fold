@@ -99,7 +99,7 @@ pub fn human_from(
         .ok_or(ClientError::HumanUnknown)
 }
 
-/// The human from the environment, else the account name of this process's user in `/etc/passwd`.
+/// The human from the environment, else the account name of this process's user.
 pub fn human_from_env() -> Result<String, ClientError> {
     human_from(
         std::env::var_os("FOLD_HUMAN"),
@@ -109,11 +109,32 @@ pub fn human_from_env() -> Result<String, ClientError> {
     .or_else(|error| os_account().ok_or(error))
 }
 
+/// The `/etc/passwd` entry of this process's user, else, on macOS, the account the directory service knows: macOS keeps people's accounts there and only system accounts in `/etc/passwd`.
 fn os_account() -> Option<String> {
-    use std::os::unix::fs::MetadataExt;
+    let uid = rustix::process::getuid().as_raw();
+    std::fs::read_to_string("/etc/passwd")
+        .ok()
+        .and_then(|passwd| account_name(&passwd, uid))
+        .or_else(directory_account)
+}
 
-    let uid = std::fs::metadata("/proc/self").ok()?.uid();
-    account_name(&std::fs::read_to_string("/etc/passwd").ok()?, uid)
+#[cfg(target_os = "macos")]
+fn directory_account() -> Option<String> {
+    let output = Command::new("/usr/bin/id")
+        .arg("-un")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|output| output.status.success())?;
+    let name = String::from_utf8(output.stdout).ok()?;
+    let name = name.trim();
+    (!name.is_empty()).then(|| name.to_owned())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn directory_account() -> Option<String> {
+    None
 }
 
 /// The name of the `passwd` entry for `uid`: the first field of the line whose third field is `uid`.
@@ -148,12 +169,12 @@ pub async fn connect(config: &ClientConfig) -> Result<UnixStream, ClientError> {
     UnixStream::from_std(stream).map_err(io_error("connect to the daemon socket"))
 }
 
-/// A socket file without a listener is a daemon that did not stop cleanly; the next daemon removes it.
+/// A socket file without a listener is a daemon that did not stop cleanly; the next daemon removes it, as it removes any other file at the socket path, which Linux refuses as a connection and macOS as `ENOTSOCK`. A path the platform cannot take as a socket address, such as one longer than the 104 bytes macOS allows, has no daemon either: none could bind it.
 fn absent(error: &io::Error) -> bool {
     matches!(
         error.kind(),
-        io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
-    )
+        io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused | io::ErrorKind::InvalidInput
+    ) || error.raw_os_error() == Some(rustix::io::Errno::NOTSOCK.raw_os_error())
 }
 
 fn start_and_connect(

@@ -17,8 +17,12 @@ impl Sandbox {
         })
     }
 
+    /// Below the canonical folder, the form fold records and prints: macOS reaches its temporary folders through the `/var` symlink.
     fn path(&self, name: &str) -> PathBuf {
-        self.dir.path().join(name)
+        let root = self.dir.path();
+        root.canonicalize()
+            .unwrap_or_else(|_| root.to_path_buf())
+            .join(name)
     }
 
     /// The environment holds no real home, no runtime directory and an empty `PATH`, so a run sees only the sandbox.

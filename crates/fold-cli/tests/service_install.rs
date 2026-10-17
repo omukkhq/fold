@@ -38,11 +38,17 @@ impl Sandbox {
         command.output()
     }
 
+    #[cfg(target_os = "linux")]
     fn fake_systemctl(&self, exit: i32) -> io::Result<(PathBuf, PathBuf)> {
+        self.fake_tool("systemctl", exit)
+    }
+
+    /// A script called `name` in the sandbox's `bin` that logs its arguments to `<name>.log` and exits with `exit`.
+    fn fake_tool(&self, name: &str, exit: i32) -> io::Result<(PathBuf, PathBuf)> {
         let bin = self.path("bin");
         std::fs::create_dir_all(&bin)?;
-        let log = self.path("systemctl.log");
-        let script = bin.join("systemctl");
+        let log = self.path(&format!("{name}.log"));
+        let script = bin.join(name);
         std::fs::write(
             &script,
             format!(
@@ -55,6 +61,7 @@ impl Sandbox {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn golden(exe: &str) -> String {
     format!(
         "[Unit]\nDescription=fold daemon\nAfter=default.target\n\n[Service]\nType=simple\nExecStart={exe} serve\nRestart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n"
@@ -141,4 +148,66 @@ fn a_host_without_systemctl_is_refused_with_invalid_request() {
     );
     assert!(text.contains("hint: run `fld serve` under the host's own supervisor"));
     assert!(!sandbox.path("home/.config").exists());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn no_start_on_macos_writes_the_launch_agent_and_runs_no_launchctl() {
+    let sandbox = Sandbox::new().unwrap();
+    let (bin, log) = sandbox.fake_tool("launchctl", 0).unwrap();
+    let output = sandbox.fold(&["setup", "--no-start"], &bin, None).unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let agent = sandbox.path("home/Library/LaunchAgents/dev.omukk.fold.plist");
+    let text = std::fs::read_to_string(&agent).unwrap();
+    assert!(text.contains("<string>dev.omukk.fold</string>"));
+    assert!(text.contains("<string>serve</string>"));
+    assert!(text.contains(&format!(
+        "<key>PATH</key>\n\t\t<string>{}</string>",
+        bin.display()
+    )));
+    assert_eq!(stdout(&output), format!("wrote {}\n", agent.display()));
+    assert!(!log.exists());
+    // The plist parser of macOS accepts the file.
+    let lint = Command::new("/usr/bin/plutil")
+        .arg("-lint")
+        .arg(&agent)
+        .output()
+        .unwrap();
+    assert!(
+        lint.status.success(),
+        "{}",
+        String::from_utf8_lossy(&lint.stdout)
+    );
+    assert!(!sandbox.path("home/.config/systemd").exists());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn setup_on_macos_loads_the_agent_through_launchctl() {
+    let sandbox = Sandbox::new().unwrap();
+    let (bin, log) = sandbox.fake_tool("launchctl", 0).unwrap();
+    let output = sandbox.fold(&["setup"], &bin, None).unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let uid = rustix::process::getuid().as_raw();
+    let agent = sandbox.path("home/Library/LaunchAgents/dev.omukk.fold.plist");
+    assert_eq!(
+        std::fs::read_to_string(&log).unwrap(),
+        format!(
+            "bootout gui/{uid}/dev.omukk.fold\nenable gui/{uid}/dev.omukk.fold\nbootstrap gui/{uid} {}\n",
+            agent.display()
+        )
+    );
+    assert!(stdout(&output).contains("loaded dev.omukk.fold"));
+
+    let broken = Sandbox::new().unwrap();
+    let (bin, _) = broken.fake_tool("launchctl", 1).unwrap();
+    let failing = broken.fold(&["setup"], &bin, None).unwrap();
+    assert_eq!(failing.status.code(), Some(1));
+    assert!(stderr(&failing).contains("service_install_failed"));
+
+    let missing = Sandbox::new().unwrap();
+    let refused = missing.fold(&["setup"], Path::new(""), None).unwrap();
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(stderr(&refused).contains("invalid_request: no service manager support"));
+    assert!(!missing.path("home/Library").exists());
 }

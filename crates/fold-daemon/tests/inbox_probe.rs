@@ -265,34 +265,12 @@ fn socket_owner_pid(socket: &str) -> Option<u32> {
         .ok()
 }
 
+/// The parents of `pid`, nearest first, read the way the daemon reads them for the socket peer check.
 #[cfg(test)]
 fn ancestry(pid: u32) -> Vec<u32> {
-    let mut chain = Vec::new();
-    let mut current = pid;
-    for _ in 0..12 {
-        let Ok(stat) = std::fs::read_to_string(format!("/proc/{current}/stat")) else {
-            break;
-        };
-        let Some(after_comm) = stat.rfind(')').map(|i| &stat[i + 2..]) else {
-            break;
-        };
-        let Some(ppid) = after_comm
-            .split(' ')
-            .nth(1)
-            .and_then(|field| field.parse::<u32>().ok())
-        else {
-            break;
-        };
-        if ppid == 0 {
-            break;
-        }
-        chain.push(ppid);
-        if ppid == 1 {
-            break;
-        }
-        current = ppid;
-    }
-    chain
+    fold_daemon::services::agents::peers::process_chain(pid)
+        .map(|chain| chain.into_iter().skip(1).collect())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

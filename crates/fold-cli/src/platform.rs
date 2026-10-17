@@ -7,6 +7,7 @@ use crate::serve::Dirs;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Platform {
     pub(crate) linux: bool,
+    pub(crate) macos: bool,
     pub(crate) file_modes: bool,
 }
 
@@ -14,12 +15,16 @@ impl Platform {
     pub(crate) const fn current() -> Self {
         Self {
             linux: cfg!(target_os = "linux"),
+            macos: cfg!(target_os = "macos"),
             file_modes: cfg!(unix),
         }
     }
 }
 
-/// Reads the host files outside the project (`/proc`, `/run/systemd`, `/var/lib/systemd`) below a root. The root is `/` in production and a temporary directory of real files in tests.
+/// The launchd label of fold's agent, which also names its file in `~/Library/LaunchAgents`.
+pub(crate) const LAUNCH_AGENT_LABEL: &str = "dev.omukk.fold";
+
+/// Reads the host files outside the project (`/proc`, `/run/systemd`, `/var/lib/systemd`) below a root; on macOS none of them exists. The root is `/` in production and a temporary directory of real files in tests.
 #[derive(Debug, Clone)]
 pub(crate) struct Probe {
     root: PathBuf,
@@ -63,6 +68,8 @@ impl Probe {
 pub(crate) struct Host {
     pub(crate) dirs: Dirs,
     pub(crate) user: Option<String>,
+    /// The real user id, which names the launchd domain `gui/<uid>` of the user's login session.
+    pub(crate) uid: u32,
     pub(crate) path: Option<OsString>,
     pub(crate) platform: Platform,
     pub(crate) probe: Probe,
@@ -78,6 +85,7 @@ impl Host {
         Self {
             dirs: Dirs::from_env(),
             user,
+            uid: rustix::process::getuid().as_raw(),
             path: std::env::var_os("PATH"),
             platform: Platform::current(),
             probe: Probe::new("/"),
@@ -91,6 +99,24 @@ impl Host {
         } else {
             None
         }
+    }
+
+    /// `launchctl` on macOS when it is on `PATH`.
+    pub(crate) fn launchctl(&self) -> Option<PathBuf> {
+        if self.platform.macos {
+            on_path("launchctl", self.path.as_deref())
+        } else {
+            None
+        }
+    }
+
+    /// `~/Library/LaunchAgents/<label>.plist`, where launchd finds the agents it starts at login. launchd reads no XDG variable, so only the home directory decides.
+    pub(crate) fn agent_path(&self) -> Option<PathBuf> {
+        let home = self.dirs.home.as_ref()?;
+        Some(
+            home.join("Library/LaunchAgents")
+                .join(format!("{LAUNCH_AGENT_LABEL}.plist")),
+        )
     }
 
     /// `$XDG_CONFIG_HOME/systemd/user/fold.service`, or the same below `~/.config`.
@@ -172,9 +198,11 @@ mod tests {
                 ..Dirs::default()
             },
             user: None,
+            uid: 501,
             path: None,
             platform: Platform {
                 linux,
+                macos: !linux,
                 file_modes: true,
             },
             probe: Probe::new("/nonexistent-root"),
@@ -210,8 +238,33 @@ mod tests {
     }
 
     #[test]
+    fn launchctl_needs_macos_and_the_path_and_the_agent_lives_in_the_home_library() {
+        let dir = tmp();
+        let tool = dir.path().join("launchctl");
+        std::fs::write(&tool, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut macos = host(Some("/cfg"), Some("/Users/ana"), false);
+        macos.path = Some(std::env::join_paths([dir.path()]).unwrap());
+        assert_eq!(macos.launchctl(), Some(tool));
+        assert_eq!(macos.systemctl(), None);
+        assert_eq!(
+            macos.agent_path(),
+            Some(PathBuf::from(
+                "/Users/ana/Library/LaunchAgents/dev.omukk.fold.plist"
+            ))
+        );
+        let mut linux = macos.clone();
+        linux.platform.macos = false;
+        linux.platform.linux = true;
+        assert_eq!(linux.launchctl(), None);
+        assert_eq!(host(None, None, false).agent_path(), None);
+    }
+
+    #[test]
     fn the_current_platform_matches_the_build() {
         let platform = Platform::current();
         assert_eq!(platform.linux, cfg!(target_os = "linux"));
+        assert_eq!(platform.macos, cfg!(target_os = "macos"));
+        assert_eq!(Host::from_env().uid, rustix::process::getuid().as_raw());
     }
 }

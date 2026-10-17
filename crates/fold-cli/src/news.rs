@@ -371,6 +371,7 @@ mod tests {
             config_home: Some(root.join("config")),
             data_home: None,
             runtime_dir: None,
+            library_runtime: false,
         }
     }
 

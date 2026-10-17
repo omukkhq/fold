@@ -33,11 +33,20 @@ want="fld $(sed -n '/^\[workspace\.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' "
 got=$("$bin" --version 2>&1) || fail "'$bin --version' exited with an error: $got"
 [ "$got" = "$want" ] || fail "expected '$want', got '$got'"
 
-work=$(mktemp -d) || fail "cannot create a temporary folder"
-mkdir -p "$work/data" "$work/config" "$work/runtime"
-chmod 700 "$work/runtime"
-export XDG_DATA_HOME="$work/data" XDG_CONFIG_HOME="$work/config" XDG_RUNTIME_DIR="$work/runtime" HOME="$work"
-socket="$work/runtime/fold/fold.sock"
+# macOS sets no XDG_RUNTIME_DIR, so there the daemon takes its runtime folder below HOME, the path a first install uses. A socket path may hold only 104 bytes on macOS and $TMPDIR is long, so the folder is made in /tmp.
+if [ "$(uname -s)" = Darwin ]; then
+  work=$(mktemp -d /tmp/fold-smoke.XXXXXX) || fail "cannot create a temporary folder"
+  mkdir -p "$work/data" "$work/config"
+  unset XDG_RUNTIME_DIR
+  export XDG_DATA_HOME="$work/data" XDG_CONFIG_HOME="$work/config" HOME="$work"
+  socket="$work/Library/Application Support/fold/run/fold.sock"
+else
+  work=$(mktemp -d) || fail "cannot create a temporary folder"
+  mkdir -p "$work/data" "$work/config" "$work/runtime"
+  chmod 700 "$work/runtime"
+  export XDG_DATA_HOME="$work/data" XDG_CONFIG_HOME="$work/config" XDG_RUNTIME_DIR="$work/runtime" HOME="$work"
+  socket="$work/runtime/fold/fold.sock"
+fi
 
 step=free-port
 port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])' 2>/dev/null) ||

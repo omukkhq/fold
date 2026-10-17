@@ -44,10 +44,14 @@ pub enum WatchRefused {
 
 /// The platform's native notifications. A backend delivers what it observes through the [`Notifier`] of its hub.
 pub trait WatchBackend: Send {
-    /// One non-recursive watch on `dir`.
+    /// One non-recursive watch on `dir`, or one on its whole tree when [`WatchBackend::watches_subtrees`] is true.
     fn watch_dir(&mut self, dir: &Path) -> Result<(), WatchRefused>;
     /// Removing a watch the backend already dropped is not an error.
     fn unwatch_dir(&mut self, dir: &Path);
+    /// True when one watch on a workspace root reports every change below it. The hub then hands the backend only the root and keeps its own record of the directories below, which still decides what is new, moved or ignored.
+    fn watches_subtrees(&self) -> bool {
+        false
+    }
     /// True when the reported paths use `\` as a separator. On other platforms `\` is an ordinary file name byte and must stay one.
     fn backslash_separates(&self) -> bool {
         cfg!(windows)
@@ -128,10 +132,12 @@ impl notify::EventHandler for Notifier {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 pub(crate) struct NativeBackend {
     watcher: RecommendedWatcher,
 }
 
+#[cfg(not(target_os = "macos"))]
 impl NativeBackend {
     pub(crate) fn new(notifier: Notifier) -> notify::Result<Self> {
         Ok(Self {
@@ -140,6 +146,45 @@ impl NativeBackend {
     }
 }
 
+/// FSEvents watches a whole tree with one stream, and notify restarts its stream, dropping what happens meanwhile, on every path it adds. So each workspace root gets a recursive stream of its own, and adding or removing a workspace never touches another workspace's stream.
+#[cfg(target_os = "macos")]
+pub(crate) struct NativeBackend {
+    notifier: Notifier,
+    streams: BTreeMap<PathBuf, RecommendedWatcher>,
+}
+
+#[cfg(target_os = "macos")]
+impl NativeBackend {
+    pub(crate) fn new(notifier: Notifier) -> notify::Result<Self> {
+        Ok(Self {
+            notifier,
+            streams: BTreeMap::new(),
+        })
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl WatchBackend for NativeBackend {
+    fn watch_dir(&mut self, dir: &Path) -> Result<(), WatchRefused> {
+        let mut stream = RecommendedWatcher::new(self.notifier.clone(), notify::Config::default())
+            .map_err(|error| refusal(&error))?;
+        stream
+            .watch(dir, RecursiveMode::Recursive)
+            .map_err(|error| refusal(&error))?;
+        self.streams.insert(dir.to_path_buf(), stream);
+        Ok(())
+    }
+
+    fn unwatch_dir(&mut self, dir: &Path) {
+        self.streams.remove(dir);
+    }
+
+    fn watches_subtrees(&self) -> bool {
+        true
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
 impl WatchBackend for NativeBackend {
     fn watch_dir(&mut self, dir: &Path) -> Result<(), WatchRefused> {
         self.watcher
@@ -718,6 +763,10 @@ impl Workspace {
         if self.degraded.is_some() {
             return;
         }
+        if !key.is_empty() && ctx.backend.watches_subtrees() {
+            self.watched.insert(key, (full, identity));
+            return;
+        }
         match ctx.backend.watch_dir(&full) {
             Ok(()) => {
                 self.watched.insert(key, (full, identity));
@@ -754,8 +803,11 @@ impl Workspace {
         let below: Vec<Vec<u8>> = entries_at_or_below(&self.watched, key)
             .map(|(dir, _)| dir.clone())
             .collect();
+        let subtrees = backend.watches_subtrees();
         for dir in below {
-            if let Some((full, _)) = self.watched.remove(&dir) {
+            if let Some((full, _)) = self.watched.remove(&dir)
+                && (dir.is_empty() || !subtrees)
+            {
                 backend.unwatch_dir(&full);
             }
         }

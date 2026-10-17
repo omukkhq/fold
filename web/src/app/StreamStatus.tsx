@@ -1,6 +1,6 @@
 import { useLiveStatus } from "../live/status";
 import { cn } from "../lib/cn";
-import { streamView } from "./streamStatus";
+import { streamView } from "./streamStatusModel";
 import { useNow } from "../live/useNow";
 
 export function StreamStatus() {

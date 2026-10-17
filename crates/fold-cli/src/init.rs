@@ -398,6 +398,7 @@ mod tests {
             config_home: config.map(Into::into),
             data_home: None,
             runtime_dir: runtime.map(Into::into),
+            library_runtime: false,
         }
     }
 

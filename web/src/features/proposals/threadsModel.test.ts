@@ -12,7 +12,7 @@ import {
   linesText,
   placeThreads,
   unplacedThreads,
-} from "./threads";
+} from "./threadsModel";
 
 function comment(
   id: number,

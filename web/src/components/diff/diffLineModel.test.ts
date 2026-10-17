@@ -4,7 +4,7 @@ import {
   diffNumberClass,
   diffRowClass,
   type DiffLineKind,
-} from "./diffLine";
+} from "./diffLineModel";
 
 const KINDS: DiffLineKind[] = ["added", "removed", "context", "hunk"];
 

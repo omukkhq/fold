@@ -54,7 +54,7 @@ async fn a_request_carries_the_human_from_fold_human_or_the_user_name() {
     let dir = TempDir::new().unwrap();
     let socket = dir.path().join("fake.sock");
     let listener = UnixListener::bind(&socket).unwrap();
-    let config = config(&socket, dir.path(), "/bin/false");
+    let config = config(&socket, dir.path(), "false");
     const OK: &str = "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 11\r\n\r\n{\"ok\":true}";
 
     let lead = human_from(Some("lead".into()), Some("ana".into()), None).unwrap();
@@ -105,7 +105,7 @@ async fn a_request_carries_the_human_from_fold_human_or_the_user_name() {
 async fn a_daemon_that_stops_while_it_starts_is_reported() {
     let dir = TempDir::new().unwrap();
     let missing = dir.path().join("none.sock");
-    let error = connect(&config(&missing, &dir.path().join("run"), "/bin/true"))
+    let error = connect(&config(&missing, &dir.path().join("run"), "true"))
         .await
         .unwrap_err();
     assert!(matches!(error, ClientError::StartFailed), "{error}");
@@ -114,7 +114,7 @@ async fn a_daemon_that_stops_while_it_starts_is_reported() {
     // A file that no daemon listens on counts as absent too.
     let stale = dir.path().join("stale.sock");
     std::fs::write(&stale, "").unwrap();
-    let error = connect(&config(&stale, dir.path(), "/bin/true"))
+    let error = connect(&config(&stale, dir.path(), "true"))
         .await
         .unwrap_err();
     assert!(matches!(error, ClientError::StartFailed), "{error}");
@@ -133,7 +133,7 @@ async fn without_a_runtime_directory_a_client_reaches_a_running_daemon_but_start
     let _listener = UnixListener::bind(&socket).unwrap();
     let no_runtime = |socket: &Path| ClientConfig {
         runtime_dir: None,
-        ..config(socket, dir.path(), "/bin/true")
+        ..config(socket, dir.path(), "true")
     };
     assert!(connect(&no_runtime(&socket)).await.is_ok());
 
@@ -153,7 +153,7 @@ async fn the_start_lock_directory_is_private_to_its_owner() {
     std::fs::create_dir(&runtime).unwrap();
     std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o755)).unwrap();
     let missing = dir.path().join("none.sock");
-    let error = connect(&config(&missing, &runtime, "/bin/true"))
+    let error = connect(&config(&missing, &runtime, "true"))
         .await
         .unwrap_err();
     assert!(matches!(error, ClientError::StartFailed), "{error}");
@@ -182,7 +182,7 @@ async fn the_socket_flag_reaches_a_daemon_on_a_non_default_path() {
     .unwrap();
 
     let client = DaemonClient::new(
-        config(&socket, &host.runtime_base(), "/bin/false"),
+        config(&socket, &host.runtime_base(), "false"),
         Some("ana".into()),
     );
     let response = client
@@ -204,4 +204,19 @@ async fn the_socket_flag_reaches_a_daemon_on_a_non_default_path() {
     );
     DaemonGuard(started).stop().await;
     daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_socket_path_too_long_for_the_platform_has_no_daemon() {
+    let dir = TempDir::new().unwrap();
+    let long = dir.path().join("s".repeat(200));
+    let error = connect(&ClientConfig::running(long.clone()))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, ClientError::NoDaemon { .. }), "{error}");
+    // A client that may start a daemon tries, and the daemon refuses the path.
+    let error = connect(&config(&long, &dir.path().join("run"), "false"))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, ClientError::StartFailed), "{error}");
 }

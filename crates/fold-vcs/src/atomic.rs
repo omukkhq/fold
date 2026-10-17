@@ -98,14 +98,13 @@ mod tests {
         assert_eq!(fs::read_dir(dir.path().join("sub")).unwrap().count(), 1);
     }
 
-    /// Read from `/proc`, because setting the umask to learn it would change it for the other tests of the process.
+    /// Read from a child shell, which inherits it, because setting the umask to learn it would change it for the other tests of the process.
     fn umask() -> u32 {
-        let status = fs::read_to_string("/proc/self/status").unwrap();
-        let line = status
-            .lines()
-            .find_map(|line| line.strip_prefix("Umask:"))
+        let output = std::process::Command::new("sh")
+            .args(["-c", "umask"])
+            .output()
             .unwrap();
-        u32::from_str_radix(line.trim(), 8).unwrap()
+        u32::from_str_radix(String::from_utf8(output.stdout).unwrap().trim(), 8).unwrap()
     }
 
     #[test]

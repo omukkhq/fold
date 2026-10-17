@@ -9,7 +9,7 @@ import {
   chipAgents,
   chipStateText,
   isPaused,
-} from "./agentChips";
+} from "./agentChipsModel";
 
 interface ChipOptions {
   name?: string;

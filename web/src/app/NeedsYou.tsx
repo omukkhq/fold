@@ -26,7 +26,7 @@ import {
   needsYouGroups,
   waitingText,
   type NeedsYouLine,
-} from "./needsYou";
+} from "./needsYouModel";
 
 const ICONS: Record<NeedsYouKind, LucideIcon> = {
   question: MessagesSquare,

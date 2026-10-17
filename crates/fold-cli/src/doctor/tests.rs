@@ -45,8 +45,9 @@ impl Fixture {
         }
     }
 
+    /// Below the canonical folder, the form fold records and prints: macOS reaches its temporary folders through the `/var` symlink.
     fn path(&self, name: &str) -> PathBuf {
-        self.dir.path().join(name)
+        self.dir.path().canonicalize().unwrap().join(name)
     }
 
     /// A host whose probe root holds nothing: no `/proc`, no systemd.
@@ -59,11 +60,14 @@ impl Fixture {
                 config_home: Some(self.path("config")),
                 data_home: Some(self.path("data")),
                 runtime_dir: Some(self.path("run")),
+                library_runtime: false,
             },
             user: Some("ana".to_owned()),
+            uid: 501,
             path: Some(std::env::join_paths([self.path("bin")]).unwrap()),
             platform: Platform {
                 linux: true,
+                macos: false,
                 file_modes: true,
             },
             probe: Probe::new(self.path("root")),
@@ -245,6 +249,7 @@ fn a_socket_with_mode_0644_fails_with_the_chmod_fix() {
     assert_eq!(check.fix, Some(format!("chmod 600 {}", path.display())));
     let no_modes = Platform {
         linux: false,
+        macos: false,
         file_modes: false,
     };
     assert_eq!(inspect_socket(&path, no_modes), SocketState::Dead);
@@ -510,6 +515,7 @@ fn a_probe_with_no_proc_and_no_systemd_fails_nothing() {
     let other = Host {
         platform: Platform {
             linux: false,
+            macos: false,
             file_modes: false,
         },
         ..fixture.linux_host(100)
@@ -520,6 +526,46 @@ fn a_probe_with_no_proc_and_no_systemd_fails_nothing() {
         "no service manager support"
     );
     assert_eq!(linger_check(&other).message, NOT_APPLICABLE);
+}
+
+#[test]
+fn on_macos_launchd_is_the_service_manager_and_linux_checks_do_not_apply() {
+    let fixture = Fixture::new();
+    // A probe root with systemd and inotify files must not count on macOS.
+    let mut host = fixture.linux_host(100);
+    host.platform = Platform {
+        linux: false,
+        macos: true,
+        file_modes: true,
+    };
+    let missing = service_manager_check(&host);
+    assert_eq!(missing.status, Status::Warn);
+    assert_eq!(missing.message, "no service manager support");
+
+    executable(&fixture.path("bin/launchctl"));
+    let available = service_manager_check(&host);
+    assert_eq!(available.status, Status::Ok);
+    assert_eq!(
+        available.message,
+        "launchd user agents are available; fold's agent is not installed"
+    );
+    assert_eq!(available.fix, None);
+    let agent = fixture.path("home/Library/LaunchAgents/dev.omukk.fold.plist");
+    std::fs::create_dir_all(agent.parent().unwrap()).unwrap();
+    std::fs::write(&agent, "").unwrap();
+    assert_eq!(
+        service_manager_check(&host).message,
+        format!(
+            "launchd user agents are available; fold's agent is {}",
+            agent.display()
+        )
+    );
+    for check in [linger_check(&host), inotify_limit_check(&host)] {
+        assert_eq!(
+            (check.status, check.message.as_str()),
+            (Status::Ok, NOT_APPLICABLE)
+        );
+    }
 }
 
 #[test]

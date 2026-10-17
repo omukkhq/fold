@@ -1,7 +1,7 @@
 import type { ProjectAgent } from "../api/agentBar";
 import { formatAsOfMinute } from "../format/time";
 import type { LiveStatus } from "../live/status";
-import { syncedAt } from "./streamStatus";
+import { syncedAt } from "./streamStatusModel";
 import { projectPath, withQuery } from "@/routes/paths";
 
 /** The top bar has room for three chips beside the stream status and the Theme button. */

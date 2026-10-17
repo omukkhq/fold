@@ -213,9 +213,28 @@ impl DirHandle {
     }
 
     /// What `name` itself is, a symlink included. The metadata comes from an `O_PATH` descriptor, which opens neither a link's target nor a FIFO, so it describes exactly what `symlink_metadata` would.
+    #[cfg(target_os = "linux")]
     pub(crate) fn metadata(&self, name: &[u8]) -> io::Result<Metadata> {
         let flags = OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC;
         File::from(rustix::fs::openat(&self.0, name, flags, Mode::empty())?).metadata()
+    }
+
+    /// What `name` itself is, a symlink included. macOS has no `O_PATH`, and opening the entry would need read access and fail on a socket, so the metadata comes from `symlink_metadata` on the path the kernel reports for this directory. It counts only when it names the inode that `fstatat` finds in this directory, so a directory moved or swapped between the two calls is an error, never another entry's metadata.
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn metadata(&self, name: &[u8]) -> io::Result<Metadata> {
+        let here = rustix::fs::statat(&self.0, name, AtFlags::SYMLINK_NOFOLLOW)?;
+        let dir = rustix::fs::getpath(&self.0)?;
+        let path = Path::new(OsStr::from_bytes(dir.as_bytes())).join(OsStr::from_bytes(name));
+        let meta = fs::symlink_metadata(path)?;
+        // std widens `st_dev` with the same cast.
+        if meta.dev() == here.st_dev as u64 && meta.ino() == here.st_ino {
+            Ok(meta)
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "the directory moved while its entry was read",
+            ))
+        }
     }
 
     /// Opens `name` for reading only when it is a regular file: a symlink is not followed and a FIFO does not block the open. `None` when something other than a regular file is there.

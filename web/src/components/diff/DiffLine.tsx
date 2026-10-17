@@ -5,7 +5,7 @@ import {
   diffNumberClass,
   diffRowClass,
   type DiffLineKind,
-} from "./diffLine";
+} from "./diffLineModel";
 
 interface DiffLineProps extends Omit<ComponentProps<"div">, "children"> {
   kind: DiffLineKind;

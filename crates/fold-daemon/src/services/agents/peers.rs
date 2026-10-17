@@ -120,7 +120,7 @@ fn parents() -> Option<impl FnMut(u32) -> Option<u32>> {
         .ok()
         .filter(|output| output.status.success())?;
     let table = parse_ps_table(&String::from_utf8_lossy(&output.stdout));
-    (!table.is_empty()).then(|| move |pid| table.get(&pid).copied())
+    (!table.is_empty()).then_some(move |pid| table.get(&pid).copied())
 }
 
 #[cfg(any(not(target_os = "linux"), test))]

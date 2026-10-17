@@ -35,7 +35,7 @@ enum Command {
     Mcp(mcp::McpArgs),
     /// Check the host, the daemon and each project, and name the fix for every problem
     Doctor(doctor::DoctorArgs),
-    /// Write the systemd user unit that starts the daemon at login, then enable and start it
+    /// Install the service that starts the daemon at login, then start it: a systemd user unit on Linux, a launchd agent on macOS
     Setup(service::SetupArgs),
     /// Delete unreferenced objects, prune checkpoints and remove closed workspace directories
     Gc(commands::gc::GcArgs),

@@ -79,6 +79,7 @@ impl SocketServer {
         handshake: HandshakeHandler,
         shutdown: watch::Receiver<bool>,
     ) -> io::Result<Self> {
+        check_length(path)?;
         let listener = UnixListener::bind(path)?;
         restrict(path).await?;
         let handler = Arc::new(RwLock::new(handshake));
@@ -107,6 +108,23 @@ impl SocketServer {
         self.drain.send_replace(true);
         let _ = self.task.await;
     }
+}
+
+/// The longest socket path the platform binds: `sun_path` holds 104 bytes on macOS and 108 on Linux, the closing NUL included.
+const MAX_SOCKET_PATH: usize = if cfg!(target_os = "linux") { 107 } else { 103 };
+
+/// A path that does not fit is refused with its length and the limit, which the bind error of the platform does not name.
+fn check_length(path: &Path) -> io::Result<()> {
+    let length = path.as_os_str().len();
+    if length > MAX_SOCKET_PATH {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "the socket path is {length} bytes, longer than the {MAX_SOCKET_PATH} bytes this platform allows; set a shorter path with --socket or `socket` in daemon.toml, or set XDG_RUNTIME_DIR to a shorter folder"
+            ),
+        ));
+    }
+    Ok(())
 }
 
 async fn restrict(path: &Path) -> io::Result<()> {
@@ -246,6 +264,29 @@ mod tests {
         assert!(same_user(Some(1000), 1000));
         assert!(!same_user(Some(0), 1000));
         assert!(!same_user(None, 1000));
+    }
+
+    #[tokio::test]
+    async fn a_socket_path_longer_than_the_platform_allows_is_refused_with_its_length() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().as_os_str().len() + 1;
+        let fits = dir.path().join("s".repeat(MAX_SOCKET_PATH - base));
+        let long = dir.path().join("s".repeat(MAX_SOCKET_PATH - base + 1));
+        assert!(check_length(&fits).is_ok());
+        let (_stop, shutdown) = watch::channel(false);
+        let handshake: HandshakeHandler = Arc::new(|_, _| Box::pin(async {}));
+        let error = SocketServer::bind(&long, Router::new(), handshake, shutdown)
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "the socket path is {} bytes, longer than the {MAX_SOCKET_PATH} bytes this platform allows; set a shorter path with --socket or `socket` in daemon.toml, or set XDG_RUNTIME_DIR to a shorter folder",
+                MAX_SOCKET_PATH + 1
+            )
+        );
+        assert!(!long.exists());
     }
 
     #[tokio::test(start_paused = true)]

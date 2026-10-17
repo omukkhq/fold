@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use std::fs;
-use std::os::fd::AsRawFd;
+use std::io::Write;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -131,7 +131,12 @@ fn a_scanned_directory_swapped_for_an_outside_symlink_is_never_recorded_or_store
     let outside_hash = hash_object(ObjectKind::Blob, &secret);
     // The real directory by its descriptor, whichever name holds it at the moment.
     let held = fs::File::open(root.join("d")).unwrap();
-    let real = PathBuf::from(format!("/proc/self/fd/{}", held.as_raw_fd()));
+    let write_inside = |text: String| {
+        use rustix::fs::{Mode, OFlags, openat};
+        let flags = OFlags::WRONLY | OFlags::CREATE | OFlags::TRUNC | OFlags::CLOEXEC;
+        let fd = openat(&held, "inner.txt", flags, Mode::from_raw_mode(0o644)).unwrap();
+        fs::File::from(fd).write_all(text.as_bytes()).unwrap();
+    };
     let rules = IgnoreRules::new(&root);
     let opts = ScanOptions {
         rules: &rules,
@@ -144,7 +149,7 @@ fn a_scanned_directory_swapped_for_an_outside_symlink_is_never_recorded_or_store
     let mut index = StatIndex::empty(HOST);
     let swapper = Swapper::start(&root);
     for number in 0..SCANS {
-        fs::write(real.join("inner.txt"), format!("inside {number}")).unwrap();
+        write_inside(format!("inside {number}"));
         let scanned = scan(&root, &mut index, &opts).unwrap();
         let rescanned =
             rescan_paths(&root, &mut index, std::slice::from_ref(&inner), &opts).unwrap();

@@ -271,6 +271,10 @@ async fn an_unreachable_daemon_exits_0_with_one_line() {
         &host.root,
     );
     command.env_remove("XDG_RUNTIME_DIR").envs(agent);
+    // macOS falls back to a runtime directory below the home directory.
+    if cfg!(target_os = "macos") {
+        command.env_remove("HOME");
+    }
     for name in MESSAGING {
         command.env_remove(name);
     }
