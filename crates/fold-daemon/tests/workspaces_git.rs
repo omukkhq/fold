@@ -207,6 +207,7 @@ async fn from_git_makes_the_repository_the_project_and_head_its_first_commit() {
     );
     assert_eq!(git(&repo, &["status", "--porcelain"]), "");
     assert!(!repo.join(".foldignore").exists());
+    assert!(!repo.join(".gitignore").exists());
     assert_eq!(fs::read(repo.join("README.md")).unwrap(), b"# app\n");
     assert!(paths.db().is_file());
     assert_eq!(host.registered().await, 1);

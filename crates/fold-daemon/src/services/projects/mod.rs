@@ -17,6 +17,7 @@ use fold_core::{
 use fold_store::projects::{self, HumanRow, ProjectRow};
 use fold_store::workspaces::{RevisionRow, create_initial_revision, head, initial_revision};
 use fold_store::{Store, StoreError};
+use fold_vcs::atomic::write_atomic;
 use fold_vcs::gc::mark;
 use fold_vcs::git::{CommitId, Git};
 use fold_vcs::git_import::{GitImportOptions, import_commit};
@@ -104,7 +105,7 @@ pub type FolderFiles = Box<dyn FnOnce(&Path) -> Result<Vec<PathBuf>, FoldError> 
 
 /// How init takes the project folder.
 enum Start {
-    /// The folder is not a Git repository: init runs `git init`, and the folder's files, less the ignore rules, with the ignore files (when the folder has no `.gitignore`) and `files` init writes, become `r1` and its first commit.
+    /// The folder is not a Git repository: init runs `git init`, and the folder's files, less the ignore rules, with the `.gitignore` and `.foldignore` init writes or changes and the `files` it writes, become `r1` and its first commit.
     New { files: Option<FolderFiles> },
     /// The folder is a Git repository with a clean tree on `branch`: `r1` is the committed tree at `head`, whose commit is `head` itself.
     FromGit { head: CommitId, branch: String },
@@ -115,9 +116,11 @@ enum Start {
 struct Created {
     repository: bool,
     files: Vec<PathBuf>,
+    /// Files of the folder that init changed, with the bytes they held before, which a failed init writes back.
+    restore: Vec<(PathBuf, Vec<u8>)>,
 }
 
-/// Makes `root` a fold project whose folder is main: creates `.fold/`, migrates the project database, writes the commented config, records the folder's files, less the ignore rules, as `r1`, runs `git init` and writes `r1`'s commit, and only then registers the project under a free slug. A folder that is a Git repository is refused with a hint to use `--from-git`. A folder that is inside another repository's working tree is refused with a hint to use `--from-git` at that repository's top, so no repository is nested in another. When the folder has no `.gitignore`, init writes `.gitignore` as a regular file with a comment, and an empty `.foldignore` unless the folder has one, before the folder's files are recorded, so both are in `r1` and its commit and the folder is clean after init; an existing `.gitignore` is kept and init writes no ignore file. `.foldignore` only adds rules on top of `.gitignore` or brings back a path it ignores. Init is a host command, so it has no actor and appends no event. A failure after `.fold/` exists removes `.fold/` and what init wrote beside it, never a file of the folder. A `.fold/` that the registry does not know is an init that stopped part-way, or a project that fold removed while its `.fold/` was away: when its database is complete the init finishes it and registers it, and otherwise it is refused with `project_incomplete` and nothing is removed. A registered folder that holds `.fold/` is refused with `project_exists`, or with `project_incomplete` when `.fold/` holds project content without a database, or a database without `main`; a registered folder without `.fold/`, or whose `.fold/` holds only what a daemon that still had the project open wrote after it was deleted, holds no project, so the new project replaces that registration in the transaction that registers it and keeps its slug.
+/// Makes `root` a fold project whose folder is main: creates `.fold/`, migrates the project database, writes the commented config, records the folder's files, less the ignore rules, as `r1`, runs `git init` and writes `r1`'s commit, and only then registers the project under a free slug. A folder that is a Git repository is refused with a hint to use `--from-git`. A folder that is inside another repository's working tree is refused with a hint to use `--from-git` at that repository's top, so no repository is nested in another. Git ignores `.fold/` in the new repository, so init writes the ignore files before the folder's files are recorded and both are in `r1` and its commit, and the folder is clean after init. Without a `.gitignore`, init writes one as a regular file that copies `.foldignore` (a comment when the folder has no `.foldignore`) and ends with a `.fold/` line, and also writes an empty `.foldignore` when the folder has none. An existing `.gitignore` is kept and gets a `.fold/` line only when no line of it is `.fold`, `.fold/`, `/.fold` or `/.fold/`. The copy happens once: `.foldignore` only adds rules on top of `.gitignore` or brings back a path it ignores. Init is a host command, so it has no actor and appends no event. A failure after `.fold/` exists removes `.fold/` and what init created beside it and writes back the bytes of a `.gitignore` that init changed, never touching another file of the folder. A `.fold/` that the registry does not know is an init that stopped part-way, or a project that fold removed while its `.fold/` was away: when its database is complete the init finishes it and registers it, and otherwise it is refused with `project_incomplete` and nothing is removed. A registered folder that holds `.fold/` is refused with `project_exists`, or with `project_incomplete` when `.fold/` holds project content without a database, or a database without `main`; a registered folder without `.fold/`, or whose `.fold/` holds only what a daemon that still had the project open wrote after it was deleted, holds no project, so the new project replaces that registration in the transaction that registers it and keeps its slug.
 pub async fn init_project(
     host: &HostPaths,
     root: &Path,
@@ -541,10 +544,13 @@ fn stored_contents(
     }))
 }
 
-/// The `.gitignore` init writes when the folder has none.
-const GITIGNORE_TEXT: &str = "# Paths that Git and fold leave out, one pattern per line. Add a .foldignore for rules that only fold uses.\n";
+/// The comment of the `.gitignore` init writes when the folder has neither ignore file.
+const GITIGNORE_COMMENT: &str = "# Paths that Git and fold leave out, one pattern per line. Add a .foldignore for rules that only fold uses.\n";
 
-/// A new project's ignore files and the caller's `files` first, so `r1` holds them and the folder is clean against `r1`'s commit; then the objects of `r1`, the sync map that names `r1` for [`Start::FromGit`], and the one transaction that inserts `r1` and creates `main`. The map comes before the row, so a database that holds `r1` always has the map that names its commit. A new project's repository comes last, so an init that stops before its database is complete leaves no repository; one that stops after has it created when the init runs again. Both kinds get `/.fold/` in `info/exclude`.
+/// The line init adds to a `.gitignore` that does not ignore `.fold`, before its line ending.
+const FOLD_DIR_LINE: &str = ".fold/";
+
+/// A new project's ignore files (see [`plan_ignore_files`]) and the caller's `files` first, so `r1` holds them and the folder is clean against `r1`'s commit; then the objects of `r1`, the sync map that names `r1` for [`Start::FromGit`], and the one transaction that inserts `r1` and creates `main`. The map comes before the row, so a database that holds `r1` always has the map that names its commit. A new project's repository comes last, so an init that stops before its database is complete leaves no repository; one that stops after has it created when the init runs again. Both kinds get `/.fold/` in `info/exclude`.
 async fn create_first_revision(
     store: &Store,
     paths: &ProjectPaths,
@@ -559,7 +565,15 @@ async fn create_first_revision(
         Start::FromGit { head, .. } => Some(head),
         Start::New { files } => {
             let root = paths.root().to_owned();
-            created.files = blocking(move || write_ignore_files(&root)).await?;
+            let plan = blocking(move || plan_ignore_files(&root)).await?;
+            // The old bytes are kept before the file changes, so a failure in between can still write them back.
+            created.files = plan.create.iter().map(|(path, _)| path.clone()).collect();
+            created.restore = plan
+                .change
+                .iter()
+                .map(|(path, old, _)| (path.clone(), old.clone()))
+                .collect();
+            blocking(move || write_ignore_files(plan)).await?;
             if let Some(files) = files {
                 let root = paths.root().to_owned();
                 let written = blocking(move || Ok(files(&root)?)).await?;
@@ -623,22 +637,94 @@ async fn create_first_revision(
     Ok((row.number, imported, head))
 }
 
-/// Writes a regular `.gitignore`, and an empty `.foldignore` unless one exists, when the folder has no `.gitignore`, and returns what it wrote. Blocking.
-fn write_ignore_files(root: &Path) -> Result<Vec<PathBuf>, ProjectError> {
+/// What init does to the ignore files of a new project's folder.
+struct IgnorePlan {
+    /// Files that do not exist yet, with their content.
+    create: Vec<(PathBuf, Vec<u8>)>,
+    /// A `.gitignore` that exists, with its bytes now and the bytes it gets.
+    change: Option<(PathBuf, Vec<u8>, Vec<u8>)>,
+}
+
+/// True when a line of `text` is exactly `.fold`, `.fold/`, `/.fold` or `/.fold/` once trailing spaces are trimmed, as Git trims them; leading spaces stay part of a Git pattern, and a comment or a negation is not one of the four.
+fn ignores_fold_dir(text: &str) -> bool {
+    text.lines().any(|line| {
+        matches!(
+            line.trim_end_matches(' '),
+            ".fold" | ".fold/" | "/.fold" | "/.fold/"
+        )
+    })
+}
+
+/// `text` with the `.fold/` line added unless a line of it already ignores `.fold`. The line ends the way the lines of `text` end, CRLF when `text` has one, and a line ending comes first when `text` does not end with one.
+fn with_fold_dir_line(mut text: Vec<u8>) -> Vec<u8> {
+    if ignores_fold_dir(&String::from_utf8_lossy(&text)) {
+        return text;
+    }
+    let eol: &[u8] = if text.windows(2).any(|pair| pair == b"\r\n") {
+        b"\r\n"
+    } else {
+        b"\n"
+    };
+    if !text.is_empty() && !text.ends_with(b"\n") {
+        text.extend_from_slice(eol);
+    }
+    text.extend_from_slice(FOLD_DIR_LINE.as_bytes());
+    text.extend_from_slice(eol);
+    text
+}
+
+/// The bytes of a regular file, or `None` when the path is missing; a symlink or another kind of entry is not followed and reads as `None` too, and `exists` tells it apart. Blocking.
+fn read_regular(path: &Path) -> Result<(bool, Option<Vec<u8>>), ProjectError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_file() => {
+            Ok((true, Some(std::fs::read(path).map_err(|e| io_error(&e))?)))
+        }
+        Ok(_) => Ok((true, None)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok((false, None)),
+        Err(error) => Err(io_error(&error)),
+    }
+}
+
+/// Decides the ignore files of a new project's folder, because Git starts with them. A folder without a `.gitignore` gets one that copies `.foldignore` (or a comment when there is none) and ends with a `.fold/` line, and an empty `.foldignore` when it has none. An existing `.gitignore` gets the `.fold/` line when it lacks one, and no `.foldignore` is written. A `.gitignore` that is not a regular file is left alone. Blocking.
+fn plan_ignore_files(root: &Path) -> Result<IgnorePlan, ProjectError> {
     let gitignore = root.join(GITIGNORE);
-    match std::fs::symlink_metadata(&gitignore) {
-        Ok(_) => return Ok(Vec::new()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(io_error(&error)),
-    }
-    std::fs::write(&gitignore, GITIGNORE_TEXT).map_err(|error| io_error(&error))?;
-    let mut written = vec![gitignore];
     let foldignore = root.join(FOLDIGNORE);
-    if std::fs::symlink_metadata(&foldignore).is_err() {
-        std::fs::write(&foldignore, b"").map_err(|error| io_error(&error))?;
-        written.push(foldignore);
+    let (git_exists, git_text) = read_regular(&gitignore)?;
+    let (fold_exists, fold_text) = read_regular(&foldignore)?;
+    let mut plan = IgnorePlan {
+        create: Vec::new(),
+        change: None,
+    };
+    if git_exists {
+        if let Some(old) = git_text {
+            let new = with_fold_dir_line(old.clone());
+            if new != old {
+                plan.change = Some((gitignore, old, new));
+            }
+        }
+        return Ok(plan);
     }
-    Ok(written)
+    let text = match fold_text {
+        Some(text) => with_fold_dir_line(text),
+        None if fold_exists => with_fold_dir_line(Vec::new()),
+        None => with_fold_dir_line(GITIGNORE_COMMENT.as_bytes().to_vec()),
+    };
+    plan.create.push((gitignore, text));
+    if !fold_exists {
+        plan.create.push((foldignore, Vec::new()));
+    }
+    Ok(plan)
+}
+
+/// Writes what [`plan_ignore_files`] decided, each file through [`write_atomic`]. Blocking.
+fn write_ignore_files(plan: IgnorePlan) -> Result<(), ProjectError> {
+    for (path, text) in plan.create {
+        write_atomic(&path, &text).map_err(|error| io_error(&error))?;
+    }
+    if let Some((path, _, new)) = plan.change {
+        write_atomic(&path, &new).map_err(|error| io_error(&error))?;
+    }
+    Ok(())
 }
 
 /// [`crate::support::blocking`] for work that fails with a [`ProjectError`]: a panic on the blocking pool is an `internal_error`, never a layout failure.
@@ -841,7 +927,7 @@ async fn write_config(paths: &ProjectPaths, branch: Option<&str>) -> Result<(), 
     flatten(wrote).map_err(|error| io_error(&error))
 }
 
-/// Removes `.fold/` and what this failed init wrote beside it: the repository it created and the files and folders it created. The folder's own files are never touched.
+/// Removes `.fold/` and what this failed init wrote beside it: the repository it created and the files and folders it created, and writes back a `.gitignore` it changed. The folder's other files are never touched.
 async fn remove_created(paths: &ProjectPaths, created: Created) {
     let fold = paths.fold_dir();
     let repository = created.repository.then(|| paths.git_dir());
@@ -850,6 +936,9 @@ async fn remove_created(paths: &ProjectPaths, created: Created) {
         let _ = std::fs::remove_dir_all(fold);
         if let Some(repository) = repository {
             let _ = std::fs::remove_dir_all(repository);
+        }
+        for (path, old) in created.restore {
+            let _ = write_atomic(&path, &old);
         }
         for path in created.files {
             let _ = match std::fs::symlink_metadata(&path) {

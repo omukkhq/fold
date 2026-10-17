@@ -172,18 +172,24 @@ fn init_makes_the_folder_files_r1_and_its_first_commit() {
         format!(
             "initialised project app at {}\n{}\n{}",
             canonical.display(),
-            crate::common::r1_line(&project, 5, 46),
+            crate::common::r1_line(&project, 4, 40),
             machine_warnings(&project)
         )
     );
     let row = r1(&project);
     assert_eq!(row.number.to_string(), "r1");
     assert_eq!(row.import_source, None);
-    // The folder's files stay as they were, writable, with the `.gitignore` the folder had.
+    // The folder's files stay as they were, writable; its `.gitignore` gains the `.fold/` line.
     let after = snapshot(&project);
     for (path, entry) in &before {
-        assert_eq!(after.get(path), Some(entry), "{path:?}");
+        if path.as_os_str() != ".gitignore" {
+            assert_eq!(after.get(path), Some(entry), "{path:?}");
+        }
     }
+    assert_eq!(
+        fs::read_to_string(project.join(".gitignore")).unwrap(),
+        "*.log\n.fold/\n"
+    );
     assert!(!project.join(".foldignore").exists());
     assert_eq!(
         git(&project, &["ls-tree", "-r", "--name-only", "HEAD"]),
@@ -195,7 +201,7 @@ fn init_makes_the_folder_files_r1_and_its_first_commit() {
 }
 
 #[test]
-fn init_in_a_new_dir_writes_a_regular_gitignore_and_an_empty_foldignore() {
+fn init_in_a_new_dir_writes_a_regular_gitignore_that_ignores_fold_and_an_empty_foldignore() {
     let sandbox = Sandbox::new();
     let project = sandbox.path("app");
     let output = sandbox.fold(&["init", project.to_str().unwrap()]);
@@ -208,11 +214,9 @@ fn init_in_a_new_dir_writes_a_regular_gitignore_and_an_empty_foldignore() {
     assert_eq!(r1(&project).number.to_string(), "r1");
     assert_eq!(fs::metadata(project.join(".foldignore")).unwrap().len(), 0);
     assert!(!project.join(".gitignore").is_symlink());
-    assert!(
-        fs::read_to_string(project.join(".gitignore"))
-            .unwrap()
-            .starts_with("# ")
-    );
+    let gitignore = fs::read_to_string(project.join(".gitignore")).unwrap();
+    assert!(gitignore.starts_with("# "));
+    assert!(gitignore.ends_with("\n.fold/\n"));
     assert_eq!(git(&project, &["log", "--format=%s"]), "fold r1\n");
     assert_eq!(
         git(&project, &["ls-tree", "--name-only", "HEAD"]),

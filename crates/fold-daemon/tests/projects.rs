@@ -85,6 +85,9 @@ async fn init_creates_the_layout_and_registers_the_project() {
             .len(),
         0
     );
+    let gitignore = std::fs::read_to_string(project.root.join(".gitignore")).unwrap();
+    assert!(gitignore.starts_with("# "));
+    assert!(gitignore.ends_with("\n.fold/\n"));
     let mut inside: Vec<_> = std::fs::read_dir(paths.fold_dir())
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
@@ -349,7 +352,7 @@ fn git(dir: &Path, args: &[&str]) -> String {
 }
 
 #[tokio::test]
-async fn init_records_the_folder_files_as_r1_and_keeps_its_gitignore() {
+async fn init_records_the_folder_files_as_r1_and_adds_fold_to_its_gitignore() {
     let host = Host::new();
     let root = host.root("app");
     std::fs::create_dir_all(root.join("src")).unwrap();
@@ -365,7 +368,7 @@ async fn init_records_the_folder_files_as_r1_and_keeps_its_gitignore() {
     assert_eq!(project.git_commit, None);
     assert_eq!(
         std::fs::read_to_string(root.join(".gitignore")).unwrap(),
-        "target/\n"
+        "target/\n.fold/\n"
     );
     assert!(!root.join(".foldignore").exists());
     assert_eq!(
@@ -376,7 +379,7 @@ async fn init_records_the_folder_files_as_r1_and_keeps_its_gitignore() {
 }
 
 #[tokio::test]
-async fn init_keeps_the_foldignore_of_a_folder_without_a_gitignore() {
+async fn init_copies_the_foldignore_into_a_new_gitignore() {
     let host = Host::new();
     let root = host.root("app");
     std::fs::create_dir_all(&root).unwrap();
@@ -394,10 +397,180 @@ async fn init_keeps_the_foldignore_of_a_folder_without_a_gitignore() {
             .is_file()
     );
     assert_eq!(
+        std::fs::read_to_string(root.join(".gitignore")).unwrap(),
+        "out/\n.fold/\n"
+    );
+    assert_eq!(
         git(&root, &["ls-tree", "-r", "--name-only", "HEAD"]),
         ".foldignore\n.gitignore\n"
     );
     assert_eq!(git(&root, &["status", "--porcelain"]), "");
+}
+
+#[cfg(test)]
+/// Runs a plain init in a folder holding `files` and returns the folder.
+async fn init_with_files(files: &[(&str, &str)]) -> (Host, std::path::PathBuf) {
+    let host = Host::new();
+    let root = host.root("app");
+    std::fs::create_dir_all(&root).unwrap();
+    for (name, text) in files {
+        std::fs::write(root.join(name), text).unwrap();
+    }
+    init_project(&host.paths, &root, None, &host.clock)
+        .await
+        .unwrap();
+    (host, root)
+}
+
+#[cfg(test)]
+fn read(root: &std::path::Path, name: &str) -> String {
+    std::fs::read_to_string(root.join(name)).unwrap()
+}
+
+#[tokio::test]
+async fn init_adds_a_missing_newline_before_the_fold_line() {
+    let (_host, root) = init_with_files(&[(".foldignore", "out/")]).await;
+    assert_eq!(read(&root, ".gitignore"), "out/\n.fold/\n");
+    assert_eq!(read(&root, ".foldignore"), "out/");
+    let (_host, root) = init_with_files(&[(".gitignore", "target")]).await;
+    assert_eq!(read(&root, ".gitignore"), "target\n.fold/\n");
+    assert_eq!(git(&root, &["status", "--porcelain"]), "");
+}
+
+#[tokio::test]
+async fn init_with_an_empty_foldignore_writes_only_the_fold_line() {
+    let (_host, root) = init_with_files(&[(".foldignore", "")]).await;
+    assert_eq!(read(&root, ".gitignore"), ".fold/\n");
+}
+
+#[tokio::test]
+async fn init_keeps_both_ignore_files_and_adds_fold_to_the_gitignore() {
+    let (_host, root) =
+        init_with_files(&[(".gitignore", "target/\n"), (".foldignore", "out/\n")]).await;
+    assert_eq!(read(&root, ".gitignore"), "target/\n.fold/\n");
+    assert_eq!(read(&root, ".foldignore"), "out/\n");
+    assert_eq!(
+        git(&root, &["ls-tree", "-r", "--name-only", "HEAD"]),
+        ".foldignore\n.gitignore\n"
+    );
+    assert_eq!(git(&root, &["status", "--porcelain"]), "");
+}
+
+#[tokio::test]
+async fn init_leaves_a_gitignore_that_already_ignores_fold() {
+    for line in [".fold", ".fold/", "/.fold", "/.fold/", ".fold/  "] {
+        let text = format!("target/\n{line}\n");
+        let (_host, root) = init_with_files(&[(".gitignore", &text)]).await;
+        assert_eq!(read(&root, ".gitignore"), text, "{line}");
+    }
+    // Only the four exact forms count: Git keeps leading spaces, and a negation added before the line loses to it.
+    for line in [
+        "# .fold/", "!.fold/", ".folder/", "  .fold/", ".fold/*", "**/.fold",
+    ] {
+        let text = format!("{line}\n");
+        let (_host, root) = init_with_files(&[(".gitignore", &text)]).await;
+        assert_eq!(
+            read(&root, ".gitignore"),
+            format!("{text}.fold/\n"),
+            "{line}"
+        );
+        assert_eq!(git(&root, &["status", "--porcelain"]), "", "{line}");
+    }
+}
+
+#[tokio::test]
+async fn init_ends_the_fold_line_like_the_crlf_lines_of_the_gitignore() {
+    let (_host, root) = init_with_files(&[(".gitignore", "target/\r\n")]).await;
+    assert_eq!(read(&root, ".gitignore"), "target/\r\n.fold/\r\n");
+    let (_host, root) = init_with_files(&[(".gitignore", "a\r\nb")]).await;
+    assert_eq!(read(&root, ".gitignore"), "a\r\nb\r\n.fold/\r\n");
+    let (_host, root) = init_with_files(&[(".gitignore", "target/\r\n.fold/\r\n")]).await;
+    assert_eq!(read(&root, ".gitignore"), "target/\r\n.fold/\r\n");
+    let (_host, root) = init_with_files(&[(".foldignore", "out/\r\n")]).await;
+    assert_eq!(read(&root, ".gitignore"), "out/\r\n.fold/\r\n");
+    assert_eq!(git(&root, &["status", "--porcelain"]), "");
+}
+
+#[tokio::test]
+async fn init_leaves_an_ignore_file_that_is_not_a_regular_file() {
+    let host = Host::new();
+    let root = host.root("app");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(host.root("rules"), "target/\n").unwrap();
+    std::os::unix::fs::symlink("../rules", root.join(".gitignore")).unwrap();
+    init_project(&host.paths, &root, None, &host.clock)
+        .await
+        .unwrap();
+    assert!(
+        std::fs::symlink_metadata(root.join(".gitignore"))
+            .unwrap()
+            .is_symlink()
+    );
+    assert_eq!(
+        std::fs::read_to_string(host.root("rules")).unwrap(),
+        "target/\n"
+    );
+    assert!(!root.join(".foldignore").exists());
+    assert_eq!(git(&root, &["status", "--porcelain"]), "");
+
+    // A `.foldignore` that is not a regular file counts as empty.
+    let host = Host::new();
+    let root = host.root("app");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(host.root("rules"), "out/\n").unwrap();
+    std::os::unix::fs::symlink("../rules", root.join(".foldignore")).unwrap();
+    init_project(&host.paths, &root, None, &host.clock)
+        .await
+        .unwrap();
+    assert_eq!(read(&root, ".gitignore"), ".fold/\n");
+    assert!(
+        std::fs::symlink_metadata(root.join(".foldignore"))
+            .unwrap()
+            .is_symlink()
+    );
+    assert_eq!(
+        std::fs::read_to_string(host.root("rules")).unwrap(),
+        "out/\n"
+    );
+    assert_eq!(git(&root, &["status", "--porcelain"]), "");
+}
+
+#[tokio::test]
+async fn a_failed_init_writes_back_the_gitignore_it_changed() {
+    let host = Host::new();
+    let registry = host.registry().await;
+    registry
+        .write(async |tx| {
+            sqlx::query(
+                "CREATE TRIGGER projects_refuse BEFORE INSERT ON projects BEGIN SELECT RAISE(ABORT, 'registry is read-only'); END",
+            )
+            .execute(tx.conn())
+            .await
+            .map_err(StoreError::from)?;
+            Ok::<_, StoreError>(())
+        })
+        .await
+        .unwrap();
+    registry.close().await.unwrap();
+
+    let root = host.root("app");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gitignore"), "target").unwrap();
+    let error = init_project(&host.paths, &root, None, &host.clock)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, ProjectError::Store(_)));
+    assert_eq!(read(&root, ".gitignore"), "target");
+    assert!(!root.join(".foldignore").exists());
+    assert!(!root.join(".fold").exists());
+
+    std::fs::remove_file(root.join(".gitignore")).unwrap();
+    std::fs::write(root.join(".foldignore"), "out/\n").unwrap();
+    init_project(&host.paths, &root, None, &host.clock)
+        .await
+        .unwrap_err();
+    assert_eq!(read(&root, ".foldignore"), "out/\n");
+    assert!(!root.join(".gitignore").exists());
 }
 
 #[tokio::test]

@@ -197,7 +197,7 @@ fn terminate(pids: &[i32]) {
     }
 }
 
-/// The files `fld init` writes into a new project's folder that are there now, and their bytes as `r1` counts them. A `.gitignore` counts only when it holds the comment init writes, never as the folder's own file. An empty `.foldignore` counts as a file of no bytes.
+/// The files `fld init` writes into a new project's folder that are there now, and their bytes as `r1` counts them. The `.gitignore` always counts, with the bytes it holds after init, so the folder's own `.gitignore` is not part of the folder's file count. An empty `.foldignore` counts as a file of no bytes.
 pub fn init_files(project: &Path) -> (usize, u64) {
     let written = [
         ".mcp.json",
@@ -211,18 +211,12 @@ pub fn init_files(project: &Path) -> (usize, u64) {
     for relative in written {
         let path = project.join(relative);
         let bytes = match std::fs::symlink_metadata(&path) {
-            Ok(_) if relative == ".gitignore" && !init_wrote_gitignore(&path) => continue,
             Ok(meta) => meta.len(),
             Err(_) => continue,
         };
         found = (found.0 + 1, found.1 + bytes);
     }
     found
-}
-
-fn init_wrote_gitignore(path: &Path) -> bool {
-    std::fs::read_to_string(path)
-        .is_ok_and(|text| text.starts_with("# Paths that Git and fold leave out"))
 }
 
 /// The `r1:` line `fld init` prints for a folder whose own files are `files` with `bytes`, with what init writes beside them.
