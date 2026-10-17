@@ -26,7 +26,7 @@ We use fold to build and maintain our own projects.
 
 ### Install fold
 
-fold uses your installed Claude Code. Before you start, install Git and sign in to Claude Code version **2.1.299 or newer**. See the [Claude Code installation guide](https://code.claude.com/docs/en/overview#get-started).
+fold uses your installed Claude Code. Before you start, install Git **2.36 or newer** and sign in to Claude Code version **2.1.299 or newer**. See the [Claude Code installation guide](https://code.claude.com/docs/en/overview#get-started).
 
 Install fold on **Linux AMD64 (x86_64)**, **Linux ARM64 (aarch64)**, or **macOS 13 or newer with Apple silicon (ARM64)**. The Linux binaries are static and run on any distribution.
 
