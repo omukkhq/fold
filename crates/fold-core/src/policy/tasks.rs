@@ -1,7 +1,7 @@
 use crate::actor::Actor;
 use crate::agents::{AgentName, WorkerName};
 use crate::error::codes;
-use crate::status::TaskStatus;
+use crate::tasks::status::TaskStatus;
 
 use super::PolicyDenied;
 

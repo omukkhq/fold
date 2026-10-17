@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{ProposalId, TaskId, WorkspaceId};
-use crate::task::{TaskKind, TaskValueError, define_names};
+use crate::tasks::{TaskKind, TaskValueError, define_names};
 
 define_names!(
     /// A task's column on the board. The value is always calculated from `TaskFacts`; nothing sets it directly. Its text is what `tasks.status` stores and the serde form.

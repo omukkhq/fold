@@ -4,8 +4,8 @@ use super::Role;
 use crate::agents::{AgentName, AreaName};
 use crate::error::{FoldError, codes};
 use crate::ids::{ProposalId, TaskId};
-use crate::status::TaskStatus;
-use crate::task::LabelName;
+use crate::tasks::LabelName;
+use crate::tasks::status::TaskStatus;
 use crate::text::shorten;
 
 /// How many turns of a lead, counted from the turn that asks for its hand-off note, may end without a note before fold starts the lead fresh with the fold summary alone.

@@ -8,7 +8,13 @@ use crate::events::EventActor;
 use crate::text::one_line;
 use crate::time::Timestamp;
 
+pub mod claims;
+pub mod container;
+pub mod dag;
 mod plan;
+pub mod readiness;
+pub mod requests;
+pub mod status;
 
 pub use plan::{MAX_PLAN_TASKS, PlanRef, PlannedReview, PlannedTask, check_task_plan};
 
@@ -213,7 +219,7 @@ macro_rules! define_names {
 
         $(
             impl ::std::str::FromStr for $name {
-                type Err = $crate::task::TaskValueError;
+                type Err = $crate::tasks::TaskValueError;
 
                 fn from_str(text: &str) -> Result<Self, Self::Err> {
                     $name::parse(text).ok_or($error)
@@ -264,7 +270,7 @@ define_names!(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::status::TaskStatus;
+    use crate::tasks::status::TaskStatus;
 
     #[test]
     fn titles_and_names_are_trimmed_single_lines() {

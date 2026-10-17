@@ -4,6 +4,10 @@ use thiserror::Error;
 
 use crate::error::{FoldError, codes};
 
+pub mod presence;
+pub mod push;
+pub mod roles;
+
 pub(crate) const MAX_NAME_LEN: usize = 32;
 const MAX_WORKER_NAME_LEN: usize = 128;
 

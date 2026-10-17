@@ -304,9 +304,9 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+    use crate::agents::roles::Role;
     use crate::events::EventActor;
     use crate::reviews::Approver;
-    use crate::roles::Role;
 
     const AUTHOR: &str = "backend";
 

@@ -4,14 +4,14 @@ use std::fmt;
 use serde_json::json;
 
 use crate::actor::Actor;
+use crate::agents::roles::Role;
 use crate::agents::{AgentName, HumanName};
-use crate::claims::is_stale;
-use crate::dag::{Dag, EdgeRefusal};
 use crate::error::{FoldError, codes};
 use crate::events::EventActor;
 use crate::ids::{RequestId, TaskId};
-use crate::roles::Role;
-use crate::task::{LabelName, define_names};
+use crate::tasks::claims::is_stale;
+use crate::tasks::dag::{Dag, EdgeRefusal};
+use crate::tasks::{LabelName, define_names};
 use crate::text::{LineFault, one_line};
 use crate::time::Timestamp;
 

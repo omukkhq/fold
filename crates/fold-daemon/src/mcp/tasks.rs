@@ -2,7 +2,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::str::FromStr;
 
-use fold_core::task::{PlanRef, PlannedReview, PlannedTask};
+use fold_core::tasks::{PlanRef, PlannedReview, PlannedTask};
 use fold_core::{
     Actor, ChecklistItemId, ChecklistName, FoldError, HumanName, IdParseError, LabelColor,
     LabelName, StepText, TaskDescription, TaskId, TaskKind, TaskTitle, WorkerName,

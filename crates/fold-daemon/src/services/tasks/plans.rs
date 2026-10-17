@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use fold_core::events::types;
 use fold_core::reviews::{HumanReviewMark, human_review_reason};
-use fold_core::task::{PlanRef, PlannedTask, check_task_plan};
+use fold_core::tasks::{PlanRef, PlannedTask, check_task_plan};
 use fold_core::{
     Actor, ChecklistName, DependencyOrigin, FoldError, HoldMark, HoldReason, HumanName, NewEvent,
     TaskId, TaskKind, codes, policy,

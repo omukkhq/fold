@@ -10,7 +10,8 @@ use fold_store::agents::{self, WorkerProcessRow};
 use fold_store::{StoreError, messages};
 use serde_json::json;
 
-use super::{Input, Supervisor, lock, stopped_event};
+use super::stop::stopped_event;
+use super::{Input, Supervisor, lock};
 use crate::services::agents::AgentError;
 use crate::services::agents::workers::new_session;
 use crate::services::events::EventBuffer;

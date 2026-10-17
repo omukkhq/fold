@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::agents::roles::{CacheTtl, Role, WorkerLimits, is_command_word as plain_word};
 use crate::error::{FoldError, codes};
-use crate::roles::{CacheTtl, Role, WorkerLimits, is_command_word as plain_word};
 
 /// The commented file `fld init` writes to `.fold/config.toml`. Every value line is commented out and holds the default.
 pub const CONFIG_TEMPLATE: &str = include_str!("config_template.toml");

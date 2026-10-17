@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{Conflict, ConflictHunk, ConflictKind};
 use crate::ids::{ProposalId, RevisionId};
-use crate::object::ObjectHash;
-use crate::tree::{EntryKind, FlatEntry};
+use crate::workspaces::object::ObjectHash;
+use crate::workspaces::tree::{EntryKind, FlatEntry};
 
 /// How many conflicting paths the author's message names before it counts the rest.
 const NAMED_PATHS: usize = 5;
@@ -200,7 +200,7 @@ impl ConflictReport {
 mod hash_text {
     use serde::{Deserialize, Deserializer, Serializer};
 
-    use crate::object::ObjectHash;
+    use crate::workspaces::object::ObjectHash;
 
     pub fn serialize<S: Serializer>(hash: &ObjectHash, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.collect_str(hash)
@@ -217,8 +217,8 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
-    use crate::object::{ObjectKind, hash_object};
-    use crate::tree::FlatTree;
+    use crate::workspaces::object::{ObjectKind, hash_object};
+    use crate::workspaces::tree::FlatTree;
 
     fn hash(text: &str) -> ObjectHash {
         hash_object(ObjectKind::Blob, text.as_bytes())

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::agents::{AgentName, AreaName};
 use crate::error::{FoldError, codes};
 use crate::ids::{ProposalId, TaskId};
-use crate::task::{LabelName, define_names};
+use crate::tasks::{LabelName, define_names};
 
 mod answers;
 mod handoff;

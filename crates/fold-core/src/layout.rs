@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use crate::agents::AgentName;
+use crate::agents::roles::Role;
 use crate::error::{FoldError, codes};
 use crate::ids::{ProposalId, ReviewBatchId, TaskId, WorkspaceId};
-use crate::roles::Role;
 
 /// Where the host-wide files live: `<data home>/fold/`. The data home is `XDG_DATA_HOME`, else `<home>/.local/share`. An empty or relative value counts as unset, as the XDG base directory rules require.
 #[derive(Debug, Clone, PartialEq, Eq)]

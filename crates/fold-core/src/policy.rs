@@ -2,9 +2,9 @@ use thiserror::Error;
 
 use crate::actor::{Actor, AgentActor};
 use crate::agents::WorkerName;
+use crate::agents::roles::Role;
 use crate::error::{FoldError, codes};
 use crate::reviews::{Reviewer, Verdict};
-use crate::roles::Role;
 
 mod batches;
 mod human_review;

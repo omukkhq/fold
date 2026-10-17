@@ -88,7 +88,7 @@ fn numbered(line: &str, marker: &str, label: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::merge::merge3;
+    use crate::workspaces::merge::merge3;
 
     #[test]
     fn renders_a_known_conflict() {

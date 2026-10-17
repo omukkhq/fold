@@ -232,8 +232,8 @@ pub fn area_prompt(role_prompt: &str, area: &AreaName, instructions: &str) -> St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::roles::Role;
     use crate::config::ProjectConfig;
-    use crate::roles::Role;
 
     fn names(list: &[&str]) -> Vec<String> {
         list.iter().map(|name| (*name).to_owned()).collect()

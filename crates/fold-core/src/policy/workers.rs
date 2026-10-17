@@ -1,7 +1,7 @@
 use crate::actor::Actor;
+use crate::agents::roles::Role;
 use crate::agents::{AreaName, Tag};
 use crate::error::codes;
-use crate::roles::Role;
 
 use super::PolicyDenied;
 

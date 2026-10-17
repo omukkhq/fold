@@ -1,9 +1,9 @@
 use std::collections::BTreeSet;
 
 use crate::error::FoldError;
-use crate::object::{ObjectHash, ObjectKind, hash_object};
 use crate::text::as_text;
-use crate::tree::{EntryKind, FlatEntry, FlatTree};
+use crate::workspaces::object::{ObjectHash, ObjectKind, hash_object};
+use crate::workspaces::tree::{EntryKind, FlatEntry, FlatTree};
 
 use super::{ConflictHunk, merge3};
 

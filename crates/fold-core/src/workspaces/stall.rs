@@ -24,7 +24,7 @@ pub fn is_stalled(
     if !has_impl_claim || workspace != WorkspaceFact::Active {
         return false;
     }
-    crate::claims::is_stale(last_activity_at, now, stall_minutes)
+    crate::tasks::claims::is_stale(last_activity_at, now, stall_minutes)
 }
 
 #[cfg(test)]

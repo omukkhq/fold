@@ -1,35 +1,30 @@
 pub mod actor;
 pub mod agents;
-pub mod checkpoint_policy;
-pub mod claims;
 pub mod clock;
 pub mod config;
-pub mod container;
-pub mod dag;
 pub mod error;
 pub mod events;
 pub mod ids;
 pub mod layout;
-pub mod merge;
 pub mod messages;
-pub mod object;
 pub mod policy;
-pub mod presence;
 pub mod projects;
-pub mod push;
-pub mod readiness;
-pub mod requests;
 pub mod reviews;
-pub mod revision;
-pub mod roles;
-pub mod stall;
-pub mod status;
-pub mod task;
+pub mod tasks;
 pub mod text;
 pub mod time;
-pub mod tree;
+pub mod workspaces;
+
+// Every domain submodule is also reachable at the crate root, so callers outside the crate name it without its domain.
+pub use agents::{presence, push, roles};
+pub use tasks::{claims, container, dag, readiness, requests, status};
+pub use workspaces::{checkpoint_policy, merge, object, revision, stall, tree};
 
 pub use actor::{Actor, AgentActor};
+pub use agents::presence::{ACTIVE_WINDOW_MS, Presence, SessionFact, presence_of};
+pub use agents::roles::{
+    CacheTtl, Role, WorkerState, main_prompt, shared_prompt, with_shared_rules,
+};
 pub use agents::{AgentName, AreaName, HumanName, MAIN_TAG, NameError, Tag, WorkerName};
 pub use clock::{Clock, ManualClock};
 pub use config::{CONFIG_TEMPLATE, GitConfig, IntegrationConfig, ProjectConfig, RemoteConfig};
@@ -51,11 +46,9 @@ pub use messages::{
     MessageChoices, Recipient, ResolveError, Sender, Target,
 };
 pub use policy::PolicyDenied;
-pub use presence::{ACTIVE_WINDOW_MS, Presence, SessionFact, presence_of};
 pub use projects::{choose_slug, slugify};
-pub use roles::{CacheTtl, Role, WorkerState, main_prompt, shared_prompt, with_shared_rules};
-pub use status::TaskStatus;
-pub use task::{
+pub use tasks::status::TaskStatus;
+pub use tasks::{
     ChecklistName, DependencyOrigin, HoldMark, HoldReason, LabelColor, LabelName, StepText,
     TaskDescription, TaskKind, TaskTitle, TaskValueError,
 };

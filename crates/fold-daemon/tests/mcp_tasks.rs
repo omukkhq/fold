@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use crate::common::roles::give_role;
 use fold_core::events::types;
-use fold_core::task::{PlanRef, PlannedReview, PlannedTask};
+use fold_core::tasks::{PlanRef, PlannedReview, PlannedTask};
 use fold_core::{Actor, HumanName, Role, TaskId, TaskStatus};
 use fold_daemon::mcp::{FoldServer, FooterPart, FooterSource};
 use fold_daemon::services::agents::{AgentService, SessionContext};

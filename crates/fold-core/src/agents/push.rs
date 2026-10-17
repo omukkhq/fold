@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use crate::agents::{AgentName, AreaName};
 use crate::events::{Event, types};
 use crate::ids::{MessageId, RequestId, TaskId};
-use crate::status::TaskStatus;
+use crate::tasks::status::TaskStatus;
 
 /// The longest notice text. A notice names ids and a tool, so it never comes near it.
 pub const MAX_NOTICE_LEN: usize = 200;

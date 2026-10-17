@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
-use crate::dag::Dag;
 use crate::ids::TaskId;
-use crate::status::TaskStatus;
+use crate::tasks::dag::Dag;
+use crate::tasks::status::TaskStatus;
 use crate::time::Timestamp;
 
 /// How many direct dependents only `task` holds back: those in Backlog, In Progress or Review whose every other prerequisite is Done. A started dependent counts because an agent already waits on it. A task missing from `statuses` counts as not Done and not started.

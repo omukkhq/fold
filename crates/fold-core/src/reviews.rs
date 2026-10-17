@@ -1,7 +1,7 @@
 use crate::actor::AgentActor;
 use crate::agents::{AgentName, HumanName};
 use crate::events::EventActor;
-use crate::task::define_names;
+use crate::tasks::define_names;
 
 /// The longest reason a review command takes, in characters: why a proposal closes, why a reviewer gives a review claim up, or why a human must look.
 pub const MAX_REASON_CHARS: usize = 500;

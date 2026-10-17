@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
 use crate::error::{FoldError, codes};
-use crate::object::{ObjectHash, ObjectKind, hash_object, varint};
+use crate::workspaces::object::{ObjectHash, ObjectKind, hash_object, varint};
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum TreeError {

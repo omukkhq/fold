@@ -2,8 +2,8 @@ use thiserror::Error;
 
 use crate::error::{FoldError, codes};
 use crate::ids::{IntegrationId, RevisionId};
-use crate::object::{ObjectHash, ObjectKind, hash_object, varint};
 use crate::time::Timestamp;
+use crate::workspaces::object::{ObjectHash, ObjectKind, hash_object, varint};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum RevisionError {

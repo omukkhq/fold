@@ -1,8 +1,8 @@
 use crate::actor::{Actor, AgentActor};
+use crate::agents::roles::Role;
 use crate::agents::{Tag, WorkerName};
 use crate::error::codes;
-use crate::requests::Requester;
-use crate::roles::Role;
+use crate::tasks::requests::Requester;
 
 use super::PolicyDenied;
 
@@ -37,7 +37,7 @@ pub fn can_claim_request(actor: &Actor, role: Option<Role>) -> Result<&AgentActo
     }
 }
 
-/// The requester decides what the drafts become, so only they approve, ask for changes, edit or close: the same named human, or any worker of the requesting agent. `deputy` (see [`crate::requests::deputy`]) decides for a short-lived requester, which fold stops once its work is done.
+/// The requester decides what the drafts become, so only they approve, ask for changes, edit or close: the same named human, or any worker of the requesting agent. `deputy` (see [`crate::tasks::requests::deputy`]) decides for a short-lived requester, which fold stops once its work is done.
 pub fn is_requester(
     actor: &Actor,
     requester: &Requester,
