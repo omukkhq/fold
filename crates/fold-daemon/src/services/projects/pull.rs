@@ -60,10 +60,10 @@ pub struct PulledConflict {
 
 /// The newest commit fold main and the remote share.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct SyncBase {
-    commit: CommitId,
+pub(super) struct SyncBase {
+    pub(super) commit: CommitId,
     /// Main's head revision when the commit is its commit: the remote only added to main, so a clean pull can be the remote commit itself.
-    fast_forward: Option<RevisionId>,
+    pub(super) fast_forward: Option<RevisionId>,
 }
 
 /// Brings the branch of the remote `remote`, or of the only remote without a name, into fold main, for the named human who runs `fld pull`. The project's remote lock and Git sync lock are held to the end, so a push or the commit of an integration never runs at the same time. Main's missing commits are written first, so the project's repository holds main's whole history. When its `[git]` branch holds commits made outside fold, the commit writer stops, and those commits are what a pull without a remote name brings in, under the repository's path as the remote name; a pull that names a remote is refused until then, so it never reports a remote it did not read. Otherwise the remote branch is fetched into the repository; the sync base is the best common ancestor of the remote tip and main's newest commit, and without one it is `r1`'s tree.
@@ -260,6 +260,7 @@ async fn run(
             branch: branch.clone(),
             base_tree,
             remote_tree,
+            human: None,
         };
         let revision = match reviews
             .integrate_pull(actor, request)
@@ -289,14 +290,14 @@ async fn run(
 }
 
 /// Whether the remote tip is new to main and, when it is, the commit to merge it against.
-enum SyncCheck {
+pub(super) enum SyncCheck {
     /// The tip is main's newest commit or one of its ancestors.
     Current,
     Base(Option<SyncBase>),
 }
 
 /// Compares the remote tip with `last`, the commit of main's newest revision in the project's repository. The sync base is their best common ancestor, which every pull or sync task that merged a remote commit leaves in main's history as a second parent; without one, `r1`'s tree is the base. Blocking.
-fn sync_base(
+pub(super) fn sync_base(
     git: &Git,
     mirror: &Path,
     tip: &CommitId,
@@ -350,7 +351,7 @@ async fn open_sync_task(
 }
 
 /// Appends `r<n> <tip>` to the map when `revision` is the remote commit itself: its parent is `head`, whose commit the remote tip descends from, and its tree is the remote tree. The integration has committed, so a failure here is only logged; the next commit of main then writes the revision as a merge of the tip, which the remote accepts as well.
-async fn map_fast_forward<H: Send + 'static>(
+pub(super) async fn map_fast_forward<H: Send + 'static>(
     handle: &ProjectHandle,
     held: H,
     map: SyncMap,
@@ -392,7 +393,7 @@ fn outside_first(branch: &str, named: &str) -> FoldError {
 }
 
 /// The remote name a pull of commits made in the project's own repository reports: that repository's path in the project, such as `.git`.
-fn own_repository(paths: &ProjectPaths) -> String {
+pub(super) fn own_repository(paths: &ProjectPaths) -> String {
     paths.git_dir().strip_prefix(paths.root()).map_or_else(
         |_| ".git".to_owned(),
         |path| path.to_string_lossy().into_owned(),
@@ -400,7 +401,7 @@ fn own_repository(paths: &ProjectPaths) -> String {
 }
 
 /// A refusal of the review or workspace step the pull runs keeps its code.
-fn project_error(error: ReviewError) -> ProjectError {
+pub(super) fn project_error(error: ReviewError) -> ProjectError {
     match error {
         ReviewError::Fold(error) | ReviewError::Task(TaskError::Fold(error)) => error.into(),
         ReviewError::Store(error) | ReviewError::Task(TaskError::Store(error)) => error.into(),

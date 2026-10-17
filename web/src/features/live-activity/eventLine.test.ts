@@ -391,7 +391,7 @@ describe("eventLine", () => {
       "the Git branch has commits fold did not write; run fld pull",
     );
     expect(eventLine(event("git.uncommitted_changes")).text).toBe(
-      "the project folder has changes that are not committed; commit or stash them",
+      "the project folder has changes that are not committed; run fld record, commit or stash them",
     );
     expect(
       eventLine(
@@ -407,7 +407,26 @@ describe("eventLine", () => {
     ).toBe("the project folder follows main again");
   });
 
-  it("marks integrations, main moves and request approvals as emphasised, review approvals by their verdict", () => {
+  it("writes a line for each step of a human change", () => {
+    expect(eventLine(event("human_change.recorded"))).toMatchObject({
+      text: "recorded a change of the project folder as r17",
+      emphasis: true,
+    });
+    expect(
+      eventLine(event("human_change.recorded", { revision: null })).text,
+    ).toBe("recorded a change of the project folder");
+    expect(eventLine(event("human_change.conflicted")).text).toBe(
+      "recorded a change of the project folder that conflicts with main; main did not move",
+    );
+    expect(eventLine(event("human_change.resolved")).text).toBe(
+      "resolved the change of the project folder in r17",
+    );
+    expect(
+      eventLine(event("human_change.resolved", { revision: null })).text,
+    ).toBe("resolved the change of the project folder");
+  });
+
+  it("marks integrations, main moves, request approvals and recorded human changes as emphasised, review approvals by their verdict", () => {
     const emphasised = EVENT_TYPES.filter(
       (type) => eventLine(event(type)).emphasis,
     );
@@ -416,6 +435,7 @@ describe("eventLine", () => {
       "integration.succeeded",
       "main.advanced",
       "request.approved",
+      "human_change.recorded",
     ]);
   });
 });

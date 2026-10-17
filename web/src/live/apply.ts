@@ -35,6 +35,7 @@ const DOMAINS = new Set([
   "message",
   "request",
   "project",
+  "human_change",
 ]);
 
 export function domainOf(type: string): string | null {
@@ -406,6 +407,15 @@ function invalidationKeys(
       return [repository, board];
     case "remote":
       return [repository, keys.git(slug)];
+    case "human_change":
+      // Needs you lists a conflicted human change until an integration brings it onto main or a newer one replaces it.
+      return [
+        repository,
+        board,
+        keys.git(slug),
+        keys.project(slug),
+        keys.needsYou(slug),
+      ];
     case "git":
       // `git.committed` names the revision whose commit the revision, proposal and task reads show.
       return type === "git.committed"

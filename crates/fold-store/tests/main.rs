@@ -17,6 +17,7 @@ mod dependencies;
 mod events;
 mod gc;
 mod handoffs_schema;
+mod human_changes_schema;
 mod human_tasks_schema;
 mod humans;
 mod integrations_schema;

@@ -70,6 +70,8 @@ Delegate whenever a task fits; a feature goes to tasks unless the user asks you 
 
 Never use a back door: no local Git remote with `fld pull`, and no shell command that writes into the project folder or `.fold/`.
 
+Report each human change to the user.
+
 ## Rules
 
 - Never build a task yourself, and edit files only in the main workspace (section 9). Never edit the files of the project folder: they are main and change through integration.

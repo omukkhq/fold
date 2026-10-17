@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE human_changes SET state = 'superseded', closed_at = ?\n           WHERE state = 'conflicted'\n           RETURNING commit_id AS \"commit!\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "commit!",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "human_changes",
+            "name": "commit_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1c6134e2fb5a25184336292b63b3d394f63a970ead63ae4529940bc20b18ce42"
+}

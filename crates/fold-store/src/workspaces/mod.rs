@@ -4,6 +4,7 @@ mod columns;
 mod commits;
 mod conflicts;
 mod gc;
+mod human_changes;
 mod lifecycle;
 mod refs;
 mod remotes;
@@ -22,6 +23,11 @@ pub use conflicts::{ConflictRow, clear_conflict, list_conflicts, set_conflicts};
 pub use gc::{
     ClosedWorkspace, closed_workspaces_due, gc_roots, mark_directory_removed,
     workspaces_over_auto_limit,
+};
+pub use human_changes::{
+    HumanChangeRow, HumanChangeState, NewHumanChange, conflicted_human_change,
+    human_change_of_workspace, insert_conflicted_human_change, insert_recorded_human_change,
+    newest_human_change, resolve_human_change, set_human_change_workspace, supersede_conflicted,
 };
 pub use lifecycle::{
     CheckoutTarget, ClosedState, NewMainWorkspace, NewReviewCheckout, NewTaskWorkspace,

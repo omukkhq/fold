@@ -107,6 +107,9 @@ fn all_equals_the_plans_event_types() {
         "task.hold_cleared",
         "proposal.human_edited",
         "proposal.review_again_requested",
+        "human_change.recorded",
+        "human_change.conflicted",
+        "human_change.resolved",
     ]);
     assert_eq!(declared, expected);
 }

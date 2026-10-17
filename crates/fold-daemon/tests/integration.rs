@@ -131,6 +131,7 @@ fn pull(fx: &Fixture, readme: &str) -> PullIntegration {
         branch: "main".to_owned(),
         base_tree: remote_tree(fx, "# demo\n"),
         remote_tree: remote_tree(fx, readme),
+        human: None,
     }
 }
 

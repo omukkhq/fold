@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO human_changes (commit_id, human, base_tree_hash, tree_hash, state, created_at)\n           VALUES (?, ?, ?, ?, 'conflicted', ?)\n           RETURNING id AS \"id!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "human_changes",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "7e1a33e5f3cc86a202de6c27e1ee186ccb67f62555af3a085ed78391552a36ec"
+}

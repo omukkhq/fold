@@ -253,7 +253,7 @@ pub fn can_complete_human_task(starter: &Starter) -> Result<(), PolicyDenied> {
     }
 }
 
-/// A direct change reaches main without a task, a proposal or a review: the user's word in the conversation is its approval. Only the main agent talks with the user, so it alone opens the main workspace and submits a direct change. A lead, a worker, a subagent and the daemon are refused, and so is a human, who changes the project's files through Git and `fld pull`.
+/// A direct change reaches main without a task, a proposal or a review: the user's word in the conversation is its approval. Only the main agent talks with the user, so it alone opens the main workspace and submits a direct change. A lead, a worker, a subagent and the daemon are refused, and so is a human, who changes the files of the project folder and records them with `fld record`.
 pub fn can_change_main_directly(starter: &Starter) -> Result<(), PolicyDenied> {
     match starter {
         Starter::MainAgent => Ok(()),
@@ -263,7 +263,7 @@ pub fn can_change_main_directly(starter: &Starter) -> Result<(), PolicyDenied> {
         Starter::Human => Err(PolicyDenied {
             code: codes::MAIN_AGENT_REQUIRED,
             message: "only the main agent makes a direct change to main",
-            hint: "commit the change in the project folder's Git repository and run fld pull, or ask the main agent",
+            hint: "change the files in the project folder and run fld record, or ask the main agent",
         }),
         _ => Err(PolicyDenied {
             code: codes::MAIN_AGENT_REQUIRED,
@@ -364,7 +364,7 @@ mod tests {
         );
         let human = can_change_main_directly(&Starter::Human).unwrap_err();
         assert_eq!(human.code(), codes::MAIN_AGENT_REQUIRED);
-        assert!(human.hint().contains("fld pull"));
+        assert!(human.hint().contains("fld record"));
         for starter in [
             Starter::AreaLead(area("web")),
             Starter::ReviewLead,

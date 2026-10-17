@@ -136,6 +136,9 @@ define_event_types! {
     TASK_HOLD_CLEARED = "task.hold_cleared",
     PROPOSAL_HUMAN_EDITED = "proposal.human_edited",
     PROPOSAL_REVIEW_AGAIN_REQUESTED = "proposal.review_again_requested",
+    HUMAN_CHANGE_RECORDED = "human_change.recorded",
+    HUMAN_CHANGE_CONFLICTED = "human_change.conflicted",
+    HUMAN_CHANGE_RESOLVED = "human_change.resolved",
 }
 
 impl EventType {

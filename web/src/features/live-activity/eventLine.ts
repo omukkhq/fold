@@ -546,7 +546,7 @@ const SPECS: Record<EventType, Spec> = {
   "git.uncommitted_changes": {
     icon: TriangleAlert,
     text: fixed(
-      "the project folder has changes that are not committed; commit or stash them",
+      "the project folder has changes that are not committed; run fld record, commit or stash them",
     ),
   },
   "git.attention_cleared": {
@@ -658,6 +658,27 @@ const SPECS: Record<EventType, Spec> = {
       const tool = text(e.data.tool) ?? "a tool";
       return `${verb} ${tool} for ${workerOf(e)}`;
     },
+  },
+  "human_change.recorded": {
+    icon: GitMerge,
+    emphasis: true,
+    text: (e) =>
+      e.revision === null
+        ? "recorded a change of the project folder"
+        : `recorded a change of the project folder as ${e.revision}`,
+  },
+  "human_change.conflicted": {
+    icon: TriangleAlert,
+    text: fixed(
+      "recorded a change of the project folder that conflicts with main; main did not move",
+    ),
+  },
+  "human_change.resolved": {
+    icon: GitMerge,
+    text: (e) =>
+      e.revision === null
+        ? "resolved the change of the project folder"
+        : `resolved the change of the project folder in ${e.revision}`,
   },
 };
 

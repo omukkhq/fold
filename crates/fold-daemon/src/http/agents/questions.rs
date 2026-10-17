@@ -132,9 +132,11 @@ pub enum NeedsYouItemKind {
     HumanTask,
     /// A task with a blocker, which waits until a human clears it; `reason` says why.
     Blocker,
+    /// A human change from the project folder that conflicts with main: main did not move, and the main agent explains the conflict in its conversation and prepares the merge for the human's OK. `commit` is the human's commit and `paths` the conflicting files.
+    HumanChange,
 }
 
-/// The screen that answers an item: `messages` opens the thread, `worker` the asking worker, `proposal` the proposal, `request` the request and `task` the task.
+/// The screen that answers an item: `messages` opens the thread, `worker` the asking worker, `proposal` the proposal, `request` the request, `task` the task and `repository` the history of main.
 #[derive(Debug, Clone, Copy, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum NeedsYouScreen {
@@ -143,6 +145,7 @@ pub enum NeedsYouScreen {
     Proposal,
     Request,
     Task,
+    Repository,
 }
 
 /// One item that waits for a human. Only the ids its kind has are set.
@@ -174,7 +177,7 @@ pub struct NeedsYouEntry {
     pub proposal: Option<String>,
     #[schema(required = true, example = "RQ-4")]
     pub request: Option<String>,
-    /// The human a `human_review` or `request_draft` waits for; null when any human may answer.
+    /// The human a `human_review` or `request_draft` waits for, or whose change a `human_change` is; null when any human may answer.
     #[schema(required = true, example = "tanim")]
     pub human: Option<String>,
     /// The options of a `question` with choices; empty otherwise.
@@ -188,6 +191,11 @@ pub struct NeedsYouEntry {
     /// The reason of a `blocker`.
     #[schema(required = true, example = "Wait until the design is signed off")]
     pub reason: Option<String>,
+    /// The human's Git commit of a `human_change`.
+    #[schema(required = true, example = "9f2c4e1a7b3d5f6e8a0c2b4d6f8e0a1c3b5d7f9e")]
+    pub commit: Option<String>,
+    /// The files of a `human_change` that conflict with main, in path order; empty otherwise.
+    pub paths: Vec<String>,
 }
 
 impl From<NeedsYouItem> for NeedsYouEntry {
@@ -199,6 +207,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             NeedsYouKind::RequestDraft => NeedsYouItemKind::RequestDraft,
             NeedsYouKind::HumanTask => NeedsYouItemKind::HumanTask,
             NeedsYouKind::Blocker => NeedsYouItemKind::Blocker,
+            NeedsYouKind::HumanChange => NeedsYouItemKind::HumanChange,
         };
         let screen = match item.kind.screen() {
             Screen::Messages => NeedsYouScreen::Messages,
@@ -206,6 +215,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             Screen::Proposal => NeedsYouScreen::Proposal,
             Screen::Request => NeedsYouScreen::Request,
             Screen::Task => NeedsYouScreen::Task,
+            Screen::Repository => NeedsYouScreen::Repository,
         };
         Self {
             kind,
@@ -224,6 +234,8 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             header: item.header,
             title: item.title,
             reason: item.reason,
+            commit: item.commit,
+            paths: item.paths,
         }
     }
 }

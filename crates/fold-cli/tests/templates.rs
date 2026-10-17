@@ -255,7 +255,7 @@ const FOLD_ERROR_CODES: [&str; 153] = [
 const PENDING_ERROR_CODES: [&str; 1] = ["too_large"];
 
 /// The `invalid_request` reasons that have a name.
-const INVALID_REQUEST_REASONS: [&str; 9] = [
+const INVALID_REQUEST_REASONS: [&str; 10] = [
     "self_dependency",
     "checklist_origin",
     "linked_item",
@@ -265,9 +265,10 @@ const INVALID_REQUEST_REASONS: [&str; 9] = [
     "no_service_manager",
     "too_many_attachments",
     "attachment_too_large",
+    "human_change_superseded",
 ];
 
-const NON_TOOL_NAMES: [&str; 26] = [
+const NON_TOOL_NAMES: [&str; 27] = [
     "human_review",
     "left_out",
     "stall_minutes",
@@ -294,6 +295,7 @@ const NON_TOOL_NAMES: [&str; 26] = [
     "clear_model",
     "clear_mcp",
     "no_proposal",
+    "human_change",
 ];
 
 const SECTIONS: [&str; 14] = [

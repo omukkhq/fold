@@ -41,6 +41,7 @@ mod commits;
 mod gc;
 mod git_status;
 mod pull;
+mod record;
 mod remote;
 mod web_auth;
 
@@ -49,6 +50,7 @@ pub use commits::{Committed, commit_main, commit_message};
 pub use gc::{GcReport, gc};
 pub use git_status::{GitStatus, PushFailed, Pushed, RemoteStatus, git_status, public_location};
 pub use pull::{PullOutcome, PulledConflict, pull};
+pub use record::{RecordOutcome, TouchedTask, record};
 pub(crate) use remote::push_with;
 pub use remote::{PushOutcome, RemoteContext, push};
 pub use web_auth::{
@@ -1116,7 +1118,7 @@ pub struct ProjectOverview {
 pub enum ProjectAttention {
     /// The `[git]` branch has commits fold did not write, so the project folder stops following main until a human runs `fld pull`, which brings them in.
     OutsideCommits,
-    /// The project folder has changes that are not committed, so it stops following main until the human commits or stashes them.
+    /// The project folder has changes that are not committed, so it stops following main until the human records them with `fld record`, commits or stashes them.
     UncommittedChanges,
 }
 

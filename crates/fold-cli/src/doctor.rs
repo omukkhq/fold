@@ -400,7 +400,7 @@ fn git_check(host: &Host) -> Check {
     } else {
         Check::warn(
             "git",
-            "git is not on PATH; fold needs it for fld init, the Git commit of every integration, which the project folder follows, fld remote, fld push and fld pull",
+            "git is not on PATH; fold needs it for fld init, the Git commit of every integration, which the project folder follows, fld record, fld remote, fld push and fld pull",
             "install git",
         )
     }
@@ -1080,7 +1080,7 @@ fn folder_check(paths: &ProjectPaths, host: &Host) -> Check {
         Ok(true) => Check::warn(
             NAME,
             "the project folder has changes that are not committed, so it does not follow main",
-            "commit or stash the changes; fold brings the folder to main at the next integration or daemon start",
+            "run fld record in the project folder to record them on main, or commit or stash them; fold brings the folder to main at the next integration or daemon start",
         ),
         Err(_) => Check::warn(
             NAME,

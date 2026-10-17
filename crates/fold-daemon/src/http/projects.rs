@@ -9,7 +9,7 @@ use super::actor::Human;
 use super::error::{ApiError, ApiJson, ApiQuery, ErrorEnvelope};
 use super::{Project, SocketOnly};
 use crate::daemon::AppState;
-use crate::services::projects::{self, PullOutcome, PushOutcome};
+use crate::services::projects::{self, PullOutcome, PushOutcome, RecordOutcome};
 use fold_core::{Presence, TaskStatus, Timestamp};
 use fold_vcs::git::Git;
 
@@ -22,6 +22,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(collect_garbage))
         .routes(routes!(push))
         .routes(routes!(pull))
+        .routes(routes!(record))
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -58,7 +59,7 @@ pub struct ProjectOverview {
     pub paused_by: Option<String>,
 }
 
-/// Why the project, rather than one of its tasks, needs a person. The daemon decides every kind. `outside_commits`: the Git branch of main has commits fold did not write, so the project folder stops following main until a human runs `fld pull`. `uncommitted_changes`: the project folder has changes that are not committed, so it follows main again once the human commits or stashes them.
+/// Why the project, rather than one of its tasks, needs a person. The daemon decides every kind. `outside_commits`: the Git branch of main has commits fold did not write, so the project folder stops following main until a human runs `fld pull`. `uncommitted_changes`: the project folder has changes that are not committed, so it follows main again once the human records them with `fld record`, commits or stashes them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectAttentionKind {
@@ -637,5 +638,152 @@ pub async fn pull(
         query.remote.as_deref(),
     )
     .await?;
+    Ok(Json(outcome.into()))
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordState {
+    /// The project folder holds no change that is not recorded.
+    UpToDate,
+    /// The human change merged cleanly into main as a new revision, and the project folder follows main.
+    Recorded,
+    /// The merge conflicted and main did not move; the main agent prepares the merge with the human.
+    Conflicted,
+}
+
+/// A file of the project folder that fold leaves out, as an import does.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RecordSkipped {
+    pub path: String,
+    /// Why it is left out, such as `too_large`.
+    pub reason: String,
+}
+
+/// An open task workspace whose own changes touch a file the human changed.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RecordTouched {
+    #[schema(example = "T-12")]
+    pub task: String,
+    #[schema(example = "ws-9")]
+    pub workspace: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RecordResult {
+    pub outcome: RecordState,
+    /// The human's commit on the project's Git branch; null when up to date.
+    #[schema(required = true)]
+    pub commit: Option<String>,
+    /// Main's head: the new revision of a recorded change, else the head main stays on.
+    #[schema(example = "r18")]
+    pub revision: String,
+    /// The files the human changed, in path order; empty unless recorded.
+    pub files: Vec<String>,
+    /// In path order; empty unless conflicted.
+    pub conflicted: Vec<PullConflict>,
+    pub touched: Vec<RecordTouched>,
+    pub skipped: Vec<RecordSkipped>,
+    /// False when the same conflicted change waited already and nothing was written.
+    pub created: bool,
+}
+
+impl From<RecordOutcome> for RecordResult {
+    fn from(outcome: RecordOutcome) -> Self {
+        let touched = |touched: Vec<projects::TouchedTask>| {
+            touched
+                .into_iter()
+                .map(|touched| RecordTouched {
+                    task: touched.task.to_string(),
+                    workspace: touched.workspace.to_string(),
+                })
+                .collect()
+        };
+        let skipped = |skipped: Vec<fold_vcs::scan::Skipped>| {
+            skipped
+                .into_iter()
+                .map(|skipped| RecordSkipped {
+                    path: skipped.path.to_string(),
+                    reason: skipped.reason.as_str().to_owned(),
+                })
+                .collect()
+        };
+        match outcome {
+            RecordOutcome::UpToDate { revision } => Self {
+                outcome: RecordState::UpToDate,
+                commit: None,
+                revision: revision.to_string(),
+                files: Vec::new(),
+                conflicted: Vec::new(),
+                touched: Vec::new(),
+                skipped: Vec::new(),
+                created: false,
+            },
+            RecordOutcome::Recorded {
+                commit,
+                revision,
+                files,
+                touched: found,
+                skipped: left,
+            } => Self {
+                outcome: RecordState::Recorded,
+                commit: Some(commit.to_string()),
+                revision: revision.to_string(),
+                files,
+                conflicted: Vec::new(),
+                touched: touched(found),
+                skipped: skipped(left),
+                created: true,
+            },
+            RecordOutcome::Conflicted {
+                commit,
+                head,
+                conflicted,
+                touched: found,
+                skipped: left,
+                created,
+            } => Self {
+                outcome: RecordState::Conflicted,
+                commit: Some(commit.to_string()),
+                revision: head.to_string(),
+                files: Vec::new(),
+                conflicted: conflicted
+                    .into_iter()
+                    .map(|conflict| PullConflict {
+                        path: conflict.path,
+                        kind: conflict.kind.as_str().to_owned(),
+                    })
+                    .collect(),
+                touched: touched(found),
+                skipped: skipped(left),
+                created,
+            },
+        }
+    }
+}
+
+/// Records the human's uncommitted changes in the project folder on main, as `fld record` asks: they become one commit of the human's, which a clean merge integrates with no review, and the folder follows main; a conflict leaves main as it is and waits in Needs you while the main agent prepares the merge. A project whose Git branch has commits fold did not write is refused until `fld pull` brings them in. Socket only; the human comes from `x-fold-human`, and a process under a worker fold started is refused.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/record",
+    operation_id = "record_project",
+    params(("slug" = String, Path, description = "The project slug")),
+    responses(
+        (status = 200, description = "Main holds the human change, or it waits for the main agent", body = RecordResult),
+        (status = 400, description = "The human name is not valid, the project folder has another branch checked out, or the branch has commits fold did not write (`reason` `outside_commits`)", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
+        (status = 404, description = "Not on the socket, or the slug is not registered", body = ErrorEnvelope),
+        (status = 409, description = "Main moved during every attempt, or the config or sync map is invalid", body = ErrorEnvelope),
+        (status = 502, description = "A Git command failed", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open, git is not on PATH, or the objects of the change could not be stored", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn record(
+    _socket: SocketOnly,
+    human: Human,
+    Project(handle): Project,
+) -> Result<Json<RecordResult>, ApiError> {
+    let outcome = projects::record(&handle, &human.actor(), &Git::default()).await?;
     Ok(Json(outcome.into()))
 }

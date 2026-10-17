@@ -102,6 +102,42 @@ pub fn write_commits(
         .collect())
 }
 
+/// A commit that is no fold revision: the commit `fld record` makes of the project folder for the human who runs it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportCommit {
+    pub tree: ObjectHash,
+    pub created_at: Timestamp,
+    pub message: String,
+    pub author: Signature,
+    pub committer: Signature,
+}
+
+/// Writes `commit` as one commit on `target.refname` that continues `base`, as [`write_commits`] writes a revision, and returns its id. Blocking.
+pub fn write_commit(
+    objects: &ObjectStore,
+    git: &Git,
+    target: &ExportTarget<'_>,
+    base: &ExportBase,
+    commit: &ExportCommit,
+    scratch: &Path,
+) -> Result<CommitId, FoldError> {
+    // The number only pairs the commit with its input; it is not written into the commit.
+    let number = RevisionId::from_number(1).ok_or_else(|| unexpected_output("fast-import"))?;
+    let revision = ExportRevision {
+        number,
+        tree: commit.tree,
+        created_at: commit.created_at,
+        message: commit.message.clone(),
+        author: commit.author.clone(),
+        committer: commit.committer.clone(),
+        merge: None,
+    };
+    write_commits(objects, git, target, Some(base), &[revision], scratch)?
+        .pop()
+        .map(|(_, id)| id)
+        .ok_or_else(|| unexpected_output("fast-import"))
+}
+
 fn run_fast_import(
     objects: &ObjectStore,
     git: &Git,

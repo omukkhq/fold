@@ -535,6 +535,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/record": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Records the human's uncommitted changes in the project folder on main, as `fld record` asks: they become one commit of the human's, which a clean merge integrates with no review, and the folder follows main; a conflict leaves main as it is and waits in Needs you while the main agent prepares the merge. A project whose Git branch has commits fold did not write is refused until `fld pull` brings them in. Socket only; the human comes from `x-fold-human`, and a process under a worker fold started is refused. */
+        post: operations["record_project"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/repository": {
         parameters: {
             query?: never;
@@ -1834,7 +1851,7 @@ export interface components {
             workspace: string | null;
         };
         /** @enum {string} */
-        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested";
+        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved";
         /**
          * @description `needs`: this task needs the other task. `needed_by`: the other task needs this one.
          * @enum {string}
@@ -2244,12 +2261,17 @@ export interface components {
             /** @description The options of a `question` with choices; empty otherwise. */
             choices: components["schemas"]["MessageChoice"][];
             /**
+             * @description The human's Git commit of a `human_change`.
+             * @example 9f2c4e1a7b3d5f6e8a0c2b4d6f8e0a1c3b5d7f9e
+             */
+            commit: string | null;
+            /**
              * @description The short header of a `question`, such as `Chart library`.
              * @example Chart library
              */
             header: string | null;
             /**
-             * @description The human a `human_review` or `request_draft` waits for; null when any human may answer.
+             * @description The human a `human_review` or `request_draft` waits for, or whose change a `human_change` is; null when any human may answer.
              * @example tanim
              */
             human: string | null;
@@ -2259,6 +2281,8 @@ export interface components {
              * @example m-31
              */
             message: string | null;
+            /** @description The files of a `human_change` that conflict with main, in path order; empty otherwise. */
+            paths: string[];
             /** @example P-3 */
             proposal: string | null;
             /**
@@ -2301,16 +2325,16 @@ export interface components {
          * @description Why an item waits for a human.
          * @enum {string}
          */
-        NeedsYouItemKind: "question" | "permission" | "human_review" | "request_draft" | "human_task" | "blocker";
+        NeedsYouItemKind: "question" | "permission" | "human_review" | "request_draft" | "human_task" | "blocker" | "human_change";
         /** @description Every item that waits for a human, oldest first. */
         NeedsYouList: {
             items: components["schemas"]["NeedsYouEntry"][];
         };
         /**
-         * @description The screen that answers an item: `messages` opens the thread, `worker` the asking worker, `proposal` the proposal, `request` the request and `task` the task.
+         * @description The screen that answers an item: `messages` opens the thread, `worker` the asking worker, `proposal` the proposal, `request` the request, `task` the task and `repository` the history of main.
          * @enum {string}
          */
-        NeedsYouScreen: "messages" | "worker" | "proposal" | "request" | "task";
+        NeedsYouScreen: "messages" | "worker" | "proposal" | "request" | "task" | "repository";
         /** @description Exactly one of `text` and `linked_task`. */
         NewChecklistItemBody: {
             /** @description The checklist name. Left out, a plain step goes to the task's only checklist, or to `Subtasks` when the task has none; with two or more checklists the request is refused with `checklist_ambiguous`. A new name creates the checklist. */
@@ -2354,7 +2378,7 @@ export interface components {
             presence: components["schemas"]["PresenceState"];
         };
         /**
-         * @description Why the project, rather than one of its tasks, needs a person. The daemon decides every kind. `outside_commits`: the Git branch of main has commits fold did not write, so the project folder stops following main until a human runs `fld pull`. `uncommitted_changes`: the project folder has changes that are not committed, so it follows main again once the human commits or stashes them.
+         * @description Why the project, rather than one of its tasks, needs a person. The daemon decides every kind. `outside_commits`: the Git branch of main has commits fold did not write, so the project folder stops following main until a human runs `fld pull`. `uncommitted_changes`: the project folder has changes that are not committed, so it follows main again once the human records them with `fld record`, commits or stashes them.
          * @enum {string}
          */
         ProjectAttentionKind: "outside_commits" | "uncommitted_changes";
@@ -2652,6 +2676,39 @@ export interface components {
             delivered_at: number | null;
             /** @example frontend/ui */
             name: string;
+        };
+        RecordResult: {
+            /** @description The human's commit on the project's Git branch; null when up to date. */
+            commit: string | null;
+            /** @description In path order; empty unless conflicted. */
+            conflicted: components["schemas"]["PullConflict"][];
+            /** @description False when the same conflicted change waited already and nothing was written. */
+            created: boolean;
+            /** @description The files the human changed, in path order; empty unless recorded. */
+            files: string[];
+            outcome: components["schemas"]["RecordState"];
+            /**
+             * @description Main's head: the new revision of a recorded change, else the head main stays on.
+             * @example r18
+             */
+            revision: string;
+            skipped: components["schemas"]["RecordSkipped"][];
+            touched: components["schemas"]["RecordTouched"][];
+        };
+        /** @description A file of the project folder that fold leaves out, as an import does. */
+        RecordSkipped: {
+            path: string;
+            /** @description Why it is left out, such as `too_large`. */
+            reason: string;
+        };
+        /** @enum {string} */
+        RecordState: "up_to_date" | "recorded" | "conflicted";
+        /** @description An open task workspace whose own changes touch a file the human changed. */
+        RecordTouched: {
+            /** @example T-12 */
+            task: string;
+            /** @example ws-9 */
+            workspace: string;
         };
         /**
          * @description How a lead check answered a report.
@@ -6658,6 +6715,101 @@ export interface operations {
                 };
             };
             /** @description The project failed to open, or git is not on PATH */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    record_project: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Main holds the human change, or it waits for the main agent */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecordResult"];
+                };
+            };
+            /** @description The human name is not valid, the project folder has another branch checked out, or the branch has commits fold did not write (`reason` `outside_commits`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not on the socket, or the slug is not registered */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Main moved during every attempt, or the config or sync map is invalid */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description A Git command failed */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open, git is not on PATH, or the objects of the change could not be stored */
             503: {
                 headers: {
                     [name: string]: unknown;

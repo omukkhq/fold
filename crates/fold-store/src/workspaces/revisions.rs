@@ -39,7 +39,7 @@ pub struct IntegrationInfo {
     pub number: IntegrationId,
     pub kind: IntegrationKind,
     pub actor: String,
-    /// The Git commit a pull brought in.
+    /// The Git commit a pull brought in, a sync task resolved, or an integration merged as the waiting human change it resolved.
     pub remote_commit: Option<String>,
     pub proposal: Option<IntegratedProposal>,
     /// The changeset a direct change brought onto main.
@@ -297,7 +297,8 @@ where
         r#"SELECT r.number AS "number!: i64", r.hash AS "hash!", r.tree_hash AS "tree_hash!",
                   p.number AS "parent?: i64", r.created_at AS "created_at!: i64", r.import_source,
                   i.number AS "integration_number?: i64", i.kind AS "integration_kind?",
-                  i.actor AS "integration_actor?", i.remote_commit AS "remote_commit?",
+                  i.actor AS "integration_actor?",
+                  COALESCE(i.remote_commit, hc.commit_id) AS "remote_commit?: String",
                   cs.number AS "changeset_number?: i64", i.message AS "integration_message?",
                   pr.number AS "proposal_number?: i64", pr.title AS "proposal_title?",
                   v.version AS "version?: i64", t.number AS "task_number?: i64",
@@ -313,6 +314,7 @@ where
            LEFT JOIN proposal_versions v ON v.id = i.version_id
            LEFT JOIN revision_commits rc ON rc.revision_id = r.id
            LEFT JOIN changesets cs ON cs.id = i.changeset_id
+           LEFT JOIN human_changes hc ON hc.integration_id = i.id
            WHERE r.number BETWEEN ?1 AND ?2
            ORDER BY r.number ASC
            LIMIT ?3"#,
@@ -338,7 +340,8 @@ where
         r#"SELECT r.number AS "number!: i64", r.hash AS "hash!", r.tree_hash AS "tree_hash!",
                   p.number AS "parent?: i64", r.created_at AS "created_at!: i64", r.import_source,
                   i.number AS "integration_number?: i64", i.kind AS "integration_kind?",
-                  i.actor AS "integration_actor?", i.remote_commit AS "remote_commit?",
+                  i.actor AS "integration_actor?",
+                  COALESCE(i.remote_commit, hc.commit_id) AS "remote_commit?: String",
                   cs.number AS "changeset_number?: i64", i.message AS "integration_message?",
                   pr.number AS "proposal_number?: i64", pr.title AS "proposal_title?",
                   v.version AS "version?: i64", t.number AS "task_number?: i64",
@@ -354,6 +357,7 @@ where
            LEFT JOIN proposal_versions v ON v.id = i.version_id
            LEFT JOIN revision_commits rc ON rc.revision_id = r.id
            LEFT JOIN changesets cs ON cs.id = i.changeset_id
+           LEFT JOIN human_changes hc ON hc.integration_id = i.id
            WHERE r.number <= ?1
            ORDER BY r.number DESC
            LIMIT ?2"#,

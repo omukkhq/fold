@@ -13,7 +13,7 @@ export interface NeedsYouLine {
   chip: string | null;
   text: string;
   task: string | null;
-  /** The second line's title: the proposal title of a review, the request title of a draft, the task title of a human task, the reason of a blocker. */
+  /** The second line's title: the proposal title of a review, the request title of a draft, the task title of a human task, the reason of a blocker, the conflicting files of a human change. */
   title: string | null;
   since: number;
   hint: string;
@@ -33,6 +33,7 @@ const GROUPS: readonly { kind: NeedsYouKind; title: string }[] = [
   { kind: "request_draft", title: "Request drafts" },
   { kind: "human_task", title: "Human tasks" },
   { kind: "blocker", title: "Blockers" },
+  { kind: "human_change", title: "Your changes" },
 ];
 
 /** The items for this human: an item that waits for another named human is theirs. Before a name, every item shows. */
@@ -51,6 +52,11 @@ export function titleText(title: string | null): string | null {
   return text === "" ? null : text;
 }
 
+/** The conflicting files of a human change, joined for the second line; null when none is named. */
+export function conflictedText(paths: readonly string[]): string | null {
+  return paths.length === 0 ? null : paths.join(", ");
+}
+
 /** `asks about Chart library` with the question's header, else what kind of answer it wants. */
 export function questionText(
   item: Pick<NeedsYouItem, "header" | "choices">,
@@ -61,7 +67,7 @@ export function questionText(
 
 function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
   const base = {
-    key: `${item.kind}:${item.message ?? item.question ?? item.proposal ?? item.request ?? item.task ?? String(index)}`,
+    key: `${item.kind}:${item.message ?? item.question ?? item.proposal ?? item.request ?? item.task ?? item.commit ?? String(index)}`,
     kind: item.kind,
     task: item.task,
     title:
@@ -115,6 +121,17 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
           question: item.question ?? "",
         }),
       };
+    case "human_change":
+      return {
+        ...base,
+        person: null,
+        chip: item.commit === null ? null : item.commit.slice(0, 7),
+        task: null,
+        title: conflictedText(item.paths),
+        text: "conflicts with main; the main agent explains it",
+        hint: "opens the history of main",
+        href: projectPath(slug, "repository"),
+      };
     case "human_review":
       return {
         ...base,
@@ -136,7 +153,7 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
   }
 }
 
-/** The list in group order: questions, permissions, reviews, request drafts, human tasks, blockers; a group without items is left out. */
+/** The list in group order: questions, permissions, reviews, request drafts, human tasks, blockers, human changes; a group without items is left out. */
 export function needsYouGroups(
   slug: string,
   items: readonly NeedsYouItem[],

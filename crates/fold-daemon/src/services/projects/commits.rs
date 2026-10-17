@@ -5,14 +5,14 @@ use fold_core::{
 };
 use fold_store::workspaces::{
     IntegrationKind, RevisionRow, get_by_number, head, insert_revision_commits, list_after,
-    uncommitted_revisions,
+    newest_human_change, uncommitted_revisions,
 };
 use fold_store::{Store, StoreError, reviews};
 use fold_vcs::git::{CommitId, Git};
 use fold_vcs::git_export::{ExportBase, ExportRevision, ExportTarget, Signature, write_commits};
 use fold_vcs::git_remote::{
-    FOLD_HEAD_REF, Followed, branch_ref, follow_main, index_to, is_ancestor, move_branch,
-    project_repository, set_ref,
+    FOLD_HEAD_REF, Followed, branch_ref, follow_main, follow_main_via, index_to, is_ancestor,
+    move_branch, project_repository, set_ref,
 };
 use fold_vcs::git_sync_map::SyncMap;
 use fold_vcs::objects::ObjectStore;
@@ -70,6 +70,12 @@ pub(crate) async fn commit_locked<H: Send + 'static>(
         return Ok((held, map, Committed::default()));
     }
     let revisions = export_revisions(store, &rows).await?;
+    let via = {
+        let mut conn = store.read().acquire().await.map_err(StoreError::from)?;
+        newest_human_change(&mut conn, true).await?
+    }
+    .map(|(commit, _)| commit.parse::<CommitId>())
+    .transpose()?;
     let (git, paths_owned, branch_owned) = (git.clone(), paths.clone(), branch.to_owned());
     let (held, map, mut committed) = blocking(move || {
         let (paths, branch) = (paths_owned, branch_owned);
@@ -135,8 +141,16 @@ pub(crate) async fn commit_locked<H: Send + 'static>(
         match tip {
             tip if tip == newest => {}
             tip if is_ancestor(&git, &repo, &tip, &newest)? => {
-                committed.uncommitted =
-                    follow_main(&git, &paths, &branch, &tip, &newest)? == Followed::Dirty;
+                let mut followed = follow_main(&git, &paths, &branch, &tip, &newest)?;
+                // A folder that still holds the newest recorded human change follows from that change's commit.
+                if followed == Followed::Dirty
+                    && let Some(via) = via.as_ref().filter(|via| **via != tip)
+                    && is_ancestor(&git, &repo, &tip, via)?
+                    && (*via == newest || is_ancestor(&git, &repo, via, &newest)?)
+                {
+                    followed = follow_main_via(&git, &paths, &branch, &tip, via, &newest)?;
+                }
+                committed.uncommitted = followed == Followed::Dirty;
             }
             tip => committed.outside = Some(tip),
         }
@@ -243,7 +257,7 @@ async fn export_revisions(
 }
 
 /// The committer of every commit fold writes, and the author of every commit that no proposal wrote.
-fn fold_signature() -> Signature {
+pub(super) fn fold_signature() -> Signature {
     Signature {
         name: "fold".to_owned(),
         email: "fold@localhost".to_owned(),

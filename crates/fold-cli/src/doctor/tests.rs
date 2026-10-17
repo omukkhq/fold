@@ -765,6 +765,7 @@ fn a_project_folder_with_changes_that_are_not_committed_is_a_warning() {
         check.fix.as_deref().unwrap().contains("commit or stash"),
         "{check:?}"
     );
+    assert!(check.fix.as_deref().unwrap().contains("fld record"));
     // The check reads the folder and never writes the index.
     assert_eq!(std::fs::read(root.join(".git/index")).unwrap(), index);
     host.path = None;

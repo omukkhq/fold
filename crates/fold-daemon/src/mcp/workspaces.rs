@@ -236,7 +236,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             OPEN_MAIN_WORKSPACE,
-            "Main agent only. Open the main workspace: a copy of main under .fold/ws/ that belongs to no task, for a change the user asks you to make yourself, such as the initial setup or a small docs change. Edit, build and test there, then call record_changes, show the user the diff and a summary, and call submit_main_change only after the user's explicit OK. While the main workspace is open this returns it with reused true.",
+            "Main agent only. Open the main workspace: a copy of main under .fold/ws/ that belongs to no task, for a change the user asks you to make yourself, such as the initial setup or a small docs change. Edit, build and test there, then call record_changes, show the user the diff and a summary, and call submit_main_change only after the user's explicit OK. While the main workspace is open this returns it with reused true. When a human change from the project folder conflicts with main, human_change names it; a new main workspace then holds the human's files with main merged in and conflict markers, which you resolve with the user before you record.",
             schema_for_type::<OpenMainWorkspaceInput>(),
         ),
     ]
@@ -616,12 +616,21 @@ pub async fn call(
                 .await
                 .map_err(from_workspace)?;
             let view = opened.workspace;
-            json!({
+            let mut value = json!({
                 "workspace": view.id.to_string(),
                 "path": view.path,
                 "base": view.base.to_string(),
                 "reused": opened.reused,
-            })
+            });
+            if let Some(change) = opened.human_change {
+                value["human_change"] = json!({
+                    "commit": change.commit,
+                    "human": change.human,
+                    "held": change.held,
+                    "conflicted": change.conflicted,
+                });
+            }
+            value
         }
         _ => return Ok(None),
     };

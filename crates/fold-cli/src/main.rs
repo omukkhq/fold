@@ -60,6 +60,8 @@ enum Command {
     Pause(commands::pause::PauseArgs),
     /// Resume the agents of a paused project: each stopped worker runs again in its own session
     Resume(commands::pause::PauseArgs),
+    /// Record your uncommitted changes in the project folder on main as one commit of yours; a conflict with the agents' work waits for the main agent
+    Record(commands::record::RecordArgs),
     /// Development helpers
     #[cfg(feature = "dev-seed")]
     #[command(hide = true)]
@@ -133,6 +135,9 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         }
         Some(Command::Resume(args)) => {
             commands::pause::run_resume(&args, out).map_err(Failure::Remote)
+        }
+        Some(Command::Record(args)) => {
+            commands::record::run_record(&args, out).map_err(Failure::Remote)
         }
         #[cfg(feature = "dev-seed")]
         Some(Command::Dev(args)) => {

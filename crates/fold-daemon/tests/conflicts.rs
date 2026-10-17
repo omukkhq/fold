@@ -55,6 +55,7 @@ async fn move_main(fx: &Fixture, files: &[(&str, &[u8])]) {
             .unwrap()
             .tree_hash,
         remote_tree: write_initial_tree(&objects, tree).unwrap(),
+        human: None,
     };
     let outcome = fx.reviews.integrate_pull(&human(), pull).await.unwrap();
     assert!(matches!(outcome, PullOutcome::Succeeded { .. }));

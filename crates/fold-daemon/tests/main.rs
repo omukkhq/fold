@@ -20,6 +20,7 @@ mod acceptance_10_requests;
 mod acceptance_11_main_agent;
 mod acceptance_12_main_direct_change;
 mod acceptance_13_human_edit;
+mod acceptance_14_human_changes;
 mod acceptance_1_three_sessions;
 mod acceptance_2_messaging;
 mod acceptance_3_parallel_workspaces;
@@ -52,6 +53,8 @@ mod crash_init;
 mod crash_integration;
 #[cfg(feature = "failpoints")]
 mod crash_messages;
+#[cfg(feature = "failpoints")]
+mod crash_record;
 mod daemon_shell;
 mod delete_archive;
 mod deleted_projects;
@@ -77,6 +80,7 @@ mod http_review_checkouts;
 mod http_reviews;
 mod http_tasks;
 mod http_workspaces;
+mod human_changes;
 mod human_edits;
 mod human_review;
 mod human_tasks;

@@ -17,7 +17,7 @@ use fold_store::reviews::{
 };
 use fold_store::tasks::claims::{self, ReleaseReason};
 use fold_store::tasks::completions::{self, CompletionKind};
-use fold_store::workspaces::{WorkspaceKind, WorkspaceRow, WorkspaceState};
+use fold_store::workspaces::{NewHumanChange, WorkspaceKind, WorkspaceRow, WorkspaceState};
 use fold_store::{StoreError, WriteTx, agents, counters, tasks, workspaces};
 use fold_vcs::integrate::MergeOutcome;
 use serde_json::json;
@@ -67,6 +67,15 @@ pub struct PullIntegration {
     pub branch: String,
     pub base_tree: ObjectHash,
     pub remote_tree: ObjectHash,
+    /// Set when the commit is a human change from the project folder, which `fld record` brings in: the integration records it with `human_change.recorded` in its transaction.
+    pub human: Option<HumanRecord>,
+}
+
+/// A human change as its integration records it: the human whose commit it is, and the data of its `human_change.recorded` event, which names the changed files, the open workspaces they touch and the leads of their tasks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HumanRecord {
+    pub human: HumanName,
+    pub data: serde_json::Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,6 +185,9 @@ enum Subject {
         remote_commit: String,
         remote: String,
         branch: String,
+        base_tree: ObjectHash,
+        remote_tree: ObjectHash,
+        human: Option<HumanRecord>,
     },
     Direct {
         changeset: ChangesetId,
@@ -423,6 +435,7 @@ impl ReviewService {
         fail::fail_point!("integration_after_objects", |_| Err(Step::from(fired(
             "integration_after_objects"
         ))));
+        let human = self.human_resolution(&plan, tree).await?;
         let mut buffer = EventBuffer::new();
         let commit = Commit {
             actor,
@@ -431,6 +444,7 @@ impl ReviewService {
             stored: &stored,
             integration,
             now,
+            human: human.as_ref(),
         };
         let archived = self
             .store
@@ -596,6 +610,9 @@ impl ReviewService {
                 remote_commit: commit.to_owned(),
                 remote: pull.remote.clone(),
                 branch: pull.branch.clone(),
+                base_tree: pull.base_tree,
+                remote_tree: pull.remote_tree,
+                human: pull.human.clone(),
             },
         })
     }
@@ -635,6 +652,12 @@ impl ReviewService {
             .await?
             .map(|newest| newest.id);
         check_direct(actor, &row, changeset.id, latest)?;
+        let mut conn = read.acquire().await.map_err(StoreError::from)?;
+        let held = workspaces::human_change_of_workspace(&mut conn, row.id).await?;
+        drop(conn);
+        if let Some(stale) = superseded(row.id, held.as_ref()) {
+            return Err(stale.into());
+        }
         let base_tree = workspaces::get_by_number(read, changeset.base_revision)
             .await?
             .tree_hash;
@@ -658,6 +681,92 @@ impl ReviewService {
             },
         })
     }
+}
+
+impl ReviewService {
+    /// The conflicted human change an integration onto `tree` brings onto main, when one waits: the change whose merge the main workspace of a direct change holds, or one whose changes `tree` holds already. A record of the human closes the waiting change itself.
+    async fn human_resolution(
+        &self,
+        plan: &Plan,
+        tree: ObjectHash,
+    ) -> Result<Option<HumanResolution>, Step> {
+        if matches!(plan.subject, Subject::Pull { human: Some(_), .. }) {
+            return Ok(None);
+        }
+        let mut conn = self
+            .store
+            .read()
+            .acquire()
+            .await
+            .map_err(StoreError::from)?;
+        let waiting = workspaces::conflicted_human_change(&mut conn).await?;
+        drop(conn);
+        let Some(change) = waiting else {
+            return Ok(None);
+        };
+        let held = matches!(
+            (&plan.subject, change.workspace),
+            (Subject::Direct { workspace, .. }, Some(held)) if held == *workspace
+        );
+        if !held
+            && !self
+                .workspaces
+                .holds_human_change(change.base_tree, change.tree, tree)
+                .await
+                .map_err(ReviewError::from)?
+        {
+            return Ok(None);
+        }
+        let reach = self
+            .workspaces
+            .human_change_reach(change.base_tree, change.tree)
+            .await
+            .map_err(ReviewError::from)?;
+        let mut data = reach.event_data(&change.commit);
+        data["human"] = json!(format!("human:{}", change.human));
+        Ok(Some(HumanResolution {
+            commit: change.commit,
+            data,
+        }))
+    }
+}
+
+/// A main workspace that holds the merge of a human change that no longer waits: the human replaced it with a newer one, so the main agent prepares the newer one, or another integration brought its changes onto main, so nothing is left to merge.
+fn superseded(
+    workspace: WorkspaceId,
+    held: Option<&fold_store::workspaces::HumanChangeRow>,
+) -> Option<FoldError> {
+    use fold_store::workspaces::HumanChangeState;
+    let held = held?;
+    if held.state == HumanChangeState::Resolved {
+        return Some(
+            FoldError::new(
+                codes::INVALID_REQUEST,
+                format!("{workspace} holds the merge of a human change that main holds already"),
+            )
+            .with_details([
+                ("reason", json!("human_change_resolved")),
+                ("commit", json!(held.commit)),
+            ])
+            .with_hint("call abandon_workspace on it; main has the human's changes"),
+        );
+    }
+    if held.state != HumanChangeState::Superseded {
+        return None;
+    }
+    Some(
+        FoldError::new(
+            codes::INVALID_REQUEST,
+            format!(
+                "{workspace} holds the merge of an older human change; the human recorded a newer one"
+            ),
+        )
+        .with_details([
+            ("reason", json!("human_change_superseded")),
+            ("commit", json!(held.commit)),
+        ])
+        .with_hint("call abandon_workspace on it, then open_main_workspace to prepare the newer change"),
+    )
 }
 
 /// The checks of a direct change on one read: `row` is the workspace of `changeset`, which must be the main workspace, owned by the main agent's worker and active, and `latest` is its newest changeset, which must be `changeset`, so the change the user saw is the change that reaches main.
@@ -741,6 +850,14 @@ struct Commit<'a> {
     stored: &'a StoredRevision,
     integration: IntegrationId,
     now: Timestamp,
+    /// The conflicted human change the integration brings onto main.
+    human: Option<&'a HumanResolution>,
+}
+
+/// A conflicted human change that an integration brings onto main, with the data of its `human_change.resolved` event: the human, and the files, open workspaces and leads it touches.
+struct HumanResolution {
+    commit: String,
+    data: serde_json::Value,
 }
 
 impl Commit<'_> {
@@ -789,6 +906,9 @@ impl Commit<'_> {
                 remote_commit,
                 remote,
                 branch,
+                base_tree,
+                remote_tree,
+                human,
             } => {
                 let subject = IntegrationSubject::Pull {
                     remote_commit: remote_commit.as_str(),
@@ -800,7 +920,7 @@ impl Commit<'_> {
                         "remote_commit": remote_commit,
                     }))?;
                 self.advance(tx, buffer, &label, subject, succeeded).await?;
-                let pulled = NewEvent::new(types::REMOTE_PULLED, label)?
+                let pulled = NewEvent::new(types::REMOTE_PULLED, label.clone())?
                     .revision(revision)
                     .data(json!({
                         "remote": remote,
@@ -809,6 +929,23 @@ impl Commit<'_> {
                         "revision": revision.to_string(),
                     }))?;
                 buffer.append(tx, &pulled, self.now).await?;
+                if let Some(human) = human {
+                    workspaces::supersede_conflicted(tx, self.now).await?;
+                    let change = NewHumanChange {
+                        commit: remote_commit.as_str(),
+                        human: human.human.as_str(),
+                        base_tree: *base_tree,
+                        tree: *remote_tree,
+                        now: self.now,
+                    };
+                    workspaces::insert_recorded_human_change(tx, &change, self.integration).await?;
+                    let mut data = human.data.clone();
+                    data["integration"] = json!(self.integration.to_string());
+                    let recorded = NewEvent::new(types::HUMAN_CHANGE_RECORDED, label.clone())?
+                        .revision(revision)
+                        .data(data)?;
+                    buffer.append(tx, &recorded, self.now).await?;
+                }
                 buffer.extend(recompute(tx, &[], self.now).await?.events);
                 Vec::new()
             }
@@ -848,6 +985,20 @@ impl Commit<'_> {
                 archived
             }
         };
+        // The integration resolves the waiting human change it brings onto main, and the human's commit becomes the revision's second parent unless the integration merged a Git commit of its own, so the project folder follows main again.
+        if let Some(human) = self.human
+            && workspaces::resolve_human_change(tx, &human.commit, self.integration, self.now)
+                .await?
+        {
+            let mut data = human.data.clone();
+            data["integration"] = json!(self.integration.to_string());
+            let mut resolved =
+                NewEvent::new(types::HUMAN_CHANGE_RESOLVED, label)?.revision(revision);
+            if let Subject::Direct { workspace, .. } = &self.plan.subject {
+                resolved = resolved.workspace(*workspace);
+            }
+            buffer.append(tx, &resolved.data(data)?, self.now).await?;
+        }
         #[cfg(feature = "failpoints")]
         fail::fail_point!("integration_in_transaction", |_| Err(Step::from(fired(
             "integration_in_transaction"
@@ -933,6 +1084,10 @@ impl Commit<'_> {
             .map(|newest| newest.id);
         if check_direct(self.actor, &row, changeset, latest).is_err() {
             return Err(Step::Retry);
+        }
+        let held = workspaces::human_change_of_workspace(tx.conn(), workspace).await?;
+        if let Some(stale) = superseded(workspace, held.as_ref()) {
+            return Err(Step::Failed(stale.into()));
         }
         Ok(())
     }

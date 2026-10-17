@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   Bell,
   ChevronRight,
+  GitMerge,
   GitPullRequest,
   Hand,
   Inbox,
@@ -35,6 +36,7 @@ const ICONS: Record<NeedsYouKind, LucideIcon> = {
   request_draft: Inbox,
   human_task: UserRound,
   blocker: Hand,
+  human_change: GitMerge,
 };
 
 const MINUTE_MS = 60_000;

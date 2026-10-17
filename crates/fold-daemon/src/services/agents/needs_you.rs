@@ -26,6 +26,8 @@ pub enum NeedsYouKind {
     HumanTask,
     /// A task with a blocker, which waits until a human clears it.
     Blocker,
+    /// A human change from the project folder that conflicts with main. Main did not move; the main agent explains the conflict in its conversation and prepares the merge for the human's OK.
+    HumanChange,
 }
 
 /// The screen on which a human answers an item.
@@ -36,6 +38,7 @@ pub enum Screen {
     Proposal,
     Request,
     Task,
+    Repository,
 }
 
 impl NeedsYouKind {
@@ -46,6 +49,7 @@ impl NeedsYouKind {
             NeedsYouKind::HumanReview => Screen::Proposal,
             NeedsYouKind::RequestDraft => Screen::Request,
             NeedsYouKind::HumanTask | NeedsYouKind::Blocker => Screen::Task,
+            NeedsYouKind::HumanChange => Screen::Repository,
         }
     }
 }
@@ -74,6 +78,10 @@ pub struct NeedsYouItem {
     pub title: Option<String>,
     /// The reason of a `Blocker`.
     pub reason: Option<String>,
+    /// The human's Git commit of a `HumanChange`.
+    pub commit: Option<String>,
+    /// The paths of a `HumanChange` that conflict with main, in path order.
+    pub paths: Vec<String>,
 }
 
 impl NeedsYouItem {
@@ -93,6 +101,8 @@ impl NeedsYouItem {
             header: None,
             title: None,
             reason: None,
+            commit: None,
+            paths: Vec::new(),
         }
     }
 }
@@ -139,6 +149,17 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
         },
     )
     .await?;
+    if let Some(change) = fold_store::workspaces::conflicted_human_change(&mut conn).await? {
+        let mut item = NeedsYouItem::new(NeedsYouKind::HumanChange, change.created_at);
+        item.human = HumanName::parse(&change.human).ok();
+        item.commit = Some(change.commit);
+        item.paths = change
+            .conflicts
+            .iter()
+            .map(|row| String::from_utf8_lossy(&row.path).into_owned())
+            .collect();
+        items.push(item);
+    }
     let human_tasks = tasks::ready_human_tasks(&mut *conn).await?;
     let held = tasks::held_tasks(&mut *conn).await?;
     drop(conn);

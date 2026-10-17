@@ -8,7 +8,7 @@ use fold_core::config::{check_branch, check_remote, check_remote_name};
 use fold_core::{FoldError, ProjectPaths, codes};
 use serde_json::json;
 
-use crate::git::{CommitId, Git, failed, unexpected_output};
+use crate::git::{CommitId, Git, failed, unexpected_output, wait_error};
 
 /// The ref fold writes its commits to. The `[git]` branch, which the project folder has checked out, moves to this ref's commit only by fast-forward, so a branch tip that is not an ancestor of it is a commit made outside fold, also after a stop between the write and the move.
 pub const FOLD_HEAD_REF: &str = "refs/fold/head";
@@ -225,6 +225,82 @@ pub fn follow_main(
     }
     move_branch(git, &repo, branch, new, Some(tip))?;
     Ok(Followed::Moved)
+}
+
+/// [`follow_main`] for a folder that holds the commit `via` rather than its branch tip `tip`: `fld record` made `via` of the folder's changes on top of `tip`, and `new` descends from it. The files are first compared with `via` through an index file of fold's own, so a folder that holds other changes keeps its index as the human left it, also across the many runs of the commit writer until the next record. Only when they match is the index set to `via` and are the files and the index brought to `new`, and the branch moves from `tip` to `new`; a file that changes in between sets the index back to `tip` and nothing else changes. Blocking.
+pub fn follow_main_via(
+    git: &Git,
+    paths: &ProjectPaths,
+    branch: &str,
+    tip: &CommitId,
+    via: &CommitId,
+    new: &CommitId,
+) -> Result<Followed, FoldError> {
+    let repo = paths.git_dir();
+    if checked_out_branch(git, &repo)?.as_deref() != Some(branch) || !files_match(git, paths, via)?
+    {
+        return Ok(Followed::Dirty);
+    }
+    index_to(git, paths, via)?;
+    let moved = folder_clean(git, paths, via)?
+        && git
+            .status(
+                paths.root(),
+                &in_folder(
+                    paths,
+                    &["read-tree", "-u", "-m", via.as_str(), new.as_str()],
+                ),
+                "read-tree",
+            )?
+            .success();
+    if !moved {
+        index_to(git, paths, tip)?;
+        return Ok(Followed::Dirty);
+    }
+    move_branch(git, &repo, branch, new, Some(tip))?;
+    Ok(Followed::Moved)
+}
+
+static INDEX_FILES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Whether the tracked files of the project folder match the tree of `commit`, read through an index file of fold's own in the repository that holds that tree, so the folder's index is never written. Untracked files do not count. Blocking.
+fn files_match(git: &Git, paths: &ProjectPaths, commit: &CommitId) -> Result<bool, FoldError> {
+    let index = paths.git_dir().join(format!(
+        "fold-index-{}-{}",
+        std::process::id(),
+        INDEX_FILES.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let run = |args: &[&str], what: &'static str| {
+        let mut command = git.command(paths.root());
+        command
+            .args(in_folder(paths, args))
+            .env("GIT_INDEX_FILE", &index);
+        Git::spawn(&mut command, what)?
+            .wait()
+            .map_err(|error| wait_error(&error, what))
+    };
+    let matched = (|| {
+        let read = run(&["read-tree", commit.as_str()], "read-tree")?;
+        if !read.success() {
+            return Err(failed("read-tree", read));
+        }
+        // The fresh index has no file stats; the refresh compares each file's content, and its exit code is what the check below answers.
+        run(
+            &["update-index", "-q", "--ignore-submodules", "--refresh"],
+            "update-index",
+        )?;
+        let diff = run(
+            &["diff-files", "--quiet", "--ignore-submodules", "--"],
+            "diff-files",
+        )?;
+        match diff.code() {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
+            _ => Err(failed("diff-files", diff)),
+        }
+    })();
+    let _ = fs::remove_file(&index);
+    matched
 }
 
 /// Points the remote `name` of the project's repository `mirror` at `url`. The URL is never put in an error, because it can hold credentials. Blocking.

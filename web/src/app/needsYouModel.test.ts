@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { needsItem } from "@/test/workers";
 import {
+  conflictedText,
   itemsFor,
   needsYouGroups,
   questionText,
@@ -178,6 +179,32 @@ describe("needsYouGroups", () => {
     });
     const [human] = needsYouGroups("demo", [needsItem({ kind: "human_task" })]);
     expect(human?.lines[0]?.href).toBe("/p/demo/t/");
+  });
+
+  it("links a conflicting human change to the history of main", () => {
+    const [group] = needsYouGroups("demo", [
+      needsItem({
+        kind: "human_change",
+        screen: "repository",
+        human: "ana",
+        commit: "9f2c4e1a7b3d5f6e8a0c2b4d6f8e0a1c3b5d7f9e",
+        paths: ["README.md", "src/lib.rs"],
+      }),
+    ]);
+    expect(group?.title).toBe("Your changes");
+    expect(group?.lines[0]).toMatchObject({
+      key: "human_change:9f2c4e1a7b3d5f6e8a0c2b4d6f8e0a1c3b5d7f9e",
+      chip: "9f2c4e1",
+      person: null,
+      title: "README.md, src/lib.rs",
+      text: "conflicts with main; the main agent explains it",
+      href: "/p/demo/repository",
+    });
+    const [bare] = needsYouGroups("demo", [
+      needsItem({ kind: "human_change" }),
+    ]);
+    expect(bare?.lines[0]).toMatchObject({ chip: null, title: null });
+    expect(conflictedText([])).toBeNull();
   });
 
   it("counts what waits", () => {

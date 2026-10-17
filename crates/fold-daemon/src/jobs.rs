@@ -771,7 +771,7 @@ async fn record_attention(
                 })
             }
             ProjectAttention::UncommittedChanges => {
-                tracing::info!(project = %context.slug, "the project folder has changes that are not committed; it follows main once they are committed or stashed");
+                tracing::info!(project = %context.slug, "the project folder has changes that are not committed; it follows main once they are recorded with fld record, committed or stashed");
                 NewEvent::new(types::GIT_UNCOMMITTED_CHANGES, actor.clone())
                     .and_then(|event| event.data(json!({"branch": branch})))
             }

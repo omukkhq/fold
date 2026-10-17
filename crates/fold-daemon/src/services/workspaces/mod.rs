@@ -27,6 +27,7 @@ mod checkpoints;
 mod compare;
 mod direct;
 mod files;
+mod human_change;
 mod human_edit;
 mod integration;
 mod lifecycle;
@@ -49,6 +50,7 @@ pub use compare::{ResolvedState, StateComparison, StateKind, StateRef, StateSumm
 pub use direct::OpenedMainWorkspace;
 pub(crate) use direct::{main_agent, main_agent_in_tx};
 pub(crate) use files::checkpoint_in_tx;
+pub use human_change::TouchedTask;
 pub use lifecycle::{
     Abandoned, ArchiveReason, CreatedWorkspace, WorkspaceDetails, WorkspaceRef, WorkspaceView,
     archive_in_tx,

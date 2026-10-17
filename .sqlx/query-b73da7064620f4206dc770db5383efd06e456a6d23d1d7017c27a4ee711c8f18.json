@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT path AS \"path!: Vec<u8>\", kind FROM human_change_conflicts\n           WHERE human_change_id = ? ORDER BY path",
+  "describe": {
+    "columns": [
+      {
+        "name": "path!: Vec<u8>",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "human_change_conflicts",
+            "name": "path"
+          }
+        }
+      },
+      {
+        "name": "kind",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "human_change_conflicts",
+            "name": "kind"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "b73da7064620f4206dc770db5383efd06e456a6d23d1d7017c27a4ee711c8f18"
+}

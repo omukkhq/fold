@@ -634,6 +634,8 @@ describe("invalidation rules", () => {
       ["proposal.opened", { proposal: "P-3" }],
       ["request.draft_submitted", { data: { request: "RQ-4" } }],
       ["request.approved", { data: { request: "RQ-4", tasks: [] } }],
+      ["human_change.conflicted", {}],
+      ["human_change.resolved", {}],
     ];
     for (const [type, extra] of cases) {
       invalidated = [];
