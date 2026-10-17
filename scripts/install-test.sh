@@ -208,6 +208,24 @@ run_installer "http://127.0.0.1:$dead_port" FOLD_GITHUB_API="http://127.0.0.1:$d
 check "everything down" '[ "$status" != 0 ] && [ ! -e "$dest/fld" ]'
 finish "no source fails cleanly"
 
+# download progress: shown on a terminal, absent in a pipe. util-linux `script` gives the installer a terminal on stderr; the BSD `script` of macOS takes other options, so the scenario runs only where `script -qec` works.
+if script -qec true /dev/null >/dev/null 2>&1 </dev/null; then
+  fresh
+  publish "$www/r2/fold" v0.2.0
+  set_latest v0.2.0
+  status=0
+  env HOME="$work/home" FOLD_INSTALL_DIR="$dest" FOLD_DOWNLOAD_BASE="$r2" FOLD_GITHUB_BASE="$gh" \
+    FOLD_GITHUB_API="$api" FOLD_UNAME_S=Linux FOLD_UNAME_M=x86_64 PATH="$work/bin:$PATH" \
+    FAKE_SYSTEMCTL_LOG="$work/systemctl.log" script -qec "sh $installer" /dev/null >"$work/out" 2>&1 </dev/null || status=$?
+  check "progress on a terminal" '[ "$status" = 0 ] && [ "$(version_of)" = "fld 0.2.0" ] && grep -q "100.0%" "$work/out"'
+  fresh
+  publish "$www/r2/fold" v0.2.0
+  set_latest v0.2.0
+  run_installer "$r2"
+  check "no progress in a pipe" '[ "$status" = 0 ] && ! grep -q "%" "$work/out" && ! grep -q "#" "$work/out"'
+  finish "download progress only on a terminal"
+fi
+
 # unsupported systems
 fresh
 publish "$www/r2/fold" v0.2.0

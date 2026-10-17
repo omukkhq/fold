@@ -23,15 +23,27 @@ cleanup() {
   return 0
 }
 
-# fetch <url> <file>. curl never follows an https URL to plain http; only a base the caller overrode to http is fetched over http.
+# fetch <url> <file> [progress]. With a third argument, the transfer shows how much is downloaded, when main found that stderr is a terminal and the downloader can show it; the argument only changes the output. curl never follows an https URL to plain http; only a base the caller overrode to http is fetched over http.
 fetch() {
   case "$1" in
   https://*) protos='=https' ;;
   *) protos='=http,https' ;;
   esac
   case "$downloader" in
-  curl) curl -fsSL --proto "$protos" --tlsv1.2 --connect-timeout 10 --max-time 600 --retry 2 -o "$2" "$1" ;;
-  gnu-wget) wget -q --connect-timeout=10 --read-timeout=600 --tries=2 -O "$2" "$1" ;;
+  curl)
+    if [ -n "${3:-}" ] && [ -n "$show_progress" ]; then
+      curl -fSL --progress-bar --proto "$protos" --tlsv1.2 --connect-timeout 10 --max-time 600 --retry 2 -o "$2" "$1"
+    else
+      curl -fsSL --proto "$protos" --tlsv1.2 --connect-timeout 10 --max-time 600 --retry 2 -o "$2" "$1"
+    fi
+    ;;
+  gnu-wget)
+    if [ -n "${3:-}" ] && [ -n "$show_progress" ] && [ -n "$wget_bar" ]; then
+      wget -q --show-progress --connect-timeout=10 --read-timeout=600 --tries=2 -O "$2" "$1"
+    else
+      wget -q --connect-timeout=10 --read-timeout=600 --tries=2 -O "$2" "$1"
+    fi
+    ;;
   *) wget -q -T 60 -O "$2" "$1" ;;
   esac
 }
@@ -44,9 +56,13 @@ sha256() {
   fi
 }
 
-# The binary and SHA256SUMS always come from the same base.
+# The binary and SHA256SUMS always come from the same base. Only the binary shows progress. Its errors stay hidden unless stderr is a terminal, so a person sees why a host failed.
 get_from() {
-  fetch "$1/$asset" "$tmp/$asset" && fetch "$1/SHA256SUMS" "$tmp/SHA256SUMS"
+  if [ -n "$show_progress" ]; then
+    fetch "$1/$asset" "$tmp/$asset" progress
+  else
+    fetch "$1/$asset" "$tmp/$asset" 2>/dev/null
+  fi && fetch "$1/SHA256SUMS" "$tmp/SHA256SUMS" 2>/dev/null
 }
 
 main() {
@@ -75,6 +91,17 @@ main() {
     fi
   else
     die "curl or wget is needed."
+  fi
+
+  # Progress goes to stderr and only to a person: a pipe or a log keeps the quiet output.
+  show_progress=
+  wget_bar=
+  if [ -t 2 ]; then
+    show_progress=1
+    # GNU Wget before 1.16 has no --show-progress.
+    if [ "$downloader" = gnu-wget ] && wget --help 2>&1 | grep -q -- '--show-progress'; then
+      wget_bar=1
+    fi
   fi
 
   # FOLD_UNAME_S and FOLD_UNAME_M exist so the tests can fake another system.
@@ -123,9 +150,9 @@ main() {
   fi
 
   say "Downloading fld $version ($asset)"
-  if ! get_from "$download_base/fold/$tag" 2>/dev/null; then
+  if ! get_from "$download_base/fold/$tag"; then
     say "  $download_base did not answer; using GitHub"
-    get_from "$github_base/releases/download/$tag" 2>/dev/null ||
+    get_from "$github_base/releases/download/$tag" ||
       die "could not download $asset $tag. Check the version and your network."
   fi
 
