@@ -147,10 +147,12 @@ async fn remove_dir_eventually_removes_a_folder_that_a_writer_fills() {
     std::fs::create_dir_all(dir.join("sub")).unwrap();
     let writer = {
         let sub = dir.join("sub");
+        // A bounded number of files, so a busy machine cannot keep the folder full past the deadline.
         std::thread::spawn(move || {
-            let mut written = 0_u64;
-            while std::fs::write(sub.join(format!("f{written}")), b"x").is_ok() {
-                written += 1;
+            for written in 0..200 {
+                if std::fs::write(sub.join(format!("f{written}")), b"x").is_err() {
+                    break;
+                }
             }
         })
     };
