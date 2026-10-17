@@ -413,3 +413,30 @@ async fn abandoning_the_main_workspace_closes_it_without_a_task() {
     assert_ne!(next.workspace.id, opened.workspace.id);
     assert_consistent(&fx.project).await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_live_state_names_the_session_that_took_the_main_workspace_over() {
+    let h = crate::common::acceptance::Harness::start().await;
+    let workspaces = fold_daemon::services::workspaces::WorkspaceService::for_project(&h.handle);
+    let as_main = |agent: &str| {
+        let worker = fold_core::WorkerName::parse(agent).unwrap();
+        Actor::Agent(AgentActor {
+            agent: worker.agent(),
+            worker,
+            tags: vec![Tag::parse(MAIN_TAG).unwrap()],
+        })
+    };
+    let opened = workspaces
+        .open_main_workspace(&as_main("frontend"))
+        .await
+        .unwrap();
+    let ws = opened.workspace.id;
+    let owner = || h.handle.live.get(ws).map(|live| live.view.worker.clone());
+    assert_eq!(owner().as_deref(), Some("frontend"));
+    let taken = workspaces
+        .open_main_workspace(&as_main("backend"))
+        .await
+        .unwrap();
+    assert!(taken.reused);
+    assert_eq!(owner().as_deref(), Some("backend"));
+}

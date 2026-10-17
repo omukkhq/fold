@@ -309,6 +309,9 @@ impl WorkspaceService {
             })
             .await?;
         self.bus.publish(buffer);
+        if let Some(live) = &self.live {
+            live.set_worker(workspace, &agent.worker);
+        }
         Ok(OpenedMainWorkspace {
             workspace: self.get(WorkspaceRef::Workspace(workspace)).await?,
             reused: true,

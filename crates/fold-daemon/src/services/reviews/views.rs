@@ -152,7 +152,6 @@ impl ReviewService {
     }
 }
 
-/// The refusal a transport reports for an integration that conflicted. The details name each path and its kind only, never a hunk, because an error detail carries no file content; the full report is read with the proposal.
 /// A direct change that conflicts with main: nothing was written and the main workspace stays open, so the main agent brings it up to date and submits again.
 pub fn direct_conflicted(changeset: ChangesetId, conflicts: &[Conflict]) -> FoldError {
     let files: Vec<_> = conflicts
@@ -174,6 +173,7 @@ pub fn direct_conflicted(changeset: ChangesetId, conflicts: &[Conflict]) -> Fold
     .with_hint("call sync_workspace on the main workspace, resolve the files, call record_changes, show the user the new diff and call submit_main_change again")
 }
 
+/// The refusal a transport reports for an integration that conflicted. The details name each path and its kind only, never a hunk, because an error detail carries no file content; the full report is read with the proposal.
 pub fn integration_conflicted(proposal: ProposalId, conflicts: &[Conflict]) -> FoldError {
     let files: Vec<_> = conflicts
         .iter()
