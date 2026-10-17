@@ -2,8 +2,8 @@ use std::fmt;
 
 use serde::Deserialize;
 
-/// The oldest Claude Code that fold drives: the version the headless probe passed on. `CLAUDE_CODE_PROMPT_CACHE_TTL` needs 2.1.242 or later.
-pub const MIN_CLAUDE_VERSION: ClaudeVersion = ClaudeVersion::new(2, 1, 301);
+/// The oldest Claude Code that fold drives. It knows the Opus, Sonnet and Haiku 5.5 models that leads choose for workers (Haiku 5.5 from 2.1.293), sends a headless background subagent's permission request to `--permission-prompt-tool` instead of denying it (2.1.285), and attaches a subfolder's `AGENTS.md` when a file under it is @-mentioned (2.1.290). 2.1.299 fixes a headless session's MCP tool call that failed or ran twice when a background reconnect closed its connection, and the regression of 2.1.296 to 2.1.298 that ran an approved tool call twice when a message arrived as a session resumed after a restart. The headless wire format was probed on 2.1.301.
+pub const MIN_CLAUDE_VERSION: ClaudeVersion = ClaudeVersion::new(2, 1, 299);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ClaudeVersion {

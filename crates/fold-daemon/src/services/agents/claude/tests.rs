@@ -597,7 +597,10 @@ fn the_version_parser_reads_claude_version_output() {
     assert!(ClaudeVersion::new(2, 1, 242) < MIN_CLAUDE_VERSION);
     assert!(ClaudeVersion::new(2, 2, 0) > MIN_CLAUDE_VERSION);
     assert!(MIN_CLAUDE_VERSION >= ClaudeVersion::new(2, 1, 242));
-    assert_eq!(MIN_CLAUDE_VERSION.to_string(), "2.1.301");
+    assert_eq!(MIN_CLAUDE_VERSION.to_string(), "2.1.299");
+    assert!(ClaudeVersion::new(2, 1, 298) < MIN_CLAUDE_VERSION);
+    assert_eq!(ClaudeVersion::new(2, 1, 299), MIN_CLAUDE_VERSION);
+    assert!(ClaudeVersion::new(2, 1, 301) > MIN_CLAUDE_VERSION);
 }
 
 #[test]
