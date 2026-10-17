@@ -30,7 +30,9 @@ use fold_vcs::revision_store::{read_revision, write_revision};
 use thiserror::Error;
 
 use crate::daemon::DaemonState;
-use crate::projects::{ProjectHandle, Slot};
+use crate::projects::{
+    ProjectFolder, ProjectHandle, Slot, database_missing_hint, project_folder, removed, unopened,
+};
 #[cfg(feature = "failpoints")]
 use crate::services::fired;
 
@@ -115,7 +117,7 @@ struct Created {
     files: Vec<PathBuf>,
 }
 
-/// Makes `root` a fold project whose folder is main: creates `.fold/`, migrates the project database, writes the commented config, records the folder's files, less the ignore rules, as `r1`, runs `git init` and writes `r1`'s commit, and only then registers the project under a free slug. A folder that is a Git repository is refused with a hint to use `--from-git`. A folder that is inside another repository's working tree is refused with a hint to use `--from-git` at that repository's top, so no repository is nested in another. When the folder has no `.gitignore`, init writes `.gitignore` as a regular file with a comment, and an empty `.foldignore` unless the folder has one, before the folder's files are recorded, so both are in `r1` and its commit and the folder is clean after init; an existing `.gitignore` is kept and init writes no ignore file. `.foldignore` only adds rules on top of `.gitignore` or brings back a path it ignores. Init is a host command, so it has no actor and appends no event. A failure after `.fold/` exists removes `.fold/` and what init wrote beside it, never a file of the folder. A `.fold/` that the registry does not know is an init that stopped part-way: when its database is complete the init finishes it, and otherwise it is refused with `project_incomplete` and nothing is removed. A registered folder that holds `.fold/` is refused with `project_exists`, or with `project_incomplete` when `.fold/` has no database but holds project content; a registered folder without `.fold/`, or whose `.fold/` holds only what a daemon that still had the project open wrote after it was deleted, holds no project, so the new project replaces that registration in the transaction that registers it and keeps its slug.
+/// Makes `root` a fold project whose folder is main: creates `.fold/`, migrates the project database, writes the commented config, records the folder's files, less the ignore rules, as `r1`, runs `git init` and writes `r1`'s commit, and only then registers the project under a free slug. A folder that is a Git repository is refused with a hint to use `--from-git`. A folder that is inside another repository's working tree is refused with a hint to use `--from-git` at that repository's top, so no repository is nested in another. When the folder has no `.gitignore`, init writes `.gitignore` as a regular file with a comment, and an empty `.foldignore` unless the folder has one, before the folder's files are recorded, so both are in `r1` and its commit and the folder is clean after init; an existing `.gitignore` is kept and init writes no ignore file. `.foldignore` only adds rules on top of `.gitignore` or brings back a path it ignores. Init is a host command, so it has no actor and appends no event. A failure after `.fold/` exists removes `.fold/` and what init wrote beside it, never a file of the folder. A `.fold/` that the registry does not know is an init that stopped part-way, or a project that fold removed while its `.fold/` was away: when its database is complete the init finishes it and registers it, and otherwise it is refused with `project_incomplete` and nothing is removed. A registered folder that holds `.fold/` is refused with `project_exists`, or with `project_incomplete` when `.fold/` holds project content without a database, or a database without `main`; a registered folder without `.fold/`, or whose `.fold/` holds only what a daemon that still had the project open wrote after it was deleted, holds no project, so the new project replaces that registration in the transaction that registers it and keeps its slug.
 pub async fn init_project(
     host: &HostPaths,
     root: &Path,
@@ -964,11 +966,7 @@ async fn database_refusal(paths: &ProjectPaths) -> FoldError {
                 paths.db().display()
             ),
         )
-        .with_hint(format!(
-            "restore {} from a backup, or delete {} and run fld init again to make a new project there",
-            paths.db().display(),
-            paths.fold_dir().display()
-        ))
+        .with_hint(database_missing_hint(paths))
     } else {
         exists(paths.root())
     }
@@ -1136,11 +1134,16 @@ pub async fn overview(handle: &ProjectHandle) -> Result<ProjectOverview, Project
     })
 }
 
-/// Every registered project, ordered by slug, with the overview of each open one. A project whose overview cannot be read is listed without it, so one damaged store does not hide the others.
+/// Every registered project, ordered by slug, with the overview of each open one. A project whose overview cannot be read is listed without it, so one damaged store does not hide the others. A project whose folder is there without `.fold/` is removed from fold first and is not listed.
 pub async fn list(state: &DaemonState) -> Result<Vec<ProjectEntry>, ProjectError> {
     let rows = projects::list_projects(state.registry.read()).await?;
     let mut entries = Vec::with_capacity(rows.len());
     for row in rows {
+        if project_folder(Path::new(&row.root)).await == ProjectFolder::FoldMissing
+            && state.projects.remove_if_deleted(&row).await
+        {
+            continue;
+        }
         let (available, overview) = match state.projects.slot(&row.slug) {
             Some(Slot::Open(handle)) => match self::overview(&handle).await {
                 Ok(overview) => (true, Some(overview)),
@@ -1161,15 +1164,120 @@ pub async fn list(state: &DaemonState) -> Result<Vec<ProjectEntry>, ProjectError
     Ok(entries)
 }
 
+/// The open handle of `slug` for a request. A handle whose database was replaced or is missing, or whose folder is missing, is closed and the project is unavailable, with what to do for its folder; a project whose folder is there without `.fold/`, open or not, is removed from fold and is `project_not_found`, like a slug the registry does not hold.
+pub async fn handle(state: &DaemonState, slug: &str) -> Result<Arc<ProjectHandle>, ProjectError> {
+    let root = match state.projects.slot(slug) {
+        Some(Slot::Open(handle)) if !handle.database_replaced().await => return Ok(handle),
+        Some(Slot::Open(handle)) => {
+            state.projects.close_if_stale(slug).await;
+            Some(handle.paths.root().to_owned())
+        }
+        Some(Slot::Unavailable) => match projects::find_project(state.registry.read(), slug).await?
+        {
+            Some(row) => {
+                state.projects.remove_if_deleted(&row).await;
+                Some(PathBuf::from(row.root))
+            }
+            None => None,
+        },
+        None => None,
+    };
+    match (state.projects.slot(slug), root) {
+        (Some(_), Some(root)) => Err(unopened(slug, &root).await.into()),
+        (Some(_), None) => Err(FoldError::new(
+            codes::PROJECT_UNAVAILABLE,
+            format!("project {slug} is unavailable"),
+        )
+        .into()),
+        (None, root) => match state.projects.take_removed(slug).or(root) {
+            Some(root) => Err(removed(slug, &root).into()),
+            None => Err(FoldError::new(
+                codes::PROJECT_NOT_FOUND,
+                format!("project {slug} is not registered"),
+            )
+            .into()),
+        },
+    }
+}
+
+/// Removes from fold every registered project whose folder is there without `.fold/`, closes every open project whose folder or database went away or whose database was replaced, and opens again every project whose missing folder came back. The daemon's live job runs it on every tick, so each change takes effect within a tick even when nothing opens the project. Returns how many projects it removed, closed or opened.
+pub async fn sweep_deleted(state: &DaemonState) -> Result<usize, ProjectError> {
+    let mut changed = state.projects.close_stale().await;
+    for row in projects::list_projects(state.registry.read()).await? {
+        let changes = match project_folder(Path::new(&row.root)).await {
+            ProjectFolder::FoldMissing => state.projects.remove_if_deleted(&row).await,
+            ProjectFolder::Present if state.projects.is_away(&row.slug) => {
+                open_returned(state, &row).await
+            }
+            _ => false,
+        };
+        changed += usize::from(changes);
+    }
+    Ok(changed)
+}
+
+/// Opens a project whose missing folder is back, unless an init holds its `.fold/`, which leaves the open to the next tick. True when it opened.
+async fn open_returned(state: &DaemonState, row: &projects::ProjectRow) -> bool {
+    let paths = ProjectPaths::new(&row.root);
+    let Ok(Some(_init)) = try_lock_fold_dir(&paths).await else {
+        return false;
+    };
+    match state.projects.open(row, state.clock.clone()).await {
+        Ok(_) => {
+            tracing::info!(project = %row.slug, root = %row.root, "the project folder is back; the project is open again");
+            true
+        }
+        Err(error) => {
+            tracing::warn!(project = %row.slug, code = error.code(), "the project folder is back, but the project did not open");
+            false
+        }
+    }
+}
+
+/// Removes from the host registry every project whose folder is there without `.fold/`, for `fld doctor` when no daemon runs, and returns their slugs in slug order. A missing folder or a `.fold/` without its database keeps its row. A missing registry holds no project.
+pub async fn remove_deleted_on_host(host: &HostPaths) -> Result<Vec<String>, ProjectError> {
+    if !tokio::fs::try_exists(host.registry_db())
+        .await
+        .unwrap_or(false)
+    {
+        return Ok(Vec::new());
+    }
+    let registry = Store::open_registry(&host.registry_db()).await?;
+    let removed = remove_deleted_rows(&registry).await;
+    registry.close().await?;
+    removed
+}
+
+async fn remove_deleted_rows(registry: &Store) -> Result<Vec<String>, ProjectError> {
+    let mut removed = Vec::new();
+    for row in projects::list_projects(registry.read()).await? {
+        let gone =
+            async || project_folder(Path::new(&row.root)).await == ProjectFolder::FoldMissing;
+        if gone().await
+            && registry
+                .write(async |tx| -> Result<bool, StoreError> {
+                    // Looked at again under the registry's write lock, which an init's registration also takes, so a project that an init registered meanwhile stays.
+                    Ok(gone().await && projects::delete_project(tx, &row.slug, &row.root).await?)
+                })
+                .await?
+        {
+            tracing::warn!(project = %row.slug, root = %row.root, "the project folder has no .fold; fold removed the project");
+            removed.push(row.slug);
+        }
+    }
+    Ok(removed)
+}
+
 /// Opens a project that `fld init` registered after the daemon started. An open project returns its handle again; a slug the registry does not hold is `project_not_found`.
 pub async fn open(state: &DaemonState, slug: &str) -> Result<Arc<ProjectHandle>, ProjectError> {
     let row = projects::find_project(state.registry.read(), slug)
         .await?
-        .ok_or_else(|| {
-            FoldError::new(
+        .ok_or_else(|| match state.projects.take_removed(slug) {
+            Some(root) => removed(slug, &root),
+            None => FoldError::new(
                 codes::PROJECT_NOT_FOUND,
                 format!("project {slug} is not registered"),
-            )
+            ),
         })?;
     Ok(state.projects.open(&row, state.clock.clone()).await?)
 }

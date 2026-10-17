@@ -22,6 +22,8 @@ export interface StreamHandlers {
   onResync(): void;
   /** The daemon answered `auth_required`: the session ended off loopback. The stream stops and makes no further attempt. */
   onAuthRequired?(): void;
+  /** The daemon answered `project_not_found`: fold does not know the project, as after its `.fold` folder was deleted. The stream stops and makes no further attempt. */
+  onProjectGone?(): void;
 }
 
 export interface StreamOptions {
@@ -137,6 +139,9 @@ export function startStream(options: StreamOptions): StreamHandle {
       if (isApiError(error, "auth_required") && !isStopped()) {
         stopped = true;
         handlers.onAuthRequired?.();
+      } else if (isApiError(error, "project_not_found") && !isStopped()) {
+        stopped = true;
+        handlers.onProjectGone?.();
       } else if (isApiError(error, "invalid_last_event_id") && !isStopped()) {
         lastSeq = null;
         handlers.onResync();

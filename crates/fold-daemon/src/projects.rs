@@ -1,5 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::MetadataExt;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
@@ -283,6 +284,95 @@ pub enum DatabaseFile {
     Replaced,
 }
 
+/// What is at a registered project's folder. Only a path that is not there counts as missing: one that cannot be looked at for another reason, as for a permission problem, a stale network mount or an I/O error, counts as there, so such a problem never closes or removes a project.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectFolder {
+    /// `.fold/fold.db` is there, or cannot be looked at.
+    Present,
+    /// The folder itself is gone, as on a disk that is not mounted. The project stays registered and is unavailable, and the daemon opens it again when the folder comes back.
+    RootMissing,
+    /// The folder is there without `.fold/`: its fold data was deleted, and fold removes the project.
+    FoldMissing,
+    /// `.fold/` is there without its database. The project stays registered and is unavailable until the database is restored or `fld init` makes a new project there.
+    DatabaseMissing,
+}
+
+/// Looks at `root`, then `.fold/`, then the database. The root is followed through a symbolic link, so a link to a disk that is not mounted counts as a missing folder; `.fold/` and the database are not.
+pub async fn project_folder(root: &Path) -> ProjectFolder {
+    fn gone(looked: std::io::Result<std::fs::Metadata>) -> bool {
+        matches!(looked, Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+    }
+    let paths = ProjectPaths::new(root);
+    if gone(tokio::fs::metadata(root).await) {
+        ProjectFolder::RootMissing
+    } else if gone(tokio::fs::symlink_metadata(paths.fold_dir()).await) {
+        ProjectFolder::FoldMissing
+    } else if gone(tokio::fs::symlink_metadata(paths.db()).await) {
+        ProjectFolder::DatabaseMissing
+    } else {
+        ProjectFolder::Present
+    }
+}
+
+/// The refusal of a registered project that the daemon cannot open now, with what the human can do for its folder.
+pub async fn unopened(slug: &str, root: &Path) -> FoldError {
+    let paths = ProjectPaths::new(root);
+    match project_folder(root).await {
+        ProjectFolder::RootMissing => FoldError::new(
+            codes::PROJECT_UNAVAILABLE,
+            format!(
+                "project {slug} is unavailable: its folder {} is missing",
+                root.display()
+            ),
+        )
+        .with_hint(format!(
+            "mount the disk that holds {} or put the folder back; fold opens the project again when it is there",
+            root.display()
+        ))
+        .with_details([("reason", serde_json::json!("folder_missing"))]),
+        ProjectFolder::DatabaseMissing => database_missing(slug, &paths),
+        ProjectFolder::Present | ProjectFolder::FoldMissing => unavailable(slug),
+    }
+}
+
+/// The refusal of a project whose `.fold/` holds no database.
+pub fn database_missing(slug: &str, paths: &ProjectPaths) -> FoldError {
+    FoldError::new(
+        codes::PROJECT_UNAVAILABLE,
+        format!(
+            "project {slug} is unavailable: its project database {} is missing",
+            paths.db().display()
+        ),
+    )
+    .with_hint(database_missing_hint(paths))
+    .with_details([("reason", serde_json::json!("database_missing"))])
+}
+
+/// The way back for a `.fold/` without its database, shared by the daemon, `fld init` and `fld doctor`.
+pub fn database_missing_hint(paths: &ProjectPaths) -> String {
+    format!(
+        "restore {} from a backup, or delete {} and run fld init again to make a new project there",
+        paths.db().display(),
+        paths.fold_dir().display()
+    )
+}
+
+/// The refusal of a project that fold removed because its folder was there without `.fold/`. A `.fold/` that comes back holds a complete project that is not registered, and `fld init` there registers it again.
+pub fn removed(slug: &str, root: &Path) -> FoldError {
+    FoldError::new(
+        codes::PROJECT_NOT_FOUND,
+        format!(
+            "project {slug} is not registered: {} is missing, so fold removed the project",
+            ProjectPaths::new(root).fold_dir().display()
+        ),
+    )
+    .with_hint(format!(
+        "if {} comes back, run fld init in {} to register the project again",
+        ProjectPaths::new(root).fold_dir().display(),
+        root.display()
+    ))
+}
+
 fn unavailable(slug: &str) -> FoldError {
     FoldError::new(
         codes::PROJECT_UNAVAILABLE,
@@ -306,8 +396,12 @@ pub struct Projects {
     opening: tokio::sync::Mutex<()>,
     /// The programs every project's worker processes run.
     launcher: Launcher,
-    /// The host registry, whose humans a worker's `AskUserQuestion` call reaches.
+    /// The host registry, whose humans a worker's `AskUserQuestion` call reaches, and from which a project whose `.fold/` is gone is removed.
     registry: Option<Store>,
+    /// The root of each project removed because its `.fold/` was gone, kept until the next answer for its slug, so that answer carries the `fld init` hint also when the live job removed the project.
+    removed: RwLock<HashMap<String, PathBuf>>,
+    /// The projects that are unavailable because their folder is missing, which the live job opens again when the folder is back.
+    away: RwLock<HashSet<String>>,
 }
 
 impl Projects {
@@ -337,7 +431,7 @@ impl Projects {
             .collect()
     }
 
-    /// Opens `row` unless it is already open, in which case the same handle comes back. An open handle whose database was deleted or replaced is closed first, with its workers, and leaves the slot, so the folder opens again as it is now: a new project that `fld init` made there opens fresh, and a folder without one is unavailable. A new handle runs its start-up sequence before any request can reach it: the database opens with SQLite's own WAL recovery, the workspaces are reconciled with their directories, and every session a previous run left open ends at the start time with its `session.ended`, so presence shows offline until the adapters reconnect. The handle's commit writer runs as it starts, which writes the commit of a revision an integration cut off after its own commit never got and brings the project folder to it, and changes nothing otherwise. No session of this run can exist yet, because a session starts only through an open handle. Once the handle is in place, every worker that was working or idle runs again with its session resumed; a resumed worker's adapter connects through the daemon's socket, which is bound by then, and its handshake opens this same project, so the resume runs after the open has let go of its lock.
+    /// Opens `row` unless it is already open, in which case the same handle comes back. A folder that is there without `.fold/`, as after its fold data was deleted, is removed from fold instead, with `project_not_found`; a missing folder or a `.fold/` without its database leaves the project registered and unavailable. An open handle whose database was replaced is closed first, with its workers, and leaves the slot, so the new project that `fld init` made there opens fresh. A new handle runs its start-up sequence before any request can reach it: the database opens with SQLite's own WAL recovery, the workspaces are reconciled with their directories, and every session a previous run left open ends at the start time with its `session.ended`, so presence shows offline until the adapters reconnect. The handle's commit writer runs as it starts, which writes the commit of a revision an integration cut off after its own commit never got and brings the project folder to it, and changes nothing otherwise. No session of this run can exist yet, because a session starts only through an open handle. Once the handle is in place, every worker that was working or idle runs again with its session resumed; a resumed worker's adapter connects through the daemon's socket, which is bound by then, and its handshake opens this same project, so the resume runs after the open has let go of its lock.
     pub async fn open(
         &self,
         row: &ProjectRow,
@@ -366,13 +460,28 @@ impl Projects {
         clock: Arc<dyn Clock>,
     ) -> Result<(Arc<ProjectHandle>, bool), FoldError> {
         let _opening = self.opening.lock().await;
+        let root = Path::new(&row.root);
+        if self.remove_locked(&row.slug, root).await {
+            return Err(removed(&row.slug, root));
+        }
         if let Some(handle) = self.current(&row.slug).await {
             return Ok((handle, false));
         }
+        let folder = project_folder(root).await;
+        if folder != ProjectFolder::Present {
+            // A missing folder or database keeps the registration: the folder can come back, and the database can be restored.
+            unpoisoned(self.slots.write()).insert(row.slug.clone(), Slot::Unavailable);
+            self.mark_away(&row.slug, folder == ProjectFolder::RootMissing);
+            tracing::warn!(project = %row.slug, root = %root.display(), ?folder, "the project folder or its database is missing; the project is unavailable");
+            return Err(unopened(&row.slug, root).await);
+        }
+        // An open of a folder that is there settles it, so a project that fails to open is not tried again on every tick.
+        self.mark_away(&row.slug, false);
         let outcome = ProjectHandle::open_with(row, clock, self.launcher.clone())
             .await
             .map(Arc::new);
         if let Ok(handle) = &outcome {
+            unpoisoned(self.removed.write()).remove(&row.slug);
             if let Some(registry) = &self.registry {
                 handle.workers.set_registry(registry.clone());
             }
@@ -404,17 +513,93 @@ impl Projects {
         None
     }
 
-    /// Closes the open handle of `slug` when its database file was deleted or replaced, as an open does, without opening the folder again: the project is unavailable until the next open, so a request never opens a project that `fld init` is still making. True when it closed the handle.
-    pub async fn close_if_stale(&self, slug: &str) -> bool {
-        let _opening = self.opening.lock().await;
-        if !matches!(self.slot(slug), Some(Slot::Open(_))) || self.current(slug).await.is_some() {
+    fn mark_away(&self, slug: &str, away: bool) {
+        let mut marks = unpoisoned(self.away.write());
+        if away {
+            marks.insert(slug.to_owned());
+        } else {
+            marks.remove(slug);
+        }
+    }
+
+    /// True while `slug` is unavailable because its folder was missing when the daemon last looked.
+    pub fn is_away(&self, slug: &str) -> bool {
+        unpoisoned(self.away.read()).contains(slug)
+    }
+
+    /// Removes the project `slug` at `root` from fold when the folder is there without `.fold/`, as after its fold data was deleted: the registry row goes in one registry write, and an open handle closes with its workers, live state, jobs and store and leaves the slot. A missing folder or a `.fold/` without its database removes nothing. A daemon state without a registry removes nothing. The caller holds `opening`. True when the project was removed.
+    async fn remove_locked(&self, slug: &str, root: &Path) -> bool {
+        let Some(registry) = &self.registry else {
+            return false;
+        };
+        if project_folder(root).await != ProjectFolder::FoldMissing {
             return false;
         }
-        unpoisoned(self.slots.write()).insert(slug.to_owned(), Slot::Unavailable);
+        let root_text = root.to_string_lossy();
+        let deleted = registry
+            .write(async |tx| -> Result<bool, fold_store::StoreError> {
+                // An init registers a project only after it made `.fold/`, inside a registry write like this one, so a project that an init registered at this root since the first look stays.
+                if project_folder(root).await != ProjectFolder::FoldMissing {
+                    return Ok(false);
+                }
+                fold_store::projects::delete_project(tx, slug, &root_text).await?;
+                Ok(true)
+            })
+            .await;
+        match deleted {
+            Ok(true) => {}
+            Ok(false) => return false,
+            Err(error) => {
+                tracing::error!(project = %slug, code = error.log_code(), "the project whose .fold is gone could not be removed from the registry");
+                return false;
+            }
+        }
+        unpoisoned(self.removed.write()).insert(slug.to_owned(), root.to_owned());
+        self.mark_away(slug, false);
+        let slot = {
+            let mut slots = unpoisoned(self.slots.write());
+            // A handle of another folder under the slug is another project, which stays.
+            let other =
+                matches!(slots.get(slug), Some(Slot::Open(handle)) if handle.paths.root() != root);
+            if other { None } else { slots.remove(slug) }
+        };
+        if let Some(Slot::Open(handle)) = slot {
+            handle.close().await;
+        }
+        tracing::warn!(project = %slug, root = %root.display(), "the project folder has no .fold; fold removed the project");
         true
     }
 
-    /// [`Projects::close_if_stale`] for every open project, and how many it closed. The daemon's live job runs it on every tick, so a project whose `.fold/` was deleted stops within a tick even when nothing opens it.
+    /// The root of `slug` when fold removed that project because its `.fold/` was gone and no answer for the slug has told it yet.
+    pub fn take_removed(&self, slug: &str) -> Option<PathBuf> {
+        unpoisoned(self.removed.write()).remove(slug)
+    }
+
+    /// [`Projects::remove_locked`] for a registered project, under the open lock.
+    pub async fn remove_if_deleted(&self, row: &ProjectRow) -> bool {
+        let _opening = self.opening.lock().await;
+        self.remove_locked(&row.slug, Path::new(&row.root)).await
+    }
+
+    /// Closes the open handle of `slug` when its database file was deleted or replaced, as an open does, without opening the folder again. A folder without `.fold/` removes the project from fold. A missing folder leaves it unavailable until the folder comes back; a missing or replaced database leaves it unavailable until the next open, so a request never opens a project that `fld init` is still making. True when it closed the handle.
+    pub async fn close_if_stale(&self, slug: &str) -> bool {
+        let _opening = self.opening.lock().await;
+        let Some(Slot::Open(handle)) = self.slot(slug) else {
+            return false;
+        };
+        if self.remove_locked(slug, handle.paths.root()).await {
+            return true;
+        }
+        if self.current(slug).await.is_some() {
+            return false;
+        }
+        unpoisoned(self.slots.write()).insert(slug.to_owned(), Slot::Unavailable);
+        let folder = project_folder(handle.paths.root()).await;
+        self.mark_away(slug, folder == ProjectFolder::RootMissing);
+        true
+    }
+
+    /// [`Projects::close_if_stale`] for every open project, and how many it closed. The daemon's live job runs it on every tick, so a project whose folder, `.fold/` or database went away stops within a tick even when nothing opens it.
     pub async fn close_stale(&self) -> usize {
         let mut closed = 0;
         for handle in self.handles() {

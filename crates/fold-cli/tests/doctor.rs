@@ -96,6 +96,37 @@ fn warnings_alone_exit_0_and_every_project_in_the_registry_is_checked() {
 }
 
 #[test]
+fn a_project_whose_fold_was_deleted_leaves_the_registry_and_the_report() {
+    let sandbox = Sandbox::new().unwrap();
+    let alpha = sandbox.init("alpha").unwrap();
+    sandbox.init("beta").unwrap();
+    let gamma = sandbox.init("gamma").unwrap();
+    let delta = sandbox.init("delta").unwrap();
+    std::fs::remove_dir_all(alpha.join(".fold")).unwrap();
+    std::fs::rename(&gamma, gamma.with_extension("moved")).unwrap();
+    std::fs::remove_file(delta.join(".fold/fold.db")).unwrap();
+    let socket = sandbox.path("absent.sock");
+    let doctor = || {
+        sandbox
+            .fold(&["doctor", "--socket", socket.to_str().unwrap()])
+            .unwrap()
+    };
+    let output = doctor();
+    let text = stdout(&output);
+    assert!(!text.contains("project alpha"), "{text}");
+    assert!(!text.contains("fold data"), "{text}");
+    assert!(text.contains("project beta\n"), "{text}");
+    // A missing folder and a `.fold` without its database keep the project, with the way to get it back.
+    assert!(text.contains("project gamma\n"), "{text}");
+    assert!(text.contains("fix: mount the disk that holds"), "{text}");
+    assert!(text.contains("project delta\n"), "{text}");
+    assert!(text.contains("and run fld init again"), "{text}");
+    let again = stdout(&doctor());
+    assert!(!again.contains("project alpha"), "the row is gone: {again}");
+    assert!(again.contains("project gamma\n") && again.contains("project delta\n"));
+}
+
+#[test]
 fn a_socket_with_mode_0644_fails_with_exit_1() {
     let sandbox = Sandbox::new().unwrap();
     let socket = sandbox.path("loose.sock");

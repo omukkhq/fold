@@ -762,7 +762,7 @@ async fn shutdown_ends_every_worker_at_once() {
 }
 
 #[tokio::test]
-async fn opening_a_project_whose_fold_data_was_deleted_ends_its_workers() {
+async fn opening_a_project_whose_fold_data_was_deleted_removes_it_and_ends_its_workers() {
     let fake = FakeClaude::new("result");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
     harness.make_main(MAIN).await;
@@ -785,7 +785,7 @@ async fn opening_a_project_whose_fold_data_was_deleted_ends_its_workers() {
     })
     .await;
     let error = open.await.unwrap().unwrap_err();
-    assert_eq!(error.code(), Some(codes::PROJECT_UNAVAILABLE));
+    assert_eq!(error.code(), Some(codes::PROJECT_NOT_FOUND));
     assert!(fake.saw_eof(&run));
     assert!(harness.handle.store.read().is_closed());
 }

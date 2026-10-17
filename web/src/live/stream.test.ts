@@ -157,6 +157,7 @@ function harness(opts: { failOpens?: number; failWith?: Error } = {}) {
       },
       onResync: () => log.push("resync"),
       onAuthRequired: () => log.push("auth required"),
+      onProjectGone: () => log.push("project gone"),
     },
   });
   return { pipes, cursors, log, events, delays, handle };
@@ -454,6 +455,20 @@ describe("startStream", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(h.cursors).toEqual([null]);
     expect(h.log).toEqual(["auth required"]);
+  });
+
+  it("stops for good when the daemon answers project_not_found", async () => {
+    const h = harness({
+      failOpens: 5,
+      failWith: new ApiError("project_not_found", "removed"),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.log).toEqual(["project gone"]);
+    await vi.advanceTimersByTimeAsync(60_000);
+    h.handle.retry();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.cursors).toEqual([null]);
+    expect(h.log).toEqual(["project gone"]);
   });
 
   it("stops quietly on auth_required without a sign-in handler", async () => {

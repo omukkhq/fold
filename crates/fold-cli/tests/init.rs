@@ -148,7 +148,7 @@ async fn init_registers_with_a_running_daemon() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn init_in_a_folder_whose_fold_data_was_deleted_replaces_the_project_in_the_running_daemon() {
+async fn init_in_a_folder_whose_fold_data_was_deleted_registers_it_again_in_the_running_daemon() {
     let sandbox = Arc::new(Sandbox::new());
     let daemon = start_daemon(&sandbox, "data").await;
     let socket = daemon.socket_path().to_string_lossy().into_owned();
@@ -170,10 +170,6 @@ async fn init_in_a_folder_whose_fold_data_was_deleted_replaces_the_project_in_th
     for dir in [".fold", ".git"] {
         std::fs::remove_dir_all(project.join(dir)).unwrap();
     }
-    // The open project can write these into `.fold/` again before init runs.
-    for dir in [".fold/index", ".fold/objects/tmp"] {
-        std::fs::create_dir_all(project.join(dir)).unwrap();
-    }
     let (sandbox_again, cwd) = (sandbox.clone(), project.clone());
     let second = tokio::task::spawn_blocking(move || {
         sandbox_again.fold_in(&cwd, &["init", "--socket", &socket], &[])
@@ -182,12 +178,12 @@ async fn init_in_a_folder_whose_fold_data_was_deleted_replaces_the_project_in_th
     .unwrap();
     assert!(second.status.success(), "{second:?}");
     let text = stdout(&second);
+    // The daemon removed the old registration before init ran, so init registers the folder anew under the same slug.
     assert!(
-        text.contains(
-            "replaced the registration of the project whose .fold was deleted; the slug scratch stays\n"
-        ),
+        text.starts_with("initialised project scratch at "),
         "{text}"
     );
+    assert!(!text.contains("replaced the registration"), "{text}");
     assert!(text.ends_with("opened by the running daemon\n"), "{text}");
     assert!(old.store.read().is_closed());
     let Some(fold_daemon::projects::Slot::Open(new)) = daemon.state().projects.slot("scratch")
@@ -238,6 +234,9 @@ async fn the_running_daemon_closes_a_project_whose_fold_was_deleted_and_init_mak
     .unwrap();
     assert!(daemon.state().projects.handles().is_empty());
     assert!(!project.join(".fold").exists());
+    // The same tick removed the project from fold.
+    let listed = get_projects(daemon.socket_path()).await;
+    assert_eq!(listed["projects"], serde_json::json!([]));
 
     let (sandbox_again, cwd) = (sandbox.clone(), project.clone());
     let second = tokio::task::spawn_blocking(move || {
@@ -255,6 +254,44 @@ async fn the_running_daemon_closes_a_project_whose_fold_was_deleted_and_init_mak
         panic!("the daemon opened the new project");
     };
     assert!(!Arc::ptr_eq(&old, &new));
+    daemon.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn doctor_with_a_running_daemon_reports_nothing_for_a_project_whose_fold_was_deleted() {
+    let sandbox = Arc::new(Sandbox::new());
+    let daemon = start_daemon(&sandbox, "data").await;
+    let socket = daemon.socket_path().to_string_lossy().into_owned();
+    for name in ["kept", "gone"] {
+        let output = fold_blocking(
+            sandbox.clone(),
+            vec![
+                "init".into(),
+                sandbox.path(name).to_string_lossy().into_owned(),
+                "--socket".into(),
+                socket.clone(),
+            ],
+        )
+        .await;
+        assert!(output.status.success(), "{output:?}");
+    }
+    let gone = sandbox.path("gone");
+    for dir in [".fold", ".git"] {
+        std::fs::remove_dir_all(gone.join(dir)).unwrap();
+    }
+
+    let doctor = fold_blocking(
+        sandbox.clone(),
+        vec!["doctor".into(), "--socket".into(), socket.clone()],
+    )
+    .await;
+    let text = stdout(&doctor);
+    assert!(!text.contains("project gone"), "{text}");
+    assert!(text.contains("project kept\n"), "{text}");
+    assert!(daemon.state().projects.slot("gone").is_none());
+    let listed = get_projects(daemon.socket_path()).await;
+    assert_eq!(listed["projects"].as_array().unwrap().len(), 1, "{listed}");
+    assert!(!gone.join(".fold").exists());
     daemon.shutdown().await;
 }
 

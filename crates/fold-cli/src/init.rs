@@ -132,7 +132,7 @@ pub(crate) fn initialise(
     if let Ok(Some(socket)) = &socket {
         let deleted = runtime.block_on(deleted_project_slug(&host, dir))?;
         if let Some(slug) = deleted {
-            // The daemon closes a project whose database was deleted when it is asked to open it, so the old project and its workers are gone before init creates the new one there.
+            // Asked to open a project whose database was deleted, the daemon closes it and ends its workers, and removes it when its `.fold/` is gone, so the old project is gone before init creates the new one there.
             let _ = runtime.block_on(register(&client(socket.clone()), &slug));
         }
     }

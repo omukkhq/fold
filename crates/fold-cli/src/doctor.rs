@@ -10,7 +10,9 @@ use clap::Args;
 use fold_core::events::types;
 use fold_core::{Clock, FoldError, ProjectPaths, Role, Timestamp, codes};
 use fold_daemon::SystemClock;
+use fold_daemon::projects::database_missing_hint;
 use fold_daemon::services::agents::claude::{AuthStatus, ClaudeVersion, MIN_CLAUDE_VERSION};
+use fold_daemon::services::projects::remove_deleted_on_host;
 use fold_vcs::git::Git;
 use fold_vcs::git_remote::folder_has_changes;
 use fold_vcs::git_sync_map::{SYNC_MAP_FILE, SyncMap};
@@ -196,6 +198,7 @@ pub(crate) fn collect(
             vec![(root.display().to_string(), root)]
         }
         None => {
+            remove_deleted_projects(args.socket.as_deref(), host, runtime);
             let (projects, registry_check) = registered_projects(&host.dirs, runtime)?;
             sections[0].checks.extend(registry_check);
             projects
@@ -235,13 +238,20 @@ fn daemon_file(dirs: &Dirs) -> (FileConfig, Option<Check>) {
     }
 }
 
-fn host_checks(socket_flag: Option<&Path>, file: &FileConfig, host: &Host) -> Vec<Check> {
-    // An unreadable daemon.toml is already a failed check, so the runtime directory stands in.
-    let runtime = serve::runtime_dir(&host.dirs).ok();
-    let socket = serve::socket_path(socket_flag, &host.dirs)
+/// An unreadable daemon.toml is already a failed check, so the runtime directory stands in.
+fn daemon_socket(socket_flag: Option<&Path>, dirs: &Dirs) -> Option<PathBuf> {
+    serve::socket_path(socket_flag, dirs)
         .ok()
         .flatten()
-        .or_else(|| runtime.as_ref().map(|dir| dir.join(SOCKET_FILE)));
+        .or_else(|| {
+            serve::runtime_dir(dirs)
+                .ok()
+                .map(|dir| dir.join(SOCKET_FILE))
+        })
+}
+
+fn host_checks(socket_flag: Option<&Path>, file: &FileConfig, host: &Host) -> Vec<Check> {
+    let socket = daemon_socket(socket_flag, &host.dirs);
     let state = socket
         .as_deref()
         .map(|path| inspect_socket(path, host.platform));
@@ -616,6 +626,36 @@ fn inotify_limit_check(host: &Host) -> Check {
     }
 }
 
+/// A project whose folder is there without `.fold/` leaves the registry before the project checks, so doctor reports nothing for it: a running daemon removes it, and closes its workers, when it lists its projects, and without a daemon doctor removes it from the host registry itself. A failure leaves the row, and its project checks report the missing data.
+fn remove_deleted_projects(
+    socket_flag: Option<&Path>,
+    host: &Host,
+    runtime: &tokio::runtime::Runtime,
+) {
+    let listed =
+        daemon_socket(socket_flag, &host.dirs).is_some_and(|socket| lists_projects(&socket));
+    if listed {
+        return;
+    }
+    if let Ok(paths) = host_paths(&host.dirs) {
+        let _ = runtime.block_on(remove_deleted_on_host(&paths));
+    }
+}
+
+/// Reads the daemon's whole answer to the project list, since the daemon removes deleted projects while it makes that answer.
+fn lists_projects(socket: &Path) -> bool {
+    let Ok(mut stream) = UnixStream::connect(socket) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(CONNECT_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(CONNECT_TIMEOUT));
+    let request = b"GET /api/v1/projects HTTP/1.1\r\nHost: fold\r\nConnection: close\r\n\r\n";
+    let mut reply = Vec::new();
+    stream.write_all(request).is_ok()
+        && stream.read_to_end(&mut reply).is_ok()
+        && reply.starts_with(b"HTTP/1.1 200")
+}
+
 /// A project's slug and root.
 type Registered = (String, PathBuf);
 
@@ -677,8 +717,14 @@ fn project_checks(
     if !root.is_dir() {
         return vec![Check::fail(
             "directory",
-            format!("{} does not exist", root.display()),
-            format!("restore {} from a backup", root.display()),
+            format!(
+                "{} does not exist; fold keeps the project and opens it again when the folder is back",
+                root.display()
+            ),
+            format!(
+                "mount the disk that holds {} or restore the folder from a backup",
+                root.display()
+            ),
         )];
     }
     let paths = ProjectPaths::new(root);
@@ -691,7 +737,7 @@ fn project_checks(
     let events_now = watch_applicable.then_some(now);
     let facts = runtime.block_on(inspect_database(&paths.db(), events_now));
     let mut checks = vec![
-        database_check(&paths.db(), &facts),
+        database_check(&paths, &facts),
         objects_check(&paths.objects()),
         git_history_check(&paths, host),
         folder_check(&paths, host),
@@ -821,15 +867,20 @@ pub(crate) fn database_issues(facts: &DatabaseFacts) -> Vec<String> {
     issues
 }
 
-fn database_check(path: &Path, facts: &DatabaseFacts) -> Check {
+fn database_check(paths: &ProjectPaths, facts: &DatabaseFacts) -> Check {
     let issues = database_issues(facts);
     if issues.is_empty() {
         return Check::ok("database", "quick_check is ok and journal_mode is wal");
     }
+    let fix = if facts.exists {
+        format!("restore {} from a backup", paths.db().display())
+    } else {
+        database_missing_hint(paths)
+    };
     Check::fail(
         "database",
-        format!("{}: {}", path.display(), issues.join("; ")),
-        format!("restore {} from a backup", path.display()),
+        format!("{}: {}", paths.db().display(), issues.join("; ")),
+        fix,
     )
 }
 

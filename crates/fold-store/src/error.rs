@@ -61,6 +61,11 @@ impl StoreError {
         self.code().unwrap_or(codes::INTERNAL_ERROR)
     }
 
+    /// True when the store was closed before the statement ran, as for a project that the daemon closed under a caller that still holds it.
+    pub fn closed(&self) -> bool {
+        matches!(self, StoreError::Database(sqlx::Error::PoolClosed))
+    }
+
     /// True when a `UNIQUE` constraint or a unique index refused the statement.
     pub fn unique_violation(&self) -> bool {
         self.database_error()

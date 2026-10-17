@@ -140,7 +140,7 @@ pub struct OpenedProject {
     pub name: String,
 }
 
-/// Every registered project and whether the daemon has it open.
+/// Every registered project and whether the daemon has it open. A project whose `.fold/` was deleted is removed from fold before the list is read, so it is not in the list.
 #[utoipa::path(
     get,
     path = "/api/v1/projects",
@@ -306,7 +306,7 @@ pub async fn show_git(Project(handle): Project) -> Result<Json<ProjectGit>, ApiE
     Ok(Json(projects::git_status(&handle).await?.into()))
 }
 
-/// Opens a project that was registered after the daemon started. Socket only; an open project answers the same again, unless its database was deleted or replaced: the daemon then closes it and opens the folder as it is now.
+/// Opens a project that was registered after the daemon started. Socket only; an open project answers the same again, unless its database was replaced: the daemon then closes it and opens the folder as it is now. A folder that is there without `.fold/`, as after its fold data was deleted, is removed from fold and answers `project_not_found`; a missing folder or a `.fold/` without its database keeps the project and answers `project_unavailable` with `details.reason` `folder_missing` or `database_missing`.
 #[utoipa::path(
     post,
     path = "/api/v1/projects",

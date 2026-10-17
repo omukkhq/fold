@@ -5,7 +5,7 @@ use fold_core::{Clock, HostPaths, ManualClock, ProjectConfig, ProjectPaths};
 use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
 use fold_daemon::jobs::QuietCheckpoints;
-use fold_daemon::projects::{Projects, Slot};
+use fold_daemon::projects::Projects;
 use fold_daemon::services::projects::{
     self as project_service, DEFAULT_SESSION_LIFETIME, Lease, ProjectError, deleted_project_slug,
     init_project, init_project_from_git, load_config,
@@ -662,16 +662,21 @@ async fn the_daemon_closes_a_project_whose_fold_data_was_deleted_and_opens_the_n
     assert_eq!(QuietCheckpoints::default().run(&old).await, 0);
     assert!(!root.join(".fold").exists());
     let error = project_service::open(&state, "app").await.unwrap_err();
-    assert_eq!(code(&error), Some("project_unavailable"));
+    assert_eq!(code(&error), Some("project_not_found"));
     assert!(closed(&old));
-    assert!(matches!(
-        state.projects.slot("app"),
-        Some(Slot::Unavailable)
-    ));
+    assert!(state.projects.slot("app").is_none());
+    assert!(
+        projects::find_project(state.registry.read(), "app")
+            .await
+            .unwrap()
+            .is_none(),
+        "the open removed the project"
+    );
 
-    init_project(&host.paths, &root, None, &host.clock)
+    let fresh = init_project(&host.paths, &root, None, &host.clock)
         .await
         .unwrap();
+    assert!(!fresh.replaced && fresh.slug == "app");
     let new = project_service::open(&state, "app").await.unwrap();
     assert!(!Arc::ptr_eq(&old, &new));
     assert!(!new.database_replaced().await);

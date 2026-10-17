@@ -2,17 +2,20 @@ import { CircleAlert } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/cn";
 
-/** A failure with its sentence and the daemon's code, for a load or write error. */
+/** A failure with its sentence, the daemon's hint when it gives one, and its code, for a load or write error. */
 export function FailurePanel({
   title,
   text,
   code,
+  hint,
   action,
   className,
 }: {
   title: string;
   text: string;
   code: string | null;
+  /** The daemon's next step, which names the paths of the case. */
+  hint?: string | null;
   action?: ReactNode;
   className?: string;
 }) {
@@ -34,6 +37,9 @@ export function FailurePanel({
           {title}
         </p>
         <p className="text-bar leading-snug text-text-muted">{text}</p>
+        {hint ? (
+          <p className="text-bar leading-snug break-words text-text">{hint}</p>
+        ) : null}
         {code ? (
           <p className="font-mono text-meta text-text-muted">code: {code}</p>
         ) : null}

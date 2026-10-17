@@ -22,9 +22,8 @@ use tracing::Level;
 use utoipa_axum::router::OpenApiRouter;
 
 use crate::daemon::AppState;
-use crate::projects::{ProjectHandle, Slot};
+use crate::projects::ProjectHandle;
 use error::ApiError;
-use fold_core::{FoldError, codes};
 use std::sync::Arc;
 
 /// How a request reached the daemon. The socket listener adds `Socket` to every request it serves; the HTTP listener adds nothing, so a route that needs [`SocketOnly`] does not exist on the network.
@@ -117,7 +116,7 @@ impl<S: Send + Sync> FromRequestParts<S> for SocketOnly {
     }
 }
 
-/// Resolves `{slug}` of a `/api/v1/projects/{slug}` route to its open handle. A handle whose database was deleted or replaced is closed first and the project is unavailable, so no request reaches a project whose `.fold/` is gone.
+/// Resolves `{slug}` of a `/api/v1/projects/{slug}` route to its open handle through [`crate::services::projects::handle`], so no request reaches a project whose `.fold/` is gone.
 #[derive(Debug, Clone)]
 pub struct Project(pub Arc<ProjectHandle>);
 
@@ -132,26 +131,6 @@ impl FromRequestParts<AppState> for Project {
             .iter()
             .find_map(|(name, value)| (name == "slug").then_some(value))
             .ok_or_else(ApiError::not_found)?;
-        match state.projects.slot(slug) {
-            Some(Slot::Open(handle)) if !handle.database_replaced().await => {
-                return Ok(Self(handle));
-            }
-            Some(Slot::Open(_)) => {
-                state.projects.close_if_stale(slug).await;
-            }
-            Some(Slot::Unavailable) => {}
-            None => {
-                return Err(FoldError::new(
-                    codes::PROJECT_NOT_FOUND,
-                    format!("project {slug} is not registered"),
-                )
-                .into());
-            }
-        }
-        Err(FoldError::new(
-            codes::PROJECT_UNAVAILABLE,
-            format!("project {slug} is unavailable"),
-        )
-        .into())
+        Ok(Self(crate::services::projects::handle(state, slug).await?))
     }
 }

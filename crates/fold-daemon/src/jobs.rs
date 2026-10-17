@@ -169,9 +169,7 @@ pub fn spawn_presence(state: AppState, tick: Duration, stop: watch::Receiver<boo
     }
 }
 
-/// Starts the live job: every `tick` it closes each open project whose database was deleted or replaced, through [`Projects::close_stale`], then lets the live state of each open project look at the clock, so a workspace scans in full every `rescan_seconds` of clock time even when its watcher reports nothing. A cycle is a tick that reached at least one workspace. It stops when `stop` changes.
-///
-/// [`Projects::close_stale`]: crate::projects::Projects::close_stale
+/// Starts the live job: every `tick` it removes each project whose folder is there without `.fold/`, closes each open project whose folder or database went away or whose database was replaced, and opens again each project whose missing folder is back, through [`projects::sweep_deleted`], then lets the live state of each open project look at the clock, so a workspace scans in full every `rescan_seconds` of clock time even when its watcher reports nothing. A cycle is a tick that reached at least one workspace. It stops when `stop` changes.
 pub fn spawn_live(state: AppState, tick: Duration, stop: watch::Receiver<bool>) -> Job {
     let (progress, watcher) = watch::channel(JobProgress::default());
     let task = tokio::spawn(live(state, tick, stop, progress));
@@ -534,7 +532,12 @@ async fn live(
             _ = stop.changed() => break,
             _ = ticks.tick() => {}
         }
-        state.projects.close_stale().await;
+        if let Err(error) = projects::sweep_deleted(&state).await {
+            tracing::warn!(
+                code = error.log_code(),
+                "the check for deleted projects failed; the next tick tries again"
+            );
+        }
         let reached: usize = state
             .projects
             .handles()

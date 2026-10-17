@@ -15,7 +15,14 @@ import { keys } from "../api/keys";
 import { createAppRouter } from "../app/router";
 import { createQueryClient } from "../app/queryClient";
 import { ThemeProvider } from "../theme/ThemeProvider";
-import { errorReply, stubFetch, type StubRequest } from "../test/stubFetch";
+import {
+  errorReply,
+  shellRoutes,
+  stubFetch,
+  type StubReply,
+  type StubRequest,
+} from "../test/stubFetch";
+import { workerList } from "../test/workers";
 import { ProjectsScreen } from "./projects/ProjectsScreen";
 import { RepositoryScreen } from "./repository/RepositoryScreen";
 
@@ -268,6 +275,58 @@ function renderRepository(
   );
   return router;
 }
+
+describe("A project fold removed", () => {
+  it("shows the project not-found state, never the load failure, and leads back to a list without it", async () => {
+    stubFetch({
+      "GET /api/v1/session": { body: { human: "tanim", authenticated: true } },
+      "GET /api/v1/projects": {
+        body: { projects: [{ slug: "demo", name: "Demo", available: false }] },
+      },
+      "GET /api/v1/projects/nobs": errorReply(404, "project_not_found"),
+    });
+    renderAt("/p/nobs/board");
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Project not found");
+    expect(screen.queryByText(/did not arrive/)).toBeNull();
+    await userEvent.click(
+      screen.getByRole("link", { name: "Back to projects" }),
+    );
+    expect(await screen.findByText("Demo")).toBeTruthy();
+    expect(screen.queryByText("nobs")).toBeNull();
+  });
+
+  it("switches an open project screen to the not-found state when the event stream answers project_not_found", async () => {
+    let gone = false;
+    let endStream: (reply: StubReply) => void = () => undefined;
+    const shell = shellRoutes(["demo"]);
+    stubFetch({
+      ...shell,
+      "GET /api/v1/projects/demo": () =>
+        gone
+          ? errorReply(404, "project_not_found")
+          : { body: { slug: "demo", name: "demo", available: true } },
+      "GET /api/v1/projects/demo/agents": { body: { agents: [] } },
+      "GET /api/v1/projects/demo/workers": { body: workerList() },
+      "GET /api/v1/projects/demo/events": () =>
+        new Promise<StubReply>((resolve) => {
+          endStream = resolve;
+        }),
+    });
+    renderAt("/p/demo/agents");
+    expect(
+      await screen.findByRole("region", { name: "No agents yet" }),
+    ).toBeTruthy();
+    expect(screen.queryByText("Project not found")).toBeNull();
+
+    gone = true;
+    endStream(errorReply(404, "project_not_found"));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Project not found");
+    expect(screen.queryByText(/did not arrive/)).toBeNull();
+    expect(screen.queryByRole("region", { name: "No agents yet" })).toBeNull();
+  });
+});
 
 describe("Repository screen", () => {
   it("opens a mentioned folder as the tree at that folder and a mentioned file as a file", async () => {

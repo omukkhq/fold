@@ -146,6 +146,15 @@ mod tests {
     fn store_errors_keep_only_their_stable_codes() {
         let coded = from_agent(AgentError::Store(StoreError::SchemaTooNew { version: 9 }));
         assert_eq!(coded.code(), codes::SCHEMA_TOO_NEW);
+        let closed = from_agent(AgentError::Store(StoreError::Database(
+            sqlx::Error::PoolClosed,
+        )));
+        assert_eq!(closed.code(), codes::PROJECT_UNAVAILABLE);
+        assert!(
+            closed
+                .hint()
+                .is_some_and(|hint| hint.contains("fld doctor"))
+        );
         let internal = from_agent(AgentError::Store(StoreError::Corrupt("agents.name")));
         assert_eq!(internal.code(), codes::INTERNAL_ERROR);
         assert_eq!(internal.message(), "internal error");

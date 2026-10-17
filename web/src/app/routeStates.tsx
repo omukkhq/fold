@@ -1,6 +1,9 @@
-import { useRouter } from "@tanstack/react-router";
+import { useRouter, type ErrorComponentProps } from "@tanstack/react-router";
 import { ErrorBanner } from "../components/states/ErrorBanner";
 import { Skeleton } from "../components/states/Skeleton";
+import { projectProblem } from "./projectGone";
+import { ProjectNotFound } from "./ProjectNotFound";
+import { ProjectUnavailable } from "./ProjectUnavailable";
 
 export function RoutePending() {
   return (
@@ -10,8 +13,21 @@ export function RoutePending() {
   );
 }
 
-export function RouteError() {
+/** A screen whose project fold does not know shows the not-found state instead of a retry, as no retry brings the project back; one whose project the daemon cannot open now says why. */
+export function RouteError({ error }: Pick<ErrorComponentProps, "error">) {
   const router = useRouter();
+  const problem = projectProblem(error);
+  if (problem?.kind === "gone") {
+    return <ProjectNotFound />;
+  }
+  if (problem) {
+    return (
+      <ProjectUnavailable
+        problem={problem}
+        onRetry={() => void router.invalidate()}
+      />
+    );
+  }
   return (
     <ErrorBanner
       title="This screen could not load."
