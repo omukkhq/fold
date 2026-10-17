@@ -3,18 +3,22 @@ import { errorReply, stubFetch } from "../test/stubFetch";
 import {
   proposalDetail,
   proposalSummary,
+  proposalVersion,
   reviewComment,
 } from "../test/proposals";
 import { isApiError } from "./errors";
 import { keys } from "./keys";
 import {
   addComment,
+  editProposalFile,
   getProposal,
   getProposalChanges,
+  getProposalFile,
   getProposalFileDiff,
   integrateProposal,
   listComments,
   listProposals,
+  sendForReviewAgain,
   submitReview,
 } from "./proposals";
 import { comparedFile, comparison, fileDiff } from "../test/diff";
@@ -22,6 +26,7 @@ import {
   proposalChangesQuery,
   proposalCommentsQuery,
   proposalFileDiffQuery,
+  proposalFileQuery,
   proposalQuery,
   proposalsQuery,
 } from "./queries";
@@ -212,6 +217,77 @@ describe("human writes", () => {
     await expect(integrateProposal("demo", "P-3", 2)).rejects.toSatisfy(
       (e: unknown) => isApiError(e, "stale_version"),
     );
+  });
+});
+
+describe("human edits", () => {
+  it("reads a file of a version, keyed outside the proposal", async () => {
+    const file = {
+      path: "src/lib.rs",
+      kind: "file" as const,
+      hash: "a".repeat(64),
+      size: 3,
+      binary: false,
+      too_large: false,
+      text: "x\n",
+    };
+    const calls = stubFetch({ [`GET ${P}/P-4/file`]: { body: file } });
+    await expect(
+      getProposalFile("demo", "P-4", 2, "src/lib.rs"),
+    ).resolves.toEqual(file);
+    expect(calls[0]?.search.get("version")).toBe("2");
+    expect(calls[0]?.search.get("path")).toBe("src/lib.rs");
+    expect(proposalFileQuery("demo", "P-4", 2, "src/lib.rs").queryKey).toEqual([
+      "demo",
+      "proposal-file",
+      "P-4",
+      2,
+      "src/lib.rs",
+    ]);
+  });
+
+  it("posts an edit of the version read and answers with the new version", async () => {
+    const calls = stubFetch({
+      [`POST ${P}/P-4/edits`]: (request) =>
+        (request.body as { version: number }).version === 2
+          ? {
+              status: 201,
+              body: proposalVersion(3, {
+                created_by: "human:tanim",
+                human_edit: true,
+              }),
+            }
+          : errorReply(409, "stale_version"),
+    });
+    const made = await editProposalFile("demo", "P-4", {
+      version: 2,
+      path: "src/lib.rs",
+      content: "y\n",
+    });
+    expect([made.version, made.human_edit]).toEqual([3, true]);
+    expect(calls[0]?.body).toEqual({
+      version: 2,
+      path: "src/lib.rs",
+      content: "y\n",
+    });
+    await expect(
+      editProposalFile("demo", "P-4", {
+        version: 1,
+        path: "src/lib.rs",
+        content: "y\n",
+      }),
+    ).rejects.toSatisfy((e: unknown) => isApiError(e, "stale_version"));
+  });
+
+  it("sends a version for review again", async () => {
+    const calls = stubFetch({
+      [`POST ${P}/P-4/review-again`]: {
+        body: proposalSummary("P-4", { current_version: 3 }),
+      },
+    });
+    const summary = await sendForReviewAgain("demo", "P-4", 3);
+    expect(summary.current_version).toBe(3);
+    expect(calls[0]?.body).toEqual({ version: 3 });
   });
 });
 

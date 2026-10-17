@@ -141,6 +141,11 @@ fn status_of(code: &str) -> Option<StatusCode> {
         | codes::TASK_HOLD_DENIED
         | codes::CHECKLIST_DENIED => Some(StatusCode::FORBIDDEN),
         codes::CHECKLIST_AMBIGUOUS => Some(StatusCode::CONFLICT),
+        codes::HUMAN_EDIT_DENIED => Some(StatusCode::FORBIDDEN),
+        codes::WORKER_BUSY | codes::VERSION_UNCHANGED | codes::NOT_WORKSPACE_OWNER => {
+            Some(StatusCode::CONFLICT)
+        }
+        codes::FILE_NOT_EDITABLE => Some(StatusCode::UNPROCESSABLE_ENTITY),
         codes::TASK_KIND_MISMATCH
         | codes::TASK_ALREADY_REPORTED
         | codes::TASK_NOT_REPORTED
@@ -381,6 +386,11 @@ mod tests {
             (codes::TASK_HOLD_DENIED, StatusCode::FORBIDDEN),
             (codes::CHECKLIST_DENIED, StatusCode::FORBIDDEN),
             (codes::CHECKLIST_AMBIGUOUS, StatusCode::CONFLICT),
+            (codes::HUMAN_EDIT_DENIED, StatusCode::FORBIDDEN),
+            (codes::WORKER_BUSY, StatusCode::CONFLICT),
+            (codes::VERSION_UNCHANGED, StatusCode::CONFLICT),
+            (codes::NOT_WORKSPACE_OWNER, StatusCode::CONFLICT),
+            (codes::FILE_NOT_EDITABLE, StatusCode::UNPROCESSABLE_ENTITY),
             (codes::TASK_ON_HOLD, StatusCode::CONFLICT),
             (codes::TASK_NEEDS_HUMAN, StatusCode::CONFLICT),
         ] {

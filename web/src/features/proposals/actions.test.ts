@@ -4,6 +4,7 @@ import {
   humanGates,
   proposalDetail,
   proposalSummary,
+  proposalVersion,
   review,
 } from "@/test/proposals";
 import {
@@ -46,6 +47,27 @@ describe("visibleActions", () => {
       [],
     );
     expect(visibleActions(proposal({ state: "closed" }), "tanim")).toEqual([]);
+  });
+
+  it("adds Send for review again on a human edit whose kept approvals count", () => {
+    const edited = proposalDetail(
+      proposalSummary("P-4", {
+        current_version: 2,
+        human_review: { reason: "auth", reviewer: null, set_by: "planner" },
+      }),
+      {
+        versions: [
+          proposalVersion(1),
+          proposalVersion(2, { created_by: "human:tanim", human_edit: true }),
+        ],
+      },
+    );
+    expect(visibleActions(edited, "tanim")).toEqual([
+      "approve",
+      "request_changes",
+      "integrate",
+      "review_again",
+    ]);
   });
 
   it("never offers a reject", () => {

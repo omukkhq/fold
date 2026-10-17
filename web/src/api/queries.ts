@@ -8,6 +8,7 @@ import { getProject, listProjects } from "./projects";
 import {
   getProposal,
   getProposalChanges,
+  getProposalFile,
   getProposalFileDiff,
   listComments,
   listProposals,
@@ -125,6 +126,18 @@ export const proposalFileDiffQuery = (
   queryOptions({
     queryKey: keys.proposalFileDiff(slug, id, range.version, range.since, path),
     queryFn: () => getProposalFileDiff(slug, id, range, path),
+    staleTime: Infinity,
+  });
+
+export const proposalFileQuery = (
+  slug: string,
+  id: string,
+  version: number,
+  path: string,
+) =>
+  queryOptions({
+    queryKey: keys.proposalFile(slug, id, version, path),
+    queryFn: () => getProposalFile(slug, id, version, path),
     staleTime: Infinity,
   });
 

@@ -900,6 +900,7 @@ mod tests {
                     body: "Split the page.".to_owned(),
                     comments: 2,
                     created_at: at,
+                    kept_from: None,
                 }],
                 comments: vec![
                     CommentRow {

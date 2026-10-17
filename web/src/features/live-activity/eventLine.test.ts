@@ -185,6 +185,16 @@ describe("eventLine", () => {
       "added v2 to P-4",
     );
     expect(line("proposal.version_added")).toBe("added a version to P-4");
+    expect(line("proposal.human_edited", { version: 3 })).toBe(
+      "edited P-4 as v3",
+    );
+    expect(line("proposal.human_edited")).toBe("edited P-4");
+    expect(line("proposal.review_again_requested", { version: 3 })).toBe(
+      "sent v3 of P-4 for review again",
+    );
+    expect(line("proposal.review_again_requested")).toBe(
+      "sent P-4 for review again",
+    );
     expect(
       line("proposal.author_changed", {
         reason: "taken_over",

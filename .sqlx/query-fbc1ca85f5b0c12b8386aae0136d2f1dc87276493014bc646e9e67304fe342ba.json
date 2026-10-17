@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO reviews (version_id, reviewer_worker_id, reviewer_human, verdict, body, created_at, kept_from_review_id)\n         SELECT nv.id, r.reviewer_worker_id, r.reviewer_human, 'approve', '', ?4, r.id\n         FROM reviews r\n         JOIN proposal_versions sv ON sv.id = r.version_id\n         JOIN proposals p ON p.id = sv.proposal_id\n         JOIN proposal_versions nv ON nv.proposal_id = p.id AND nv.version = ?3\n         WHERE p.number = ?1 AND sv.version = ?2 AND r.verdict = 'approve' AND r.reviewer_worker_id IS NOT NULL\n           AND (r.kept_from_review_id IS NULL\n               OR NOT EXISTS (SELECT 1 FROM review_again_requests q WHERE q.version_id = r.version_id))\n           AND NOT EXISTS (\n               SELECT 1 FROM reviews later\n               WHERE later.version_id = r.version_id AND later.verdict = 'request_changes'\n                 AND (later.created_at > r.created_at OR (later.created_at = r.created_at AND later.id > r.id))\n           )\n         ORDER BY r.created_at, r.id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "fbc1ca85f5b0c12b8386aae0136d2f1dc87276493014bc646e9e67304fe342ba"
+}

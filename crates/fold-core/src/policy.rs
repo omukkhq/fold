@@ -18,7 +18,7 @@ mod workers;
 
 pub use batches::can_review_batch;
 pub use human_review::{
-    MarkChange, can_clear_human_review, can_human_approve, can_set_human_review,
+    MarkChange, can_clear_human_review, can_edit_as_human, can_human_approve, can_set_human_review,
 };
 pub use integrate::{
     CallerFacts, Gate, GateRefusal, GateState, GateStatus, IntegrateInput, ProposalFacts,

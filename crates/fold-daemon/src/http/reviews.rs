@@ -20,7 +20,9 @@ use super::actor::Human;
 use super::diff::{DiffView, comparison_view, file_view};
 use super::error::{ApiError, ApiJson, ApiQuery, ErrorEnvelope};
 use super::tasks::{HumanReviewMark, TaskStatus, TaskView, id, task_view};
-use super::workspaces::{ChangeSource, ComparedFile, ComparisonTotals};
+use super::workspaces::{
+    ChangeSource, ComparedFile, ComparisonTotals, FileContentView, file_view as content_view,
+};
 use crate::daemon::AppState;
 use crate::services::reviews::{
     self as service, ChangeRange, CheckoutTarget, CommentInput, CommentLocation,
@@ -40,6 +42,9 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(list_review_comments, add_review_comment))
         .routes(routes!(submit_review))
         .routes(routes!(integrate_proposal))
+        .routes(routes!(read_proposal_file))
+        .routes(routes!(edit_proposal_file))
+        .routes(routes!(send_for_review_again))
         .routes(routes!(list_review_checkouts))
 }
 
@@ -321,9 +326,14 @@ pub struct ProposalVersion {
     /// The author's evidence that the work is done.
     #[schema(required = true)]
     pub evidence: Option<String>,
+    /// The worker, or `human:<name>` for a human edit.
     pub created_by: String,
     /// UTC milliseconds.
     pub created_at: i64,
+    /// A human made this version by editing the one before it in a human review. It keeps the agent approvals of that version until it is sent for review again; a human approves it again.
+    pub human_edit: bool,
+    /// A human sent this version for review again, so the approvals it kept no longer count.
+    pub review_again: bool,
 }
 
 impl From<service::VersionView> for ProposalVersion {
@@ -336,9 +346,11 @@ impl From<service::VersionView> for ProposalVersion {
             files_added: version.stats.files_added,
             files_modified: version.stats.files_modified,
             files_deleted: version.stats.files_deleted,
+            human_edit: version.human_edit,
             evidence: version.evidence,
             created_by: version.created_by,
             created_at: version.created_at.as_millis(),
+            review_again: version.review_again,
         }
     }
 }
@@ -354,6 +366,9 @@ pub struct ProposalReview {
     pub comments: u32,
     /// UTC milliseconds.
     pub created_at: i64,
+    /// For an approval that a human edit kept, the version whose approval it copies.
+    #[schema(required = true)]
+    pub kept_from: Option<u32>,
 }
 
 impl From<service::ReviewView> for ProposalReview {
@@ -365,6 +380,7 @@ impl From<service::ReviewView> for ProposalReview {
             body: review.body,
             comments: review.comments,
             created_at: review.created_at.as_millis(),
+            kept_from: review.kept_from,
         }
     }
 }
@@ -850,6 +866,34 @@ impl From<service::SubmittedReview> for SubmittedReview {
     }
 }
 
+/// A human's change of one text file of the version the human read, in a human review.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct EditFileBody {
+    /// The version the human read and edited. When the current version is another one, nothing is written and the answer is `stale_version`.
+    pub version: u32,
+    /// The file, such as `src/lib.rs`: a text file of that version.
+    pub path: String,
+    /// The whole new content of the file, as UTF-8 text.
+    pub content: String,
+}
+
+/// The human edit the human sends for review again.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ReviewAgainBody {
+    /// The version the human read. When the current version is another one, nothing is written and the answer is `stale_version`.
+    pub version: u32,
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct VersionFileQuery {
+    /// A version number; left out, the current version.
+    #[serde(default)]
+    pub version: Option<u32>,
+    /// A file path relative to the version's root, such as `src/lib.rs`.
+    pub path: String,
+}
+
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct IntegrateBody {
     /// The version the human reviewed. When the current version is another one, nothing integrates and the answer is `stale_version`.
@@ -1179,6 +1223,111 @@ pub async fn integrate_proposal(
             Err(integration_conflicted(proposal, &conflicts).into())
         }
     }
+}
+
+/// One file of a proposal version, the content a human edit starts from. A symlink gives its target text and is never followed.
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{slug}/proposals/{id}/file",
+    operation_id = "read_proposal_file",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("id" = String, Path, description = "The proposal id, such as P-3"),
+        VersionFileQuery,
+    ),
+    responses(
+        (status = 200, description = "The file", body = FileContentView),
+        (status = 400, description = "`invalid_id`, `invalid_path` or `invalid_request`: the query string is not valid", body = ErrorEnvelope),
+        (status = 404, description = "`proposal_not_found`: no such proposal or version, `not_found`: the version has no file at the path, or `project_not_found`", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn read_proposal_file(
+    State(state): State<AppState>,
+    project: Project,
+    Path((_slug, id)): Path<(String, String)>,
+    ApiQuery(query): ApiQuery<VersionFileQuery>,
+) -> Result<Json<FileContentView>, ApiError> {
+    let content = service(&state, &project)
+        .version_file(proposal(&id)?, query.version, &query.path)
+        .await?;
+    Ok(Json(content_view(query.path, content)))
+}
+
+/// A human edits one text file of the version the human read, in a human review: only on a task with the human review mark, by the human the mark names or by any human when it names none. The edit becomes a new version under the human's name that keeps the agent approvals of the version it was made from, but no human approval; send it for review again to withdraw them. The task worker's next sync writes the edit into its workspace.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/proposals/{id}/edits",
+    operation_id = "edit_proposal_file",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("id" = String, Path, description = "The proposal id, such as P-3"),
+    ),
+    request_body = EditFileBody,
+    responses(
+        (status = 201, description = "The new version", body = ProposalVersion),
+        (status = 400, description = "`invalid_request`, `invalid_path`, `invalid_id` or `invalid_name`", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
+        (status = 403, description = "`human_edit_denied`: the task has no human review mark, or the mark names another human (`details.reviewer`)", body = ErrorEnvelope),
+        (status = 404, description = "`proposal_not_found` or `project_not_found`", body = ErrorEnvelope),
+        (status = 409, description = "`stale_version` (`details.expected_version`, `details.current_version`), `worker_busy` (`details.reason`: `working`, `unfinished_write` or `newer_work`), `version_unchanged`, `proposal_not_open`, `workspace_not_active`, `not_workspace_owner` or `task_closed`", body = ErrorEnvelope),
+        (status = 422, description = "`file_not_editable` (`details.reason`: `missing`, `not_a_file`, `binary` or `too_large`)", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn edit_proposal_file(
+    State(state): State<AppState>,
+    human: Human,
+    project: Project,
+    Path((_slug, id)): Path<(String, String)>,
+    ApiJson(body): ApiJson<EditFileBody>,
+) -> Result<(StatusCode, Json<ProposalVersion>), ApiError> {
+    let edit = service(&state, &project)
+        .edit_as_human(
+            &human.actor(),
+            proposal(&id)?,
+            body.version,
+            &body.path,
+            &body.content,
+        )
+        .await?;
+    Ok((StatusCode::CREATED, Json(edit.detail.selected.into())))
+}
+
+/// A human sends the current version, a human edit, for review again: the approvals it kept stop counting and the reviewers are told. Only in a human review, for the human the mark names or any human when it names none.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/proposals/{id}/review-again",
+    operation_id = "send_for_review_again",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("id" = String, Path, description = "The proposal id, such as P-3"),
+    ),
+    request_body = ReviewAgainBody,
+    responses(
+        (status = 200, description = "The proposal after the request", body = ProposalSummary),
+        (status = 400, description = "`invalid_request` (`details.reason`: `not_human_edit` or `already_sent`), `invalid_id` or `invalid_name`", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
+        (status = 403, description = "`human_edit_denied`", body = ErrorEnvelope),
+        (status = 404, description = "`proposal_not_found` or `project_not_found`", body = ErrorEnvelope),
+        (status = 409, description = "`stale_version` (`details.expected_version`, `details.current_version`), `proposal_not_open` or `task_closed`", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn send_for_review_again(
+    State(state): State<AppState>,
+    human: Human,
+    project: Project,
+    Path((_slug, id)): Path<(String, String)>,
+    ApiJson(body): ApiJson<ReviewAgainBody>,
+) -> Result<Json<ProposalSummary>, ApiError> {
+    let detail = service(&state, &project)
+        .send_for_review_again(&human.actor(), proposal(&id)?, body.version)
+        .await?;
+    Ok(Json(detail.summary.into()))
 }
 
 /// A read-only checkout of a proposal version, or of a review batch, for its reviewer. The daemon records no command run in it.

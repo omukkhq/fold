@@ -93,7 +93,7 @@ const FOLD_TOOLS: [&str; 83] = [
 const PENDING_TOOLS: [&str; 0] = [];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 150] = [
+const FOLD_ERROR_CODES: [&str; 153] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -244,6 +244,9 @@ const FOLD_ERROR_CODES: [&str; 150] = [
     "task_hold_denied",
     "checklist_denied",
     "checklist_ambiguous",
+    "human_edit_denied",
+    "worker_busy",
+    "file_not_editable",
 ];
 
 /// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.

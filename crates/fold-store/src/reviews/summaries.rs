@@ -114,6 +114,8 @@ pub async fn review_entries(
            JOIN proposals p ON p.id = v.proposal_id
            LEFT JOIN workers w ON w.id = r.reviewer_worker_id
            WHERE p.number = ?
+             AND (r.kept_from_review_id IS NULL
+                 OR NOT EXISTS (SELECT 1 FROM review_again_requests q WHERE q.version_id = r.version_id))
            ORDER BY r.created_at DESC, r.id DESC"#,
         number
     )

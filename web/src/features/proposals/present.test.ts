@@ -219,6 +219,9 @@ describe("reviews and evidence", () => {
       "Requested changes: Missing index",
     );
     expect(reviewText(review(2, "approve", "  "))).toBe("Approved");
+    expect(reviewText({ ...review(2, "approve"), kept_from: 1 })).toBe(
+      "Approved (kept from v1)",
+    );
     expect(reviewText(review(1, "comment", "Naming matches T-14"))).toBe(
       "Comment: Naming matches T-14",
     );

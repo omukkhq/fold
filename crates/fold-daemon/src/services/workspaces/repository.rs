@@ -203,13 +203,19 @@ impl WorkspaceService {
         number: RevisionId,
         path: &str,
     ) -> Result<FileContent, WorkspaceError> {
-        let path = browse::parse_path(path)?.ok_or_else(|| {
-            fold_core::FoldError::new(fold_core::codes::INVALID_PATH, "a file path is required")
-                .with_details([("path", serde_json::json!(""))])
-        })?;
+        let path = file_path(path)?;
         let tree = workspaces::get_by_number(self.store.read(), number)
             .await?
             .tree_hash;
+        self.read_tree_file(tree, path).await
+    }
+
+    /// One file of a stored tree, such as a proposal version's. A symlink gives its target text.
+    pub(crate) async fn read_tree_file(
+        &self,
+        tree: ObjectHash,
+        path: RepoPath,
+    ) -> Result<FileContent, WorkspaceError> {
         let paths = self.paths.clone();
         blocking(move || browse::read_file(&open_objects(&paths)?, &tree, &path)).await
     }
@@ -240,4 +246,12 @@ impl WorkspaceService {
         })
         .await
     }
+}
+
+/// A file path as a caller writes it: relative, normalised and not empty, so the root is refused with `invalid_path`.
+pub(crate) fn file_path(path: &str) -> Result<RepoPath, WorkspaceError> {
+    Ok(browse::parse_path(path)?.ok_or_else(|| {
+        fold_core::FoldError::new(fold_core::codes::INVALID_PATH, "a file path is required")
+            .with_details([("path", serde_json::json!(""))])
+    })?)
 }

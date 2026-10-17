@@ -32,6 +32,10 @@ export type NewComment = Schemas["AddCommentBody"];
 export type NewReview = Schemas["ReviewBody"];
 export type SubmittedReview = Schemas["SubmittedReview"];
 export type IntegrationResult = Schemas["IntegrationResult"];
+/** One file of a proposal version, as a human edit starts from it. */
+export type VersionFile = Schemas["FileContentView"];
+/** A human's new content for one text file of the version the human read. */
+export type NewEdit = Schemas["EditFileBody"];
 
 function base(slug: string, id: string) {
   return { path: { slug, id } };
@@ -164,6 +168,50 @@ export async function integrateProposal(
     api.POST("/api/v1/projects/{slug}/proposals/{id}/integrate", {
       params: base(slug, id),
       body: { expected_version: expectedVersion },
+    }),
+  );
+}
+
+/** One file of `version`, the content the edit box starts from. */
+export async function getProposalFile(
+  slug: string,
+  id: string,
+  version: number,
+  path: string,
+): Promise<VersionFile> {
+  return unwrap(
+    api.GET("/api/v1/projects/{slug}/proposals/{id}/file", {
+      params: { ...base(slug, id), query: { version, path } },
+    }),
+  );
+}
+
+/**
+ * A human edit of one file of `edit.version`, the version the human read, in a human review. The daemon answers with the new version; another current version rejects with `stale_version`, and a busy task worker with `worker_busy`.
+ */
+export async function editProposalFile(
+  slug: string,
+  id: string,
+  edit: NewEdit,
+): Promise<ProposalVersion> {
+  return unwrap(
+    api.POST("/api/v1/projects/{slug}/proposals/{id}/edits", {
+      params: base(slug, id),
+      body: edit,
+    }),
+  );
+}
+
+/** Sends `version`, a human edit, for review again: the approvals it kept stop counting. */
+export async function sendForReviewAgain(
+  slug: string,
+  id: string,
+  version: number,
+): Promise<ProposalSummary> {
+  return unwrap(
+    api.POST("/api/v1/projects/{slug}/proposals/{id}/review-again", {
+      params: base(slug, id),
+      body: { version },
     }),
   );
 }

@@ -179,8 +179,12 @@ const REVIEW_HEADS: Record<Verdict, string> = {
 };
 
 /** `Requested changes: missing index`, as the reviews list draws a verdict. */
+/** A kept approval names the version it was kept from: a human edit keeps the agent approvals of the version it was made from. */
 export function reviewText(review: Review): string {
-  const head = REVIEW_HEADS[review.verdict];
+  const head =
+    review.kept_from === null
+      ? REVIEW_HEADS[review.verdict]
+      : `${REVIEW_HEADS[review.verdict]} (kept from v${String(review.kept_from)})`;
   const body = review.body.trim();
   return body ? `${head}: ${body}` : head;
 }

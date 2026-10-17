@@ -15,7 +15,9 @@ import {
   MessageSquare,
   Milestone,
   Pause,
+  Pencil,
   Play,
+  RotateCcw,
   Tag,
   TriangleAlert,
   Undo2,
@@ -422,6 +424,24 @@ const SPECS: Record<EventType, Spec> = {
       return version === null
         ? `added a version to ${proposalOf(e)}`
         : `added v${String(version)} to ${proposalOf(e)}`;
+    },
+  },
+  "proposal.human_edited": {
+    icon: Pencil,
+    text: (e) => {
+      const version = count(e.data.version);
+      return version === null
+        ? `edited ${proposalOf(e)}`
+        : `edited ${proposalOf(e)} as v${String(version)}`;
+    },
+  },
+  "proposal.review_again_requested": {
+    icon: RotateCcw,
+    text: (e) => {
+      const version = count(e.data.version);
+      return version === null
+        ? `sent ${proposalOf(e)} for review again`
+        : `sent v${String(version)} of ${proposalOf(e)} for review again`;
     },
   },
   "proposal.author_changed": {

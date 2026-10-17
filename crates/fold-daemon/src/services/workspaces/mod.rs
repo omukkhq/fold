@@ -26,6 +26,7 @@ mod changesets;
 mod checkpoints;
 mod compare;
 mod files;
+mod human_edit;
 mod integration;
 mod lifecycle;
 mod reconcile;
@@ -44,11 +45,13 @@ pub(crate) use changesets::ProposalSnapshot;
 pub use changesets::RecordedChanges;
 pub use checkpoints::{CheckpointView, Restored};
 pub use compare::{ResolvedState, StateComparison, StateKind, StateRef, StateSummary};
+pub(crate) use files::checkpoint_in_tx;
 pub use lifecycle::{
     Abandoned, ArchiveReason, CreatedWorkspace, WorkspaceDetails, WorkspaceRef, WorkspaceView,
     archive_in_tx,
 };
 pub use reconcile::{Reconciled, Reconciliation};
+pub(crate) use repository::file_path;
 pub use repository::{
     DEFAULT_REVISION_PAGE, RECENT_REVISIONS, RepositoryState, RevisionDetail, RevisionOrigin,
     RevisionPage, RevisionSummary,

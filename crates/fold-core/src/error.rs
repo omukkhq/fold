@@ -169,6 +169,9 @@ define_codes! {
     TASK_HOLD_DENIED = "task_hold_denied",
     CHECKLIST_DENIED = "checklist_denied",
     CHECKLIST_AMBIGUOUS = "checklist_ambiguous",
+    HUMAN_EDIT_DENIED = "human_edit_denied",
+    WORKER_BUSY = "worker_busy",
+    FILE_NOT_EDITABLE = "file_not_editable",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

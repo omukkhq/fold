@@ -40,6 +40,13 @@ export const keys = {
     since: number | null,
     path: string,
   ) => [slug, "proposal-diff", proposal, version, since, path] as const,
+  /** Outside the proposal prefix: a file of a version never changes. */
+  proposalFile: (
+    slug: string,
+    proposal: string,
+    version: number,
+    path: string,
+  ) => [slug, "proposal-file", proposal, version, path] as const,
   requests: (slug: string) => [slug, "requests"] as const,
   request: (slug: string, request: string) =>
     [slug, "request", request] as const,

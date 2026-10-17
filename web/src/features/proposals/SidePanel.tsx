@@ -11,6 +11,7 @@ import {
   GitMerge,
   Hourglass,
   MessageSquare,
+  RotateCcw,
   Undo2,
   type LucideIcon,
 } from "lucide-react";
@@ -40,6 +41,7 @@ import {
   nextStepText,
   reportTrees,
 } from "./conflict";
+import { keptApprovalsNote } from "./edit";
 import { gateText, shownGates, waitingSummary } from "./gates";
 import type { IntegrationView } from "./integration";
 import {
@@ -86,6 +88,8 @@ export interface ActionHandlers {
   approveBlock: string | null;
   onApprove: () => void;
   onIntegrate: () => void;
+  /** Sends the current version, a human edit, for review again. */
+  onReviewAgain: () => void;
   /** Resolves once the daemon has taken the verdict; rejects with its error. */
   onRequestChanges: (body: string) => Promise<void>;
 }
@@ -276,6 +280,7 @@ function HumanActions({
     );
   }
   const shows = (action: HumanAction) => actions.visible.includes(action);
+  const kept = keptApprovalsNote(proposal, proposal.summary.current_version);
   return (
     <div className="flex flex-col gap-8 border-t border-border-subtle pt-10">
       <p className="text-code text-text-muted">You are reviewing as {human}</p>
@@ -346,6 +351,21 @@ function HumanActions({
             <p id={blockId} className="text-meta text-text-muted">
               {actions.integrateBlock}
             </p>
+          ) : null}
+          {kept !== null ? (
+            <p className="text-meta text-text-muted">{kept}</p>
+          ) : null}
+          {shows("review_again") ? (
+            <Button
+              pending={actions.pending === "review_again"}
+              pendingLabel="Sending for review…"
+              disabled={busy}
+              icon={<RotateCcw aria-hidden="true" size={15} />}
+              className="w-full justify-center"
+              onClick={actions.onReviewAgain}
+            >
+              Send {v} for review again
+            </Button>
           ) : null}
         </>
       )}

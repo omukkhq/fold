@@ -4,12 +4,13 @@ import {
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query";
-import { GitPullRequest } from "lucide-react";
+import { GitPullRequest, Pencil } from "lucide-react";
 import { useState } from "react";
 import { keys } from "@/api/keys";
 import {
   addComment,
   integrateProposal,
+  sendForReviewAgain,
   submitReview,
   type ChangeRange,
   type NewComment,
@@ -24,6 +25,7 @@ import {
   proposalQuery,
 } from "@/api/queries";
 import { HrefLink } from "@/app/HrefLink";
+import { Button } from "@/components/button/Button";
 import { buttonClasses } from "@/components/button/buttonStyles";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
@@ -45,7 +47,9 @@ import {
   visibleActions,
   type HumanAction,
 } from "./actions";
+import { canEdit, editableFile } from "./edit";
 import { describeFailure, reloadsProposal } from "./errors";
+import { FileEditor } from "./FileEditor";
 import { integrationOf, mainHead } from "./integration";
 import { ProposalHeader } from "./ProposalHeader";
 import { SidePanel } from "./SidePanel";
@@ -111,6 +115,8 @@ interface DiffAreaProps {
   now: number;
   onSearch: (next: DetailSearch) => void;
   onComment: (comment: LineComment) => Promise<void>;
+  /** Resolves once the proposal with the human's new version is read again. */
+  onEdited: (path: string) => Promise<void>;
 }
 
 function DiffArea({
@@ -123,10 +129,12 @@ function DiffArea({
   now,
   onSearch,
   onComment,
+  onEdited,
 }: DiffAreaProps) {
   const id = proposal.summary.id;
   const comparison = useQuery(proposalChangesQuery(slug, id, view.range));
   const [selection, setSelection] = useState<DiffSelection | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
   const files = comparison.data ? listedFiles(comparison.data.files) : [];
   const file = currentFile(files, search.path);
   const fileDiff = useFileDiff(
@@ -152,6 +160,7 @@ function DiffArea({
     held,
   );
   const composer = human !== null && canComment(proposal, human, version);
+  const editable = canEdit(proposal, human, view) && editableFile(file);
 
   if (comparison.isPending) return <Skeleton className="min-w-0 flex-1" />;
   if (comparison.isError) {
@@ -165,8 +174,38 @@ function DiffArea({
     );
   }
   const data = comparison.data;
+  if (editable && editing === file.path) {
+    return (
+      <FileEditor
+        slug={slug}
+        id={id}
+        view={view}
+        path={file.path}
+        onCancel={() => {
+          setEditing(null);
+        }}
+        onSaved={async () => {
+          await onEdited(file.path);
+        }}
+      />
+    );
+  }
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-16">
+      {editable ? (
+        <div className="flex justify-end">
+          <Button
+            size="sm"
+            icon={<Pencil aria-hidden="true" size={14} />}
+            onClick={() => {
+              setSelection(null);
+              setEditing(file.path);
+            }}
+          >
+            Edit {file.path}
+          </Button>
+        </div>
+      ) : null}
       {files.length === 0 ? (
         <EmptyPanel title="No changes">{emptyChangeText(view)}</EmptyPanel>
       ) : (
@@ -285,6 +324,11 @@ export function ProposalDetailScreen({
     mutationFn: (input: NewComment) => addComment(slug, id, input),
     onSuccess: reload,
   });
+  const reviewAgain = useMutation({
+    mutationFn: (version: number) => sendForReviewAgain(slug, id, version),
+    onSuccess: reload,
+    ...handlers,
+  });
 
   if (data === null) {
     return (
@@ -318,7 +362,9 @@ export function ProposalDetailScreen({
       : "request_changes"
     : integrate.isPending
       ? "integrate"
-      : null;
+      : reviewAgain.isPending
+        ? "review_again"
+        : null;
   const shown = failure === null ? null : describeFailure(failure);
 
   return (
@@ -355,6 +401,10 @@ export function ProposalDetailScreen({
               reply_to: null,
             });
           }}
+          onEdited={async (path) => {
+            await reload();
+            onSearch({ path });
+          }}
         />
         <SidePanel
           slug={slug}
@@ -375,6 +425,9 @@ export function ProposalDetailScreen({
             },
             onIntegrate: () => {
               integrate.mutate(actedVersion(view));
+            },
+            onReviewAgain: () => {
+              reviewAgain.mutate(actedVersion(view));
             },
             onRequestChanges: async (body) => {
               await review.mutateAsync(

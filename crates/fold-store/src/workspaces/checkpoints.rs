@@ -34,7 +34,7 @@ impl CheckpointKind {
     }
 }
 
-/// Why a checkpoint was taken. Only an agent's own request is `Explicit`; every other reason belongs to an automatic checkpoint.
+/// Why a checkpoint was taken. An agent's own request and a human edit are explicit checkpoints; every other reason belongs to an automatic checkpoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckpointReason {
     Explicit,
@@ -45,10 +45,12 @@ pub enum CheckpointReason {
     BeforeRestore,
     /// The workspace was quiet for two minutes after a change.
     Quiet,
+    /// The tree of a human's edit of a proposal version, which the task worker's next sync or restore writes into the workspace.
+    HumanEdit,
 }
 
 impl CheckpointReason {
-    pub const ALL: [CheckpointReason; 7] = [
+    pub const ALL: [CheckpointReason; 8] = [
         CheckpointReason::Explicit,
         CheckpointReason::BeforeSync,
         CheckpointReason::BeforeRecord,
@@ -56,6 +58,7 @@ impl CheckpointReason {
         CheckpointReason::BeforeProposalUpdate,
         CheckpointReason::BeforeRestore,
         CheckpointReason::Quiet,
+        CheckpointReason::HumanEdit,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -67,6 +70,7 @@ impl CheckpointReason {
             CheckpointReason::BeforeProposalUpdate => "before_proposal_update",
             CheckpointReason::BeforeRestore => "before_restore",
             CheckpointReason::Quiet => "quiet",
+            CheckpointReason::HumanEdit => "human_edit",
         }
     }
 
@@ -77,7 +81,7 @@ impl CheckpointReason {
     /// The only kind a checkpoint with this reason can have.
     pub fn kind(self) -> CheckpointKind {
         match self {
-            CheckpointReason::Explicit => CheckpointKind::Explicit,
+            CheckpointReason::Explicit | CheckpointReason::HumanEdit => CheckpointKind::Explicit,
             _ => CheckpointKind::Auto,
         }
     }

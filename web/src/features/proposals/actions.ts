@@ -1,9 +1,14 @@
 import type { NewReview, ProposalDetail } from "@/api/proposals";
 import { reviewerSegment, seg, segmentsText } from "@/people/segments";
+import { canSendForReviewAgain } from "./edit";
 import { gateText, shownGates } from "./gates";
 import type { DetailView } from "./view";
 
-export type HumanAction = "approve" | "request_changes" | "integrate";
+export type HumanAction =
+  | "approve"
+  | "request_changes"
+  | "integrate"
+  | "review_again";
 
 /** The body an Approve sends: the daemon takes no verdict without a body or a comment, and the button has no text field. */
 export const APPROVE_BODY = "approved in the web interface";
@@ -27,14 +32,17 @@ export function humanVerdict(
 
 /**
  * The actions the signed-in human sees on the current version of an open proposal. The daemon decides whether each write holds and refuses with a code the screen shows on the action;
- * Integrate shows also after a `request_changes`, because an integrating human approves in the same action.
+ * Integrate shows also after a `request_changes`, because an integrating human approves in the same action. Send for review again shows on a human edit whose kept approvals still count.
  */
 export function visibleActions(
   proposal: ProposalDetail,
   human: string | null,
 ): HumanAction[] {
   if (human === null || proposal.summary.state !== "open") return [];
-  return ["approve", "request_changes", "integrate"];
+  const actions: HumanAction[] = ["approve", "request_changes", "integrate"];
+  return canSendForReviewAgain(proposal, human)
+    ? [...actions, "review_again"]
+    : actions;
 }
 
 /** The composer opens only on the current version of an open proposal, for a named human. */

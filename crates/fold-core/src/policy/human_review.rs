@@ -56,6 +56,33 @@ pub fn can_clear_human_review(actor: &Actor) -> Result<(), PolicyDenied> {
     })
 }
 
+/// A human changes a proposal only in a human review: on a task with the human review mark, the human that the mark names, or any human when it names none, may edit a version or send a human edit for review again. Everywhere else the change goes back to the author with `request_changes`, and an agent or the system never edits. It returns the admitted human, who becomes the new version's author.
+///
+/// The version a human edit makes keeps the agent approvals of the version it was made from. This is the one exception to the rule that a new version starts without approvals: the human looked at the change while making it. No human approval is kept, so a human approves the edited version again and an edit never integrates on a human's earlier approval. Sending the edit for review again withdraws the kept approvals and gives the turn to the reviewers.
+pub fn can_edit_as_human<'a>(
+    actor: &'a Actor,
+    mark: Option<&HumanReviewMark>,
+) -> Result<&'a HumanName, PolicyDenied> {
+    match (actor, mark) {
+        (Actor::Human { name }, Some(mark)) if mark.accepts(name) => Ok(name),
+        (Actor::Human { .. }, Some(_)) => Err(PolicyDenied {
+            code: codes::HUMAN_EDIT_DENIED,
+            message: "the human review mark names another human",
+            hint: "ask the human that the mark names, or comment and request changes",
+        }),
+        (Actor::Human { .. }, None) => Err(PolicyDenied {
+            code: codes::HUMAN_EDIT_DENIED,
+            message: "a human edits a proposal only on a task with the human review mark",
+            hint: "comment and request changes, so the author makes the change",
+        }),
+        (Actor::Agent(_) | Actor::System, _) => Err(PolicyDenied {
+            code: codes::HUMAN_EDIT_DENIED,
+            message: "only a human edits a proposal in a human review",
+            hint: "submit request_changes, so the author's worker adds a version with update_proposal",
+        }),
+    }
+}
+
 /// A human reviews a marked task after an agent: the human approves only once an agent that decides reviews, other than `author`'s, has approved the version. `reviews` are the reviews of the version the human approves. A task without the mark, and a human's comment or request for changes, need no agent approval.
 pub fn can_human_approve(
     mark: Option<&HumanReviewMark>,
@@ -209,6 +236,39 @@ mod tests {
         }
         let denied = can_set_human_review(&frontend, Some(&current), None, "other").unwrap_err();
         assert!(denied.hint().contains("human"));
+    }
+
+    #[test]
+    fn only_the_human_of_a_human_review_edits() {
+        let tanim = Actor::human(name("tanim"));
+        let ana = Actor::human(name("ana"));
+        let named = mark(Some("tanim"), "auth");
+        let anyone = mark(None, "auth");
+        assert_eq!(
+            can_edit_as_human(&tanim, Some(&named)).unwrap().as_str(),
+            "tanim"
+        );
+        assert_eq!(
+            can_edit_as_human(&ana, Some(&anyone)).unwrap().as_str(),
+            "ana"
+        );
+        let other = can_edit_as_human(&ana, Some(&named)).unwrap_err();
+        assert_eq!(other.code(), codes::HUMAN_EDIT_DENIED);
+        assert!(other.to_string().contains("another human"));
+        let unmarked = can_edit_as_human(&tanim, None).unwrap_err();
+        assert_eq!(unmarked.code(), codes::HUMAN_EDIT_DENIED);
+        assert!(unmarked.hint().contains("request changes"));
+        for actor in [
+            agent("frontend", &[]),
+            agent("main", &["main"]),
+            Actor::System,
+        ] {
+            for mark in [None, Some(&anyone), Some(&named)] {
+                let denied = can_edit_as_human(&actor, mark).unwrap_err();
+                assert_eq!(denied.code(), codes::HUMAN_EDIT_DENIED, "{actor:?}");
+                assert!(denied.hint().contains("request_changes"));
+            }
+        }
     }
 
     #[test]

@@ -16,12 +16,14 @@ use crate::workspaces::parse_stats;
 
 pub mod batches;
 mod claims;
+mod human_edits;
 mod integrations;
 mod summaries;
 
 pub use claims::{
     ReviewClaimRow, insert_review_claim, integrated_review_claim_holder, unreleased_review_claim,
 };
+pub use human_edits::{keep_approvals, request_review_again};
 pub use integrations::{
     IntegrationFacts, IntegrationSubject, NewIntegration, conflict_report, insert_conflicted,
     insert_refused, insert_succeeded, integration_facts, mark_conflicted,
@@ -109,6 +111,8 @@ pub struct VersionRow {
     pub evidence: Option<String>,
     pub created_by: String,
     pub created_at: Timestamp,
+    /// A human sent this version for review again, so the approvals it kept from an earlier version no longer count.
+    pub review_again: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -511,7 +515,8 @@ pub async fn list_versions(
     let number = proposal.to_db();
     let rows = sqlx::query!(
         r#"SELECT v.version, r.number AS "base!: i64", v.tree_hash,
-                  c.number AS "changeset!: i64", c.stats, v.evidence, v.created_by, v.created_at
+                  c.number AS "changeset!: i64", c.stats, v.evidence, v.created_by, v.created_at,
+                  EXISTS (SELECT 1 FROM review_again_requests q WHERE q.version_id = v.id) AS "review_again!: bool"
            FROM proposal_versions v
            JOIN proposals p ON p.id = v.proposal_id
            JOIN revisions r ON r.id = v.base_revision_id
@@ -539,6 +544,7 @@ pub async fn list_versions(
                 evidence: row.evidence,
                 created_by: row.created_by,
                 created_at: time(row.created_at, "proposal_versions.created_at")?,
+                review_again: row.review_again,
             })
         })
         .collect()
@@ -745,7 +751,7 @@ pub async fn comment_proposal(
         .transpose()
 }
 
-/// The reviews of one version of the proposal. `seq` is each review's place in `(created_at, id)` order, counted from 1: the order the status cache reads the latest verdict in, so `fold_core::reviews::latest_verdict` over these facts and the board never disagree. Each approver's weight comes from the agent's `main` tag and worker role at the time of this read.
+/// The reviews of one version of the proposal. `seq` is each review's place in `(created_at, id)` order, counted from 1: the order the status cache reads the latest verdict in, so `fold_core::reviews::latest_verdict` over these facts and the board never disagree. Each approver's weight comes from the agent's `main` tag and worker role at the time of this read. The approvals a human edit kept count as the version's own until a human sends the version for review again.
 pub async fn review_facts(
     executor: impl SqliteExecutor<'_>,
     proposal: ProposalId,
@@ -764,6 +770,8 @@ pub async fn review_facts(
            JOIN proposals p ON p.id = v.proposal_id
            LEFT JOIN workers w ON w.id = r.reviewer_worker_id
            WHERE p.number = ?1 AND v.version = ?2
+             AND (r.kept_from_review_id IS NULL
+                 OR NOT EXISTS (SELECT 1 FROM review_again_requests q WHERE q.version_id = r.version_id))
            ORDER BY r.created_at, r.id"#,
         number,
         version
@@ -914,9 +922,11 @@ pub struct ReviewRow {
     pub body: String,
     pub comments: u32,
     pub created_at: Timestamp,
+    /// For an approval a human edit kept, the version whose approval it copies.
+    pub kept_from: Option<u32>,
 }
 
-/// The reviews of every version of the proposal, in the `(created_at, id)` order that `review_facts` counts in.
+/// The reviews of every version of the proposal, in the `(created_at, id)` order that `review_facts` counts in. The kept approvals of a version sent for review again are left out, as `review_facts` leaves them out.
 pub async fn list_reviews(
     executor: impl SqliteExecutor<'_>,
     proposal: ProposalId,
@@ -925,12 +935,16 @@ pub async fn list_reviews(
     let rows = sqlx::query!(
         r#"SELECT v.version, r.verdict, w.name AS "worker?: String", r.reviewer_human, r.body,
                   r.created_at,
-                  (SELECT COUNT(*) FROM review_comments c WHERE c.review_id = r.id) AS "comments!: i64"
+                  (SELECT COUNT(*) FROM review_comments c WHERE c.review_id = r.id) AS "comments!: i64",
+                  (SELECT kv.version FROM reviews kept JOIN proposal_versions kv ON kv.id = kept.version_id
+                   WHERE kept.id = r.kept_from_review_id) AS "kept_from?: i64"
            FROM reviews r
            JOIN proposal_versions v ON v.id = r.version_id
            JOIN proposals p ON p.id = v.proposal_id
            LEFT JOIN workers w ON w.id = r.reviewer_worker_id
            WHERE p.number = ?
+             AND (r.kept_from_review_id IS NULL
+                 OR NOT EXISTS (SELECT 1 FROM review_again_requests q WHERE q.version_id = r.version_id))
            ORDER BY r.created_at, r.id"#,
         number
     )
@@ -951,6 +965,13 @@ pub async fn list_reviews(
                 comments: u32::try_from(row.comments)
                     .map_err(|_| StoreError::Corrupt("review_comments.review_id"))?,
                 created_at: time(row.created_at, "reviews.created_at")?,
+                kept_from: row
+                    .kept_from
+                    .map(|version| {
+                        u32::try_from(version)
+                            .map_err(|_| StoreError::Corrupt("proposal_versions.version"))
+                    })
+                    .transpose()?,
             })
         })
         .collect()

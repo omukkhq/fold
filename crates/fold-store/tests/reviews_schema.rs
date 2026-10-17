@@ -289,3 +289,122 @@ async fn the_rebuild_keeps_existing_reviews_and_comments() {
     assert_eq!(leftovers, 0);
     conn.close().await.unwrap();
 }
+
+/// The migration of human edits applies to a database that already holds reviews: their verdicts read the same afterwards, and the new rules shape the kept approvals and the requests for review again.
+#[tokio::test]
+async fn the_human_edits_migration_keeps_existing_verdicts_and_shapes_kept_approvals() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let options = SqliteConnectOptions::new()
+        .filename(dir.path().join("fold.db"))
+        .create_if_missing(true)
+        .foreign_keys(true);
+    let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
+    let mut before: Migrator = sqlx::migrate!("./migrations/project");
+    let edits = before
+        .migrations
+        .iter()
+        .position(|migration| migration.description == "human edits")
+        .unwrap();
+    before.migrations = Cow::Owned(before.migrations[..edits].to_vec());
+    before.run(&mut conn).await.unwrap();
+    let rows = format!(
+        "{SEED}
+        INSERT INTO reviews (id, version_id, reviewer_worker_id, reviewer_human, verdict, body, created_at) VALUES (7, 1, 2, NULL, 'approve', 'ok', 5), (8, 1, NULL, 'tanim', 'request_changes', 'fix', 6), (9, 1, NULL, 'tanim', 'comment', 'note', 7);"
+    );
+    sqlx::raw_sql(sqlx::AssertSqlSafe(rows))
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    let verdict = "SELECT verdict FROM proposal_verdicts WHERE proposal_id = 1";
+    let old: Option<String> = sqlx::query_scalar(verdict)
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+    assert_eq!(old.as_deref(), Some("request_changes"));
+
+    let after: Migrator = sqlx::migrate!("./migrations/project");
+    after.run(&mut conn).await.unwrap();
+
+    let new: Option<String> = sqlx::query_scalar(verdict)
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+    assert_eq!(new, old);
+    let kept: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM reviews WHERE kept_from_review_id IS NOT NULL")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+    assert_eq!(kept, 0);
+    let violations: Vec<(String,)> =
+        sqlx::query_as("SELECT \"table\" FROM pragma_foreign_key_check")
+            .fetch_all(&mut conn)
+            .await
+            .unwrap();
+    assert!(violations.is_empty(), "{violations:?}");
+
+    sqlx::raw_sql(
+        "INSERT INTO changesets (id, number, workspace_id, task_id, base_revision_id, tree_hash, message, created_by, created_at) VALUES (2, 2, 1, 1, 1, 't3', 'm', 'human:tanim', 8);
+         INSERT INTO proposal_versions (id, proposal_id, version, base_revision_id, tree_hash, head_changeset_id, created_by, created_at) VALUES (2, 1, 2, 1, 't3', 2, 'human:tanim', 8);",
+    )
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    let kept_row = |id: u32, version: u32, verdict: &str, from: u32| {
+        format!(
+            "INSERT INTO reviews (id, version_id, reviewer_worker_id, verdict, body, created_at, kept_from_review_id) VALUES ({id}, {version}, 2, '{verdict}', '', 9, {from})"
+        )
+    };
+    for refused in [
+        kept_row(20, 2, "request_changes", 7),
+        kept_row(21, 2, "approve", 8),
+        kept_row(22, 1, "approve", 7),
+        kept_row(23, 2, "approve", 99),
+        "INSERT INTO reviews (id, version_id, reviewer_human, verdict, body, created_at, kept_from_review_id) VALUES (25, 2, 'tanim', 'approve', '', 9, 7)".to_owned(),
+    ] {
+        let error = sqlx::query(sqlx::AssertSqlSafe(refused.clone()))
+            .execute(&mut conn)
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("reviews_kept_shape"),
+            "{refused}: {error}"
+        );
+    }
+    sqlx::query(sqlx::AssertSqlSafe(kept_row(24, 2, "approve", 7)))
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    let edited: Option<String> = sqlx::query_scalar(verdict)
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+    assert_eq!(edited.as_deref(), Some("approve"));
+
+    let error = sqlx::query(
+        "INSERT INTO review_again_requests (version_id, requested_by_human, created_at) VALUES (2, '', 10)",
+    )
+    .execute(&mut conn)
+    .await
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("review_again_requests_human_present"),
+        "{error}"
+    );
+    sqlx::query(
+        "INSERT INTO review_again_requests (version_id, requested_by_human, created_at) VALUES (2, 'tanim', 10)",
+    )
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    let sent: Option<String> = sqlx::query_scalar(verdict)
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+    assert_eq!(
+        sent, None,
+        "a version sent for review again has no kept verdict"
+    );
+}

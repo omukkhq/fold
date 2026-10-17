@@ -66,6 +66,8 @@ pub fn is_pushed(event: &Event) -> bool {
         types::PROJECT_PAUSED,
         types::PROJECT_RESUMED,
         types::TASK_HOLD_CLEARED,
+        types::PROPOSAL_HUMAN_EDITED,
+        types::PROPOSAL_REVIEW_AGAIN_REQUESTED,
     ]
     .contains(&event.event_type)
 }
@@ -119,6 +121,26 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
             None => format!("{proposal} has a new version"),
         };
         return Some((reviewers(ctx), text, "create_review_checkout"));
+    }
+    if kind == types::PROPOSAL_HUMAN_EDITED {
+        let proposal = event.proposal?;
+        let version = event.data.get("version")?.as_u64()?;
+        return Some((
+            ctx.author.iter().cloned().collect(),
+            format!(
+                "a human edited {proposal} as version {version}; sync your workspace before you work in it"
+            ),
+            "sync_workspace",
+        ));
+    }
+    if kind == types::PROPOSAL_REVIEW_AGAIN_REQUESTED {
+        let proposal = event.proposal?;
+        let version = event.data.get("version")?.as_u64()?;
+        return Some((
+            reviewers(ctx),
+            format!("a human sent {proposal} version {version} for review again"),
+            "create_review_checkout",
+        ));
     }
     if kind == types::INTEGRATION_SUCCEEDED {
         let proposal = event.proposal?;
@@ -837,6 +859,8 @@ mod tests {
             types::REQUEST_DRAFT_SUBMITTED,
             types::REQUEST_CHANGES_REQUESTED,
             types::REQUEST_APPROVED,
+            types::PROPOSAL_HUMAN_EDITED,
+            types::PROPOSAL_REVIEW_AGAIN_REQUESTED,
         ] {
             let long = AreaName::parse(&"a".repeat(32)).unwrap();
             let unled = PushContext {
@@ -893,6 +917,42 @@ mod tests {
             notice_for(&bare, &ctx())[0].text,
             "fold: P-3 has a new version. Call create_review_checkout."
         );
+    }
+
+    #[test]
+    fn a_human_edit_reaches_only_the_author_and_a_review_again_the_reviewers() {
+        let edited = with_data(
+            event(types::PROPOSAL_HUMAN_EDITED, "human:tanim"),
+            json!({"version": 4, "from_version": 3}),
+        );
+        assert_eq!(
+            sent(&notice_for(&edited, &ctx())),
+            vec![row(
+                "frontend",
+                "fold: a human edited P-3 as version 4; sync your workspace before you work in it. Call sync_workspace.",
+                "sync_workspace"
+            )]
+        );
+        let again = with_data(
+            event(types::PROPOSAL_REVIEW_AGAIN_REQUESTED, "human:tanim"),
+            json!({"version": 4}),
+        );
+        let text =
+            "fold: a human sent P-3 version 4 for review again. Call create_review_checkout.";
+        assert_eq!(
+            sent(&notice_for(&again, &ctx())),
+            vec![
+                row("lead", text, "create_review_checkout"),
+                row("review", text, "create_review_checkout"),
+            ]
+        );
+        for kind in [
+            types::PROPOSAL_HUMAN_EDITED,
+            types::PROPOSAL_REVIEW_AGAIN_REQUESTED,
+        ] {
+            assert!(is_pushed(&event(kind, "human:tanim")));
+            assert!(notice_for(&event(kind, "human:tanim"), &ctx()).is_empty());
+        }
     }
 
     #[test]

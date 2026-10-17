@@ -416,6 +416,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/proposals/{id}/edits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A human edits one text file of the version the human read, in a human review: only on a task with the human review mark, by the human the mark names or by any human when it names none. The edit becomes a new version under the human's name that keeps the agent approvals of the version it was made from, but no human approval; send it for review again to withdraw them. The task worker's next sync writes the edit into its workspace. */
+        post: operations["edit_proposal_file"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/proposals/{id}/file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One file of a proposal version, the content a human edit starts from. A symlink gives its target text and is never followed. */
+        get: operations["read_proposal_file"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/proposals/{id}/integrate": {
         parameters: {
             query?: never;
@@ -427,6 +461,23 @@ export interface paths {
         put?: never;
         /** A named human integrates the current version onto main and approves it in the same action. A conflicting merge publishes nothing: the answer is `integration_conflicted` with each conflicting path and its kind in `details.files`, and the full report is on the proposal. */
         post: operations["integrate_proposal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/proposals/{id}/review-again": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A human sends the current version, a human edit, for review again: the approvals it kept stop counting and the reviewers are told. Only in a human review, for the human the mark names or any human when it names none. */
+        post: operations["send_for_review_again"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1783,7 +1834,7 @@ export interface components {
             workspace: string | null;
         };
         /** @enum {string} */
-        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared";
+        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested";
         /**
          * @description `needs`: this task needs the other task. `needed_by`: the other task needs this one.
          * @enum {string}
@@ -1800,6 +1851,18 @@ export interface components {
             edges?: components["schemas"]["DraftEdgeView"][];
             /** @description A note about this version. `#` names a fold item and `@` names a file; the daemon parses nothing. */
             note?: string | null;
+        };
+        /** @description A human's change of one text file of the version the human read, in a human review. */
+        EditFileBody: {
+            /** @description The whole new content of the file, as UTF-8 text. */
+            content: string;
+            /** @description The file, such as `src/lib.rs`: a text file of that version. */
+            path: string;
+            /**
+             * Format: int32
+             * @description The version the human read and edited. When the current version is another one, nothing is written and the answer is `stale_version`.
+             */
+            version: number;
         };
         ErrorBody: {
             /** @description A stable code; branch on it, never on the message. */
@@ -2390,6 +2453,11 @@ export interface components {
              * @description UTC milliseconds.
              */
             created_at: number;
+            /**
+             * Format: int32
+             * @description For an approval that a human edit kept, the version whose approval it copies.
+             */
+            kept_from: number | null;
             /** @description The worker, or `human:<name>`. */
             reviewer: string;
             verdict: components["schemas"]["ReviewVerdict"];
@@ -2478,6 +2546,7 @@ export interface components {
              * @description UTC milliseconds.
              */
             created_at: number;
+            /** @description The worker, or `human:<name>` for a human edit. */
             created_by: string;
             /** @description The author's evidence that the work is done. */
             evidence: string | null;
@@ -2487,6 +2556,10 @@ export interface components {
             files_deleted: number;
             /** Format: int32 */
             files_modified: number;
+            /** @description A human made this version by editing the one before it in a human review. It keeps the agent approvals of that version until it is sent for review again; a human approves it again. */
+            human_edit: boolean;
+            /** @description A human sent this version for review again, so the approvals it kept no longer count. */
+            review_again: boolean;
             /** @description The proposed tree's hash. */
             tree: string;
             /** Format: int32 */
@@ -2715,6 +2788,14 @@ export interface components {
             last_at: number;
             /** Format: int32 */
             messages: number;
+        };
+        /** @description The human edit the human sends for review again. */
+        ReviewAgainBody: {
+            /**
+             * Format: int32
+             * @description The version the human read. When the current version is another one, nothing is written and the answer is `stale_version`.
+             */
+            version: number;
         };
         /** @description Related proposals one reviewer reviews together, with one verdict per member. */
         ReviewBatch: {
@@ -5915,6 +5996,191 @@ export interface operations {
             };
         };
     };
+    edit_proposal_file: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The proposal id, such as P-3 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EditFileBody"];
+            };
+        };
+        responses: {
+            /** @description The new version */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProposalVersion"];
+                };
+            };
+            /** @description `invalid_request`, `invalid_path`, `invalid_id` or `invalid_name` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_edit_denied`: the task has no human review mark, or the mark names another human (`details.reviewer`); `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `proposal_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `stale_version` (`details.expected_version`, `details.current_version`), `worker_busy` (`details.reason`: `working`, `unfinished_write` or `newer_work`), `version_unchanged`, `proposal_not_open`, `workspace_not_active`, `not_workspace_owner` or `task_closed` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `file_not_editable` (`details.reason`: `missing`, `not_a_file`, `binary` or `too_large`) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    read_proposal_file: {
+        parameters: {
+            query: {
+                /** @description A version number; left out, the current version. */
+                version?: number;
+                /** @description A file path relative to the version's root, such as `src/lib.rs`. */
+                path: string;
+            };
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The proposal id, such as P-3 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileContentView"];
+                };
+            };
+            /** @description `invalid_id`, `invalid_path` or `invalid_request`: the query string is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `proposal_not_found`: no such proposal or version, `not_found`: the version has no file at the path, or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     integrate_proposal: {
         parameters: {
             query?: never;
@@ -5997,6 +6263,98 @@ export interface operations {
                 };
             };
             /** @description `project_unavailable`, or `integration_failed` (`details.cause`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    send_for_review_again: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The proposal id, such as P-3 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewAgainBody"];
+            };
+        };
+        responses: {
+            /** @description The proposal after the request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProposalSummary"];
+                };
+            };
+            /** @description `invalid_request` (`details.reason`: `not_human_edit` or `already_sent`), `invalid_id` or `invalid_name` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_edit_denied`; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `proposal_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `stale_version` (`details.expected_version`, `details.current_version`), `proposal_not_open` or `task_closed` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
             503: {
                 headers: {
                     [name: string]: unknown;

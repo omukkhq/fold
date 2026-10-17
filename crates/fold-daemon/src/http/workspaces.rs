@@ -354,7 +354,7 @@ pub struct FileContentView {
     pub text: Option<String>,
 }
 
-fn file_view(path: String, content: FileContent) -> FileContentView {
+pub(super) fn file_view(path: String, content: FileContent) -> FileContentView {
     let size = content.size;
     let text = if content.binary || content.too_large {
         None

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT v.id AS \"id!: i64\" FROM proposal_versions v JOIN proposals p ON p.id = v.proposal_id\n           WHERE p.number = ?1 AND v.version = ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d85da70e9ca25cc18363aa4e222c3fab0036657b2de3e62244c29dd0d41c7580"
+}

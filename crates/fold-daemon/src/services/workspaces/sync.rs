@@ -3,7 +3,7 @@ use std::sync::Arc;
 use fold_core::checkpoint_policy::AutoReason;
 use fold_core::events::types;
 use fold_core::{Actor, CheckpointId, FoldError, NewEvent, RevisionId, WorkspaceId, codes};
-use fold_store::workspaces::{self, ConflictRow, WorkspaceRow};
+use fold_store::workspaces::{self, CheckpointReason, ConflictRow, WorkspaceRow};
 use fold_vcs::sync::{SyncInput, sync};
 use serde_json::json;
 
@@ -24,7 +24,7 @@ pub struct Synced {
 impl WorkspaceService {
     /// Brings main into a workspace the actor's worker owns with a three-way merge of its base, its current files and main. A `before_sync` automatic checkpoint commits first, unless the latest checkpoint already holds the same files on the same base, and is marked as the sync in progress; a checkpoint that cannot be taken refuses the sync; the files are written; then the new base, the conflict list and `workspace.synced` commit and clear the mark.
     ///
-    /// A mark left by a sync or a restore that stopped after it began to write means the files may be half written. Merging over them would put markers inside markers, so the marked checkpoint is restored first, through a restore with its own safety checkpoint, and the sync runs from clean files.
+    /// A mark left by a sync or a restore that stopped after it began to write means the files may be half written. Merging over them would put markers inside markers, so the marked checkpoint is restored first, through a restore with its own safety checkpoint, and the sync runs from clean files. A human edit of the task's proposal leaves the same mark on the checkpoint of its tree, so the worker's next sync writes the edit into the files before it merges main.
     pub async fn sync_workspace(
         &self,
         actor: &Actor,
@@ -53,7 +53,11 @@ impl WorkspaceService {
                 .ok_or(fold_store::StoreError::Corrupt(
                     "workspaces.sync_checkpoint_id",
                 ))?;
-            tracing::warn!(workspace = %workspace, checkpoint = %pending, "restoring the checkpoint of a sync that did not finish");
+            if target.reason == CheckpointReason::HumanEdit {
+                tracing::info!(workspace = %workspace, checkpoint = %pending, "writing a human edit into the workspace");
+            } else {
+                tracing::warn!(workspace = %workspace, checkpoint = %pending, "restoring the checkpoint of a sync that did not finish");
+            }
             self.restore_in(actor, &row, &target, &files)
                 .await
                 .map_err(|error| retry_hint(error, "call sync_workspace again"))?;

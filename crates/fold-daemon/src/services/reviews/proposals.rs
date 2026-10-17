@@ -123,6 +123,10 @@ pub struct VersionView {
     pub evidence: Option<String>,
     pub created_by: String,
     pub created_at: Timestamp,
+    /// A human made this version by editing the one before it in a human review, so it keeps that version's agent approvals until it is sent for review again.
+    pub human_edit: bool,
+    /// A human sent this version for review again, so the approvals it kept from the version before no longer count.
+    pub review_again: bool,
 }
 
 impl From<VersionRow> for VersionView {
@@ -132,10 +136,12 @@ impl From<VersionRow> for VersionView {
             base: row.base,
             tree: row.tree,
             changeset: row.head_changeset,
+            human_edit: is_human_edit(&row.created_by),
             stats: row.stats,
             evidence: row.evidence,
             created_by: row.created_by,
             created_at: row.created_at,
+            review_again: row.review_again,
         }
     }
 }
@@ -492,6 +498,11 @@ impl ReviewService {
     }
 }
 
+/// A version a human wrote is a human edit: only a human edit names a human as its author.
+pub(super) fn is_human_edit(created_by: &str) -> bool {
+    EventActor::parse(created_by).is_ok_and(|author| author.is_human())
+}
+
 /// [`ReviewService::get_proposal`] on `conn`, so a caller reads it in the same snapshot as the rest of its view.
 pub(super) async fn proposal_detail(
     conn: &mut SqliteConnection,
@@ -615,7 +626,7 @@ fn update_checks(
     Ok(row)
 }
 
-fn usable_workspace(
+pub(super) fn usable_workspace(
     live: Option<WorkspaceRow>,
     task: TaskId,
     worker: &WorkerName,

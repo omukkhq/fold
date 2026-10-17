@@ -52,6 +52,8 @@ export function proposalVersion(
     evidence: null,
     created_by: "backend/db",
     created_at: T0 + version * 60_000,
+    human_edit: false,
+    review_again: false,
     ...fields,
   };
 }
@@ -69,6 +71,7 @@ export function review(
     body: "",
     comments: 0,
     created_at: T0 + version * 60_000 + 30_000,
+    kept_from: null,
     ...fields,
   };
 }

@@ -1091,3 +1091,180 @@ describe("Proposal detail", () => {
     ).toBeTruthy();
   });
 });
+
+describe("Human edit", () => {
+  const EDITS = "POST /api/v1/projects/demo/proposals/P-4/edits";
+  const AGAIN = "POST /api/v1/projects/demo/proposals/P-4/review-again";
+
+  function editRoutes(): void {
+    daemon.on("GET /api/v1/projects/:slug/proposals/:id/file", () =>
+      ok({
+        path: SCHEMA,
+        kind: "file",
+        hash: "f".repeat(64),
+        size: 26,
+        binary: false,
+        too_large: false,
+        text: "CREATE TABLE reports (\r\n);\r\n",
+      }),
+    );
+    daemon.on("POST /api/v1/projects/:slug/proposals/:id/edits", async () => {
+      if (held) await held;
+      const made = proposalVersion(3, {
+        created_by: "human:tanim",
+        human_edit: true,
+      });
+      update("P-4", (p) => ({
+        ...p,
+        summary: { ...p.summary, current_version: 3 },
+        versions: [...p.versions, made],
+        reviews: [
+          ...p.reviews,
+          review(3, "review/quality", "approve", {
+            kept_from: 2,
+            created_at: Date.now(),
+          }),
+        ],
+      }));
+      return ok(made, 201);
+    });
+    daemon.on(
+      "POST /api/v1/projects/:slug/proposals/:id/review-again",
+      async () => {
+        if (held) await held;
+        update("P-4", (p) => ({
+          ...p,
+          summary: { ...p.summary, latest_verdict: null },
+          versions: p.versions.map((v) =>
+            v.version === 3 ? { ...v, review_again: true } : v,
+          ),
+          reviews: p.reviews.filter((r) => r.kept_from === null),
+          agent_approved: false,
+        }));
+        return ok(proposals.get("P-4")?.summary);
+      },
+    );
+  }
+
+  it("edits a file of the current version in a human review: pending, then the new version with its kept approval", async () => {
+    editRoutes();
+    const user = userEvent.setup();
+    renderAt("/p/demo/proposals/P-4");
+    await user.click(
+      await screen.findByRole("button", { name: `Edit ${SCHEMA}` }),
+    );
+    const editor = await screen.findByRole("region", {
+      name: `Edit ${SCHEMA}`,
+    });
+    expect(
+      within(editor).getByText(
+        "You are editing v2. Saving writes v3 under your name; v2 stays in the history. v3 keeps the agent approvals of v2, and you approve v3 again.",
+      ),
+    ).toBeTruthy();
+    const save = within(editor).getByRole("button", { name: "Save as v3" });
+    expect(save).toHaveProperty("disabled", true);
+    const box = within(editor).getByLabelText(`Content of ${SCHEMA}`);
+    expect((box as HTMLTextAreaElement).value).toBe(
+      "CREATE TABLE reports (\n);\n",
+    );
+    fireEvent.change(box, {
+      target: { value: "CREATE TABLE reports (\n);\n-- checked\n" },
+    });
+    const release = hold();
+    await user.click(save);
+    expect(
+      within(editor)
+        .getByRole("button", { name: "Saving v3…" })
+        .getAttribute("aria-busy"),
+    ).toBe("true");
+    expect(screen.queryByText("Approved (kept from v2)")).toBeNull();
+    release();
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("region", { name: `Edit ${SCHEMA}` }),
+      ).toBeNull();
+    });
+    expect(await screen.findByText("Approved (kept from v2)")).toBeTruthy();
+    const panel = await integration();
+    expect(
+      within(panel).getByText(
+        "v3 is a human edit. It keeps the agent approvals of v2 until it is sent for review again.",
+      ),
+    ).toBeTruthy();
+    expect(writes(EDITS)[0]?.body).toEqual({
+      version: 2,
+      path: SCHEMA,
+      content: "CREATE TABLE reports (\r\n);\r\n-- checked\r\n",
+    });
+  });
+
+  it("sends a human edit for review again: pending, then the kept approval no longer shows", async () => {
+    editRoutes();
+    update("P-4", (p) => ({
+      ...p,
+      summary: { ...p.summary, current_version: 3 },
+      versions: [
+        ...p.versions,
+        proposalVersion(3, { created_by: "human:tanim", human_edit: true }),
+      ],
+      reviews: [
+        ...p.reviews,
+        review(3, "review/quality", "approve", { kept_from: 2 }),
+      ],
+    }));
+    const user = userEvent.setup();
+    renderAt("/p/demo/proposals/P-4");
+    const panel = await integration();
+    const release = hold();
+    await user.click(
+      within(panel).getByRole("button", { name: "Send v3 for review again" }),
+    );
+    expect(
+      within(panel)
+        .getByRole("button", { name: "Sending for review…" })
+        .getAttribute("aria-busy"),
+    ).toBe("true");
+    release();
+    await waitFor(() => {
+      expect(screen.queryByText("Approved (kept from v2)")).toBeNull();
+    });
+    expect(
+      within(panel).queryByRole("button", { name: "Send v3 for review again" }),
+    ).toBeNull();
+    expect(writes(AGAIN)[0]?.body).toEqual({ version: 3 });
+  });
+
+  it("shows a refusal of the edit on the edit box", async () => {
+    editRoutes();
+    daemon.on("POST /api/v1/projects/:slug/proposals/:id/edits", () =>
+      refuse(409, "worker_busy", { reason: "working" }),
+    );
+    const user = userEvent.setup();
+    renderAt("/p/demo/proposals/P-4");
+    await user.click(
+      await screen.findByRole("button", { name: `Edit ${SCHEMA}` }),
+    );
+    const editor = await screen.findByRole("region", {
+      name: `Edit ${SCHEMA}`,
+    });
+    fireEvent.change(within(editor).getByLabelText(`Content of ${SCHEMA}`), {
+      target: { value: "x\n" },
+    });
+    await user.click(
+      within(editor).getByRole("button", { name: "Save as v3" }),
+    );
+    expect(
+      await within(editor).findByText(
+        "The task worker is working in its workspace now. Try again when it stops.",
+      ),
+    ).toBeTruthy();
+    await user.click(within(editor).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("region", { name: `Edit ${SCHEMA}` })).toBeNull();
+  });
+
+  it("offers no edit box outside a human review", async () => {
+    renderAt("/p/demo/proposals/P-3");
+    await integration();
+    expect(screen.queryByRole("button", { name: /^Edit / })).toBeNull();
+  });
+});

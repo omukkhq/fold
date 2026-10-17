@@ -3,6 +3,7 @@ pub mod batch;
 pub mod browse;
 pub mod compare;
 pub mod diff;
+pub mod edit;
 pub mod gc;
 pub mod git;
 pub mod git_export;

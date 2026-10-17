@@ -7,7 +7,7 @@ use fold_core::tree::ChangeCounts;
 use fold_core::{
     Actor, ChangesetId, CheckpointId, FoldError, NewEvent, Timestamp, WorkspaceId, codes,
 };
-use fold_store::workspaces::{self, WorkspaceRow};
+use fold_store::workspaces::{self, CheckpointReason, WorkspaceRow};
 use fold_vcs::scan::{changes, count_changes};
 use serde_json::json;
 use tokio::sync::{OwnedMutexGuard, OwnedRwLockReadGuard};
@@ -167,20 +167,31 @@ impl WorkspaceService {
         .await
     }
 
-    /// The files of `row` once nothing stops a record of them: no sync or restore left them half written, and every conflicted path is resolved. The caller holds the workspace lock.
+    /// The files of `row` once nothing stops a record of them: no sync or restore left them half written, no human edit waits to be written into them, and every conflicted path is resolved. The caller holds the workspace lock.
     async fn ready_to_record(&self, row: &WorkspaceRow) -> Result<Arc<Files>, WorkspaceError> {
         let workspace = row.id;
         if let Some(mark) = workspaces::sync_checkpoint(self.store.read(), workspace).await? {
-            return Err(FoldError::new(
-                codes::WORKSPACE_WRITE_UNFINISHED,
-                format!("a sync or restore of {workspace} stopped before it finished"),
-            )
-            .with_details([
-                ("workspace", json!(workspace.to_string())),
-                ("checkpoint", json!(mark.to_string())),
-            ])
-            .with_hint("call sync_workspace, or call restore_checkpoint again")
-            .into());
+            let human_edit = workspaces::get_checkpoint(self.store.read(), mark)
+                .await?
+                .is_some_and(|checkpoint| checkpoint.reason == CheckpointReason::HumanEdit);
+            let (message, hint) = if human_edit {
+                (
+                    format!("{workspace} has a human edit that its files do not hold yet"),
+                    "call sync_workspace to write the human edit into the files",
+                )
+            } else {
+                (
+                    format!("a sync or restore of {workspace} stopped before it finished"),
+                    "call sync_workspace, or call restore_checkpoint again",
+                )
+            };
+            return Err(FoldError::new(codes::WORKSPACE_WRITE_UNFINISHED, message)
+                .with_details([
+                    ("workspace", json!(workspace.to_string())),
+                    ("checkpoint", json!(mark.to_string())),
+                ])
+                .with_hint(hint)
+                .into());
         }
         let files = self.files(row).await?;
         let conflicts = workspaces::list_conflicts(self.store.read(), workspace).await?;

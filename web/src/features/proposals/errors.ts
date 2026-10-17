@@ -128,6 +128,35 @@ const ENTRIES: Record<string, Entry> = {
     place: "banner",
     text: "fold has no proposal with this id.",
   },
+  human_edit_denied: {
+    place: "inline",
+    text: (d) =>
+      typeof d.reviewer === "string"
+        ? `Only ${atName(d.reviewer)} can change this proposal in the human review.`
+        : "You can change a proposal only in a human review.",
+  },
+  worker_busy: {
+    place: "inline",
+    text: (d) =>
+      d.reason === "working"
+        ? "The task worker is working in its workspace now. Try again when it stops."
+        : d.reason === "unfinished_write"
+          ? "The task workspace waits for its worker to sync an earlier change. Try again after that."
+          : "The task worker has work that this version does not hold. Ask for changes instead.",
+  },
+  file_not_editable: {
+    place: "inline",
+    text: (d) =>
+      d.reason === "missing"
+        ? "This version does not have that file."
+        : d.reason === "too_large"
+          ? "The file is too large to edit here."
+          : "Only a text file can be edited here.",
+  },
+  version_unchanged: {
+    place: "inline",
+    text: "The file has no change yet. Change it, then save.",
+  },
 };
 
 /** Where and how the screen shows a failed write. It branches on the error code; a code every screen words the same way shows its shared sentence as a banner, and the message shows only for a code without an entry. */

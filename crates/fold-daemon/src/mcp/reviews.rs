@@ -418,6 +418,7 @@ fn view_json(view: &ProposalView) -> Value {
                 "version": version(entry.version),
                 "base": entry.base,
                 "changeset": entry.changeset,
+                "created_by": entry.created_by,
                 "created_at": entry.created_at.as_millis(),
             })
         })
@@ -426,13 +427,18 @@ fn view_json(view: &ProposalView) -> Value {
         .reviews
         .iter()
         .map(|review| {
-            json!({
+            let mut line = json!({
                 "version": version(review.version),
                 "verdict": review.verdict.as_str(),
                 "reviewer": review.reviewer.as_str(),
                 "body": review.body,
                 "comments": review.comments,
-            })
+            });
+            // A human edit keeps the agent approvals of the version it was made from.
+            if let Some(kept) = review.kept_from {
+                line["kept_from"] = json!(version(kept));
+            }
+            line
         })
         .collect();
     json!({
