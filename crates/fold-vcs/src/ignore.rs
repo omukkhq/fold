@@ -11,24 +11,37 @@ use crate::paths::{RepoPath, open_parent, os_path};
 
 pub const GITIGNORE: &str = ".gitignore";
 pub const FOLDIGNORE: &str = ".foldignore";
+/// The project's local ignore file in `.fold/`, which `.git/info/exclude` links to.
+pub const EXCLUDE: &str = "exclude";
+/// fold's data folder, whose `exclude` file holds the project's local rules.
+const FOLD_DIR: &str = ".fold";
 
 /// A folder and the name of one ignore file in it.
 type MatcherKey = (Vec<u8>, &'static str);
 
-/// The `.gitignore` and `.foldignore` files of one workspace, read from the workspace itself and nowhere else: no global excludes, no `.git/info/exclude`, no `.ignore` files, no parent folder. Each file applies below its own folder. A `.foldignore` rule at any level wins over a `.gitignore` rule at any level, so a `.foldignore` can add patterns or bring a file back with `!`; within each kind the deepest file that has a rule for the path decides. This is the order the `ignore` crate's walker gives a custom ignore file.
+/// The `.gitignore` and `.foldignore` files of one workspace, read from the workspace itself, and the project's `.fold/exclude`: no global excludes, no `.ignore` files, no parent folder. Each ignore file applies below its own folder, and the exclude file to the whole tree. A `.foldignore` rule at any level wins over a `.gitignore` rule at any level, so a `.foldignore` can add patterns or bring a file back with `!`; within each kind the deepest file that has a rule for the path decides. This is the order the `ignore` crate's walker gives a custom ignore file. The exclude file comes last, as `.git/info/exclude` does for Git, so a `!` line of either kind of file brings back a path it excludes and Git and fold always agree.
 ///
 /// Files are read when first needed and kept until [`IgnoreRules::reload`], which every scan calls first, so the rules always follow the files on disk.
 #[derive(Debug)]
 pub struct IgnoreRules {
     /// `None` for rules that ignore nothing.
     root: Option<PathBuf>,
+    /// The project's `.fold/exclude`: in the root's own `.fold/` for the project folder, in the `.fold/` that holds it for a workspace.
+    exclude: Option<PathBuf>,
     cache: Mutex<HashMap<MatcherKey, Option<Arc<Gitignore>>>>,
 }
 
 impl IgnoreRules {
     pub fn new(root: &Path) -> Self {
+        // Any root that is not a workspace is a project folder, also one that lies below a folder named `.fold`.
+        let fold_dir = root
+            .parent()
+            .filter(|parent| parent.ends_with(fold_core::layout::WS_DIR))
+            .and_then(Path::parent)
+            .map_or_else(|| root.join(FOLD_DIR), Path::to_path_buf);
         Self {
             root: Some(root.to_path_buf()),
+            exclude: Some(fold_dir.join(EXCLUDE)),
             cache: Mutex::new(HashMap::new()),
         }
     }
@@ -37,6 +50,7 @@ impl IgnoreRules {
     pub fn none() -> Self {
         Self {
             root: None,
+            exclude: None,
             cache: Mutex::new(HashMap::new()),
         }
     }
@@ -96,6 +110,9 @@ impl IgnoreRules {
                 }
             }
         }
+        if let Some(matcher) = self.matcher(&[], EXCLUDE) {
+            matchers.push((0, matcher));
+        }
         DirRules { matchers }
     }
 
@@ -118,8 +135,11 @@ impl IgnoreRules {
         built
     }
 
-    /// The file is reached from the root one directory handle at a time and opened once, with no symlink followed below the root, so the file read is the one checked. Lines are read as the `ignore` crate reads a file: up to the first line that is not UTF-8, with a byte order mark at the start dropped.
+    /// The file is reached from the root one directory handle at a time and opened once, with no symlink followed below the root, so the file read is the one checked.
     fn build(&self, dir: &[u8], name: &str) -> Option<Gitignore> {
+        if name == EXCLUDE {
+            return self.build_exclude();
+        }
         let root = self.root.as_ref()?;
         let folder = if dir.is_empty() {
             None
@@ -136,24 +156,56 @@ impl IgnoreRules {
             None => root.clone(),
         };
         let source = folder.join(name);
-        let mut builder = GitignoreBuilder::new(&folder);
-        for (at, line) in text.lines().enumerate() {
-            let Ok(line) = line else {
-                break;
-            };
-            let line = if at == 0 {
-                line.trim_start_matches('\u{feff}')
-            } else {
-                &line
-            };
-            // A line that does not parse is skipped, as Git skips it.
-            let _ = builder.add_line(Some(source.clone()), line);
+        rules_of(&folder, &source, &text)
+    }
+
+    /// The exclude file is fold's own, so it is read by its path; anything but a regular file there is no rules.
+    fn build_exclude(&self) -> Option<Gitignore> {
+        let (root, exclude) = (self.root.as_ref()?, self.exclude.as_ref()?);
+        if !std::fs::symlink_metadata(exclude).ok()?.is_file() {
+            return None;
         }
-        builder.build().ok()
+        let text = std::fs::read(exclude).ok()?;
+        rules_of(root, exclude, &text)
     }
 }
 
-/// The ignore files of one directory in the order they decide: each `.foldignore` from the deepest folder up, then each `.gitignore` the same way. A walk resolves it once per directory and checks every entry against it without taking the cache lock again.
+/// Whether `pattern` is one line of `.gitignore` syntax that Git and fold read as a rule: not blank, not a comment, and a glob the matcher accepts.
+pub fn is_ignore_pattern(pattern: &str) -> bool {
+    !pattern.trim().is_empty()
+        && !pattern.starts_with('#')
+        && !pattern.chars().any(char::is_control)
+        && GitignoreBuilder::new("/").add_line(None, pattern).is_ok()
+}
+
+/// Whether `pattern` is a `!` line that would bring fold's data folder back for Git after the `/.fold/` line of the exclude file, so `git status` would list it and a `git add` would take it in.
+pub fn brings_back_fold_dir(pattern: &str) -> bool {
+    let mut builder = GitignoreBuilder::new("/");
+    builder.add_line(None, pattern).is_ok()
+        && builder
+            .build()
+            .is_ok_and(|rules| rules.matched(Path::new(FOLD_DIR), true).is_whitelist())
+}
+
+/// The rules of one ignore file read from `source`, matching below `folder`. Lines are read as the `ignore` crate reads a file: up to the first line that is not UTF-8, with a byte order mark at the start dropped.
+fn rules_of(folder: &Path, source: &Path, text: &[u8]) -> Option<Gitignore> {
+    let mut builder = GitignoreBuilder::new(folder);
+    for (at, line) in text.lines().enumerate() {
+        let Ok(line) = line else {
+            break;
+        };
+        let line = if at == 0 {
+            line.trim_start_matches('\u{feff}')
+        } else {
+            &line
+        };
+        // A line that does not parse is skipped, as Git skips it.
+        let _ = builder.add_line(Some(source.to_path_buf()), line);
+    }
+    builder.build().ok()
+}
+
+/// The ignore files of one directory in the order they decide: each `.foldignore` from the deepest folder up, then each `.gitignore` the same way, then the project's exclude file. A walk resolves it once per directory and checks every entry against it without taking the cache lock again.
 pub(crate) struct DirRules {
     /// Each matcher with the length of its folder's path plus the slash after it, where the path it matches starts.
     matchers: Vec<(usize, Arc<Gitignore>)>,

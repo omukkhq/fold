@@ -6,6 +6,7 @@ mod browse;
 mod compare;
 mod diff;
 mod dir_handles;
+mod exclude;
 mod gc;
 mod git_export;
 mod git_import;

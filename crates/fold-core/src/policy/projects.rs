@@ -2,6 +2,7 @@ use crate::actor::Actor;
 use crate::error::codes;
 
 use super::PolicyDenied;
+use super::workers::Starter;
 
 /// Bringing the remote branch into main changes main outside any proposal, so only a named human runs `fld pull`.
 pub fn can_pull(actor: &Actor) -> Result<(), PolicyDenied> {
@@ -26,6 +27,23 @@ pub fn can_record(actor: &Actor) -> Result<(), PolicyDenied> {
             message: "only a human records the changes of the project folder",
             hint: "ask a human to run fld record in the project folder",
         })
+    }
+}
+
+/// `.fold/exclude` holds the human's local rules of what is never recorded, imported or proposed. The human writes it directly; of the agents only the main agent, which talks with the human, adds a pattern, so no worker can hide files from review by excluding them.
+pub fn can_add_exclude_patterns(starter: &Starter) -> Result<(), PolicyDenied> {
+    match starter {
+        Starter::MainAgent => Ok(()),
+        Starter::Human => Err(PolicyDenied {
+            code: codes::MAIN_AGENT_REQUIRED,
+            message: "a human writes .fold/exclude directly",
+            hint: "add the pattern to .fold/exclude in the project folder, one per line",
+        }),
+        _ => Err(PolicyDenied {
+            code: codes::MAIN_AGENT_REQUIRED,
+            message: "only the main agent adds patterns to .fold/exclude",
+            hint: "ask the main agent, which asks the user",
+        }),
     }
 }
 
@@ -63,5 +81,29 @@ mod tests {
             assert_eq!(denied.code(), codes::HUMAN_REQUIRED);
             assert!(denied.hint().contains("fld record"));
         }
+    }
+
+    #[test]
+    fn only_the_main_agent_adds_exclude_patterns() {
+        use crate::agents::AreaName;
+        assert!(can_add_exclude_patterns(&Starter::MainAgent).is_ok());
+        for starter in [
+            Starter::Human,
+            Starter::Unsupervised,
+            Starter::AreaLead(AreaName::parse("web").unwrap()),
+            Starter::ReviewLead,
+            Starter::ShortLived,
+            Starter::Subagent,
+            Starter::System,
+        ] {
+            let denied = can_add_exclude_patterns(&starter).unwrap_err();
+            assert_eq!(denied.code(), codes::MAIN_AGENT_REQUIRED, "{starter:?}");
+        }
+        assert!(
+            can_add_exclude_patterns(&Starter::Human)
+                .unwrap_err()
+                .hint()
+                .contains(".fold/exclude")
+        );
     }
 }

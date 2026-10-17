@@ -203,7 +203,7 @@ pub async fn init_new_project(
     init_with(host, &root, name, git, Start::New { files }, clock).await
 }
 
-/// Makes the Git repository whose top is `root` a fold project whose folder is main, as [`init_project`] does, keeping the repository and its history: `r1` is the committed tree at `HEAD`, free of ignore rules, and its commit is `HEAD` itself, which `.fold/git-sync.map` records as its first line. The folder must be the top of a repository whose `.git` is a directory, with a branch checked out that has a commit and no change in the index or a tracked file; anything else is refused with a hint. The `[git]` branch becomes the checked-out branch. Nothing in the repository changes but `info/exclude`, which gains `/.fold/`.
+/// Makes the Git repository whose top is `root` a fold project whose folder is main, as [`init_project`] does, keeping the repository and its history: `r1` is the committed tree at `HEAD`, free of ignore rules, and its commit is `HEAD` itself, which `.fold/git-sync.map` records as its first line. The folder must be the top of a repository whose `.git` is a directory, with a branch checked out that has a commit and no change in the index or a tracked file; anything else is refused with a hint. The `[git]` branch becomes the checked-out branch. Nothing in the repository changes but `info/exclude`, which becomes the link to `.fold/exclude` with `/.fold/` in it.
 pub async fn init_project_from_git(
     host: &HostPaths,
     root: &Path,
@@ -552,7 +552,7 @@ const GITIGNORE_COMMENT: &str = "# Paths that Git and fold leave out, one patter
 /// The line init adds to a `.gitignore` that does not ignore `.fold`, before its line ending.
 const FOLD_DIR_LINE: &str = ".fold/";
 
-/// A new project's ignore files (see [`plan_ignore_files`]) and the caller's `files` first, so `r1` holds them and the folder is clean against `r1`'s commit; then the objects of `r1`, the sync map that names `r1` for [`Start::FromGit`], and the one transaction that inserts `r1` and creates `main`. The map comes before the row, so a database that holds `r1` always has the map that names its commit. A new project's repository comes last, so an init that stops before its database is complete leaves no repository; one that stops after has it created when the init runs again. Both kinds get `/.fold/` in `info/exclude`.
+/// A new project's ignore files (see [`plan_ignore_files`]) and the caller's `files` first, so `r1` holds them and the folder is clean against `r1`'s commit; then the objects of `r1`, the sync map that names `r1` for [`Start::FromGit`], and the one transaction that inserts `r1` and creates `main`. The map comes before the row, so a database that holds `r1` always has the map that names its commit. A new project's repository comes last, so an init that stops before its database is complete leaves no repository; one that stops after has it created when the init runs again. Both kinds get `info/exclude` as the link to `.fold/exclude`, with `/.fold/` in it.
 async fn create_first_revision(
     store: &Store,
     paths: &ProjectPaths,

@@ -26,7 +26,10 @@ pub fn remote_ref(name: &str, branch: &str) -> String {
 /// fold's data folder, which `git status` in the project must never list.
 const EXCLUDE_LINE: &str = "/.fold/";
 
-/// The project's Git repository at [`ProjectPaths::git_dir`], whose working tree is the project folder, after making sure `info/exclude` lists fold's data folder. It never creates one: `fld init` does. Anything but a real directory in its place, a symlink included, is refused, so fold never writes Git data through it and Git never finds an enclosing repository instead. Blocking.
+/// Where `info/exclude` of the project's repository points: the project's `.fold/exclude`, relative to the link.
+pub const EXCLUDE_LINK: &str = "../../.fold/exclude";
+
+/// The project's Git repository at [`ProjectPaths::git_dir`], whose working tree is the project folder, after making sure its `info/exclude` is the project's `.fold/exclude` with fold's data folder in it. It never creates one: `fld init` does. Anything but a real directory in its place, a symlink included, is refused, so fold never writes Git data through it and Git never finds an enclosing repository instead. Blocking.
 pub fn project_repository(paths: &ProjectPaths) -> Result<PathBuf, FoldError> {
     let repo = paths.git_dir();
     match fs::symlink_metadata(&repo) {
@@ -51,31 +54,91 @@ fn no_repository() -> FoldError {
     .with_hint("re-create the project with fld init")
 }
 
-/// Adds [`EXCLUDE_LINE`] to `info/exclude` of `repo` once. Blocking.
+/// Makes `info/exclude` of `repo`, the project's `.git`, a symlink to the project's `.fold/exclude`, so Git and fold read the same local rules, and makes sure that file lists [`EXCLUDE_LINE`]. The lines an `info/exclude` of its own holds move into `.fold/exclude` first, after the lines already there, each once. The file is written to a temporary name and renamed into place, and so is the link. Blocking.
 pub fn exclude_fold_dir(repo: &Path) -> Result<(), FoldError> {
-    let exclude = repo.join("info").join("exclude");
-    let text = match fs::read_to_string(&exclude) {
+    let io = |error: io::Error| repository_io(&error);
+    let _writing = crate::lock(&EXCLUDE_WRITES);
+    let fold_dir = repo.parent().unwrap_or(repo).join(".fold");
+    let target = fold_dir.join("exclude");
+    let link = repo.join("info").join("exclude");
+    let linked = fs::read_link(&link).is_ok_and(|to| to == Path::new(EXCLUDE_LINK));
+    let moved = if linked {
+        String::new()
+    } else {
+        match fs::read_to_string(&link) {
+            Ok(text) => text,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
+            Err(error) => return Err(io(error)),
+        }
+    };
+    let current = match fs::read_to_string(&target) {
         Ok(text) => text,
         Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
-        Err(error) => return Err(repository_io(&error)),
+        Err(error) => return Err(io(error)),
     };
-    if text.lines().any(|line| line.trim() == EXCLUDE_LINE) {
-        return Ok(());
+    let mut lines: Vec<&str> = current.lines().collect();
+    for line in moved.lines().chain([EXCLUDE_LINE]) {
+        if !line.trim().is_empty() && !lines.contains(&line) {
+            lines.push(line);
+        }
     }
-    let separator = if text.is_empty() || text.ends_with('\n') {
-        ""
-    } else {
-        "\n"
+    let text: String = lines.iter().map(|line| format!("{line}\n")).collect();
+    if text != current {
+        write_exclude(&fold_dir, &text).map_err(io)?;
+    }
+    if !linked {
+        let info = repo.join("info");
+        fs::create_dir_all(&info).map_err(io)?;
+        let temporary = info.join(".exclude.fold");
+        let _ = fs::remove_file(&temporary);
+        std::os::unix::fs::symlink(EXCLUDE_LINK, &temporary)
+            .and_then(|()| fs::rename(&temporary, &link))
+            .map_err(io)?;
+    }
+    Ok(())
+}
+
+/// Held while `.fold/exclude` is read and written again, so two writers in this process never drop each other's lines.
+static EXCLUDE_WRITES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Replaces `.fold/exclude` in `fold_dir` with `text` by renaming a file of a name of its own into place, so a reader sees the old file or the new one. The caller holds [`EXCLUDE_WRITES`]. A missing `fold_dir` is `NotFound` and is not created, so a project whose `.fold/` was deleted never gets it back from here.
+fn write_exclude(fold_dir: &Path, text: &str) -> io::Result<()> {
+    let temporary = fold_dir.join(format!(".exclude-{}.tmp", std::process::id()));
+    let written =
+        fs::write(&temporary, text).and_then(|()| fs::rename(&temporary, fold_dir.join("exclude")));
+    if written.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    written
+}
+
+/// Adds each of `patterns` that `.fold/exclude` in `fold_dir` does not list yet at its end, keeping [`EXCLUDE_LINE`] in it, and returns the patterns it added. Blocking.
+pub fn add_exclude_patterns(
+    fold_dir: &Path,
+    patterns: &[String],
+) -> Result<Vec<String>, FoldError> {
+    let io = |error: io::Error| repository_io(&error);
+    let _writing = crate::lock(&EXCLUDE_WRITES);
+    let current = match fs::read_to_string(fold_dir.join("exclude")) {
+        Ok(text) => text,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(io(error)),
     };
-    fs::create_dir_all(repo.join("info"))
-        .and_then(|()| {
-            let mut file = fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&exclude)?;
-            io::Write::write_all(&mut file, format!("{separator}{EXCLUDE_LINE}\n").as_bytes())
-        })
-        .map_err(|error| repository_io(&error))
+    let mut lines: Vec<String> = current.lines().map(str::to_owned).collect();
+    let mut added = Vec::new();
+    for pattern in [EXCLUDE_LINE.to_owned()].iter().chain(patterns) {
+        if !lines.contains(pattern) {
+            lines.push(pattern.clone());
+            if pattern != EXCLUDE_LINE {
+                added.push(pattern.clone());
+            }
+        }
+    }
+    let text: String = lines.iter().map(|line| format!("{line}\n")).collect();
+    if text != current {
+        write_exclude(fold_dir, &text).map_err(io)?;
+    }
+    Ok(added)
 }
 
 /// Moves `branch` of `repo` to `new`, only while it points to `old`, or only while it does not exist when `old` is `None`. Blocking.
@@ -547,6 +610,7 @@ mod tests {
         fs::remove_file(paths.git_dir()).unwrap();
         fs::create_dir_all(paths.git_dir().join("info")).unwrap();
         fs::write(paths.git_dir().join("info/exclude"), "# mine").unwrap();
+        fs::create_dir(paths.fold_dir()).unwrap();
         project_repository(&paths).unwrap();
         project_repository(&paths).unwrap();
         assert_eq!(

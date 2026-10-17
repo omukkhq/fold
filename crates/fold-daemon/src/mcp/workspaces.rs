@@ -29,6 +29,7 @@ pub const RECORD_CHANGES: &str = "record_changes";
 pub const SYNC_WORKSPACE: &str = "sync_workspace";
 pub const ABANDON_WORKSPACE: &str = "abandon_workspace";
 pub const OPEN_MAIN_WORKSPACE: &str = "open_main_workspace";
+pub const ADD_EXCLUDE_PATTERNS: &str = "add_exclude_patterns";
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -172,6 +173,16 @@ pub struct OpenMainWorkspaceInput {
     pub as_worker: Option<String>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct AddExcludePatternsInput {
+    /// The patterns to add to .fold/exclude, each one line of .gitignore syntax, such as build/ or *.log. A pattern the file lists already is left out.
+    pub patterns: Vec<String>,
+    /// The worker that makes this call. Only the main agent's main worker adds patterns, so leave it out.
+    #[serde(rename = "as", default)]
+    pub as_worker: Option<String>,
+}
+
 pub fn tools() -> Vec<Tool> {
     vec![
         Tool::new(
@@ -238,6 +249,11 @@ pub fn tools() -> Vec<Tool> {
             OPEN_MAIN_WORKSPACE,
             "Main agent only. Open the main workspace: a copy of main under .fold/ws/ that belongs to no task, for a change the user asks you to make yourself, such as the initial setup or a small docs change. Edit, build and test there, then call record_changes, show the user the diff and a summary, and call submit_main_change only after the user's explicit OK. While the main workspace is open this returns it with reused true. When a human change from the project folder conflicts with main, human_change names it; a new main workspace then holds the human's files with main merged in and conflict markers, which you resolve with the user before you record.",
             schema_for_type::<OpenMainWorkspaceInput>(),
+        ),
+        Tool::new(
+            ADD_EXCLUDE_PATTERNS,
+            "Main agent only, when the user asks. Add patterns to .fold/exclude, the project's local ignore rules: paths that are never recorded, imported or proposed and that Git leaves out too, without a change to .gitignore or .foldignore. A ! line in .gitignore or .foldignore brings a path back.",
+            schema_for_type::<AddExcludePatternsInput>(),
         ),
     ]
 }
@@ -631,6 +647,16 @@ pub async fn call(
                 });
             }
             value
+        }
+        ADD_EXCLUDE_PATTERNS => {
+            let input: AddExcludePatternsInput = parse(arguments)?;
+            let actor = server.actor(as_worker).await?;
+            let added = server
+                .workspaces
+                .add_exclude_patterns(&actor, input.patterns)
+                .await
+                .map_err(from_workspace)?;
+            json!({"file": ".fold/exclude", "added": added})
         }
         _ => return Ok(None),
     };

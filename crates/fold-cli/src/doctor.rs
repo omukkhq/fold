@@ -14,7 +14,7 @@ use fold_daemon::projects::database_missing_hint;
 use fold_daemon::services::agents::claude::{AuthStatus, ClaudeVersion, MIN_CLAUDE_VERSION};
 use fold_daemon::services::projects::remove_deleted_on_host;
 use fold_vcs::git::Git;
-use fold_vcs::git_remote::folder_has_changes;
+use fold_vcs::git_remote::{EXCLUDE_LINK, folder_has_changes};
 use fold_vcs::git_sync_map::{SYNC_MAP_FILE, SyncMap};
 use fold_vcs::watch::DegradedReason;
 use sqlx::sqlite::SqliteConnectOptions;
@@ -741,6 +741,7 @@ fn project_checks(
         objects_check(&paths.objects()),
         git_history_check(&paths, host),
         folder_check(&paths, host),
+        exclude_check(&paths),
     ];
     checks.push(if watch_applicable {
         degraded_check(&facts, now)
@@ -1086,6 +1087,26 @@ fn folder_check(paths: &ProjectPaths, host: &Host) -> Check {
             NAME,
             "git cannot read the state of the project folder",
             "run git status in the project folder",
+        ),
+    }
+}
+
+/// Git reads `.git/info/exclude` and fold reads `.fold/exclude`; only while the first is a link to the second do they leave out the same paths.
+fn exclude_check(paths: &ProjectPaths) -> Check {
+    const NAME: &str = "exclude file";
+    let link = paths.git_dir().join("info").join("exclude");
+    if !paths.git_dir().is_dir() {
+        return Check::not_applicable(NAME);
+    }
+    match std::fs::read_link(&link) {
+        Ok(target) if target == Path::new(EXCLUDE_LINK) => Check::ok(
+            NAME,
+            ".git/info/exclude links to .fold/exclude, so Git and fold leave out the same paths",
+        ),
+        _ => Check::warn(
+            NAME,
+            ".git/info/exclude is not the link to .fold/exclude, so Git and fold can leave out different paths",
+            "fld init --refresh, which moves its lines into .fold/exclude and makes the link",
         ),
     }
 }

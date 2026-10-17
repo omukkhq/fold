@@ -26,6 +26,7 @@ mod changesets;
 mod checkpoints;
 mod compare;
 mod direct;
+mod exclude;
 mod files;
 mod human_change;
 mod human_edit;

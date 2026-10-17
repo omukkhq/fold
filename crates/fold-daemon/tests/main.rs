@@ -63,6 +63,7 @@ mod diff_routes;
 mod direct_changes;
 mod event_bus;
 mod events_service;
+mod exclude_file;
 mod gc;
 mod git_commits;
 mod handoffs;

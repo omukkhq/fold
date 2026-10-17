@@ -108,6 +108,7 @@ impl Fixture {
         std::fs::write(root.join(SETTINGS_FILE), good_settings()).unwrap();
         std::fs::write(root.join(AGENTS_FILE), good_agents()).unwrap();
         git(&root, &["init", "--quiet"]);
+        fold_vcs::git_remote::exclude_fold_dir(&root.join(".git")).unwrap();
         root
     }
 }
@@ -629,6 +630,7 @@ fn a_healthy_project_is_all_ok_and_nothing_changes_on_disk() {
             "objects",
             "git history",
             "project folder",
+            "exclude file",
             "inotify watches",
             "claude files",
             "role prompts",
@@ -1520,4 +1522,20 @@ fn a_database_in_use_by_a_daemon_is_read_through_its_wal() {
         assert_eq!(facts.degraded, [at(5)]);
         store.close().await.unwrap();
     });
+}
+
+#[test]
+fn an_info_exclude_that_is_not_the_link_names_the_refresh() {
+    let fixture = Fixture::new();
+    let root = fixture.project("demo");
+    let host = fixture.bare_host();
+    let check = |root: &Path| find(&project_report(&host, root, at(1_000)), "exclude file").clone();
+    assert_eq!(check(&root).status, Status::Ok);
+    std::fs::remove_file(root.join(".git/info/exclude")).unwrap();
+    std::fs::write(root.join(".git/info/exclude"), "*.log\n").unwrap();
+    let plain = check(&root);
+    assert_eq!(plain.status, Status::Warn);
+    assert!(plain.fix.as_deref().unwrap().contains("fld init --refresh"));
+    std::fs::remove_dir_all(root.join(".git")).unwrap();
+    assert_eq!(check(&root).message, NOT_APPLICABLE);
 }

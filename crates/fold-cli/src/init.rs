@@ -205,7 +205,7 @@ pub(crate) fn initialise(
     Ok(project.slug)
 }
 
-/// Rewrites the Claude Code files of the registered project that holds `dir`.
+/// Rewrites the Claude Code files of the registered project that holds `dir`, and makes `.git/info/exclude` the link to `.fold/exclude` again.
 fn refresh(dir: Option<&Path>, dirs: &Dirs, out: &mut impl Write) -> Result<(), InitError> {
     let dir = match dir {
         Some(dir) => std::fs::canonicalize(dir),
@@ -216,6 +216,10 @@ fn refresh(dir: Option<&Path>, dirs: &Dirs, out: &mut impl Write) -> Result<(), 
     let runtime = current_thread_runtime().map_err(InitError::Runtime)?;
     let root = runtime.block_on(root_for_dir_on_host(&host, &dir))?;
     write_claude_files(&root, dirs, out)?;
+    let repo = ProjectPaths::new(&root).git_dir();
+    if repo.is_dir() {
+        fold_vcs::git_remote::exclude_fold_dir(&repo).map_err(InitError::Refused)?;
+    }
     output::line(
         out,
         &format!("refreshed the Claude Code files at {}", root.display()),
