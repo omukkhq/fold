@@ -1,4 +1,4 @@
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -15,8 +15,8 @@ use fold_vcs::git::Git;
 use hyper::Method;
 use thiserror::Error;
 
-use crate::output;
 use crate::serve::{Dirs, current_thread_runtime, socket_path};
+use crate::{git_identity, output};
 
 /// How long a daemon gets to accept the connection and answer the open request.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(10);
@@ -37,6 +37,12 @@ pub struct InitArgs {
     /// Rewrite the Claude Code files of an existing project, keeping every entry fold does not own, instead of creating a project
     #[arg(long, conflicts_with_all = ["name", "from_git", "socket"])]
     pub(crate) refresh: bool,
+    /// The name for the project's own Git config, instead of asking for it; only a new Git repository gets one
+    #[arg(long, conflicts_with_all = ["from_git", "refresh"])]
+    pub(crate) git_name: Option<String>,
+    /// The email for the project's own Git config, instead of asking for it; only a new Git repository gets one
+    #[arg(long, conflicts_with_all = ["from_git", "refresh"])]
+    pub(crate) git_email: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -91,6 +97,7 @@ pub fn run(args: &InitArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), Ini
     if args.refresh {
         return refresh(args.dir.as_deref(), dirs, out);
     }
+    git_identity::check_given(&given(args)).map_err(InitError::Refused)?;
     let Some(dir) = &args.dir else {
         let cwd = std::env::current_dir().map_err(InitError::Dir)?;
         return initialise(&cwd, args, dirs, out).map(|_| ());
@@ -107,6 +114,13 @@ pub fn run(args: &InitArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), Ini
         let _ = std::fs::remove_dir(dir);
     }
     initialised.map(|_| ())
+}
+
+fn given(args: &InitArgs) -> git_identity::Given {
+    git_identity::Given {
+        name: args.git_name.clone(),
+        email: args.git_email.clone(),
+    }
 }
 
 fn dir_exists(dir: &Path) -> FoldError {
@@ -186,6 +200,21 @@ pub(crate) fn initialise(
         output::line(out, &format!("{} is Git commit {commit}", project.revision))?;
     }
     write_claude_files(&project.root, dirs, out)?;
+    if !args.from_git {
+        let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
+        git_identity::ensure(
+            &Git::default(),
+            &project.root,
+            git_identity::Plan {
+                given: &given(args),
+                env: &git_identity::Environment::from_env(),
+                interactive,
+            },
+            &mut io::stdin().lock(),
+            out,
+            &mut io::stderr(),
+        );
+    }
     let note = match socket {
         Ok(Some(socket)) => match runtime.block_on(register(&client(socket), &project.slug)) {
             Registration::NoDaemon => None,
@@ -456,6 +485,8 @@ mod tests {
             from_git: false,
             socket: None,
             refresh: false,
+            git_name: None,
+            git_email: None,
         };
         let mut out = Vec::new();
         let error = run(&args, &Dirs::default(), &mut out).unwrap_err();
@@ -474,6 +505,8 @@ mod tests {
             from_git: false,
             socket: None,
             refresh: false,
+            git_name: None,
+            git_email: None,
         };
         let error = run(&args, &Dirs::default(), &mut Vec::new()).unwrap_err();
         assert_eq!(error.code(), Some("invalid_request"));
@@ -496,6 +529,8 @@ mod tests {
             from_git: false,
             socket: None,
             refresh: false,
+            git_name: None,
+            git_email: None,
         };
         let error = run(&args, &Dirs::default(), &mut Vec::new()).unwrap_err();
         assert_eq!(

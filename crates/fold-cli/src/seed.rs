@@ -133,6 +133,8 @@ fn seed(args: &SeedArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), SeedEr
         from_git: false,
         socket: Some(socket.clone()),
         refresh: false,
+        git_name: Some("Demo".to_owned()),
+        git_email: Some("demo@example.com".to_owned()),
     };
     let slug = init::initialise(&dir, &init, dirs, &mut io::sink())?;
     let root = dir.canonicalize()?;

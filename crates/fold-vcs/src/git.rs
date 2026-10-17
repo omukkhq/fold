@@ -367,6 +367,22 @@ impl Git {
         Ok(())
     }
 
+    /// The value Git resolves for a config key in `repo`, from the repository, global and system files and their includes, or `None` when no value is set.
+    pub fn config_get(&self, repo: &Path, key: &str) -> Result<Option<String>, FoldError> {
+        let bytes = self.output_or_none(repo, &["config", "--get", "--", key], "config")?;
+        Ok(bytes.map(|bytes| {
+            String::from_utf8_lossy(&bytes)
+                .trim_end_matches(['\n', '\r'])
+                .to_owned()
+        }))
+    }
+
+    /// Sets a config key in the repository's own `.git/config`, never in a global file.
+    pub fn config_set_local(&self, repo: &Path, key: &str, value: &str) -> Result<(), FoldError> {
+        self.output(repo, &["config", "--local", "--", key, value], "config")?;
+        Ok(())
+    }
+
     /// The top of the working tree that holds `dir`, `dir` itself or a folder above it, or `None` when no repository's working tree holds it.
     pub fn working_tree_top(&self, dir: &Path) -> Result<Option<PathBuf>, FoldError> {
         Ok(self

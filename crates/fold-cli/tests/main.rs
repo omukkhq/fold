@@ -29,6 +29,7 @@ mod dev_command;
 mod doctor;
 mod gc;
 mod git;
+mod git_identity;
 mod hook_session_start;
 mod hook_stop;
 mod init;

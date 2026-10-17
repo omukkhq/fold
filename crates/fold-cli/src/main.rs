@@ -1,6 +1,7 @@
 mod claude;
 mod commands;
 mod doctor;
+mod git_identity;
 mod hook;
 mod init;
 mod mcp;
