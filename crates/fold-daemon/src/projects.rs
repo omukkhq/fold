@@ -194,15 +194,22 @@ impl ProjectHandle {
         })
     }
 
-    /// True when the project's database file is gone or is another file than the one this handle opened, as after the project's `.fold/` was deleted, with or without a new `fld init` in the folder. A file that cannot be read for another reason is not replaced, so a passing permission problem never closes a working project.
-    pub async fn database_replaced(&self) -> bool {
+    /// What is at the path of the project's database now. A file that cannot be read for another reason counts as the opened one, so a passing permission problem never closes a working project.
+    pub async fn database_file(&self) -> DatabaseFile {
         let Some(opened) = self.database_file else {
-            return false;
+            return DatabaseFile::Opened;
         };
         match tokio::fs::metadata(self.paths.db()).await {
-            Ok(meta) => (meta.dev(), meta.ino()) != opened,
-            Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+            Ok(meta) if (meta.dev(), meta.ino()) == opened => DatabaseFile::Opened,
+            Ok(_) => DatabaseFile::Replaced,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => DatabaseFile::Missing,
+            Err(_) => DatabaseFile::Opened,
         }
+    }
+
+    /// True when the project's database file is gone or is another file than the one this handle opened, as after the project's `.fold/` was deleted, with or without a new `fld init` in the folder.
+    pub async fn database_replaced(&self) -> bool {
+        self.database_file().await != DatabaseFile::Opened
     }
 
     /// Ends the worker processes, closes the bus and then the project, as the daemon's stop does for each project, so nothing of the handle runs on after it.
@@ -263,6 +270,17 @@ impl ProjectHandle {
         )
         .with_registry(registry.clone())
     }
+}
+
+/// What a project handle finds at the path of its database. SQLite keeps reading a file that was deleted, so a handle on a file that is not there any more still works, and only this tells the cases apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DatabaseFile {
+    /// The file the handle opened.
+    Opened,
+    /// No file, as after the project's `.fold/` was deleted.
+    Missing,
+    /// Another file, as after a new `fld init` in the folder.
+    Replaced,
 }
 
 fn unavailable(slug: &str) -> FoldError {
@@ -348,13 +366,8 @@ impl Projects {
         clock: Arc<dyn Clock>,
     ) -> Result<(Arc<ProjectHandle>, bool), FoldError> {
         let _opening = self.opening.lock().await;
-        if let Some(Slot::Open(handle)) = self.slot(&row.slug) {
-            if !handle.database_replaced().await {
-                return Ok((handle, false));
-            }
-            tracing::warn!(project = %row.slug, "project database was deleted or replaced; the open project closes");
-            unpoisoned(self.slots.write()).remove(&row.slug);
-            handle.close().await;
+        if let Some(handle) = self.current(&row.slug).await {
+            return Ok((handle, false));
         }
         let outcome = ProjectHandle::open_with(row, clock, self.launcher.clone())
             .await
@@ -374,6 +387,42 @@ impl Projects {
         };
         unpoisoned(self.slots.write()).insert(row.slug.clone(), slot);
         outcome.map(|handle| (handle, true))
+    }
+
+    /// The open handle of `slug` while its database file is the one it opened. A handle whose file was deleted or replaced is closed, with its workers, and leaves the slot, so nothing of it runs on and the next open finds the folder as it is now. The caller holds `opening`.
+    async fn current(&self, slug: &str) -> Option<Arc<ProjectHandle>> {
+        let Some(Slot::Open(handle)) = self.slot(slug) else {
+            return None;
+        };
+        let file = handle.database_file().await;
+        if file == DatabaseFile::Opened {
+            return Some(handle);
+        }
+        tracing::warn!(project = %slug, missing = file == DatabaseFile::Missing, "project database was deleted or replaced; the open project closes");
+        unpoisoned(self.slots.write()).remove(slug);
+        handle.close().await;
+        None
+    }
+
+    /// Closes the open handle of `slug` when its database file was deleted or replaced, as an open does, without opening the folder again: the project is unavailable until the next open, so a request never opens a project that `fld init` is still making. True when it closed the handle.
+    pub async fn close_if_stale(&self, slug: &str) -> bool {
+        let _opening = self.opening.lock().await;
+        if !matches!(self.slot(slug), Some(Slot::Open(_))) || self.current(slug).await.is_some() {
+            return false;
+        }
+        unpoisoned(self.slots.write()).insert(slug.to_owned(), Slot::Unavailable);
+        true
+    }
+
+    /// [`Projects::close_if_stale`] for every open project, and how many it closed. The daemon's live job runs it on every tick, so a project whose `.fold/` was deleted stops within a tick even when nothing opens it.
+    pub async fn close_stale(&self) -> usize {
+        let mut closed = 0;
+        for handle in self.handles() {
+            if handle.database_replaced().await && self.close_if_stale(&handle.slug).await {
+                closed += 1;
+            }
+        }
+        closed
     }
 }
 

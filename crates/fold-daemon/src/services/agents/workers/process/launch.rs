@@ -322,6 +322,7 @@ async fn write_files(
     area_instructions: Option<(AreaName, String)>,
 ) -> std::io::Result<(PathBuf, PathBuf)> {
     let dir = paths.worker_dir(&row.agent);
+    let fold_dir = paths.fold_dir();
     let override_prompt = paths.role_prompt(row.role);
     let project_mcp = paths.mcp_json();
     let fold = match &launcher.fold {
@@ -332,7 +333,7 @@ async fn write_files(
     let prompt_text = row.role.prompt();
     let limit = settings.mcp.clone();
     tokio::task::spawn_blocking(move || {
-        std::fs::create_dir_all(&dir)?;
+        fold_vcs::platform::create_dir_below(&fold_dir, &dir)?;
         let config = mcp_config(&fold, &agent, limit.as_deref(), &project_mcp);
         let mcp = dir.join("mcp.json");
         std::fs::write(&mcp, config.to_string())?;

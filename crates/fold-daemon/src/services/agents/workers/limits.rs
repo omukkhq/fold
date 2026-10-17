@@ -181,6 +181,10 @@ impl AgentService {
             let path = path.clone();
             joined(
                 tokio::task::spawn_blocking(move || {
+                    // The lock file's folder is `.fold/`, which a deleted project must not get back.
+                    if !path.parent().is_some_and(Path::is_dir) {
+                        return Err(config_io(&std::io::ErrorKind::NotFound.into()));
+                    }
                     EditLock::acquire(&path).map_err(|error| config_io(&error))
                 })
                 .await,

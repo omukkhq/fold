@@ -53,7 +53,7 @@ pub async fn gc(project: &ProjectHandle, dry_run: bool) -> Result<GcReport, Proj
     let fs_now = file_time(now);
     let roots = pruning.roots;
     let marked = blocking(move || -> Result<_, FoldError> {
-        let objects = ObjectStore::open(&objects_dir)?;
+        let objects = ObjectStore::open_existing(&objects_dir)?;
         let marked = vcs_gc::mark(&objects, roots)?;
         Ok((objects, marked))
     })

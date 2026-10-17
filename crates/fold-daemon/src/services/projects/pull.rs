@@ -179,7 +179,7 @@ async fn run(
         };
         blocking(move || {
             let _objects = objects_guard;
-            let objects = ObjectStore::open(&fold_dir)?;
+            let objects = ObjectStore::open_existing(&fold_dir)?;
             let remote = import_commit(&objects, &git, &mirror, tip.as_str(), &opts)?.tree;
             let base = match base_commit {
                 Some(commit) => {
@@ -213,7 +213,7 @@ async fn run(
             let head_tree = head.tree_hash;
             blocking(move || {
                 tree_merge(
-                    &ObjectStore::open(&fold_dir)?,
+                    &ObjectStore::open_existing(&fold_dir)?,
                     &base_tree,
                     &remote_tree,
                     &head_tree,

@@ -1124,11 +1124,11 @@ impl Scanner {
                 "the project database is missing",
             ));
         }
-        let objects = ObjectStore::open(&paths.fold_dir()).map_err(FoldError::from)?;
+        let objects = ObjectStore::open_existing(&paths.fold_dir()).map_err(FoldError::from)?;
         let base = vcs::load_flat(&objects, &seed.base_tree)?;
         let index = StatIndex::load(&paths.workspace_index(seed.workspace), caps);
         let boundary_dir = paths.index();
-        std::fs::create_dir_all(&boundary_dir)
+        fold_vcs::platform::create_dir_below(&paths.fold_dir(), &boundary_dir)
             .map_err(|error| FoldError::from(fold_vcs::paths::WorkspaceError::from(error)))?;
         Ok(Self {
             root: seed.root.clone(),

@@ -117,7 +117,7 @@ impl<S: Send + Sync> FromRequestParts<S> for SocketOnly {
     }
 }
 
-/// Resolves `{slug}` of a `/api/v1/projects/{slug}` route to its open handle.
+/// Resolves `{slug}` of a `/api/v1/projects/{slug}` route to its open handle. A handle whose database was deleted or replaced is closed first and the project is unavailable, so no request reaches a project whose `.fold/` is gone.
 #[derive(Debug, Clone)]
 pub struct Project(pub Arc<ProjectHandle>);
 
@@ -133,17 +133,25 @@ impl FromRequestParts<AppState> for Project {
             .find_map(|(name, value)| (name == "slug").then_some(value))
             .ok_or_else(ApiError::not_found)?;
         match state.projects.slot(slug) {
-            Some(Slot::Open(handle)) => Ok(Self(handle)),
-            Some(Slot::Unavailable) => Err(FoldError::new(
-                codes::PROJECT_UNAVAILABLE,
-                format!("project {slug} is unavailable"),
-            )
-            .into()),
-            None => Err(FoldError::new(
-                codes::PROJECT_NOT_FOUND,
-                format!("project {slug} is not registered"),
-            )
-            .into()),
+            Some(Slot::Open(handle)) if !handle.database_replaced().await => {
+                return Ok(Self(handle));
+            }
+            Some(Slot::Open(_)) => {
+                state.projects.close_if_stale(slug).await;
+            }
+            Some(Slot::Unavailable) => {}
+            None => {
+                return Err(FoldError::new(
+                    codes::PROJECT_NOT_FOUND,
+                    format!("project {slug} is not registered"),
+                )
+                .into());
+            }
         }
+        Err(FoldError::new(
+            codes::PROJECT_UNAVAILABLE,
+            format!("project {slug} is unavailable"),
+        )
+        .into())
     }
 }

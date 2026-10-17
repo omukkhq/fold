@@ -51,6 +51,7 @@ mod crash_integration;
 mod crash_messages;
 mod daemon_shell;
 mod delete_archive;
+mod deleted_projects;
 mod dependencies_service;
 mod diff_routes;
 mod event_bus;

@@ -203,6 +203,61 @@ async fn init_in_a_folder_whose_fold_data_was_deleted_replaces_the_project_in_th
     daemon.shutdown().await;
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn the_running_daemon_closes_a_project_whose_fold_was_deleted_and_init_makes_it_again() {
+    let sandbox = Arc::new(Sandbox::new());
+    let daemon = start_daemon(&sandbox, "data").await;
+    let socket = daemon.socket_path().to_string_lossy().into_owned();
+    let project = sandbox.path("scratch");
+    let first = fold_blocking(
+        sandbox.clone(),
+        vec![
+            "init".into(),
+            project.to_string_lossy().into_owned(),
+            "--socket".into(),
+            socket.clone(),
+        ],
+    )
+    .await;
+    assert!(first.status.success(), "{first:?}");
+    let Some(fold_daemon::projects::Slot::Open(old)) = daemon.state().projects.slot("scratch")
+    else {
+        panic!("the daemon opened the project");
+    };
+
+    for dir in [".fold", ".git"] {
+        std::fs::remove_dir_all(project.join(dir)).unwrap();
+    }
+    // The daemon's live job finds the deleted database on its next tick, with no request for the project.
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while !old.store.read().is_closed() {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(daemon.state().projects.handles().is_empty());
+    assert!(!project.join(".fold").exists());
+
+    let (sandbox_again, cwd) = (sandbox.clone(), project.clone());
+    let second = tokio::task::spawn_blocking(move || {
+        sandbox_again.fold_in(&cwd, &["init", "--socket", &socket], &[])
+    })
+    .await
+    .unwrap();
+    assert!(second.status.success(), "{second:?}");
+    assert!(
+        stdout(&second).ends_with("opened by the running daemon\n"),
+        "{second:?}"
+    );
+    let Some(fold_daemon::projects::Slot::Open(new)) = daemon.state().projects.slot("scratch")
+    else {
+        panic!("the daemon opened the new project");
+    };
+    assert!(!Arc::ptr_eq(&old, &new));
+    daemon.shutdown().await;
+}
+
 #[test]
 fn init_without_a_daemon_skips_the_call() {
     let sandbox = Sandbox::new();

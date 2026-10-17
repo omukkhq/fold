@@ -98,10 +98,14 @@ impl StatIndex {
         index
     }
 
-    /// Saves of one index run one at a time: a save first removes the temp files that an interrupted save of the same index left beside it.
+    /// Saves of one index run one at a time: a save first removes the temp files that an interrupted save of the same index left beside it. The index's directory is created when missing, but not the directory that holds it, so a save after the project's `.fold/` was deleted fails instead of making `.fold/` again.
     pub fn save(&mut self, path: &Path) -> io::Result<()> {
         let dir = path.parent().unwrap_or_else(|| Path::new("."));
-        fs::create_dir_all(dir)?;
+        match fs::create_dir(dir) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists && dir.is_dir() => {}
+            Err(error) => return Err(error),
+        }
         let prefix = format!(
             ".save-{}-",
             path.file_name().unwrap_or_default().to_string_lossy()

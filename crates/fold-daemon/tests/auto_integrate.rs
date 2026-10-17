@@ -542,3 +542,34 @@ async fn a_batch_reviewers_batch_integrates_its_approved_members_in_dependency_o
     assert_eq!(integrated_in_order(&fx).await, [2, 1, 3]);
     job.stop().await;
 }
+
+#[tokio::test]
+async fn a_project_opened_again_under_its_slug_gets_a_new_listener() {
+    let fx = Fixture::new().await;
+    let job = Running::start(&fx.state);
+    job.runs(1).await;
+
+    // Another database file at the path makes the next open close the handle, which ends its listener, and open the folder again under the same slug.
+    fx.handle.store.close().await.unwrap();
+    let db = fx.handle.paths.db();
+    let copy = db.with_extension("copy");
+    std::fs::copy(&db, &copy).unwrap();
+    std::fs::rename(&copy, &db).unwrap();
+    let row = fold_store::projects::ProjectRow {
+        slug: fx.handle.slug.clone(),
+        name: fx.handle.name.clone(),
+        root: fx.handle.paths.root().to_string_lossy().into_owned(),
+    };
+    let reopened = fx
+        .state
+        .projects
+        .open(&row, std::sync::Arc::new(fx.project.clock().clone()))
+        .await
+        .unwrap();
+    assert!(!std::sync::Arc::ptr_eq(&fx.handle, &reopened));
+
+    // Only a new listener runs again with no event: it checks once as it starts.
+    job.runs(2).await;
+    job.stop().await;
+    reopened.store.close().await.unwrap();
+}

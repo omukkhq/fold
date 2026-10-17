@@ -172,6 +172,41 @@ async fn a_replacing_init_stopped_before_the_registry_change_leaves_the_old_row_
 }
 
 #[tokio::test]
+async fn a_replacing_init_stopped_inside_the_import_is_refused_as_incomplete_and_replaces_once_deleted()
+ {
+    let scenario = fail::FailScenario::setup();
+    let host = Host::new();
+    host.init().await.unwrap();
+    let paths = host.project_paths();
+    std::fs::remove_dir_all(paths.fold_dir()).unwrap();
+    std::fs::remove_dir_all(paths.git_dir()).unwrap();
+    host.stopped_at("init_after_import").await;
+    assert!(paths.db().is_file(), "the stopped init made its database");
+    assert_eq!(host.registered().await, ["app"]);
+    let before = files(host.dir.path());
+
+    let error = host.init().await.unwrap_err();
+    assert_eq!(error.code(), Some("project_incomplete"));
+    let ProjectError::Fold(error) = error else {
+        panic!("a fold error");
+    };
+    assert!(error.hint().unwrap().contains(&format!(
+        "delete {} and run fld init again",
+        paths.fold_dir().display()
+    )));
+    assert_eq!(files(host.dir.path()), before, "nothing is removed");
+    assert_eq!(host.registered().await, ["app"]);
+
+    std::fs::remove_dir_all(paths.fold_dir()).unwrap();
+    let project = host.init().await.unwrap();
+    assert!(project.replaced && !project.resumed);
+    assert_eq!(project.slug, "app");
+    assert_eq!(host.registered().await, ["app"]);
+    assert_project_consistent(&paths).await;
+    scenario.teardown();
+}
+
+#[tokio::test]
 async fn an_init_stopped_inside_the_import_is_refused_and_nothing_is_deleted() {
     let scenario = fail::FailScenario::setup();
     let host = Host::new();

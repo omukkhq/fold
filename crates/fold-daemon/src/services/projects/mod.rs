@@ -926,8 +926,31 @@ fn only_leftovers(paths: &ProjectPaths) -> io::Result<bool> {
     Ok(true)
 }
 
-/// The refusal of an init in a registered folder that holds `.fold/`: `project_exists` while the project database is there, and `project_incomplete` when `.fold/` has no database but holds more than [`remove_leftovers`] removes.
+/// The refusal of an init in a registered folder that holds `.fold/`: `project_exists` while the project database is there with its `main`, and `project_incomplete` when `.fold/` has no database but holds more than [`remove_leftovers`] removes, or a database without `main`, as an init that replaced the registration and stopped before its first revision leaves, or that is running there.
 async fn registered_refusal(paths: &ProjectPaths) -> FoldError {
+    let refusal = database_refusal(paths).await;
+    if refusal.code() == codes::PROJECT_EXISTS && !holds_main(paths).await {
+        return incomplete(paths);
+    }
+    refusal
+}
+
+/// True when `.fold/` is free of a running init and its database names `main`. A folder or database that cannot be read counts as holding it, so the refusal stays `project_exists`.
+async fn holds_main(paths: &ProjectPaths) -> bool {
+    let _init = match try_lock_fold_dir(paths).await {
+        Ok(Some(lock)) => lock,
+        Ok(None) => return false,
+        Err(_) => return true,
+    };
+    let Ok(store) = Store::open_project(paths).await else {
+        return true;
+    };
+    let main = head(store.read()).await;
+    let _ = store.close().await;
+    !matches!(main, Ok(None))
+}
+
+async fn database_refusal(paths: &ProjectPaths) -> FoldError {
     let db = paths.db();
     let missing = tokio::task::spawn_blocking(move || std::fs::symlink_metadata(db).is_err())
         .await

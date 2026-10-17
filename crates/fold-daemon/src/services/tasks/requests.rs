@@ -239,7 +239,7 @@ impl TaskService {
         let guard = access.lock.read_owned().await;
         let fold_dir = access.fold_dir;
         let hashes = blocking(move || {
-            let objects = ObjectStore::open(&fold_dir)?;
+            let objects = ObjectStore::open_existing(&fold_dir)?;
             Ok(blobs
                 .iter()
                 .map(|bytes| objects.write(ObjectKind::Blob, bytes))
@@ -670,7 +670,7 @@ impl TaskService {
         let access = self.object_access()?;
         let hash = attachment.object;
         let bytes = blocking(move || {
-            Ok(ObjectStore::open(&access.fold_dir)?
+            Ok(ObjectStore::open_existing(&access.fold_dir)?
                 .read_expecting(&hash, ObjectKind::Blob)?
                 .payload)
         })

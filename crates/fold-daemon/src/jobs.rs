@@ -169,7 +169,9 @@ pub fn spawn_presence(state: AppState, tick: Duration, stop: watch::Receiver<boo
     }
 }
 
-/// Starts the live job: every `tick` it lets the live state of each open project look at the clock, so a workspace scans in full every `rescan_seconds` of clock time even when its watcher reports nothing. A cycle is a tick that reached at least one workspace. It stops when `stop` changes.
+/// Starts the live job: every `tick` it closes each open project whose database was deleted or replaced, through [`Projects::close_stale`], then lets the live state of each open project look at the clock, so a workspace scans in full every `rescan_seconds` of clock time even when its watcher reports nothing. A cycle is a tick that reached at least one workspace. It stops when `stop` changes.
+///
+/// [`Projects::close_stale`]: crate::projects::Projects::close_stale
 pub fn spawn_live(state: AppState, tick: Duration, stop: watch::Receiver<bool>) -> Job {
     let (progress, watcher) = watch::channel(JobProgress::default());
     let task = tokio::spawn(live(state, tick, stop, progress));
@@ -367,6 +369,12 @@ async fn auto_integrate(
             _ = stop.changed() => break,
             _ = ticks.tick() => {}
         }
+        // A listener ends when its project closes, so a project opened again under the same slug gets a new one.
+        while let Some(ended) = listeners.try_join_next() {
+            if let Ok(slug) = ended {
+                listening.remove(&slug);
+            }
+        }
         for handle in state.projects.handles() {
             if listening.insert(handle.slug.clone()) {
                 listeners.spawn(integrate_project(
@@ -381,28 +389,33 @@ async fn auto_integrate(
     while listeners.join_next().await.is_some() {}
 }
 
-/// One run after each event of a kind that can make a proposal ready, rather than one run for a burst: a run that is already past a proposal does not see an approval that lands on it during the run.
+/// One run after each event of a kind that can make a proposal ready, rather than one run for a burst: a run that is already past a proposal does not see an approval that lands on it during the run. Returns the project's slug once its project closes or the job stops. The listener holds the handle and so its bus, whose channel never closes, so a closed project ends it through [`EventBus::closing`].
+///
+/// [`EventBus::closing`]: crate::services::events::EventBus::closing
 async fn integrate_project(
     state: AppState,
     handle: Arc<ProjectHandle>,
     progress: Arc<watch::Sender<JobProgress>>,
     mut stop: watch::Receiver<bool>,
-) {
+) -> String {
     let mut events = handle.bus.subscribe();
+    let mut closing = handle.bus.closing();
     integrate_ready(&state, &handle, &progress).await;
     loop {
         let received = tokio::select! {
-            _ = stop.changed() => return,
+            _ = stop.changed() => break,
+            _ = closing.wait_for(|closed| *closed) => break,
             received = events.recv() => received,
         };
         match received {
             Ok(BusMessage::Durable(event)) if can_make_ready(event.event_type) => {}
             Err(RecvError::Lagged(_)) => {}
             Ok(_) => continue,
-            Err(RecvError::Closed) => return,
+            Err(RecvError::Closed) => break,
         }
         integrate_ready(&state, &handle, &progress).await;
     }
+    handle.slug.clone()
 }
 
 /// A verdict, alone or in a batch review, a changed or cleared mark, a removed dependency, a status change, which covers a prerequisite becoming Done, and an added tag, because an approval counts by the `main` tag and the role its agent holds now.
@@ -521,6 +534,7 @@ async fn live(
             _ = stop.changed() => break,
             _ = ticks.tick() => {}
         }
+        state.projects.close_stale().await;
         let reached: usize = state
             .projects
             .handles()

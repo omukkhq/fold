@@ -312,7 +312,7 @@ pub(crate) fn capabilities(
 
 /// Opening creates the store's directories, so it runs inside the blocking work.
 fn open_objects(paths: &ProjectPaths) -> Result<ObjectStore, FoldError> {
-    ObjectStore::open(&paths.fold_dir()).map_err(FoldError::from)
+    ObjectStore::open_existing(&paths.fold_dir()).map_err(FoldError::from)
 }
 
 async fn blocking<T: Send + 'static>(

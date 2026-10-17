@@ -452,3 +452,26 @@ fn concurrent_writers_of_one_hash_both_succeed() {
     assert_eq!(store.read(&hashes[0]).unwrap().payload, data);
     assert_eq!(store.entries().unwrap().len(), 1);
 }
+
+#[test]
+fn a_store_of_a_deleted_fold_dir_never_makes_it_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let fold = dir.path().join(".fold");
+    let missing = ObjectStore::open_existing(&fold).unwrap_err();
+    assert!(
+        matches!(missing, ObjectError::Io(ref error) if error.kind() == std::io::ErrorKind::NotFound)
+    );
+    assert!(!fold.exists());
+
+    fs::create_dir(&fold).unwrap();
+    let store = ObjectStore::open_existing(&fold).unwrap();
+    store.write(ObjectKind::Blob, b"kept").unwrap();
+    fs::remove_dir_all(&fold).unwrap();
+    assert!(store.write(ObjectKind::Blob, b"after").is_err());
+    assert!(
+        store
+            .write_blob_from(&mut Cursor::new(compressible(4096)))
+            .is_err()
+    );
+    assert!(!fold.exists());
+}

@@ -88,7 +88,7 @@ pub(crate) async fn commit_locked<H: Send + 'static>(
         if git.ref_commit(&repo, FOLD_HEAD_REF)?.as_ref() != wanted {
             set_ref(&git, &repo, FOLD_HEAD_REF, wanted)?;
         }
-        let objects = ObjectStore::open(&fold_dir).map_err(FoldError::from)?;
+        let objects = ObjectStore::open_existing(&fold_dir).map_err(FoldError::from)?;
         let target = ExportTarget {
             repo: &repo,
             refname: FOLD_HEAD_REF,

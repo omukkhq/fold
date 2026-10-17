@@ -23,7 +23,7 @@ use fold_vcs::index::StatIndex;
 use fold_vcs::materialise::{MaterialiseOptions, materialise};
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::paths::WorkspaceError as VcsError;
-use fold_vcs::platform::sync_dir;
+use fold_vcs::platform::{create_dir_below, sync_dir};
 use serde_json::json;
 
 use super::sync::path_text;
@@ -424,8 +424,8 @@ impl WorkspaceService {
         let root = self.paths.root().to_path_buf();
         let probed = Arc::clone(&self.caps);
         blocking(move || {
-            fs::create_dir_all(&ws_dir).map_err(io_error)?;
-            let objects = ObjectStore::open(&paths.fold_dir()).map_err(FoldError::from)?;
+            create_dir_below(&paths.fold_dir(), &ws_dir).map_err(io_error)?;
+            let objects = ObjectStore::open_existing(&paths.fold_dir()).map_err(FoldError::from)?;
             let caps = capabilities(&probed, &paths)?;
             let staging = staging_dir(&ws_dir)?;
             let opts = MaterialiseOptions { read_only, caps };
