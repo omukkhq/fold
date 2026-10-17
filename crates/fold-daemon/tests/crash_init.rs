@@ -111,12 +111,11 @@ async fn an_init_stopped_before_the_registry_insert_finishes_on_the_next_run() {
     assert_eq!(project.slug, "app");
     assert_eq!(project.root, paths.root());
     assert_eq!(project.revision.to_string(), "r1");
-    // The folder's two files and the `.foldignore` and `.gitignore` link init wrote beside them.
+    // The folder's two files and the `.gitignore` and empty `.foldignore` init wrote beside them.
     assert_eq!(project.imported.files, 4);
-    let ignore_files = std::fs::metadata(paths.root().join(".foldignore"))
+    let ignore_files = std::fs::metadata(paths.root().join(".gitignore"))
         .unwrap()
-        .len()
-        + ".foldignore".len() as u64;
+        .len();
     assert_eq!(
         project.imported.bytes,
         (LIB.len() + README.len()) as u64 + ignore_files

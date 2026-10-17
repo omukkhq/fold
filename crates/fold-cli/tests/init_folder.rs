@@ -195,7 +195,7 @@ fn init_makes_the_folder_files_r1_and_its_first_commit() {
 }
 
 #[test]
-fn init_in_a_new_dir_writes_foldignore_and_a_gitignore_link_to_it() {
+fn init_in_a_new_dir_writes_a_regular_gitignore_and_an_empty_foldignore() {
     let sandbox = Sandbox::new();
     let project = sandbox.path("app");
     let output = sandbox.fold(&["init", project.to_str().unwrap()]);
@@ -206,10 +206,12 @@ fn init_in_a_new_dir_writes_foldignore_and_a_gitignore_link_to_it() {
         machine_warnings(&project)
     )));
     assert_eq!(r1(&project).number.to_string(), "r1");
-    assert!(project.join(".foldignore").is_file());
-    assert_eq!(
-        fs::read_link(project.join(".gitignore")).unwrap(),
-        Path::new(".foldignore")
+    assert_eq!(fs::metadata(project.join(".foldignore")).unwrap().len(), 0);
+    assert!(!project.join(".gitignore").is_symlink());
+    assert!(
+        fs::read_to_string(project.join(".gitignore"))
+            .unwrap()
+            .starts_with("# ")
     );
     assert_eq!(git(&project, &["log", "--format=%s"]), "fold r1\n");
     assert_eq!(

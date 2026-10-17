@@ -74,9 +74,16 @@ async fn init_creates_the_layout_and_registers_the_project() {
         .collect();
     entries.sort();
     assert_eq!(entries, [".fold", ".foldignore", ".git", ".gitignore"]);
+    assert!(
+        std::fs::symlink_metadata(project.root.join(".gitignore"))
+            .unwrap()
+            .is_file()
+    );
     assert_eq!(
-        std::fs::read_link(project.root.join(".gitignore")).unwrap(),
-        Path::new(".foldignore")
+        std::fs::metadata(project.root.join(".foldignore"))
+            .unwrap()
+            .len(),
+        0
     );
     let mut inside: Vec<_> = std::fs::read_dir(paths.fold_dir())
         .unwrap()
@@ -364,6 +371,31 @@ async fn init_records_the_folder_files_as_r1_and_keeps_its_gitignore() {
     assert_eq!(
         git(&root, &["ls-tree", "-r", "--name-only", "HEAD"]),
         ".gitignore\nsrc/lib.rs\n"
+    );
+    assert_eq!(git(&root, &["status", "--porcelain"]), "");
+}
+
+#[tokio::test]
+async fn init_keeps_the_foldignore_of_a_folder_without_a_gitignore() {
+    let host = Host::new();
+    let root = host.root("app");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".foldignore"), "out/\n").unwrap();
+    init_project(&host.paths, &root, None, &host.clock)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(root.join(".foldignore")).unwrap(),
+        "out/\n"
+    );
+    assert!(
+        std::fs::symlink_metadata(root.join(".gitignore"))
+            .unwrap()
+            .is_file()
+    );
+    assert_eq!(
+        git(&root, &["ls-tree", "-r", "--name-only", "HEAD"]),
+        ".foldignore\n.gitignore\n"
     );
     assert_eq!(git(&root, &["status", "--porcelain"]), "");
 }

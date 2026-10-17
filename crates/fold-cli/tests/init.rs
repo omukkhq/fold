@@ -417,6 +417,12 @@ fn name_sets_the_slug_and_a_new_folder_gets_the_ignore_files() {
     let project = sandbox.path("dir");
     let output = sandbox.fold(&["init", project.to_str().unwrap(), "--name", "Big Shop"]);
     assert!(stdout(&output).starts_with("initialised project big-shop at "));
-    assert!(project.join(".foldignore").is_file());
-    assert!(project.join(".gitignore").is_symlink());
+    assert_eq!(
+        std::fs::metadata(project.join(".foldignore"))
+            .unwrap()
+            .len(),
+        0
+    );
+    assert!(project.join(".gitignore").is_file());
+    assert!(!project.join(".gitignore").is_symlink());
 }

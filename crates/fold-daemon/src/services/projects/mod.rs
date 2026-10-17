@@ -102,7 +102,7 @@ pub type FolderFiles = Box<dyn FnOnce(&Path) -> Result<Vec<PathBuf>, FoldError> 
 
 /// How init takes the project folder.
 enum Start {
-    /// The folder is not a Git repository: init runs `git init`, and the folder's files, less the ignore rules, with the ignore files and `files` init writes, become `r1` and its first commit.
+    /// The folder is not a Git repository: init runs `git init`, and the folder's files, less the ignore rules, with the ignore files (when the folder has no `.gitignore`) and `files` init writes, become `r1` and its first commit.
     New { files: Option<FolderFiles> },
     /// The folder is a Git repository with a clean tree on `branch`: `r1` is the committed tree at `head`, whose commit is `head` itself.
     FromGit { head: CommitId, branch: String },
@@ -115,7 +115,7 @@ struct Created {
     files: Vec<PathBuf>,
 }
 
-/// Makes `root` a fold project whose folder is main: creates `.fold/`, migrates the project database, writes the commented config, records the folder's files, less the ignore rules, as `r1`, runs `git init` and writes `r1`'s commit, and only then registers the project under a free slug. A folder that is a Git repository is refused with a hint to use `--from-git`. A folder that is inside another repository's working tree is refused with a hint to use `--from-git` at that repository's top, so no repository is nested in another. When the folder has no `.gitignore`, init writes `.foldignore` and makes `.gitignore` a symlink to it before the folder's files are recorded, so both are in `r1` and its commit and the folder is clean after init; an existing `.gitignore` is kept. Init is a host command, so it has no actor and appends no event. A failure after `.fold/` exists removes `.fold/` and what init wrote beside it, never a file of the folder. A `.fold/` that the registry does not know is an init that stopped part-way: when its database is complete the init finishes it, and otherwise it is refused with `project_incomplete` and nothing is removed. A registered folder that holds `.fold/` is refused with `project_exists`; a registered folder without `.fold/` holds no project, so the new project replaces that registration in the transaction that registers it and keeps its slug.
+/// Makes `root` a fold project whose folder is main: creates `.fold/`, migrates the project database, writes the commented config, records the folder's files, less the ignore rules, as `r1`, runs `git init` and writes `r1`'s commit, and only then registers the project under a free slug. A folder that is a Git repository is refused with a hint to use `--from-git`. A folder that is inside another repository's working tree is refused with a hint to use `--from-git` at that repository's top, so no repository is nested in another. When the folder has no `.gitignore`, init writes `.gitignore` as a regular file with a comment, and an empty `.foldignore` unless the folder has one, before the folder's files are recorded, so both are in `r1` and its commit and the folder is clean after init; an existing `.gitignore` is kept and init writes no ignore file. `.foldignore` only adds rules on top of `.gitignore` or brings back a path it ignores. Init is a host command, so it has no actor and appends no event. A failure after `.fold/` exists removes `.fold/` and what init wrote beside it, never a file of the folder. A `.fold/` that the registry does not know is an init that stopped part-way: when its database is complete the init finishes it, and otherwise it is refused with `project_incomplete` and nothing is removed. A registered folder that holds `.fold/` is refused with `project_exists`, or with `project_incomplete` when `.fold/` has no database but holds project content; a registered folder without `.fold/`, or whose `.fold/` holds only what a daemon that still had the project open wrote after it was deleted, holds no project, so the new project replaces that registration in the transaction that registers it and keeps its slug.
 pub async fn init_project(
     host: &HostPaths,
     root: &Path,
@@ -539,9 +539,8 @@ fn stored_contents(
     }))
 }
 
-/// The ignore file init writes when the folder has no `.gitignore`; `.gitignore` becomes a symlink to it, so fold and Git read the same rules.
-const FOLDIGNORE_TEXT: &str =
-    "# Paths that fold and Git leave out, one pattern per line, as in a .gitignore file.\n";
+/// The `.gitignore` init writes when the folder has none.
+const GITIGNORE_TEXT: &str = "# Paths that Git and fold leave out, one pattern per line. Add a .foldignore for rules that only fold uses.\n";
 
 /// A new project's ignore files and the caller's `files` first, so `r1` holds them and the folder is clean against `r1`'s commit; then the objects of `r1`, the sync map that names `r1` for [`Start::FromGit`], and the one transaction that inserts `r1` and creates `main`. The map comes before the row, so a database that holds `r1` always has the map that names its commit. A new project's repository comes last, so an init that stops before its database is complete leaves no repository; one that stops after has it created when the init runs again. Both kinds get `/.fold/` in `info/exclude`.
 async fn create_first_revision(
@@ -622,7 +621,7 @@ async fn create_first_revision(
     Ok((row.number, imported, head))
 }
 
-/// Writes `.foldignore` and makes `.gitignore` a symlink to it when the folder has no `.gitignore`, and returns what it wrote. Blocking.
+/// Writes a regular `.gitignore`, and an empty `.foldignore` unless one exists, when the folder has no `.gitignore`, and returns what it wrote. Blocking.
 fn write_ignore_files(root: &Path) -> Result<Vec<PathBuf>, ProjectError> {
     let gitignore = root.join(GITIGNORE);
     match std::fs::symlink_metadata(&gitignore) {
@@ -630,14 +629,13 @@ fn write_ignore_files(root: &Path) -> Result<Vec<PathBuf>, ProjectError> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(io_error(&error)),
     }
+    std::fs::write(&gitignore, GITIGNORE_TEXT).map_err(|error| io_error(&error))?;
+    let mut written = vec![gitignore];
     let foldignore = root.join(FOLDIGNORE);
-    let mut written = Vec::new();
     if std::fs::symlink_metadata(&foldignore).is_err() {
-        std::fs::write(&foldignore, FOLDIGNORE_TEXT).map_err(|error| io_error(&error))?;
+        std::fs::write(&foldignore, b"").map_err(|error| io_error(&error))?;
         written.push(foldignore);
     }
-    std::os::unix::fs::symlink(FOLDIGNORE, &gitignore).map_err(|error| io_error(&error))?;
-    written.push(gitignore);
     Ok(written)
 }
 
