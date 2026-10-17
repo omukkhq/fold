@@ -94,14 +94,17 @@ main() {
 
   tag=${FOLD_VERSION:-}
   if [ -z "$tag" ]; then
-    say "Looking for the latest version"
-    if fetch "$download_base/fold/latest.txt" "$tmp/latest" 2>/dev/null; then
+    # Each platform has its own latest version: a release whose build failed for one platform leaves that platform on its last release.
+    say "Looking for the latest version for $asset"
+    if fetch "$download_base/fold/latest/$asset.txt" "$tmp/latest" 2>/dev/null; then
       tag=$(tr -d ' \t\r\n' <"$tmp/latest")
     else
       say "  $download_base did not answer; asking GitHub"
       fetch "$github_api/releases/latest" "$tmp/latest.json" 2>/dev/null ||
         die "could not find the latest version. Set FOLD_VERSION=v0.x.y to pick one."
       tag=$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$tmp/latest.json" | head -n 1)
+      grep -Eq "\"name\"[[:space:]]*:[[:space:]]*\"$asset\"" "$tmp/latest.json" ||
+        die "the latest GitHub release $tag has no $asset. Set FOLD_VERSION to an earlier version that has one."
     fi
   fi
   # The tag goes into download URLs, so it must be a plain release tag.

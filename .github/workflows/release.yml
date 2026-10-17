@@ -1,0 +1,183 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# An explicit bash adds -o pipefail to the -e of the default shell.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  web:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check that the tag names the workspace version
+        run: |
+          version=$(sed -n '/^\[workspace\.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "::error::tag $GITHUB_REF_NAME does not match version $version in Cargo.toml"; exit 1; }
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.0
+      - run: make web-build
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-dist
+          path: web/dist
+          if-no-files-found: error
+
+  build:
+    needs: web
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-22.04
+            asset: fld-x86_64-linux
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-22.04-arm
+            asset: fld-aarch64-linux
+          - target: aarch64-apple-darwin
+            os: macos-14
+            asset: fld-aarch64-macos
+    runs-on: ${{ matrix.os }}
+    env:
+      ASSET: ${{ matrix.asset }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the toolchain of rust-toolchain.toml
+        run: rustup toolchain install
+      - name: Install musl-tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: web-dist
+          path: web/dist
+      - run: make release RELEASE_TRIPLE=${{ matrix.target }} RELEASE_ASSET="$ASSET" WEB_BUILT=1
+      - name: Check that fld reports the tag version
+        run: |
+          got=$("dist/$ASSET" --version)
+          [ "$got" = "fld ${GITHUB_REF_NAME#v}" ] || { echo "::error::dist/$ASSET reports '$got' for tag $GITHUB_REF_NAME"; exit 1; }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  # A platform whose build fails is left out of the release; the run stays red, and the release goes out with the binaries that built.
+  release:
+    needs: [web, build]
+    if: ${{ !cancelled() && needs.web.result == 'success' }}
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # checkout fetches the tagged commit only, so the annotated tag object, which holds the release notes, comes separately.
+      - name: Fetch the tag
+        run: git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: fld-*
+          path: files
+          merge-multiple: true
+      - name: Write SHA256SUMS
+        run: |
+          ls files/fld-* >/dev/null 2>&1 || { echo "::error::no platform built a binary"; exit 1; }
+          [ ! -f scripts/install.sh ] || cp scripts/install.sh files/install.sh
+          cd files
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+      - name: Create or update the GitHub release
+        run: |
+          flags=(--verify-tag)
+          case $TAG in *-*) flags+=(--prerelease) ;; esac
+          if [ "$(git cat-file -t "refs/tags/$TAG")" = tag ]; then
+            git tag -l --format='%(contents:subject)%0a%0a%(contents:body)' "$TAG" > notes.md
+            flags+=(--notes-file notes.md)
+          else
+            flags+=(--generate-notes)
+          fi
+          # A re-run of the release job, for example after a failed platform build, adds its files to the release that exists.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber files/*
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" "${flags[@]}" files/*
+          fi
+
+  r2:
+    needs: release
+    # success() would also look at the failed build of a left-out platform.
+    if: ${{ !cancelled() && needs.release.result == 'success' }}
+    runs-on: ubuntu-22.04
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: Download the release files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir files
+          cd files && sha256sum -c SHA256SUMS
+      - name: Upload to R2
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          # R2 does not accept the default checksums of AWS CLI 2.23 and later.
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+        run: |
+          missing=
+          [ -n "$R2_ACCOUNT_ID" ] || missing="$missing R2_ACCOUNT_ID"
+          [ -n "$R2_BUCKET" ] || missing="$missing R2_BUCKET"
+          [ -n "$AWS_ACCESS_KEY_ID" ] || missing="$missing R2_ACCESS_KEY_ID"
+          [ -n "$AWS_SECRET_ACCESS_KEY" ] || missing="$missing R2_SECRET_ACCESS_KEY"
+          [ -z "$missing" ] || { echo "::error::repository secrets not set:$missing"; exit 1; }
+          put() {
+            aws s3 cp --endpoint-url "https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com" --no-progress \
+              --content-type "$2" --cache-control "$3" "$1" "s3://$R2_BUCKET/fold/$4"
+          }
+          for file in files/*; do
+            name=${file#files/}
+            case $name in
+              fld-*) type=application/octet-stream ;;
+              install.sh) type='text/x-shellscript; charset=utf-8' ;;
+              *) type='text/plain; charset=utf-8' ;;
+            esac
+            # A re-run of the release adds files, so SHA256SUMS of a tag can change; a binary of a tag never does.
+            case $name in
+              SHA256SUMS) cache=no-cache ;;
+              *) cache='public, max-age=31536000, immutable' ;;
+            esac
+            put "$file" "$type" "$cache" "$TAG/$name"
+          done
+          case $TAG in *-*) echo "$TAG is a prerelease: fold/latest/ and fold/install.sh keep the last release"; exit 0 ;; esac
+          [ ! -f files/install.sh ] || put files/install.sh 'text/x-shellscript; charset=utf-8' no-cache install.sh
+          # The latest version is kept per platform, so a platform whose build failed keeps its last release.
+          printf '%s\n' "$TAG" > latest.txt
+          for file in files/fld-*; do
+            put latest.txt 'text/plain; charset=utf-8' no-cache "latest/${file#files/}.txt"
+          done

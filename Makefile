@@ -24,6 +24,7 @@ fmt: ## Format the Rust code, fix lint findings and format the web sources
 	cd web && bun run format
 
 RELEASE_TRIPLE := x86_64-unknown-linux-musl
+RELEASE_ASSET = fld-$(RELEASE_ARCH)-$(if $(findstring -apple-darwin,$(RELEASE_TRIPLE)),macos,linux)
 
 DEV_DIR := $(CURDIR)/target/dev
 
@@ -151,24 +152,50 @@ check-api: ## Fail when web/src/api/schema.d.ts differs from the daemon's OpenAP
 	cd web && bunx openapi-typescript ../$(GEN_DIR)/openapi.json -o ../$(GEN_DIR)/schema.d.ts
 	@cmp -s $(GEN_DIR)/schema.d.ts web/src/api/schema.d.ts || { echo "web/src/api/schema.d.ts is stale: run make gen-api" >&2; exit 1; }
 
-# The C code of the bundled SQLite and zstd needs a musl C compiler: cc-rs takes x86_64-linux-musl-gcc or musl-gcc from PATH, and rustc links the musl target statically with its own C runtime, so no linker setting is needed.
-release-tools:
-	@command -v x86_64-linux-musl-gcc >/dev/null 2>&1 || command -v musl-gcc >/dev/null 2>&1 || { echo "release: neither x86_64-linux-musl-gcc nor musl-gcc is on PATH; install musl-gcc with: sudo apt install musl-tools" >&2; exit 1; }
+RELEASE_ARCH = $(firstword $(subst -, ,$(RELEASE_TRIPLE)))
+RELEASE_DIST = dist/$(RELEASE_ASSET)
+# The oldest macOS that the darwin build runs on; rustc and the C compiler of the bundled SQLite and zstd both read it.
+RELEASE_MACOS_MIN := 13.0
+# cc-rs looks for <arch>-linux-musl-gcc and falls back to musl-gcc only for x86_64, and Ubuntu's musl-tools ships only musl-gcc (for the host architecture), so the release names the C compiler of the bundled SQLite and zstd itself. rustc links the musl targets statically with their own C runtime, so no linker setting is needed.
+RELEASE_MUSL_CC = $(or $(shell command -v $(RELEASE_ARCH)-linux-musl-gcc 2>/dev/null),$(if $(filter $(RELEASE_ARCH),$(shell uname -m)),$(shell command -v musl-gcc 2>/dev/null)))
 
-release: release-tools web-build ## Build the static musl fld for x86_64 Linux into dist/ (needs musl-tools), check the artefact, run the smoke test and write SHA256SUMS
+ifneq ($(findstring -linux-musl,$(RELEASE_TRIPLE)),)
+RELEASE_ENV = CC_$(subst -,_,$(RELEASE_TRIPLE))=$(RELEASE_MUSL_CC)
+else ifneq ($(findstring -apple-darwin,$(RELEASE_TRIPLE)),)
+RELEASE_ENV = MACOSX_DEPLOYMENT_TARGET=$(RELEASE_MACOS_MIN)
+endif
+
+release-tools:
+	rustup target add $(RELEASE_TRIPLE)
+ifneq ($(findstring -linux-musl,$(RELEASE_TRIPLE)),)
+	@test -n "$(RELEASE_MUSL_CC)" || { echo "release: no musl C compiler for $(RELEASE_ARCH): put $(RELEASE_ARCH)-linux-musl-gcc on PATH, or on a $(RELEASE_ARCH) host install musl-gcc with: sudo apt install musl-tools" >&2; exit 1; }
+endif
+
+# A musl build is static: no shared libraries and no program interpreter; on x86_64 it is also a static PIE (rustc builds aarch64 musl as a plain static executable). macOS has no static executables, so the darwin build may link only the libraries and frameworks that macOS itself ships in /usr/lib and /System/Library.
+release: release-tools $(if $(WEB_BUILT),,web-build) ## Build the standalone fld for RELEASE_TRIPLE (static musl x86_64 Linux by default) into dist/RELEASE_ASSET, check it, run the smoke test and write SHA256SUMS; WEB_BUILT=1 embeds the existing web/dist
 	@test -f web/dist/index.html || { echo "release: web/dist/index.html is missing; the binary embeds web/dist" >&2; exit 1; }
-	cargo build --release --locked -p fold-cli --target $(RELEASE_TRIPLE)
+	$(RELEASE_ENV) cargo build --release --locked -p fold-cli --target $(RELEASE_TRIPLE)
 	rm -rf dist
 	mkdir -p dist
-	install -m 0755 "$$(cargo metadata --format-version 1 --no-deps | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')/$(RELEASE_TRIPLE)/release/fld" dist/fld-x86_64-linux
-	file dist/fld-x86_64-linux | grep -q 'x86-64' || { echo "release: dist/fld-x86_64-linux is not an x86-64 binary" >&2; exit 1; }
-	@readelf -h dist/fld-x86_64-linux | grep -q 'Type:.*DYN' && \
-	 readelf -d dist/fld-x86_64-linux | grep -q 'FLAGS_1.*PIE' && \
-	 ! readelf -d dist/fld-x86_64-linux | grep -q '(NEEDED)' && \
-	 ! readelf -lW dist/fld-x86_64-linux | grep -q 'Requesting program interpreter' || \
-		{ echo "release: dist/fld-x86_64-linux must be a static PIE: no shared libraries (DT_NEEDED) and no program interpreter" >&2; exit 1; }
-	scripts/release-smoke.sh dist/fld-x86_64-linux
-	cd dist && sha256sum fld-x86_64-linux > SHA256SUMS
+	install -m 0755 "$$(cargo metadata --format-version 1 --no-deps | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')/$(RELEASE_TRIPLE)/release/fld" $(RELEASE_DIST)
+	file $(RELEASE_DIST) | grep -Eq '$(if $(filter x86_64,$(RELEASE_ARCH)),x86-64,aarch64|arm64)' || { echo "release: $(RELEASE_DIST) is not a $(RELEASE_ARCH) binary" >&2; exit 1; }
+ifneq ($(findstring -linux-musl,$(RELEASE_TRIPLE)),)
+	@! readelf -d $(RELEASE_DIST) | grep -q '(NEEDED)' && \
+	 ! readelf -lW $(RELEASE_DIST) | grep -q 'Requesting program interpreter' || \
+		{ echo "release: $(RELEASE_DIST) must be static: no shared libraries (DT_NEEDED) and no program interpreter" >&2; exit 1; }
+ifeq ($(RELEASE_ARCH),x86_64)
+	@readelf -h $(RELEASE_DIST) | grep -q 'Type:.*DYN' && readelf -d $(RELEASE_DIST) | grep -q 'FLAGS_1.*PIE' || \
+		{ echo "release: $(RELEASE_DIST) must be a static PIE" >&2; exit 1; }
+endif
+endif
+ifneq ($(findstring -apple-darwin,$(RELEASE_TRIPLE)),)
+	@libs=$$(otool -L $(RELEASE_DIST) | tail -n +2 | awk '{print $$1}' | grep -vE '^/(usr/lib|System/Library)/'); \
+	 [ -z "$$libs" ] || { echo "release: $(RELEASE_DIST) links libraries that macOS does not ship: $$libs" >&2; exit 1; }
+	@otool -l $(RELEASE_DIST) | grep -A4 LC_BUILD_VERSION | grep -q 'minos $(RELEASE_MACOS_MIN)$$' || \
+		{ echo "release: $(RELEASE_DIST) does not name macOS $(RELEASE_MACOS_MIN) as its minimum" >&2; exit 1; }
+endif
+	scripts/release-smoke.sh $(RELEASE_DIST)
+	cd dist && $(if $(findstring -apple-darwin,$(RELEASE_TRIPLE)),shasum -a 256,sha256sum) $(RELEASE_ASSET) > SHA256SUMS
 
 # The web build comes first because the binary embeds web/dist; the second make runs the rest: the checks of the web sources, without a second install or build.
 check: web-build ## Run every check, after the web build that the binary embeds

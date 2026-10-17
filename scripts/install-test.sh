@@ -60,9 +60,11 @@ fresh() {
   dest=$work/home/.local/bin
 }
 
+# set_latest <tag> [asset]: the latest version of one platform (default Linux x86_64) on R2, and the latest GitHub release with that asset.
 set_latest() {
-  printf '%s\n' "$1" >"$www/r2/fold/latest.txt"
-  printf '{"url": "x", "tag_name": "%s", "name": "x"}\n' "$1" >"$www/api/releases/latest"
+  mkdir -p "$www/r2/fold/latest"
+  printf '%s\n' "$1" >"$www/r2/fold/latest/${2:-fld-x86_64-linux}.txt"
+  printf '{"url": "x", "tag_name": "%s", "name": "x", "assets": [{"name": "%s"}, {"name": "SHA256SUMS"}]}\n' "$1" "${2:-fld-x86_64-linux}" >"$www/api/releases/latest"
 }
 
 # run_installer <r2 base> [VAR=value ...]: the script is piped to sh as `curl ... | sh` does; output goes to $work/out, status to $status.
@@ -155,15 +157,15 @@ run_installer "$r2"
 check "missing checksum entry" '[ "$status" != 0 ] && grep -q "no entry for fld-x86_64-linux" "$work/out" && [ ! -e "$dest/fld" ]'
 finish "a missing checksum entry is refused"
 
-# latest.txt that is not a release tag
+# latest file that is not a release tag
 fresh
 publish "$www/r2/fold" v0.2.0
-printf 'v0.2.0/../../x\n' >"$www/r2/fold/latest.txt"
+set_latest 'v0.2.0/../../x'
 run_installer "$r2"
-check "bad latest.txt" '[ "$status" != 0 ] && grep -q "unexpected version" "$work/out" && [ ! -e "$dest/fld" ]'
-printf '<html>Sign in to the network</html>\n' >"$www/r2/fold/latest.txt"
+check "bad latest file" '[ "$status" != 0 ] && grep -q "unexpected version" "$work/out" && [ ! -e "$dest/fld" ]'
+set_latest '<html>Sign in to the network</html>'
 run_installer "$r2"
-check "HTML latest.txt" '[ "$status" != 0 ] && grep -q "unexpected version" "$work/out" && [ ! -e "$dest/fld" ]'
+check "HTML latest file" '[ "$status" != 0 ] && grep -q "unexpected version" "$work/out" && [ ! -e "$dest/fld" ]'
 run_installer "$r2" FOLD_VERSION="v0.2.0 x"
 check "bad FOLD_VERSION" '[ "$status" != 0 ] && grep -q "unexpected version" "$work/out" && [ ! -e "$dest/fld" ]'
 finish "a version that is not a release tag is refused"
@@ -175,6 +177,23 @@ set_latest v0.5.0
 run_installer "http://127.0.0.1:$dead_port"
 check "R2 down" '[ "$status" = 0 ] && [ "$(version_of)" = "fld 0.5.0" ] && grep -q "GitHub" "$work/out"'
 finish "R2 down falls back to GitHub"
+
+# the latest for this platform is older than the latest for another platform
+fresh
+publish "$www/r2/fold" v0.3.0
+set_latest v0.4.0 fld-aarch64-linux
+set_latest v0.3.0
+run_installer "$r2"
+check "older platform latest" '[ "$status" = 0 ] && [ "$(version_of)" = "fld 0.3.0" ]'
+finish "each platform installs its own latest version"
+
+# R2 down, and the latest GitHub release has no binary for this platform
+fresh
+publish "$www/gh/releases/download" v0.5.0
+set_latest v0.5.0 fld-aarch64-linux
+run_installer "http://127.0.0.1:$dead_port"
+check "GitHub release without this platform" '[ "$status" != 0 ] && grep -q "has no fld-x86_64-linux" "$work/out" && [ ! -e "$dest/fld" ]'
+finish "a GitHub release without this platform stops clearly"
 
 # R2 lacks the files of a pinned release, GitHub has them
 fresh
