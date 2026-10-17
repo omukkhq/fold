@@ -546,6 +546,18 @@ fn the_skill_has_the_frontmatter_keys_and_every_section() {
 }
 
 #[test]
+fn the_skill_maps_existing_code_into_areas_before_planning() {
+    for rule in [
+        "map the code before you plan",
+        "Derive the areas from that map",
+        "with the folders each area owns",
+        "name the folders it owns",
+    ] {
+        assert!(SKILL.contains(rule), "{rule}");
+    }
+}
+
+#[test]
 fn the_skill_uses_exactly_the_four_verdicts() {
     for verdict in ["comment", "request_changes", "approve", "reject"] {
         assert!(SKILL.contains(&format!("`{verdict}`")), "{verdict}");

@@ -563,6 +563,8 @@ mod tests {
         assert!(prompt.contains("call `submit_main_change`"));
         assert!(prompt.contains("Delegate whenever a task fits"));
         assert!(prompt.contains("Never use a back door"));
+        assert!(prompt.contains("map the code first"));
+        assert!(prompt.contains("names the folders the area owns"));
         assert!(prompt.contains("`pause_project` or `resume_project` only when the user asks"));
         assert!(prompt.contains("`start_worker` fails with `project_paused`"));
         assert!(prompt.contains("only when the user tells you in this conversation"));
