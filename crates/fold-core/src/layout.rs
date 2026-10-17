@@ -147,6 +147,14 @@ pub fn task_workspace_path(task: TaskId, earlier: u32) -> String {
     }
 }
 
+/// The directory of the main workspace relative to the project root. `earlier` counts the main workspaces the project had before this one: none gives `.fold/ws/main`, one gives `.fold/ws/main-2`. A task id is `t-<n>` and a review checkout `review-…`, so the name never meets theirs.
+pub fn main_workspace_path(earlier: u32) -> String {
+    match earlier {
+        0 => format!("{WS_DIR}/main"),
+        _ => format!("{WS_DIR}/main-{}", u64::from(earlier) + 1),
+    }
+}
+
 /// The directory of a review checkout relative to the project root. `earlier` counts the review checkouts the proposal had before this one: none gives `.fold/ws/review-p-4`, one gives `.fold/ws/review-p-4-2`. Like a task workspace's name it carries no worker and no version, so it never changes when the checkout changes hands.
 pub fn review_checkout_path(proposal: ProposalId, earlier: u32) -> String {
     let name = proposal.to_string().to_ascii_lowercase();
@@ -236,6 +244,16 @@ mod tests {
         assert_eq!(
             task_workspace_path(task, u32::MAX),
             format!(".fold/ws/t-12-{}", u64::from(u32::MAX) + 1)
+        );
+    }
+
+    #[test]
+    fn main_workspace_paths_count_the_earlier_workspaces() {
+        assert_eq!(main_workspace_path(0), ".fold/ws/main");
+        assert_eq!(main_workspace_path(1), ".fold/ws/main-2");
+        assert_eq!(
+            main_workspace_path(u32::MAX),
+            format!(".fold/ws/main-{}", u64::from(u32::MAX) + 1)
         );
     }
 

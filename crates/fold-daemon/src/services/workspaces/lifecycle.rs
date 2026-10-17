@@ -42,18 +42,19 @@ const MAX_NAME_ATTEMPTS: u32 = 64;
 /// The longest abandon reason, in characters.
 const MAX_REASON_CHARS: usize = 500;
 
-/// An abandoned workspace and the status its task went back to, read in the transaction that abandoned it.
+/// An abandoned workspace and the status its task went back to, read in the transaction that abandoned it; `None` for the main workspace, which has no task.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Abandoned {
     pub workspace: WorkspaceView,
-    pub task_status: TaskStatus,
+    pub task_status: Option<TaskStatus>,
 }
 
 /// A workspace with public ids only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceView {
     pub id: WorkspaceId,
-    pub task: TaskId,
+    /// `None` for the main workspace only.
+    pub task: Option<TaskId>,
     pub worker: Option<WorkerName>,
     pub kind: WorkspaceKind,
     /// Relative to the project root.
@@ -148,16 +149,16 @@ enum CreatePlan {
     /// The task's live workspace, which no claim holder owns.
     Adopt(WorkspaceRow),
     Create {
-        base: workspaces::RevisionRow,
+        base: Box<workspaces::RevisionRow>,
         taken: Vec<String>,
     },
 }
 
 /// The directory a create renamed into place, with the index of what it wrote.
-struct Placed {
-    path: String,
-    dir: PathBuf,
-    index: StatIndex,
+pub(super) struct Placed {
+    pub(super) path: String,
+    pub(super) dir: PathBuf,
+    pub(super) index: StatIndex,
 }
 
 impl WorkspaceService {
@@ -259,7 +260,7 @@ impl WorkspaceService {
         })
     }
 
-    /// Abandons a live workspace of the actor's worker, which `policy::can_abandon_workspace` requires to be the owner: it becomes `abandoned` and `closed_at` is set, and the task goes back to Todo or Backlog. The directory and the claim stay. Refused while the task has an open proposal; the author closes it first, and nothing closes it on the worker's behalf. `reason` is the worker's short explanation, which `workspace.abandoned` carries.
+    /// Abandons a live workspace of the actor's worker, which `policy::can_abandon_workspace` requires to be the owner: it becomes `abandoned` and `closed_at` is set, and the task goes back to Todo or Backlog. The directory and the claim stay. Refused while the task has an open proposal; the author closes it first, and nothing closes it on the worker's behalf. The main workspace has no task, so abandoning it only closes it and discards its unsubmitted change. `reason` is the worker's short explanation, which `workspace.abandoned` carries.
     pub async fn abandon_workspace(
         &self,
         actor: &Actor,
@@ -374,7 +375,10 @@ impl WorkspaceService {
                 .with_hint("run fld init to create the first revision")
         })?;
         let taken = workspaces::task_workspace_paths(read, task).await?;
-        Ok(CreatePlan::Create { base, taken })
+        Ok(CreatePlan::Create {
+            base: Box::new(base),
+            taken,
+        })
     }
 
     /// Step 2 of a create: materialises `tree` into a staging directory under `.fold/ws/` and renames it to the task's next directory name. A name that `taken` lists for an earlier workspace of the task, or that some directory already holds, such as one left by a create that stopped before its row, is skipped, so a name is never shared.
@@ -412,7 +416,7 @@ impl WorkspaceService {
         Ok((placed.path, placed.dir))
     }
 
-    async fn place_named(
+    pub(super) async fn place_named(
         &self,
         name: impl Fn(u32) -> String + Send + 'static,
         taken: Vec<String>,
@@ -530,7 +534,7 @@ async fn abandon_in_tx(
     workspace: WorkspaceId,
     reason: &str,
     now: Timestamp,
-) -> Result<(WorkspaceRow, TaskStatus), WorkspaceError> {
+) -> Result<(WorkspaceRow, Option<TaskStatus>), WorkspaceError> {
     let row = workspaces::get_workspace(tx.conn(), workspace)
         .await?
         .ok_or_else(|| {
@@ -561,21 +565,23 @@ async fn abandon_in_tx(
             ])
             .into());
     }
-    let open_proposal = tasks::load_facts(tx.conn(), &[row.task])
-        .await?
-        .pop()
-        .is_some_and(|loaded| loaded.facts.proposal != ProposalFact::None);
-    if open_proposal {
-        return Err(FoldError::new(
-            codes::INVALID_REQUEST,
-            format!("{} has an open proposal", row.task),
-        )
-        .with_details([
-            ("reason", json!("proposal_open")),
-            ("task", json!(row.task.to_string())),
-        ])
-        .with_hint("call close_proposal first, then abandon_workspace")
-        .into());
+    if let Some(task) = row.task {
+        let open_proposal = tasks::load_facts(tx.conn(), &[task])
+            .await?
+            .pop()
+            .is_some_and(|loaded| loaded.facts.proposal != ProposalFact::None);
+        if open_proposal {
+            return Err(FoldError::new(
+                codes::INVALID_REQUEST,
+                format!("{task} has an open proposal"),
+            )
+            .with_details([
+                ("reason", json!("proposal_open")),
+                ("task", json!(task.to_string())),
+            ])
+            .with_hint("call close_proposal first, then abandon_workspace")
+            .into());
+        }
     }
     workspaces::close(tx, workspace, ClosedState::Abandoned, now).await?;
     let event = NewEvent::new(types::WORKSPACE_ABANDONED, actor.event_actor())?
@@ -583,20 +589,29 @@ async fn abandon_in_tx(
         .workspace(workspace)
         .data(json!({"reason": reason}))?;
     buffer.append(tx, &event, now).await?;
-    buffer.extend(recompute(tx, &[row.task], now).await?.events);
-    let task = tasks::fetch(tx.conn(), row.task)
-        .await?
-        .ok_or_else(|| task_not_found(row.task))?;
+    let status = match row.task {
+        Some(task) => {
+            buffer.extend(recompute(tx, &[task], now).await?.events);
+            let fetched = tasks::fetch(tx.conn(), task)
+                .await?
+                .ok_or_else(|| task_not_found(task))?;
+            Some(fetched.status)
+        }
+        None => None,
+    };
     let closed = workspaces::get_workspace(tx.conn(), workspace)
         .await?
         .ok_or(StoreError::Corrupt("workspaces.number"))?;
-    Ok((closed, task.status))
+    Ok((closed, status))
 }
 
 pub(super) fn workspace_exists(live: &WorkspaceRow) -> FoldError {
+    let owner = live
+        .task
+        .map_or_else(|| "main".to_owned(), |task| task.to_string());
     FoldError::new(
         codes::WORKSPACE_EXISTS,
-        format!("{} already has the workspace {}", live.task, live.id),
+        format!("{owner} already has the workspace {}", live.id),
     )
     .with_details([
         ("workspace", json!(live.id.to_string())),

@@ -61,8 +61,9 @@ The main agent is the session the user talks to. It handles requests, decides ar
 6. The review lead and its batch reviewers approve, and fold integrates their approvals. Approve or integrate yourself only when the user asks you to.
 7. Watch the work with `list_workers`, `get_task_graph` and `wait_for_events`, and answer the messages of the leads. Stop a worker with `stop_worker` only when its work is no longer necessary.
 8. When the user asks for more or fewer agents, for example "Summon max 10 agents for coding", call `set_worker_limits(task_worker?, batch_reviewer?, max_per_area?, clear_max_per_area?)`. Each limit is a whole number with no upper bound, and 0 lets no worker of that role start. Say the new numbers back to the user. A running worker is never stopped by a lower limit.
-9. While worker agents run, never edit code and never build a task yourself. Give the work to the lead of its area.
+9. While worker agents run, never build a task yourself. Give the work to the lead of its area.
 10. Call `pause_project` only when the user asks you to pause the agents, for example before the user sleeps or loses power or internet, and `resume_project` only when the user asks you to continue. Never pause or resume on your own decision. While the project is paused, start no work: fold refuses `start_worker` with `project_paused`.
+11. Change main directly only for a change that clears the way for the others and needs no task: the initial commit, preparing the repository for development (reference docs, merging `AGENTS.md`, scaffolding, config), a small docs change or a minor fix the user asks for. Delegate whenever a task fits; a feature goes to tasks unless the user asks you to build it yourself. Call `open_main_workspace`, which returns the main workspace under `.fold/ws/`: a workspace of no task, which only the main agent opens. Edit, build and test there, then call `record_changes(ws, message)`. Show the user the diff from `compare_revisions(from, to, path?)` between the workspace's base revision and the changeset, a summary and the Git commit message, and ask about anything unclear. Only after the user's explicit OK, call `submit_main_change(changeset, message)`: fold integrates the newest changeset of the main workspace as one revision and one Git commit with your message, and the workspace closes. The user's OK is the approval; no review runs. On `integration_conflicted`, call `sync_workspace(ws)`, resolve the files, record again, show the new diff and wait for a new OK.
 
 Only the agent with the `main` tag defines areas and starts leads. Every other agent that fold does not supervise gets `orchestrator_required`, also while no agent has the tag: a session opened by hand never does the main agent's work.
 
@@ -259,6 +260,7 @@ Every error has a stable `code`, a message and a hint that names the next tool. 
 ## Never
 
 - Never edit the files of the project folder. They are main, and they change only through integration.
+- Never change the project folder through a back door: no local Git remote with `fld pull`, and no shell command that writes into the project folder or `.fold/`. The main agent changes main directly only from its main workspace with `submit_main_change`, after the user's OK.
 - Never edit the workspace of another worker.
 - Never tick a linked checklist item. fold ticks it when the child task is Done.
 - Never clear the human review mark.

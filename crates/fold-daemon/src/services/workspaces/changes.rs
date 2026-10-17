@@ -15,6 +15,8 @@ use crate::services::tasks::{AttentionItem, attention, stalled_tasks};
 #[derive(Debug, Clone)]
 pub struct WorkspaceEntry {
     pub workspace: WorkspaceView,
+    /// The workspace's task: the routes list no main workspace.
+    pub task: TaskId,
     pub task_title: TaskTitle,
     /// `None` for a missing or closed workspace, a review checkout, and an active one whose live state did not start.
     pub live: Option<Arc<WorkspaceLive>>,
@@ -37,7 +39,7 @@ impl WorkspaceService {
         self.entries(views).await
     }
 
-    /// One workspace in any state, in the shape of a list entry. An unknown id is `workspace_not_found`.
+    /// One task workspace or review checkout in any state, in the shape of a list entry. An unknown id is `workspace_not_found`; the main workspace, which has no task, is `workspace_not_active`.
     pub async fn workspace_entry(
         &self,
         workspace: WorkspaceId,
@@ -45,6 +47,9 @@ impl WorkspaceService {
         let row = workspaces::get_workspace(self.store.read(), workspace)
             .await?
             .ok_or_else(|| not_found(workspace))?;
+        if row.kind == WorkspaceKind::Main {
+            return Err(not_active(workspace, row.kind, row.state).into());
+        }
         let mut entries = self.entries(vec![WorkspaceView::from(row)]).await?;
         entries.pop().ok_or_else(|| not_found(workspace).into())
     }
@@ -53,7 +58,7 @@ impl WorkspaceService {
         &self,
         views: Vec<WorkspaceView>,
     ) -> Result<Vec<WorkspaceEntry>, WorkspaceError> {
-        let task_ids: Vec<TaskId> = views.iter().map(|view| view.task).collect();
+        let task_ids: Vec<TaskId> = views.iter().filter_map(|view| view.task).collect();
         let stalled = stalled_tasks(self.live.as_ref());
         let items = attention(&self.store, &task_ids, &stalled).await?;
         let mut read = self
@@ -71,13 +76,17 @@ impl WorkspaceService {
         views
             .into_iter()
             .map(|workspace| {
+                let task = workspace
+                    .task
+                    .ok_or(StoreError::Corrupt("workspaces.task_id"))?;
                 let task_title = titles
-                    .get(&workspace.task)
+                    .get(&task)
                     .cloned()
                     .ok_or(StoreError::Corrupt("workspaces.task_id"))?;
                 Ok(WorkspaceEntry {
+                    task,
                     live: self.live.as_ref().and_then(|live| live.get(workspace.id)),
-                    attention: items.get(&workspace.task).cloned().unwrap_or_default(),
+                    attention: items.get(&task).cloned().unwrap_or_default(),
                     task_title,
                     workspace,
                 })
@@ -85,7 +94,7 @@ impl WorkspaceService {
             .collect()
     }
 
-    /// The live state of an active task workspace after a full scan, so a change the watcher has not delivered yet is in it. An unknown id is `workspace_not_found`; a missing or closed workspace, a review checkout, or a service without live state is `workspace_not_active`.
+    /// The live state of an active task workspace after a full scan, so a change the watcher has not delivered yet is in it. An unknown id is `workspace_not_found`; a missing or closed workspace, a review checkout, the main workspace, or a service without live state is `workspace_not_active`.
     pub async fn changes(
         &self,
         workspace: WorkspaceId,
@@ -122,6 +131,10 @@ fn not_active(workspace: WorkspaceId, kind: WorkspaceKind, state: WorkspaceState
             "a review checkout".to_owned(),
             "compare the proposal's changeset C-<n> with compare_revisions instead",
         ),
+        (WorkspaceKind::Main, _) => (
+            "the main workspace, which has no live state".to_owned(),
+            "compare ws-<n> with its base revision r<n> through compare_revisions instead",
+        ),
         (_, WorkspaceState::Missing) => (
             state.as_str().to_owned(),
             "the directory is gone; compare one of its checkpoints ck-<n> instead",
@@ -152,6 +165,13 @@ mod tests {
         let review = not_active(ws, WorkspaceKind::Review, WorkspaceState::Active);
         assert_eq!(review.code(), codes::WORKSPACE_NOT_ACTIVE);
         assert!(review.message().contains("review checkout"));
+        let main = not_active(ws, WorkspaceKind::Main, WorkspaceState::Active);
+        assert!(main.message().contains("main workspace"));
+        assert!(
+            main.hint()
+                .unwrap_or_default()
+                .contains("compare_revisions")
+        );
         let missing = not_active(ws, WorkspaceKind::Task, WorkspaceState::Missing);
         assert!(missing.hint().unwrap_or_default().contains("checkpoints"));
         let closed = not_active(ws, WorkspaceKind::Task, WorkspaceState::Archived);

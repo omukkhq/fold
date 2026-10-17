@@ -20,6 +20,7 @@ mod handoffs_schema;
 mod human_tasks_schema;
 mod humans;
 mod integrations_schema;
+mod main_workspaces_schema;
 mod messages_schema;
 mod proposals_schema;
 mod registry;

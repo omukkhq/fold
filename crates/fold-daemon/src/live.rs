@@ -403,7 +403,7 @@ impl LiveState {
         }
     }
 
-    /// Starts the watcher and the pipeline of an active task workspace and returns the state of its first scan. Called after the commit that created the workspace. Attaching an attached workspace only rescans it. A review checkout is refused: nothing in it is ever recorded, so it has no live state and the live job never reaches it.
+    /// Starts the watcher and the pipeline of an active task workspace and returns the state of its first scan. Called after the commit that created the workspace. Attaching an attached workspace only rescans it. A review checkout is refused: nothing in it is ever recorded, so it has no live state and the live job never reaches it. The main workspace is refused too.
     pub async fn attach(
         &self,
         workspace: WorkspaceId,
@@ -436,6 +436,9 @@ impl LiveState {
             .with_details([("reason", json!("review_checkout"))])
             .into());
         }
+        let Some(task) = row.task else {
+            return Err(main_without_live(workspace).into());
+        };
         if row.state != WorkspaceState::Active {
             return Err(FoldError::new(
                 codes::WORKSPACE_NOT_ACTIVE,
@@ -482,7 +485,7 @@ impl LiveState {
         }
         let pipeline = Pipeline {
             workspace,
-            task: row.task,
+            task,
             store: shared.store.clone(),
             bus: shared.bus.clone(),
             clock: Arc::clone(&shared.clock),
@@ -495,7 +498,7 @@ impl LiveState {
             rebased: None,
             initial: LiveWorkspace {
                 workspace,
-                task: row.task,
+                task,
                 worker: row
                     .worker
                     .map(|worker| worker.to_string())
@@ -669,6 +672,19 @@ impl LiveState {
         all.sort_by_key(|state| state.view.workspace);
         all
     }
+}
+
+/// The main workspace has no live state: its change reaches main only after the user saw it in the conversation, so the stream and the board never show its working files.
+fn main_without_live(workspace: WorkspaceId) -> FoldError {
+    FoldError::new(
+        codes::WORKSPACE_NOT_ACTIVE,
+        format!("{workspace} is the main workspace, which has no live state"),
+    )
+    .with_details([
+        ("workspace", json!(workspace)),
+        ("reason", json!("main_workspace")),
+    ])
+    .with_hint("compare the workspace with its base revision through compare_revisions")
 }
 
 fn not_attached(workspace: WorkspaceId) -> FoldError {

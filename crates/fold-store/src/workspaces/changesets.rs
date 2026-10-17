@@ -35,7 +35,8 @@ pub(crate) fn parse_stats(text: &str) -> Option<ChangesetStats> {
 pub struct Changeset {
     pub id: ChangesetId,
     pub workspace: WorkspaceId,
-    pub task: TaskId,
+    /// `None` for a changeset of the main workspace.
+    pub task: Option<TaskId>,
     /// The changeset recorded before this one in the same workspace.
     pub parent: Option<ChangesetId>,
     pub base_revision: RevisionId,
@@ -46,7 +47,7 @@ pub struct Changeset {
     pub created_at: Timestamp,
 }
 
-/// Inserts one changeset in the caller's write, chained to the workspace's latest changeset. `tree` must already be in the object store. A workspace, task or base revision that does not exist is refused, and so are a task the workspace does not belong to and a review checkout.
+/// Inserts one changeset in the caller's write, chained to the workspace's latest changeset. `tree` must already be in the object store. `task` is the workspace's task, `None` for the main workspace. A workspace, task or base revision that does not exist is refused, and so are a task the workspace does not belong to and a review checkout.
 #[expect(
     clippy::too_many_arguments,
     reason = "each argument is one column of the append-only row"
@@ -54,7 +55,7 @@ pub struct Changeset {
 pub async fn insert_changeset(
     tx: &mut WriteTx,
     workspace: WorkspaceId,
-    task: TaskId,
+    task: Option<TaskId>,
     base_revision: RevisionId,
     tree: ObjectHash,
     message: &str,
@@ -65,11 +66,11 @@ pub async fn insert_changeset(
     let workspace_number = workspace.to_db();
     let revision_number = base_revision.to_db();
     let found = sqlx::query!(
-        r#"SELECT w.id AS "workspace_id!: i64", w.task_id AS "task_id!: i64",
-                  t.number AS "task_number!: i64",
+        r#"SELECT w.id AS "workspace_id!: i64", w.task_id AS "task_id?: i64",
+                  t.number AS "task_number?: i64",
                   (SELECT id FROM revisions WHERE number = ?2) AS "revision_id?: i64",
                   w.kind = 'review' AS "review!: bool"
-           FROM workspaces w JOIN tasks t ON t.id = w.task_id
+           FROM workspaces w LEFT JOIN tasks t ON t.id = w.task_id
            WHERE w.number = ?1"#,
         workspace_number,
         revision_number
@@ -80,7 +81,7 @@ pub async fn insert_changeset(
     if found.review {
         return Err(StoreError::Invalid("a review checkout takes no changeset"));
     }
-    if found.task_number != task.to_db() {
+    if found.task_number != task.map(TaskId::to_db) {
         return Err(StoreError::Invalid("the workspace belongs to another task"));
     }
     let revision_id = found
@@ -146,12 +147,12 @@ pub async fn latest_changeset<'e>(
     let row = sqlx::query_as!(
         Row,
         r#"SELECT c.number AS "number!: i64", w.number AS "workspace!: i64",
-                  t.number AS "task!: i64", p.number AS "parent?: i64",
+                  t.number AS "task?: i64", p.number AS "parent?: i64",
                   r.number AS "base_revision!: i64", c.tree_hash, c.message, c.stats,
                   c.created_by, c.created_at
            FROM changesets c
            JOIN workspaces w ON w.id = c.workspace_id
-           JOIN tasks t ON t.id = c.task_id
+           LEFT JOIN tasks t ON t.id = c.task_id
            JOIN revisions r ON r.id = c.base_revision_id
            LEFT JOIN changesets p ON p.id = c.parent_changeset_id
            WHERE w.number = ?
@@ -172,12 +173,12 @@ pub async fn get_changeset<'e>(
     let row = sqlx::query_as!(
         Row,
         r#"SELECT c.number AS "number!: i64", w.number AS "workspace!: i64",
-                  t.number AS "task!: i64", p.number AS "parent?: i64",
+                  t.number AS "task?: i64", p.number AS "parent?: i64",
                   r.number AS "base_revision!: i64", c.tree_hash, c.message, c.stats,
                   c.created_by, c.created_at
            FROM changesets c
            JOIN workspaces w ON w.id = c.workspace_id
-           JOIN tasks t ON t.id = c.task_id
+           LEFT JOIN tasks t ON t.id = c.task_id
            JOIN revisions r ON r.id = c.base_revision_id
            LEFT JOIN changesets p ON p.id = c.parent_changeset_id
            WHERE c.number = ?"#,
@@ -197,12 +198,12 @@ pub async fn list_changesets<'e>(
     let rows = sqlx::query_as!(
         Row,
         r#"SELECT c.number AS "number!: i64", w.number AS "workspace!: i64",
-                  t.number AS "task!: i64", p.number AS "parent?: i64",
+                  t.number AS "task?: i64", p.number AS "parent?: i64",
                   r.number AS "base_revision!: i64", c.tree_hash, c.message, c.stats,
                   c.created_by, c.created_at
            FROM changesets c
            JOIN workspaces w ON w.id = c.workspace_id
-           JOIN tasks t ON t.id = c.task_id
+           LEFT JOIN tasks t ON t.id = c.task_id
            JOIN revisions r ON r.id = c.base_revision_id
            LEFT JOIN changesets p ON p.id = c.parent_changeset_id
            WHERE w.number = ?
@@ -217,7 +218,7 @@ pub async fn list_changesets<'e>(
 struct Row {
     number: i64,
     workspace: i64,
-    task: i64,
+    task: Option<i64>,
     parent: Option<i64>,
     base_revision: i64,
     tree_hash: String,
@@ -236,7 +237,10 @@ impl Row {
                 WorkspaceId::try_from_db,
                 "workspaces.number",
             )?,
-            task: number(self.task, TaskId::try_from_db, "tasks.number")?,
+            task: self
+                .task
+                .map(|value| number(value, TaskId::try_from_db, "tasks.number"))
+                .transpose()?,
             parent: self
                 .parent
                 .map(|value| number(value, ChangesetId::try_from_db, "changesets.number"))

@@ -312,9 +312,10 @@ impl NewEvent {
         })
     }
 
+    /// Takes an `Option` too, for a workspace or changeset that may belong to no task.
     #[must_use]
-    pub fn task(mut self, task: TaskId) -> Self {
-        self.task = Some(task);
+    pub fn task(mut self, task: impl Into<Option<TaskId>>) -> Self {
+        self.task = task.into();
         self
     }
 

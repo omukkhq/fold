@@ -22,7 +22,7 @@ async fn record(
             insert_changeset(
                 tx,
                 at.workspace,
-                at.task,
+                Some(at.task),
                 at.revision,
                 seed::tree(message),
                 message,
@@ -108,7 +108,7 @@ async fn each_changeset_points_at_the_previous_one_of_its_workspace() {
     assert_eq!(read, made[2]);
     assert_eq!(read.message, "one b");
     assert_eq!(read.created_by, "frontend");
-    assert_eq!(read.task, one.task);
+    assert_eq!(read.task, Some(one.task));
     assert_eq!(read.base_revision, one.revision);
     assert_eq!(get_changeset(store.read(), id(9)).await.unwrap(), None);
 }

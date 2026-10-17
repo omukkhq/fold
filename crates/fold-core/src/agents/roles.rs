@@ -558,12 +558,16 @@ mod tests {
         assert!(prompt.starts_with("# Main agent\n"));
         assert!(prompt.contains("`AskUserQuestion`"));
         assert!(prompt.contains("explicit OK"));
-        assert!(prompt.contains("Never edit code and never build a task yourself"));
+        assert!(prompt.contains("Never build a task yourself"));
+        assert!(prompt.contains("Wait for the user's explicit OK to that diff"));
+        assert!(prompt.contains("call `submit_main_change`"));
+        assert!(prompt.contains("Delegate whenever a task fits"));
+        assert!(prompt.contains("Never use a back door"));
         assert!(prompt.contains("`pause_project` or `resume_project` only when the user asks"));
         assert!(prompt.contains("`start_worker` fails with `project_paused`"));
         assert!(prompt.contains("only when the user tells you in this conversation"));
         assert!(
-            prompt.split_whitespace().count() < 1500,
+            prompt.split_whitespace().count() < 1650,
             "the prompt stays in context every turn"
         );
     }

@@ -24,6 +24,8 @@ pub enum RevisionOrigin {
     Proposal,
     /// A revision `fld pull` made from a remote commit.
     Pull,
+    /// A direct change of the main agent, on the user's word.
+    Direct,
 }
 
 impl RevisionOrigin {
@@ -32,6 +34,7 @@ impl RevisionOrigin {
             Self::Initial => "initial",
             Self::Proposal => "proposal",
             Self::Pull => "pull",
+            Self::Direct => "direct",
         }
     }
 }
@@ -46,9 +49,9 @@ pub struct RevisionSummary {
     pub origin: RevisionOrigin,
     pub task: Option<TaskId>,
     pub proposal: Option<ProposalId>,
-    /// The title of the integrated proposal.
+    /// The title of the integrated proposal, or the first line of a direct change's commit message.
     pub title: Option<String>,
-    /// The agent whose proposal was integrated, or the human who pulled.
+    /// The agent whose proposal was integrated, the human who pulled, or the main worker that made a direct change.
     pub author: Option<String>,
     /// The remote commit a pull brought in.
     pub pull: Option<String>,
@@ -63,11 +66,16 @@ impl From<RevisionRow> for RevisionSummary {
             None => RevisionOrigin::Initial,
             Some(IntegrationKind::Proposal) => RevisionOrigin::Proposal,
             Some(IntegrationKind::Pull) => RevisionOrigin::Pull,
+            Some(IntegrationKind::Direct) => RevisionOrigin::Direct,
         };
         let proposal = integration.as_ref().and_then(|info| info.proposal.clone());
         let author = match (&proposal, &integration) {
             (Some(proposal), _) => Some(proposal.agent.clone()),
-            (None, Some(info)) if info.kind == IntegrationKind::Pull => Some(info.actor.clone()),
+            (None, Some(info))
+                if matches!(info.kind, IntegrationKind::Pull | IntegrationKind::Direct) =>
+            {
+                Some(info.actor.clone())
+            }
             _ => None,
         };
         Self {
@@ -78,7 +86,17 @@ impl From<RevisionRow> for RevisionSummary {
             origin,
             task: proposal.as_ref().map(|proposal| proposal.task),
             proposal: proposal.as_ref().map(|proposal| proposal.number),
-            title: proposal.map(|proposal| proposal.title),
+            title: match proposal {
+                Some(proposal) => Some(proposal.title),
+                // The subject line of the commit message the main agent wrote.
+                None => integration
+                    .as_ref()
+                    .and_then(|info| info.message.as_deref())
+                    .and_then(|message| {
+                        message.lines().map(str::trim).find(|line| !line.is_empty())
+                    })
+                    .map(str::to_owned),
+            },
             author,
             pull: integration.and_then(|info| info.remote_commit),
             commit: row.commit,

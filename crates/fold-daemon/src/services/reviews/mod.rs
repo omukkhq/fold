@@ -35,7 +35,10 @@ pub use claims::ReviewClaimView;
 pub use comments::{CommentInput, CommentLocation, CommentView};
 pub use human_edits::HumanEdit;
 pub use human_review::{AwaitingHumanReview, awaiting_human_review, awaiting_human_review_in};
-pub use integrate::{AutomaticIntegration, IntegrationOutcome, PullIntegration, PullOutcome};
+pub use integrate::{
+    AutomaticIntegration, DirectChange, DirectOutcome, IntegrationOutcome, PullIntegration,
+    PullOutcome,
+};
 pub(crate) use proposals::proposal_missing;
 pub use proposals::{
     DEFAULT_PROPOSAL_LIST, MAX_PROPOSAL_LIST, ProposalDetail, ProposalFilter, ProposalSummary,
@@ -43,7 +46,8 @@ pub use proposals::{
 };
 pub use verdicts::SubmittedReview;
 pub use views::{
-    CommentCounts, ProposalView, ReviewView, TaskRequirements, integration_conflicted,
+    CommentCounts, ProposalView, ReviewView, TaskRequirements, direct_conflicted,
+    integration_conflicted,
 };
 
 #[derive(Debug, Error)]

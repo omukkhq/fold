@@ -61,7 +61,7 @@ async fn revisions(store: &Store, problems: &mut Vec<String>) {
         "a revision after r1 without a succeeded integration",
         "SELECT 'r' || r.number FROM revisions r LEFT JOIN integrations i ON i.id = r.integration_id
          WHERE r.number > 1
-           AND (i.id IS NULL OR i.result <> 'succeeded' OR i.kind NOT IN ('proposal', 'pull')
+           AND (i.id IS NULL OR i.result <> 'succeeded' OR i.kind NOT IN ('proposal', 'pull', 'direct')
                 OR i.revision_id IS NOT r.id)",
     )
     .await;
@@ -124,7 +124,7 @@ async fn revision_objects(store: &Store, paths: &ProjectPaths, problems: &mut Ve
     }
 }
 
-/// Done means a completion: an `integration` completion belongs to the task of a succeeded proposal integration, a succeeded proposal integration completes exactly one task, and a pull completes none.
+/// Done means a completion: an `integration` completion belongs to the task of a succeeded proposal integration, a succeeded proposal integration completes exactly one task, and a pull or a direct change completes none.
 async fn completions(store: &Store, problems: &mut Vec<String>) {
     offenders(
         store,

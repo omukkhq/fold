@@ -1,7 +1,9 @@
 use fold_core::merge::ConflictReport;
 use fold_core::reviews::{HumanReviewMark, ReviewFact};
 use fold_core::revision::StoredRevision;
-use fold_core::{IntegrationId, ProposalId, TaskId, TaskStatus, Timestamp, WorkspaceId};
+use fold_core::{
+    ChangesetId, IntegrationId, ProposalId, TaskId, TaskStatus, Timestamp, WorkspaceId,
+};
 use sqlx::{SqliteConnection, SqliteExecutor};
 
 use super::{ProposalRow, ReviewTarget, get_proposal, review_facts, review_target};
@@ -53,7 +55,7 @@ pub async fn integration_facts(
     }))
 }
 
-/// What an integration brings onto main: a version of a proposal, or the newest commit of the Git remote. A proposal of a sync task carries the remote commit its task resolves, so the Git writers see it as merged.
+/// What an integration brings onto main: a version of a proposal, the newest commit of the Git remote, or a changeset of the main workspace with the Git commit message the main agent wrote. A proposal of a sync task carries the remote commit its task resolves, so the Git writers see it as merged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntegrationSubject<'a> {
     Proposal {
@@ -63,6 +65,10 @@ pub enum IntegrationSubject<'a> {
     },
     Pull {
         remote_commit: &'a str,
+    },
+    Direct {
+        changeset: ChangesetId,
+        message: &'a str,
     },
 }
 
@@ -189,12 +195,20 @@ async fn insert(
             remote_commit,
         ),
         IntegrationSubject::Pull { remote_commit } => ("pull", None, None, Some(remote_commit)),
+        IntegrationSubject::Direct { .. } => ("direct", None, None, None),
+    };
+    let (changeset, message) = match new.subject {
+        IntegrationSubject::Direct { changeset, message } => {
+            (Some(changeset.to_db()), Some(message))
+        }
+        IntegrationSubject::Proposal { .. } | IntegrationSubject::Pull { .. } => (None, None),
     };
     let succeeded = result == "succeeded";
     let created_at = new.created_at.as_millis();
     sqlx::query!(
         "INSERT INTO integrations
-             (number, kind, proposal_id, version_id, remote_commit, result, revision_id, report, actor, created_at)
+             (number, kind, proposal_id, version_id, remote_commit, result, revision_id, report, actor, created_at,
+              changeset_id, message)
          VALUES (
              ?1, ?2,
              (SELECT id FROM proposals WHERE number = ?3),
@@ -202,7 +216,9 @@ async fn insert(
               WHERE p.number = ?3 AND v.version = ?4),
              ?5, ?6,
              CASE WHEN ?7 THEN (SELECT COALESCE(MAX(id), 0) + 1 FROM revisions) END,
-             ?8, ?9, ?10
+             ?8, ?9, ?10,
+             (SELECT id FROM changesets WHERE number = ?11),
+             ?12
          )",
         number,
         kind,
@@ -213,7 +229,9 @@ async fn insert(
         succeeded,
         report,
         new.actor,
-        created_at
+        created_at,
+        changeset,
+        message
     )
     .execute(tx.conn())
     .await?;

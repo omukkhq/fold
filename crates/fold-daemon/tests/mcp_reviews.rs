@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 /// The fixed count always puts the unread part on the footer line; real counts can add to it.
 const FOOTER: &str = "fold: ";
 
-const REVIEW_TOOLS: [&str; 13] = [
+const REVIEW_TOOLS: [&str; 14] = [
     "create_proposal",
     "list_proposals",
     "get_proposal",
@@ -33,6 +33,7 @@ const REVIEW_TOOLS: [&str; 13] = [
     "get_review_comments",
     "integrate_proposal",
     "require_human_review",
+    "submit_main_change",
 ];
 
 #[cfg(test)]
@@ -739,6 +740,7 @@ async fn every_result_ends_with_the_footer() {
             "require_human_review" => json!({"task": "T-1", "reason": "check"}),
             "list_proposals" => json!({}),
             "close_proposal" => json!({"id": "P-1", "reason": "done"}),
+            "submit_main_change" => json!({"changeset": "C-1", "message": "m"}),
             _ => json!({"id": "P-1"}),
         };
         let result = call_raw(&frontend, tool, arguments).await;

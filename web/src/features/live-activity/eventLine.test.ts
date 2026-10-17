@@ -357,6 +357,22 @@ describe("eventLine", () => {
     expect(eventLine(event("integration.succeeded")).text).toBe(
       "integration succeeded as r17",
     );
+    const direct = { data: { kind: "direct", changeset: "C-40" } };
+    expect(eventLine(event("integration.succeeded", direct)).text).toBe(
+      "integrated direct change C-40 with the user's OK as r17",
+    );
+    expect(
+      eventLine(
+        event("integration.succeeded", {
+          ...bare,
+          data: { kind: "direct" },
+        }),
+      ).text,
+    ).toBe("integrated a direct change with the user's OK");
+    expect(
+      eventLine(event("integration.succeeded", { data: { kind: "pull" } }))
+        .text,
+    ).toBe("integration succeeded as r17");
     expect(eventLine(event("main.advanced", bare)).text).toBe("main advanced");
     expect(eventLine(event("main.advanced")).text).toBe("main advanced to r17");
     expect(eventLine(event("git.commit_failed", bare)).text).toBe(

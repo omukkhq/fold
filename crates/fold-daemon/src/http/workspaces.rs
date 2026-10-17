@@ -65,6 +65,8 @@ pub enum RevisionOriginView {
     Initial,
     Proposal,
     Pull,
+    /// A direct change of the main agent, which the user approved in the conversation.
+    Direct,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -83,10 +85,10 @@ pub struct RevisionView {
     pub task: Option<TaskId>,
     #[schema(value_type = Option<String>, required = true, example = "P-3")]
     pub proposal: Option<ProposalId>,
-    /// The title of the integrated proposal.
+    /// The title of the integrated proposal, or the first line of a direct change's commit message.
     #[schema(required = true)]
     pub title: Option<String>,
-    /// The agent whose proposal was integrated, or the human who pulled.
+    /// The agent whose proposal was integrated, the human who pulled, or the main worker that made a direct change.
     #[schema(required = true)]
     pub author: Option<String>,
     /// The remote commit a pull brought in.
@@ -108,6 +110,7 @@ impl From<RevisionSummary> for RevisionView {
                 RevisionOrigin::Initial => RevisionOriginView::Initial,
                 RevisionOrigin::Proposal => RevisionOriginView::Proposal,
                 RevisionOrigin::Pull => RevisionOriginView::Pull,
+                RevisionOrigin::Direct => RevisionOriginView::Direct,
             },
             task: summary.task,
             proposal: summary.proposal,
@@ -378,6 +381,8 @@ pub enum WorkspaceKindView {
     Task,
     /// A read-only checkout of a proposal version for its reviewer.
     Review,
+    /// The main agent's workspace, which belongs to no task.
+    Main,
 }
 
 impl From<WorkspaceKind> for WorkspaceKindView {
@@ -385,6 +390,7 @@ impl From<WorkspaceKind> for WorkspaceKindView {
         match kind {
             WorkspaceKind::Task => Self::Task,
             WorkspaceKind::Review => Self::Review,
+            WorkspaceKind::Main => Self::Main,
         }
     }
 }
@@ -459,7 +465,7 @@ impl From<WorkspaceEntry> for WorkspaceEntryView {
         let workspace = entry.workspace;
         Self {
             id: workspace.id,
-            task: workspace.task,
+            task: entry.task,
             task_title: entry.task_title.as_str().to_owned(),
             owner: workspace.worker.map(|worker| worker.as_str().to_owned()),
             kind: workspace.kind.into(),

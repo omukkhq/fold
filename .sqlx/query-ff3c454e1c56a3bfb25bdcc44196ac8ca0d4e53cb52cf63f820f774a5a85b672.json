@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT w.number AS \"number!: i64\",\n                      t.number AS \"task!: i64\",\n                      w.worker_id,\n                      k.name AS \"worker?: String\",\n                      w.kind,\n                      w.path,\n                      r.number AS \"base!: i64\",\n                      p.number AS \"proposal?: i64\",\n                      w.state,\n                      w.changed_files,\n                      (SELECT COUNT(*) FROM workspace_conflicts c WHERE c.workspace_id = w.id) AS \"conflicted!: i64\",\n                      w.last_activity_at,\n                      w.created_at,\n                      w.closed_at\n               FROM workspaces w\n               JOIN tasks t ON t.id = w.task_id\n               JOIN revisions r ON r.id = w.base_revision_id\n               LEFT JOIN workers k ON k.id = w.worker_id\n               LEFT JOIN proposals p ON p.id = w.proposal_id\n               WHERE t.number = ?1 AND w.kind = 'task' AND w.state IN ('active', 'missing')\n         ORDER BY w.number DESC\n         LIMIT 1",
+  "query": "SELECT w.number AS \"number!: i64\",\n                      t.number AS \"task?: i64\",\n                      w.worker_id,\n                      k.name AS \"worker?: String\",\n                      w.kind,\n                      w.path,\n                      r.number AS \"base!: i64\",\n                      p.number AS \"proposal?: i64\",\n                      w.state,\n                      w.changed_files,\n                      (SELECT COUNT(*) FROM workspace_conflicts c WHERE c.workspace_id = w.id) AS \"conflicted!: i64\",\n                      w.last_activity_at,\n                      w.created_at,\n                      w.closed_at\n               FROM workspaces w\n               LEFT JOIN tasks t ON t.id = w.task_id\n               JOIN revisions r ON r.id = w.base_revision_id\n               LEFT JOIN workers k ON k.id = w.worker_id\n               LEFT JOIN proposals p ON p.id = w.proposal_id\n               WHERE w.kind = 'task' AND w.state IN ('active', 'missing') ORDER BY w.number",
   "describe": {
     "columns": [
       {
@@ -15,7 +15,7 @@
         }
       },
       {
-        "name": "task!: i64",
+        "name": "task?: i64",
         "ordinal": 1,
         "type_info": "Integer",
         "origin": {
@@ -154,11 +154,11 @@
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 0
     },
     "nullable": [
       false,
-      false,
+      true,
       true,
       true,
       false,
@@ -173,5 +173,5 @@
       true
     ]
   },
-  "hash": "31660664e07fb02279b8d0aa7ddbe74725063050144ff2318fe008a339147669"
+  "hash": "ff3c454e1c56a3bfb25bdcc44196ac8ca0d4e53cb52cf63f820f774a5a85b672"
 }

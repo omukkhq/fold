@@ -18,7 +18,7 @@ export interface RevisionLines {
   meta: Segments;
 }
 
-/** What a revision row shows: a proposal integration names its proposal and task, a pull names the remote commit and the human. */
+/** What a revision row shows: a proposal integration names its proposal and task, a pull names the remote commit and the human, and a direct change of the main agent names its commit subject and the user's approval. */
 export function describeRevision(
   revision: Revision,
   now: number,
@@ -41,6 +41,11 @@ export function describeRevision(
       return {
         title: `pull · ${revision.pull ?? ""}`,
         meta: seg`${who} · ${at}`,
+      };
+    case "direct":
+      return {
+        title: `direct · ${revision.title ?? revision.id}`,
+        meta: seg`${who} · approved by the user · ${at}`,
       };
     case "initial":
       return {

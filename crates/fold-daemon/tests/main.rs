@@ -18,6 +18,7 @@ pub mod workspaces_support;
 
 mod acceptance_10_requests;
 mod acceptance_11_main_agent;
+mod acceptance_12_main_direct_change;
 mod acceptance_13_human_edit;
 mod acceptance_1_three_sessions;
 mod acceptance_2_messaging;
@@ -42,6 +43,8 @@ mod conflicts;
 #[cfg(feature = "failpoints")]
 mod crash_checkpoint;
 #[cfg(feature = "failpoints")]
+mod crash_direct_change;
+#[cfg(feature = "failpoints")]
 mod crash_git_commit;
 #[cfg(feature = "failpoints")]
 mod crash_init;
@@ -54,6 +57,7 @@ mod delete_archive;
 mod deleted_projects;
 mod dependencies_service;
 mod diff_routes;
+mod direct_changes;
 mod event_bus;
 mod events_service;
 mod gc;

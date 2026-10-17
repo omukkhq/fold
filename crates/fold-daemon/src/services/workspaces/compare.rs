@@ -247,12 +247,12 @@ impl WorkspaceService {
             }
             StateRef::Changeset(id) => {
                 let changeset = changeset(&self.store, id).await?;
-                summary.task = Some(changeset.task);
+                summary.task = changeset.task;
                 Source::Tree(changeset.tree)
             }
             StateRef::Checkpoint(id) => {
                 let checkpoint = checkpoint(&self.store, id).await?;
-                summary.task = Some(workspace(&self.store, checkpoint.workspace).await?.task);
+                summary.task = workspace(&self.store, checkpoint.workspace).await?.task;
                 Source::Tree(checkpoint.tree)
             }
             StateRef::Workspace(id) => {
@@ -262,7 +262,7 @@ impl WorkspaceService {
                 }
                 let base = workspaces::get_by_number(read, row.base).await?;
                 summary.base = Some(row.base);
-                summary.task = Some(row.task);
+                summary.task = row.task;
                 summary.worker = row.worker.map(|worker| worker.to_string());
                 Source::Working {
                     workspace: id,

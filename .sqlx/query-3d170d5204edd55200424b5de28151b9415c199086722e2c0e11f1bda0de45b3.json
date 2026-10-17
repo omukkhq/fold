@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT w.number AS \"number!: i64\",\n                      t.number AS \"task!: i64\",\n                      w.worker_id,\n                      k.name AS \"worker?: String\",\n                      w.kind,\n                      w.path,\n                      r.number AS \"base!: i64\",\n                      p.number AS \"proposal?: i64\",\n                      w.state,\n                      w.changed_files,\n                      (SELECT COUNT(*) FROM workspace_conflicts c WHERE c.workspace_id = w.id) AS \"conflicted!: i64\",\n                      w.last_activity_at,\n                      w.created_at,\n                      w.closed_at\n               FROM workspaces w\n               JOIN tasks t ON t.id = w.task_id\n               JOIN revisions r ON r.id = w.base_revision_id\n               LEFT JOIN workers k ON k.id = w.worker_id\n               LEFT JOIN proposals p ON p.id = w.proposal_id\n               WHERE t.number = ?1 AND w.kind = 'task' ORDER BY w.number DESC LIMIT 1",
+  "query": "SELECT w.number AS \"number!: i64\",\n                  t.number AS \"task?: i64\",\n                  w.worker_id,\n                  k.name AS \"worker?: String\",\n                  w.kind,\n                  w.path,\n                  r.number AS \"base!: i64\",\n                  p.number AS \"proposal?: i64\",\n                  w.state,\n                  w.changed_files,\n                  (SELECT COUNT(*) FROM workspace_conflicts c WHERE c.workspace_id = w.id) AS \"conflicted!: i64\",\n                  w.last_activity_at,\n                  w.created_at,\n                  w.closed_at,\n                  v.version AS \"version?: i64\",\n                  b.number AS \"batch?: i64\"\n           FROM workspaces w\n           JOIN tasks t ON t.id = w.task_id\n           JOIN revisions r ON r.id = w.base_revision_id\n           LEFT JOIN proposal_versions v ON v.id = w.version_id\n           LEFT JOIN proposals p ON p.id = w.proposal_id\n           LEFT JOIN review_batches b ON b.id = w.review_batch_id\n           LEFT JOIN workers k ON k.id = w.worker_id\n           WHERE w.kind = 'review' AND w.state = 'active'\n           ORDER BY w.number",
   "describe": {
     "columns": [
       {
@@ -15,7 +15,7 @@
         }
       },
       {
-        "name": "task!: i64",
+        "name": "task?: i64",
         "ordinal": 1,
         "type_info": "Integer",
         "origin": {
@@ -151,10 +151,32 @@
             "name": "closed_at"
           }
         }
+      },
+      {
+        "name": "version?: i64",
+        "ordinal": 14,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "name": "batch?: i64",
+        "ordinal": 15,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_batches",
+            "name": "number"
+          }
+        }
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 0
     },
     "nullable": [
       false,
@@ -170,8 +192,10 @@
       false,
       true,
       false,
+      true,
+      true,
       true
     ]
   },
-  "hash": "9a9714938c29ccd93cee62a00382f427945d3970e40682d1bc395d2a540459fd"
+  "hash": "3d170d5204edd55200424b5de28151b9415c199086722e2c0e11f1bda0de45b3"
 }

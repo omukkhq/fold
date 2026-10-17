@@ -9,14 +9,15 @@ use fold_core::policy::{
 use fold_core::reviews::{Approver, ReviewFact, Verdict, latest_verdict};
 use fold_core::revision::{Revision, StoredRevision};
 use fold_core::{
-    Actor, EventActor, EventError, FoldError, HumanName, IdKind, IntegrationId, NewEvent,
-    ProposalId, RevisionId, TaskId, Timestamp, WorkspaceId, codes,
+    Actor, ChangesetId, EventActor, EventError, FoldError, HumanName, IdKind, IntegrationId,
+    NewEvent, ProposalId, RevisionId, TaskId, Timestamp, WorkspaceId, codes, policy,
 };
 use fold_store::reviews::{
     self, IntegrationFacts, IntegrationSubject, NewIntegration, ProposalState, ReviewerRef,
 };
 use fold_store::tasks::claims::{self, ReleaseReason};
 use fold_store::tasks::completions::{self, CompletionKind};
+use fold_store::workspaces::{WorkspaceKind, WorkspaceRow, WorkspaceState};
 use fold_store::{StoreError, WriteTx, agents, counters, tasks, workspaces};
 use fold_vcs::integrate::MergeOutcome;
 use serde_json::json;
@@ -29,7 +30,9 @@ use crate::services::events::EventBuffer;
 #[cfg(feature = "failpoints")]
 use crate::services::fired;
 use crate::services::tasks::{TaskError, recompute};
-use crate::services::workspaces::{ArchiveReason, archive_in_tx};
+use crate::services::workspaces::{
+    ArchiveReason, WorkspaceError, archive_in_tx, main_agent, main_agent_in_tx,
+};
 
 /// How many times the procedure starts again from reading main when main moved under it.
 const ATTEMPTS: usize = 3;
@@ -39,6 +42,12 @@ const MAX_COMMIT_CHARS: usize = 64;
 
 /// The body of the approval a human gives by integrating.
 const INTEGRATING_APPROVAL: &str = "approved by integrating";
+
+/// The longest Git commit message of a direct change, in characters.
+const MAX_DIRECT_MESSAGE_CHARS: usize = 5000;
+
+/// What `integration.succeeded` of a direct change names as its approval: the user's word in the main agent's conversation.
+const DIRECT_APPROVAL: &str = "user_in_conversation";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IntegrationOutcome {
@@ -69,6 +78,22 @@ pub enum PullOutcome {
     Conflicted(Vec<Conflict>),
 }
 
+/// A direct change of the main agent: a changeset of the main workspace, which must be the workspace's newest, and the Git commit message the main agent wrote for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirectChange {
+    pub changeset: ChangesetId,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DirectOutcome {
+    Succeeded {
+        revision: RevisionId,
+    },
+    /// In path order. No row and no event was written, and the main workspace stays open.
+    Conflicted(Vec<Conflict>),
+}
+
 /// What one automatic integration did with a ready proposal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AutomaticIntegration {
@@ -85,6 +110,7 @@ enum IntegrationRequest<'a> {
         automatic: bool,
     },
     Pull(&'a PullIntegration),
+    Direct(&'a DirectChange),
 }
 
 enum Integrated {
@@ -132,7 +158,7 @@ impl From<FoldError> for Step {
 struct Plan {
     base_tree: ObjectHash,
     other_tree: ObjectHash,
-    /// The task workspace the transaction archives; its operation lock is held from the merge until the commit.
+    /// The task workspace or main workspace the transaction archives; its operation lock is held from the merge until the commit.
     workspace: Option<WorkspaceId>,
     subject: Subject,
 }
@@ -150,6 +176,11 @@ enum Subject {
         remote_commit: String,
         remote: String,
         branch: String,
+    },
+    Direct {
+        changeset: ChangesetId,
+        workspace: WorkspaceId,
+        message: String,
     },
 }
 
@@ -206,6 +237,23 @@ impl ReviewService {
             {
                 Integrated::Succeeded(revision) => PullOutcome::Succeeded { revision },
                 Integrated::Conflicted(conflicts) => PullOutcome::Conflicted(conflicts),
+            },
+        )
+    }
+
+    /// Integrates a direct change of the main agent: the newest changeset of its main workspace, with the Git commit message it wrote. The user approved the change in the main agent's conversation, so no review gate runs; `policy::can_change_main_directly` admits the main agent only, and the main workspace must be active and owned by its worker. A clean merge moves main by compare-and-swap, records a `direct` integration with the changeset and the message, and archives the main workspace, in one transaction. A conflicting merge writes nothing and returns the conflicts: the main agent syncs the workspace, records again and submits the new changeset.
+    pub async fn integrate_direct(
+        &self,
+        actor: &Actor,
+        change: DirectChange,
+    ) -> Result<DirectOutcome, ReviewError> {
+        Ok(
+            match self
+                .integrate(actor, IntegrationRequest::Direct(&change))
+                .await?
+            {
+                Integrated::Succeeded(revision) => DirectOutcome::Succeeded { revision },
+                Integrated::Conflicted(conflicts) => DirectOutcome::Conflicted(conflicts),
             },
         )
     }
@@ -280,7 +328,7 @@ impl ReviewService {
             codes::HEAD_MOVED,
             format!("main moved during each of {ATTEMPTS} integration attempts"),
         )
-        .with_hint("call integrate_proposal again, or run fld pull again")
+        .with_hint("call integrate_proposal or submit_main_change again, or run fld pull again")
         .into())
     }
 
@@ -302,6 +350,7 @@ impl ReviewService {
                     .await?
             }
             IntegrationRequest::Pull(pull) => self.pull_plan(actor, pull).await?,
+            IntegrationRequest::Direct(change) => self.direct_plan(actor, change).await?,
         };
         let locks = self.workspaces.lock_for_integration(plan.workspace).await;
         let merged = self
@@ -402,6 +451,9 @@ impl ReviewService {
             }
             Subject::Pull { remote_commit, .. } => {
                 tracing::info!(remote_commit = %remote_commit, revision = %next, integration = %integration, "remote commit integrated");
+            }
+            Subject::Direct { changeset, .. } => {
+                tracing::info!(changeset = %changeset, revision = %next, integration = %integration, "direct change integrated");
             }
         }
         Ok(Integrated::Succeeded(next))
@@ -549,6 +601,120 @@ impl ReviewService {
     }
 }
 
+impl ReviewService {
+    /// Step 2 of a direct change: the main agent, its own active main workspace and that workspace's newest changeset, which must change something. The merge base is the tree of the changeset's base revision.
+    async fn direct_plan(&self, actor: &Actor, change: &DirectChange) -> Result<Plan, Step> {
+        main_agent(&self.store, actor)
+            .await
+            .map_err(ReviewError::from)?;
+        let message = change.message.trim();
+        if message.is_empty() || message.chars().count() > MAX_DIRECT_MESSAGE_CHARS {
+            return Err(FoldError::new(
+                codes::INVALID_REQUEST,
+                format!("the commit message must be 1 to {MAX_DIRECT_MESSAGE_CHARS} characters"),
+            )
+            .with_details([("field", json!("message"))])
+            .with_hint("call submit_main_change again with the Git commit message the user saw")
+            .into());
+        }
+        let read = self.store.read();
+        let changeset = workspaces::get_changeset(read, change.changeset)
+            .await?
+            .ok_or_else(|| {
+                FoldError::new(
+                    codes::NOT_FOUND,
+                    format!("changeset {} does not exist", change.changeset),
+                )
+                .with_details([("changeset", json!(change.changeset))])
+                .with_hint("call record_changes in the main workspace first")
+            })?;
+        let row = workspaces::get_workspace(read, changeset.workspace)
+            .await?
+            .ok_or(StoreError::Corrupt("changesets.workspace_id"))?;
+        let latest = workspaces::latest_changeset(read, row.id)
+            .await?
+            .map(|newest| newest.id);
+        check_direct(actor, &row, changeset.id, latest)?;
+        let base_tree = workspaces::get_by_number(read, changeset.base_revision)
+            .await?
+            .tree_hash;
+        if changeset.tree == base_tree {
+            return Err(FoldError::new(
+                codes::INVALID_REQUEST,
+                format!("{} changes nothing against {}", changeset.id, changeset.base_revision),
+            )
+            .with_details([("reason", json!("no_changes"))])
+            .with_hint("change files in the main workspace and call record_changes, or call abandon_workspace")
+            .into());
+        }
+        Ok(Plan {
+            base_tree,
+            other_tree: changeset.tree,
+            workspace: Some(row.id),
+            subject: Subject::Direct {
+                changeset: changeset.id,
+                workspace: row.id,
+                message: message.to_owned(),
+            },
+        })
+    }
+}
+
+/// The checks of a direct change on one read: `row` is the workspace of `changeset`, which must be the main workspace, owned by the main agent's worker and active, and `latest` is its newest changeset, which must be `changeset`, so the change the user saw is the change that reaches main.
+fn check_direct(
+    actor: &Actor,
+    row: &WorkspaceRow,
+    changeset: ChangesetId,
+    latest: Option<ChangesetId>,
+) -> Result<(), FoldError> {
+    if row.kind != WorkspaceKind::Main {
+        return Err(FoldError::new(
+            codes::INVALID_REQUEST,
+            format!(
+                "{changeset} belongs to {}, which is not the main workspace",
+                row.id
+            ),
+        )
+        .with_details([
+            ("reason", json!("not_main_workspace")),
+            ("workspace", json!(row.id.to_string())),
+        ])
+        .with_hint("task work reaches main through a proposal: call create_proposal"));
+    }
+    if let Err(denied) = policy::can_change_workspace(actor, row.worker.as_ref()) {
+        return Err(FoldError::from(denied).with_details([
+            ("workspace", json!(row.id.to_string())),
+            (
+                "owner",
+                json!(row.worker.as_ref().map(|worker| worker.as_str())),
+            ),
+        ]));
+    }
+    if row.state != WorkspaceState::Active {
+        return Err(FoldError::new(
+            codes::WORKSPACE_NOT_ACTIVE,
+            format!("{} is {}", row.id, row.state.as_str()),
+        )
+        .with_details([
+            ("workspace", json!(row.id.to_string())),
+            ("state", json!(row.state.as_str())),
+        ])
+        .with_hint("call open_main_workspace to start a new change"));
+    }
+    if latest != Some(changeset) {
+        return Err(FoldError::new(
+            codes::INVALID_REQUEST,
+            format!("{changeset} is not the newest changeset of {}", row.id),
+        )
+        .with_details([
+            ("reason", json!("stale_changeset")),
+            ("latest", json!(latest.map(|id| id.to_string()))),
+        ])
+        .with_hint("show the user the diff of the newest changeset, then submit that one"));
+    }
+    Ok(())
+}
+
 /// The caller as the gates see it, with the acting agent's `standing`. The daemon integrates only through the automatic integration, so `Actor::System` is refused on every other path, and a proposal view reads the gates for an agent or a named human only.
 pub(super) fn caller_facts(
     actor: &Actor,
@@ -646,6 +812,41 @@ impl Commit<'_> {
                 buffer.extend(recompute(tx, &[], self.now).await?.events);
                 Vec::new()
             }
+            Subject::Direct {
+                changeset,
+                workspace,
+                message,
+            } => {
+                self.recheck_direct(tx, *changeset, *workspace).await?;
+                let subject = IntegrationSubject::Direct {
+                    changeset: *changeset,
+                    message: message.as_str(),
+                };
+                let succeeded = NewEvent::new(types::INTEGRATION_SUCCEEDED, label.clone())?
+                    .workspace(*workspace)
+                    .data(json!({
+                        "integration": self.integration.to_string(),
+                        "kind": "direct",
+                        "changeset": changeset.to_string(),
+                        "approval": DIRECT_APPROVAL,
+                    }))?;
+                self.advance(tx, buffer, &label, subject, succeeded).await?;
+                let mut archived = Vec::new();
+                if archive_in_tx::<Step>(
+                    tx,
+                    buffer,
+                    &label,
+                    *workspace,
+                    ArchiveReason::Integrated,
+                    self.now,
+                )
+                .await?
+                {
+                    archived.push(*workspace);
+                }
+                buffer.extend(recompute(tx, &[], self.now).await?.events);
+                archived
+            }
         };
         #[cfg(feature = "failpoints")]
         fail::fail_point!("integration_in_transaction", |_| Err(Step::from(fired(
@@ -710,6 +911,30 @@ impl Commit<'_> {
             return Err(Step::Retry);
         }
         Ok(facts)
+    }
+
+    /// The checks of a direct change again on the writer's connection, because the main tag, the workspace and its changesets change without the integration mutex. A check that fails now starts the attempt again, whose plan step then reports it.
+    async fn recheck_direct(
+        &self,
+        tx: &mut WriteTx,
+        changeset: ChangesetId,
+        workspace: WorkspaceId,
+    ) -> Result<(), Step> {
+        match main_agent_in_tx(tx, self.actor).await {
+            Ok(_) => {}
+            Err(WorkspaceError::Fold(_)) => return Err(Step::Retry),
+            Err(error) => return Err(Step::Failed(error.into())),
+        }
+        let row = workspaces::get_workspace(tx.conn(), workspace)
+            .await?
+            .ok_or(StoreError::Corrupt("workspaces.number"))?;
+        let latest = workspaces::latest_changeset(tx.conn(), workspace)
+            .await?
+            .map(|newest| newest.id);
+        if check_direct(self.actor, &row, changeset, latest).is_err() {
+            return Err(Step::Retry);
+        }
+        Ok(())
     }
 
     /// The proposal half of step 6: the completion, the integrating human's approval, the retired proposal, the archived workspaces, the released claim and the recalculated statuses.

@@ -60,7 +60,7 @@ async fn roots_name_every_referenced_hash_once_and_skip_pruned_checkpoints() {
             insert_changeset(
                 tx,
                 one.workspace,
-                one.task,
+                Some(one.task),
                 one.revision,
                 seed::tree("changeset"),
                 "record",

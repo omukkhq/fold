@@ -55,7 +55,7 @@ async fn checkout_materialises_the_current_version_tree() {
     assert_eq!(view.id, ws(2));
     assert_eq!(view.path, ".fold/ws/review-p-1");
     assert_eq!(view.kind, WorkspaceKind::Review);
-    assert_eq!(view.task, t(1));
+    assert_eq!(view.task, Some(t(1)));
     assert_eq!(view.proposal, Some(p(1)));
     assert_eq!(view.worker, Some(fx.backend.worker.name.clone()));
     assert_eq!(view.base, RevisionId::from_number(1).unwrap());
@@ -302,7 +302,7 @@ async fn checkout_is_not_watched_and_takes_no_checkpoint() {
             workspaces::insert_changeset(
                 tx,
                 id,
-                t(1),
+                Some(t(1)),
                 RevisionId::from_number(1).unwrap(),
                 tree,
                 "edit",

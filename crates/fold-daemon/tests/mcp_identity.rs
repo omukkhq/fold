@@ -490,6 +490,7 @@ async fn the_server_lists_described_tools_and_sends_the_workflow() {
             "record_changes",
             "sync_workspace",
             "abandon_workspace",
+            "open_main_workspace",
             "get_task_graph",
             "get_ready_tasks",
             "get_task",

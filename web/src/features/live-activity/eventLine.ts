@@ -108,6 +108,23 @@ function approvedText(event: DurableEvent): string {
     : `approved ${request} as ${tasks.join(", ")}`;
 }
 
+/** A direct change of the main agent says so, because the user's word in the conversation approved it instead of a review. */
+function integrationText(event: DurableEvent): string {
+  const done =
+    event.revision === null
+      ? "integration succeeded"
+      : `integration succeeded as ${event.revision}`;
+  if (text(event.data.kind) !== "direct") {
+    return done;
+  }
+  const changeset = text(event.data.changeset);
+  const change =
+    changeset === null ? "a direct change" : `direct change ${changeset}`;
+  return event.revision === null
+    ? `integrated ${change} with the user's OK`
+    : `integrated ${change} with the user's OK as ${event.revision}`;
+}
+
 /** A worker's agent name. */
 function workerOf(event: DurableEvent): string {
   return text(event.data.agent) ?? "a worker";
@@ -481,10 +498,7 @@ const SPECS: Record<EventType, Spec> = {
   },
   "integration.succeeded": {
     icon: GitMerge,
-    text: (e) =>
-      e.revision === null
-        ? "integration succeeded"
-        : `integration succeeded as ${e.revision}`,
+    text: integrationText,
     emphasis: true,
   },
   "integration.conflicted": {

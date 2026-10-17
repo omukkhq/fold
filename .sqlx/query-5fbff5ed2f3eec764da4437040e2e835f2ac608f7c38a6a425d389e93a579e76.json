@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT r.number AS \"number!: i64\", r.hash AS \"hash!\", r.tree_hash AS \"tree_hash!\",\n                  p.number AS \"parent?: i64\", r.created_at AS \"created_at!: i64\", r.import_source,\n                  i.number AS \"integration_number?: i64\", i.kind AS \"integration_kind?\",\n                  i.actor AS \"integration_actor?\", i.remote_commit AS \"remote_commit?\",\n                  pr.number AS \"proposal_number?: i64\", pr.title AS \"proposal_title?\",\n                  v.version AS \"version?: i64\", t.number AS \"task_number?: i64\",\n                  t.title AS \"task_title?\", a.name AS \"agent?\", w.name AS \"worker?\",\n                  rc.\"commit\" AS \"git_commit?\"\n           FROM revisions r\n           LEFT JOIN revisions p ON p.id = r.parent_id\n           LEFT JOIN integrations i ON i.id = r.integration_id\n           LEFT JOIN proposals pr ON pr.id = i.proposal_id\n           LEFT JOIN tasks t ON t.id = pr.task_id\n           LEFT JOIN workers w ON w.id = pr.author_worker_id\n           LEFT JOIN agents a ON a.id = w.agent_id\n           LEFT JOIN proposal_versions v ON v.id = i.version_id\n           LEFT JOIN revision_commits rc ON rc.revision_id = r.id\n           WHERE r.number <= ?1\n           ORDER BY r.number DESC\n           LIMIT ?2",
+  "query": "SELECT r.number AS \"number!: i64\", r.hash AS \"hash!\", r.tree_hash AS \"tree_hash!\",\n                  p.number AS \"parent?: i64\", r.created_at AS \"created_at!: i64\", r.import_source,\n                  i.number AS \"integration_number?: i64\", i.kind AS \"integration_kind?\",\n                  i.actor AS \"integration_actor?\", i.remote_commit AS \"remote_commit?\",\n                  cs.number AS \"changeset_number?: i64\", i.message AS \"integration_message?\",\n                  pr.number AS \"proposal_number?: i64\", pr.title AS \"proposal_title?\",\n                  v.version AS \"version?: i64\", t.number AS \"task_number?: i64\",\n                  t.title AS \"task_title?\", a.name AS \"agent?\", w.name AS \"worker?\",\n                  rc.\"commit\" AS \"git_commit?\"\n           FROM revisions r\n           LEFT JOIN revisions p ON p.id = r.parent_id\n           LEFT JOIN integrations i ON i.id = r.integration_id\n           LEFT JOIN proposals pr ON pr.id = i.proposal_id\n           LEFT JOIN tasks t ON t.id = pr.task_id\n           LEFT JOIN workers w ON w.id = pr.author_worker_id\n           LEFT JOIN agents a ON a.id = w.agent_id\n           LEFT JOIN proposal_versions v ON v.id = i.version_id\n           LEFT JOIN revision_commits rc ON rc.revision_id = r.id\n           LEFT JOIN changesets cs ON cs.id = i.changeset_id\n           WHERE r.number <= ?1\n           ORDER BY r.number DESC\n           LIMIT ?2",
   "describe": {
     "columns": [
       {
@@ -114,8 +114,30 @@
         }
       },
       {
-        "name": "proposal_number?: i64",
+        "name": "changeset_number?: i64",
         "ordinal": 10,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "changesets",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "integration_message?",
+        "ordinal": 11,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "integrations",
+            "name": "message"
+          }
+        }
+      },
+      {
+        "name": "proposal_number?: i64",
+        "ordinal": 12,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -126,7 +148,7 @@
       },
       {
         "name": "proposal_title?",
-        "ordinal": 11,
+        "ordinal": 13,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -137,7 +159,7 @@
       },
       {
         "name": "version?: i64",
-        "ordinal": 12,
+        "ordinal": 14,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -148,7 +170,7 @@
       },
       {
         "name": "task_number?: i64",
-        "ordinal": 13,
+        "ordinal": 15,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -159,7 +181,7 @@
       },
       {
         "name": "task_title?",
-        "ordinal": 14,
+        "ordinal": 16,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -170,7 +192,7 @@
       },
       {
         "name": "agent?",
-        "ordinal": 15,
+        "ordinal": 17,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -181,7 +203,7 @@
       },
       {
         "name": "worker?",
-        "ordinal": 16,
+        "ordinal": 18,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -192,7 +214,7 @@
       },
       {
         "name": "git_commit?",
-        "ordinal": 17,
+        "ordinal": 19,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -223,8 +245,10 @@
       true,
       true,
       true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "24b9e5260ad5bbeeacd594c73ad8846e6a4c06ee7b722942d21b712e4403e043"
+  "hash": "5fbff5ed2f3eec764da4437040e2e835f2ac608f7c38a6a425d389e93a579e76"
 }

@@ -3,7 +3,8 @@ use fold_core::merge::{Conflict, ReportFile};
 use fold_core::policy::{GateState, IntegrateInput, ProposalFacts, gate_report};
 use fold_core::reviews::{deciding_approval, last_verdict_version};
 use fold_core::{
-    Actor, FoldError, ProposalId, TaskDescription, TaskId, TaskStatus, TaskTitle, codes,
+    Actor, ChangesetId, FoldError, ProposalId, TaskDescription, TaskId, TaskStatus, TaskTitle,
+    codes,
 };
 use fold_store::reviews::{self, ProposalState};
 use fold_store::tasks::{self, TaskRef};
@@ -152,6 +153,27 @@ impl ReviewService {
 }
 
 /// The refusal a transport reports for an integration that conflicted. The details name each path and its kind only, never a hunk, because an error detail carries no file content; the full report is read with the proposal.
+/// A direct change that conflicts with main: nothing was written and the main workspace stays open, so the main agent brings it up to date and submits again.
+pub fn direct_conflicted(changeset: ChangesetId, conflicts: &[Conflict]) -> FoldError {
+    let files: Vec<_> = conflicts
+        .iter()
+        .map(ReportFile::from)
+        .map(|file| json!({"path": file.path, "kind": file.kind}))
+        .collect();
+    FoldError::new(
+        codes::INTEGRATION_CONFLICTED,
+        format!(
+            "{changeset} conflicts with main in {} files and was not integrated",
+            files.len()
+        ),
+    )
+    .with_details([
+        ("changeset", json!(changeset.to_string())),
+        ("files", json!(files)),
+    ])
+    .with_hint("call sync_workspace on the main workspace, resolve the files, call record_changes, show the user the new diff and call submit_main_change again")
+}
+
 pub fn integration_conflicted(proposal: ProposalId, conflicts: &[Conflict]) -> FoldError {
     let files: Vec<_> = conflicts
         .iter()

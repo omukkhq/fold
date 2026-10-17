@@ -1,6 +1,6 @@
 use fold_core::object::ObjectHash;
 use fold_core::revision::{Revision, StoredRevision};
-use fold_core::{IdKind, IntegrationId, ProposalId, RevisionId, TaskId, Timestamp};
+use fold_core::{ChangesetId, IdKind, IntegrationId, ProposalId, RevisionId, TaskId, Timestamp};
 use sqlx::{Executor, Sqlite, SqlitePool};
 
 use super::refs;
@@ -29,6 +29,8 @@ pub struct RevisionRow {
 pub enum IntegrationKind {
     Proposal,
     Pull,
+    /// A changeset of the main workspace that the main agent brought onto main on the user's word.
+    Direct,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +42,10 @@ pub struct IntegrationInfo {
     /// The Git commit a pull brought in.
     pub remote_commit: Option<String>,
     pub proposal: Option<IntegratedProposal>,
+    /// The changeset a direct change brought onto main.
+    pub changeset: Option<ChangesetId>,
+    /// The Git commit message the main agent wrote for a direct change.
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -253,6 +259,8 @@ struct RawRow {
     integration_kind: Option<String>,
     integration_actor: Option<String>,
     remote_commit: Option<String>,
+    changeset_number: Option<i64>,
+    integration_message: Option<String>,
     proposal_number: Option<i64>,
     proposal_title: Option<String>,
     version: Option<i64>,
@@ -290,6 +298,7 @@ where
                   p.number AS "parent?: i64", r.created_at AS "created_at!: i64", r.import_source,
                   i.number AS "integration_number?: i64", i.kind AS "integration_kind?",
                   i.actor AS "integration_actor?", i.remote_commit AS "remote_commit?",
+                  cs.number AS "changeset_number?: i64", i.message AS "integration_message?",
                   pr.number AS "proposal_number?: i64", pr.title AS "proposal_title?",
                   v.version AS "version?: i64", t.number AS "task_number?: i64",
                   t.title AS "task_title?", a.name AS "agent?", w.name AS "worker?",
@@ -303,6 +312,7 @@ where
            LEFT JOIN agents a ON a.id = w.agent_id
            LEFT JOIN proposal_versions v ON v.id = i.version_id
            LEFT JOIN revision_commits rc ON rc.revision_id = r.id
+           LEFT JOIN changesets cs ON cs.id = i.changeset_id
            WHERE r.number BETWEEN ?1 AND ?2
            ORDER BY r.number ASC
            LIMIT ?3"#,
@@ -329,6 +339,7 @@ where
                   p.number AS "parent?: i64", r.created_at AS "created_at!: i64", r.import_source,
                   i.number AS "integration_number?: i64", i.kind AS "integration_kind?",
                   i.actor AS "integration_actor?", i.remote_commit AS "remote_commit?",
+                  cs.number AS "changeset_number?: i64", i.message AS "integration_message?",
                   pr.number AS "proposal_number?: i64", pr.title AS "proposal_title?",
                   v.version AS "version?: i64", t.number AS "task_number?: i64",
                   t.title AS "task_title?", a.name AS "agent?", w.name AS "worker?",
@@ -342,6 +353,7 @@ where
            LEFT JOIN agents a ON a.id = w.agent_id
            LEFT JOIN proposal_versions v ON v.id = i.version_id
            LEFT JOIN revision_commits rc ON rc.revision_id = r.id
+           LEFT JOIN changesets cs ON cs.id = i.changeset_id
            WHERE r.number <= ?1
            ORDER BY r.number DESC
            LIMIT ?2"#,
@@ -361,12 +373,20 @@ fn row(raw: RawRow) -> Result<RevisionRow, StoreError> {
             kind: match kind.as_str() {
                 "proposal" => IntegrationKind::Proposal,
                 "pull" => IntegrationKind::Pull,
+                "direct" => IntegrationKind::Direct,
                 _ => return Err(StoreError::Corrupt("integrations.kind")),
             },
             actor: raw
                 .integration_actor
                 .ok_or(StoreError::Corrupt("integrations.actor"))?,
             remote_commit: raw.remote_commit,
+            changeset: raw
+                .changeset_number
+                .map(|number| {
+                    ChangesetId::try_from_db(number).ok_or(StoreError::Corrupt("changesets.number"))
+                })
+                .transpose()?,
+            message: raw.integration_message,
             proposal: match (
                 raw.proposal_number,
                 raw.proposal_title,

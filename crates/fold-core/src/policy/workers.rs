@@ -253,6 +253,26 @@ pub fn can_complete_human_task(starter: &Starter) -> Result<(), PolicyDenied> {
     }
 }
 
+/// A direct change reaches main without a task, a proposal or a review: the user's word in the conversation is its approval. Only the main agent talks with the user, so it alone opens the main workspace and submits a direct change. A lead, a worker, a subagent and the daemon are refused, and so is a human, who changes the project's files through Git and `fld pull`.
+pub fn can_change_main_directly(starter: &Starter) -> Result<(), PolicyDenied> {
+    match starter {
+        Starter::MainAgent => Ok(()),
+        Starter::Unsupervised => Err(not_the_main_agent(
+            "plan the change as a task, or ask the user to make it through the main agent",
+        )),
+        Starter::Human => Err(PolicyDenied {
+            code: codes::MAIN_AGENT_REQUIRED,
+            message: "only the main agent makes a direct change to main",
+            hint: "commit the change in the project folder's Git repository and run fld pull, or ask the main agent",
+        }),
+        _ => Err(PolicyDenied {
+            code: codes::MAIN_AGENT_REQUIRED,
+            message: "only the main agent makes a direct change to main",
+            hint: "record the work in a task workspace and open a proposal",
+        }),
+    }
+}
+
 /// An agent that fold does not supervise leaves the plan of the whole project to the main agent, which `fld claude` starts, whether or not it runs now. `hint` names the call the main agent makes instead.
 fn not_the_main_agent(hint: &'static str) -> PolicyDenied {
     PolicyDenied {
@@ -330,6 +350,31 @@ mod tests {
                 can_publish_task_plan(&starter, &[]).unwrap_err().code(),
                 codes::MAIN_AGENT_REQUIRED
             );
+        }
+    }
+
+    #[test]
+    fn only_the_main_agent_changes_main_directly() {
+        assert!(can_change_main_directly(&Starter::MainAgent).is_ok());
+        assert_eq!(
+            can_change_main_directly(&Starter::Unsupervised)
+                .unwrap_err()
+                .code(),
+            codes::ORCHESTRATOR_REQUIRED
+        );
+        let human = can_change_main_directly(&Starter::Human).unwrap_err();
+        assert_eq!(human.code(), codes::MAIN_AGENT_REQUIRED);
+        assert!(human.hint().contains("fld pull"));
+        for starter in [
+            Starter::AreaLead(area("web")),
+            Starter::ReviewLead,
+            Starter::ShortLived,
+            Starter::Subagent,
+            Starter::System,
+        ] {
+            let denied = can_change_main_directly(&starter).unwrap_err();
+            assert_eq!(denied.code(), codes::MAIN_AGENT_REQUIRED);
+            assert!(denied.hint().contains("proposal"));
         }
     }
 

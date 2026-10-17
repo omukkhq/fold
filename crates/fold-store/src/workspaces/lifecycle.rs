@@ -13,7 +13,7 @@ macro_rules! select_workspaces {
         sqlx::query_as!(
             RawWorkspace,
             r#"SELECT w.number AS "number!: i64",
-                      t.number AS "task!: i64",
+                      t.number AS "task?: i64",
                       w.worker_id,
                       k.name AS "worker?: String",
                       w.kind,
@@ -27,7 +27,7 @@ macro_rules! select_workspaces {
                       w.created_at,
                       w.closed_at
                FROM workspaces w
-               JOIN tasks t ON t.id = w.task_id
+               LEFT JOIN tasks t ON t.id = w.task_id
                JOIN revisions r ON r.id = w.base_revision_id
                LEFT JOIN workers k ON k.id = w.worker_id
                LEFT JOIN proposals p ON p.id = w.proposal_id
@@ -41,6 +41,8 @@ macro_rules! select_workspaces {
 pub enum WorkspaceKind {
     Task,
     Review,
+    /// The main agent's workspace, which belongs to no task: its changes reach main directly, on the user's word.
+    Main,
 }
 
 impl WorkspaceKind {
@@ -48,6 +50,7 @@ impl WorkspaceKind {
         match self {
             WorkspaceKind::Task => "task",
             WorkspaceKind::Review => "review",
+            WorkspaceKind::Main => "main",
         }
     }
 
@@ -55,6 +58,7 @@ impl WorkspaceKind {
         match text {
             "task" => Ok(WorkspaceKind::Task),
             "review" => Ok(WorkspaceKind::Review),
+            "main" => Ok(WorkspaceKind::Main),
             _ => Err(StoreError::Corrupt("workspaces.kind")),
         }
     }
@@ -114,7 +118,8 @@ impl ClosedState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceRow {
     pub id: WorkspaceId,
-    pub task: TaskId,
+    /// `None` for the main workspace only.
+    pub task: Option<TaskId>,
     pub worker_id: Option<i64>,
     pub worker: Option<WorkerName>,
     pub kind: WorkspaceKind,
@@ -235,6 +240,66 @@ pub async fn task_workspace_paths(
     Ok(paths)
 }
 
+#[derive(Debug, Clone)]
+pub struct NewMainWorkspace<'a> {
+    pub id: WorkspaceId,
+    pub worker_id: i64,
+    pub path: &'a str,
+    pub base: RevisionId,
+    pub now: Timestamp,
+}
+
+/// Inserts the active main workspace of `worker_id`, which belongs to no task. A second live main workspace fails on `workspaces.kind` and a reused directory on `workspaces.path`, so the unique indexes decide a race. A base revision that does not exist inserts nothing and fails with `StoreError::Invalid`.
+pub async fn insert_main_workspace(
+    tx: &mut WriteTx,
+    new: &NewMainWorkspace<'_>,
+) -> Result<(), StoreError> {
+    let (id, base, now) = (new.id.to_db(), new.base.to_db(), new.now.as_millis());
+    let inserted = sqlx::query!(
+        "INSERT INTO workspaces (number, task_id, worker_id, kind, path, base_revision_id, state, last_activity_at, created_at)
+         SELECT ?1, NULL, ?2, 'main', ?3, r.id, 'active', ?5, ?5
+         FROM revisions r
+         WHERE r.number = ?4",
+        id,
+        new.worker_id,
+        new.path,
+        base,
+        now
+    )
+    .execute(tx.conn())
+    .await?
+    .rows_affected();
+    if inserted == 1 {
+        Ok(())
+    } else {
+        Err(StoreError::Invalid("the base revision does not exist"))
+    }
+}
+
+/// The main workspace in state `active` or `missing`; the partial unique index allows at most one.
+pub async fn live_main_workspace(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Option<WorkspaceRow>, StoreError> {
+    one(select_workspaces!(
+        "WHERE w.kind = 'main' AND w.state IN ('active', 'missing')
+         ORDER BY w.number DESC
+         LIMIT 1"
+    )
+    .fetch_optional(executor)
+    .await?)
+}
+
+/// The directories of every main workspace the project has had, in any state, so a new one never takes the name of an earlier one.
+pub async fn main_workspace_paths(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Vec<String>, StoreError> {
+    let paths =
+        sqlx::query_scalar!("SELECT path FROM workspaces WHERE kind = 'main' ORDER BY number")
+            .fetch_all(executor)
+            .await?;
+    Ok(paths)
+}
+
 /// Moves a live workspace to `state` and stamps `closed_at`. Only the row changes; the directory stays until garbage collection. False when the workspace is not live or does not exist, and then nothing changes.
 pub async fn close(
     tx: &mut WriteTx,
@@ -299,7 +364,7 @@ pub async fn set_worker(
 /// A workspace row as the reads select it, before its columns are checked.
 struct RawWorkspace {
     number: i64,
-    task: i64,
+    task: Option<i64>,
     worker_id: Option<i64>,
     worker: Option<String>,
     kind: String,
@@ -358,7 +423,7 @@ pub async fn list_active_review_checkouts(
 ) -> Result<Vec<ReviewCheckoutRow>, StoreError> {
     let rows = sqlx::query!(
         r#"SELECT w.number AS "number!: i64",
-                  t.number AS "task!: i64",
+                  t.number AS "task?: i64",
                   w.worker_id,
                   k.name AS "worker?: String",
                   w.kind,
@@ -445,7 +510,10 @@ pub async fn list_active_review_checkouts(
 fn workspace_row(row: RawWorkspace) -> Result<WorkspaceRow, StoreError> {
     Ok(WorkspaceRow {
         id: number(row.number, WorkspaceId::try_from_db, "workspaces.number")?,
-        task: number(row.task, TaskId::try_from_db, "tasks.number")?,
+        task: row
+            .task
+            .map(|value| number(value, TaskId::try_from_db, "tasks.number"))
+            .transpose()?,
         worker_id: row.worker_id,
         worker: row
             .worker

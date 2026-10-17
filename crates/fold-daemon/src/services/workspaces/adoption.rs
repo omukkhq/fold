@@ -19,6 +19,8 @@ pub enum AdoptReason {
     Released,
     /// `takeover_claim` moved the stale claim, and the workspace went with it.
     TakenOver,
+    /// The main tag moved to another session, and the new main agent took the main workspace.
+    MainAgent,
 }
 
 impl AdoptReason {
@@ -26,6 +28,7 @@ impl AdoptReason {
         match self {
             AdoptReason::Released => "released",
             AdoptReason::TakenOver => "taken_over",
+            AdoptReason::MainAgent => "main_agent",
         }
     }
 }

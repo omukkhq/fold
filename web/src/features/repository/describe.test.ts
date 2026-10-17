@@ -72,6 +72,25 @@ describe("describeRevision", () => {
     });
   });
 
+  it("names the commit subject, the main agent and the user's approval for a direct change", () => {
+    expect(
+      describeRevision(
+        revision({
+          origin: "direct",
+          title: "Add the AGENTS.md rules",
+          author: "main",
+        }),
+        NOW,
+      ),
+    ).toEqual({
+      title: "direct · Add the AGENTS.md rules",
+      meta: [{ actor: "main" }, " · approved by the user · 14:06:00"],
+    });
+    expect(describeRevision(revision({ origin: "direct" }), NOW).title).toBe(
+      "direct · r8",
+    );
+  });
+
   it("shows the title of the first revision, or a name when it has none", () => {
     expect(
       describeRevision(

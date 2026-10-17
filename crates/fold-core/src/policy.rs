@@ -32,9 +32,10 @@ pub use tasks::{
     TaskHolder, TaskStart, can_archive_task, can_change_checklist, can_delete_task, can_hold_task,
 };
 pub use workers::{
-    Starter, can_check_task, can_choose_no_proposal, can_clear_hold, can_complete_human_task,
-    can_define_area, can_pause_project, can_publish_task_plan, can_set_hold, can_set_worker_limits,
-    can_start_worker, can_stop_worker, can_update_area, can_write_handoff,
+    Starter, can_change_main_directly, can_check_task, can_choose_no_proposal, can_clear_hold,
+    can_complete_human_task, can_define_area, can_pause_project, can_publish_task_plan,
+    can_set_hold, can_set_worker_limits, can_start_worker, can_stop_worker, can_update_area,
+    can_write_handoff,
 };
 
 /// The facts behind an agent's rights that its name and tags do not carry, which the services read inside the command's transaction. `role` is the role of the agent's worker process, fixed when fold started it, and `None` for an agent that fold does not supervise.

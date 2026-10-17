@@ -3025,7 +3025,7 @@ export interface components {
             totals: components["schemas"]["ComparisonTotals"];
         };
         /** @enum {string} */
-        RevisionOriginView: "initial" | "proposal" | "pull";
+        RevisionOriginView: "initial" | "proposal" | "pull" | "direct";
         RevisionPageView: {
             /**
              * @description Pass it as `before` for the next page; null once the page reaches `r1`.
@@ -3036,7 +3036,7 @@ export interface components {
             revisions: components["schemas"]["RevisionView"][];
         };
         RevisionView: {
-            /** @description The agent whose proposal was integrated, or the human who pulled. */
+            /** @description The agent whose proposal was integrated, the human who pulled, or the main worker that made a direct change. */
             author: string | null;
             /** @description The Git commit the revision became in the project folder's repository `.git`; null until it is written, just after the integration. */
             commit: string | null;
@@ -3056,7 +3056,7 @@ export interface components {
             pull: string | null;
             /** @example T-12 */
             task: string | null;
-            /** @description The title of the integrated proposal. */
+            /** @description The title of the integrated proposal, or the first line of a direct change's commit message. */
             title: string | null;
             /** @description The hash of the revision's root tree. */
             tree: string;
@@ -3744,7 +3744,7 @@ export interface components {
             watch: components["schemas"]["WatchModeView"] | null;
         };
         /** @enum {string} */
-        WorkspaceKindView: "task" | "review";
+        WorkspaceKindView: "task" | "review" | "main";
         WorkspaceListView: {
             /** @description The active and missing task workspaces, by id. */
             workspaces: components["schemas"]["WorkspaceEntryView"][];

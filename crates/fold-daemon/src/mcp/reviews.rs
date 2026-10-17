@@ -3,7 +3,8 @@ use std::str::FromStr;
 use fold_core::policy::{Gate, GateState, GateStatus};
 use fold_core::reviews::{HumanReviewMark, Side, Verdict};
 use fold_core::{
-    Actor, CommentId, FoldError, HumanName, IdParseError, ProposalId, TaskId, WorkerName, codes,
+    Actor, ChangesetId, CommentId, FoldError, HumanName, IdParseError, ProposalId, TaskId,
+    WorkerName, codes,
 };
 use fold_store::reviews::ProposalState;
 use rmcp::handler::server::common::schema_for_type;
@@ -17,9 +18,9 @@ use super::error::from_review;
 use super::parse;
 use super::workspaces::{file_diff_value, file_line};
 use crate::services::reviews::{
-    ChangeRange, CommentInput, CommentLocation, CommentView, DEFAULT_PROPOSAL_LIST,
-    IntegrationOutcome, ProposalDetail, ProposalFilter, ProposalSummary, ProposalView,
-    ReviewService, integration_conflicted,
+    ChangeRange, CommentInput, CommentLocation, CommentView, DEFAULT_PROPOSAL_LIST, DirectChange,
+    DirectOutcome, IntegrationOutcome, ProposalDetail, ProposalFilter, ProposalSummary,
+    ProposalView, ReviewService, direct_conflicted, integration_conflicted,
 };
 
 pub mod batches;
@@ -37,6 +38,7 @@ pub const SUBMIT_REVIEW: &str = "submit_review";
 pub const GET_REVIEW_COMMENTS: &str = "get_review_comments";
 pub const INTEGRATE_PROPOSAL: &str = "integrate_proposal";
 pub const REQUIRE_HUMAN_REVIEW: &str = "require_human_review";
+pub const SUBMIT_MAIN_CHANGE: &str = "submit_main_change";
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -219,6 +221,18 @@ pub struct RequireHumanReviewInput {
     pub as_worker: Option<String>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct SubmitMainChangeInput {
+    /// The newest changeset of your main workspace, such as C-40: the change whose diff the user saw and approved.
+    pub changeset: String,
+    /// The Git commit message of the change, 1 to 5000 characters: a subject line, then a blank line and a body when one helps. Show it to the user with the diff.
+    pub message: String,
+    /// The worker that makes this call. Only the main agent's main worker submits a direct change, so leave it out.
+    #[serde(rename = "as", default)]
+    pub as_worker: Option<String>,
+}
+
 pub fn tools() -> Vec<Tool> {
     let mut tools = vec![
         Tool::new(
@@ -288,6 +302,11 @@ pub fn tools() -> Vec<Tool> {
         ),
     ];
     tools.extend(batches::tools());
+    tools.push(Tool::new(
+        SUBMIT_MAIN_CHANGE,
+        "Main agent only, and only after the user's explicit OK to the diff and summary you showed. Integrate the newest changeset of your main workspace onto main as one revision and one Git commit with your message, with no task, proposal or review; the main workspace then closes. integration_conflicted means main moved: details list the files; call sync_workspace, resolve them, call record_changes, show the user the new diff and submit again.",
+        schema_for_type::<SubmitMainChangeInput>(),
+    ));
     tools
 }
 
@@ -316,6 +335,7 @@ pub async fn call(
         GET_REVIEW_COMMENTS => get_review_comments(reviews, arguments).await?,
         INTEGRATE_PROPOSAL => integrate_proposal(reviews, &actor, arguments).await?,
         REQUIRE_HUMAN_REVIEW => require_human_review(reviews, &actor, arguments).await?,
+        SUBMIT_MAIN_CHANGE => submit_main_change(reviews, &actor, arguments).await?,
         _ => match batches::run(reviews, tool, &actor, arguments).await? {
             Some(value) => value,
             None => return Ok(None),
@@ -806,6 +826,34 @@ async fn integrate_proposal(
         IntegrationOutcome::Conflicted(conflicts) => {
             Err(integration_conflicted(proposal, &conflicts))
         }
+    }
+}
+
+async fn submit_main_change(
+    reviews: &ReviewService,
+    actor: &Actor,
+    arguments: &JsonObject,
+) -> Result<Value, FoldError> {
+    let input: SubmitMainChangeInput = parse(arguments)?;
+    let changeset: ChangesetId = id(
+        &input.changeset,
+        "pass the changeset that record_changes returned, such as C-40",
+    )?;
+    let change = DirectChange {
+        changeset,
+        message: input.message,
+    };
+    match reviews
+        .integrate_direct(actor, change)
+        .await
+        .map_err(from_review)?
+    {
+        DirectOutcome::Succeeded { revision } => Ok(json!({
+            "changeset": changeset,
+            "result": "succeeded",
+            "revision": revision,
+        })),
+        DirectOutcome::Conflicted(conflicts) => Err(direct_conflicted(changeset, &conflicts)),
     }
 }
 

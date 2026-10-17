@@ -282,7 +282,7 @@ async fn create_takes_a_free_claim_writes_the_head_and_moves_the_task() {
     let view = fx.create(&fx.frontend, 1).await.unwrap();
 
     assert_eq!(view.id, ws(1));
-    assert_eq!(view.task, t(1));
+    assert_eq!(view.task, Some(t(1)));
     assert_eq!(view.path, ".fold/ws/t-1");
     assert_eq!(view.base, RevisionId::from_number(1).unwrap());
     assert_eq!(view.kind, WorkspaceKind::Task);
@@ -428,7 +428,7 @@ async fn abandon_returns_the_task_to_todo_and_leaves_the_directory() {
     let view = abandoned.workspace;
     assert_eq!(view.state, WorkspaceState::Abandoned);
     assert_eq!(view.closed_at, Some(fx.project.now()));
-    assert_eq!(abandoned.task_status, TaskStatus::Todo);
+    assert_eq!(abandoned.task_status, Some(TaskStatus::Todo));
     assert_eq!(fx.status(1).await, (TaskStatus::Todo, false));
     assert_eq!(std::fs::read(&edited).unwrap(), b"draft");
     assert_eq!(

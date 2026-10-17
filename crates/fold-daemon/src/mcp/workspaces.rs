@@ -28,6 +28,7 @@ pub const RESTORE_CHECKPOINT: &str = "restore_checkpoint";
 pub const RECORD_CHANGES: &str = "record_changes";
 pub const SYNC_WORKSPACE: &str = "sync_workspace";
 pub const ABANDON_WORKSPACE: &str = "abandon_workspace";
+pub const OPEN_MAIN_WORKSPACE: &str = "open_main_workspace";
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -163,6 +164,14 @@ pub struct AbandonWorkspaceInput {
     pub as_worker: Option<String>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct OpenMainWorkspaceInput {
+    /// The worker that makes this call. Only the main agent's main worker opens the main workspace, so leave it out.
+    #[serde(rename = "as", default)]
+    pub as_worker: Option<String>,
+}
+
 pub fn tools() -> Vec<Tool> {
     vec![
         Tool::new(
@@ -224,6 +233,11 @@ pub fn tools() -> Vec<Tool> {
             ABANDON_WORKSPACE,
             "Give up your workspace: it closes, and the task goes back to Todo or Backlog. Its files and your claim stay.",
             schema_for_type::<AbandonWorkspaceInput>(),
+        ),
+        Tool::new(
+            OPEN_MAIN_WORKSPACE,
+            "Main agent only. Open the main workspace: a copy of main under .fold/ws/ that belongs to no task, for a change the user asks you to make yourself, such as the initial setup or a small docs change. Edit, build and test there, then call record_changes, show the user the diff and a summary, and call submit_main_change only after the user's explicit OK. While the main workspace is open this returns it with reused true.",
+            schema_for_type::<OpenMainWorkspaceInput>(),
         ),
     ]
 }
@@ -455,7 +469,7 @@ pub async fn call(
                 "workspace": view.id.to_string(),
                 "path": view.path,
                 "base": view.base.to_string(),
-                "task": view.task.to_string(),
+                "task": view.task.map(|task| task.to_string()),
                 "adopted": created.adopted,
             })
         }
@@ -483,7 +497,7 @@ pub async fn call(
                 "state": view.state.as_str(),
                 "path": view.path,
                 "base": view.base.to_string(),
-                "task": view.task.to_string(),
+                "task": view.task.map(|task| task.to_string()),
                 "worker": view.worker.as_ref().map(WorkerName::as_str),
                 "conflicted": details.conflicted,
                 "changed_files": view.changed_files,
@@ -590,7 +604,23 @@ pub async fn call(
                 .map_err(from_workspace)?;
             json!({
                 "workspace": abandoned.workspace.id.to_string(),
-                "task_status": abandoned.task_status.as_str(),
+                "task_status": abandoned.task_status.map(|status| status.as_str()),
+            })
+        }
+        OPEN_MAIN_WORKSPACE => {
+            let _: OpenMainWorkspaceInput = parse(arguments)?;
+            let actor = server.actor(as_worker).await?;
+            let opened = server
+                .workspaces
+                .open_main_workspace(&actor)
+                .await
+                .map_err(from_workspace)?;
+            let view = opened.workspace;
+            json!({
+                "workspace": view.id.to_string(),
+                "path": view.path,
+                "base": view.base.to_string(),
+                "reused": opened.reused,
             })
         }
         _ => return Ok(None),

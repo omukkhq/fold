@@ -258,9 +258,15 @@ fn export_revision(
         .integration
         .as_ref()
         .and_then(|integration| integration.proposal.as_ref());
-    let author = match proposal {
-        Some(proposal) => author(&proposal.agent, &proposal.worker),
-        None => fold_signature(),
+    let author = match (proposal, row.integration.as_ref()) {
+        (Some(proposal), _) => author(&proposal.agent, &proposal.worker),
+        // A direct change is the main agent's own work; its actor is the main worker's name.
+        (None, Some(integration)) if integration.kind == IntegrationKind::Direct => {
+            let worker = integration.actor.as_str();
+            let agent = worker.split('/').next().unwrap_or(worker);
+            author(agent, worker)
+        }
+        (None, _) => fold_signature(),
     };
     Ok(ExportRevision {
         number: row.number,
@@ -298,7 +304,7 @@ fn merge_parent(row: &RevisionRow) -> Result<Option<CommitId>, StoreError> {
         .transpose()
 }
 
-/// The message of the commit a revision becomes, ending in Git trailers that name it by public ids. An integrated proposal gives its title as the subject and its task's title as the body, with `reviewers`, those whose approval of the integrated version stands, as `Reviewed-by`. A pull that merged a remote commit names that commit; an imported `r1` names its source; any other revision is `fold r<n>`.
+/// The message of the commit a revision becomes, ending in Git trailers that name it by public ids. An integrated proposal gives its title as the subject and its task's title as the body, with `reviewers`, those whose approval of the integrated version stands, as `Reviewed-by`. A direct change gives the message the main agent wrote, as it wrote it. A pull that merged a remote commit names that commit; an imported `r1` names its source; any other revision is `fold r<n>`.
 pub fn commit_message(row: &RevisionRow, reviewers: &[EventActor]) -> String {
     let revision = row.number;
     let Some(integration) = &row.integration else {
@@ -322,6 +328,22 @@ pub fn commit_message(row: &RevisionRow, reviewers: &[EventActor]) -> String {
                 message.push_str(&format!("Reviewed-by: {reviewer}\n"));
             }
             message.push_str(&format!("Integrated-by: {actor}\n"));
+            message
+        }
+        (None, IntegrationKind::Direct) => {
+            let mut message = integration
+                .message
+                .as_deref()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map_or_else(|| format!("fold {revision}"), str::to_owned);
+            message.push_str("\n\n");
+            if let Some(changeset) = integration.changeset {
+                message.push_str(&format!("Fold-Changeset: {changeset}\n"));
+            }
+            message.push_str(&format!(
+                "Fold-Revision: {revision}\nIntegrated-by: {actor}\n"
+            ));
             message
         }
         (None, IntegrationKind::Pull) => {
@@ -395,6 +417,17 @@ mod tests {
                 agent: "backend".to_owned(),
                 worker: "backend/db".to_owned(),
             }),
+            changeset: None,
+            message: None,
+        }
+    }
+
+    fn direct(message: &str) -> IntegrationInfo {
+        IntegrationInfo {
+            actor: "main".to_owned(),
+            changeset: Some(fold_core::ChangesetId::from_number(40).unwrap()),
+            message: Some(message.to_owned()),
+            ..integration(IntegrationKind::Direct, None, None)
         }
     }
 
@@ -460,6 +493,22 @@ mod tests {
                 &[][..],
                 "fold r9\n\nFold-Revision: r9\nIntegrated-by: human:ana\n",
             ),
+            (
+                row(
+                    10,
+                    None,
+                    Some(direct(
+                        "Add the AGENTS.md rules\n\nTaken from the parent folder.\n",
+                    )),
+                ),
+                &[][..],
+                "Add the AGENTS.md rules\n\nTaken from the parent folder.\n\nFold-Changeset: C-40\nFold-Revision: r10\nIntegrated-by: main\n",
+            ),
+            (
+                row(11, None, Some(direct("  "))),
+                &[][..],
+                "fold r11\n\nFold-Changeset: C-40\nFold-Revision: r11\nIntegrated-by: main\n",
+            ),
         ];
         for (row, reviewers, expected) in cases {
             assert_eq!(commit_message(&row, reviewers), expected);
@@ -499,6 +548,13 @@ mod tests {
             Some(integration(IntegrationKind::Pull, None, Some("nope"))),
         );
         assert!(export_revision(&corrupt, &[]).is_err());
+        let changed = export_revision(&row(3, None, Some(direct("Initial setup"))), &[]).unwrap();
+        assert_eq!(
+            (changed.author.name.as_str(), changed.author.email.as_str()),
+            ("main", "main.main@fold.local")
+        );
+        assert_eq!(changed.committer, fold_signature());
+        assert_eq!(changed.merge, None);
     }
 
     #[test]
