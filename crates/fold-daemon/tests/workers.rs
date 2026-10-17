@@ -568,7 +568,7 @@ async fn a_role_that_names_its_mcp_servers_gets_only_those() {
     );
     assert_eq!(
         std::fs::read_to_string(run.flag("--append-system-prompt-file").unwrap()).unwrap(),
-        "Our own lead prompt.\n"
+        format!("Our own lead prompt.\n\n{}", fold_core::shared_prompt())
     );
 }
 

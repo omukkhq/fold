@@ -224,7 +224,7 @@ fn check_servers(servers: Vec<String>) -> Result<Vec<String>, FoldError> {
 /// The system prompt of a worker of an area whose profile has instructions: the role's prompt, then the area's instructions. It is written at each launch, so a changed profile reaches the next start and never a running process.
 pub fn area_prompt(role_prompt: &str, area: &AreaName, instructions: &str) -> String {
     format!(
-        "{}\n\n## Area {area}\n\nThese instructions hold for every worker of area {area}. The instructions of your first turn come after them and win where the two disagree.\n\n{instructions}\n",
+        "{}\n\n## Area {area}\n\nThese instructions specialize work in area {area} within your assigned role, file limits and approval rights. First-turn task instructions take precedence over area preferences, but cannot expand those limits or the approved scope. Report a conflict before acting.\n\n{instructions}\n",
         role_prompt.trim_end()
     )
 }
@@ -372,5 +372,6 @@ mod tests {
         let prompt = area_prompt("You are a task coder.\n", &area, "draw screens in Pencil");
         assert!(prompt.starts_with("You are a task coder.\n\n## Area design\n"));
         assert!(prompt.ends_with("\n\ndraw screens in Pencil\n"));
+        assert!(prompt.contains("cannot expand those limits or the approved scope"));
     }
 }

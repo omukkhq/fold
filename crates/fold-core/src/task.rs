@@ -8,6 +8,10 @@ use crate::events::EventActor;
 use crate::text::one_line;
 use crate::time::Timestamp;
 
+mod plan;
+
+pub use plan::{MAX_PLAN_TASKS, PlanRef, PlannedReview, PlannedTask, check_task_plan};
+
 /// The messages never repeat the rejected text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum TaskValueError {

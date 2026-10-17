@@ -25,6 +25,7 @@ mod dependencies;
 mod hold;
 mod lead_checks;
 mod leases;
+mod plans;
 mod ready;
 mod recompute;
 mod removal;

@@ -92,6 +92,121 @@ async fn two_proposals(fx: &Fixture) {
 }
 
 #[tokio::test]
+async fn a_delegate_creates_its_own_batch_after_the_lead_releases_its_members() {
+    let fx = Fixture::new().await;
+    two_proposals(&fx).await;
+    let lead = connect(&fx, "lead").await;
+    let delegate = connect(&fx, "delegate").await;
+    give_role(&fx.handle.store, "lead", Role::ReviewLead, None).await;
+    give_role(&fx.handle.store, "delegate", Role::BatchReviewer, None).await;
+    ok(
+        &lead,
+        "create_review_batch",
+        json!({"proposals": ["P-1", "P-2"]}),
+    )
+    .await;
+    assert_eq!(
+        err(
+            &delegate,
+            "create_review_batch",
+            json!({"proposals": ["P-1", "P-2"]})
+        )
+        .await["code"],
+        "already_claimed"
+    );
+    for proposal in ["P-1", "P-2"] {
+        ok(
+            &lead,
+            "remove_from_batch",
+            json!({"id": "rb-1", "proposal": proposal}),
+        )
+        .await;
+    }
+    let created = ok(
+        &delegate,
+        "create_review_batch",
+        json!({"proposals": ["P-1", "P-2"]}),
+    )
+    .await;
+    assert_eq!(created["holder"], "delegate");
+    assert_eq!(created["id"], "rb-2");
+    ok(&delegate, "create_batch_checkout", json!({"id": "rb-2"})).await;
+}
+
+#[tokio::test]
+async fn an_omitted_batch_version_gets_a_new_checkout_and_its_own_review() {
+    let fx = Fixture::new().await;
+    two_proposals(&fx).await;
+    let delegate = connect(&fx, "delegate").await;
+    give_role(&fx.handle.store, "delegate", Role::BatchReviewer, None).await;
+    ok(
+        &delegate,
+        "create_review_batch",
+        json!({"proposals": ["P-1", "P-2"]}),
+    )
+    .await;
+    ok(&delegate, "create_batch_checkout", json!({"id": "rb-1"})).await;
+    fx.write(2, "src/two.rs", "corrected\n");
+    fx.reviews()
+        .update_proposal(
+            &fx.agent("backend").await,
+            fold_core::ProposalId::from_number(2).unwrap(),
+            Some("Checked new content"),
+        )
+        .await
+        .unwrap();
+    let submitted = ok(
+        &delegate,
+        "submit_batch_review",
+        json!({
+            "id": "rb-1", "verdicts": [
+                {"proposal": "P-1", "verdict": "approve"},
+                {"proposal": "P-2", "verdict": "approve"}
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(submitted["reviewed"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        submitted["left_out"],
+        json!([{"proposal": "P-2", "version": "v1", "reason": "new_version"}])
+    );
+    ok(&delegate, "claim_review", json!({"id": "P-2"})).await;
+    let checkout = ok(&delegate, "create_review_checkout", json!({"id": "P-2"})).await;
+    assert_eq!(checkout["version"], "v2");
+    assert_eq!(
+        err(
+            &delegate,
+            "submit_review",
+            json!({"id": "P-2", "version": 1, "verdict": "approve", "body": "Wrong version"})
+        )
+        .await["code"],
+        "stale_version"
+    );
+    ok(&delegate, "submit_review", json!({"id": "P-2", "version": 2, "verdict": "approve", "body": "Checked corrected content"})).await;
+}
+
+#[tokio::test]
+async fn a_new_coder_session_recovers_its_existing_workspace_and_proposal() {
+    let fx = Fixture::new().await;
+    two_proposals(&fx).await;
+    let first = connect(&fx, "backend").await;
+    let task = ok(&first, "get_task", json!({"id": "T-2"})).await;
+    let proposal = ok(&first, "get_proposal", json!({"id": "P-2"})).await;
+    first.cancel().await.unwrap();
+    let resumed = connect(&fx, "backend").await;
+    let claim = ok(&resumed, "claim_task", json!({"id": "T-2"})).await;
+    assert!(task["workspace"].is_string());
+    assert_eq!(claim["workspace"], task["workspace"]);
+    assert_eq!(
+        ok(&resumed, "get_proposal", json!({"id": "P-2"})).await,
+        proposal
+    );
+    let all = ok(&resumed, "list_proposals", json!({})).await;
+    assert_eq!(all["proposals"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
 async fn a_reviewer_batches_checks_out_and_reviews_two_proposals_through_the_tools() {
     let fx = Fixture::new().await;
     two_proposals(&fx).await;

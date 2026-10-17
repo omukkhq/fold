@@ -45,15 +45,56 @@ impl Role {
         }
     }
 
-    /// The prompt that ships with fold; a project overrides it with `.fold/roles/<role>.md`.
+    /// The prompt that ships with fold: the role's text followed by the shared rules. A project replaces the role's text with `.fold/roles/<role>.md`; [`with_shared_rules`] then adds the shared rules again.
     pub fn prompt(self) -> &'static str {
         match self {
-            Role::AreaLead => include_str!("roles/area_lead.md"),
-            Role::ReviewLead => include_str!("roles/review_lead.md"),
-            Role::TaskCoder => include_str!("roles/task_coder.md"),
-            Role::BatchReviewer => include_str!("roles/batch_reviewer.md"),
+            Role::AreaLead => concat!(
+                include_str!("roles/area_lead.md"),
+                "\n",
+                include_str!("roles/shared.md")
+            ),
+            Role::ReviewLead => concat!(
+                include_str!("roles/review_lead.md"),
+                "\n",
+                include_str!("roles/shared.md")
+            ),
+            Role::TaskCoder => concat!(
+                include_str!("roles/task_coder.md"),
+                "\n",
+                include_str!("roles/shared.md")
+            ),
+            Role::BatchReviewer => concat!(
+                include_str!("roles/batch_reviewer.md"),
+                "\n",
+                include_str!("roles/shared.md")
+            ),
         }
     }
+}
+
+/// The authority and recovery rules that every agent prompt ends with, the main agent's and the workers' alike, whether the role text ships with fold or comes from a project file.
+pub fn shared_prompt() -> &'static str {
+    include_str!("roles/shared.md")
+}
+
+/// A project's own role text followed by the shared rules, so an override never drops them. The daemon (workers) and `fld claude` (main agent) both build their override prompts here.
+pub fn with_shared_rules(role_text: &str) -> String {
+    let mut prompt = role_text.to_owned();
+    if !prompt.ends_with('\n') {
+        prompt.push('\n');
+    }
+    prompt.push('\n');
+    prompt.push_str(shared_prompt());
+    prompt
+}
+
+/// The prompt that ships with fold for the main agent, which `fld claude` appends to the system prompt of the user's session; a project replaces the role text with `.fold/roles/main.md`, and the shared rules follow it either way. It stands apart from [`Role`] because fold neither starts nor supervises the main agent.
+pub fn main_prompt() -> &'static str {
+    concat!(
+        include_str!("roles/main.md"),
+        "\n",
+        include_str!("roles/shared.md")
+    )
 }
 
 define_names!(
@@ -340,12 +381,12 @@ pub fn first_turn(facts: &StartFacts<'_>) -> String {
             facts.name
         ),
         (Role::TaskCoder, _) => format!(
-            "fold started you as {}, a task coder for {}. Claim each task with claim_task, work only in its task workspace, and send a proposal for each task with create_proposal.",
+            "fold started you as {}, a task coder for {}. Read each task with get_task, claim it with claim_task and reuse its workspace when present. For a proposal task, work only in its task workspace and send create_proposal or update_proposal. For a no_proposal task, create no workspace and send report_task with verifiable evidence.",
             facts.name,
             ids(facts.tasks.iter().map(ToString::to_string).collect())
         ),
         (Role::BatchReviewer, _) => format!(
-            "fold started you as {}, a batch reviewer for {}. Review them together with create_review_batch, create_batch_checkout and submit_batch_review, so each gets its own verdict.",
+            "fold started you as {}, a batch reviewer for {}. Review only these proposals. Review a single proposal or a proposal with a human review mark on its own. For related unmarked proposals, create your own batch with create_review_batch, check it out and submit each verdict. Read current claims and versions before starting.",
             facts.name,
             ids(facts.proposals.iter().map(ToString::to_string).collect())
         ),
@@ -509,6 +550,58 @@ mod tests {
                 "{role}"
             );
         }
+    }
+
+    #[test]
+    fn the_main_prompt_asks_and_waits_for_an_ok_before_it_creates_anything() {
+        let prompt = main_prompt();
+        assert!(prompt.starts_with("# Main agent\n"));
+        assert!(prompt.contains("`AskUserQuestion`"));
+        assert!(prompt.contains("explicit OK"));
+        assert!(prompt.contains("Never edit code and never build a task yourself"));
+        assert!(prompt.contains("`pause_project` or `resume_project` only when the user asks"));
+        assert!(prompt.contains("`start_worker` fails with `project_paused`"));
+        assert!(prompt.contains("only when the user tells you in this conversation"));
+        assert!(
+            prompt.split_whitespace().count() < 1500,
+            "the prompt stays in context every turn"
+        );
+    }
+
+    #[test]
+    fn shipped_prompts_include_shared_authority_and_recovery_rules() {
+        for prompt in Role::ALL
+            .into_iter()
+            .map(Role::prompt)
+            .chain([main_prompt()])
+        {
+            assert_eq!(prompt.matches(include_str!("roles/shared.md")).count(), 1);
+        }
+    }
+
+    #[test]
+    fn an_override_is_followed_by_the_shared_rules() {
+        let prompt = with_shared_rules("Our own prompt.\n");
+        assert!(prompt.starts_with("Our own prompt.\n\n"));
+        assert!(prompt.ends_with(shared_prompt()));
+        assert_eq!(
+            with_shared_rules("No newline"),
+            "No newline\n\n".to_owned() + shared_prompt()
+        );
+    }
+
+    #[test]
+    fn reviewer_prompts_require_current_evidence_and_handle_omitted_verdicts() {
+        for role in [Role::ReviewLead, Role::BatchReviewer] {
+            let prompt = role.prompt();
+            assert!(prompt.contains("acceptance criteria"));
+            assert!(prompt.contains("Do not edit source files or tests"));
+            assert!(prompt.contains("stale_version"));
+            assert!(prompt.contains("left_out"));
+        }
+        let lead = Role::ReviewLead.prompt();
+        assert!(lead.contains("before taking claims or creating a batch"));
+        assert!(lead.contains("that reviewer creates its own batch"));
     }
 
     #[test]

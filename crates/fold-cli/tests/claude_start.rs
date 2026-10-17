@@ -68,13 +68,34 @@ async fn fld_claude(host: &Host, args: &[&str], cwd: &Path) -> Output {
     fld(host, &all, cwd).await
 }
 
-/// The arguments the fake `claude` got.
-fn claude_args(output: &Output) -> Vec<&str> {
+/// Every argument the fake `claude` got.
+fn all_args(output: &Output) -> Vec<&str> {
     assert!(output.status.success(), "{}", text(&output.stderr));
     text(&output.stdout)
         .lines()
         .filter_map(|line| line.strip_prefix("arg "))
         .collect()
+}
+
+/// The file the fake `claude` got as `--append-system-prompt-file`, when it got one.
+fn prompt_arg(output: &Output) -> Option<&str> {
+    let args = all_args(output);
+    let at = args
+        .iter()
+        .position(|arg| *arg == "--append-system-prompt-file")?;
+    args.get(at + 1).copied()
+}
+
+/// The arguments the fake `claude` got other than the main agent prompt, which [`prompt_arg`] reads.
+fn claude_args(output: &Output) -> Vec<&str> {
+    let mut args = all_args(output);
+    if let Some(at) = args
+        .iter()
+        .position(|arg| *arg == "--append-system-prompt-file")
+    {
+        args.drain(at..at + 2);
+    }
+    args
 }
 
 /// The main session id that fold recorded for the agent `main` of the project.
@@ -125,12 +146,18 @@ async fn fld_claude_starts_the_daemon_and_runs_claude_as_the_main_agent_in_the_p
     let guard = DaemonGuard(daemons(&host.default_socket()));
     assert!(output.status.success(), "{}", text(&output.stderr));
     let session = recorded(&host);
+    let prompt = ProjectPaths::new(&host.root).main_prompt_file();
     assert_eq!(
         text(&output.stdout),
         format!(
-            "arg --name\narg main\narg --session-id\narg {session}\narg --model\narg opus\ncwd {}\nFOLD_AGENT=main\nFOLD_AGENT_TAGS=main\n",
+            "arg --name\narg main\narg --session-id\narg {session}\narg --append-system-prompt-file\narg {}\narg --model\narg opus\ncwd {}\nFOLD_AGENT=main\nFOLD_AGENT_TAGS=main\n",
+            prompt.display(),
             host.root.display()
         )
+    );
+    assert_eq!(
+        std::fs::read_to_string(&prompt).unwrap(),
+        fold_core::main_prompt()
     );
     assert_eq!(guard.0.len(), 1, "fld claude started the daemon");
     assert!(
@@ -267,6 +294,56 @@ async fn the_users_own_session_arguments_win_and_each_name_keeps_its_own_session
     assert_eq!(claude_args(&resumed), ["--name", "main", "--resume", &x]);
     let resumed = fld_claude(&host, &["--name", "lead"], &host.root).await;
     assert_eq!(claude_args(&resumed), ["--name", "lead", "--resume", &l]);
+    guard.stop().await;
+}
+
+#[tokio::test]
+async fn every_start_and_resume_appends_the_main_prompt_unless_the_user_sets_one() {
+    let host = Host::new().await;
+    let paths = ProjectPaths::new(&host.root);
+    let shipped = paths.main_prompt_file().display().to_string();
+    let first = fld_claude(&host, &[], &host.root).await;
+    let guard = DaemonGuard(daemons(&host.default_socket()));
+    assert_eq!(prompt_arg(&first), Some(shipped.as_str()));
+    let resumed = fld_claude(&host, &[], &host.root).await;
+    assert_eq!(claude_args(&resumed)[2], "--resume");
+    assert_eq!(prompt_arg(&resumed), Some(shipped.as_str()));
+    let new = fld(&host, &["new"], &host.root).await;
+    assert_eq!(prompt_arg(&new), Some(shipped.as_str()));
+    let own_session = fld(&host, &["new", "--", "-c"], &host.root).await;
+    assert_eq!(prompt_arg(&own_session), Some(shipped.as_str()));
+
+    let own = paths.main_role_prompt();
+    std::fs::create_dir_all(own.parent().unwrap()).unwrap();
+    std::fs::write(&own, "# Our main agent\n").unwrap();
+    let overridden = fld_claude(&host, &[], &host.root).await;
+    assert_eq!(prompt_arg(&overridden), Some(shipped.as_str()));
+    assert_eq!(
+        std::fs::read_to_string(paths.main_prompt_file()).unwrap(),
+        format!("# Our main agent\n\n{}", fold_core::shared_prompt())
+    );
+    let new = fld(&host, &["new"], &host.root).await;
+    assert_eq!(prompt_arg(&new), Some(shipped.as_str()));
+
+    for flag in [
+        &["--system-prompt", "be brief"][..],
+        &["--system-prompt-file", "p.md"],
+        &["--append-system-prompt", "be brief"],
+        &["--append-system-prompt-file=p.md"],
+    ] {
+        let mut args = vec!["--"];
+        args.extend_from_slice(flag);
+        let output = fld_claude(&host, &args, &host.root).await;
+        let all = all_args(&output);
+        assert_eq!(&all[all.len() - flag.len()..], flag, "{flag:?}");
+        assert_eq!(
+            all.iter()
+                .filter(|arg| arg.contains("system-prompt"))
+                .count(),
+            1,
+            "only the user's own flag: {all:?}"
+        );
+    }
     guard.stop().await;
 }
 

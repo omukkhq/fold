@@ -81,6 +81,8 @@ pub enum ClaudeError {
     },
     #[error("cannot record the main session in .fold: {0}")]
     Record(io::Error),
+    #[error("cannot write the main agent prompt in .fold: {0}")]
+    Prompt(io::Error),
     #[error("cannot run claude: {0}")]
     Exec(io::Error),
 }
@@ -93,9 +95,12 @@ impl ClaudeError {
             Self::Config(error) => error.code(),
             Self::Project(error) => error.code(),
             Self::Refused { code, .. } => Some(code),
-            Self::Cwd(_) | Self::Runtime(_) | Self::Client(_) | Self::Record(_) | Self::Exec(_) => {
-                None
-            }
+            Self::Cwd(_)
+            | Self::Runtime(_)
+            | Self::Client(_)
+            | Self::Record(_)
+            | Self::Prompt(_)
+            | Self::Exec(_) => None,
         }
     }
 
@@ -116,7 +121,8 @@ impl ClaudeError {
             | Self::Cwd(_)
             | Self::Runtime(_)
             | Self::Client(_)
-            | Self::Record(_) => None,
+            | Self::Record(_)
+            | Self::Prompt(_) => None,
         }
     }
 }
@@ -128,7 +134,7 @@ pub fn run_new(args: &NewArgs, dirs: &Dirs) -> Result<(), ClaudeError> {
     }
 }
 
-/// Starts the daemon when it is not running, then replaces this process with the user's own `claude`, an interactive session in the project root that is the main agent. `FOLD_AGENT` and `--name` give the session its agent name and its messaging socket, and `FOLD_AGENT_TAGS` makes `fld mcp` register it with the `main` tag. fold chooses the id of every new session and records it, so that [`Session::Continue`] resumes the session `fld` started and never one the user started without it, which `claude --continue` could pick. It writes no Claude Code settings. It returns only when it could not start `claude`.
+/// Starts the daemon when it is not running, then replaces this process with the user's own `claude`, an interactive session in the project root that is the main agent. `FOLD_AGENT` and `--name` give the session its agent name and its messaging socket, and `FOLD_AGENT_TAGS` makes `fld mcp` register it with the `main` tag. The main agent prompt is appended to the session's system prompt on every start and resume, because a system prompt flag holds only for the `claude` run that gets it. fold chooses the id of every new session and records it, so that [`Session::Continue`] resumes the session `fld` started and never one the user started without it, which `claude --continue` could pick. It writes no Claude Code settings. It returns only when it could not start `claude`.
 pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), ClaudeError> {
     let agent = AgentName::parse(&args.name).map_err(FoldError::from)?;
     let host = host_paths(dirs)?;
@@ -150,12 +156,18 @@ pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), Claud
         Ok::<_, ClaudeError>(root)
     })?;
     drop(runtime);
+    let paths = ProjectPaths::new(&root);
+    let prompt = if picks_system_prompt(&args.claude_args) {
+        None
+    } else {
+        Some(prompt_file(&paths).map_err(ClaudeError::Prompt)?)
+    };
     let start = if picks_session(&args.claude_args) {
         None
     } else {
         let config_dir = claude_config_dir(|name| std::env::var_os(name)).map(|dir| root.join(dir));
         Some(start(
-            &ProjectPaths::new(&root),
+            &paths,
             &agent,
             session,
             config_dir.as_deref(),
@@ -167,6 +179,7 @@ pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), Claud
         &root,
         &agent,
         start.as_ref(),
+        prompt.as_deref(),
         &args.claude_args,
         socket.as_deref(),
     )
@@ -184,6 +197,34 @@ fn picks_session(extra: &[OsString]) -> bool {
         ) || arg.starts_with("--resume=")
             || arg.starts_with("--session-id=")
     })
+}
+
+/// Whether the user's own arguments for `claude` set a system prompt. fold then appends none of its own, so the user's prompt is the one the session gets.
+fn picks_system_prompt(extra: &[OsString]) -> bool {
+    const FLAGS: [&str; 4] = [
+        "--system-prompt",
+        "--system-prompt-file",
+        "--append-system-prompt",
+        "--append-system-prompt-file",
+    ];
+    extra.iter().any(|arg| {
+        let arg = arg.to_string_lossy();
+        let flag = arg.split_once('=').map_or(arg.as_ref(), |(flag, _)| flag);
+        FLAGS.contains(&flag)
+    })
+}
+
+/// The main agent prompt for `claude`, written anew into fold's own file on each start so that it follows the installed `fld`: the project's `.fold/roles/main.md` followed by the shared rules when it has that file, else the shipped prompt. The project's file is never passed itself, because it lacks the shared rules.
+fn prompt_file(paths: &ProjectPaths) -> io::Result<PathBuf> {
+    let own = paths.main_role_prompt();
+    let text = if own.is_file() {
+        fold_core::with_shared_rules(&std::fs::read_to_string(&own)?)
+    } else {
+        fold_core::main_prompt().to_owned()
+    };
+    let file = paths.main_prompt_file();
+    fold_vcs::atomic::write_atomic(&file, text.as_bytes())?;
+    Ok(file)
 }
 
 /// Resumes the recorded session of `agent` when Claude Code still has it; otherwise records `new_id()` as that session and starts it.
@@ -279,12 +320,13 @@ fn transcript_exists(config_dir: &Path, root: &Path, id: &str) -> bool {
         })
 }
 
-/// The `claude` run of `fld claude`: its own arguments come after `--name` and the session, which is `None` when they choose it themselves. `socket` is the socket the user chose with `--socket` or `FOLD_SOCKET`; the session's `fld mcp` and hooks read it from `FOLD_SOCKET`, as they have no flag of their own to carry it.
+/// The `claude` run of `fld claude`: its own arguments come after `--name`, the session and the main agent prompt, each `None` when they choose it themselves. `socket` is the socket the user chose with `--socket` or `FOLD_SOCKET`; the session's `fld mcp` and hooks read it from `FOLD_SOCKET`, as they have no flag of their own to carry it.
 fn command(
     claude: &Path,
     root: &Path,
     agent: &AgentName,
     start: Option<&Start>,
+    prompt: Option<&Path>,
     extra: &[OsString],
     socket: Option<&Path>,
 ) -> Command {
@@ -295,6 +337,9 @@ fn command(
         Some(Start::Resume(id)) => command.arg("--resume").arg(id),
         None => &mut command,
     };
+    if let Some(prompt) = prompt {
+        command.arg("--append-system-prompt-file").arg(prompt);
+    }
     command
         .args(extra)
         .current_dir(root)
@@ -526,6 +571,66 @@ mod tests {
     }
 
     #[test]
+    fn the_users_own_system_prompt_replaces_folds() {
+        let picks = |args: &[&str]| {
+            picks_system_prompt(&args.iter().map(OsString::from).collect::<Vec<_>>())
+        };
+        for chosen in [
+            &["--system-prompt", "be brief"][..],
+            &["--system-prompt=be brief"],
+            &["--model", "opus", "--system-prompt-file", "p.md"],
+            &["--system-prompt-file=p.md"],
+            &["--append-system-prompt", "x"],
+            &["--append-system-prompt=x"],
+            &["--append-system-prompt-file", "p.md"],
+            &["--append-system-prompt-file=p.md"],
+        ] {
+            assert!(picks(chosen), "{chosen:?}");
+        }
+        for other in [
+            &[][..],
+            &["--model", "opus"],
+            &["--resume", ID],
+            &["--system-prompts"],
+            &["--append-system-prompt-files=p.md"],
+        ] {
+            assert!(!picks(other), "{other:?}");
+        }
+    }
+
+    #[test]
+    fn the_prompt_is_the_projects_own_or_the_shipped_one_written_into_fold() {
+        let project = tempfile::tempdir().unwrap();
+        let paths = ProjectPaths::new(project.path());
+        let shipped = prompt_file(&paths).unwrap();
+        assert_eq!(shipped, paths.main_prompt_file());
+        assert_eq!(
+            std::fs::read_to_string(&shipped).unwrap(),
+            fold_core::main_prompt()
+        );
+        std::fs::write(&shipped, "stale").unwrap();
+        prompt_file(&paths).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&shipped).unwrap(),
+            fold_core::main_prompt(),
+            "each start writes the prompt of the installed fld"
+        );
+        let own = paths.main_role_prompt();
+        std::fs::create_dir_all(own.parent().unwrap()).unwrap();
+        std::fs::write(&own, "# Our main agent\n").unwrap();
+        assert_eq!(prompt_file(&paths).unwrap(), shipped);
+        assert_eq!(
+            std::fs::read_to_string(&shipped).unwrap(),
+            fold_core::with_shared_rules("# Our main agent\n")
+        );
+        assert_eq!(std::fs::read_to_string(&own).unwrap(), "# Our main agent\n");
+
+        std::fs::remove_dir_all(paths.fold_dir()).unwrap();
+        std::fs::write(paths.fold_dir(), "").unwrap();
+        assert!(prompt_file(&paths).is_err());
+    }
+
+    #[test]
     fn continue_resumes_the_recorded_session_while_claude_has_it() {
         let config = tempfile::tempdir().unwrap();
         let project = tempfile::tempdir().unwrap();
@@ -634,15 +739,29 @@ mod tests {
             Path::new("/src/app"),
             &agent,
             Some(&Start::Resume(ID.to_owned())),
+            Some(Path::new("/src/app/.fold/sessions/prompt.md")),
             &extra,
             None,
         );
         let args: Vec<_> = resumed.get_args().collect();
-        assert_eq!(args, ["--name", "main", "--resume", ID, "--model", "opus"]);
+        assert_eq!(
+            args,
+            [
+                "--name",
+                "main",
+                "--resume",
+                ID,
+                "--append-system-prompt-file",
+                "/src/app/.fold/sessions/prompt.md",
+                "--model",
+                "opus"
+            ]
+        );
         let own = command(
             Path::new("claude"),
             Path::new("/src/app"),
             &agent,
+            None,
             None,
             &[OsString::from("-c")],
             None,
@@ -654,6 +773,7 @@ mod tests {
             Path::new("/src/app"),
             &agent,
             Some(&Start::New(ID.to_owned())),
+            Some(Path::new("/src/app/.fold/roles/main.md")),
             &extra,
             Some(Path::new("/run/by-hand.sock")),
         );
@@ -661,7 +781,16 @@ mod tests {
         let args: Vec<_> = command.get_args().collect();
         assert_eq!(
             args,
-            ["--name", "main", "--session-id", ID, "--model", "opus"]
+            [
+                "--name",
+                "main",
+                "--session-id",
+                ID,
+                "--append-system-prompt-file",
+                "/src/app/.fold/roles/main.md",
+                "--model",
+                "opus"
+            ]
         );
         assert_eq!(command.get_current_dir(), Some(Path::new("/src/app")));
         let envs: Vec<_> = command.get_envs().collect();
@@ -729,6 +858,9 @@ mod tests {
         assert_eq!(ClaudeError::Runtime(io::Error::other("x")).hint(), None);
         let record = ClaudeError::Record(io::Error::other("x"));
         assert_eq!((record.code(), record.hint()), (None, None));
+        let prompt = ClaudeError::Prompt(io::Error::other("x"));
+        assert_eq!((prompt.code(), prompt.hint()), (None, None));
+        assert!(prompt.to_string().contains("main agent prompt"));
         let bad = ClaudeError::Fold(FoldError::new(codes::INVALID_NAME, "bad").with_hint("pick"));
         assert_eq!(bad.code(), Some("invalid_name"));
         assert_eq!(bad.hint(), Some("pick"));

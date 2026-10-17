@@ -53,7 +53,7 @@ pub use messages::{
 pub use policy::PolicyDenied;
 pub use presence::{ACTIVE_WINDOW_MS, Presence, SessionFact, presence_of};
 pub use projects::{choose_slug, slugify};
-pub use roles::{CacheTtl, Role, WorkerState};
+pub use roles::{CacheTtl, Role, WorkerState, main_prompt, shared_prompt, with_shared_rules};
 pub use status::TaskStatus;
 pub use task::{
     ChecklistName, DependencyOrigin, HoldMark, HoldReason, LabelColor, LabelName, StepText,

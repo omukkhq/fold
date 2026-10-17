@@ -1323,7 +1323,7 @@ async fn watch_done(
     }
 }
 
-/// Writes the worker's MCP configuration and, unless the project overrides the role's prompt, the shipped prompt, under the worker's folder. With `area_instructions` the prompt is the role's prompt, shipped or overridden, followed by the area's instructions. Returns the two paths Claude Code reads.
+/// Writes the worker's MCP configuration and its prompt under the worker's folder. The prompt is the role's text, shipped or the project's override, then the shared rules, then the area's instructions when there are any; the override file itself is never passed, because it lacks the shared rules. Returns the two paths Claude Code reads.
 async fn write_files(
     paths: &ProjectPaths,
     launcher: &Launcher,
@@ -1346,19 +1346,18 @@ async fn write_files(
         let config = mcp_config(&fold, &agent, limit.as_deref(), &project_mcp);
         let mcp = dir.join("mcp.json");
         std::fs::write(&mcp, config.to_string())?;
+        let role_prompt = if override_prompt.is_file() {
+            fold_core::with_shared_rules(&std::fs::read_to_string(&override_prompt)?)
+        } else {
+            prompt_text.to_owned()
+        };
         let prompt = match area_instructions {
-            None if override_prompt.is_file() => override_prompt,
             None => {
                 let prompt = dir.join("prompt.md");
-                std::fs::write(&prompt, prompt_text)?;
+                std::fs::write(&prompt, role_prompt)?;
                 prompt
             }
             Some((area, instructions)) => {
-                let role_prompt = if override_prompt.is_file() {
-                    std::fs::read_to_string(&override_prompt)?
-                } else {
-                    prompt_text.to_owned()
-                };
                 let prompt = dir.join("prompt.md");
                 std::fs::write(&prompt, area_prompt(&role_prompt, &area, &instructions))?;
                 prompt

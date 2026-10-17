@@ -2,6 +2,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::str::FromStr;
 
+use fold_core::task::{PlanRef, PlannedReview, PlannedTask};
 use fold_core::{
     Actor, ChecklistItemId, ChecklistName, FoldError, HumanName, IdParseError, LabelColor,
     LabelName, StepText, TaskDescription, TaskId, TaskKind, TaskTitle, WorkerName,
@@ -27,6 +28,7 @@ pub const GET_TASK_GRAPH: &str = "get_task_graph";
 pub const GET_READY_TASKS: &str = "get_ready_tasks";
 pub const GET_TASK: &str = "get_task";
 pub const CREATE_TASK: &str = "create_task";
+pub const CREATE_TASK_PLAN: &str = "create_task_plan";
 pub const UPDATE_TASK: &str = "update_task";
 pub const DELETE_TASK: &str = "delete_task";
 pub const ARCHIVE_TASK: &str = "archive_task";
@@ -120,6 +122,66 @@ pub struct TaskNoteInput {
     /// What was done, or what to change: plain text, not empty.
     pub note: String,
     /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
+    #[serde(rename = "as", default)]
+    pub as_worker: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+pub struct PlannedReviewInput {
+    /// The registered human whose review is required. Omit to let any human review.
+    #[serde(default)]
+    pub reviewer: Option<String>,
+    /// Why a human must review this task: not blank, at most 500 characters.
+    pub reason: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+pub struct PlannedBlockerInput {
+    /// Why the task waits for a person, such as "Wait until the Meta app review passes": plain text, not empty, at most 500 characters.
+    pub reason: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+pub struct PlannedTaskInput {
+    /// A unique plan-local key: 1 to 32 ASCII letters, digits, - or _, distinct from a public task id.
+    pub key: String,
+    /// The task title: one line, not empty.
+    pub title: String,
+    /// The task template: summary, Refs, Scope, Out of scope and testable Acceptance.
+    pub description: String,
+    /// Existing labels, including the label of the area that owns this task.
+    #[serde(default)]
+    pub labels: Vec<String>,
+    /// Prerequisites, each an existing task id such as T-3 or a key in this plan.
+    #[serde(default)]
+    pub needs: Vec<String>,
+    /// The parent task's existing id or plan-local key. Creates its linked Subtasks item atomically.
+    #[serde(default)]
+    pub parent: Option<String>,
+    /// proposal (the default), no_proposal for work that changes no project file, or human for work only a person can do outside every agent: no agent claims a human task, and a human, or the main agent when the user says so, marks it Done with complete_task. The same planners as for create_task may choose no_proposal or human.
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// The human review mark to set before workers can see this task.
+    #[serde(default)]
+    pub human_review: Option<PlannedReviewInput>,
+    /// A blocker to set before workers can see this task, for agent work that waits until a person says it can start. Only a human or the main agent clears it with clear_blocker.
+    #[serde(default)]
+    pub blocker: Option<PlannedBlockerInput>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+pub struct CreateTaskPlanInput {
+    /// Between 1 and 100 tasks to publish together with their dependencies, parent links, human review marks and blockers. Only the main agent, a human or the lead of each task's area may publish them. Any refusal leaves the entire plan uncreated.
+    pub tasks: Vec<PlannedTaskInput>,
+    /// The worker that makes this call. Leave it out to act as the main worker.
     #[serde(rename = "as", default)]
     pub as_worker: Option<String>,
 }
@@ -248,6 +310,11 @@ pub fn tools() -> Vec<Tool> {
             CREATE_TASK,
             "Create a task, with its dependencies and its parent link in the same step. A refused dependency, such as a cycle, creates nothing. Pass kind no_proposal for work that changes no project file, and kind human for work only a person can do.",
             schema_for_type::<CreateTaskInput>(),
+        ),
+        Tool::new(
+            CREATE_TASK_PLAN,
+            "Publish an approved plan atomically: create all tasks, dependencies, parent links, human review marks and blockers before workers receive ready notices. Each task has kind proposal, no_proposal or human. A refusal creates nothing. Re-read the graph before retrying an uncertain result.",
+            schema_for_type::<CreateTaskPlanInput>(),
         ),
         Tool::new(
             UPDATE_TASK,
@@ -512,6 +579,7 @@ async fn run(
         GET_READY_TASKS => get_ready_tasks(server, arguments).await?,
         GET_TASK => get_task(server, arguments).await?,
         CREATE_TASK => create_task(server, actor, arguments).await?,
+        CREATE_TASK_PLAN => create_task_plan(server, actor, arguments).await?,
         UPDATE_TASK => update_task(server, actor, arguments).await?,
         DELETE_TASK => delete_task(server, actor, arguments).await?,
         ARCHIVE_TASK => archive_task(server, actor, arguments).await?,
@@ -613,6 +681,64 @@ async fn create_task(
         .await
         .map_err(from_task)?;
     Ok(json!({"id": view.id, "status": view.status.as_str()}))
+}
+
+async fn create_task_plan(
+    server: &FoldServer,
+    actor: &Actor,
+    arguments: &JsonObject,
+) -> Result<Value, FoldError> {
+    let input: CreateTaskPlanInput = parse(arguments)?;
+    let plan = input
+        .tasks
+        .into_iter()
+        .map(|task| {
+            Ok(PlannedTask {
+                key: task.key,
+                title: TaskTitle::parse(&task.title)?,
+                description: TaskDescription::new(task.description),
+                labels: label_names(&task.labels)?,
+                kind: task
+                    .kind
+                    .as_deref()
+                    .map(str::parse)
+                    .transpose()?
+                    .unwrap_or(TaskKind::Proposal),
+                needs: task
+                    .needs
+                    .iter()
+                    .map(|value| PlanRef::parse(value))
+                    .collect(),
+                parent: task.parent.as_deref().map(PlanRef::parse),
+                human_review: task
+                    .human_review
+                    .map(|review| {
+                        Ok::<_, FoldError>(PlannedReview {
+                            reviewer: review
+                                .reviewer
+                                .as_deref()
+                                .map(HumanName::parse)
+                                .transpose()?,
+                            reason: review.reason,
+                        })
+                    })
+                    .transpose()?,
+                blocker: task.blocker.map(|blocker| blocker.reason),
+            })
+        })
+        .collect::<Result<Vec<_>, FoldError>>()?;
+    let registry = server
+        .reviews
+        .as_ref()
+        .and_then(crate::services::reviews::ReviewService::registry);
+    let created = server
+        .tasks
+        .create_task_plan(actor, plan, registry)
+        .await
+        .map_err(from_task)?;
+    Ok(
+        json!({"tasks": created.into_iter().map(|(key, task)| json!({"key": key, "id": task.id, "status": task.status.as_str()})).collect::<Vec<_>>()}),
+    )
 }
 
 async fn update_task(

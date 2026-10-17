@@ -6,6 +6,23 @@ use crate::task::define_names;
 /// The longest reason a review command takes, in characters: why a proposal closes, why a reviewer gives a review claim up, or why a human must look.
 pub const MAX_REASON_CHARS: usize = 500;
 
+/// The trimmed reason is stored with the human review mark and never repeats rejected text in an error.
+pub fn human_review_reason(reason: &str) -> Result<String, crate::FoldError> {
+    let reason = reason.trim();
+    let problem = if reason.is_empty() {
+        "the reason must not be empty".to_owned()
+    } else if reason.chars().count() > MAX_REASON_CHARS {
+        format!("the reason must be at most {MAX_REASON_CHARS} characters")
+    } else {
+        return Ok(reason.to_owned());
+    };
+    Err(
+        crate::FoldError::new(crate::codes::INVALID_REQUEST, problem)
+            .with_details([("field", serde_json::json!("reason"))])
+            .with_hint("say in one line why a human must look at the work"),
+    )
+}
+
 define_names!(
     /// What a review says about one proposal version. `Comment` is not a verdict on the work: it leaves the turn where it was.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

@@ -148,6 +148,30 @@ pub fn can_stop_worker(
     }
 }
 
+/// The main agent or a human publishes a whole plan; an area lead can split only the tasks and parents of its own area.
+pub fn can_publish_task_plan(
+    starter: &Starter,
+    task_areas: &[AreaName],
+) -> Result<(), PolicyDenied> {
+    match starter {
+        Starter::Human | Starter::MainAgent => Ok(()),
+        Starter::AreaLead(own) if task_areas.contains(own) => Ok(()),
+        Starter::AreaLead(_) => Err(PolicyDenied {
+            code: codes::TASK_OUTSIDE_AREA,
+            message: "an area lead publishes tasks and parent links only in its own area",
+            hint: "give each new task your area's label and choose parents of that area, then call create_task_plan",
+        }),
+        Starter::Unsupervised => Err(not_the_main_agent(
+            "ask the main agent to call create_task_plan",
+        )),
+        _ => Err(PolicyDenied {
+            code: codes::MAIN_AGENT_REQUIRED,
+            message: "only the main agent, a human or an area lead can publish a task plan",
+            hint: "ask the main agent or the area's lead to call create_task_plan",
+        }),
+    }
+}
+
 /// A task without a proposal is done when a lead check or a person says so, so whoever plans the work decides at creation that it needs no proposal, for a `no_proposal` task and a `human` task alike: the main agent, a named human, or the lead of an area whose label the task carries. `task_areas` are the areas whose label the task carries.
 pub fn can_choose_no_proposal(
     starter: &Starter,
@@ -272,6 +296,41 @@ mod tests {
 
     fn area(name: &str) -> AreaName {
         AreaName::parse(name).unwrap()
+    }
+
+    #[test]
+    fn publishing_a_plan_requires_the_main_agent_or_the_owning_area_lead() {
+        let web = area("web");
+        for starter in [
+            Starter::Human,
+            Starter::MainAgent,
+            Starter::AreaLead(web.clone()),
+        ] {
+            assert!(can_publish_task_plan(&starter, std::slice::from_ref(&web)).is_ok());
+        }
+        assert_eq!(
+            can_publish_task_plan(&Starter::AreaLead(area("api")), &[web])
+                .unwrap_err()
+                .code(),
+            codes::TASK_OUTSIDE_AREA
+        );
+        assert_eq!(
+            can_publish_task_plan(&Starter::Unsupervised, &[])
+                .unwrap_err()
+                .code(),
+            codes::ORCHESTRATOR_REQUIRED
+        );
+        for starter in [
+            Starter::ReviewLead,
+            Starter::ShortLived,
+            Starter::Subagent,
+            Starter::System,
+        ] {
+            assert_eq!(
+                can_publish_task_plan(&starter, &[]).unwrap_err().code(),
+                codes::MAIN_AGENT_REQUIRED
+            );
+        }
     }
 
     fn tagged(worker: &str, tag: &str) -> Actor {

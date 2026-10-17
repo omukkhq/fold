@@ -250,9 +250,12 @@ async fn a_project_role_prompt_comes_before_the_area_instructions() {
     let run = first_run(&fake, &coder).await;
     let text = prompt(&run);
     assert!(
-        text.starts_with("You draw for this project.\n\n## Area design"),
+        text.starts_with("You draw for this project.\n\n## Authority and recovery"),
         "{text}"
     );
+    let shared = text.find(fold_core::shared_prompt()).unwrap();
+    let area = text.find("## Area design").unwrap();
+    assert!(shared < area, "the shared rules come before the area");
     assert!(text.ends_with("\n\nDraw screens in Pencil.\n"));
     assert_eq!(run.flag("--model"), Some("haiku"));
 }

@@ -89,6 +89,16 @@ impl ProjectPaths {
             .join(format!("{}.md", role.as_str()))
     }
 
+    /// A project's own prompt for the main agent, which replaces the one that ships with fold.
+    pub fn main_role_prompt(&self) -> PathBuf {
+        self.fold_dir().join("roles").join("main.md")
+    }
+
+    /// Where `fld claude` writes the shipped main agent prompt that it passes to `claude`. It sits beside the session records, and its `.` keeps it apart from them, as no agent name holds one.
+    pub fn main_prompt_file(&self) -> PathBuf {
+        self.fold_dir().join("sessions").join("prompt.md")
+    }
+
     /// The files fold writes for one worker agent's Claude Code process: its MCP configuration and its role prompt.
     pub fn worker_dir(&self, agent: &AgentName) -> PathBuf {
         self.fold_dir().join("workers").join(agent.as_str())
@@ -192,6 +202,14 @@ mod tests {
         assert_eq!(
             paths.role_prompt(Role::TaskCoder),
             Path::new("/srv/demo/.fold/roles/task_coder.md")
+        );
+        assert_eq!(
+            paths.main_role_prompt(),
+            Path::new("/srv/demo/.fold/roles/main.md")
+        );
+        assert_eq!(
+            paths.main_prompt_file(),
+            Path::new("/srv/demo/.fold/sessions/prompt.md")
         );
         assert_eq!(
             paths.worker_dir(&AgentName::parse("web-lead").unwrap()),

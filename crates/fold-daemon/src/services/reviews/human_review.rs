@@ -1,8 +1,8 @@
 use fold_core::events::types;
 use fold_core::policy::{self, MarkChange, PolicyDenied};
-use fold_core::reviews::MAX_REASON_CHARS;
 use fold_core::reviews::{
     HumanReviewMark, changes_requested, deciding_approval, human_approval_standing,
+    human_review_reason,
 };
 use fold_core::status::ProposalFact;
 use fold_core::{
@@ -37,7 +37,7 @@ impl ReviewService {
         reviewer: Option<HumanName>,
         reason: &str,
     ) -> Result<HumanReviewMark, ReviewError> {
-        let reason = check_reason(reason)?;
+        let reason = human_review_reason(reason)?;
         if let Some(name) = &reviewer {
             self.require_known(name).await?;
         }
@@ -175,22 +175,6 @@ pub async fn awaiting_human_review_in(
         });
     }
     Ok(waiting)
-}
-
-/// The trimmed reason, which says why a human must look.
-fn check_reason(reason: &str) -> Result<String, ReviewError> {
-    let reason = reason.trim();
-    let problem = if reason.is_empty() {
-        "the reason must not be empty".to_owned()
-    } else if reason.chars().count() > MAX_REASON_CHARS {
-        format!("the reason must be at most {MAX_REASON_CHARS} characters")
-    } else {
-        return Ok(reason.to_owned());
-    };
-    Err(FoldError::new(codes::INVALID_REQUEST, problem)
-        .with_details([("field", json!("reason"))])
-        .with_hint("say in one line why a human must look at the work")
-        .into())
 }
 
 /// The task row of an open task: `task_not_found` when it does not exist and `task_closed` when it is Done or archived.

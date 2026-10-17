@@ -126,6 +126,10 @@ impl std::fmt::Debug for ReviewService {
 }
 
 impl ReviewService {
+    pub(crate) fn registry(&self) -> Option<&Store> {
+        self.registry.as_ref()
+    }
+
     /// `integration` is the project's integration mutex (`ProjectHandle::integration`). Every review service of a project must share it, because it is what keeps two integrations from running at the same time.
     pub fn new(
         store: Store,

@@ -456,6 +456,8 @@ async fn the_server_lists_described_tools_and_sends_the_workflow() {
     let info = client.peer_info().unwrap();
     assert_eq!(info.instructions.as_deref(), Some(INSTRUCTIONS));
     assert!(INSTRUCTIONS.contains("register_agent"));
+    assert!(INSTRUCTIONS.contains("fld claude"));
+    assert!(INSTRUCTIONS.contains("start_worker"));
     let tools = client.list_all_tools().await.unwrap();
     let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_ref()).collect();
     assert_eq!(
@@ -492,6 +494,7 @@ async fn the_server_lists_described_tools_and_sends_the_workflow() {
             "get_ready_tasks",
             "get_task",
             "create_task",
+            "create_task_plan",
             "update_task",
             "delete_task",
             "archive_task",

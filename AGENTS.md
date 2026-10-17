@@ -36,7 +36,7 @@ make check-rust            # the Rust half of check
 make check-web             # the web half of check
 make acceptance            # the acceptance tests only
 make seed-dev              # development only: a throwaway project with agents, tasks, workspaces and a proposal
-make release               # web build, then fld for x86_64 Linux into dist/
+make release               # web build, then a static fld for x86_64 Linux (x86_64-unknown-linux-musl, needs musl-tools) into dist/
 make clean                 # delete build output and dev projects
 make clean-keep-cargo      # the same, but keep the cargo target directory
 ```
@@ -54,7 +54,7 @@ To run the tests of one file in `crates/<crate>/tests/`, select its module: `car
 5. **Blocking work never runs on the async runtime.** File I/O on workspaces, hashing, compression and merging go through `spawn_blocking`. Never hold a `std::sync::Mutex` guard across an `.await`.
 6. **Time and randomness are inputs.** `fold-core` takes `now` as an argument. `fold-core` defines the `Clock` trait and `ManualClock` for tests; `fold-daemon` provides `SystemClock`. Services and jobs read time only through a `Clock`. Timestamps are UTC milliseconds in the `Timestamp` newtype; never a local time.
 7. **Public ids are the prefixed numbers** (`T-12`, `P-3`, `C-40`, `r17`, `ws-9`, `ck-88`, `m-210`, `rc-5`, `i-7`, `ci-3`, `wt-4`, `RQ-12`, `rb-3`, `pq-2`), parsed and printed by the id types in `fold-core`. A SQLite row id never leaves the daemon.
-8. **Pin the toolchain and version once.** `rust-toolchain.toml` pins the channel with the `minimal` profile, `rustfmt` and `clippy`; move it in its own change with every check green. The workspace uses `resolver = "3"` and edition 2024. Every crate takes `version.workspace = true`, so one number versions the binary. The release profile sets `lto = true` and `codegen-units = 1`. Checks, tests and coverage build with the dev profile: `incremental = false`, `debug = "line-tables-only"` for fold's own crates, and unoptimized dependencies built without debug info, which keeps the build from empty short and the build folder small.
+8. **Pin the toolchain and version once.** `rust-toolchain.toml` pins the channel with the `minimal` profile, `rustfmt`, `clippy` and the `x86_64-unknown-linux-musl` target of the static release; move it in its own change with every check green. The workspace uses `resolver = "3"` and edition 2024. Every crate takes `version.workspace = true`, so one number versions the binary. The release profile sets `lto = true` and `codegen-units = 1`, and `make release` builds it for musl as a static binary; every other build uses the host target. Checks, tests and coverage build with the dev profile: `incremental = false`, `debug = "line-tables-only"` for fold's own crates, and unoptimized dependencies built without debug info, which keeps the build from empty short and the build folder small.
 
 ## Database
 

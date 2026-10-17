@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 const SKILL: &str = include_str!("../templates/SKILL.md");
 const AGENTS_SECTION: &str = include_str!("../templates/agents_section.md");
 
-const FOLD_TOOLS: [&str; 82] = [
+const FOLD_TOOLS: [&str; 83] = [
     "register_agent",
     "register_worker",
     "list_agents",
@@ -26,6 +26,7 @@ const FOLD_TOOLS: [&str; 82] = [
     "get_ready_tasks",
     "get_task",
     "create_task",
+    "create_task_plan",
     "update_task",
     "delete_task",
     "archive_task",
@@ -259,7 +260,9 @@ const INVALID_REQUEST_REASONS: [&str; 9] = [
     "attachment_too_large",
 ];
 
-const NON_TOOL_NAMES: [&str; 24] = [
+const NON_TOOL_NAMES: [&str; 26] = [
+    "human_review",
+    "left_out",
     "stall_minutes",
     "lease_minutes",
     "request_changes",
@@ -368,6 +371,52 @@ fn server_tools() -> BTreeSet<String> {
     .collect()
 }
 
+/// No template names the start command of a session opened by hand, which is outside the roles: `fld claude` starts the main agent, and fold starts every worker.
+#[test]
+fn no_template_names_a_hand_started_session() {
+    let instructions = fold_daemon::mcp::INSTRUCTIONS;
+    for (name, text) in [
+        ("SKILL.md", SKILL),
+        ("agents_section.md", AGENTS_SECTION),
+        ("main.md", fold_core::main_prompt()),
+        ("INSTRUCTIONS", instructions),
+    ] {
+        assert!(!text.contains("FOLD_AGENT="), "{name}");
+    }
+}
+
+#[test]
+fn every_tool_the_main_prompt_names_is_a_fold_tool() {
+    let server = server_tools();
+    let named = backticked_identifiers(fold_core::main_prompt());
+    for identifier in &named {
+        assert!(
+            server.contains(identifier)
+                || FOLD_ERROR_CODES.contains(&identifier.as_str())
+                || NON_TOOL_NAMES.contains(&identifier.as_str()),
+            "main.md names `{identifier}`, which is not a fold tool, a code or an allowed name"
+        );
+    }
+    for tool in [
+        "get_task_graph",
+        "list_requests",
+        "list_workers",
+        "create_label",
+        "define_area",
+        "create_task_plan",
+        "start_worker",
+        "set_worker_limits",
+        "claim_request",
+        "submit_request_draft",
+        "pause_project",
+        "resume_project",
+        "clear_blocker",
+        "complete_task",
+    ] {
+        assert!(named.contains(tool), "main.md does not name `{tool}`");
+    }
+}
+
 #[test]
 fn the_tool_list_is_the_server_list_and_the_skill_teaches_no_pending_tool() {
     let server = server_tools();
@@ -449,7 +498,7 @@ fn the_agents_section_is_short_and_has_no_imports_or_design_documents() {
 fn the_agents_section_points_to_the_skill_and_the_repository_rules() {
     assert!(AGENTS_SECTION.starts_with("## fold\n"));
     assert!(AGENTS_SECTION.contains("`fld claude`"));
-    assert!(AGENTS_SECTION.contains("FOLD_AGENT=<name> claude --name <name>"));
+    assert!(AGENTS_SECTION.contains("`fld new`"));
     assert!(AGENTS_SECTION.contains("`fold` skill"));
     assert!(AGENTS_SECTION.contains("`.fold/ws/`"));
     assert!(AGENTS_SECTION.contains("`AGENTS.md` or `CLAUDE.md`"));

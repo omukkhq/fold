@@ -319,6 +319,65 @@ async fn a_task_with_a_blocker_is_not_ready_and_is_neither_claimed_nor_given_to_
 }
 
 #[tokio::test]
+async fn a_planned_blocker_is_set_before_the_lead_hears_of_the_task() {
+    let fake = FakeClaude::new("result");
+    let harness = planned(&fake).await;
+    let created = harness
+        .call(
+            MAIN,
+            "create_task_plan",
+            json!({"tasks": [
+                {"key": "icons", "title": "Draw the icons", "description": "Check the icons", "labels": ["ui"]},
+                {"key": "push", "title": "Wire the Meta push", "description": "Check the push", "labels": ["ui"], "blocker": {"reason": " Wait for the Meta review "}}
+            ]}),
+        )
+        .await;
+    assert_eq!(
+        created["tasks"],
+        json!([
+            {"key": "icons", "id": "T-4", "status": "todo"},
+            {"key": "push", "id": "T-5", "status": "todo"}
+        ])
+    );
+    let held = task(&harness, "T-5").await;
+    assert_eq!(held["blocker"]["reason"], "Wait for the Meta review");
+    assert_eq!(held["blocker"]["set_by"], MAIN);
+    until_stdin(&fake, LEAD, "fold: T-4 is ready in your area").await;
+    assert!(!ready(&harness).await.contains(&"T-5".to_owned()));
+    let refused = harness
+        .refused(SOLO, "claim_task", json!({"id": "T-5"}))
+        .await;
+    assert_eq!(refused["code"], codes::TASK_ON_HOLD, "{refused}");
+
+    let (status, cleared) = http(&harness, Method::DELETE, "tasks/T-5/blocker", None).await;
+    assert_eq!(status, StatusCode::OK, "{cleared}");
+    let lines = until_stdin(&fake, LEAD, "fold: T-5 is ready in your area").await;
+    let notices: usize = lines
+        .iter()
+        .map(|line| line.matches("fold: T-5 is ready in your area").count())
+        .sum();
+    assert_eq!(
+        notices, 1,
+        "only the cleared blocker makes T-5 ready for the lead"
+    );
+    assert!(ready(&harness).await.contains(&"T-5".to_owned()));
+    let holds: Vec<String> = harness
+        .events()
+        .await
+        .into_iter()
+        .filter(|event| event.kind.starts_with("task.hold_"))
+        .map(|event| format!("{} {}", event.kind, event.data["reason"]))
+        .collect();
+    assert_eq!(
+        holds,
+        [
+            "task.hold_set \"Wait for the Meta review\"",
+            "task.hold_cleared \"Wait for the Meta review\"",
+        ]
+    );
+}
+
+#[tokio::test]
 async fn only_a_human_or_the_main_agent_clears_a_blocker_and_completes_a_human_task() {
     let fake = FakeClaude::new("result");
     let mut harness = planned(&fake).await;

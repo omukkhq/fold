@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help setup build fmt dev dev-daemon dev-web seed-dev fmt-check-rust fmt-check-web fmt-check web-install web-build check-web-sources check-inner-allow clippy test test-fast test-default-features test-web coverage check-rust check-web check acceptance clean clean-keep-cargo gen-api check-api release bench bench-smoke
+.PHONY: help setup build fmt dev dev-daemon dev-web seed-dev fmt-check-rust fmt-check-web fmt-check web-install web-build check-web-sources check-inner-allow clippy test test-fast test-default-features test-web coverage check-rust check-web check acceptance clean clean-keep-cargo gen-api check-api release release-tools bench bench-smoke
 
 help: ## List the targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-18s %s\n", $$1, $$2}'
@@ -15,7 +15,7 @@ setup: ## Install the toolchain, components, cargo tools, web dependencies, prek
 	prek --version >/dev/null 2>&1 || cargo install --locked prek
 	prek install --allow-missing-config
 
-build: ## Build the Rust workspace
+build: ## Build the Rust workspace for the host with the dev profile, the fast build for development
 	cargo build --workspace
 
 fmt: ## Format the Rust code, fix lint findings and format the web sources
@@ -23,7 +23,7 @@ fmt: ## Format the Rust code, fix lint findings and format the web sources
 	cd web && bun run lint --fix
 	cd web && bun run format
 
-RELEASE_TRIPLE := x86_64-unknown-linux-gnu
+RELEASE_TRIPLE := x86_64-unknown-linux-musl
 
 DEV_DIR := $(CURDIR)/target/dev
 
@@ -151,13 +151,22 @@ check-api: ## Fail when web/src/api/schema.d.ts differs from the daemon's OpenAP
 	cd web && bunx openapi-typescript ../$(GEN_DIR)/openapi.json -o ../$(GEN_DIR)/schema.d.ts
 	@cmp -s $(GEN_DIR)/schema.d.ts web/src/api/schema.d.ts || { echo "web/src/api/schema.d.ts is stale: run make gen-api" >&2; exit 1; }
 
-release: web-build ## Build fld for x86_64 Linux into dist/ with the host toolchain, check the artefact, run the smoke test and write SHA256SUMS
+# The C code of the bundled SQLite and zstd needs a musl C compiler: cc-rs takes x86_64-linux-musl-gcc or musl-gcc from PATH, and rustc links the musl target statically with its own C runtime, so no linker setting is needed.
+release-tools:
+	@command -v x86_64-linux-musl-gcc >/dev/null 2>&1 || command -v musl-gcc >/dev/null 2>&1 || { echo "release: neither x86_64-linux-musl-gcc nor musl-gcc is on PATH; install musl-gcc with: sudo apt install musl-tools" >&2; exit 1; }
+
+release: release-tools web-build ## Build the static musl fld for x86_64 Linux into dist/ (needs musl-tools), check the artefact, run the smoke test and write SHA256SUMS
 	@test -f web/dist/index.html || { echo "release: web/dist/index.html is missing; the binary embeds web/dist" >&2; exit 1; }
 	cargo build --release --locked -p fold-cli --target $(RELEASE_TRIPLE)
 	rm -rf dist
 	mkdir -p dist
 	install -m 0755 "$$(cargo metadata --format-version 1 --no-deps | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')/$(RELEASE_TRIPLE)/release/fld" dist/fld-x86_64-linux
 	file dist/fld-x86_64-linux | grep -q 'x86-64' || { echo "release: dist/fld-x86_64-linux is not an x86-64 binary" >&2; exit 1; }
+	@readelf -h dist/fld-x86_64-linux | grep -q 'Type:.*DYN' && \
+	 readelf -d dist/fld-x86_64-linux | grep -q 'FLAGS_1.*PIE' && \
+	 ! readelf -d dist/fld-x86_64-linux | grep -q '(NEEDED)' && \
+	 ! readelf -lW dist/fld-x86_64-linux | grep -q 'Requesting program interpreter' || \
+		{ echo "release: dist/fld-x86_64-linux must be a static PIE: no shared libraries (DT_NEEDED) and no program interpreter" >&2; exit 1; }
 	scripts/release-smoke.sh dist/fld-x86_64-linux
 	cd dist && sha256sum fld-x86_64-linux > SHA256SUMS
 
