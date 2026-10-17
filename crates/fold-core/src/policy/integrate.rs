@@ -447,9 +447,9 @@ mod tests {
                 Err(IntegratorRequired),
             ),
             (
-                "a task coder as caller",
+                "a task worker as caller",
                 Case {
-                    caller: agent_caller("web-coder", Some(Role::TaskCoder)),
+                    caller: agent_caller("web-worker", Some(Role::TaskWorker)),
                     ..Case::new()
                 },
                 Err(IntegratorRequired),
@@ -950,7 +950,7 @@ mod tests {
             Just(decider()),
             Just(agent_caller("reviewer-1", Some(Role::BatchReviewer))),
             Just(agent_caller("frontend", None)),
-            Just(agent_caller("web-coder", Some(Role::TaskCoder))),
+            Just(agent_caller("web-worker", Some(Role::TaskWorker))),
             Just(agent_caller(AUTHOR, Some(Role::ReviewLead))),
             Just(human("tanim")),
             Just(human("ana")),

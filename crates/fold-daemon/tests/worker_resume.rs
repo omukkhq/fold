@@ -18,7 +18,7 @@ use crate::common::acceptance::{Harness, SLUG, StoredEvent, WAIT, Work};
 use crate::workers_support::{FakeClaude, Run};
 
 pub const MAIN: &str = "frontend";
-pub const CODER: &str = "web-coder";
+pub const TASK_WORKER: &str = "web-worker";
 
 pub async fn worker(harness: &Harness, agent: &str) -> WorkerProcessRow {
     harness
@@ -72,8 +72,8 @@ async fn until_resumed(harness: &Harness, count: usize) -> Vec<(Option<String>, 
     .await
 }
 
-/// Area `web` over label `ui` with one task per title, its lead `web-lead`, and the task coder `web-coder` that the lead started for every task, connected and waiting for work. `review` is the review lead.
-pub async fn coder_for(fake: &FakeClaude, titles: &[&str], state: WorkerState) -> Harness {
+/// Area `web` over label `ui` with one task per title, its lead `web-lead`, and the task worker `web-worker` that the lead started for every task, connected and waiting for work. `review` is the review lead.
+pub async fn task_worker_for(fake: &FakeClaude, titles: &[&str], state: WorkerState) -> Harness {
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
     harness.make_main(MAIN).await;
     give_role(&harness.handle.store, "review", Role::ReviewLead, None).await;
@@ -106,23 +106,26 @@ pub async fn coder_for(fake: &FakeClaude, titles: &[&str], state: WorkerState) -
         .call(
             "web-lead",
             "start_worker",
-            json!({"role": "task_coder", "tasks": tasks}),
+            json!({"role": "task_worker", "tasks": tasks}),
         )
         .await;
-    assert_eq!(started["worker"]["name"], CODER);
-    until_state(&harness, CODER, state).await;
-    harness.connect(CODER).await;
+    assert_eq!(started["worker"]["name"], TASK_WORKER);
+    until_state(&harness, TASK_WORKER, state).await;
+    harness.connect(TASK_WORKER).await;
     harness
 }
 
-/// [`coder_for`] one task `T-1`, for which the coder writes `files` in its workspace and proposes `P-1`, after which fold stops it.
-pub async fn proposed_by_a_coder(fake: &FakeClaude, files: &[(&str, &str)]) -> (Harness, Work) {
-    let harness = coder_for(fake, &["Draw the page"], WorkerState::Idle).await;
-    let work = harness.start_work(CODER, "T-1").await;
+/// [`task_worker_for`] one task `T-1`, for which the task worker writes `files` in its workspace and proposes `P-1`, after which fold stops it.
+pub async fn proposed_by_a_task_worker(
+    fake: &FakeClaude,
+    files: &[(&str, &str)],
+) -> (Harness, Work) {
+    let harness = task_worker_for(fake, &["Draw the page"], WorkerState::Idle).await;
+    let work = harness.start_work(TASK_WORKER, "T-1").await;
     work.write(files);
-    let proposal = harness.propose(CODER, &work, "Draw the page").await;
+    let proposal = harness.propose(TASK_WORKER, &work, "Draw the page").await;
     assert_eq!(proposal, "P-1");
-    until_state(&harness, CODER, WorkerState::Stopped).await;
+    until_state(&harness, TASK_WORKER, WorkerState::Stopped).await;
     (harness, work)
 }
 
@@ -146,26 +149,27 @@ fn position(events: &[StoredEvent], kind: &str, pick: impl Fn(&StoredEvent) -> b
         .unwrap_or_else(|| panic!("no {kind}"))
 }
 
-/// The coder records its workspace and sends the next version of `P-1`.
+/// The task worker records its workspace and sends the next version of `P-1`.
 async fn post_next_version(harness: &Harness, work: &Work) {
     harness
         .call(
-            CODER,
+            TASK_WORKER,
             "record_changes",
             json!({"ws": work.workspace, "message": "Address the review"}),
         )
         .await;
     let updated = harness
-        .call(CODER, "update_proposal", json!({"id": "P-1"}))
+        .call(TASK_WORKER, "update_proposal", json!({"id": "P-1"}))
         .await;
     assert_eq!(updated["version"], "v2", "{updated}");
 }
 
 #[tokio::test]
-async fn requested_changes_resume_the_stopped_coder_with_the_comments_until_it_posts_version_2() {
+async fn requested_changes_resume_the_stopped_task_worker_with_the_comments_until_it_posts_version_2()
+ {
     let fake = FakeClaude::new("result");
-    let (harness, work) = proposed_by_a_coder(&fake, &[("page.html", "<p>page</p>\n")]).await;
-    let stopped = worker(&harness, CODER).await;
+    let (harness, work) = proposed_by_a_task_worker(&fake, &[("page.html", "<p>page</p>\n")]).await;
+    let stopped = worker(&harness, TASK_WORKER).await;
     harness
         .call(
             "review",
@@ -180,7 +184,7 @@ async fn requested_changes_resume_the_stopped_coder_with_the_comments_until_it_p
         )
         .await;
 
-    let runs = until_runs(&fake, CODER, 2).await;
+    let runs = until_runs(&fake, TASK_WORKER, 2).await;
     let resumed_run = &runs[1];
     assert_eq!(
         resumed_run.flag("--resume"),
@@ -200,15 +204,15 @@ async fn requested_changes_resume_the_stopped_coder_with_the_comments_until_it_p
     assert_eq!(resumed[0].0.as_deref(), Some("P-1"));
     assert_eq!(
         resumed[0].1,
-        json!({"agent": CODER, "proposal": "P-1", "version": 1, "reason": "changes", "resumed": true})
+        json!({"agent": TASK_WORKER, "proposal": "P-1", "version": 1, "reason": "changes", "resumed": true})
     );
-    let running = until_state(&harness, CODER, WorkerState::Idle).await;
+    let running = until_state(&harness, TASK_WORKER, WorkerState::Idle).await;
     assert_eq!(running.tasks.len(), 1);
     assert_eq!(running.session_id, stopped.session_id);
 
     work.write(&[("page.html", "<h1>Page</h1>\n<p>page</p>\n")]);
     post_next_version(&harness, &work).await;
-    let done = until_state(&harness, CODER, WorkerState::Stopped).await;
+    let done = until_state(&harness, TASK_WORKER, WorkerState::Stopped).await;
     assert_eq!(done.exit_code, Some(0));
     let view = harness
         .call("review", "get_proposal", json!({"id": "P-1"}))
@@ -226,9 +230,10 @@ async fn requested_changes_resume_the_stopped_coder_with_the_comments_until_it_p
 }
 
 #[tokio::test]
-async fn a_conflict_at_integration_resumes_the_stopped_coder_with_the_sync_step() {
+async fn a_conflict_at_integration_resumes_the_stopped_task_worker_with_the_sync_step() {
     let fake = FakeClaude::new("result");
-    let (harness, work) = proposed_by_a_coder(&fake, &[("README.md", "# demo: the page\n")]).await;
+    let (harness, work) =
+        proposed_by_a_task_worker(&fake, &[("README.md", "# demo: the page\n")]).await;
     let other = harness.create_task(MAIN, "Name the endpoint").await;
     let theirs = harness.start_work(MAIN, &other).await;
     theirs.write(&[("README.md", "# demo: the endpoint\n")]);
@@ -247,7 +252,7 @@ async fn a_conflict_at_integration_resumes_the_stopped_coder_with_the_sync_step(
         .await;
     assert_eq!(refused["code"], codes::INTEGRATION_CONFLICTED);
 
-    let runs = until_runs(&fake, CODER, 2).await;
+    let runs = until_runs(&fake, TASK_WORKER, 2).await;
     assert!(runs[1].has("--resume"));
     let turn = &runs[1].stdin[1];
     for wanted in [
@@ -261,22 +266,22 @@ async fn a_conflict_at_integration_resumes_the_stopped_coder_with_the_sync_step(
     let resumed = until_resumed(&harness, 1).await;
     assert_eq!(resumed[0].1["reason"], "conflict");
     assert_eq!(resumed[0].1["resumed"], true);
-    until_state(&harness, CODER, WorkerState::Idle).await;
+    until_state(&harness, TASK_WORKER, WorkerState::Idle).await;
 
     let synced = harness
-        .call(CODER, "sync_workspace", json!({"ws": work.workspace}))
+        .call(TASK_WORKER, "sync_workspace", json!({"ws": work.workspace}))
         .await;
     assert_eq!(synced["conflicted"], json!(["README.md"]), "{synced}");
     work.write(&[("README.md", "# demo: the page and the endpoint\n")]);
     post_next_version(&harness, &work).await;
-    until_state(&harness, CODER, WorkerState::Stopped).await;
+    until_state(&harness, TASK_WORKER, WorkerState::Stopped).await;
 }
 
 #[tokio::test]
-async fn a_coder_whose_session_is_gone_starts_fresh_in_a_new_session() {
+async fn a_task_worker_whose_session_is_gone_starts_fresh_in_a_new_session() {
     let fake = FakeClaude::new("result").lost_sessions();
-    let (harness, work) = proposed_by_a_coder(&fake, &[("page.html", "<p>page</p>\n")]).await;
-    let stopped = worker(&harness, CODER).await;
+    let (harness, work) = proposed_by_a_task_worker(&fake, &[("page.html", "<p>page</p>\n")]).await;
+    let stopped = worker(&harness, TASK_WORKER).await;
     harness
         .call(
             "review",
@@ -285,7 +290,7 @@ async fn a_coder_whose_session_is_gone_starts_fresh_in_a_new_session() {
         )
         .await;
 
-    let runs = until_runs(&fake, CODER, 3).await;
+    let runs = until_runs(&fake, TASK_WORKER, 3).await;
     assert_eq!(runs[1].flag("--resume"), Some(stopped.session_id.as_str()));
     let fresh = &runs[2];
     assert!(!fresh.has("--resume"));
@@ -293,7 +298,7 @@ async fn a_coder_whose_session_is_gone_starts_fresh_in_a_new_session() {
     assert_ne!(session, stopped.session_id);
     let turn = &fresh.stdin[1];
     for wanted in [
-        "task coder for T-1",
+        "task worker for T-1",
         "Your earlier session is gone",
         "P-1 v1 for T-1: changes requested",
         &format!("Your task workspace is {}", work.workspace),
@@ -304,9 +309,9 @@ async fn a_coder_whose_session_is_gone_starts_fresh_in_a_new_session() {
     let resumed = until_resumed(&harness, 1).await;
     assert_eq!(
         resumed[0].1,
-        json!({"agent": CODER, "proposal": "P-1", "version": 1, "reason": "changes", "resumed": false})
+        json!({"agent": TASK_WORKER, "proposal": "P-1", "version": 1, "reason": "changes", "resumed": false})
     );
-    let row = until_state(&harness, CODER, WorkerState::Idle).await;
+    let row = until_state(&harness, TASK_WORKER, WorkerState::Idle).await;
     assert_eq!(row.session_id, session);
     assert_eq!(row.turns, stopped.turns + 1, "the lost session ran no turn");
     let kinds: Vec<String> = harness
@@ -320,26 +325,32 @@ async fn a_coder_whose_session_is_gone_starts_fresh_in_a_new_session() {
 
     work.write(&[("page.html", "<h1>Page</h1>\n")]);
     post_next_version(&harness, &work).await;
-    until_state(&harness, CODER, WorkerState::Stopped).await;
+    until_state(&harness, TASK_WORKER, WorkerState::Stopped).await;
 }
 
 #[tokio::test]
-async fn a_coder_stays_while_a_proposal_has_changes_requested_and_an_integrated_task_counts_as_finished()
+async fn a_task_worker_stays_while_a_proposal_has_changes_requested_and_an_integrated_task_counts_as_finished()
  {
     let fake = FakeClaude::new("result");
-    let harness = coder_for(
+    let harness = task_worker_for(
         &fake,
         &["Draw the page", "Draw the menu"],
         WorkerState::Idle,
     )
     .await;
-    let page = harness.start_work(CODER, "T-1").await;
+    let page = harness.start_work(TASK_WORKER, "T-1").await;
     page.write(&[("page.html", "<p>page</p>\n")]);
-    assert_eq!(harness.propose(CODER, &page, "Draw the page").await, "P-1");
+    assert_eq!(
+        harness.propose(TASK_WORKER, &page, "Draw the page").await,
+        "P-1"
+    );
     request_changes(&harness, "P-1", "Split the page.").await;
-    let menu = harness.start_work(CODER, "T-2").await;
+    let menu = harness.start_work(TASK_WORKER, "T-2").await;
     menu.write(&[("menu.html", "<p>menu</p>\n")]);
-    assert_eq!(harness.propose(CODER, &menu, "Draw the menu").await, "P-2");
+    assert_eq!(
+        harness.propose(TASK_WORKER, &menu, "Draw the menu").await,
+        "P-2"
+    );
     harness.approve("P-2").await;
     harness
         .call("review", "integrate_proposal", json!({"id": "P-2"}))
@@ -347,37 +358,40 @@ async fn a_coder_stays_while_a_proposal_has_changes_requested_and_an_integrated_
 
     page.write(&[("page.html", "<h1>Page</h1>\n")]);
     post_next_version(&harness, &page).await;
-    until_state(&harness, CODER, WorkerState::Stopped).await;
+    until_state(&harness, TASK_WORKER, WorkerState::Stopped).await;
     let events = harness.events().await;
     let stopped = position(&events, "worker.stopped", |event| {
-        event.data["agent"] == CODER
+        event.data["agent"] == TASK_WORKER
     });
     let sent = position(&events, "proposal.version_added", |_| true);
     assert!(
         stopped > sent,
-        "the coder stops only once the requested change is sent"
+        "the task worker stops only once the requested change is sent"
     );
     assert_eq!(
-        fake.runs_of(CODER).len(),
+        fake.runs_of(TASK_WORKER).len(),
         1,
-        "a running coder gets the review as a notice, not a resume"
+        "a running task worker gets the review as a notice, not a resume"
     );
 }
 
-/// A supervisor whose watcher falls behind its bus still tells a running coder about changes requested while it fell behind, from the stored reviews.
+/// A supervisor whose watcher falls behind its bus still tells a running task worker about changes requested while it fell behind, from the stored reviews.
 #[tokio::test]
-async fn a_running_coder_hears_of_changes_its_supervisor_missed() {
+async fn a_running_task_worker_hears_of_changes_its_supervisor_missed() {
     let fake = FakeClaude::new("result");
-    let harness = coder_for(
+    let harness = task_worker_for(
         &fake,
         &["Draw the page", "Draw the menu"],
         WorkerState::Idle,
     )
     .await;
-    let page = harness.start_work(CODER, "T-1").await;
+    let page = harness.start_work(TASK_WORKER, "T-1").await;
     page.write(&[("page.html", "<p>page</p>\n")]);
-    assert_eq!(harness.propose(CODER, &page, "Draw the page").await, "P-1");
-    until_state(&harness, CODER, WorkerState::Idle).await;
+    assert_eq!(
+        harness.propose(TASK_WORKER, &page, "Draw the page").await,
+        "P-1"
+    );
+    until_state(&harness, TASK_WORKER, WorkerState::Idle).await;
     harness
         .project
         .clock()
@@ -419,7 +433,7 @@ async fn a_running_coder_hears_of_changes_its_supervisor_missed() {
             .publish_live(LiveEvent::new(types::WORKER_OUTPUT, None, json!({})).unwrap());
     }
     let runs = eventually(WAIT, async || {
-        let runs = fake.runs_of(CODER);
+        let runs = fake.runs_of(TASK_WORKER);
         let told = runs[0]
             .stdin
             .iter()
@@ -431,25 +445,29 @@ async fn a_running_coder_hears_of_changes_its_supervisor_missed() {
         }
     })
     .await;
-    assert_eq!(runs.len(), 1, "a running coder gets a notice, not a resume");
+    assert_eq!(
+        runs.len(),
+        1,
+        "a running task worker gets a notice, not a resume"
+    );
 }
 
 #[tokio::test]
-async fn a_batch_review_resumes_the_coder_once_with_every_member_it_wrote() {
+async fn a_batch_review_resumes_the_task_worker_once_with_every_member_it_wrote() {
     let fake = FakeClaude::new("result");
-    let harness = coder_for(
+    let harness = task_worker_for(
         &fake,
         &["Draw the page", "Draw the menu"],
         WorkerState::Idle,
     )
     .await;
-    let page = harness.start_work(CODER, "T-1").await;
+    let page = harness.start_work(TASK_WORKER, "T-1").await;
     page.write(&[("page.html", "<p>page</p>\n")]);
-    harness.propose(CODER, &page, "Draw the page").await;
-    let menu = harness.start_work(CODER, "T-2").await;
+    harness.propose(TASK_WORKER, &page, "Draw the page").await;
+    let menu = harness.start_work(TASK_WORKER, "T-2").await;
     menu.write(&[("menu.html", "<p>menu</p>\n")]);
-    harness.propose(CODER, &menu, "Draw the menu").await;
-    until_state(&harness, CODER, WorkerState::Stopped).await;
+    harness.propose(TASK_WORKER, &menu, "Draw the menu").await;
+    until_state(&harness, TASK_WORKER, WorkerState::Stopped).await;
     harness
         .call(
             "review",
@@ -478,7 +496,7 @@ async fn a_batch_review_resumes_the_coder_once_with_every_member_it_wrote() {
     let resumed = until_resumed(&harness, 2).await;
     let proposals: Vec<Option<&str>> = resumed.iter().map(|(p, _)| p.as_deref()).collect();
     assert_eq!(proposals, [Some("P-1"), Some("P-2")]);
-    let runs = fake.runs_of(CODER);
+    let runs = fake.runs_of(TASK_WORKER);
     assert_eq!(runs.len(), 2, "one resume for the whole batch");
     let turn = &runs[1].stdin[1];
     for wanted in [
@@ -497,7 +515,8 @@ async fn a_batch_review_resumes_the_coder_once_with_every_member_it_wrote() {
 #[tokio::test]
 async fn a_resume_the_worker_limits_refuse_runs_once_a_worker_stops() {
     let fake = FakeClaude::new("result");
-    let (harness, _work) = proposed_by_a_coder(&fake, &[("page.html", "<p>page</p>\n")]).await;
+    let (harness, _work) =
+        proposed_by_a_task_worker(&fake, &[("page.html", "<p>page</p>\n")]).await;
     std::fs::write(
         std::path::Path::new(harness.root()).join(".fold/config.toml"),
         "[workers]\nmax_per_area = 1\n",
@@ -514,7 +533,7 @@ async fn a_resume_the_worker_limits_refuse_runs_once_a_worker_stops() {
         .call(
             "web-lead",
             "start_worker",
-            json!({"role": "task_coder", "tasks": ["T-2"]}),
+            json!({"role": "task_worker", "tasks": ["T-2"]}),
         )
         .await;
     let other = other["worker"]["name"].as_str().unwrap().to_owned();
@@ -526,15 +545,15 @@ async fn a_resume_the_worker_limits_refuse_runs_once_a_worker_stops() {
         .unwrap();
     request_changes(&harness, "P-1", "Split the page.").await;
     assert_eq!(
-        worker(&harness, CODER).await.state,
+        worker(&harness, TASK_WORKER).await.state,
         WorkerState::Stopped,
-        "the area holds the other coder"
+        "the area holds the other task worker"
     );
 
     harness
         .call("web-lead", "stop_worker", json!({"name": other}))
         .await;
-    let runs = until_runs(&fake, CODER, 2).await;
+    let runs = until_runs(&fake, TASK_WORKER, 2).await;
     assert!(runs[1].has("--resume"));
     assert!(
         runs[1].stdin[1].contains("Split the page."),
@@ -548,9 +567,10 @@ async fn a_resume_the_worker_limits_refuse_runs_once_a_worker_stops() {
 #[tokio::test]
 async fn a_daemon_start_serves_a_resume_the_worker_limits_refused() {
     let fake = FakeClaude::new("result");
-    let (mut harness, _work) = proposed_by_a_coder(&fake, &[("page.html", "<p>page</p>\n")]).await;
+    let (mut harness, _work) =
+        proposed_by_a_task_worker(&fake, &[("page.html", "<p>page</p>\n")]).await;
     let config = std::path::Path::new(harness.root()).join(".fold/config.toml");
-    std::fs::write(&config, "[workers]\ntask_coder = 1\n").unwrap();
+    std::fs::write(&config, "[workers]\ntask_worker = 1\n").unwrap();
     harness
         .call(
             MAIN,
@@ -562,7 +582,7 @@ async fn a_daemon_start_serves_a_resume_the_worker_limits_refused() {
         .call(
             "web-lead",
             "start_worker",
-            json!({"role": "task_coder", "tasks": ["T-2"]}),
+            json!({"role": "task_worker", "tasks": ["T-2"]}),
         )
         .await;
     let other = other["worker"]["name"].as_str().unwrap().to_owned();
@@ -575,48 +595,48 @@ async fn a_daemon_start_serves_a_resume_the_worker_limits_refused() {
     request_changes(&harness, "P-1", "Split the page.").await;
     harness.stop().await;
     assert_eq!(
-        fake.runs_of(CODER).len(),
+        fake.runs_of(TASK_WORKER).len(),
         1,
-        "the other coder holds the only place"
+        "the other task worker holds the only place"
     );
-    std::fs::write(&config, "[workers]\ntask_coder = 2\n").unwrap();
+    std::fs::write(&config, "[workers]\ntask_worker = 2\n").unwrap();
 
     harness.start_again().await;
-    let runs = until_runs(&fake, CODER, 2).await;
+    let runs = until_runs(&fake, TASK_WORKER, 2).await;
     assert!(runs[1].has("--resume"));
     assert!(runs[1].stdin[1].contains("Split the page."));
     until_resumed(&harness, 1).await;
 }
 
 #[tokio::test]
-async fn a_daemon_start_that_finds_a_coders_session_gone_starts_it_fresh() {
+async fn a_daemon_start_that_finds_a_task_workers_session_gone_starts_it_fresh() {
     let fake = FakeClaude::new("init").lost_sessions();
-    let mut harness = coder_for(&fake, &["Draw the page"], WorkerState::Working).await;
-    let working = worker(&harness, CODER).await;
-    until_runs(&fake, CODER, 1).await;
+    let mut harness = task_worker_for(&fake, &["Draw the page"], WorkerState::Working).await;
+    let working = worker(&harness, TASK_WORKER).await;
+    until_runs(&fake, TASK_WORKER, 1).await;
     harness.stop().await;
 
     harness.start_again().await;
-    let runs = until_runs(&fake, CODER, 3).await;
+    let runs = until_runs(&fake, TASK_WORKER, 3).await;
     assert_eq!(runs[1].flag("--resume"), Some(working.session_id.as_str()));
     let fresh = &runs[2];
     assert!(!fresh.has("--resume"));
     let session = fresh.flag("--session-id").unwrap();
     assert_ne!(session, working.session_id);
-    for wanted in ["task coder for T-1", "your earlier session is gone"] {
+    for wanted in ["task worker for T-1", "your earlier session is gone"] {
         assert!(
             fresh.stdin[1].contains(wanted),
             "{wanted} in {}",
             fresh.stdin[1]
         );
     }
-    let row = until_state(&harness, CODER, WorkerState::Working).await;
+    let row = until_state(&harness, TASK_WORKER, WorkerState::Working).await;
     assert_eq!(row.session_id, session);
     let started: Vec<Value> = harness
         .events()
         .await
         .into_iter()
-        .filter(|event| event.kind == "worker.started" && event.data["agent"] == CODER)
+        .filter(|event| event.kind == "worker.started" && event.data["agent"] == TASK_WORKER)
         .map(|event| event.data["resumed"].clone())
         .collect();
     assert_eq!(
@@ -811,7 +831,8 @@ async fn a_daemon_start_that_finds_a_batch_reviewers_session_gone_starts_it_fres
 #[tokio::test]
 async fn a_raised_limit_serves_a_resume_the_worker_limits_refused() {
     let fake = FakeClaude::new("result");
-    let (harness, _work) = proposed_by_a_coder(&fake, &[("page.html", "<p>page</p>\n")]).await;
+    let (harness, _work) =
+        proposed_by_a_task_worker(&fake, &[("page.html", "<p>page</p>\n")]).await;
     harness
         .call(MAIN, "set_worker_limits", json!({"max_per_area": 1}))
         .await;
@@ -826,7 +847,7 @@ async fn a_raised_limit_serves_a_resume_the_worker_limits_refused() {
         .call(
             "web-lead",
             "start_worker",
-            json!({"role": "task_coder", "tasks": ["T-2"]}),
+            json!({"role": "task_worker", "tasks": ["T-2"]}),
         )
         .await;
     let other = other["worker"]["name"].as_str().unwrap().to_owned();
@@ -838,15 +859,15 @@ async fn a_raised_limit_serves_a_resume_the_worker_limits_refused() {
         .unwrap();
     request_changes(&harness, "P-1", "Split the page.").await;
     assert_eq!(
-        worker(&harness, CODER).await.state,
+        worker(&harness, TASK_WORKER).await.state,
         WorkerState::Stopped,
-        "the area holds the other coder"
+        "the area holds the other task worker"
     );
 
     harness
         .call(MAIN, "set_worker_limits", json!({"max_per_area": 2}))
         .await;
-    let runs = until_runs(&fake, CODER, 2).await;
+    let runs = until_runs(&fake, TASK_WORKER, 2).await;
     assert!(runs[1].has("--resume"));
     assert!(
         runs[1].stdin[1].contains("Split the page."),
@@ -865,7 +886,7 @@ cat > /dev/null
 "#;
 
 #[tokio::test]
-async fn a_daemon_start_resumes_a_working_coder_once_its_socket_is_bound() {
+async fn a_daemon_start_resumes_a_working_task_worker_once_its_socket_is_bound() {
     use std::os::unix::fs::PermissionsExt;
     use std::sync::Arc;
 
@@ -876,8 +897,8 @@ async fn a_daemon_start_resumes_a_working_coder_once_its_socket_is_bound() {
     use fold_store::{Store, StoreError};
 
     let fake = FakeClaude::new("init");
-    let mut harness = coder_for(&fake, &["Draw the page"], WorkerState::Working).await;
-    until_runs(&fake, CODER, 1).await;
+    let mut harness = task_worker_for(&fake, &["Draw the page"], WorkerState::Working).await;
+    until_runs(&fake, TASK_WORKER, 1).await;
     harness.stop().await;
 
     let dir = tempfile::TempDir::new().unwrap();
@@ -930,7 +951,7 @@ async fn a_daemon_start_resumes_a_working_coder_once_its_socket_is_bound() {
     .await;
     assert_eq!(
         seen, "bound\n",
-        "the resumed coder found the daemon's socket"
+        "the resumed task worker found the daemon's socket"
     );
     daemon.shutdown().await;
 }

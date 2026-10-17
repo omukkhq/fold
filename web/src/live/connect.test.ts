@@ -117,7 +117,7 @@ describe("connectProject", () => {
         Promise.resolve(
           (async function* () {
             await Promise.resolve();
-            yield `data: ${JSON.stringify({ kind: "worker_output", agent: "web-coder", step: "tool_use", tool: "Edit", text_length: null })}\n\n`;
+            yield `data: ${JSON.stringify({ kind: "worker_output", agent: "web-worker", step: "tool_use", tool: "Edit", text_length: null })}\n\n`;
             await new Promise<void>(() => undefined);
           })(),
         ),

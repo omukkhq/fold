@@ -94,7 +94,7 @@ export function mainPill(presence: AgentView["presence"]): StatePill {
 const ROLE_NAMES: Record<WorkerRole, string> = {
   area_lead: "Area lead",
   review_lead: "Review lead",
-  task_coder: "Task coder",
+  task_worker: "Task worker",
   batch_reviewer: "Batch reviewer",
 };
 
@@ -255,7 +255,7 @@ function faint(text: string): Step {
 export function workerStep(
   worker: WorkerProcess,
   steps: WorkerSteps,
-  waitsForCoders = false,
+  waitsForTaskWorkers = false,
 ): Step {
   const live = steps[worker.name];
   switch (worker.state) {
@@ -267,7 +267,9 @@ export function workerStep(
       return faint("waiting for the process to exit");
     case "idle":
       return faint(
-        waitsForCoders ? "waiting for coders" : "waiting for its next turn",
+        waitsForTaskWorkers
+          ? "waiting for task workers"
+          : "waiting for its next turn",
       );
     default:
       return faint(
@@ -346,7 +348,7 @@ function boundOf(
         text: count === 0 ? NONE : plural(count, "proposal"),
       };
     }
-    case "task_coder": {
+    case "task_worker": {
       if (worker.tasks.length === 0) return { kind: "text", text: NONE };
       const text = worker.tasks
         .map((task) => {
@@ -412,7 +414,7 @@ function runningRow(
     step: workerStep(
       worker,
       input.steps,
-      waitsForCoders(worker, input.workers.workers),
+      waitsForTaskWorkers(worker, input.workers.workers),
     ),
     stop: stopControl(worker.state),
   };
@@ -449,8 +451,8 @@ export function roleModel(
 
 const LEADS: readonly WorkerRole[] = ["area_lead", "review_lead"];
 
-/** A lead between turns waits for the coders or batch reviewers it started while one of them starts or works. */
-export function waitsForCoders(
+/** A lead between turns waits for the task workers or batch reviewers it started while one of them starts or works. */
+export function waitsForTaskWorkers(
   lead: WorkerProcess,
   workers: readonly WorkerProcess[],
 ): boolean {
@@ -466,7 +468,7 @@ export function waitsForCoders(
 }
 
 /**
- * The team: the main agents first, then one group per area with its lead and the task coders under it, then the review lead with its batch reviewers.
+ * The team: the main agents first, then one group per area with its lead and the task workers under it, then the review lead with its batch reviewers.
  * A main agent is an agent fold does not supervise: the user's own Claude Code session.
  */
 export function teamGroups(input: TeamInput): TeamGroup[] {
@@ -489,7 +491,7 @@ export function teamGroups(input: TeamInput): TeamGroup[] {
     ...new Set([
       ...areas.map((a) => a.name),
       ...workers
-        .filter((w) => w.role === "area_lead" || w.role === "task_coder")
+        .filter((w) => w.role === "area_lead" || w.role === "task_worker")
         .map((w) => w.area ?? ""),
     ]),
   ];
@@ -497,7 +499,7 @@ export function teamGroups(input: TeamInput): TeamGroup[] {
     const area = areas.find((a) => a.name === name) ?? null;
     const members = workers.filter(
       (w) =>
-        (w.role === "area_lead" || w.role === "task_coder") &&
+        (w.role === "area_lead" || w.role === "task_worker") &&
         (w.area ?? "") === name,
     );
     groups.push({

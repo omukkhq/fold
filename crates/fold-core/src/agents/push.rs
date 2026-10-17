@@ -233,7 +233,7 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
     None
 }
 
-/// A ready task nobody claimed goes to whoever starts its builder. The lead of its area starts a task coder; while the area has no lead, the main agent starts one; a task in no area waits for the main agent to give it an area label. Both an approved request card and a dependent of an integrated task turn ready through `task.status_changed`, so this one rule routes them.
+/// A ready task nobody claimed goes to whoever starts its builder. The lead of its area starts a task worker; while the area has no lead, the main agent starts one; a task in no area waits for the main agent to give it an area label. Both an approved request card and a dependent of an integrated task turn ready through `task.status_changed`, so this one rule routes them.
 fn ready_route(task: TaskId, ctx: &PushContext) -> (Vec<AgentName>, String, &'static str) {
     let main = || ctx.main_agents.iter().cloned().collect();
     if !ctx.area_leads.is_empty() {
@@ -565,10 +565,10 @@ mod tests {
         assert_eq!(
             sent(&notice_for(
                 &event,
-                &ready(Some("backend-coder"), &["backend-lead"], &["backend"])
+                &ready(Some("backend-worker"), &["backend-lead"], &["backend"])
             )),
             vec![row(
-                "backend-coder",
+                "backend-worker",
                 "fold: T-12 is ready. Call create_workspace.",
                 "create_workspace"
             )],

@@ -3,14 +3,14 @@ use fold_core::{AgentName, AreaName, LabelColor, LabelName, Timestamp};
 use fold_store::agents::{self, NewWorkerProcess};
 use fold_store::{Store, StoreError, tasks};
 
-/// The area an area lead or task coder gets when the caller names none, made on first use over the label of the same name.
+/// The area an area lead or task worker gets when the caller names none, made on first use over the label of the same name.
 const DEFAULT_AREA: &str = "work";
 
-/// Records a stopped worker process of `role` for the registered agent `agent`, as if fold had started it in `area`; nothing runs. An area lead or task coder always has an area, so without `area` it gets [`DEFAULT_AREA`], and an area lead becomes its area's lead. The rules that read an agent's role, such as the review rights and the archive rule, then see it.
+/// Records a stopped worker process of `role` for the registered agent `agent`, as if fold had started it in `area`; nothing runs. An area lead or task worker always has an area, so without `area` it gets [`DEFAULT_AREA`], and an area lead becomes its area's lead. The rules that read an agent's role, such as the review rights and the archive rule, then see it.
 pub async fn give_role(store: &Store, agent: &str, role: Role, area: Option<&str>) {
     let name = AgentName::parse(agent).unwrap();
     let area = match role {
-        Role::AreaLead | Role::TaskCoder => Some(area.unwrap_or(DEFAULT_AREA)),
+        Role::AreaLead | Role::TaskWorker => Some(area.unwrap_or(DEFAULT_AREA)),
         Role::ReviewLead | Role::BatchReviewer => area,
     }
     .map(|area| AreaName::parse(area).unwrap());

@@ -13,7 +13,7 @@ const items = [
     kind: "permission",
     screen: "worker",
     question: "pq-3",
-    agent: "web-coder",
+    agent: "web-worker",
     tool: "Bash",
     task: "T-12",
   }),
@@ -67,7 +67,7 @@ describe("needsYouGroups", () => {
       ["asks a question", "/p/demo/messages?thread=m-40"],
     ]);
     expect(permissions?.lines[0]).toMatchObject({
-      person: "web-coder",
+      person: "web-worker",
       text: "asks to run Bash",
       task: "T-12",
       hint: "opens the permission panel",

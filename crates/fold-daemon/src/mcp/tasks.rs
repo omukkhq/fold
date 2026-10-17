@@ -94,7 +94,7 @@ pub struct CreateTaskInput {
     /// A task to split: the new task becomes a linked item of its Subtasks checklist, so the parent needs the new task. Only an agent that may change the parent's checklist passes it (checklist_denied).
     #[serde(default)]
     pub parent: Option<String>,
-    /// proposal (the default), no_proposal or human. A no_proposal task is for work that changes no project file, such as designs made through an MCP server: its coder claims it, does the work without a workspace and calls report_task, and a lead check completes it. A human task is work only a person can do outside every agent, such as verifying an app with a provider: no agent claims it, and a human, or the main agent when the user says so, marks it Done with complete_task. Only the main agent, a human or the lead of the task's area creates a no_proposal or human task.
+    /// proposal (the default), no_proposal or human. A no_proposal task is for work that changes no project file, such as designs made through an MCP server: its task worker claims it, does the work without a workspace and calls report_task, and a lead check completes it. A human task is work only a person can do outside every agent, such as verifying an app with a provider: no agent claims it, and a human, or the main agent when the user says so, marks it Done with complete_task. Only the main agent, a human or the lead of the task's area creates a no_proposal or human task.
     #[serde(default)]
     pub kind: Option<String>,
     /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
@@ -362,7 +362,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             UPDATE_CHECKLIST_ITEM,
-            "Change the text of a plain step, or tick or untick it. A task coder ticks each step of its own task when the step is done and checked. On a held task only its holder's agent, its lead, the main agent or a human changes the checklist; on a task nobody holds, the lead of its area, the main agent or a human. Anyone else gets checklist_denied.",
+            "Change the text of a plain step, or tick or untick it. A task worker ticks each step of its own task when the step is done and checked. On a held task only its holder's agent, its lead, the main agent or a human changes the checklist; on a task nobody holds, the lead of its area, the main agent or a human. Anyone else gets checklist_denied.",
             schema_for_type::<UpdateChecklistItemInput>(),
         ),
         Tool::new(
@@ -407,12 +407,12 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             SEND_BACK_TASK,
-            "Send a reported no_proposal task back to its coder with a note on what to change. The task returns to In Progress and fold resumes the coder with the note.",
+            "Send a reported no_proposal task back to its task worker with a note on what to change. The task returns to In Progress and fold resumes the task worker with the note.",
             schema_for_type::<TaskNoteInput>(),
         ),
         Tool::new(
             SET_BLOCKER,
-            "Put a blocker on a task with the reason it waits for a person, or change the reason. Only a task in Backlog or Todo that no agent has started gets one: a task with a claim, a workspace or an open proposal is refused with task_hold_denied. While it is set, no agent claims the task, no lead starts a coder for it and get_ready_tasks leaves it out; the status does not change. Only a human, the main agent or the lead of the task's area sets one.",
+            "Put a blocker on a task with the reason it waits for a person, or change the reason. Only a task in Backlog or Todo that no agent has started gets one: a task with a claim, a workspace or an open proposal is refused with task_hold_denied. While it is set, no agent claims the task, no lead starts a task worker for it and get_ready_tasks leaves it out; the status does not change. Only a human, the main agent or the lead of the task's area sets one.",
             schema_for_type::<SetBlockerInput>(),
         ),
         Tool::new(

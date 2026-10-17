@@ -60,16 +60,16 @@ mod tests {
 
     #[test]
     fn a_worker_binds_only_to_its_own_agent() {
-        let worker = SessionPeer::Worker(name("web-coder"));
-        assert_eq!(can_bind_agent(&worker, &name("web-coder")), Ok(()));
+        let worker = SessionPeer::Worker(name("web-worker"));
+        assert_eq!(can_bind_agent(&worker, &name("web-worker")), Ok(()));
         let refused = can_bind_agent(&worker, &name("main")).unwrap_err();
         assert_eq!(refused.code(), codes::WORKER_PEER_REFUSED);
-        assert!(can_bind_agent(&SessionPeer::OtherProjectWorker, &name("web-coder")).is_err());
+        assert!(can_bind_agent(&SessionPeer::OtherProjectWorker, &name("web-worker")).is_err());
         assert_eq!(
             can_bind_agent(&SessionPeer::Unsupervised, &name("main")),
             Ok(())
         );
-        assert_eq!(worker.worker(), Some(&name("web-coder")));
+        assert_eq!(worker.worker(), Some(&name("web-worker")));
         assert_eq!(SessionPeer::OtherProjectWorker.worker(), None);
         assert_eq!(SessionPeer::default(), SessionPeer::Unsupervised);
     }

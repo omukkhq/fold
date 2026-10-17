@@ -23,7 +23,7 @@ pub const REPORT_LIMIT: u32 = 20;
 /// The longest report or send-back note, in characters.
 pub const MAX_NOTE_CHARS: usize = 20_000;
 
-/// A coder's report on a task without a proposal as the task shows it, with the lead check that answered it once there is one.
+/// A task worker's report on a task without a proposal as the task shows it, with the lead check that answered it once there is one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReportView {
     pub by: WorkerName,
@@ -50,9 +50,9 @@ impl From<ReportRow> for ReportView {
     }
 }
 
-/// The lead check of tasks without a proposal: the coder reports the work finished, and the lead of the task's area, the main agent or a human completes the task or sends it back. Each command is one write transaction that runs `recompute`, because the claim and the open report decide the status of such a task.
+/// The lead check of tasks without a proposal: the task worker reports the work finished, and the lead of the task's area, the main agent or a human completes the task or sends it back. Each command is one write transaction that runs `recompute`, because the claim and the open report decide the status of such a task.
 impl TaskService {
-    /// Reports the work on `task` finished with `note`, by the worker that holds its implementation claim. The task moves to Review and waits for a lead check; the claim stays with the coder, so a send-back returns the task to it.
+    /// Reports the work on `task` finished with `note`, by the worker that holds its implementation claim. The task moves to Review and waits for a lead check; the claim stays with the task worker, so a send-back returns the task to it.
     pub async fn report_task(
         &self,
         actor: &Actor,
@@ -176,7 +176,7 @@ impl TaskService {
         self.get(task).await
     }
 
-    /// Sends a reported task without a proposal back to its coder with `note`: the open report is answered `sent_back` and the task returns to In Progress while the coder holds the claim. The supervisor resumes a stopped task coder with the note.
+    /// Sends a reported task without a proposal back to its task worker with `note`: the open report is answered `sent_back` and the task returns to In Progress while the task worker holds the claim. The supervisor resumes a stopped task worker with the note.
     pub async fn send_back_task(
         &self,
         actor: &Actor,
@@ -280,7 +280,7 @@ pub(crate) async fn areas_of(
         .collect())
 }
 
-/// The rules a lead check shares: the task exists, the actor may check it, it is open, it needs no proposal and its coder's report waits. Returns the task and that report.
+/// The rules a lead check shares: the task exists, the actor may check it, it is open, it needs no proposal and its task worker's report waits. Returns the task and that report.
 async fn checked_report(
     tx: &mut WriteTx,
     actor: &Actor,
@@ -325,7 +325,7 @@ async fn checked_report(
                 codes::TASK_NOT_REPORTED,
                 format!("{task} has no report that waits for a check"),
             )
-            .with_hint("wait until its coder calls report_task")
+            .with_hint("wait until its task worker calls report_task")
             .into()
         })?;
     Ok((row, report))

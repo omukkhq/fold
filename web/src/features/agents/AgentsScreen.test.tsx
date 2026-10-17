@@ -45,8 +45,8 @@ const team = workerList({
   areas: [areaEntry("web", "frontend", { lead: "web-lead" })],
   workers: [
     workerProcess("web-lead"),
-    workerProcess("web-coder", {
-      role: "task_coder",
+    workerProcess("web-worker", {
+      role: "task_worker",
       started_by: "web-lead",
       tasks: ["T-12"],
       model: "sonnet",
@@ -177,10 +177,10 @@ describe("AgentsScreen", () => {
     expect(within(lead).queryByText("91%")).toBeNull();
     expect(within(table).queryByText(/cache/i)).toBeNull();
     expect(within(lead).getByText("164k")).toBeTruthy();
-    const coder = row("web-coder");
-    expect(within(coder).getByText("T-12")).toBeTruthy();
+    const taskWorker = row("web-worker");
+    expect(within(taskWorker).getByText("T-12")).toBeTruthy();
     expect(
-      within(coder).getByRole("button", { name: "Stopping web-coder…" })
+      within(taskWorker).getByRole("button", { name: "Stopping web-worker…" })
         .textContent,
     ).toContain("Stopping…");
     expect(
@@ -352,7 +352,7 @@ describe("AgentsScreen", () => {
   });
 
   it("asks for a permission answer and shows the daemon's answer", async () => {
-    const question = permissionQuestion({ worker: "web-coder" });
+    const question = permissionQuestion({ worker: "web-worker" });
     let answered = false;
     const calls = stubFetch(
       routes({
@@ -381,9 +381,9 @@ describe("AgentsScreen", () => {
       name: "Permission question",
     });
     expect(await within(panel).findByText("Bash")).toBeTruthy();
-    expect(within(panel).getByText("Task coder")).toBeTruthy();
+    expect(within(panel).getByText("Task worker")).toBeTruthy();
     expect(
-      await within(row("web-coder")).findByRole("img", {
+      await within(row("web-worker")).findByRole("img", {
         name: "waits for a permission answer",
       }),
     ).toBeTruthy();

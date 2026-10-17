@@ -66,13 +66,13 @@ impl From<PauseState> for PauseEntry {
 /// The `[workers]` limits: how many short-lived workers run at once.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct LimitsEntry {
-    /// The most task coders that run at once.
+    /// The most task workers that run at once.
     #[schema(example = 4)]
-    pub task_coder: u64,
+    pub task_worker: u64,
     /// The most batch reviewers that run at once.
     #[schema(example = 3)]
     pub batch_reviewer: u64,
-    /// The most task coders that run at once in one area; null when an area has no limit of its own.
+    /// The most task workers that run at once in one area; null when an area has no limit of its own.
     #[schema(required = true, example = 2)]
     pub max_per_area: Option<u64>,
 }
@@ -80,7 +80,7 @@ pub struct LimitsEntry {
 impl From<WorkerLimits> for LimitsEntry {
     fn from(limits: WorkerLimits) -> Self {
         Self {
-            task_coder: limits.task_coder,
+            task_worker: limits.task_worker,
             batch_reviewer: limits.batch_reviewer,
             max_per_area: limits.max_per_area,
         }
@@ -90,13 +90,13 @@ impl From<WorkerLimits> for LimitsEntry {
 /// A change of the worker limits; a limit left out stays as it is.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct SetWorkerLimitsBody {
-    /// The most task coders that run at once, a whole number with no upper bound; 0 lets none start.
+    /// The most task workers that run at once, a whole number with no upper bound; 0 lets none start.
     #[serde(default)]
-    pub task_coder: Option<u64>,
+    pub task_worker: Option<u64>,
     /// The most batch reviewers that run at once, a whole number with no upper bound; 0 lets none start.
     #[serde(default)]
     pub batch_reviewer: Option<u64>,
-    /// The most task coders that run at once in one area, a whole number with no upper bound; 0 lets none start.
+    /// The most task workers that run at once in one area, a whole number with no upper bound; 0 lets none start.
     #[serde(default)]
     pub max_per_area: Option<u64>,
     /// True removes the limit of one area.
@@ -129,10 +129,10 @@ pub struct AreaEntry {
     /// The instructions every worker of the area starts with; null for none.
     #[schema(required = true, example = "Draw the screens in Pencil.")]
     pub instructions: Option<String>,
-    /// The model of the area's lead and coders; null when the role's model applies.
+    /// The model of the area's lead and task workers; null when the role's model applies.
     #[schema(required = true, example = "opus")]
     pub model: Option<String>,
-    /// The MCP servers the area's lead and coders load; null when the role's servers apply.
+    /// The MCP servers the area's lead and task workers load; null when the role's servers apply.
     #[schema(required = true, example = json!(["fold", "pencil"]))]
     pub mcp: Option<Vec<String>>,
 }
@@ -143,7 +143,7 @@ pub struct AreaEntry {
 pub enum WorkerRole {
     AreaLead,
     ReviewLead,
-    TaskCoder,
+    TaskWorker,
     BatchReviewer,
 }
 
@@ -152,7 +152,7 @@ impl From<Role> for WorkerRole {
         match role {
             Role::AreaLead => Self::AreaLead,
             Role::ReviewLead => Self::ReviewLead,
-            Role::TaskCoder => Self::TaskCoder,
+            Role::TaskWorker => Self::TaskWorker,
             Role::BatchReviewer => Self::BatchReviewer,
         }
     }
@@ -163,7 +163,7 @@ impl From<WorkerRole> for Role {
         match role {
             WorkerRole::AreaLead => Self::AreaLead,
             WorkerRole::ReviewLead => Self::ReviewLead,
-            WorkerRole::TaskCoder => Self::TaskCoder,
+            WorkerRole::TaskWorker => Self::TaskWorker,
             WorkerRole::BatchReviewer => Self::BatchReviewer,
         }
     }
@@ -202,7 +202,7 @@ impl From<fold_core::WorkerState> for WorkerProcessState {
 #[schema(as = WorkerProcessEntry)]
 pub struct WorkerEntry {
     /// The worker's agent name.
-    #[schema(example = "web-coder")]
+    #[schema(example = "web-worker")]
     pub name: String,
     pub role: WorkerRole,
     /// Null for the review lead and batch reviewers.
@@ -212,7 +212,7 @@ pub struct WorkerEntry {
     /// The model Claude Code reported, or the one fold asked for; null for Claude Code's default before the first turn.
     #[schema(required = true)]
     pub model: Option<String>,
-    /// The tasks a task coder is bound to.
+    /// The tasks a task worker is bound to.
     pub tasks: Vec<String>,
     /// The proposals a batch reviewer is bound to.
     pub proposals: Vec<String>,
@@ -306,10 +306,10 @@ pub struct DefineAreaBody {
     /// What every worker of the area must know about its kind of work, at most 8000 characters.
     #[serde(default)]
     pub instructions: Option<String>,
-    /// The model of the area's lead and coders; leave it out for the role's model.
+    /// The model of the area's lead and task workers; leave it out for the role's model.
     #[serde(default)]
     pub model: Option<String>,
-    /// The MCP servers of the area's lead and coders, by name; leave it out for the role's servers.
+    /// The MCP servers of the area's lead and task workers, by name; leave it out for the role's servers.
     #[serde(default)]
     pub mcp: Option<Vec<String>>,
 }
@@ -494,7 +494,7 @@ pub async fn define_area(
     Ok((StatusCode::CREATED, Json(area.into())))
 }
 
-/// A named human changes an area's profile. The next start of the area's lead or coders gets it; running workers keep theirs.
+/// A named human changes an area's profile. The next start of the area's lead or task workers gets it; running workers keep theirs.
 #[utoipa::path(
     patch,
     path = "/api/v1/projects/{slug}/areas/{name}",
@@ -559,7 +559,7 @@ pub async fn set_worker_limits(
     ApiJson(body): ApiJson<SetWorkerLimitsBody>,
 ) -> Result<Json<LimitsEntry>, ApiError> {
     let change = fold(WorkerLimitsChange::from_request(
-        body.task_coder,
+        body.task_worker,
         body.batch_reviewer,
         body.max_per_area,
         body.clear_max_per_area,

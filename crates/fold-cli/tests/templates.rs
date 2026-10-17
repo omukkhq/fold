@@ -278,7 +278,7 @@ const NON_TOOL_NAMES: [&str; 26] = [
     "reply_to",
     "area_lead",
     "review_lead",
-    "task_coder",
+    "task_worker",
     "batch_reviewer",
     "idle_minutes",
     "handoff_at",

@@ -26,21 +26,21 @@ define_names!(
     pub enum Role {
         AreaLead = "area_lead",
         ReviewLead = "review_lead",
-        TaskCoder = "task_coder",
+        TaskWorker = "task_worker",
         BatchReviewer = "batch_reviewer",
     }
 );
 
 impl Role {
-    /// A lead lives until someone stops it; a task coder or batch reviewer is bound to its work and stops when it is done or idle.
+    /// A lead lives until someone stops it; a task worker or batch reviewer is bound to its work and stops when it is done or idle.
     pub fn is_long_lived(self) -> bool {
         matches!(self, Role::AreaLead | Role::ReviewLead)
     }
 
-    /// Leads and batch reviewers keep long gaps between turns (a batch reviewer runs long tests), so their prompt cache lives an hour; a task coder works in short bursts.
+    /// Leads and batch reviewers keep long gaps between turns (a batch reviewer runs long tests), so their prompt cache lives an hour; a task worker works in short bursts.
     pub fn default_cache_ttl(self) -> CacheTtl {
         match self {
-            Role::TaskCoder => CacheTtl::FiveMinutes,
+            Role::TaskWorker => CacheTtl::FiveMinutes,
             Role::AreaLead | Role::ReviewLead | Role::BatchReviewer => CacheTtl::OneHour,
         }
     }
@@ -58,8 +58,8 @@ impl Role {
                 "\n",
                 include_str!("roles/shared.md")
             ),
-            Role::TaskCoder => concat!(
-                include_str!("roles/task_coder.md"),
+            Role::TaskWorker => concat!(
+                include_str!("roles/task_worker.md"),
                 "\n",
                 include_str!("roles/shared.md")
             ),
@@ -152,7 +152,7 @@ pub fn check_model(model: &str) -> Result<(), FoldError> {
 /// The `[workers]` limits of a project, counted over the short-lived workers whose process is running. The long-lived leads are outside them, so a full limit never holds back the plan of an area or the review of the project.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WorkerLimits {
-    pub task_coder: u64,
+    pub task_worker: u64,
     pub batch_reviewer: u64,
     /// `None`: an area has no limit of its own.
     pub max_per_area: Option<u64>,
@@ -162,7 +162,7 @@ impl WorkerLimits {
     /// The limit of `role`, `None` for a long-lived role.
     pub fn of(self, role: Role) -> Option<u64> {
         match role {
-            Role::TaskCoder => Some(self.task_coder),
+            Role::TaskWorker => Some(self.task_worker),
             Role::BatchReviewer => Some(self.batch_reviewer),
             Role::AreaLead | Role::ReviewLead => None,
         }
@@ -181,7 +181,7 @@ pub enum AreaLimitChange {
 /// A request to change the `[workers]` limits: a limit left out stays as it is.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct WorkerLimitsChange {
-    pub task_coder: Option<u64>,
+    pub task_worker: Option<u64>,
     pub batch_reviewer: Option<u64>,
     pub max_per_area: AreaLimitChange,
 }
@@ -189,7 +189,7 @@ pub struct WorkerLimitsChange {
 impl WorkerLimitsChange {
     /// The change a request asks for; a value together with a clear of the same limit is refused.
     pub fn from_request(
-        task_coder: Option<u64>,
+        task_worker: Option<u64>,
         batch_reviewer: Option<u64>,
         max_per_area: Option<u64>,
         clear_max_per_area: bool,
@@ -209,7 +209,7 @@ impl WorkerLimitsChange {
             (None, false) => AreaLimitChange::Keep,
         };
         Ok(Self {
-            task_coder,
+            task_worker,
             batch_reviewer,
             max_per_area,
         })
@@ -217,7 +217,7 @@ impl WorkerLimitsChange {
 
     /// Refuses a change that sets nothing. A limit has no upper bound, because how many workers a machine and a token budget carry is the user's choice, and a limit of 0 lets no worker of that role start.
     pub fn check(&self) -> Result<(), FoldError> {
-        if self.task_coder.is_none()
+        if self.task_worker.is_none()
             && self.batch_reviewer.is_none()
             && self.max_per_area == AreaLimitChange::Keep
         {
@@ -225,7 +225,7 @@ impl WorkerLimitsChange {
                 codes::INVALID_REQUEST,
                 "set_worker_limits needs at least one limit",
             )
-            .with_hint("pass task_coder, batch_reviewer, max_per_area or clear_max_per_area"));
+            .with_hint("pass task_worker, batch_reviewer, max_per_area or clear_max_per_area"));
         }
         Ok(())
     }
@@ -233,7 +233,7 @@ impl WorkerLimitsChange {
     /// The limits after the change.
     pub fn apply(&self, limits: WorkerLimits) -> WorkerLimits {
         WorkerLimits {
-            task_coder: self.task_coder.unwrap_or(limits.task_coder),
+            task_worker: self.task_worker.unwrap_or(limits.task_worker),
             batch_reviewer: self.batch_reviewer.unwrap_or(limits.batch_reviewer),
             max_per_area: match self.max_per_area {
                 AreaLimitChange::Keep => limits.max_per_area,
@@ -314,7 +314,7 @@ pub fn outside_area(label: &LabelName, tasks: &[(TaskId, Vec<LabelName>)]) -> Op
         .map(|(task, _)| *task)
 }
 
-/// The name fold gives a worker started without one: `<area>-lead`, `review-lead`, `<area>-coder` or `batch-reviewer`, with `-<n>` from the second name on. The area part is shortened so the name fits the agent name limit.
+/// The name fold gives a worker started without one: `<area>-lead`, `review-lead`, `<area>-worker` or `batch-reviewer`, with `-<n>` from the second name on. The area part is shortened so the name fits the agent name limit.
 pub fn default_worker_name(role: Role, area: Option<&AreaName>, attempt: u32) -> Option<AgentName> {
     let suffix = match attempt {
         0 | 1 => String::new(),
@@ -322,9 +322,9 @@ pub fn default_worker_name(role: Role, area: Option<&AreaName>, attempt: u32) ->
     };
     let (prefix, base) = match (role, area) {
         (Role::AreaLead, Some(area)) => (Some(area.as_str()), "lead"),
-        (Role::TaskCoder, Some(area)) => (Some(area.as_str()), "coder"),
+        (Role::TaskWorker, Some(area)) => (Some(area.as_str()), "worker"),
         (Role::AreaLead, None) => (None, "area-lead"),
-        (Role::TaskCoder, None) => (None, "task-coder"),
+        (Role::TaskWorker, None) => (None, "task-worker"),
         (Role::ReviewLead, _) => (None, "review-lead"),
         (Role::BatchReviewer, _) => (None, "batch-reviewer"),
     };
@@ -372,7 +372,7 @@ pub fn first_turn(facts: &StartFacts<'_>) -> String {
     let ids = |ids: Vec<String>| ids.join(", ");
     let line = match (facts.role, facts.area) {
         (Role::AreaLead, Some((area, label))) => format!(
-            "fold started you as {}, the area lead of area {area}, which owns the tasks labelled {label}. Read your tasks with get_task_graph, split them where needed and start task coders for ready tasks with start_worker.",
+            "fold started you as {}, the area lead of area {area}, which owns the tasks labelled {label}. Read your tasks with get_task_graph, split them where needed and start task workers for ready tasks with start_worker.",
             facts.name
         ),
         (Role::AreaLead, None) => format!("fold started you as {}, an area lead.", facts.name),
@@ -380,8 +380,8 @@ pub fn first_turn(facts: &StartFacts<'_>) -> String {
             "fold started you as {}, the review lead. Review the open proposals yourself or start a batch reviewer for related proposals with start_worker.",
             facts.name
         ),
-        (Role::TaskCoder, _) => format!(
-            "fold started you as {}, a task coder for {}. Read each task with get_task, claim it with claim_task and reuse its workspace when present. For a proposal task, work only in its task workspace and send create_proposal or update_proposal. For a no_proposal task, create no workspace and send report_task with verifiable evidence.",
+        (Role::TaskWorker, _) => format!(
+            "fold started you as {}, a task worker for {}. Read each task with get_task, claim it with claim_task and reuse its workspace when present. For a proposal task, work only in its task workspace and send create_proposal or update_proposal. For a no_proposal task, create no workspace and send report_task with verifiable evidence.",
             facts.name,
             ids(facts.tasks.iter().map(ToString::to_string).collect())
         ),
@@ -411,8 +411,8 @@ mod tests {
 
     #[test]
     fn a_limits_change_takes_any_number_and_needs_a_limit() {
-        let set = |task_coder| WorkerLimitsChange {
-            task_coder: Some(task_coder),
+        let set = |task_worker| WorkerLimitsChange {
+            task_worker: Some(task_worker),
             ..WorkerLimitsChange::default()
         };
         for value in [0, 1, 50, u64::from(u32::MAX)] {
@@ -424,26 +424,26 @@ mod tests {
         };
         assert!(area.check().is_ok());
         let none = WorkerLimits {
-            task_coder: 0,
+            task_worker: 0,
             batch_reviewer: 50,
             max_per_area: None,
         };
-        let zero = check_limits(none, Role::TaskCoder, 0, None).unwrap_err();
+        let zero = check_limits(none, Role::TaskWorker, 0, None).unwrap_err();
         assert_eq!(zero.code(), codes::WORKER_LIMIT_REACHED);
         assert_eq!(
             zero.hint(),
             Some(
-                "ask the main agent or a human to raise the task_coder limit with set_worker_limits"
+                "ask the main agent or a human to raise the task_worker limit with set_worker_limits"
             )
         );
         assert!(check_limits(none, Role::BatchReviewer, 49, None).is_ok());
         let web = AreaName::parse("web").unwrap();
         let closed = WorkerLimits {
-            task_coder: 4,
+            task_worker: 4,
             max_per_area: Some(0),
             ..none
         };
-        let zero = check_limits(closed, Role::TaskCoder, 0, Some((&web, 0))).unwrap_err();
+        let zero = check_limits(closed, Role::TaskWorker, 0, Some((&web, 0))).unwrap_err();
         assert_eq!(zero.code(), codes::WORKER_LIMIT_REACHED);
         assert_eq!(
             zero.hint(),
@@ -466,7 +466,7 @@ mod tests {
     #[test]
     fn a_limits_change_keeps_what_it_leaves_out() {
         let limits = WorkerLimits {
-            task_coder: 4,
+            task_worker: 4,
             batch_reviewer: 3,
             max_per_area: Some(2),
         };
@@ -474,7 +474,7 @@ mod tests {
         assert_eq!(
             change.apply(limits),
             WorkerLimits {
-                task_coder: 9,
+                task_worker: 9,
                 ..limits
             }
         );
@@ -522,13 +522,13 @@ mod tests {
     }
 
     #[test]
-    fn leads_and_batch_reviewers_cache_for_an_hour_and_coders_for_five_minutes() {
+    fn leads_and_batch_reviewers_cache_for_an_hour_and_task_workers_for_five_minutes() {
         assert_eq!(Role::AreaLead.default_cache_ttl(), CacheTtl::OneHour);
         assert_eq!(Role::ReviewLead.default_cache_ttl(), CacheTtl::OneHour);
         assert_eq!(Role::BatchReviewer.default_cache_ttl(), CacheTtl::OneHour);
-        assert_eq!(Role::TaskCoder.default_cache_ttl(), CacheTtl::FiveMinutes);
+        assert_eq!(Role::TaskWorker.default_cache_ttl(), CacheTtl::FiveMinutes);
         assert!(Role::AreaLead.is_long_lived() && Role::ReviewLead.is_long_lived());
-        assert!(!Role::TaskCoder.is_long_lived() && !Role::BatchReviewer.is_long_lived());
+        assert!(!Role::TaskWorker.is_long_lived() && !Role::BatchReviewer.is_long_lived());
     }
 
     #[test]
@@ -607,20 +607,20 @@ mod tests {
     #[test]
     fn limits_count_each_short_lived_role_and_never_a_lead() {
         let limits = WorkerLimits {
-            task_coder: 4,
+            task_worker: 4,
             batch_reviewer: 3,
             max_per_area: None,
         };
         let web = area("web");
-        assert!(check_limits(limits, Role::TaskCoder, 3, Some((&web, 3))).is_ok());
-        let full = check_limits(limits, Role::TaskCoder, 4, Some((&web, 4))).unwrap_err();
+        assert!(check_limits(limits, Role::TaskWorker, 3, Some((&web, 3))).is_ok());
+        let full = check_limits(limits, Role::TaskWorker, 4, Some((&web, 4))).unwrap_err();
         assert_eq!(full.code(), codes::WORKER_LIMIT_REACHED);
         assert_eq!(
             full.details().unwrap()["role"],
-            serde_json::json!("task_coder")
+            serde_json::json!("task_worker")
         );
         assert_eq!(full.details().unwrap()["max"], serde_json::json!(4));
-        assert!(full.hint().unwrap().contains("task_coder limit is 4"));
+        assert!(full.hint().unwrap().contains("task_worker limit is 4"));
         assert!(full.hint().unwrap().contains("set_worker_limits"));
         assert!(check_limits(limits, Role::BatchReviewer, 2, None).is_ok());
         let reviewers = check_limits(limits, Role::BatchReviewer, 3, None).unwrap_err();
@@ -638,9 +638,9 @@ mod tests {
             max_per_area: Some(2),
             ..limits
         };
-        assert!(check_limits(per_area, Role::TaskCoder, 3, Some((&web, 1))).is_ok());
-        assert!(check_limits(per_area, Role::TaskCoder, 3, None).is_ok());
-        let area_full = check_limits(per_area, Role::TaskCoder, 2, Some((&web, 2))).unwrap_err();
+        assert!(check_limits(per_area, Role::TaskWorker, 3, Some((&web, 1))).is_ok());
+        assert!(check_limits(per_area, Role::TaskWorker, 3, None).is_ok());
+        let area_full = check_limits(per_area, Role::TaskWorker, 2, Some((&web, 2))).unwrap_err();
         assert_eq!(area_full.code(), codes::WORKER_LIMIT_REACHED);
         assert_eq!(
             area_full.details().unwrap()["area"],
@@ -666,14 +666,17 @@ mod tests {
         let web = area("web");
         let name = |role, area, n| default_worker_name(role, area, n).unwrap().to_string();
         assert_eq!(name(Role::AreaLead, Some(&web), 1), "web-lead");
-        assert_eq!(name(Role::TaskCoder, Some(&web), 2), "web-coder-2");
+        assert_eq!(name(Role::TaskWorker, Some(&web), 2), "web-worker-2");
         assert_eq!(name(Role::ReviewLead, None, 1), "review-lead");
         assert_eq!(name(Role::BatchReviewer, None, 3), "batch-reviewer-3");
         assert_eq!(name(Role::AreaLead, None, 0), "area-lead");
-        assert_eq!(name(Role::TaskCoder, None, 0), "task-coder");
+        assert_eq!(name(Role::TaskWorker, None, 0), "task-worker");
         let long = area(&"a".repeat(32));
-        let coder = name(Role::TaskCoder, Some(&long), 12);
-        assert!(coder.len() <= 32 && coder.ends_with("-coder-12"), "{coder}");
+        let task_worker = name(Role::TaskWorker, Some(&long), 12);
+        assert!(
+            task_worker.len() <= 32 && task_worker.ends_with("-worker-12"),
+            "{task_worker}"
+        );
     }
 
     #[test]
@@ -691,7 +694,7 @@ mod tests {
         let web = area("web");
         let label = LabelName::parse("frontend").unwrap();
         let lead = AgentName::parse("web-lead").unwrap();
-        let coder = AgentName::parse("web-coder").unwrap();
+        let task_worker = AgentName::parse("web-worker").unwrap();
         let task = TaskId::from_number(4).unwrap();
         let proposal = ProposalId::from_number(2).unwrap();
         let lead_turn = first_turn(&StartFacts {
@@ -705,19 +708,19 @@ mod tests {
         assert!(lead_turn.contains("area lead of area web"));
         assert!(lead_turn.contains("labelled frontend"));
         assert!(lead_turn.ends_with("\n\nStart with the board."));
-        let coder_turn = first_turn(&StartFacts {
-            role: Role::TaskCoder,
-            name: &coder,
+        let task_worker_turn = first_turn(&StartFacts {
+            role: Role::TaskWorker,
+            name: &task_worker,
             area: Some((&web, &label)),
             tasks: &[task],
             proposals: &[],
             instructions: Some(" "),
         });
-        assert!(coder_turn.contains("task coder for T-4"));
-        assert!(!coder_turn.contains("\n\n"));
+        assert!(task_worker_turn.contains("task worker for T-4"));
+        assert!(!task_worker_turn.contains("\n\n"));
         let reviewer_turn = first_turn(&StartFacts {
             role: Role::BatchReviewer,
-            name: &coder,
+            name: &task_worker,
             area: None,
             tasks: &[],
             proposals: &[proposal],

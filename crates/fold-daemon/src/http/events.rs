@@ -305,7 +305,7 @@ pub struct PresenceChange {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct WorkerOutput {
     /// The worker's agent name.
-    #[schema(example = "web-coder")]
+    #[schema(example = "web-worker")]
     pub agent: String,
     /// Such as `init`, `thinking`, `text`, `tool_use`, `tool_result`, `permission_request`, `result` or `result_error`.
     #[schema(example = "tool_use")]
@@ -382,7 +382,7 @@ mod tests {
             LiveEvent::new(types::AGENT_PRESENCE_CHANGED, None, serde_json::json!({})).unwrap();
         assert!(live_frame(&bad).is_none());
         let output = WorkerOutput {
-            agent: "web-coder".into(),
+            agent: "web-worker".into(),
             step: "text".into(),
             tool: None,
             text_length: Some(4),

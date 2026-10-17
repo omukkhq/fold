@@ -200,8 +200,8 @@ mod tests {
         assert_eq!(paths.git_dir(), Path::new("/srv/demo/.git"));
         assert_eq!(paths.ws_dir(), Path::new("/srv/demo/.fold/ws"));
         assert_eq!(
-            paths.role_prompt(Role::TaskCoder),
-            Path::new("/srv/demo/.fold/roles/task_coder.md")
+            paths.role_prompt(Role::TaskWorker),
+            Path::new("/srv/demo/.fold/roles/task_worker.md")
         );
         assert_eq!(
             paths.main_role_prompt(),

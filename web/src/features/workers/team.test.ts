@@ -33,7 +33,7 @@ import {
   stopControl,
   teamGroups,
   workerPill,
-  waitsForCoders,
+  waitsForTaskWorkers,
   workerStep,
   workspaceOf,
   type TeamInput,
@@ -87,7 +87,7 @@ describe("pills", () => {
   it("names every role", () => {
     expect(roleName("area_lead")).toBe("Area lead");
     expect(roleName("review_lead")).toBe("Review lead");
-    expect(roleName("task_coder")).toBe("Task coder");
+    expect(roleName("task_worker")).toBe("Task worker");
     expect(roleName("batch_reviewer")).toBe("Batch reviewer");
   });
 
@@ -191,28 +191,30 @@ describe("steps", () => {
     ).toBe("exit code 101");
   });
 
-  it("says an idle lead waits for coders only while its coders start or work", () => {
+  it("says an idle lead waits for task workers only while its task workers start or work", () => {
     const lead = workerProcess("web-lead", { state: "idle" });
-    const coder = (state: "working" | "idle", by = "web-lead") =>
-      workerProcess("c", { role: "task_coder", started_by: by, state });
-    expect(workerStep(lead, {}, true).text).toBe("waiting for coders");
+    const taskWorker = (state: "working" | "idle", by = "web-lead") =>
+      workerProcess("c", { role: "task_worker", started_by: by, state });
+    expect(workerStep(lead, {}, true).text).toBe("waiting for task workers");
     expect(workerStep(lead, {}).text).toBe("waiting for its next turn");
-    expect(waitsForCoders(lead, [lead, coder("working")])).toBe(true);
-    expect(waitsForCoders(lead, [lead, coder("idle")])).toBe(false);
-    expect(waitsForCoders(lead, [lead, coder("working", "other")])).toBe(false);
+    expect(waitsForTaskWorkers(lead, [lead, taskWorker("working")])).toBe(true);
+    expect(waitsForTaskWorkers(lead, [lead, taskWorker("idle")])).toBe(false);
+    expect(
+      waitsForTaskWorkers(lead, [lead, taskWorker("working", "other")]),
+    ).toBe(false);
     const other = workerProcess("o", { started_by: "web-lead" });
-    expect(waitsForCoders(lead, [lead, other])).toBe(false);
-    const coderRow = coder("working");
-    expect(waitsForCoders(coderRow, [coderRow])).toBe(false);
+    expect(waitsForTaskWorkers(lead, [lead, other])).toBe(false);
+    const taskWorkerRow = taskWorker("working");
+    expect(waitsForTaskWorkers(taskWorkerRow, [taskWorkerRow])).toBe(false);
   });
 
   it("reads a role's model from the project config", () => {
     const roles = [
       { role: "area_lead", cache_ttl: "1h", model: "opus" },
-      { role: "task_coder", cache_ttl: "5m", model: null },
+      { role: "task_worker", cache_ttl: "5m", model: null },
     ] as const;
     expect(roleModel(roles, "area_lead")).toBe("opus");
-    expect(roleModel(roles, "task_coder")).toBeNull();
+    expect(roleModel(roles, "task_worker")).toBeNull();
     expect(roleModel(roles, "review_lead")).toBeNull();
     const [group] = teamGroups(
       input({
@@ -233,7 +235,7 @@ describe("steps", () => {
     expect(isPausedWorker("working", false)).toBe(false);
     const workers = [
       workerProcess("web-lead", { state: "working" }),
-      workerProcess("web-coder", { state: "stopped", role: "task_coder" }),
+      workerProcess("web-worker", { state: "stopped", role: "task_worker" }),
     ];
     const [group] = teamGroups(
       input({
@@ -266,12 +268,12 @@ describe("steps", () => {
 describe("lookups", () => {
   it("finds a worker's workspace on a task", () => {
     const agents = [
-      agent("web-coder", {
-        workers: [worker("web-coder", { workspaces: [workspace()] })],
+      agent("web-worker", {
+        workers: [worker("web-worker", { workspaces: [workspace()] })],
       }),
     ];
-    expect(workspaceOf(agents, "web-coder", "T-12")).toBe("ws-7");
-    expect(workspaceOf(agents, "web-coder", "T-99")).toBeNull();
+    expect(workspaceOf(agents, "web-worker", "T-12")).toBe("ws-7");
+    expect(workspaceOf(agents, "web-worker", "T-99")).toBeNull();
     expect(workspaceOf(agents, "other", "T-12")).toBeNull();
   });
 
@@ -305,20 +307,20 @@ describe("teamGroups", () => {
     areaEntry("api", "api", { model: "sonnet" }),
   ];
 
-  it("puts the main agent first, each area with its lead and coders, then review", () => {
+  it("puts the main agent first, each area with its lead and task workers, then review", () => {
     const groups = teamGroups(
       input({
         human: "tanim",
         agents: [
           agent("main"),
-          agent("web-coder", {
-            workers: [worker("web-coder", { workspaces: [workspace()] })],
+          agent("web-worker", {
+            workers: [worker("web-worker", { workspaces: [workspace()] })],
           }),
         ],
         labels: [{ name: "frontend", color: "slate" }],
         cards: [card("T-12", "frontend"), card("T-13", "frontend")],
-        questions: [permissionQuestion({ worker: "web-coder" })],
-        steps: { "web-coder": { step: "tool_use", tool: "Edit" } },
+        questions: [permissionQuestion({ worker: "web-worker" })],
+        steps: { "web-worker": { step: "tool_use", tool: "Edit" } },
         batches: [
           batch({
             holder: "review-b3",
@@ -329,8 +331,8 @@ describe("teamGroups", () => {
           areas,
           workers: [
             workerProcess("web-lead"),
-            workerProcess("web-coder", {
-              role: "task_coder",
+            workerProcess("web-worker", {
+              role: "task_worker",
               started_by: "web-lead",
               tasks: ["T-12", "T-13"],
               model: null,
@@ -363,12 +365,12 @@ describe("teamGroups", () => {
     expect(web?.owned).toBe(2);
     expect(web?.rows.map((r) => [r.name, r.child])).toEqual([
       ["web-lead", false],
-      ["web-coder", true],
+      ["web-worker", true],
     ]);
     expect(web?.rows[0]?.bound).toEqual({ kind: "text", text: "2 tasks" });
     expect(web?.rows[1]).toMatchObject({
-      role: "Task coder",
-      roleLine: "Task coder",
+      role: "Task worker",
+      roleLine: "Task worker",
       asks: true,
       model: "-",
       bound: { kind: "ids", text: "T-12 · ws-7, T-13", batch: null },
@@ -404,7 +406,7 @@ describe("teamGroups", () => {
         workers: workerList({
           workers: [
             workerProcess("lost-lead", { area: "gone" }),
-            workerProcess("lost-coder", { role: "task_coder", area: null }),
+            workerProcess("lost-worker", { role: "task_worker", area: null }),
             workerProcess("review", { role: "review_lead", area: null }),
             workerProcess("review-b9", {
               role: "batch_reviewer",
@@ -419,7 +421,7 @@ describe("teamGroups", () => {
     const rows = groups.flatMap((g) => g.rows);
     const bound = (name: string) => rows.find((r) => r.name === name)?.bound;
     expect(bound("lost-lead")).toEqual({ kind: "text", text: "-" });
-    expect(bound("lost-coder")).toEqual({ kind: "text", text: "-" });
+    expect(bound("lost-worker")).toEqual({ kind: "text", text: "-" });
     expect(bound("review")).toEqual({ kind: "text", text: "-" });
     expect(bound("review-b9")).toEqual({
       kind: "ids",
@@ -434,7 +436,7 @@ describe("teamGroups", () => {
     expect(unnamed?.rows.map((r) => r.child)).toEqual([true]);
   });
 
-  it("puts a coder another worker started under the last lead", () => {
+  it("puts a task worker another worker started under the last lead", () => {
     const groups = teamGroups(
       input({
         workers: workerList({
@@ -442,9 +444,9 @@ describe("teamGroups", () => {
           workers: [
             workerProcess("a", { state: "stopped" }),
             workerProcess("b"),
-            workerProcess("c", { role: "task_coder", started_by: "main" }),
-            workerProcess("d", { role: "task_coder", started_by: "a" }),
-            workerProcess("e", { role: "task_coder", started_by: "a/sub" }),
+            workerProcess("c", { role: "task_worker", started_by: "main" }),
+            workerProcess("d", { role: "task_worker", started_by: "a" }),
+            workerProcess("e", { role: "task_worker", started_by: "a/sub" }),
           ],
         }),
       }),

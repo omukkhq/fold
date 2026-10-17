@@ -79,7 +79,7 @@ impl Supervisor {
             .is_paused())
     }
 
-    /// Ends a pause that began at `paused_at`: each worker that was working, idle or starting runs again in its own session with [`PAUSE_TURN`], followed by the first turn a starting worker never read, the answer to a question a human answered during the pause, and the requested changes, conflicts and send-backs its coder missed; a worker left `stopping` ends `stopped`. The resumes, send-backs and fresh starts of lost sessions that the pause held back are then served. A row that cannot be served is logged and the next row is served.
+    /// Ends a pause that began at `paused_at`: each worker that was working, idle or starting runs again in its own session with [`PAUSE_TURN`], followed by the first turn a starting worker never read, the answer to a question a human answered during the pause, and the requested changes, conflicts and send-backs its task worker missed; a worker left `stopping` ends `stopped`. The resumes, send-backs and fresh starts of lost sessions that the pause held back are then served. A row that cannot be served is logged and the next row is served.
     pub(in crate::services::agents::workers) async fn resume_after_pause(
         &self,
         paused_at: fold_core::Timestamp,

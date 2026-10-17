@@ -751,7 +751,7 @@ async fn errors_carry_code_message_and_hint() {
     let fx = Fixture::new().await;
     let frontend = connect(&fx, "frontend").await;
     let review = connect(&fx, "review").await;
-    grant_role(&fx, "review", Role::TaskCoder).await;
+    grant_role(&fx, "review", Role::TaskWorker).await;
     open_p1(&fx, &frontend).await;
     for (client, tool, arguments, code, tool_in_hint) in [
         (

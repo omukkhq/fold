@@ -1001,15 +1001,15 @@ mod tests {
     #[test]
     fn the_starter_of_a_short_lived_worker_is_its_deputy() {
         let lead = Some(Requester::parse("web-lead").unwrap());
-        assert_eq!(deputy(Role::TaskCoder, "web-lead"), lead);
-        assert_eq!(deputy(Role::TaskCoder, "web-lead/sub"), lead);
+        assert_eq!(deputy(Role::TaskWorker, "web-lead"), lead);
+        assert_eq!(deputy(Role::TaskWorker, "web-lead/sub"), lead);
         assert_eq!(
             deputy(Role::BatchReviewer, "human:ana"),
             Requester::parse("human:ana")
         );
         assert_eq!(deputy(Role::AreaLead, "frontend"), None);
         assert_eq!(deputy(Role::ReviewLead, "human:ana"), None);
-        assert_eq!(deputy(Role::TaskCoder, "fold"), None);
-        assert_eq!(deputy(Role::TaskCoder, "not a label"), None);
+        assert_eq!(deputy(Role::TaskWorker, "fold"), None);
+        assert_eq!(deputy(Role::TaskWorker, "not a label"), None);
     }
 }

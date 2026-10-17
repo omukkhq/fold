@@ -36,7 +36,7 @@ pub(super) async fn check_running(
 
 fn limits_json(limits: WorkerLimits) -> Value {
     json!({
-        "task_coder": limits.task_coder,
+        "task_worker": limits.task_worker,
         "batch_reviewer": limits.batch_reviewer,
         "max_per_area": limits.max_per_area,
     })
@@ -92,8 +92,8 @@ fn edit(path: &Path, change: &WorkerLimitsChange) -> Result<Planned, FoldError> 
         .or_insert_with(|| Item::Table(Table::new()))
         .as_table_like_mut()
         .ok_or_else(|| FoldError::new(codes::INVALID_CONFIG, "workers must be a table"))?;
-    if let Some(limit) = change.task_coder {
-        set_number(section, "task_coder", limit)?;
+    if let Some(limit) = change.task_worker {
+        set_number(section, "task_worker", limit)?;
     }
     if let Some(limit) = change.batch_reviewer {
         set_number(section, "batch_reviewer", limit)?;
@@ -238,9 +238,9 @@ impl AgentService {
 mod tests {
     use super::*;
 
-    fn change(task_coder: u64) -> WorkerLimitsChange {
+    fn change(task_worker: u64) -> WorkerLimitsChange {
         WorkerLimitsChange {
-            task_coder: Some(task_coder),
+            task_worker: Some(task_worker),
             ..WorkerLimitsChange::default()
         }
     }
@@ -254,16 +254,16 @@ mod tests {
             changed,
         } = edit(&dir.path().join("config.toml"), &change(7)).unwrap();
         assert_eq!(original, None);
-        assert_eq!(text.as_deref(), Some("[workers]\ntask_coder = 7\n"));
+        assert_eq!(text.as_deref(), Some("[workers]\ntask_worker = 7\n"));
         assert_eq!(
             changed.old,
             WorkerLimits {
-                task_coder: 4,
+                task_worker: 4,
                 batch_reviewer: 3,
                 max_per_area: None
             }
         );
-        assert_eq!(changed.new.task_coder, 7);
+        assert_eq!(changed.new.task_worker, 7);
     }
 
     #[test]
@@ -272,7 +272,7 @@ mod tests {
         let path = dir.path().join("config.toml");
         std::fs::write(
             &path,
-            "# top\n[workers]\nmax_per_area = 2 # per area\ntask_coder = 3\n",
+            "# top\n[workers]\nmax_per_area = 2 # per area\ntask_worker = 3\n",
         )
         .unwrap();
         let clear = WorkerLimitsChange {
@@ -280,7 +280,7 @@ mod tests {
             ..WorkerLimitsChange::default()
         };
         let Planned { text, changed, .. } = edit(&path, &clear).unwrap();
-        assert_eq!(text.as_deref(), Some("# top\n[workers]\ntask_coder = 3\n"));
+        assert_eq!(text.as_deref(), Some("# top\n[workers]\ntask_worker = 3\n"));
         assert_eq!(changed.old.max_per_area, Some(2));
         assert_eq!(changed.new.max_per_area, None);
     }
@@ -289,14 +289,14 @@ mod tests {
     fn a_file_that_is_not_valid_is_refused_and_left_alone() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        std::fs::write(&path, "[workers]\ntask_coder = -1\n").unwrap();
+        std::fs::write(&path, "[workers]\ntask_worker = -1\n").unwrap();
         let Err(error) = edit(&path, &change(2)) else {
             panic!("a negative limit is not a valid file");
         };
         assert_eq!(error.code(), codes::INVALID_CONFIG);
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
-            "[workers]\ntask_coder = -1\n"
+            "[workers]\ntask_worker = -1\n"
         );
     }
 
@@ -314,18 +314,18 @@ mod tests {
     fn a_change_to_the_same_numbers_plans_no_text() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        std::fs::write(&path, "[workers]\ntask_coder = 5\n").unwrap();
+        std::fs::write(&path, "[workers]\ntask_worker = 5\n").unwrap();
         let planned = edit(&path, &change(5)).unwrap();
         assert_eq!(planned.text, None);
         assert_eq!(planned.changed.old, planned.changed.new);
-        assert_eq!(planned.changed.new.task_coder, 5);
+        assert_eq!(planned.changed.new.task_worker, 5);
     }
 
     #[test]
     fn a_restore_puts_the_old_file_back_or_removes_a_new_one() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        std::fs::write(&path, "[workers]\ntask_coder = 9\n").unwrap();
+        std::fs::write(&path, "[workers]\ntask_worker = 9\n").unwrap();
         restore(&path, Some("# old\n")).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "# old\n");
         restore(&path, None).unwrap();

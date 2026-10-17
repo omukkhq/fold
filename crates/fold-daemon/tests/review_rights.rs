@@ -31,8 +31,8 @@ enum Who {
     Human,
     /// `web-lead`, the lead of area `web`.
     AreaLead,
-    /// `web-coder`, a task coder of area `web`.
-    TaskCoder,
+    /// `web-worker`, a task worker of area `web`.
+    TaskWorker,
     /// `backend`, which wrote `P-1`; it is a batch reviewer, so only its authorship refuses it.
     Author,
 }
@@ -44,7 +44,7 @@ const EVERYONE: [Who; 7] = [
     Who::BatchReviewer,
     Who::Human,
     Who::AreaLead,
-    Who::TaskCoder,
+    Who::TaskWorker,
     Who::Author,
 ];
 
@@ -57,7 +57,7 @@ impl Who {
             Who::BatchReviewer => Some("reviewer-1"),
             Who::Human => None,
             Who::AreaLead => Some("web-lead"),
-            Who::TaskCoder => Some("web-coder"),
+            Who::TaskWorker => Some("web-worker"),
             Who::Author => Some("backend"),
         }
     }
@@ -84,7 +84,7 @@ async fn register(fx: &Fixture, name: &str, tags: &[&str]) -> Actor {
 }
 
 #[cfg(test)]
-/// The main agent, the area `web` over label `ui` with its lead, two task coders of the area, the review lead, a batch reviewer and the author `backend`, whose `P-1` on `T-1` is open.
+/// The main agent, the area `web` over label `ui` with its lead, two task workers of the area, the review lead, a batch reviewer and the author `backend`, whose `P-1` on `T-1` is open.
 async fn scene() -> Fixture {
     let fx = Fixture::new().await;
     register(&fx, "main", &["main"]).await;
@@ -109,8 +109,8 @@ async fn scene() -> Fixture {
     let store = &fx.handle.store;
     for (name, role, area) in [
         ("web-lead", Role::AreaLead, Some("web")),
-        ("web-coder", Role::TaskCoder, Some("web")),
-        ("web-coder-2", Role::TaskCoder, Some("web")),
+        ("web-worker", Role::TaskWorker, Some("web")),
+        ("web-worker-2", Role::TaskWorker, Some("web")),
         ("review-lead", Role::ReviewLead, None),
         ("reviewer-1", Role::BatchReviewer, None),
         ("backend", Role::BatchReviewer, None),
@@ -203,7 +203,7 @@ async fn a_verdict_that_decides_follows_the_role() {
 #[tokio::test]
 async fn any_reviewer_but_the_author_comments_and_asks_for_changes() {
     let fx = scene().await;
-    for who in [Who::AreaLead, Who::TaskCoder, Who::ReviewLead, Who::Human] {
+    for who in [Who::AreaLead, Who::TaskWorker, Who::ReviewLead, Who::Human] {
         let acting = actor(&fx, who).await;
         fx.reviews()
             .submit_review(&acting, p(1), 1, Verdict::Comment, "a note", Vec::new())
@@ -329,28 +329,28 @@ async fn integration_follows_the_role() {
 }
 
 #[cfg(test)]
-/// Who removes `T-2` while `web-coder` holds it: the holder's agent through any of its workers, its area lead and a human.
+/// Who removes `T-2` while `web-worker` holds it: the holder's agent through any of its workers, its area lead and a human.
 const REMOVERS: [(&str, bool); 9] = [
-    ("web-coder", true),
+    ("web-worker", true),
     ("web-lead", true),
     ("human", true),
     ("main", false),
     ("review-lead", false),
     ("reviewer-1", false),
-    ("web-coder-2", false),
+    ("web-worker-2", false),
     ("backend", false),
-    ("web-coder/tests", true),
+    ("web-worker/tests", true),
 ];
 
 #[cfg(test)]
 async fn remover(fx: &Fixture, name: &str) -> Actor {
     match name {
         "human" => human("tanim"),
-        "web-coder/tests" => {
+        "web-worker/tests" => {
             let agents = fx.agents();
             let mut session = agents.start_session(1).await.unwrap();
             agents
-                .register_agent(&mut session, &AgentName::parse("web-coder").unwrap(), &[])
+                .register_agent(&mut session, &AgentName::parse("web-worker").unwrap(), &[])
                 .await
                 .unwrap();
             agents
@@ -360,7 +360,7 @@ async fn remover(fx: &Fixture, name: &str) -> Actor {
             agents
                 .actor(
                     &session,
-                    Some(&fold_core::WorkerName::parse("web-coder/tests").unwrap()),
+                    Some(&fold_core::WorkerName::parse("web-worker/tests").unwrap()),
                 )
                 .await
                 .unwrap()
@@ -380,7 +380,7 @@ async fn held_by(fx: &Fixture, holder: &str) {
 async fn a_held_task_is_archived_only_by_its_holder_its_lead_or_a_human() {
     for (name, allowed) in REMOVERS {
         let fx = scene().await;
-        held_by(&fx, "web-coder").await;
+        held_by(&fx, "web-worker").await;
         let acting = remover(&fx, name).await;
         let result = fx.handle.tasks.archive_task(&acting, t(2)).await;
         if allowed {
@@ -395,7 +395,7 @@ async fn a_held_task_is_archived_only_by_its_holder_its_lead_or_a_human() {
                 fold_store::tasks::claims::unreleased_for_task(fx.handle.store.read(), t(2))
                     .await
                     .unwrap();
-            assert_eq!(claim.unwrap().worker.as_str(), "web-coder", "{name}");
+            assert_eq!(claim.unwrap().worker.as_str(), "web-worker", "{name}");
         }
     }
 }
@@ -404,7 +404,7 @@ async fn a_held_task_is_archived_only_by_its_holder_its_lead_or_a_human() {
 async fn a_held_task_is_deleted_only_by_its_holder_its_lead_or_a_human() {
     for (name, allowed) in REMOVERS {
         let fx = scene().await;
-        held_by(&fx, "web-coder").await;
+        held_by(&fx, "web-worker").await;
         let acting = remover(&fx, name).await;
         let result = fx.handle.tasks.delete_task(&acting, t(2)).await;
         if allowed {
@@ -443,14 +443,18 @@ async fn the_review_lead_removes_a_task_its_batch_reviewer_holds() {
 #[tokio::test]
 async fn a_task_nobody_holds_is_removed_by_any_agent() {
     let fx = scene().await;
-    let coder = agent_actor(&fx, "web-coder-2").await;
-    fx.handle.tasks.archive_task(&coder, t(2)).await.unwrap();
+    let task_worker = agent_actor(&fx, "web-worker-2").await;
+    fx.handle
+        .tasks
+        .archive_task(&task_worker, t(2))
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
 async fn deleting_a_held_task_releases_its_claim_with_an_event() {
     let fx = scene().await;
-    held_by(&fx, "web-coder").await;
+    held_by(&fx, "web-worker").await;
     let lead = agent_actor(&fx, "web-lead").await;
     fx.handle.tasks.delete_task(&lead, t(2)).await.unwrap();
     let released: Vec<_> =
@@ -465,7 +469,7 @@ async fn deleting_a_held_task_releases_its_claim_with_an_event() {
     assert_eq!(released[0].task, Some(t(2)));
     assert_eq!(
         released[0].data,
-        serde_json::json!({"kind": "implementation", "worker": "web-coder", "reason": "task_deleted"})
+        serde_json::json!({"kind": "implementation", "worker": "web-worker", "reason": "task_deleted"})
     );
     let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM claims")
         .fetch_one(fx.handle.store.read())

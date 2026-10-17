@@ -398,7 +398,7 @@ async fn one_agent_that_fold_did_not_start_holds_the_main_tag() {
 }
 
 #[tokio::test]
-async fn the_lead_decides_on_the_request_of_its_stopped_coder() {
+async fn the_lead_decides_on_the_request_of_its_stopped_task_worker() {
     let fake = FakeClaude::new("result");
     let mut h = Harness::start_with_launcher(fake.launcher.clone()).await;
     make_main(&h, MAIN).await;
@@ -422,21 +422,27 @@ async fn the_lead_decides_on_the_request_of_its_stopped_coder() {
     h.call(
         "web-lead",
         "start_worker",
-        json!({"role": "task_coder", "tasks": ["T-1"]}),
+        json!({"role": "task_worker", "tasks": ["T-1"]}),
     )
     .await;
-    h.connect("web-coder").await;
+    h.connect("web-worker").await;
     h.call(
-        "web-coder",
+        "web-worker",
         "create_request",
         json!({"body": "The page header overlaps the menu"}),
     )
     .await;
-    h.call("web-lead", "stop_worker", json!({"name": "web-coder"}))
+    h.call("web-lead", "stop_worker", json!({"name": "web-worker"}))
         .await;
-    let coder = AgentName::parse("web-coder").unwrap();
+    let task_worker = AgentName::parse("web-worker").unwrap();
     eventually(WAIT, async || {
-        let state = h.handle.agents().get_worker(&coder).await.unwrap().state;
+        let state = h
+            .handle
+            .agents()
+            .get_worker(&task_worker)
+            .await
+            .unwrap()
+            .state;
         if state.is_running() {
             Err(state)
         } else {

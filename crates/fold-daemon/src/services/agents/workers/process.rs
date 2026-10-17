@@ -111,7 +111,7 @@ struct Inner {
     watch: Mutex<Option<JoinHandle<()>>>,
     /// The leads whose fresh start is under way, so a note and a turn end that both ask for it start one session.
     refreshing: Mutex<HashSet<AgentName>>,
-    /// Held while a coder is resumed, so two events that resume the same coder start it once.
+    /// Held while a task worker is resumed, so two events that resume the same task worker start it once.
     resuming: tokio::sync::Mutex<()>,
     /// The live `can_use_tool` requests that wait for each open question, by the question's row id.
     pending: Mutex<HashMap<i64, Vec<Waiter>>>,

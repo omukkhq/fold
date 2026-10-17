@@ -172,7 +172,7 @@ impl fmt::Display for HoldReason {
     }
 }
 
-/// The hold mark of a task, which the board labels Blocker: while it is on, no agent claims the task and no lead starts a coder for it, until a person says the work can start. It is set by hand with a reason, unlike `tasks.blocked`, which recompute calculates from unfinished prerequisites. It never changes the task's status.
+/// The hold mark of a task, which the board labels Blocker: while it is on, no agent claims the task and no lead starts a task worker for it, until a person says the work can start. It is set by hand with a reason, unlike `tasks.blocked`, which recompute calculates from unfinished prerequisites. It never changes the task's status.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HoldMark {
     pub reason: HoldReason,
@@ -260,7 +260,7 @@ define_names!(
 );
 
 define_names!(
-    /// How a task's work reaches Done. A `proposal` task is done when its proposal integrates; a `no_proposal` task changes no project file, such as design work done through an MCP server, so its coder reports the work and a lead check completes it; a `human` task is work only a person can do outside every agent, such as verifying an account with a provider, so no agent takes it and a person marks it Done.
+    /// How a task's work reaches Done. A `proposal` task is done when its proposal integrates; a `no_proposal` task changes no project file, such as design work done through an MCP server, so its task worker reports the work and a lead check completes it; a `human` task is work only a person can do outside every agent, such as verifying an account with a provider, so no agent takes it and a person marks it Done.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub enum TaskKind {
         Proposal = "proposal",

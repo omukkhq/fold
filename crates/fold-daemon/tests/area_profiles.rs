@@ -71,7 +71,7 @@ async fn design_area(h: &mut Harness, profile: Value) -> Value {
     std::fs::write(Path::new(h.root()).join(".mcp.json"), PROJECT_MCP).unwrap();
     std::fs::write(
         Path::new(h.root()).join(".fold/config.toml"),
-        "[roles.task_coder]\nmodel = \"haiku\"\nmcp = [\"fold\"]\n",
+        "[roles.task_worker]\nmodel = \"haiku\"\nmcp = [\"fold\"]\n",
     )
     .unwrap();
     h.call(
@@ -105,8 +105,8 @@ async fn design_area(h: &mut Harness, profile: Value) -> Value {
     defined
 }
 
-async fn start_coder(h: &Harness, task: &str, extra: Value) -> String {
-    let mut start = json!({"role": "task_coder", "tasks": [task]});
+async fn start_task_worker(h: &Harness, task: &str, extra: Value) -> String {
+    let mut start = json!({"role": "task_worker", "tasks": [task]});
     start
         .as_object_mut()
         .unwrap()
@@ -116,7 +116,7 @@ async fn start_coder(h: &Harness, task: &str, extra: Value) -> String {
 }
 
 #[tokio::test]
-async fn a_task_coder_of_the_design_area_starts_with_the_areas_servers_model_and_instructions() {
+async fn a_task_worker_of_the_design_area_starts_with_the_areas_servers_model_and_instructions() {
     let fake = FakeClaude::new("result");
     let mut h = Harness::start_with_launcher(fake.launcher.clone()).await;
     h.make_main(MAIN).await;
@@ -142,8 +142,9 @@ async fn a_task_coder_of_the_design_area_starts_with_the_areas_servers_model_and
     assert_eq!(servers(&lead), ["fold", "pencil"]);
     assert!(prompt(&lead).ends_with("\n\nDraw screens in Pencil.\n"));
 
-    let coder = start_coder(&h, "T-1", json!({"instructions": "Start with the form."})).await;
-    let run = first_run(&fake, &coder).await;
+    let task_worker =
+        start_task_worker(&h, "T-1", json!({"instructions": "Start with the form."})).await;
+    let run = first_run(&fake, &task_worker).await;
     assert_eq!(run.flag("--model"), Some("opus"));
     assert!(run.has("--strict-mcp-config"));
     assert_eq!(servers(&run), ["fold", "pencil"]);
@@ -155,12 +156,12 @@ async fn a_task_coder_of_the_design_area_starts_with_the_areas_servers_model_and
         json!({"command": "pencil", "args": ["--stdio"]})
     );
     let text = prompt(&run);
-    assert!(text.starts_with(fold_core::Role::TaskCoder.prompt().trim_end()));
+    assert!(text.starts_with(fold_core::Role::TaskWorker.prompt().trim_end()));
     assert!(text.contains("## Area design"), "{text}");
     assert!(text.ends_with("\n\nDraw screens in Pencil.\n"));
     assert!(run.stdin[1].contains("Start with the form."));
 
-    let own = start_coder(&h, "T-2", json!({"model": "sonnet"})).await;
+    let own = start_task_worker(&h, "T-2", json!({"model": "sonnet"})).await;
     let run = first_run(&fake, &own).await;
     assert_eq!(run.flag("--model"), Some("sonnet"));
     assert_eq!(servers(&run), ["fold", "pencil"]);
@@ -176,7 +177,7 @@ async fn a_changed_profile_reaches_the_next_start_and_never_a_running_worker() {
     let mut h = Harness::start_with_launcher(fake.launcher.clone()).await;
     h.make_main(MAIN).await;
     design_area(&mut h, json!({"model": "opus", "mcp": ["fold", "pencil"]})).await;
-    let first = start_coder(&h, "T-1", json!({})).await;
+    let first = start_task_worker(&h, "T-1", json!({})).await;
     let before = first_run(&fake, &first).await;
     let running = until_state(&h, &first, WorkerState::Idle).await;
     let first_config = std::fs::read_to_string(before.flag("--mcp-config").unwrap()).unwrap();
@@ -200,7 +201,7 @@ async fn a_changed_profile_reaches_the_next_start_and_never_a_running_worker() {
         first_config
     );
 
-    let second = start_coder(&h, "T-2", json!({})).await;
+    let second = start_task_worker(&h, "T-2", json!({})).await;
     let run = first_run(&fake, &second).await;
     assert_eq!(run.flag("--model"), Some("sonnet"));
     assert_eq!(servers(&run), ["browser", "fold"]);
@@ -215,11 +216,11 @@ async fn a_changed_profile_reaches_the_next_start_and_never_a_running_worker() {
         .await;
     assert_eq!(cleared["area"]["model"], Value::Null);
     assert_eq!(cleared["area"]["mcp"], Value::Null);
-    let third = start_coder(&h, "T-1", json!({})).await;
+    let third = start_task_worker(&h, "T-1", json!({})).await;
     let run = first_run(&fake, &third).await;
     assert_eq!(run.flag("--model"), Some("haiku"));
     assert_eq!(servers(&run), ["fold"]);
-    assert_eq!(prompt(&run), fold_core::Role::TaskCoder.prompt());
+    assert_eq!(prompt(&run), fold_core::Role::TaskWorker.prompt());
 
     let changes: Vec<Value> = h
         .events()
@@ -244,10 +245,10 @@ async fn a_project_role_prompt_comes_before_the_area_instructions() {
     h.make_main(MAIN).await;
     let roles = Path::new(h.root()).join(".fold/roles");
     std::fs::create_dir_all(&roles).unwrap();
-    std::fs::write(roles.join("task_coder.md"), "You draw for this project.\n").unwrap();
+    std::fs::write(roles.join("task_worker.md"), "You draw for this project.\n").unwrap();
     design_area(&mut h, json!({"instructions": "Draw screens in Pencil."})).await;
-    let coder = start_coder(&h, "T-1", json!({})).await;
-    let run = first_run(&fake, &coder).await;
+    let task_worker = start_task_worker(&h, "T-1", json!({})).await;
+    let run = first_run(&fake, &task_worker).await;
     let text = prompt(&run);
     assert!(
         text.starts_with("You draw for this project.\n\n## Authority and recovery"),

@@ -249,7 +249,7 @@ async fn a_command_in_a_workers_bash_binds_only_to_the_workers_own_agent() {
     let (answer, _, _) = handshake_as(&host, bash, Some("main")).await;
     assert_eq!(answer, Answer::accepted("app"), "no worker runs yet");
 
-    host.record_worker("web-coder", fake.worker).await;
+    host.record_worker("web-worker", fake.worker).await;
     let terminal = SocketPeer {
         pid: Some(std::process::id()),
     };
@@ -264,10 +264,10 @@ async fn a_command_in_a_workers_bash_binds_only_to_the_workers_own_agent() {
     assert_eq!(error.code, "worker_peer_refused");
     assert_eq!(
         host.refusals().await,
-        [json!({"agent": "review-lead", "worker": "web-coder", "pid": fake.descendant})]
+        [json!({"agent": "review-lead", "worker": "web-worker", "pid": fake.descendant})]
     );
 
-    let (answer, _, _) = handshake_as(&host, bash, Some("web-coder")).await;
+    let (answer, _, _) = handshake_as(&host, bash, Some("web-worker")).await;
     assert_eq!(
         answer,
         Answer::accepted("app"),
@@ -319,11 +319,11 @@ async fn the_kernel_pid_decides_and_is_the_pid_the_session_records() {
         "not the pid the handshake line claims"
     );
 
-    host.record_worker("web-coder", me).await;
+    host.record_worker("web-worker", me).await;
     let refused = socket_handshake(&host, Some("main")).await;
     assert_eq!(refused.error.unwrap().code, "worker_peer_refused");
     assert_eq!(
-        socket_handshake(&host, Some("web-coder")).await,
+        socket_handshake(&host, Some("web-worker")).await,
         Answer::accepted("app")
     );
     host.daemon.shutdown().await;
@@ -340,7 +340,7 @@ async fn a_human_name_from_a_workers_process_tree_is_refused_over_the_socket() {
         "the user's terminal gets past the human check"
     );
 
-    host.record_worker("web-coder", std::process::id()).await;
+    host.record_worker("web-worker", std::process::id()).await;
     let (status, code) = socket_http(&host, "POST", feedback, "x", "{}").await;
     assert_eq!((status, code.as_str()), (403, "worker_peer_refused"));
     let (status, _) = socket_http(&host, "GET", "/api/v1/projects", "x", "").await;
@@ -351,7 +351,7 @@ async fn a_human_name_from_a_workers_process_tree_is_refused_over_the_socket() {
 #[tokio::test]
 async fn a_hook_from_a_workers_process_tree_names_only_the_workers_own_agent() {
     let host = Host::start().await;
-    host.record_worker("web-coder", std::process::id()).await;
+    host.record_worker("web-worker", std::process::id()).await;
     let body = |agent: &str| json!({"cwd": host.root, "agent": agent}).to_string();
     for hook in ["/api/v1/hooks/stop", "/api/v1/hooks/session-start"] {
         let (status, code) = socket_http(&host, "POST", hook, "x", &body("main")).await;
@@ -360,7 +360,7 @@ async fn a_hook_from_a_workers_process_tree_names_only_the_workers_own_agent() {
             (403, "worker_peer_refused"),
             "{hook}"
         );
-        let (status, _) = socket_http(&host, "POST", hook, "x", &body("web-coder")).await;
+        let (status, _) = socket_http(&host, "POST", hook, "x", &body("web-worker")).await;
         assert_eq!(status, 200, "{hook}");
     }
     host.daemon.shutdown().await;

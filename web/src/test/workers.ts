@@ -67,7 +67,7 @@ export function permissionQuestion(
 ): WorkerQuestion {
   return {
     id: "pq-3",
-    worker: "web-coder",
+    worker: "web-worker",
     tool: "Bash",
     input: {},
     asked_at: 1_760_000_000_000,
@@ -139,7 +139,7 @@ export function proposalSummary(
     id,
     task: "T-12",
     title: `Proposal ${id}`,
-    author: "web-coder",
+    author: "web-worker",
     state: "open",
     current_version: 1,
     latest_verdict: null,

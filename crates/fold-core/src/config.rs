@@ -31,11 +31,11 @@ pub struct ProjectConfig {
     pub roles: BTreeMap<String, RoleConfig>,
 }
 
-/// The `[workers]` section: how many short-lived workers of each role fold runs at once, and optionally how many task coders in one area. The leads are outside these limits. A limit of 0 lets no worker of its role start.
+/// The `[workers]` section: how many short-lived workers of each role fold runs at once, and optionally how many task workers in one area. The leads are outside these limits. A limit of 0 lets no worker of its role start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct WorkersConfig {
-    pub task_coder: u64,
+    pub task_worker: u64,
     pub batch_reviewer: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_per_area: Option<u64>,
@@ -44,7 +44,7 @@ pub struct WorkersConfig {
 impl Default for WorkersConfig {
     fn default() -> Self {
         Self {
-            task_coder: 4,
+            task_worker: 4,
             batch_reviewer: 3,
             max_per_area: None,
         }
@@ -54,7 +54,7 @@ impl Default for WorkersConfig {
 impl WorkersConfig {
     pub fn limits(self) -> WorkerLimits {
         WorkerLimits {
-            task_coder: self.task_coder,
+            task_worker: self.task_worker,
             batch_reviewer: self.batch_reviewer,
             max_per_area: self.max_per_area,
         }
@@ -375,8 +375,13 @@ fn check_workers_section(value: &toml::Value) -> Result<(), FoldError> {
     for (key, value) in table {
         let name = format!("{WORKERS_SECTION}.{key}");
         match key.as_str() {
-            "task_coder" | "batch_reviewer" | "max_per_area" => check_limit(&name, value)?,
-            _ => return Err(refused(&name, "is not a config key")),
+            "task_worker" | "batch_reviewer" | "max_per_area" => check_limit(&name, value)?,
+            _ => {
+                return Err(refused(
+                    &name,
+                    "is not a config key: use task_worker, batch_reviewer or max_per_area",
+                ));
+            }
         }
     }
     Ok(())
@@ -391,7 +396,7 @@ fn check_roles_section(value: &toml::Value) -> Result<(), FoldError> {
         let role = Role::parse(role_name).ok_or_else(|| {
             refused(
                 &section,
-                "is not a role: use area_lead, review_lead, task_coder or batch_reviewer",
+                "is not a role: use area_lead, review_lead, task_worker or batch_reviewer",
             )
         })?;
         let fields = value
@@ -412,7 +417,7 @@ fn check_roles_section(value: &toml::Value) -> Result<(), FoldError> {
                 "idle_minutes" if role.is_long_lived() => {
                     return Err(refused(
                         &name,
-                        "applies only to task_coder and batch_reviewer",
+                        "applies only to task_worker and batch_reviewer",
                     ));
                 }
                 "idle_minutes" => check_positive(&name, value)?,
@@ -585,35 +590,35 @@ mod tests {
     #[test]
     fn the_workers_and_roles_sections_set_limits_and_role_settings() {
         let config = ProjectConfig::from_toml(
-            "[workers]\ntask_coder = 5\nbatch_reviewer = 2\nmax_per_area = 1\n[roles.task_coder]\nmodel = \"sonnet\"\ncache_ttl = \"1h\"\nidle_minutes = 3\nmcp = [\"fold\", \"pencil\"]\n[roles.area_lead]\ncache_ttl = \"5m\"\n",
+            "[workers]\ntask_worker = 5\nbatch_reviewer = 2\nmax_per_area = 1\n[roles.task_worker]\nmodel = \"sonnet\"\ncache_ttl = \"1h\"\nidle_minutes = 3\nmcp = [\"fold\", \"pencil\"]\n[roles.area_lead]\ncache_ttl = \"5m\"\n",
         )
         .unwrap();
         assert_eq!(
             config.workers.limits(),
             WorkerLimits {
-                task_coder: 5,
+                task_worker: 5,
                 batch_reviewer: 2,
                 max_per_area: Some(1)
             }
         );
         let open = ProjectConfig::from_toml(
-            "[workers]\ntask_coder = 0\nbatch_reviewer = 500\nmax_per_area = 0\n",
+            "[workers]\ntask_worker = 0\nbatch_reviewer = 500\nmax_per_area = 0\n",
         )
         .unwrap();
         assert_eq!(
             open.workers.limits(),
             WorkerLimits {
-                task_coder: 0,
+                task_worker: 0,
                 batch_reviewer: 500,
                 max_per_area: Some(0)
             }
         );
-        let coder = config.role(Role::TaskCoder);
-        assert_eq!(coder.model.as_deref(), Some("sonnet"));
-        assert_eq!(coder.cache_ttl, CacheTtl::OneHour);
-        assert_eq!(coder.idle_minutes, Some(3));
+        let task_worker = config.role(Role::TaskWorker);
+        assert_eq!(task_worker.model.as_deref(), Some("sonnet"));
+        assert_eq!(task_worker.cache_ttl, CacheTtl::OneHour);
+        assert_eq!(task_worker.idle_minutes, Some(3));
         assert_eq!(
-            coder.mcp,
+            task_worker.mcp,
             Some(vec!["fold".to_owned(), "pencil".to_owned()])
         );
         assert_eq!(config.role(Role::AreaLead).cache_ttl, CacheTtl::FiveMinutes);
@@ -621,7 +626,7 @@ mod tests {
         assert_eq!(
             defaults.workers.limits(),
             WorkerLimits {
-                task_coder: 4,
+                task_worker: 4,
                 batch_reviewer: 3,
                 max_per_area: None
             }
@@ -634,7 +639,7 @@ mod tests {
         assert_eq!(lead.idle_minutes, None);
         assert_eq!(lead.model, None);
         assert_eq!(
-            defaults.role(Role::TaskCoder).cache_ttl,
+            defaults.role(Role::TaskWorker).cache_ttl,
             CacheTtl::FiveMinutes
         );
     }
@@ -647,12 +652,12 @@ mod tests {
             config.role(Role::AreaLead).handoff_at,
             Some(DEFAULT_HANDOFF_AT)
         );
-        assert_eq!(config.role(Role::TaskCoder).handoff_at, None);
+        assert_eq!(config.role(Role::TaskWorker).handoff_at, None);
         assert_eq!(config.role(Role::BatchReviewer).handoff_at, None);
         for (text, key) in [
             (
-                "[roles.task_coder]\nhandoff_at = 50",
-                "roles.task_coder.handoff_at",
+                "[roles.task_worker]\nhandoff_at = 50",
+                "roles.task_worker.handoff_at",
             ),
             (
                 "[roles.area_lead]\nhandoff_at = 0",
@@ -681,7 +686,7 @@ mod tests {
     fn a_wrong_value_in_the_workers_or_roles_sections_is_invalid_config() {
         for (text, key) in [
             ("workers = 3", "workers"),
-            ("[workers]\ntask_coder = -1", "workers.task_coder"),
+            ("[workers]\ntask_worker = -1", "workers.task_worker"),
             ("[workers]\nbatch_reviewer = -1", "workers.batch_reviewer"),
             ("[workers]\nmax_per_area = 1.5", "workers.max_per_area"),
             ("[workers]\nmax = 3", "workers.max"),
@@ -689,32 +694,35 @@ mod tests {
             ("[workers]\nmin = 1", "workers.min"),
             ("roles = 3", "roles"),
             ("[roles]\nmain = {}", "roles.main"),
-            ("[roles]\ntask_coder = 3", "roles.task_coder"),
+            ("[roles]\ntask_worker = 3", "roles.task_worker"),
             (
-                "[roles.task_coder]\nmodel = \"-x\"",
-                "roles.task_coder.model",
+                "[roles.task_worker]\nmodel = \"-x\"",
+                "roles.task_worker.model",
             ),
-            ("[roles.task_coder]\nmodel = 3", "roles.task_coder.model"),
+            ("[roles.task_worker]\nmodel = 3", "roles.task_worker.model"),
             (
-                "[roles.task_coder]\ncache_ttl = \"2h\"",
-                "roles.task_coder.cache_ttl",
+                "[roles.task_worker]\ncache_ttl = \"2h\"",
+                "roles.task_worker.cache_ttl",
             ),
             (
                 "[roles.area_lead]\nidle_minutes = 5",
                 "roles.area_lead.idle_minutes",
             ),
             (
-                "[roles.task_coder]\nidle_minutes = 0",
-                "roles.task_coder.idle_minutes",
-            ),
-            ("[roles.task_coder]\nmcp = \"fold\"", "roles.task_coder.mcp"),
-            (
-                "[roles.task_coder]\nmcp = [\"a b\"]",
-                "roles.task_coder.mcp",
+                "[roles.task_worker]\nidle_minutes = 0",
+                "roles.task_worker.idle_minutes",
             ),
             (
-                "[roles.task_coder]\nprompt = \"x\"",
-                "roles.task_coder.prompt",
+                "[roles.task_worker]\nmcp = \"fold\"",
+                "roles.task_worker.mcp",
+            ),
+            (
+                "[roles.task_worker]\nmcp = [\"a b\"]",
+                "roles.task_worker.mcp",
+            ),
+            (
+                "[roles.task_worker]\nprompt = \"x\"",
+                "roles.task_worker.prompt",
             ),
         ] {
             let error = ProjectConfig::from_toml(text).unwrap_err();
@@ -725,6 +733,11 @@ mod tests {
                 "{text}"
             );
         }
+        let unknown = ProjectConfig::from_toml("[workers]\nmax = 3").unwrap_err();
+        assert_eq!(
+            unknown.message(),
+            "config key workers.max is not a config key: use task_worker, batch_reviewer or max_per_area"
+        );
     }
 
     #[test]

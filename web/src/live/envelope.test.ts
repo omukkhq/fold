@@ -106,7 +106,7 @@ describe("isEventEnvelope", () => {
     expect(
       isEventEnvelope({
         kind: "worker_output",
-        agent: "web-coder",
+        agent: "web-worker",
         step: "tool_use",
         tool: "Bash",
         text_length: null,
@@ -115,7 +115,7 @@ describe("isEventEnvelope", () => {
     expect(
       isEventEnvelope({
         kind: "worker_output",
-        agent: "web-coder",
+        agent: "web-worker",
         step: "text",
         tool: null,
         text_length: 8,

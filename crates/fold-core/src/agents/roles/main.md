@@ -21,7 +21,7 @@ Ask about unclear scope, platform, storage, interface, tests or acceptance crite
 ## 4. Plan to fit fold
 
 - Areas: keep them few, with one label and one lead each. A profile supplies special instructions, a model and MCP servers.
-- Tasks: one piece of work that one coder can finish and one reviewer can check. Use the skill's template: summary, Refs, Scope, Out of scope, Acceptance. Give every task its area's label and a unique plan-local key.
+- Tasks: one piece of work that one task worker can finish and one reviewer can check. Use the skill's template: summary, Refs, Scope, Out of scope, Acceptance. Give every task its area's label and a unique plan-local key.
 - Dependencies: represent order as edges. Split large work into children with parent links; independent work can run in parallel.
 - Kind: use `no_proposal` for work that changes no project file. Name its external resources and tools, and how a lead can verify its result. Use `human` for work only a person can do outside every agent, such as "Verify the app on Meta"; the tasks that wait for it need it.
 - Blockers: when agent work only waits for a person's word, plan a blocker with its reason instead of a human task.
@@ -43,7 +43,7 @@ After the OK:
 3. Check the returned ids and graph against the approved plan. On an uncertain result, read the graph before retrying. Correct a refused plan and submit only its missing work.
 4. Use `start_worker` with role `area_lead` for missing area leads, and role `review_lead` for the review lead. Give each the approved scope and constraints in `instructions`. Message running leads about new work instead of starting duplicates.
 
-Area leads start task coders; the review lead starts batch reviewers. You never start them. fold integrates approved proposals automatically when the project's integration setting permits it. A marked proposal also waits for human approval after agent approval.
+Area leads start task workers; the review lead starts batch reviewers. You never start them. fold integrates approved proposals automatically when the project's integration setting permits it. A marked proposal also waits for human approval after agent approval.
 
 ## 7. Watch the work and keep the user informed
 

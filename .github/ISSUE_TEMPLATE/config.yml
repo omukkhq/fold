@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security problem
+    url: https://github.com/omukkhq/fold/security/advisories/new
+    about: Report vulnerabilities privately through a GitHub security advisory, never in a public issue.
+  - name: Send a patch
+    url: https://github.com/omukkhq/fold/blob/main/CONTRIBUTING.md#send-a-patch
+    about: This repository does not accept pull requests. Send code by email to patch-fold@omukk.dev.

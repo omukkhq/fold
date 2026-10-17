@@ -5,7 +5,7 @@ use crate::tasks::status::TaskStatus;
 
 use super::PolicyDenied;
 
-/// The worker that holds a task's implementation claim and the agents that lead it: the area lead of a task coder's area, or the review lead of a batch reviewer. Any other holder has no lead.
+/// The worker that holds a task's implementation claim and the agents that lead it: the area lead of a task worker's area, or the review lead of a batch reviewer. Any other holder has no lead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskHolder {
     pub worker: WorkerName,
@@ -125,17 +125,17 @@ mod tests {
     #[test]
     fn a_held_task_is_removed_by_its_holder_its_lead_or_a_human() {
         let holder = TaskHolder {
-            worker: WorkerName::parse("web-coder").unwrap(),
+            worker: WorkerName::parse("web-worker").unwrap(),
             leads: vec![AgentName::parse("web-lead").unwrap()],
         };
         let human = Actor::human(HumanName::parse("tanim").unwrap());
         for (case, actor, allowed) in [
-            ("holder", agent("web-coder"), true),
-            ("holder's other worker", agent("web-coder/tests"), true),
+            ("holder", agent("web-worker"), true),
+            ("holder's other worker", agent("web-worker/tests"), true),
             ("lead", agent("web-lead"), true),
             ("lead's other worker", agent("web-lead/plan"), true),
             ("main agent", agent("main"), false),
-            ("other coder", agent("api-coder"), false),
+            ("other task worker", agent("api-worker"), false),
             ("human", human, true),
             ("system", Actor::System, false),
         ] {
@@ -163,20 +163,20 @@ mod tests {
     #[test]
     fn a_held_task_checklist_is_changed_by_its_holder_its_lead_the_main_agent_or_a_human() {
         let holder = TaskHolder {
-            worker: WorkerName::parse("web-coder").unwrap(),
+            worker: WorkerName::parse("web-worker").unwrap(),
             leads: vec![AgentName::parse("web-lead").unwrap()],
         };
         let area_leads = [AgentName::parse("api-lead").unwrap()];
         let human = Actor::human(HumanName::parse("tanim").unwrap());
         for (case, actor, allowed) in [
-            ("holder", agent("web-coder"), true),
-            ("holder's other worker", agent("web-coder/tests"), true),
+            ("holder", agent("web-worker"), true),
+            ("holder's other worker", agent("web-worker/tests"), true),
             ("lead", agent("web-lead"), true),
             ("lead's other worker", agent("web-lead/plan"), true),
             ("main agent", tagged("main", "main"), true),
             ("main agent's subagent", tagged("main/plan", "main"), true),
-            ("other coder", agent("api-coder"), false),
-            ("other tag", tagged("api-coder", "backend"), false),
+            ("other task worker", agent("api-worker"), false),
+            ("other tag", tagged("api-worker", "backend"), false),
             (
                 "area lead that does not lead the holder",
                 agent("api-lead"),
@@ -204,7 +204,7 @@ mod tests {
             ("area lead's other worker", agent("web-lead/plan"), true),
             ("main agent", tagged("main", "main"), true),
             ("other lead", agent("api-lead"), false),
-            ("coder", agent("web-coder"), false),
+            ("task worker", agent("web-worker"), false),
             ("human", human, true),
             ("system", Actor::System, false),
         ] {
@@ -265,7 +265,7 @@ mod tests {
 
     #[test]
     fn a_task_nobody_holds_is_removed_by_anyone() {
-        for actor in [agent("api-coder"), Actor::System] {
+        for actor in [agent("api-worker"), Actor::System] {
             assert!(can_archive_task(&actor, None).is_ok());
             assert!(can_delete_task(&actor, None).is_ok());
         }

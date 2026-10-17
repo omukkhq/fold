@@ -62,7 +62,7 @@ export function describeError(error: unknown): ErrorView | null {
     case "task_not_reported":
       return {
         field: null,
-        text: "No report waits for a check. The coder reports the task again first.",
+        text: "No report waits for a check. The task worker reports the task again first.",
       };
     case "prerequisites_not_done":
       return {

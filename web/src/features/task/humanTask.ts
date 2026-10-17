@@ -98,12 +98,12 @@ export const KIND_OPTIONS: KindOption[] = [
   {
     value: "proposal",
     title: "An agent, with a proposal",
-    hint: "The coder changes files and sends a proposal; integration completes the task.",
+    hint: "The task worker changes files and sends a proposal; integration completes the task.",
   },
   {
     value: "no_proposal",
     title: "An agent, with no proposal",
-    hint: "For work that changes no project file, such as screens drawn through an MCP server. The coder reports it, and a lead check completes it.",
+    hint: "For work that changes no project file, such as screens drawn through an MCP server. The task worker reports it, and a lead check completes it.",
   },
   {
     value: "human",

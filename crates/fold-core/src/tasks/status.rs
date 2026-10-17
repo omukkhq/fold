@@ -47,7 +47,7 @@ pub struct TaskFacts {
     pub has_active_workspace: bool,
     /// An unreleased implementation claim exists, stale or not.
     pub claimed: bool,
-    /// The coder's report of finished work waits for a lead check: it is neither completed nor sent back.
+    /// The task worker's report of finished work waits for a lead check: it is neither completed nor sent back.
     pub reported: bool,
     /// The status of each direct prerequisite.
     pub prerequisites: Vec<(TaskId, TaskStatus)>,
@@ -136,11 +136,11 @@ pub fn status_reason(
     let mut text = match (calculated.status, facts.kind) {
         (TaskStatus::Done, _) => "Completed: a completion record exists".to_owned(),
         (TaskStatus::Review, TaskKind::NoProposal) => {
-            "Calculated: the coder reported the work finished and it waits for a lead check"
+            "Calculated: the task worker reported the work finished and it waits for a lead check"
                 .to_owned()
         }
         (TaskStatus::InProgress, TaskKind::NoProposal) => {
-            "Calculated: a coder holds the claim, no report yet".to_owned()
+            "Calculated: a task worker holds the claim, no report yet".to_owned()
         }
         (TaskStatus::Todo, TaskKind::NoProposal) => {
             "Calculated: no claim yet and every prerequisite is Done".to_owned()
@@ -500,11 +500,11 @@ mod tests {
         let reason = |f: &TaskFacts| status_reason(f, None, None);
         assert_eq!(
             reason(&lead(false, true, true, &[])),
-            "Calculated: the coder reported the work finished and it waits for a lead check"
+            "Calculated: the task worker reported the work finished and it waits for a lead check"
         );
         assert_eq!(
             reason(&lead(false, true, false, &[(2, Todo)])),
-            "Calculated: a coder holds the claim, no report yet, needs T-2"
+            "Calculated: a task worker holds the claim, no report yet, needs T-2"
         );
         assert_eq!(
             reason(&lead(false, false, false, &[])),

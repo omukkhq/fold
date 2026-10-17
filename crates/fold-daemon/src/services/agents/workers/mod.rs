@@ -30,7 +30,7 @@ pub use process::{Launcher, PAUSE_TURN, RESTART_TURN, StopTimeouts, Supervisor};
 /// The most default names tried for one start before the start gives up.
 const MAX_NAME_ATTEMPTS: u32 = 100;
 
-/// What `start_worker` asks for. `area` names the area of an area lead; a task coder takes its lead's area. `tasks` binds a task coder and `proposals` a batch reviewer.
+/// What `start_worker` asks for. `area` names the area of an area lead; a task worker takes its lead's area. `tasks` binds a task worker and `proposals` a batch reviewer.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StartWorker {
     pub role: Option<Role>,
@@ -196,7 +196,7 @@ impl AgentService {
         Ok(area)
     }
 
-    /// Changes the profile of area `name`. Running workers keep what they started with; the next start of a lead or a coder of the area gets the new profile.
+    /// Changes the profile of area `name`. Running workers keep what they started with; the next start of a lead or a task worker of the area gets the new profile.
     pub async fn update_area(
         &self,
         actor: &Actor,
@@ -259,7 +259,7 @@ impl AgentService {
             .ok_or_else(|| not_supervised(agent))
     }
 
-    /// Starts a worker agent: the agent and its main worker, its process row in state `starting` and its binding, in one transaction with `worker.started`; then its Claude Code process with its first turn. A task coder is refused for a human task (`task_needs_human`) and for a task on hold (`task_on_hold`). A lead whose area or role already has a stopped or failed lead resumes that lead instead, and starts it in a new session when its old one is gone.
+    /// Starts a worker agent: the agent and its main worker, its process row in state `starting` and its binding, in one transaction with `worker.started`; then its Claude Code process with its first turn. A task worker is refused for a human task (`task_needs_human`) and for a task on hold (`task_on_hold`). A lead whose area or role already has a stopped or failed lead resumes that lead instead, and starts it in a new session when its old one is gone.
     pub async fn start_worker(
         &self,
         actor: &Actor,
@@ -269,7 +269,7 @@ impl AgentService {
         let role = request.role.ok_or_else(|| {
             invalid(
                 "start_worker needs a role",
-                "pass area_lead, review_lead, task_coder or batch_reviewer",
+                "pass area_lead, review_lead, task_worker or batch_reviewer",
             )
         })?;
         let starter = self.starter(actor).await?;
@@ -314,7 +314,7 @@ impl AgentService {
                             return existing_lead(tx, lead).await;
                         }
                     }
-                    Role::TaskCoder => {
+                    Role::TaskWorker => {
                         let label = area_row
                             .as_ref()
                             .map(|area| area.label.clone())
@@ -342,7 +342,7 @@ impl AgentService {
                                 format!("task {task} does not carry the area's label {label}"),
                             )
                             .with_details([("task", json!(task.to_string()))])
-                            .with_hint("start coders only for tasks of your own area")
+                            .with_hint("start task workers only for tasks of your own area")
                             .into());
                         }
                     }
@@ -503,7 +503,7 @@ pub(crate) async fn starter_of(tx: &mut WriteTx, actor: &Actor) -> Result<Starte
     Ok(Starter::of(actor, supervised))
 }
 
-/// The area a start binds: an area lead names its own, a task coder takes its lead's, the other roles have none. It also checks that each role gets only its own kind of binding.
+/// The area a start binds: an area lead names its own, a task worker takes its lead's, the other roles have none. It also checks that each role gets only its own kind of binding.
 fn binding_area(
     role: Role,
     starter: &Starter,
@@ -534,23 +534,23 @@ fn binding_area(
             }
             Ok(None)
         }
-        Role::TaskCoder => {
+        Role::TaskWorker => {
             let Starter::AreaLead(own) = starter else {
                 return Err(invalid(
-                    "a task coder needs an area lead",
+                    "a task worker needs an area lead",
                     "ask an area lead",
                 ));
             };
             if no_tasks || !no_proposals {
                 return Err(invalid(
-                    "a task coder is bound to one or more tasks",
+                    "a task worker is bound to one or more tasks",
                     "pass the task ids in tasks",
                 ));
             }
             if request.area.as_ref().is_some_and(|area| area != own) {
                 return Err(FoldError::new(
                     codes::WORKER_START_DENIED,
-                    "an area lead starts task coders only in its own area",
+                    "an area lead starts task workers only in its own area",
                 )
                 .with_hint("leave area out")
                 .into());
@@ -672,20 +672,20 @@ mod tests {
             .is_err()
         );
         assert_eq!(
-            binding_area(Role::TaskCoder, &lead, &request(None, vec![task], vec![])).unwrap(),
+            binding_area(Role::TaskWorker, &lead, &request(None, vec![task], vec![])).unwrap(),
             Some(area("web"))
         );
-        assert!(binding_area(Role::TaskCoder, &lead, &request(None, vec![], vec![])).is_err());
+        assert!(binding_area(Role::TaskWorker, &lead, &request(None, vec![], vec![])).is_err());
         assert!(
             binding_area(
-                Role::TaskCoder,
+                Role::TaskWorker,
                 &Starter::MainAgent,
                 &request(None, vec![task], vec![])
             )
             .is_err()
         );
         let other = binding_area(
-            Role::TaskCoder,
+            Role::TaskWorker,
             &lead,
             &request(Some("api"), vec![task], vec![]),
         )

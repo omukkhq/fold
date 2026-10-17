@@ -12,7 +12,7 @@ const MIN = 60_000;
 
 function report(over: Partial<TaskReport> = {}): TaskReport {
   return {
-    by: "web-coder",
+    by: "web-worker",
     note: "Drew the board screens.",
     at: 1_000,
     resolution: null,
@@ -58,7 +58,7 @@ describe("leadCheck", () => {
     });
     expect(leadCheck(task([sentBack]))).toMatchObject({
       state: "sent_back",
-      title: "Sent back to the coder",
+      title: "Sent back to the task worker",
       canCheck: false,
     });
     const completed = report({
@@ -75,11 +75,11 @@ describe("leadCheck", () => {
 });
 
 describe("report lines", () => {
-  it("names the coder and the checker with the time", () => {
+  it("names the task worker and the checker with the time", () => {
     const now = 1_000 + 2 * MIN;
     expect(reportedText(report(), now)).toEqual([
       "Reported by ",
-      { actor: "web-coder" },
+      { actor: "web-worker" },
       " · 2 min ago",
     ]);
     expect(resolvedText(report(), now)).toBeNull();

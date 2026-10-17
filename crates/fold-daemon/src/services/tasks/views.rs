@@ -133,7 +133,7 @@ pub struct TaskDetail {
     pub checkpoints: Vec<Checkpoint>,
     pub proposal: Option<TaskProposal>,
     pub integration: Option<TaskIntegration>,
-    /// The coder's reports on a task without a proposal, newest first, at most [`REPORT_LIMIT`]; the first is the open one while the task waits for a lead check.
+    /// The task worker's reports on a task without a proposal, newest first, at most [`REPORT_LIMIT`]; the first is the open one while the task waits for a lead check.
     pub reports: Vec<ReportView>,
     /// The task's newest [`HISTORY_LIMIT`] events, newest first.
     pub history: Vec<Event>,
@@ -164,7 +164,7 @@ pub struct BoardCard {
     pub status: TaskStatus,
     pub blocked: bool,
     pub kind: TaskKind,
-    /// The note of the coder's open report on a task without a proposal: the card waits for a lead check.
+    /// The note of the task worker's open report on a task without a proposal: the card waits for a lead check.
     pub report: Option<String>,
     pub labels: Vec<LabelView>,
     pub checklist: ChecklistCounts,

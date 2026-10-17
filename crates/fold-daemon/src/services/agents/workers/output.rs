@@ -296,10 +296,10 @@ mod tests {
             .find(|effect| effect.step.kind == "tool_use")
             .unwrap();
         assert_eq!(call.step.tool.as_deref(), Some("Read"));
-        let data = call.step.data("web-coder");
+        let data = call.step.data("web-worker");
         assert_eq!(
             data,
-            json!({"agent": "web-coder", "step": "tool_use", "tool": "Read"})
+            json!({"agent": "web-worker", "step": "tool_use", "tool": "Read"})
         );
         assert!(all.iter().any(|effect| effect.step.kind == "tool_result"));
     }

@@ -120,7 +120,7 @@ impl Fixture {
         let backend = register(&agents, "backend").await;
         register(&agents, "review").await;
         // `backend` reviews without the right to decide; `review` decides as the review lead.
-        give_role(project.store(), "backend", Role::TaskCoder, None).await;
+        give_role(project.store(), "backend", Role::TaskWorker, None).await;
         give_role(project.store(), "review", Role::ReviewLead, None).await;
         workspaces
             .create_workspace(&agent("frontend", &[]), t(1))

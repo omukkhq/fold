@@ -135,7 +135,7 @@ mod tests {
             (agent("backend"), None),
             (tagged("backend", "review"), None),
             (agent("review-lead"), Some(Role::ReviewLead)),
-            (agent("web-coder"), Some(Role::TaskCoder)),
+            (agent("web-worker"), Some(Role::TaskWorker)),
             (agent("reviewer-1"), Some(Role::BatchReviewer)),
         ] {
             let denied = can_claim_request(&other, role).unwrap_err();
@@ -178,14 +178,18 @@ mod tests {
 
     #[test]
     fn the_deputy_decides_for_its_short_lived_requester() {
-        let coder = Requester::parse("web-coder").unwrap();
+        let task_worker = Requester::parse("web-worker").unwrap();
         let lead = Requester::parse("web-lead").unwrap();
-        for actor in [agent("web-coder"), agent("web-lead"), agent("web-lead/sub")] {
-            assert_eq!(code(is_requester(&actor, &coder, Some(&lead))), None);
+        for actor in [
+            agent("web-worker"),
+            agent("web-lead"),
+            agent("web-lead/sub"),
+        ] {
+            assert_eq!(code(is_requester(&actor, &task_worker, Some(&lead))), None);
         }
         for actor in [agent("frontend"), human("ana"), Actor::System] {
             assert_eq!(
-                code(is_requester(&actor, &coder, Some(&lead))),
+                code(is_requester(&actor, &task_worker, Some(&lead))),
                 Some(codes::REQUESTER_REQUIRED)
             );
         }

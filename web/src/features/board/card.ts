@@ -121,7 +121,7 @@ export function blockerMark(
 
 export interface LeadCheckMark {
   text: string;
-  /** The coder's report note. */
+  /** The task worker's report note. */
   note: string;
 }
 

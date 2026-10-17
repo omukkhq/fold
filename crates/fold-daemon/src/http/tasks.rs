@@ -51,7 +51,7 @@ pub enum TaskStatus {
     Done,
 }
 
-/// How a task's work reaches Done: `proposal` through the integration of its proposal, `no_proposal` through a lead check of its coder's report, `human` when a person marks the work Done; no agent takes a human task.
+/// How a task's work reaches Done: `proposal` through the integration of its proposal, `no_proposal` through a lead check of its task worker's report, `human` when a person marks the work Done; no agent takes a human task.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskKind {
@@ -183,7 +183,7 @@ pub struct HumanReviewMark {
     pub set_by: String,
 }
 
-/// The blocker of a task: while it is set, no agent claims the task and no lead starts a coder for it. It never changes the status.
+/// The blocker of a task: while it is set, no agent claims the task and no lead starts a task worker for it. It never changes the status.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct BlockerMark {
     /// Why the task waits for a person.
@@ -226,7 +226,7 @@ pub struct BoardCard {
     pub status: TaskStatus,
     pub blocked: bool,
     pub kind: TaskKind,
-    /// The note of the coder's open report on a `no_proposal` task, which waits for a lead check; null otherwise.
+    /// The note of the task worker's open report on a `no_proposal` task, which waits for a lead check; null otherwise.
     #[schema(required = true)]
     pub report: Option<String>,
     pub labels: Vec<Label>,
@@ -513,7 +513,7 @@ pub struct TaskView {
     /// The integration that published the proposal; null until the task is integrated.
     #[schema(required = true)]
     pub integration: Option<TaskIntegration>,
-    /// The coder's reports on a `no_proposal` task, newest first; the first one without a resolution waits for a lead check.
+    /// The task worker's reports on a `no_proposal` task, newest first; the first one without a resolution waits for a lead check.
     pub reports: Vec<TaskReport>,
     /// The task's newest stored events, newest first, at most 50.
     pub history: Vec<TaskEvent>,
@@ -596,10 +596,10 @@ pub enum ReportResolution {
     SentBack,
 }
 
-/// A coder's report that the work of a `no_proposal` task is finished, with the lead check that answered it.
+/// A task worker's report that the work of a `no_proposal` task is finished, with the lead check that answered it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct TaskReport {
-    /// The coder's worker.
+    /// The worker that wrote the report.
     pub by: String,
     pub note: String,
     /// UTC milliseconds.
@@ -860,12 +860,12 @@ pub struct CreateTaskBody {
     /// The task to split: the new task becomes a linked item of its `Subtasks` checklist.
     #[serde(default)]
     pub parent: Option<String>,
-    /// `proposal` when left out. A `no_proposal` task is for work that changes no project file: its coder reports the work and a lead check completes it. A `human` task is work only a person can do: no agent takes it and a human marks it Done.
+    /// `proposal` when left out. A `no_proposal` task is for work that changes no project file: its task worker reports the work and a lead check completes it. A `human` task is work only a person can do: no agent takes it and a human marks it Done.
     #[serde(default)]
     pub kind: Option<TaskKind>,
 }
 
-/// The note a send-back gives the task's coder.
+/// The note a send-back gives the task worker of the task.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct SendBackBody {
     /// What to change: plain text, not empty.
@@ -1288,7 +1288,7 @@ pub async fn complete_task(
     Ok(Json(task_view(tasks.get_view(task).await?, Some(&human))))
 }
 
-/// Sends a reported `no_proposal` task back to its coder with a note: the task returns to In Progress and fold resumes the coder.
+/// Sends a reported `no_proposal` task back to its task worker with a note: the task returns to In Progress and fold resumes the task worker.
 #[utoipa::path(
     post,
     path = "/api/v1/projects/{slug}/tasks/{id}/send-back",
@@ -1322,7 +1322,7 @@ pub async fn send_back_task(
     Ok(Json(task_view(tasks.get_view(task).await?, Some(&human))))
 }
 
-/// Puts a blocker on the task with its reason, or changes the reason: no agent claims the task and no lead starts a coder for it until a human clears it. Only a task in Backlog or Todo that no agent has started gets one. The status does not change.
+/// Puts a blocker on the task with its reason, or changes the reason: no agent claims the task and no lead starts a task worker for it until a human clears it. Only a task in Backlog or Todo that no agent has started gets one. The status does not change.
 #[utoipa::path(
     put,
     path = "/api/v1/projects/{slug}/tasks/{id}/blocker",

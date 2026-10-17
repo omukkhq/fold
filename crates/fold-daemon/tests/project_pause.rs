@@ -16,7 +16,8 @@ use crate::common::acceptance::{HUMAN, Harness, WAIT};
 use crate::common::roles::give_role;
 use crate::proposal_tools_support::{Fixture, human, t};
 use crate::worker_resume::{
-    CODER, MAIN, coder_for, proposed_by_a_coder, request_changes, until_runs, until_state, worker,
+    MAIN, TASK_WORKER, proposed_by_a_task_worker, request_changes, task_worker_for, until_runs,
+    until_state, worker,
 };
 use crate::workers_support::FakeClaude;
 
@@ -126,8 +127,9 @@ async fn pause_stops_every_worker_and_resume_runs_each_again_in_its_own_session(
 #[tokio::test]
 async fn a_resume_the_pause_held_back_runs_at_the_resume() {
     let fake = FakeClaude::new("result");
-    let (harness, _work) = proposed_by_a_coder(&fake, &[("page.html", "<p>page</p>\n")]).await;
-    let stopped = worker(&harness, CODER).await;
+    let (harness, _work) =
+        proposed_by_a_task_worker(&fake, &[("page.html", "<p>page</p>\n")]).await;
+    let stopped = worker(&harness, TASK_WORKER).await;
     harness.call(MAIN, "pause_project", json!({})).await;
     until_not_running(&harness, LEAD).await;
     harness
@@ -141,15 +143,22 @@ async fn a_resume_the_pause_held_back_runs_at_the_resume() {
         .refused(
             LEAD,
             "start_worker",
-            json!({"role": "task_coder", "tasks": ["T-1"]}),
+            json!({"role": "task_worker", "tasks": ["T-1"]}),
         )
         .await;
     assert_eq!(refused["code"], codes::PROJECT_PAUSED);
-    assert_eq!(worker(&harness, CODER).await.state, WorkerState::Stopped);
-    assert_eq!(fake.runs_of(CODER).len(), 1, "the pause holds the resume");
+    assert_eq!(
+        worker(&harness, TASK_WORKER).await.state,
+        WorkerState::Stopped
+    );
+    assert_eq!(
+        fake.runs_of(TASK_WORKER).len(),
+        1,
+        "the pause holds the resume"
+    );
 
     harness.call(MAIN, "resume_project", json!({})).await;
-    let runs = until_runs(&fake, CODER, 2).await;
+    let runs = until_runs(&fake, TASK_WORKER, 2).await;
     assert_eq!(runs[1].flag("--resume"), Some(stopped.session_id.as_str()));
     assert!(
         runs[1].stdin[1].contains("Split the page."),
@@ -211,9 +220,9 @@ async fn a_claim_held_through_a_long_pause_stays_fresh_and_gets_a_full_lease_at_
 #[tokio::test]
 async fn the_idle_sweep_waits_while_paused_and_counts_from_the_resume() {
     let fake = FakeClaude::new("result");
-    let harness = coder_for(&fake, &["Draw the page"], WorkerState::Idle).await;
+    let harness = task_worker_for(&fake, &["Draw the page"], WorkerState::Idle).await;
     http_post(&harness, PAUSE).await;
-    until_not_running(&harness, CODER).await;
+    until_not_running(&harness, TASK_WORKER).await;
     let clock = harness.project.clock();
     clock.advance(Duration::from_secs(24 * 60 * 60)).unwrap();
     let sweep = async || {
@@ -225,11 +234,11 @@ async fn the_idle_sweep_waits_while_paused_and_counts_from_the_resume() {
             .unwrap()
     };
     assert!(sweep().await.is_empty());
-    assert_eq!(worker(&harness, CODER).await.state, WorkerState::Idle);
+    assert_eq!(worker(&harness, TASK_WORKER).await.state, WorkerState::Idle);
 
     http_post(&harness, RESUME).await;
-    until_runs(&fake, CODER, 2).await;
-    until_state(&harness, CODER, WorkerState::Idle).await;
+    until_runs(&fake, TASK_WORKER, 2).await;
+    until_state(&harness, TASK_WORKER, WorkerState::Idle).await;
     assert!(sweep().await.is_empty(), "the idle time starts again");
 }
 

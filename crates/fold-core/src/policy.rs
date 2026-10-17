@@ -56,7 +56,7 @@ impl AgentStanding {
         self.holds_main
     }
 
-    /// Approving, rejecting and integrating decide a proposal's fate. The main agent and the review lead act for the user, and a batch reviewer reviews for the review lead that started it; an area lead and a task coder only comment and ask for changes.
+    /// Approving, rejecting and integrating decide a proposal's fate. The main agent and the review lead act for the user, and a batch reviewer reviews for the review lead that started it; an area lead and a task worker only comment and ask for changes.
     pub fn decides_reviews(self) -> bool {
         self.is_main_agent() || matches!(self.role, Some(Role::ReviewLead | Role::BatchReviewer))
     }
@@ -517,7 +517,7 @@ mod tests {
         for (role, expected) in [
             (Role::BatchReviewer, None),
             (Role::AreaLead, Some(codes::NOT_PROPOSAL_AUTHOR)),
-            (Role::TaskCoder, Some(codes::NOT_PROPOSAL_AUTHOR)),
+            (Role::TaskWorker, Some(codes::NOT_PROPOSAL_AUTHOR)),
         ] {
             let result = can_close_proposal(&agent("frontend", &[]), supervised(role), &author);
             assert_eq!(outcome(result), expected, "{role}");
@@ -580,9 +580,9 @@ mod tests {
                 None,
             ),
             (
-                "task coder",
-                agent("web-coder", &[]),
-                supervised(Role::TaskCoder),
+                "task worker",
+                agent("web-worker", &[]),
+                supervised(Role::TaskWorker),
                 Some(()),
                 None,
             ),

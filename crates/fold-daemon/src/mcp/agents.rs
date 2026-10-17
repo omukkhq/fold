@@ -47,13 +47,13 @@ pub struct DefineAreaInput {
     pub name: String,
     /// The task label whose tasks the area owns, such as frontend. Create it with create_label first.
     pub label: String,
-    /// What every worker of the area must know about its kind of work, such as "draw screens in Pencil", at most 8000 characters. fold adds it to the system prompt of the area lead and the task coders. Leave it out for none.
+    /// What every worker of the area must know about its kind of work, such as "draw screens in Pencil", at most 8000 characters. fold adds it to the system prompt of the area lead and the task workers. Leave it out for none.
     #[serde(default)]
     pub instructions: Option<String>,
-    /// The Claude Code model of the area's lead and coders, such as opus. A start_worker model comes first. Leave it out for the role's model from .fold/config.toml.
+    /// The Claude Code model of the area's lead and task workers, such as opus. A start_worker model comes first. Leave it out for the role's model from .fold/config.toml.
     #[serde(default)]
     pub model: Option<String>,
-    /// The MCP servers the area's lead and coders load, by name: fold and servers of the project's .mcp.json, such as ["fold", "pencil"]. Leave it out for the role's servers.
+    /// The MCP servers the area's lead and task workers load, by name: fold and servers of the project's .mcp.json, such as ["fold", "pencil"]. Leave it out for the role's servers.
     #[serde(default)]
     pub mcp: Option<Vec<String>>,
     /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
@@ -69,10 +69,10 @@ pub struct UpdateAreaInput {
     /// The new instructions for every worker of the area, at most 8000 characters. Leave it out to keep them.
     #[serde(default)]
     pub instructions: Option<String>,
-    /// The new Claude Code model of the area's lead and coders, such as opus. Leave it out to keep it.
+    /// The new Claude Code model of the area's lead and task workers, such as opus. Leave it out to keep it.
     #[serde(default)]
     pub model: Option<String>,
-    /// The new MCP server list of the area's lead and coders, such as ["fold", "pencil"]. Leave it out to keep it.
+    /// The new MCP server list of the area's lead and task workers, such as ["fold", "pencil"]. Leave it out to keep it.
     #[serde(default)]
     pub mcp: Option<Vec<String>>,
     /// True removes the area's instructions. Do not combine it with instructions.
@@ -92,15 +92,15 @@ pub struct UpdateAreaInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct StartWorkerInput {
-    /// area_lead or review_lead (started by the main agent), task_coder (started by an area lead) or batch_reviewer (started by the review lead).
+    /// area_lead or review_lead (started by the main agent), task_worker (started by an area lead) or batch_reviewer (started by the review lead).
     pub role: String,
-    /// The worker's agent name. Leave it out for a name from the role and area, such as web-lead or web-coder-2.
+    /// The worker's agent name. Leave it out for a name from the role and area, such as web-lead or web-worker-2.
     #[serde(default)]
     pub name: Option<String>,
-    /// The area of an area lead. A task coder takes its lead's area; leave it out for the other roles.
+    /// The area of an area lead. A task worker takes its lead's area; leave it out for the other roles.
     #[serde(default)]
     pub area: Option<String>,
-    /// The tasks a task coder works on, such as T-12. Each must carry the area's label.
+    /// The tasks a task worker works on, such as T-12. Each must carry the area's label.
     #[serde(default)]
     pub tasks: Vec<String>,
     /// The proposals a batch reviewer reviews, such as P-3.
@@ -120,7 +120,7 @@ pub struct StartWorkerInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct StopWorkerInput {
-    /// The worker's agent name, such as web-coder.
+    /// The worker's agent name, such as web-worker.
     pub name: String,
     /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
     #[serde(rename = "as", default)]
@@ -138,13 +138,13 @@ pub struct ListWorkersInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct SetWorkerLimitsInput {
-    /// The most task coders that run at once, a whole number with no upper bound; 0 lets none start. Leave it out to keep the limit.
+    /// The most task workers that run at once, a whole number with no upper bound; 0 lets none start. Leave it out to keep the limit.
     #[serde(default)]
-    pub task_coder: Option<u64>,
+    pub task_worker: Option<u64>,
     /// The most batch reviewers that run at once, a whole number with no upper bound; 0 lets none start. Leave it out to keep the limit.
     #[serde(default)]
     pub batch_reviewer: Option<u64>,
-    /// The most task coders that run at once in one area, a whole number with no upper bound; 0 lets none start. Leave it out to keep the limit.
+    /// The most task workers that run at once in one area, a whole number with no upper bound; 0 lets none start. Leave it out to keep the limit.
     #[serde(default)]
     pub max_per_area: Option<u64>,
     /// True removes the limit of one area, so an area has no limit of its own. Do not combine it with max_per_area.
@@ -198,17 +198,17 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             DEFINE_AREA,
-            "As the main agent, define an area: a part of the project that one area lead owns through one task label. Give it a profile for its kind of work: instructions, a model and MCP servers that its area lead and task coders start with.",
+            "As the main agent, define an area: a part of the project that one area lead owns through one task label. Give it a profile for its kind of work: instructions, a model and MCP servers that its area lead and task workers start with.",
             schema_for_type::<DefineAreaInput>(),
         ),
         Tool::new(
             UPDATE_AREA,
-            "As the main agent, change the profile of an area: its instructions, model and MCP servers. The next start of the area's lead or coders gets the new profile; a running worker keeps what it started with.",
+            "As the main agent, change the profile of an area: its instructions, model and MCP servers. The next start of the area's lead or task workers gets the new profile; a running worker keeps what it started with.",
             schema_for_type::<UpdateAreaInput>(),
         ),
         Tool::new(
             START_WORKER,
-            "Start a worker agent that fold runs and supervises: the main agent starts an area lead or the review lead, an area lead starts task coders for tasks of its area, the review lead starts batch reviewers. Refused over the worker limits.",
+            "Start a worker agent that fold runs and supervises: the main agent starts an area lead or the review lead, an area lead starts task workers for tasks of its area, the review lead starts batch reviewers. Refused over the worker limits.",
             schema_for_type::<StartWorkerInput>(),
         ),
         Tool::new(
@@ -223,7 +223,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             SET_WORKER_LIMITS,
-            "As the main agent, change how many task coders and batch reviewers run at once, for example when the user asks for more or fewer agents. Each limit is a whole number with no upper bound, and 0 lets no worker of that role start. The new limits apply to the next start; a running worker is never stopped by a lower limit. Say the new numbers back to the user.",
+            "As the main agent, change how many task workers and batch reviewers run at once, for example when the user asks for more or fewer agents. Each limit is a whole number with no upper bound, and 0 lets no worker of that role start. The new limits apply to the next start; a running worker is never stopped by a lower limit. Say the new numbers back to the user.",
             schema_for_type::<SetWorkerLimitsInput>(),
         ),
         Tool::new(
@@ -322,7 +322,7 @@ pub async fn update_area(
         .map_err(from_agent)?;
     Ok(json!({
         "area": area_json(&area),
-        "next": "the next start of the area's lead or coders gets this profile; running workers keep theirs",
+        "next": "the next start of the area's lead or task workers gets this profile; running workers keep theirs",
     }))
 }
 
@@ -334,7 +334,7 @@ pub async fn start_worker(
     let input: StartWorkerInput = parse(arguments)?;
     let role = Role::parse(&input.role).ok_or_else(|| {
         FoldError::new(codes::INVALID_REQUEST, "role is not a worker role")
-            .with_hint("pass area_lead, review_lead, task_coder or batch_reviewer")
+            .with_hint("pass area_lead, review_lead, task_worker or batch_reviewer")
     })?;
     let request = StartWorker {
         role: Some(role),
@@ -372,7 +372,7 @@ pub async fn stop_worker(
 
 fn limits_json(limits: WorkerLimits) -> Value {
     json!({
-        "task_coder": limits.task_coder,
+        "task_worker": limits.task_worker,
         "batch_reviewer": limits.batch_reviewer,
         "max_per_area": limits.max_per_area,
     })
@@ -385,7 +385,7 @@ pub async fn set_worker_limits(
 ) -> Result<Value, FoldError> {
     let input: SetWorkerLimitsInput = parse(arguments)?;
     let change = WorkerLimitsChange::from_request(
-        input.task_coder,
+        input.task_worker,
         input.batch_reviewer,
         input.max_per_area,
         input.clear_max_per_area,

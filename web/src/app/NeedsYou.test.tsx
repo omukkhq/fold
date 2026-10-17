@@ -65,7 +65,7 @@ const permission = needsItem({
   kind: "permission",
   screen: "worker",
   question: "pq-3",
-  agent: "web-coder",
+  agent: "web-worker",
   tool: "Bash",
   task: "T-12",
 });

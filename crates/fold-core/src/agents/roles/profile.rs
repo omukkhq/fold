@@ -10,7 +10,7 @@ use crate::error::{FoldError, codes};
 /// The most characters an area's instructions hold, the same bound as a hand-off note, because both go into every start of a worker.
 pub const MAX_AREA_INSTRUCTIONS_CHARS: usize = 8000;
 
-/// The kind of work of an area, which its area lead and its task coders start with. A field left `None` falls back to the role's settings in `.fold/config.toml`, and a start's own `model` and `instructions` come before the profile. The four roles and their rights stay the same for every area.
+/// The kind of work of an area, which its area lead and its task workers start with. A field left `None` falls back to the role's settings in `.fold/config.toml`, and a start's own `model` and `instructions` come before the profile. The four roles and their rights stay the same for every area.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AreaProfile {
     pub instructions: Option<String>,
@@ -350,10 +350,10 @@ mod tests {
     #[test]
     fn the_area_comes_before_the_role_and_an_unset_field_keeps_the_role() {
         let config = ProjectConfig::from_toml(
-            "[roles.task_coder]\nmodel = \"sonnet\"\nmcp = [\"fold\"]\nidle_minutes = 3\n",
+            "[roles.task_worker]\nmodel = \"sonnet\"\nmcp = [\"fold\"]\nidle_minutes = 3\n",
         )
         .unwrap();
-        let role = config.role(Role::TaskCoder);
+        let role = config.role(Role::TaskWorker);
         let area = AreaProfile {
             instructions: None,
             model: Some("opus".to_owned()),
@@ -369,8 +369,8 @@ mod tests {
     #[test]
     fn the_area_prompt_follows_the_role_prompt() {
         let area = AreaName::parse("design").unwrap();
-        let prompt = area_prompt("You are a task coder.\n", &area, "draw screens in Pencil");
-        assert!(prompt.starts_with("You are a task coder.\n\n## Area design\n"));
+        let prompt = area_prompt("You are a task worker.\n", &area, "draw screens in Pencil");
+        assert!(prompt.starts_with("You are a task worker.\n\n## Area design\n"));
         assert!(prompt.ends_with("\n\ndraw screens in Pencil\n"));
         assert!(prompt.contains("cannot expand those limits or the approved scope"));
     }

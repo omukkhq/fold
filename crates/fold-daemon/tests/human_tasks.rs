@@ -11,7 +11,7 @@ use crate::workers_support::FakeClaude;
 
 const MAIN: &str = "frontend";
 const LEAD: &str = "web-lead";
-const CODER: &str = "web-coder";
+const TASK_WORKER: &str = "web-worker";
 /// An agent that fold does not supervise and that lacks the `main` tag.
 const SOLO: &str = "solo";
 
@@ -153,7 +153,7 @@ async fn a_human_task_blocks_its_dependents_until_a_human_marks_it_done_and_no_a
         (
             LEAD,
             "start_worker",
-            json!({"role": "task_coder", "tasks": ["T-1"]}),
+            json!({"role": "task_worker", "tasks": ["T-1"]}),
         ),
     ] {
         let refused = harness.refused(agent, tool, arguments).await;
@@ -219,7 +219,7 @@ async fn a_human_task_blocks_its_dependents_until_a_human_marks_it_done_and_no_a
 }
 
 #[tokio::test]
-async fn a_task_with_a_blocker_is_not_ready_and_is_neither_claimed_nor_given_to_a_coder_until_cleared()
+async fn a_task_with_a_blocker_is_not_ready_and_is_neither_claimed_nor_given_to_a_task_worker_until_cleared()
  {
     let fake = FakeClaude::new("result");
     let harness = planned(&fake).await;
@@ -263,7 +263,7 @@ async fn a_task_with_a_blocker_is_not_ready_and_is_neither_claimed_nor_given_to_
         (
             LEAD,
             "start_worker",
-            json!({"role": "task_coder", "tasks": ["T-3"]}),
+            json!({"role": "task_worker", "tasks": ["T-3"]}),
         ),
     ] {
         let refused = harness.refused(agent, tool, arguments).await;
@@ -298,10 +298,10 @@ async fn a_task_with_a_blocker_is_not_ready_and_is_neither_claimed_nor_given_to_
         .call(
             LEAD,
             "start_worker",
-            json!({"role": "task_coder", "tasks": ["T-3"]}),
+            json!({"role": "task_worker", "tasks": ["T-3"]}),
         )
         .await;
-    assert_eq!(started["worker"]["name"], CODER);
+    assert_eq!(started["worker"]["name"], TASK_WORKER);
     let kinds: Vec<String> = harness
         .events()
         .await
@@ -385,13 +385,13 @@ async fn only_a_human_or_the_main_agent_clears_a_blocker_and_completes_a_human_t
         .call(
             LEAD,
             "start_worker",
-            json!({"role": "task_coder", "tasks": ["T-3"]}),
+            json!({"role": "task_worker", "tasks": ["T-3"]}),
         )
         .await;
-    until_state(&harness, CODER, WorkerState::Idle).await;
-    harness.connect(CODER).await;
+    until_state(&harness, TASK_WORKER, WorkerState::Idle).await;
+    harness.connect(TASK_WORKER).await;
     harness
-        .call(CODER, "claim_task", json!({"id": "T-3"}))
+        .call(TASK_WORKER, "claim_task", json!({"id": "T-3"}))
         .await;
     let claimed = harness
         .refused(
@@ -404,10 +404,10 @@ async fn only_a_human_or_the_main_agent_clears_a_blocker_and_completes_a_human_t
     assert_eq!(claimed["details"]["reason"], "started");
     assert!(claimed["hint"].as_str().unwrap().contains("get_task"));
     harness
-        .call(CODER, "create_workspace", json!({"task": "T-3"}))
+        .call(TASK_WORKER, "create_workspace", json!({"task": "T-3"}))
         .await;
     harness
-        .call(CODER, "release_task", json!({"id": "T-3"}))
+        .call(TASK_WORKER, "release_task", json!({"id": "T-3"}))
         .await;
     let (status, with_workspace) = http(
         &harness,
@@ -423,14 +423,14 @@ async fn only_a_human_or_the_main_agent_clears_a_blocker_and_completes_a_human_t
     assert_eq!(view["can_set_blocker"], false, "{view}");
     assert_eq!(view["blocker"], Value::Null);
 
-    let by_coder = harness
+    let by_task_worker = harness
         .refused(
-            CODER,
+            TASK_WORKER,
             "set_blocker",
             json!({"id": "T-2", "reason": "Wait."}),
         )
         .await;
-    assert_eq!(by_coder["code"], codes::TASK_HOLD_DENIED);
+    assert_eq!(by_task_worker["code"], codes::TASK_HOLD_DENIED);
     let by_solo = harness
         .refused(SOLO, "set_blocker", json!({"id": "T-2", "reason": "Wait."}))
         .await;
@@ -468,7 +468,7 @@ async fn only_a_human_or_the_main_agent_clears_a_blocker_and_completes_a_human_t
 
     for (agent, code) in [
         (LEAD, codes::MAIN_AGENT_REQUIRED),
-        (CODER, codes::MAIN_AGENT_REQUIRED),
+        (TASK_WORKER, codes::MAIN_AGENT_REQUIRED),
         (SOLO, codes::ORCHESTRATOR_REQUIRED),
     ] {
         let clear = harness
@@ -538,19 +538,19 @@ async fn a_human_task_is_created_by_whoever_plans_the_work_and_the_web_sets_its_
         .call(
             LEAD,
             "start_worker",
-            json!({"role": "task_coder", "tasks": ["T-3"]}),
+            json!({"role": "task_worker", "tasks": ["T-3"]}),
         )
         .await;
-    until_state(&harness, CODER, WorkerState::Idle).await;
-    harness.connect(CODER).await;
-    let by_coder = harness
+    until_state(&harness, TASK_WORKER, WorkerState::Idle).await;
+    harness.connect(TASK_WORKER).await;
+    let by_task_worker = harness
         .refused(
-            CODER,
+            TASK_WORKER,
             "create_task",
             json!({"title": "Call the bank", "labels": ["ui"], "kind": "human"}),
         )
         .await;
-    assert_eq!(by_coder["code"], codes::TASK_KIND_DENIED);
+    assert_eq!(by_task_worker["code"], codes::TASK_KIND_DENIED);
     let by_lead = harness
         .call(
             LEAD,

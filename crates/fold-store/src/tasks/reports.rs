@@ -29,7 +29,7 @@ impl Resolution {
     }
 }
 
-/// A coder's report on a task without a proposal, with the lead check that answered it once there is one. `worker_id` is a row id and stays inside the daemon.
+/// A task worker's report on a task without a proposal, with the lead check that answered it once there is one. `worker_id` is a row id and stays inside the daemon.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReportRow {
     pub task: TaskId,
@@ -201,14 +201,14 @@ pub async fn latest_for_task(
     Ok(for_task(executor, task, 1).await?.pop())
 }
 
-/// A send-back that waits for the task coder who wrote the report: the coder's process is in one of the asked states, such as stopped or failed, and has not started since the task was sent back.
+/// A send-back that waits for the task worker who wrote the report: the task worker's process is in one of the asked states, such as stopped or failed, and has not started since the task was sent back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwedSendBack {
     pub agent: AgentName,
     pub task: TaskId,
 }
 
-/// The send-backs no start of their coder has served yet, such as one the worker limits refused: each start moves `started_at`, so a send-back newer than it is still owed. Only the newest report of a task counts, so a task reported again owes nothing.
+/// The send-backs no start of their task worker has served yet, such as one the worker limits refused: each start moves `started_at`, so a send-back newer than it is still owed. Only the newest report of a task counts, so a task reported again owes nothing.
 pub async fn owed_send_backs(
     executor: impl SqliteExecutor<'_>,
     states: &[WorkerState],
@@ -228,7 +228,7 @@ pub async fn owed_send_backs(
            JOIN worker_processes w ON w.agent_id = k.agent_id
            JOIN agents g ON g.id = w.agent_id
            WHERE r.resolution = 'sent_back' AND r.resolved_at > w.started_at
-             AND w.role = 'task_coder' AND w.state IN (SELECT value FROM json_each(?1))
+             AND w.role = 'task_worker' AND w.state IN (SELECT value FROM json_each(?1))
              AND t.archived_at IS NULL
              AND r.id = (SELECT MAX(x.id) FROM task_reports x WHERE x.task_id = r.task_id)
            ORDER BY w.id, t.number"#,

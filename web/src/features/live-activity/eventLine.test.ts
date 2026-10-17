@@ -97,8 +97,8 @@ describe("eventLine", () => {
   it("names the agent and the worker of a refused session", () => {
     const line = (data: DurableEvent["data"]) =>
       eventLine(event("session.bind_refused", { data })).text;
-    expect(line({ agent: "main", worker: "web-coder", pid: 4242 })).toBe(
-      "refused a session as main from a process of web-coder",
+    expect(line({ agent: "main", worker: "web-worker", pid: 4242 })).toBe(
+      "refused a session as main from a process of web-worker",
     );
     expect(line({ agent: "main", worker: null })).toBe(
       "refused a session as main from a worker's process",
@@ -244,28 +244,35 @@ describe("eventLine", () => {
     expect(line("task.reported")).toBe(
       "reported T-12 finished for a lead check",
     );
-    expect(line("task.sent_back")).toBe("sent T-12 back to its coder");
+    expect(line("task.sent_back")).toBe("sent T-12 back to its task worker");
     expect(line("task.hold_set")).toBe("put a blocker on T-12");
     expect(line("task.hold_cleared")).toBe("cleared the blocker of T-12");
     expect(
       line("worker.resumed", {
-        agent: "web-coder",
+        agent: "web-worker",
         reason: "sent_back",
         resumed: true,
       }),
-    ).toBe("resumed web-coder for the send-back of T-12");
+    ).toBe("resumed web-worker for the send-back of T-12");
+    expect(
+      line("worker.started", { agent: "web-worker", role: "task_worker" }),
+    ).toBe("started web-worker as task worker");
+    // A stored event keeps the role value it was written with.
     expect(
       line("worker.started", { agent: "web-coder", role: "task_coder" }),
-    ).toBe("started web-coder as task coder");
-    expect(line("worker.started", { agent: "web-coder", resumed: true })).toBe(
-      "resumed web-coder",
+    ).toBe("started web-coder as task worker");
+    expect(
+      line("worker.started", { agent: "web-lead", role: "area_lead" }),
+    ).toBe("started web-lead as area lead");
+    expect(line("worker.started", { agent: "web-worker", resumed: true })).toBe(
+      "resumed web-worker",
     );
     expect(line("worker.started")).toBe("started a worker");
-    expect(line("worker.stopped", { agent: "web-coder" })).toBe(
-      "stopped web-coder",
+    expect(line("worker.stopped", { agent: "web-worker" })).toBe(
+      "stopped web-worker",
     );
-    expect(line("worker.failed", { agent: "web-coder" })).toBe(
-      "web-coder failed",
+    expect(line("worker.failed", { agent: "web-worker" })).toBe(
+      "web-worker failed",
     );
     expect(line("worker.refreshed", { agent: "web-lead", handoff: true })).toBe(
       "gave web-lead a fresh context with its hand-off note",
@@ -275,18 +282,18 @@ describe("eventLine", () => {
     ).toBe("gave web-lead a fresh context");
     expect(
       line("worker.resumed", {
-        agent: "web-coder",
+        agent: "web-worker",
         reason: "changes",
         resumed: true,
       }),
-    ).toBe("resumed web-coder for changes to P-4");
+    ).toBe("resumed web-worker for changes to P-4");
     expect(
       line("worker.resumed", {
-        agent: "web-coder",
+        agent: "web-worker",
         reason: "conflict",
         resumed: false,
       }),
-    ).toBe("restarted web-coder in a new session for the conflict on P-4");
+    ).toBe("restarted web-worker in a new session for the conflict on P-4");
     expect(
       line("worker.resumed", {
         agent: "web-lead",
@@ -295,18 +302,18 @@ describe("eventLine", () => {
       }),
     ).toBe("restarted web-lead in a new session");
     expect(
-      line("worker.permission_asked", { agent: "web-coder", tool: "Bash" }),
-    ).toBe("web-coder asked to use Bash");
+      line("worker.permission_asked", { agent: "web-worker", tool: "Bash" }),
+    ).toBe("web-worker asked to use Bash");
     expect(line("worker.permission_asked")).toBe(
       "a worker asked to use a tool",
     );
     expect(
       line("worker.permission_answered", {
-        agent: "web-coder",
+        agent: "web-worker",
         tool: "Bash",
         behavior: "deny",
       }),
-    ).toBe("denied Bash for web-coder");
+    ).toBe("denied Bash for web-worker");
     expect(line("worker.permission_answered", { behavior: "allow" })).toBe(
       "allowed a tool for a worker",
     );

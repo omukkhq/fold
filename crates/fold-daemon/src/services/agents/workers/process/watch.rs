@@ -219,7 +219,7 @@ impl Supervisor {
         Ok(())
     }
 
-    /// Does from the stored state what the events the watcher missed would have done: answers each `ask` question whose messages all have their replies, stops each short-lived worker whose work is done, tells each running coder about changes requested of it, and serves the resumes and send-backs the limits held back.
+    /// Does from the stored state what the events the watcher missed would have done: answers each `ask` question whose messages all have their replies, stops each short-lived worker whose work is done, tells each running task worker about changes requested of it, and serves the resumes and send-backs the limits held back.
     async fn recover(self) {
         self.answer_open_asks().await;
         self.stop_done_workers().await;

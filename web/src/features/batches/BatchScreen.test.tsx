@@ -63,7 +63,7 @@ async function setup(
         proposals: [
           proposalSummary("P-3", {
             title: "Login form validation",
-            author: "web-coder",
+            author: "web-worker",
             human_review: { reason: "auth", reviewer: "tanim", set_by: "main" },
             human_approved: false,
           }),

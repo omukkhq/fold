@@ -335,15 +335,15 @@ describe("patch rules", () => {
   });
 
   it("records a worker_output frame as the worker's latest step and refetches nothing", () => {
-    const agents = [{ name: "web-coder", presence: "idle", tags: [] }];
+    const agents = [{ name: "web-worker", presence: "idle", tags: [] }];
     client.setQueryData(keys.agents(slug), agents);
     const frame = (agent: string, step: string, tool: string | null) =>
       guarded({ kind: "worker_output", agent, step, tool, text_length: null });
-    applyEvent(client, slug, frame("web-coder", "text", null));
+    applyEvent(client, slug, frame("web-worker", "text", null));
     applyEvent(client, slug, frame("web-lead", "tool_use", "Agent"));
-    applyEvent(client, slug, frame("web-coder", "tool_use", "Edit"));
+    applyEvent(client, slug, frame("web-worker", "tool_use", "Edit"));
     expect(client.getQueryData(keys.workerSteps(slug))).toEqual({
-      "web-coder": { step: "tool_use", tool: "Edit" },
+      "web-worker": { step: "tool_use", tool: "Edit" },
       "web-lead": { step: "tool_use", tool: "Agent" },
     });
     expect(client.getQueryData(keys.agents(slug))).toBe(agents);

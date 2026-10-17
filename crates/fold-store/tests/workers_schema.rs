@@ -6,7 +6,7 @@ use fold_store::agents::{self, NewWorkerProcess, TurnTotals};
 use crate::common::{count, exec, open};
 
 const ROWS: &str = "
-INSERT INTO agents (id, name, created_at) VALUES (1, 'web-lead', 0), (2, 'web-coder', 0), (3, 'api-lead', 0), (4, 'review-lead', 0), (5, 'author', 0);
+INSERT INTO agents (id, name, created_at) VALUES (1, 'web-lead', 0), (2, 'web-worker', 0), (3, 'api-lead', 0), (4, 'review-lead', 0), (5, 'author', 0);
 INSERT INTO workers (id, agent_id, name, created_at) VALUES (5, 5, 'author', 0);
 INSERT INTO labels (id, name, color, created_at) VALUES (1, 'ui', 'sage', 0), (2, 'server', 'sage', 0);
 INSERT INTO tasks (id, number, title, created_by, created_at, updated_at) VALUES (1, 1, 'one', 'fold', 0, 0), (2, 2, 'two', 'fold', 0, 0);
@@ -208,7 +208,7 @@ async fn a_worker_process_keeps_its_role_area_and_session_and_binds_its_own_kind
         Some("worker_processes_area_of_role")
     );
     let lead = process(&store, 1, Role::AreaLead, Some(1), "s1").await;
-    let coder = process(&store, 2, Role::TaskCoder, Some(1), "s2").await;
+    let task_worker = process(&store, 2, Role::TaskWorker, Some(1), "s2").await;
     let reviewer = process(&store, 4, Role::BatchReviewer, None, "s4").await;
     let twice = exec(
         &store,
@@ -224,12 +224,12 @@ async fn a_worker_process_keeps_its_role_area_and_session_and_binds_its_own_kind
     let proposal = ProposalId::from_number(3).unwrap();
     store
         .write(async |tx| {
-            assert!(agents::bind_task(tx, coder, task).await?);
+            assert!(agents::bind_task(tx, task_worker, task).await?);
             assert!(
-                agents::bind_task(tx, coder, task).await?,
+                agents::bind_task(tx, task_worker, task).await?,
                 "a task named twice counts as bound"
             );
-            assert!(!agents::bind_task(tx, coder, TaskId::from_number(9).unwrap()).await?);
+            assert!(!agents::bind_task(tx, task_worker, TaskId::from_number(9).unwrap()).await?);
             assert!(agents::bind_proposal(tx, reviewer, proposal).await?);
             assert!(
                 agents::bind_proposal(tx, reviewer, proposal).await?,
@@ -267,9 +267,13 @@ async fn a_worker_process_keeps_its_role_area_and_session_and_binds_its_own_kind
         .write(async |tx| agents::bind_task(tx, lead, task).await)
         .await
         .unwrap_err();
-    assert!(wrong_kind.to_string().contains("worker_tasks_coder_only"));
+    assert!(
+        wrong_kind
+            .to_string()
+            .contains("worker_tasks_task_worker_only")
+    );
     let wrong_kind = store
-        .write(async |tx| agents::bind_proposal(tx, coder, proposal).await)
+        .write(async |tx| agents::bind_proposal(tx, task_worker, proposal).await)
         .await
         .unwrap_err();
     assert!(
@@ -296,16 +300,18 @@ async fn a_worker_process_keeps_its_role_area_and_session_and_binds_its_own_kind
         Some("worker_processes_idle_since_iff_idle")
     );
     assert_eq!(
-        agents::coders_of_task(store.read(), task).await.unwrap(),
+        agents::task_workers_of_task(store.read(), task)
+            .await
+            .unwrap(),
         [agents::BoundWorker {
-            id: coder,
-            agent: AgentName::parse("web-coder").unwrap()
+            id: task_worker,
+            agent: AgentName::parse("web-worker").unwrap()
         }]
     );
     assert_eq!(
-        agents::tasks_awaiting_proposal(store.read(), &[coder])
+        agents::tasks_awaiting_proposal(store.read(), &[task_worker])
             .await
-            .unwrap()[&coder],
+            .unwrap()[&task_worker],
         1
     );
     exec(
@@ -315,9 +321,9 @@ async fn a_worker_process_keeps_its_role_area_and_session_and_binds_its_own_kind
     .await
     .unwrap();
     assert_eq!(
-        agents::tasks_awaiting_proposal(store.read(), &[coder])
+        agents::tasks_awaiting_proposal(store.read(), &[task_worker])
             .await
-            .unwrap()[&coder],
+            .unwrap()[&task_worker],
         0,
         "a proposal that integrated before fold looked counts as sent"
     );
@@ -328,9 +334,9 @@ async fn a_worker_process_keeps_its_role_area_and_session_and_binds_its_own_kind
         .await
         .unwrap();
     assert_eq!(
-        agents::tasks_awaiting_proposal(store.read(), &[coder])
+        agents::tasks_awaiting_proposal(store.read(), &[task_worker])
             .await
-            .unwrap()[&coder],
+            .unwrap()[&task_worker],
         0,
         "a Done task waits for nothing"
     );
@@ -387,7 +393,7 @@ async fn the_row_follows_its_process_through_turns_stops_and_restarts() {
         (1, 0)
     );
     assert_eq!(
-        agents::running_counts(store.read(), Role::TaskCoder, web)
+        agents::running_counts(store.read(), Role::TaskWorker, web)
             .await
             .unwrap(),
         (0, 0),
@@ -497,15 +503,17 @@ async fn a_new_session_comes_only_with_a_new_start() {
     )
     .await
     .unwrap();
-    let coder = process(&store, 2, Role::TaskCoder, Some(1), "s2").await;
+    let task_worker = process(&store, 2, Role::TaskWorker, Some(1), "s2").await;
     store
-        .write(async |tx| agents::set_worker_state(tx, coder, WorkerState::Working, at(15)).await)
+        .write(async |tx| {
+            agents::set_worker_state(tx, task_worker, WorkerState::Working, at(15)).await
+        })
         .await
         .unwrap();
     for change in [
-        format!("UPDATE worker_processes SET session_id = 's3' WHERE id = {coder}"),
+        format!("UPDATE worker_processes SET session_id = 's3' WHERE id = {task_worker}"),
         format!(
-            "UPDATE worker_processes SET session_id = 's3', state = 'idle', idle_since = 20 WHERE id = {coder}"
+            "UPDATE worker_processes SET session_id = 's3', state = 'idle', idle_since = 20 WHERE id = {task_worker}"
         ),
     ] {
         let refused = exec(&store, &change).await.unwrap_err();
@@ -517,15 +525,15 @@ async fn a_new_session_comes_only_with_a_new_start() {
     exec(
         &store,
         &format!(
-            "UPDATE worker_processes SET session_id = 's2b', state = 'starting' WHERE id = {coder}"
+            "UPDATE worker_processes SET session_id = 's2b', state = 'starting' WHERE id = {task_worker}"
         ),
     )
     .await
     .expect("a running row moves to starting with a new session");
     store
         .write(async |tx| {
-            agents::record_exit(tx, coder, WorkerState::Failed, Some(1), at(30)).await?;
-            agents::refresh_session(tx, coder, "s3", at(40)).await
+            agents::record_exit(tx, task_worker, WorkerState::Failed, Some(1), at(30)).await?;
+            agents::refresh_session(tx, task_worker, "s3", at(40)).await
         })
         .await
         .unwrap();
@@ -536,11 +544,150 @@ async fn a_new_session_comes_only_with_a_new_start() {
     assert_eq!(rows[0].started_at, at(40));
     assert_eq!((rows[0].stopped_at, rows[0].exit_code), (None, None));
     for column in ["agent_id = 3", "started_by = 'main'", "role = 'area_lead'"] {
-        let change = format!("UPDATE worker_processes SET {column} WHERE id = {coder}");
+        let change = format!("UPDATE worker_processes SET {column} WHERE id = {task_worker}");
         let refused = exec(&store, &change).await.unwrap_err();
         assert!(
             refused.to_string().contains("worker_processes_fixed"),
             "{change}"
         );
     }
+}
+
+/// Workers stored with the role name `task_coder`, one stopped and one running, with a binding of each kind and a permission question on that worker.
+const OLD_WORKERS: &str = "
+INSERT INTO agents (id, name, created_at) VALUES (1, 'web-lead', 0), (2, 'web-coder', 0), (3, 'batch-reviewer', 0), (4, 'author', 0), (5, 'web-coder-2', 0);
+INSERT INTO workers (id, agent_id, name, created_at) VALUES (4, 4, 'author', 0);
+INSERT INTO labels (id, name, color, created_at) VALUES (1, 'ui', 'sage', 0);
+INSERT INTO areas (id, name, label_id, lead_agent_id, created_by, created_at) VALUES (1, 'web', 1, 1, 'main', 0);
+INSERT INTO tasks (id, number, title, created_by, created_at, updated_at) VALUES (1, 1, 'one', 'fold', 0, 0), (2, 2, 'two', 'fold', 0, 0);
+INSERT INTO proposals (id, number, task_id, author_worker_id, title, created_at, updated_at) VALUES (1, 1, 2, 4, 'p', 0, 0);
+INSERT INTO worker_processes (id, agent_id, role, area_id, session_id, state, started_by, started_at, stopped_at, idle_since, turns) VALUES (1, 1, 'area_lead', 1, 's1', 'working', 'main', 10, NULL, NULL, 0), (2, 2, 'task_coder', 1, 's2', 'stopped', 'web-lead', 10, 20, NULL, 7), (3, 3, 'batch_reviewer', NULL, 's3', 'idle', 'review-lead', 10, NULL, 30, 0), (4, 5, 'task_coder', 1, 's5', 'working', 'web-lead', 15, NULL, NULL, 2);
+INSERT INTO worker_tasks (worker_process_id, task_id) VALUES (2, 1), (4, 2);
+INSERT INTO worker_proposals (worker_process_id, proposal_id) VALUES (3, 1);
+INSERT INTO worker_permission_questions (id, number, kind, worker_process_id, session_id, request_id, tool, input, created_at) VALUES (1, 1, 'tool', 2, 's2', 'r1', 'Bash', '{}', 0);
+";
+
+#[tokio::test]
+async fn a_stored_task_coder_becomes_a_task_worker_and_keeps_its_rows() {
+    use sqlx::Connection;
+    let dir = tempfile::TempDir::new().unwrap();
+    let paths = fold_core::ProjectPaths::new(dir.path().join("project"));
+    std::fs::create_dir_all(paths.db().parent().unwrap()).unwrap();
+    let options = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(paths.db())
+        .create_if_missing(true)
+        .foreign_keys(true);
+    let mut conn = sqlx::SqliteConnection::connect_with(&options)
+        .await
+        .unwrap();
+    let mut before: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/project");
+    let rename = before
+        .migrations
+        .iter()
+        .position(|migration| migration.description == "task workers")
+        .unwrap();
+    before.migrations = std::borrow::Cow::Owned(before.migrations[..rename].to_vec());
+    before.run(&mut conn).await.unwrap();
+    sqlx::raw_sql(OLD_WORKERS).execute(&mut conn).await.unwrap();
+    conn.close().await.unwrap();
+
+    let store = Store::open_project(&paths).await.unwrap();
+    let roles: Vec<(i64, String)> =
+        sqlx::query_as("SELECT id, role FROM worker_processes ORDER BY id")
+            .fetch_all(store.read())
+            .await
+            .unwrap();
+    assert_eq!(
+        roles,
+        [
+            (1, "area_lead".to_owned()),
+            (2, "task_worker".to_owned()),
+            (3, "batch_reviewer".to_owned()),
+            (4, "task_worker".to_owned())
+        ]
+    );
+    let mut read = store.read().acquire().await.unwrap();
+    let row = agents::find_worker_process(&mut read, &AgentName::parse("web-coder").unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (row.role, row.state, row.turns),
+        (Role::TaskWorker, WorkerState::Stopped, 7)
+    );
+    let running = agents::find_worker_process(&mut read, &AgentName::parse("web-coder-2").unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (running.role, running.state, running.turns),
+        (Role::TaskWorker, WorkerState::Working, 2)
+    );
+    drop(read);
+    assert_eq!(
+        count(
+            &store,
+            "SELECT (SELECT COUNT(*) FROM worker_tasks WHERE worker_process_id IN (2, 4)) + (SELECT COUNT(*) FROM worker_proposals WHERE worker_process_id = 3) + (SELECT COUNT(*) FROM worker_permission_questions WHERE worker_process_id = 2)"
+        )
+        .await,
+        4
+    );
+    let broken = sqlx::query("PRAGMA foreign_key_check")
+        .fetch_all(store.read())
+        .await
+        .unwrap();
+    assert!(broken.is_empty());
+
+    exec(&store, "INSERT INTO agents (id, name, created_at) VALUES (9, 'late', 0), (10, 'review-lead', 0), (11, 'review-lead-2', 0)")
+        .await
+        .unwrap();
+    let old_role = exec(
+        &store,
+        "INSERT INTO worker_processes (agent_id, role, area_id, session_id, state, started_by, started_at) VALUES (9, 'task_coder', 1, 's9', 'working', 'web-lead', 40)",
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        old_role
+            .to_string()
+            .contains("worker_processes_role_values"),
+        "{old_role}"
+    );
+    let lead_binding = exec(
+        &store,
+        "INSERT INTO worker_tasks (worker_process_id, task_id) VALUES (1, 2)",
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        lead_binding
+            .to_string()
+            .contains("worker_tasks_task_worker_only")
+    );
+    exec(
+        &store,
+        "INSERT INTO worker_tasks (worker_process_id, task_id) VALUES (2, 2)",
+    )
+    .await
+    .unwrap();
+    let moved = exec(
+        &store,
+        "UPDATE worker_processes SET role = 'area_lead' WHERE id = 2",
+    )
+    .await
+    .unwrap_err();
+    assert!(moved.to_string().contains("worker_processes_fixed"));
+    let deleted = exec(&store, "DELETE FROM worker_processes WHERE id = 3")
+        .await
+        .unwrap_err();
+    assert!(deleted.to_string().contains("keeps every worker"));
+    let lead = "INSERT INTO worker_processes (agent_id, role, session_id, state, started_by, started_at) VALUES (10, 'review_lead', 's10', 'working', 'main', 40)";
+    exec(&store, lead).await.unwrap();
+    let second_lead = exec(
+        &store,
+        &lead.replace("(10,", "(11,").replace("'s10'", "'s11'"),
+    )
+    .await
+    .unwrap_err();
+    assert!(second_lead.to_string().contains("UNIQUE"), "{second_lead}");
 }

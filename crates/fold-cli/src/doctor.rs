@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use clap::Args;
 use fold_core::events::types;
-use fold_core::{Clock, FoldError, ProjectPaths, Timestamp, codes};
+use fold_core::{Clock, FoldError, ProjectPaths, Role, Timestamp, codes};
 use fold_daemon::SystemClock;
 use fold_daemon::services::agents::claude::{AuthStatus, ClaudeVersion, MIN_CLAUDE_VERSION};
 use fold_vcs::git::Git;
@@ -699,6 +699,7 @@ fn project_checks(
         Check::not_applicable("inotify watches")
     });
     checks.push(claude_files_check(root));
+    checks.push(role_prompts_check(&paths));
     let home = host.dirs.home.as_deref().map(absolute_dir);
     checks.extend(shadowing_checks(root, home.as_deref()));
     checks
@@ -1029,6 +1030,46 @@ fn claude_files_check(root: &Path) -> Check {
     } else {
         Check::warn("claude files", problems.join("; "), "fld init --refresh")
     }
+}
+
+/// fold looks up a project's prompt by the role's file name and starts a worker with the shipped prompt when that file is absent, so a prompt under any other name is never read and nothing else says so.
+fn role_prompts_check(paths: &ProjectPaths) -> Check {
+    const NAME: &str = "role prompts";
+    let main = paths.main_role_prompt();
+    let known: Vec<PathBuf> = Role::ALL
+        .iter()
+        .map(|role| paths.role_prompt(*role))
+        .chain([main.clone()])
+        .collect();
+    let mut unknown: Vec<String> = main
+        .parent()
+        .and_then(|dir| std::fs::read_dir(dir).ok())
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "md") && !known.contains(path))
+        .filter_map(|path| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .collect();
+    if unknown.is_empty() {
+        return Check::ok(NAME, "every prompt in .fold/roles names a role");
+    }
+    unknown.sort();
+    let roles: Vec<&str> = Role::ALL.iter().map(|role| role.as_str()).collect();
+    Check::warn(
+        NAME,
+        format!(
+            "fold never reads {} in .fold/roles, because no role has that name",
+            unknown.join(", ")
+        ),
+        format!(
+            "rename each file to <role>.md, where the role is {} or main",
+            roles.join(", ")
+        ),
+    )
 }
 
 fn shadowing_checks(root: &Path, home: Option<&Path>) -> Vec<Check> {

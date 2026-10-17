@@ -631,6 +631,7 @@ fn a_healthy_project_is_all_ok_and_nothing_changes_on_disk() {
             "project folder",
             "inotify watches",
             "claude files",
+            "role prompts",
             "claude md"
         ]
     );
@@ -1102,6 +1103,34 @@ fn the_fold_tools_and_hooks_are_matched_by_entry_not_by_substring() {
     assert_eq!(
         ok(r#"{"permissions":{"allow":"mcp__fold"}}"#),
         (false, false)
+    );
+}
+
+#[test]
+fn a_role_prompt_under_a_name_of_no_role_is_named_with_the_roles() {
+    let fixture = Fixture::new();
+    let root = fixture.project("demo");
+    let roles = root.join(".fold/roles");
+    std::fs::create_dir_all(&roles).unwrap();
+    for name in ["task_worker.md", "main.md", "notes.txt"] {
+        std::fs::write(roles.join(name), "# prompt\n").unwrap();
+    }
+    let checks = project_report(&fixture.bare_host(), &root, at(0));
+    assert_eq!(find(&checks, "role prompts").status, Status::Ok);
+    std::fs::write(roles.join("reviewer.md"), "# prompt\n").unwrap();
+    std::fs::write(roles.join("area-lead.md"), "# prompt\n").unwrap();
+    let checks = project_report(&fixture.bare_host(), &root, at(0));
+    let check = find(&checks, "role prompts");
+    assert_eq!(check.status, Status::Warn);
+    assert_eq!(
+        check.message,
+        "fold never reads area-lead.md, reviewer.md in .fold/roles, because no role has that name"
+    );
+    assert_eq!(
+        check.fix.as_deref(),
+        Some(
+            "rename each file to <role>.md, where the role is area_lead, review_lead, task_worker, batch_reviewer or main"
+        )
     );
 }
 

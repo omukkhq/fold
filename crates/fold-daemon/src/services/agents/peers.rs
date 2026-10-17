@@ -190,12 +190,12 @@ mod tests {
         let worker = || {
             Some(PeerWorker {
                 project: "app".to_owned(),
-                agent: AgentName::parse("web-coder").unwrap(),
+                agent: AgentName::parse("web-worker").unwrap(),
             })
         };
         assert_eq!(
             session_peer(worker(), "app"),
-            SessionPeer::Worker(AgentName::parse("web-coder").unwrap())
+            SessionPeer::Worker(AgentName::parse("web-worker").unwrap())
         );
         assert_eq!(
             session_peer(worker(), "other"),

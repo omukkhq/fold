@@ -699,7 +699,7 @@ mod tests {
         let project = tempfile::tempdir().unwrap();
         let paths = ProjectPaths::new(project.path());
         let main = AgentName::parse("main").unwrap();
-        let worker = AgentName::parse("web-coder").unwrap();
+        let worker = AgentName::parse("web-worker").unwrap();
         let other = "11111111-2222-4333-8444-555555555555";
         follow_record(&paths, &worker, other).unwrap();
         assert!(

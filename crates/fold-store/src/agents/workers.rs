@@ -265,7 +265,7 @@ pub async fn insert_worker_process(
     .await?)
 }
 
-/// Binds a task coder to `task`. A task bound already stays bound and counts as bound, so a list that names a task twice binds it once; an unknown task binds nothing and returns false.
+/// Binds a task worker to `task`. A task bound already stays bound and counts as bound, so a list that names a task twice binds it once; an unknown task binds nothing and returns false.
 pub async fn bind_task(
     tx: &mut WriteTx,
     worker_process_id: i64,
@@ -635,8 +635,8 @@ pub struct BoundWorker {
     pub agent: AgentName,
 }
 
-/// The running task coders bound to `task`. A `stopping` coder is left out with the ended ones: it takes no more work, so nothing waits for it.
-pub async fn coders_of_task(
+/// The running task workers bound to `task`. A `stopping` task worker is left out with the ended ones: it takes no more work, so nothing waits for it.
+pub async fn task_workers_of_task(
     executor: impl SqliteExecutor<'_>,
     task: TaskId,
 ) -> Result<Vec<BoundWorker>, StoreError> {
@@ -691,7 +691,7 @@ pub async fn reviewers_of_proposal(
         .collect()
 }
 
-/// How many bound tasks of each worker in `worker_process_ids` still wait for its work; every id has an entry. A task is finished when it is Done, when it is archived, when it has an integrated proposal (a proposal can integrate before fold looks), when it is a task without a proposal whose report waits for a lead check, or when it has an open proposal that is not conflicted and whose latest verdict on its newest version is not `request_changes`, read with the rule `reviews::get_proposal` uses. A requested change or a conflict therefore keeps the coder bound until it sends the next version.
+/// How many bound tasks of each worker in `worker_process_ids` still wait for its work; every id has an entry. A task is finished when it is Done, when it is archived, when it has an integrated proposal (a proposal can integrate before fold looks), when it is a task without a proposal whose report waits for a lead check, or when it has an open proposal that is not conflicted and whose latest verdict on its newest version is not `request_changes`, read with the rule `reviews::get_proposal` uses. A requested change or a conflict therefore keeps the task worker bound until it sends the next version.
 pub async fn tasks_awaiting_proposal(
     executor: impl SqliteExecutor<'_>,
     worker_process_ids: &[i64],
@@ -722,19 +722,19 @@ pub async fn tasks_awaiting_proposal(
     )
 }
 
-/// The newest version of an open proposal that waits on its author, a task coder, for a change that coder has not been started for since.
+/// The newest version of an open proposal that waits on its author, a task worker, for a change that task worker has not been started for since.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingResume {
     pub agent: AgentName,
     pub proposal: ProposalId,
     pub version: u32,
-    /// The latest verdict on the version requests changes, given after the coder last started.
+    /// The latest verdict on the version requests changes, given after the task worker last started.
     pub changes: bool,
-    /// The proposal is conflicted, by an integration of the version after the coder last started.
+    /// The proposal is conflicted, by an integration of the version after the task worker last started.
     pub conflict: bool,
 }
 
-/// The requested changes and conflicts that no start of their author has served, for task coders in one of `states`: each start moves the row's `started_at`, so a change recorded later than `started_at` is still owed. A resume that the worker limits refused leaves the row as it was, so it stays here until a start succeeds. For a running coder it is the change its current process has been running beside.
+/// The requested changes and conflicts that no start of their author has served, for task workers in one of `states`: each start moves the row's `started_at`, so a change recorded later than `started_at` is still owed. A resume that the worker limits refused leaves the row as it was, so it stays here until a start succeeds. For a running task worker it is the change its current process has been running beside.
 pub async fn pending_resumes(
     executor: impl SqliteExecutor<'_>,
     states: &[WorkerState],
@@ -766,7 +766,7 @@ pub async fn pending_resumes(
                JOIN proposals p ON p.task_id = b.task_id AND p.state = 'open'
                JOIN workers k ON k.id = p.author_worker_id AND k.agent_id = w.agent_id
                JOIN proposal_versions v ON v.proposal_id = p.id
-               WHERE w.role = 'task_coder' AND w.state IN (SELECT value FROM json_each(?1))
+               WHERE w.role = 'task_worker' AND w.state IN (SELECT value FROM json_each(?1))
                  AND v.version = (SELECT MAX(x.version) FROM proposal_versions x WHERE x.proposal_id = p.id)
            )
            SELECT agent AS "agent!: String", proposal AS "proposal!: i64", version AS "version!: i64",

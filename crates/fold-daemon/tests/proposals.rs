@@ -124,7 +124,7 @@ impl Fixture {
         let backend = register(&agents, "backend").await;
         register(&agents, "review").await;
         // `backend` may not decide on a proposal; `review` does as the review lead.
-        give_role(project.store(), "backend", Role::TaskCoder, None).await;
+        give_role(project.store(), "backend", Role::TaskWorker, None).await;
         give_role(project.store(), "review", Role::ReviewLead, None).await;
         Self {
             project,

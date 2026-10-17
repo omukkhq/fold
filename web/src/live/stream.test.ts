@@ -55,7 +55,7 @@ const presence = () =>
 const step = () =>
   `data: ${JSON.stringify({
     kind: "worker_output",
-    agent: "web-coder",
+    agent: "web-worker",
     step: "tool_use",
     tool: "Bash",
     text_length: null,
@@ -396,7 +396,7 @@ describe("startStream", () => {
     expect(h.log).toEqual([
       "open",
       "event 4",
-      "step web-coder tool_use",
+      "step web-worker tool_use",
       "event 5",
     ]);
     h.pipes[0]?.end();

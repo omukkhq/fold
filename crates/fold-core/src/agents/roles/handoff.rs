@@ -267,7 +267,7 @@ mod tests {
             role: Role::AreaLead,
             note: Some(" "),
             ..RefreshFacts {
-                role: Role::TaskCoder,
+                role: Role::TaskWorker,
                 name: &review,
                 area: None,
                 note: None,

@@ -114,7 +114,7 @@ export async function completeTask(slug: string, task: string): Promise<void> {
   );
 }
 
-/** Returns a reported `no_proposal` task to its coder with `note`, which the daemon gives the resumed coder. */
+/** Returns a reported `no_proposal` task to its task worker with `note`, which the daemon gives the resumed task worker. */
 export async function sendBackTask(
   slug: string,
   task: string,

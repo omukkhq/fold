@@ -198,7 +198,7 @@ impl Supervisor {
         while stops.join_next().await.is_some() {}
     }
 
-    /// The short-lived workers whose work `event` finished: a task coder once no bound task awaits its work (see [`agents::tasks_awaiting_proposal`]), checked when it opens a proposal, sends a new version or reports a task without a proposal and when a bound task is archived; a batch reviewer once every bound proposal has a verdict or is closed or integrated.
+    /// The short-lived workers whose work `event` finished: a task worker once no bound task awaits its work (see [`agents::tasks_awaiting_proposal`]), checked when it opens a proposal, sends a new version or reports a task without a proposal and when a bound task is archived; a batch reviewer once every bound proposal has a verdict or is closed or integrated.
     pub(super) async fn done_workers(
         &self,
         event: &fold_core::Event,
@@ -212,14 +212,17 @@ impl Supervisor {
             || kind == types::TASK_REPORTED)
             && let Some(task) = event.task
         {
-            let coders = agents::coders_of_task(read, task).await?;
-            let ids: Vec<i64> = coders.iter().map(|coder| coder.id).collect();
+            let task_workers = agents::task_workers_of_task(read, task).await?;
+            let ids: Vec<i64> = task_workers
+                .iter()
+                .map(|task_worker| task_worker.id)
+                .collect();
             let waiting = agents::tasks_awaiting_proposal(read, &ids).await?;
             done.extend(
-                coders
+                task_workers
                     .into_iter()
-                    .filter(|coder| waiting.get(&coder.id) == Some(&0))
-                    .map(|coder| coder.agent),
+                    .filter(|task_worker| waiting.get(&task_worker.id) == Some(&0))
+                    .map(|task_worker| task_worker.agent),
             );
         }
         let reviewers = if (kind == types::REVIEW_SUBMITTED
@@ -325,7 +328,8 @@ impl Supervisor {
                     .collect()
             };
             let waiting =
-                agents::tasks_awaiting_proposal(read, &of_role(fold_core::Role::TaskCoder)).await?;
+                agents::tasks_awaiting_proposal(read, &of_role(fold_core::Role::TaskWorker))
+                    .await?;
             let missing =
                 agents::proposals_without_verdict(read, &of_role(fold_core::Role::BatchReviewer))
                     .await?;
@@ -333,7 +337,7 @@ impl Supervisor {
                 rows.into_iter()
                     .filter(|row| {
                         let open = match row.role {
-                            fold_core::Role::TaskCoder => waiting.get(&row.id),
+                            fold_core::Role::TaskWorker => waiting.get(&row.id),
                             fold_core::Role::BatchReviewer => missing.get(&row.id),
                             fold_core::Role::AreaLead | fold_core::Role::ReviewLead => None,
                         };

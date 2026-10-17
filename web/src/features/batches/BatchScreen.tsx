@@ -259,9 +259,9 @@ export function BatchScreen({ slug, id }: { slug: string; id: string }) {
                   {proposal} conflicts with main
                 </p>
                 <p className="text-bar text-text-muted">
-                  The other members keep their verdicts. fold resumes the coder
-                  of {proposal} to resolve the conflict, then the reviewer
-                  checks the batch again.
+                  The other members keep their verdicts. fold resumes the task
+                  worker of {proposal} to resolve the conflict, then the
+                  reviewer checks the batch again.
                 </p>
               </div>
               <HrefLink

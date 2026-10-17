@@ -566,7 +566,7 @@ async fn gate_case(fx: &Fixture, code: &str) -> (Actor, Option<u32>) {
             (review, Some(3))
         }
         codes::INTEGRATOR_REQUIRED => {
-            give_role(fx.project.store(), "backend", Role::TaskCoder, None).await;
+            give_role(fx.project.store(), "backend", Role::TaskWorker, None).await;
             (by(&fx.backend.worker), None)
         }
         codes::AUTHOR_CANNOT_INTEGRATE => (by(&fx.frontend.worker), None),

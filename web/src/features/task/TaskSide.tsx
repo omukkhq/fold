@@ -344,8 +344,8 @@ function SendBackForm({
       )}
     >
       <Textarea
-        label="Note to the coder"
-        hint="fold resumes the coder with this note."
+        label="Note to the task worker"
+        hint="fold resumes the task worker with this note."
         rows={3}
         disabled={write.isPending}
         error={form.formState.errors.note?.message}
@@ -375,7 +375,7 @@ function SendBackForm({
   );
 }
 
-/** Takes the proposal group's place for a task without a proposal: the coder's newest report, how the lead check answered it, and the human's complete and send-back controls. */
+/** Takes the proposal group's place for a task without a proposal: the task worker's newest report, how the lead check answered it, and the human's complete and send-back controls. */
 function LeadCheck({
   slug,
   task,
@@ -645,7 +645,7 @@ function BlockerForm({
     >
       <Textarea
         label="Reason"
-        hint="Agents cannot claim the task or start a coder for it until a human clears the blocker."
+        hint="Agents cannot claim the task or start a task worker for it until a human clears the blocker."
         rows={3}
         disabled={write.isPending}
         error={form.formState.errors.reason?.message}
@@ -675,7 +675,7 @@ function BlockerForm({
   );
 }
 
-/** The blocker: while it is set, no agent claims the task and no lead starts a coder for it. */
+/** The blocker: while it is set, no agent claims the task and no lead starts a task worker for it. */
 function Blocker({
   slug,
   task,

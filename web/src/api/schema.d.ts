@@ -137,7 +137,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** A named human changes an area's profile. The next start of the area's lead or coders gets it; running workers keep theirs. */
+        /** A named human changes an area's profile. The next start of the area's lead or task workers gets it; running workers keep theirs. */
         patch: operations["update_area"];
         trace?: never;
     };
@@ -819,7 +819,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Puts a blocker on the task with its reason, or changes the reason: no agent claims the task and no lead starts a coder for it until a human clears it. Only a task in Backlog or Todo that no agent has started gets one. The status does not change. */
+        /** Puts a blocker on the task with its reason, or changes the reason: no agent claims the task and no lead starts a task worker for it until a human clears it. Only a task in Backlog or Todo that no agent has started gets one. The status does not change. */
         put: operations["set_blocker"];
         post?: never;
         /** Removes the blocker of the task, so agents can take it again. A task without a blocker is returned as it is. */
@@ -942,7 +942,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Sends a reported `no_proposal` task back to its coder with a note: the task returns to In Progress and fold resumes the coder. */
+        /** Sends a reported `no_proposal` task back to its task worker with a note: the task returns to In Progress and fold resumes the task worker. */
         post: operations["send_back_task"];
         delete?: never;
         options?: never;
@@ -1232,7 +1232,7 @@ export interface components {
              */
             lead: string | null;
             /**
-             * @description The MCP servers the area's lead and coders load; null when the role's servers apply.
+             * @description The MCP servers the area's lead and task workers load; null when the role's servers apply.
              * @example [
              *       "fold",
              *       "pencil"
@@ -1240,7 +1240,7 @@ export interface components {
              */
             mcp: string[] | null;
             /**
-             * @description The model of the area's lead and coders; null when the role's model applies.
+             * @description The model of the area's lead and task workers; null when the role's model applies.
              * @example opus
              */
             model: string | null;
@@ -1273,7 +1273,7 @@ export interface components {
             /** @description Plain text, not empty, at most 500 characters. */
             reason: string;
         };
-        /** @description The blocker of a task: while it is set, no agent claims the task and no lead starts a coder for it. It never changes the status. */
+        /** @description The blocker of a task: while it is set, no agent claims the task and no lead starts a task worker for it. It never changes the status. */
         BlockerMark: {
             /** @description Why the task waits for a person. */
             reason: string;
@@ -1324,7 +1324,7 @@ export interface components {
             /** @description Every direct prerequisite, as public task ids. */
             needs: string[];
             proposal: components["schemas"]["BoardProposal"] | null;
-            /** @description The note of the coder's open report on a `no_proposal` task, which waits for a lead check; null otherwise. */
+            /** @description The note of the task worker's open report on a `no_proposal` task, which waits for a lead check; null otherwise. */
             report: string | null;
             status: components["schemas"]["TaskStatus"];
             /** @example T-12 */
@@ -1677,9 +1677,9 @@ export interface components {
              * @example frontend
              */
             label: string;
-            /** @description The MCP servers of the area's lead and coders, by name; leave it out for the role's servers. */
+            /** @description The MCP servers of the area's lead and task workers, by name; leave it out for the role's servers. */
             mcp?: string[] | null;
-            /** @description The model of the area's lead and coders; leave it out for the role's model. */
+            /** @description The model of the area's lead and task workers; leave it out for the role's model. */
             model?: string | null;
             /** @example web */
             name: string;
@@ -2072,16 +2072,16 @@ export interface components {
             batch_reviewer: number;
             /**
              * Format: int64
-             * @description The most task coders that run at once in one area; null when an area has no limit of its own.
+             * @description The most task workers that run at once in one area; null when an area has no limit of its own.
              * @example 2
              */
             max_per_area: number | null;
             /**
              * Format: int64
-             * @description The most task coders that run at once.
+             * @description The most task workers that run at once.
              * @example 4
              */
-            task_coder: number;
+            task_worker: number;
         };
         /** @description What an active workspace holds right now. These are working changes, never history. */
         LiveWorkspace: {
@@ -2172,7 +2172,7 @@ export interface components {
         NeedsYouEntry: {
             /**
              * @description The agent that asks.
-             * @example web-coder
+             * @example web-worker
              */
             agent: string | null;
             /** @description The options of a `question` with choices; empty otherwise. */
@@ -2994,7 +2994,7 @@ export interface components {
             model: string | null;
             role: components["schemas"]["WorkerRole"];
         };
-        /** @description The note a send-back gives the task's coder. */
+        /** @description The note a send-back gives the task worker of the task. */
         SendBackBody: {
             /** @description What to change: plain text, not empty. */
             note: string;
@@ -3034,14 +3034,14 @@ export interface components {
             clear_max_per_area?: boolean;
             /**
              * Format: int64
-             * @description The most task coders that run at once in one area, a whole number with no upper bound; 0 lets none start.
+             * @description The most task workers that run at once in one area, a whole number with no upper bound; 0 lets none start.
              */
             max_per_area?: number | null;
             /**
              * Format: int64
-             * @description The most task coders that run at once, a whole number with no upper bound; 0 lets none start.
+             * @description The most task workers that run at once, a whole number with no upper bound; 0 lets none start.
              */
-            task_coder?: number | null;
+            task_worker?: number | null;
         };
         /** @description The newest durable sequence number and every live workspace, sent after a replay so a client starts from current state. */
         Snapshot: {
@@ -3163,7 +3163,7 @@ export interface components {
             revision: string;
         };
         /**
-         * @description How a task's work reaches Done: `proposal` through the integration of its proposal, `no_proposal` through a lead check of its coder's report, `human` when a person marks the work Done; no agent takes a human task.
+         * @description How a task's work reaches Done: `proposal` through the integration of its proposal, `no_proposal` through a lead check of its task worker's report, `human` when a person marks the work Done; no agent takes a human task.
          * @enum {string}
          */
         TaskKind: "proposal" | "no_proposal" | "human";
@@ -3183,14 +3183,14 @@ export interface components {
              */
             version: number;
         };
-        /** @description A coder's report that the work of a `no_proposal` task is finished, with the lead check that answered it. */
+        /** @description A task worker's report that the work of a `no_proposal` task is finished, with the lead check that answered it. */
         TaskReport: {
             /**
              * Format: int64
              * @description UTC milliseconds.
              */
             at: number;
-            /** @description The coder's worker. */
+            /** @description The worker that wrote the report. */
             by: string;
             note: string;
             resolution: components["schemas"]["ReportResolution"] | null;
@@ -3281,7 +3281,7 @@ export interface components {
             labels: components["schemas"]["Label"][];
             progress: components["schemas"]["ChecklistCounts"];
             proposal: components["schemas"]["TaskProposal"] | null;
-            /** @description The coder's reports on a `no_proposal` task, newest first; the first one without a resolution waits for a lead check. */
+            /** @description The task worker's reports on a `no_proposal` task, newest first; the first one without a resolution waits for a lead check. */
             reports: components["schemas"]["TaskReport"][];
             status: components["schemas"]["TaskStatus"];
             /** @description The rule of the status calculation that decided the status, with the ids it used. */
@@ -3450,7 +3450,7 @@ export interface components {
         WorkerOutput: {
             /**
              * @description The worker's agent name.
-             * @example web-coder
+             * @example web-worker
              */
             agent: string;
             /**
@@ -3508,7 +3508,7 @@ export interface components {
             model: string | null;
             /**
              * @description The worker's agent name.
-             * @example web-coder
+             * @example web-worker
              */
             name: string;
             /** @description The proposals a batch reviewer is bound to. */
@@ -3527,7 +3527,7 @@ export interface components {
              * @description UTC milliseconds; null while the process runs.
              */
             stopped_at: number | null;
-            /** @description The tasks a task coder is bound to. */
+            /** @description The tasks a task worker is bound to. */
             tasks: string[];
             /**
              * Format: int64
@@ -3556,7 +3556,7 @@ export interface components {
             tool: string;
             /**
              * @description The worker's agent name.
-             * @example web-coder
+             * @example web-worker
              */
             worker: string;
         };
@@ -3568,7 +3568,7 @@ export interface components {
          * @description The kinds of worker fold runs.
          * @enum {string}
          */
-        WorkerRole: "area_lead" | "review_lead" | "task_coder" | "batch_reviewer";
+        WorkerRole: "area_lead" | "review_lead" | "task_worker" | "batch_reviewer";
         WorkerWorkspace: {
             /**
              * @description The revision the workspace is based on.

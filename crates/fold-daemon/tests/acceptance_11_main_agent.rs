@@ -75,31 +75,37 @@ fn git(dir: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
-/// The lead starts a task coder for `task`; the coder connects once its first turn has ended.
-async fn start_coder(h: &mut Harness, task: &str) -> String {
+/// The lead starts a task worker for `task`; the task worker connects once its first turn has ended.
+async fn start_task_worker(h: &mut Harness, task: &str) -> String {
     let started = h
         .call(
             LEAD,
             "start_worker",
-            json!({"role": "task_coder", "tasks": [task], "model": "sonnet", "instructions": "Keep the endpoint small."}),
+            json!({"role": "task_worker", "tasks": [task], "model": "sonnet", "instructions": "Keep the endpoint small."}),
         )
         .await;
-    let coder = started["worker"]["name"].as_str().unwrap().to_owned();
-    until_state(h, &coder, WorkerState::Idle).await;
-    h.connect(&coder).await;
-    coder
+    let task_worker = started["worker"]["name"].as_str().unwrap().to_owned();
+    until_state(h, &task_worker, WorkerState::Idle).await;
+    h.connect(&task_worker).await;
+    task_worker
 }
 
-/// The coder builds `task` in its workspace and proposes it under `title`; fold then stops it.
-async fn build(h: &Harness, coder: &str, task: &str, file: &str, title: &str) -> (Work, String) {
-    let work = h.start_work(coder, task).await;
+/// The task worker builds `task` in its workspace and proposes it under `title`; fold then stops it.
+async fn build(
+    h: &Harness,
+    task_worker: &str,
+    task: &str,
+    file: &str,
+    title: &str,
+) -> (Work, String) {
+    let work = h.start_work(task_worker, task).await;
     work.write(&[(file, "pub fn handler() {}\n")]);
-    let proposal = h.propose(coder, &work, title).await;
-    until_state(h, coder, WorkerState::Stopped).await;
+    let proposal = h.propose(task_worker, &work, title).await;
+    until_state(h, task_worker, WorkerState::Stopped).await;
     (work, proposal)
 }
 
-/// Acceptance 11, the team: the main agent that `fld claude` starts defines an area, turns a human's request into three cards and starts the leads; the area lead starts coders, the review lead reviews a batch, fold resumes the coder whose proposal needs changes, integrates every approved proposal in dependency order with one Git commit each, sends the dependent task to the lead once it is ready, and stops every short-lived worker on its own.
+/// Acceptance 11, the team: the main agent that `fld claude` starts defines an area, turns a human's request into three cards and starts the leads; the area lead starts task workers, the review lead reviews a batch, fold resumes the task worker whose proposal needs changes, integrates every approved proposal in dependency order with one Git commit each, sends the dependent task to the lead once it is ready, and stops every short-lived worker on its own.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn acceptance_11_the_main_agent_runs_the_team_from_a_request_to_three_commits() {
     let mut fake = FakeClaude::new("result");
@@ -205,7 +211,7 @@ async fn acceptance_11_the_main_agent_runs_the_team_from_a_request_to_three_comm
         .call(
             MAIN,
             "start_worker",
-            json!({"role": "area_lead", "area": "backend", "instructions": "Start a coder for each ready task."}),
+            json!({"role": "area_lead", "area": "backend", "instructions": "Start a task worker for each ready task."}),
         )
         .await;
     assert_eq!(lead["worker"]["name"], LEAD, "{lead}");
@@ -231,19 +237,19 @@ async fn acceptance_11_the_main_agent_runs_the_team_from_a_request_to_three_comm
     h.connect(LEAD).await;
     h.connect(REVIEW_LEAD).await;
 
-    let list_coder = start_coder(&mut h, "T-1").await;
-    let item_coder = start_coder(&mut h, "T-2").await;
+    let list_task_worker = start_task_worker(&mut h, "T-1").await;
+    let item_task_worker = start_task_worker(&mut h, "T-2").await;
     assert_eq!(
-        [list_coder.as_str(), item_coder.as_str()],
-        ["backend-coder", "backend-coder-2"]
+        [list_task_worker.as_str(), item_task_worker.as_str()],
+        ["backend-worker", "backend-worker-2"]
     );
-    let coder_run = &until_runs(&fake, &item_coder, 1).await[0];
-    assert_eq!(coder_run.flag("--model"), Some("sonnet"));
-    assert_eq!(coder_run.env["CLAUDE_CODE_PROMPT_CACHE_TTL"], "5m");
-    assert!(coder_run.stdin[1].contains("Keep the endpoint small."));
+    let task_worker_run = &until_runs(&fake, &item_task_worker, 1).await[0];
+    assert_eq!(task_worker_run.flag("--model"), Some("sonnet"));
+    assert_eq!(task_worker_run.env["CLAUDE_CODE_PROMPT_CACHE_TTL"], "5m");
+    assert!(task_worker_run.stdin[1].contains("Keep the endpoint small."));
     let (_, list) = build(
         &h,
-        &list_coder,
+        &list_task_worker,
         "T-1",
         "src/list.rs",
         "Add the list endpoint",
@@ -251,7 +257,7 @@ async fn acceptance_11_the_main_agent_runs_the_team_from_a_request_to_three_comm
     .await;
     let (item_work, item) = build(
         &h,
-        &item_coder,
+        &item_task_worker,
         "T-2",
         "src/item.rs",
         "Add the item endpoint",
@@ -287,10 +293,10 @@ async fn acceptance_11_the_main_agent_runs_the_team_from_a_request_to_three_comm
     )
     .await;
 
-    let resumed = until_runs(&fake, &item_coder, 2).await;
+    let resumed = until_runs(&fake, &item_task_worker, 2).await;
     assert!(resumed[1].has("--resume"));
     assert!(resumed[1].stdin[1].contains("Answer 404 for a missing item."));
-    until_state(&h, &item_coder, WorkerState::Idle).await;
+    until_state(&h, &item_task_worker, WorkerState::Idle).await;
     eventually(WAIT, async || {
         let view = h.call(MAIN, "get_task", json!({"id": "T-1"})).await;
         if view["status"] == "done" {
@@ -302,16 +308,16 @@ async fn acceptance_11_the_main_agent_runs_the_team_from_a_request_to_three_comm
     .await;
     item_work.write(&[("src/item.rs", "pub fn handler() -> u16 { 404 }\n")]);
     h.call(
-        &item_coder,
+        &item_task_worker,
         "record_changes",
         json!({"ws": item_work.workspace, "message": "Answer 404 for a missing item"}),
     )
     .await;
     let updated = h
-        .call(&item_coder, "update_proposal", json!({"id": "P-2"}))
+        .call(&item_task_worker, "update_proposal", json!({"id": "P-2"}))
         .await;
     assert_eq!(updated["version"], "v2", "{updated}");
-    until_state(&h, &item_coder, WorkerState::Stopped).await;
+    until_state(&h, &item_task_worker, WorkerState::Stopped).await;
     h.call(
         REVIEW_LEAD,
         "submit_review",
@@ -332,11 +338,11 @@ async fn acceptance_11_the_main_agent_runs_the_team_from_a_request_to_three_comm
     })
     .await;
     assert_eq!(notified, 1);
-    let search_coder = start_coder(&mut h, "T-3").await;
-    assert_eq!(search_coder, "backend-coder-3");
+    let search_task_worker = start_task_worker(&mut h, "T-3").await;
+    assert_eq!(search_task_worker, "backend-worker-3");
     let (_, search) = build(
         &h,
-        &search_coder,
+        &search_task_worker,
         "T-3",
         "src/search.rs",
         "Add the search endpoint",
@@ -392,7 +398,7 @@ async fn acceptance_11_the_main_agent_runs_the_team_from_a_request_to_three_comm
     let workers = h.handle.agents().list_workers().await.unwrap();
     for row in &workers {
         match row.role {
-            Role::TaskCoder | Role::BatchReviewer => {
+            Role::TaskWorker | Role::BatchReviewer => {
                 assert_eq!(row.state, WorkerState::Stopped, "{}", row.agent);
                 assert_eq!(row.exit_code, Some(0), "{}", row.agent);
             }
@@ -404,7 +410,7 @@ async fn acceptance_11_the_main_agent_runs_the_team_from_a_request_to_three_comm
     assert_eq!(
         workers
             .iter()
-            .filter(|row| row.role == Role::TaskCoder)
+            .filter(|row| row.role == Role::TaskWorker)
             .count(),
         3
     );
@@ -418,9 +424,9 @@ async fn acceptance_11_the_main_agent_runs_the_team_from_a_request_to_three_comm
         [
             ("main".to_owned(), json!(LEAD)),
             ("main".to_owned(), json!(REVIEW_LEAD)),
-            (LEAD.to_owned(), json!("backend-coder")),
-            (LEAD.to_owned(), json!("backend-coder-2")),
-            (LEAD.to_owned(), json!("backend-coder-3")),
+            (LEAD.to_owned(), json!("backend-worker")),
+            (LEAD.to_owned(), json!("backend-worker-2")),
+            (LEAD.to_owned(), json!("backend-worker-3")),
         ]
     );
     integrate.stop().await;

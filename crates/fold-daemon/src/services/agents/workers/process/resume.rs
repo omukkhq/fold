@@ -24,7 +24,7 @@ use crate::services::agents::workers::{
 use crate::services::events::EventBuffer;
 use crate::services::projects::load_config;
 
-/// Why fold resumes a coder: a review asked for changes, or the proposal conflicts with main at integration.
+/// Why fold resumes a task worker: a review asked for changes, or the proposal conflicts with main at integration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Reason {
     Changes,
@@ -105,7 +105,7 @@ pub(super) fn session_signal(message: &ClaudeMessage, resumed: bool) -> Option<b
     }
 }
 
-/// The proposal versions an event sends back to their authors. A batch review appends one `review.submitted` per member before its `review.batch_submitted`; the batch event alone counts, so a coder with several members is resumed once.
+/// The proposal versions an event sends back to their authors. A batch review appends one `review.submitted` per member before its `review.batch_submitted`; the batch event alone counts, so a task worker with several members is resumed once.
 pub(super) fn resume_items(event: &Event) -> Vec<ResumeItem> {
     let kind = event.event_type;
     let version = |data: &Value| {
@@ -237,7 +237,7 @@ impl Supervisor {
         self.launch(&row, true, Some(turn)).await
     }
 
-    /// Hands each proposal version back to the task coder that wrote it. A stale item (the proposal moved on, was closed or integrated) and an author that is not a supervised task coder are left alone: an interactive author and a running coder get the push notice on their own.
+    /// Hands each proposal version back to the task worker that wrote it. A stale item (the proposal moved on, was closed or integrated) and an author that is not a supervised task worker are left alone: an interactive author and a running task worker get the push notice on their own.
     pub(super) async fn resume_authors(self, items: Vec<ResumeItem>) {
         let mut by_author: BTreeMap<AgentName, Vec<ResumeItem>> = BTreeMap::new();
         for item in items {
@@ -297,7 +297,7 @@ impl Supervisor {
         }
     }
 
-    /// Tells each running task coder about the requested changes and conflicts recorded since its process started, from the stored reviews and integrations. The watcher calls it after it fell behind the bus, when the events that would have reached the coder as notices may be lost.
+    /// Tells each running task worker about the requested changes and conflicts recorded since its process started, from the stored reviews and integrations. The watcher calls it after it fell behind the bus, when the events that would have reached the task worker as notices may be lost.
     pub(super) async fn notify_running_authors(&self) {
         for (agent, found) in self.owed_to_running().await {
             if let Some(run) = lock(&self.inner.running).get(&agent) {
@@ -306,7 +306,7 @@ impl Supervisor {
         }
     }
 
-    /// The requested changes and conflicts recorded since each working or idle task coder's process started, by coder: the work its notices would have told it of.
+    /// The requested changes and conflicts recorded since each working or idle task worker's process started, by task worker: the work its notices would have told it of.
     pub(super) async fn owed_to_running(&self) -> BTreeMap<AgentName, Vec<Found>> {
         let mut owed = BTreeMap::new();
         let pending = match agents::pending_resumes(
@@ -319,7 +319,7 @@ impl Supervisor {
             Err(error) => {
                 tracing::warn!(
                     code = error.log_code(),
-                    "could not read the changes owed to running coders"
+                    "could not read the changes owed to running task workers"
                 );
                 return owed;
             }
@@ -348,7 +348,7 @@ impl Supervisor {
                 match self.load(item).await {
                     Ok(one) => found.push(one),
                     Err(error) => {
-                        tracing::warn!(%agent, code = crate::services::agents::code_of(&error), "could not read the work owed by a running coder");
+                        tracing::warn!(%agent, code = crate::services::agents::code_of(&error), "could not read the work owed by a running task worker");
                     }
                 }
             }
@@ -359,13 +359,13 @@ impl Supervisor {
         owed
     }
 
-    /// The requested changes and conflicts that a task coder, caught by a pause before its process read its first turn, still owes on the open proposals of its bound tasks. Only a new version clears them, so the proposals' state says what the unread turn held, whatever the row's `started_at`.
+    /// The requested changes and conflicts that a task worker, caught by a pause before its process read its first turn, still owes on the open proposals of its bound tasks. Only a new version clears them, so the proposals' state says what the unread turn held, whatever the row's `started_at`.
     pub(super) async fn owed_to_unstarted(
         &self,
         row: &agents::WorkerProcessRow,
     ) -> Result<Vec<Found>, AgentError> {
         let mut found = Vec::new();
-        if row.role != Role::TaskCoder {
+        if row.role != Role::TaskWorker {
             return Ok(found);
         }
         let read = self.inner.store.read();
@@ -403,7 +403,7 @@ impl Supervisor {
         agent: &AgentName,
         items: &[ResumeItem],
     ) -> Result<(), AgentError> {
-        // The row is read under the lock, so a second event finds the coder running and leaves it to its stdin notices.
+        // The row is read under the lock, so a second event finds the task worker running and leaves it to its stdin notices.
         let resuming = self.inner.resuming.lock().await;
         let mut conn = self
             .inner
@@ -417,7 +417,7 @@ impl Supervisor {
         let Some(worker) = worker else {
             return Ok(());
         };
-        if worker.role != Role::TaskCoder || worker.state.is_running() {
+        if worker.role != Role::TaskWorker || worker.state.is_running() {
             return Ok(());
         }
         let mut found = Vec::with_capacity(items.len());
@@ -428,9 +428,9 @@ impl Supervisor {
         let turn = resume_turn(&found);
         let watch = match self.resume(agent, turn.clone(), &tasks).await {
             Ok(watch) => watch,
-            // The coder's row is left as it was, so the work stays owed and the resume serves it.
+            // The task worker's row is left as it was, so the work stays owed and the resume serves it.
             Err(error) if is_paused_refusal(&error) => return Ok(()),
-            // A start outside this path, such as `resume_worker`, came first; the coder takes this turn as its next one.
+            // A start outside this path, such as `resume_worker`, came first; the task worker takes this turn as its next one.
             Err(AgentError::Fold(error)) if error.code() == codes::WORKER_EXISTS => {
                 if let Some(run) = lock(&self.inner.running).get(agent) {
                     let _ = run.input.send(Input::Turn(turn));
@@ -491,7 +491,7 @@ impl Supervisor {
         }
     }
 
-    /// What a worker whose session is gone is told in its new session: a task coder to check its claims and proposals, a batch reviewer to check its verdicts, a lead to read its latest hand-off note, then the starter's instructions.
+    /// What a worker whose session is gone is told in its new session: a task worker to check its claims and proposals, a batch reviewer to check its verdicts, a lead to read its latest hand-off note, then the starter's instructions.
     async fn lost_instructions(
         &self,
         agent: &AgentName,
@@ -508,7 +508,7 @@ impl Supervisor {
             .await?
             .ok_or_else(|| not_supervised(agent))?;
         let mut text = match row.role {
-            Role::TaskCoder => RESTART_LOST.to_owned(),
+            Role::TaskWorker => RESTART_LOST.to_owned(),
             Role::BatchReviewer => REVIEWER_LOST.to_owned(),
             Role::AreaLead | Role::ReviewLead => {
                 match agents::latest_handoff(&mut *conn, row.agent_id).await? {
@@ -684,7 +684,7 @@ fn found_turn_parts(found: &[Found]) -> String {
         .join("\n\n")
 }
 
-/// The turn a resumed coder gets: each proposal version it must change, then how it ends.
+/// The turn a resumed task worker gets: each proposal version it must change, then how it ends.
 fn resume_turn(found: &[Found]) -> String {
     format!(
         "fold resumed you because work you proposed needs you again.\n\n{}\n\n{STOP_LINE}",
@@ -692,7 +692,7 @@ fn resume_turn(found: &[Found]) -> String {
     )
 }
 
-/// The turn a running coder gets for work it proposed that needs it again.
+/// The turn a running task worker gets for work it proposed that needs it again.
 pub(super) fn notice_turn(found: &[Found]) -> String {
     format!(
         "Work you proposed needs you again.\n\n{}\n\n{STOP_LINE}",
@@ -709,7 +709,7 @@ fn fresh_instructions(parts: &str) -> String {
 
 const STOP_LINE: &str = "fold stops you once each of these proposals has its new version.";
 
-/// What a task coder whose session a daemon start could not resume is told.
+/// What a task worker whose session a daemon start could not resume is told.
 const RESTART_LOST: &str = "fold restarted and your earlier session is gone, so fold started you in a new one. Check your claims, your task workspaces and the proposals you already sent before you go on. Send a new version of an open proposal with update_proposal; do not open a second one.";
 
 /// What a lead whose session could not be resumed is told before its note.

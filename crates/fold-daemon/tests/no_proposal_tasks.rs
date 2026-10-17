@@ -11,7 +11,7 @@ use crate::workers_support::{FakeClaude, Run};
 
 const MAIN: &str = "frontend";
 const LEAD: &str = "web-lead";
-const CODER: &str = "web-coder";
+const TASK_WORKER: &str = "web-worker";
 
 async fn worker(harness: &Harness, agent: &str) -> WorkerProcessRow {
     harness
@@ -67,8 +67,8 @@ async fn task(harness: &Harness, id: &str) -> Value {
     harness.call(MAIN, "get_task", json!({"id": id})).await
 }
 
-/// Area `web` over label `ui` with T-1, a task without a proposal, and T-2, which needs T-1; the area lead `web-lead` and the task coder `web-coder` it started for T-1, both connected.
-async fn designed_by_a_coder(fake: &FakeClaude) -> Harness {
+/// Area `web` over label `ui` with T-1, a task without a proposal, and T-2, which needs T-1; the area lead `web-lead` and the task worker `web-worker` it started for T-1, both connected.
+async fn designed_by_a_task_worker(fake: &FakeClaude) -> Harness {
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
     harness.make_main(MAIN).await;
     harness
@@ -105,43 +105,47 @@ async fn designed_by_a_coder(fake: &FakeClaude) -> Harness {
         .call(
             LEAD,
             "start_worker",
-            json!({"role": "task_coder", "tasks": ["T-1"]}),
+            json!({"role": "task_worker", "tasks": ["T-1"]}),
         )
         .await;
-    assert_eq!(started["worker"]["name"], CODER);
-    until_state(&harness, CODER, WorkerState::Idle).await;
-    harness.connect(CODER).await;
+    assert_eq!(started["worker"]["name"], TASK_WORKER);
+    until_state(&harness, TASK_WORKER, WorkerState::Idle).await;
+    harness.connect(TASK_WORKER).await;
     harness
 }
 
-/// The coder claims T-1 and reports it finished, after which fold stops it.
+/// The task worker claims T-1 and reports it finished, after which fold stops it.
 async fn reported(harness: &Harness, note: &str) -> Value {
     harness
-        .call(CODER, "claim_task", json!({"id": "T-1"}))
+        .call(TASK_WORKER, "claim_task", json!({"id": "T-1"}))
         .await;
     let done = harness
-        .call(CODER, "report_task", json!({"id": "T-1", "note": note}))
+        .call(
+            TASK_WORKER,
+            "report_task",
+            json!({"id": "T-1", "note": note}),
+        )
         .await;
     assert_eq!(done, json!({"id": "T-1", "status": "review"}));
-    until_state(harness, CODER, WorkerState::Stopped).await;
+    until_state(harness, TASK_WORKER, WorkerState::Stopped).await;
     task(harness, "T-1").await
 }
 
 #[tokio::test]
 async fn a_task_without_a_proposal_goes_from_todo_to_done_through_its_claim_report_and_check() {
     let fake = FakeClaude::new("result");
-    let mut harness = designed_by_a_coder(&fake).await;
+    let mut harness = designed_by_a_task_worker(&fake).await;
     assert_eq!(task(&harness, "T-1").await["kind"], "no_proposal");
 
     harness
-        .call(CODER, "claim_task", json!({"id": "T-1"}))
+        .call(TASK_WORKER, "claim_task", json!({"id": "T-1"}))
         .await;
     let claimed = task(&harness, "T-1").await;
     assert_eq!(claimed["status"], "in_progress", "{claimed}");
     assert_eq!(claimed["workspace"], Value::Null);
     assert_eq!(
         claimed["status_reason"],
-        "Calculated: a coder holds the claim, no report yet"
+        "Calculated: a task worker holds the claim, no report yet"
     );
     for (tool, arguments) in [
         ("create_workspace", json!({"task": "T-1"})),
@@ -150,7 +154,7 @@ async fn a_task_without_a_proposal_goes_from_todo_to_done_through_its_claim_repo
             json!({"task": "T-1", "title": "Draw the board"}),
         ),
     ] {
-        let refused = harness.refused(CODER, tool, arguments).await;
+        let refused = harness.refused(TASK_WORKER, tool, arguments).await;
         assert_eq!(refused["code"], codes::TASK_KIND_MISMATCH, "{tool}");
     }
     let early = harness
@@ -160,26 +164,30 @@ async fn a_task_without_a_proposal_goes_from_todo_to_done_through_its_claim_repo
 
     let done = harness
         .call(
-            CODER,
+            TASK_WORKER,
             "report_task",
             json!({"id": "T-1", "note": "Drew the five board screens."}),
         )
         .await;
     assert_eq!(done, json!({"id": "T-1", "status": "review"}));
     let again = harness
-        .refused(CODER, "report_task", json!({"id": "T-1", "note": "Again."}))
+        .refused(
+            TASK_WORKER,
+            "report_task",
+            json!({"id": "T-1", "note": "Again."}),
+        )
         .await;
     assert_eq!(again["code"], codes::TASK_ALREADY_REPORTED);
-    until_state(&harness, CODER, WorkerState::Stopped).await;
+    until_state(&harness, TASK_WORKER, WorkerState::Stopped).await;
     let waiting = task(&harness, "T-1").await;
     assert_eq!(waiting["status"], "review");
     assert_eq!(
         waiting["reports"],
-        json!([{"by": CODER, "note": "Drew the five board screens.", "resolution": null, "resolved_by": null, "send_back_note": null}])
+        json!([{"by": TASK_WORKER, "note": "Drew the five board screens.", "resolution": null, "resolved_by": null, "send_back_note": null}])
     );
 
     let own = harness
-        .refused(CODER, "complete_task", json!({"id": "T-1"}))
+        .refused(TASK_WORKER, "complete_task", json!({"id": "T-1"}))
         .await;
     assert_eq!(own["code"], codes::TASK_CHECK_DENIED);
     harness
@@ -220,11 +228,11 @@ async fn a_task_without_a_proposal_goes_from_todo_to_done_through_its_claim_repo
 }
 
 #[tokio::test]
-async fn a_send_back_resumes_the_same_coder_session_with_the_note() {
+async fn a_send_back_resumes_the_same_task_worker_session_with_the_note() {
     let fake = FakeClaude::new("result");
-    let harness = designed_by_a_coder(&fake).await;
+    let harness = designed_by_a_task_worker(&fake).await;
     reported(&harness, "Drew the board screens.").await;
-    let stopped = worker(&harness, CODER).await;
+    let stopped = worker(&harness, TASK_WORKER).await;
 
     let (status, sent) = harness
         .http(
@@ -242,7 +250,7 @@ async fn a_send_back_resumes_the_same_coder_session_with_the_note() {
         "Use the new colour tokens."
     );
 
-    let runs = until_runs(&fake, CODER, 2).await;
+    let runs = until_runs(&fake, TASK_WORKER, 2).await;
     assert_eq!(runs[1].flag("--resume"), Some(stopped.session_id.as_str()));
     let turn = &runs[1].stdin[1];
     for wanted in [
@@ -269,19 +277,19 @@ async fn a_send_back_resumes_the_same_coder_session_with_the_note() {
     .await;
     assert_eq!(
         resumed[0],
-        json!({"agent": CODER, "reason": "sent_back", "resumed": true})
+        json!({"agent": TASK_WORKER, "reason": "sent_back", "resumed": true})
     );
-    let running = until_state(&harness, CODER, WorkerState::Idle).await;
+    let running = until_state(&harness, TASK_WORKER, WorkerState::Idle).await;
     assert_eq!(running.session_id, stopped.session_id);
 
     harness
         .call(
-            CODER,
+            TASK_WORKER,
             "report_task",
             json!({"id": "T-1", "note": "Switched to the colour tokens."}),
         )
         .await;
-    until_state(&harness, CODER, WorkerState::Stopped).await;
+    until_state(&harness, TASK_WORKER, WorkerState::Stopped).await;
     let (status, completed) = harness
         .http(
             Method::POST,
@@ -299,15 +307,15 @@ async fn a_send_back_resumes_the_same_coder_session_with_the_note() {
 #[tokio::test]
 async fn the_kind_is_chosen_by_whoever_may_check_the_task() {
     let fake = FakeClaude::new("result");
-    let harness = designed_by_a_coder(&fake).await;
-    let by_coder = harness
+    let harness = designed_by_a_task_worker(&fake).await;
+    let by_task_worker = harness
         .refused(
-            CODER,
+            TASK_WORKER,
             "create_task",
             json!({"title": "Draw icons", "labels": ["ui"], "kind": "no_proposal"}),
         )
         .await;
-    assert_eq!(by_coder["code"], codes::TASK_KIND_DENIED);
+    assert_eq!(by_task_worker["code"], codes::TASK_KIND_DENIED);
     let outside = harness
         .refused(
             LEAD,
@@ -380,11 +388,11 @@ async fn the_kind_is_chosen_by_whoever_may_check_the_task() {
 #[tokio::test]
 async fn the_board_card_of_a_reported_task_carries_the_report() {
     let fake = FakeClaude::new("result");
-    let harness = designed_by_a_coder(&fake).await;
+    let harness = designed_by_a_task_worker(&fake).await;
     let reported = reported(&harness, "Drew the board screens.").await;
     assert_eq!(
         reported["status_reason"],
-        "Calculated: the coder reported the work finished and it waits for a lead check"
+        "Calculated: the task worker reported the work finished and it waits for a lead check"
     );
     let (_, board) = harness
         .http(
@@ -400,7 +408,7 @@ async fn the_board_card_of_a_reported_task_carries_the_report() {
     assert_eq!(review["cards"][0]["kind"], "no_proposal");
     assert_eq!(review["cards"][0]["report"], "Drew the board screens.");
     let released = harness
-        .call(CODER, "release_task", json!({"id": "T-1"}))
+        .call(TASK_WORKER, "release_task", json!({"id": "T-1"}))
         .await;
     assert_eq!(released["holder"], Value::Null);
     assert_eq!(task(&harness, "T-1").await["status"], "review");
@@ -426,7 +434,7 @@ async fn the_board_card_of_a_reported_task_carries_the_report() {
 #[tokio::test]
 async fn a_send_back_the_worker_limits_refuse_runs_once_a_worker_stops() {
     let fake = FakeClaude::new("result");
-    let harness = designed_by_a_coder(&fake).await;
+    let harness = designed_by_a_task_worker(&fake).await;
     reported(&harness, "Drew the board screens.").await;
     std::fs::write(
         std::path::Path::new(harness.root()).join(".fold/config.toml"),
@@ -437,7 +445,7 @@ async fn a_send_back_the_worker_limits_refuse_runs_once_a_worker_stops() {
         .call(
             LEAD,
             "start_worker",
-            json!({"role": "task_coder", "tasks": ["T-2"]}),
+            json!({"role": "task_worker", "tasks": ["T-2"]}),
         )
         .await;
     let other = other["worker"]["name"].as_str().unwrap().to_owned();
@@ -455,15 +463,15 @@ async fn a_send_back_the_worker_limits_refuse_runs_once_a_worker_stops() {
         )
         .await;
     assert_eq!(
-        worker(&harness, CODER).await.state,
+        worker(&harness, TASK_WORKER).await.state,
         WorkerState::Stopped,
-        "the area holds the other coder"
+        "the area holds the other task worker"
     );
 
     harness
         .call(LEAD, "stop_worker", json!({"name": other}))
         .await;
-    let runs = until_runs(&fake, CODER, 2).await;
+    let runs = until_runs(&fake, TASK_WORKER, 2).await;
     assert!(runs[1].has("--resume"));
     assert!(
         runs[1].stdin[1].contains("Add the empty states."),
@@ -475,7 +483,7 @@ async fn a_send_back_the_worker_limits_refuse_runs_once_a_worker_stops() {
 #[tokio::test]
 async fn a_report_reaches_the_area_lead_and_its_check_waits_for_the_prerequisites() {
     let fake = FakeClaude::new("result");
-    let harness = designed_by_a_coder(&fake).await;
+    let harness = designed_by_a_task_worker(&fake).await;
     reported(&harness, "Drew the board screens.").await;
     until_stdin(
         &fake,
@@ -527,7 +535,7 @@ async fn a_report_reaches_the_area_lead_and_its_check_waits_for_the_prerequisite
 #[tokio::test]
 async fn a_task_with_the_human_review_mark_is_completed_only_by_a_human() {
     let fake = FakeClaude::new("result");
-    let harness = designed_by_a_coder(&fake).await;
+    let harness = designed_by_a_task_worker(&fake).await;
     harness
         .call(
             MAIN,
@@ -544,11 +552,11 @@ async fn a_task_with_the_human_review_mark_is_completed_only_by_a_human() {
             json!({"id": "T-1", "note": "Add the empty states."}),
         )
         .await;
-    until_runs(&fake, CODER, 2).await;
-    until_state(&harness, CODER, WorkerState::Idle).await;
+    until_runs(&fake, TASK_WORKER, 2).await;
+    until_state(&harness, TASK_WORKER, WorkerState::Idle).await;
     harness
         .call(
-            CODER,
+            TASK_WORKER,
             "report_task",
             json!({"id": "T-1", "note": "Added the empty states."}),
         )

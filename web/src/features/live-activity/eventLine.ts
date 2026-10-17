@@ -106,7 +106,7 @@ function approvedText(event: DurableEvent): string {
     : `approved ${request} as ${tasks.join(", ")}`;
 }
 
-/** A worker's agent name, and its role with spaces, such as `task coder`. */
+/** A worker's agent name. */
 function workerOf(event: DurableEvent): string {
   return text(event.data.agent) ?? "a worker";
 }
@@ -121,6 +121,16 @@ function bindRefusedText(event: DurableEvent): string {
     : `refused a session as ${agent} from ${from}`;
 }
 
+/** Stored events keep the role value they were written with, and `task_coder` there is the task worker role. */
+const STORED_ROLES: ReadonlyMap<string, string> = new Map([
+  ["task_coder", "task_worker"],
+]);
+
+/** A role with spaces, such as `task worker`. */
+function roleText(role: string): string {
+  return (STORED_ROLES.get(role) ?? role).replaceAll("_", " ");
+}
+
 function startedText(event: DurableEvent): string {
   const worker = workerOf(event);
   if (event.data.resumed === true) {
@@ -129,10 +139,10 @@ function startedText(event: DurableEvent): string {
   const role = text(event.data.role);
   return role === null
     ? `started ${worker}`
-    : `started ${worker} as ${role.replaceAll("_", " ")}`;
+    : `started ${worker} as ${roleText(role)}`;
 }
 
-/** A coder handed its proposal again: `resumed` is false when its session was gone and it started in a new one. */
+/** A task worker handed its proposal again: `resumed` is false when its session was gone and it started in a new one. */
 function resumedText(event: DurableEvent): string {
   const worker = workerOf(event);
   if (event.data.reason === "session_lost") {
@@ -242,7 +252,7 @@ const SPECS: Record<EventType, Spec> = {
   },
   "task.sent_back": {
     icon: Undo2,
-    text: (e) => `sent ${taskOf(e)} back to its coder`,
+    text: (e) => `sent ${taskOf(e)} back to its task worker`,
   },
   "task.blocked_changed": {
     icon: Hand,

@@ -69,7 +69,7 @@ pub struct WorkerQuestionEntry {
     #[schema(example = "pq-3")]
     pub id: String,
     /// The worker's agent name.
-    #[schema(example = "web-coder")]
+    #[schema(example = "web-worker")]
     pub worker: String,
     #[schema(example = "Bash")]
     pub tool: String,
@@ -163,7 +163,7 @@ pub struct NeedsYouEntry {
     #[schema(required = true, example = "pq-3")]
     pub question: Option<String>,
     /// The agent that asks.
-    #[schema(required = true, example = "web-coder")]
+    #[schema(required = true, example = "web-worker")]
     pub agent: Option<String>,
     /// The tool of a `permission`.
     #[schema(required = true, example = "Bash")]

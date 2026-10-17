@@ -80,7 +80,7 @@ describe("describeError", () => {
 
   it("names a lead check that has nothing to check", () => {
     expect(describeError(refusal("task_not_reported"))?.text).toBe(
-      "No report waits for a check. The coder reports the task again first.",
+      "No report waits for a check. The task worker reports the task again first.",
     );
     expect(describeError(refusal("task_kind_mismatch"))?.field).toBeNull();
     expect(describeError(refusal("invalid_hold_reason"))?.text).toBe(

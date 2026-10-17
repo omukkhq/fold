@@ -110,7 +110,7 @@ export const sendBackSchema = z.object({
   note: z
     .string()
     .trim()
-    .min(1, "Say what the coder must change.")
+    .min(1, "Say what the task worker must change.")
     .refine(...textLimit("note")),
 });
 export type SendBackForm = z.infer<typeof sendBackSchema>;

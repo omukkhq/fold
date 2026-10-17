@@ -23,12 +23,12 @@ struct SentBack {
 }
 
 impl Supervisor {
-    /// Hands a sent-back task without a proposal to the task coder that reported it. A running coder gets the push notice on its own; a coder that is not a supervised task coder is left alone.
+    /// Hands a sent-back task without a proposal to the task worker that reported it. A running task worker gets the push notice on its own; a reporter that is not a supervised task worker is left alone.
     pub(super) async fn resume_sent_back(self, task: TaskId) {
         let report = match reports::latest_for_task(self.inner.store.read(), task).await {
             Ok(report) => report,
             Err(error) => {
-                tracing::warn!(task = %task, code = error.log_code(), "could not read a report to resume its coder");
+                tracing::warn!(task = %task, code = error.log_code(), "could not read a report to resume its task worker");
                 return;
             }
         };
@@ -37,11 +37,11 @@ impl Supervisor {
         };
         let agent = report.worker.agent();
         if let Err(error) = self.resume_reporter(&agent, &[task]).await {
-            tracing::warn!(%agent, code = crate::services::agents::code_of(&error), "could not resume the coder of a sent-back task");
+            tracing::warn!(%agent, code = crate::services::agents::code_of(&error), "could not resume the task worker of a sent-back task");
         }
     }
 
-    /// Resumes the coders of every send-back that no start of theirs has served yet, such as one the worker limits refused.
+    /// Resumes the task workers of every send-back that no start of theirs has served yet, such as one the worker limits refused.
     pub(super) async fn resume_owed_send_backs(self) {
         let owed = match reports::owed_send_backs(
             self.inner.store.read(),
@@ -64,12 +64,12 @@ impl Supervisor {
         }
         for (agent, tasks) in by_agent {
             if let Err(error) = self.resume_reporter(&agent, &tasks).await {
-                tracing::warn!(%agent, code = crate::services::agents::code_of(&error), "could not resume the coder of a sent-back task");
+                tracing::warn!(%agent, code = crate::services::agents::code_of(&error), "could not resume the task worker of a sent-back task");
             }
         }
     }
 
-    /// The send-backs recorded since each working, idle or starting task coder's process started, as the turn text that tells the coder of them, by coder: what a paused coder missed.
+    /// The send-backs recorded since each working, idle or starting task worker's process started, as the turn text that tells the task worker of them, by task worker: what a paused task worker missed.
     pub(super) async fn send_backs_owed_to_paused(&self) -> BTreeMap<AgentName, String> {
         let owed = match reports::owed_send_backs(
             self.inner.store.read(),
@@ -85,7 +85,7 @@ impl Supervisor {
             Err(error) => {
                 tracing::warn!(
                     code = error.log_code(),
-                    "could not read the send-backs owed to paused coders"
+                    "could not read the send-backs owed to paused task workers"
                 );
                 return BTreeMap::new();
             }
@@ -107,12 +107,12 @@ impl Supervisor {
             .collect()
     }
 
-    /// The send-backs that a task coder, caught by a pause before its process read its first turn, still owes on its bound tasks, as turn text: a task whose newest report is a send-back of the coder's report, which only a new report clears.
+    /// The send-backs that a task worker, caught by a pause before its process read its first turn, still owes on its bound tasks, as turn text: a task whose newest report is a send-back of the task worker's report, which only a new report clears.
     pub(super) async fn send_backs_of_unstarted(
         &self,
         row: &fold_store::agents::WorkerProcessRow,
     ) -> Result<Option<String>, AgentError> {
-        if row.role != Role::TaskCoder {
+        if row.role != Role::TaskWorker {
             return Ok(None);
         }
         let mut found = Vec::new();
@@ -133,7 +133,7 @@ impl Supervisor {
     }
 
     async fn resume_reporter(&self, agent: &AgentName, tasks: &[TaskId]) -> Result<(), AgentError> {
-        // The row is read under the lock, so a second event finds the coder running and leaves it to its stdin notices.
+        // The row is read under the lock, so a second event finds the task worker running and leaves it to its stdin notices.
         let resuming = self.inner.resuming.lock().await;
         let mut conn = self
             .inner
@@ -147,7 +147,7 @@ impl Supervisor {
         let Some(worker) = worker else {
             return Ok(());
         };
-        if worker.role != Role::TaskCoder || worker.state.is_running() {
+        if worker.role != Role::TaskWorker || worker.state.is_running() {
             return Ok(());
         }
         let mut found = Vec::with_capacity(tasks.len());
@@ -173,7 +173,7 @@ impl Supervisor {
             Ok(watch) => watch,
             // The send-back stays owed, and the resume serves it.
             Err(error) if is_paused_refusal(&error) => return Ok(()),
-            // A start outside this path, such as `resume_worker`, came first; the coder takes this turn as its next one.
+            // A start outside this path, such as `resume_worker`, came first; the task worker takes this turn as its next one.
             Err(AgentError::Fold(error)) if error.code() == codes::WORKER_EXISTS => {
                 if let Some(run) = lock(&self.inner.running).get(agent) {
                     let _ = run.input.send(Input::Turn(turn));
@@ -244,7 +244,7 @@ fn sections(found: &[SentBack]) -> String {
     text
 }
 
-/// The turn a coder resumed in its own session gets: each sent-back task with its note, then how it ends.
+/// The turn a task worker resumed in its own session gets: each sent-back task with its note, then how it ends.
 fn resume_turn(found: &[SentBack]) -> String {
     format!(
         "fold resumed you because work you reported needs you again.\n\n{}\n\n{STOP_LINE}",
@@ -252,7 +252,7 @@ fn resume_turn(found: &[SentBack]) -> String {
     )
 }
 
-/// What a coder whose session is gone is told in its new one, after the role's restart text.
+/// What a task worker whose session is gone is told in its new one, after the role's restart text.
 fn fresh_instructions(found: &[SentBack]) -> String {
     format!(
         "You reported the tasks below as finished, and they were sent back.\n\n{}\n\n{STOP_LINE}",

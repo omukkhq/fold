@@ -187,7 +187,7 @@ async fn an_omitted_batch_version_gets_a_new_checkout_and_its_own_review() {
 }
 
 #[tokio::test]
-async fn a_new_coder_session_recovers_its_existing_workspace_and_proposal() {
+async fn a_new_task_worker_session_recovers_its_existing_workspace_and_proposal() {
     let fx = Fixture::new().await;
     two_proposals(&fx).await;
     let first = connect(&fx, "backend").await;

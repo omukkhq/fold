@@ -76,7 +76,7 @@ describe("sendBackSchema", () => {
       note: "Use the tokens.",
     });
     expect(firstMessage(sendBackSchema.safeParse({ note: "  " }))).toBe(
-      "Say what the coder must change.",
+      "Say what the task worker must change.",
     );
     expect(sendBackSchema.safeParse({ note: "x".repeat(20_001) }).success).toBe(
       false,

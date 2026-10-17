@@ -35,7 +35,7 @@ describe("memberRows", () => {
         proposal: "P-3",
         title: "Proposal P-3",
         task: "T-12",
-        author: "web-coder",
+        author: "web-worker",
         version: "v2 of 2",
         verdict: "approved",
         needsHuman: "human:tanim",

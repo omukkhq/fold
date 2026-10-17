@@ -186,7 +186,7 @@ function seed(): void {
         claims: [
           {
             kind: "implementation",
-            holder: "design-coder",
+            holder: "design-worker",
             claimed_at: 1_000,
             renewed_at: 2_000,
             stale: false,
@@ -194,7 +194,7 @@ function seed(): void {
         ],
         reports: [
           {
-            by: "design-coder",
+            by: "design-worker",
             note: REPORT,
             at: 2_000,
             resolution: null,
@@ -1458,11 +1458,11 @@ describe("a task without a proposal", () => {
       within(form).getByRole("button", { name: "Send back" }),
     );
     expect(
-      await within(form).findByText("Say what the coder must change."),
+      await within(form).findByText("Say what the task worker must change."),
     ).toBeTruthy();
     expect(daemon.made(`POST ${P}/demo/tasks/T-7/send-back`)).toHaveLength(0);
     await userEvent.type(
-      within(form).getByRole("textbox", { name: "Note to the coder" }),
+      within(form).getByRole("textbox", { name: "Note to the task worker" }),
       "Use the colour tokens.",
     );
     await userEvent.click(
@@ -1475,7 +1475,7 @@ describe("a task without a proposal", () => {
     ).toBe("true");
     const after = region(dialog, "Lead check");
     expect(
-      await within(after).findByText("Sent back to the coder", {}, WAIT),
+      await within(after).findByText("Sent back to the task worker", {}, WAIT),
     ).toBeTruthy();
     expect(within(after).getByText("Use the colour tokens.")).toBeTruthy();
     expect(daemon.made(`POST ${P}/demo/tasks/T-7/send-back`)[0]?.body).toEqual({

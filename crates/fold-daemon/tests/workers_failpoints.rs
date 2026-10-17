@@ -13,7 +13,7 @@ use fold_store::{StoreError, counters};
 use serde_json::{Value, json};
 
 use crate::common::acceptance::{Harness, SLUG, WAIT};
-use crate::worker_resume::{CODER, proposed_by_a_coder, request_changes};
+use crate::worker_resume::{TASK_WORKER, proposed_by_a_task_worker, request_changes};
 use crate::workers_support::{FakeClaude, Run};
 
 const BEFORE_SPAWN: &str = "worker_launch_before_spawn";
@@ -212,13 +212,14 @@ async fn a_pause_before_the_process_starts_keeps_the_row_for_the_resume() {
     scenario.teardown();
 }
 
-/// A coder that requested changes resume and a pause caught before its process read the turn still hears of the changes at the resume, although its row started after the review.
+/// A task worker that requested changes resume and a pause caught before its process read the turn still hears of the changes at the resume, although its row started after the review.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_pause_that_catches_an_automatic_resume_keeps_the_owed_changes_for_the_resume() {
     let scenario = fail::FailScenario::setup();
     let fake = FakeClaude::new("result");
-    let (harness, _work) = proposed_by_a_coder(&fake, &[("page.html", "<p>page</p>\n")]).await;
-    let coder = AgentName::parse(CODER).unwrap();
+    let (harness, _work) =
+        proposed_by_a_task_worker(&fake, &[("page.html", "<p>page</p>\n")]).await;
+    let task_worker = AgentName::parse(TASK_WORKER).unwrap();
     let human = Actor::human(HumanName::parse("ana").unwrap());
     harness
         .project
@@ -228,7 +229,7 @@ async fn a_pause_that_catches_an_automatic_resume_keeps_the_owed_changes_for_the
     fail::cfg(BEFORE_SPAWN, "pause").unwrap();
     request_changes(&harness, "P-1", "Split the page.").await;
     eventually(WAIT, async || {
-        match harness.handle.agents().get_worker(&coder).await {
+        match harness.handle.agents().get_worker(&task_worker).await {
             Ok(row) if row.state == WorkerState::Starting => Ok(()),
             other => Err(other.map(|row| row.state).ok()),
         }
@@ -237,8 +238,14 @@ async fn a_pause_that_catches_an_automatic_resume_keeps_the_owed_changes_for_the
     harness.handle.agents().pause_project(&human).await.unwrap();
     fail::remove(BEFORE_SPAWN);
     eventually(WAIT, async || {
-        let row = harness.handle.agents().get_worker(&coder).await.unwrap();
-        if fake.runs_of(CODER).len() == 2 && !harness.handle.workers.is_running(&coder) {
+        let row = harness
+            .handle
+            .agents()
+            .get_worker(&task_worker)
+            .await
+            .unwrap();
+        if fake.runs_of(TASK_WORKER).len() == 2 && !harness.handle.workers.is_running(&task_worker)
+        {
             Ok(row)
         } else {
             Err(row.state)
@@ -249,7 +256,7 @@ async fn a_pause_that_catches_an_automatic_resume_keeps_the_owed_changes_for_the
         harness
             .handle
             .agents()
-            .get_worker(&coder)
+            .get_worker(&task_worker)
             .await
             .unwrap()
             .state,
@@ -263,7 +270,7 @@ async fn a_pause_that_catches_an_automatic_resume_keeps_the_owed_changes_for_the
         .await
         .unwrap();
     let runs = eventually(WAIT, async || {
-        let runs = fake.runs_of(CODER);
+        let runs = fake.runs_of(TASK_WORKER);
         match runs.get(2) {
             Some(run) if run.stdin.iter().any(|line| line.contains(PAUSE_TURN)) => Ok(runs),
             _ => Err(runs.len()),
@@ -311,13 +318,18 @@ async fn the_idle_sweep_leaves_a_worker_that_took_a_turn_after_the_rows_were_rea
         .call(
             "web-lead",
             "start_worker",
-            json!({"role": "task_coder", "tasks": ["T-1"]}),
+            json!({"role": "task_worker", "tasks": ["T-1"]}),
         )
         .await;
-    let coder = AgentName::parse("web-coder").unwrap();
+    let task_worker = AgentName::parse("web-worker").unwrap();
     let until_idle = async |turns: u64| {
         eventually(WAIT, async || {
-            let row = harness.handle.agents().get_worker(&coder).await.unwrap();
+            let row = harness
+                .handle
+                .agents()
+                .get_worker(&task_worker)
+                .await
+                .unwrap();
             if row.state == WorkerState::Idle && row.turns == turns {
                 Ok(row)
             } else {
@@ -337,7 +349,7 @@ async fn the_idle_sweep_leaves_a_worker_that_took_a_turn_after_the_rows_were_rea
         .call(
             "web-lead",
             "send_message",
-            json!({"to": ["web-coder"], "body": "one more thing"}),
+            json!({"to": ["web-worker"], "body": "one more thing"}),
         )
         .await;
     let again = until_idle(2).await;
@@ -346,13 +358,18 @@ async fn the_idle_sweep_leaves_a_worker_that_took_a_turn_after_the_rows_were_rea
     fail::remove(BEFORE_STOP);
     let stopped = sweep.await.unwrap().unwrap();
     assert!(stopped.is_empty(), "{stopped:?}");
-    let row = harness.handle.agents().get_worker(&coder).await.unwrap();
+    let row = harness
+        .handle
+        .agents()
+        .get_worker(&task_worker)
+        .await
+        .unwrap();
     assert_eq!(row.state, WorkerState::Idle);
-    assert!(harness.handle.workers.is_running(&coder));
+    assert!(harness.handle.workers.is_running(&task_worker));
 
     let later = clock.advance(Duration::from_secs(16 * 60)).unwrap();
     let stopped = harness.handle.workers.sweep_idle(later).await.unwrap();
-    assert_eq!(stopped, [coder]);
+    assert_eq!(stopped, [task_worker]);
     scenario.teardown();
 }
 

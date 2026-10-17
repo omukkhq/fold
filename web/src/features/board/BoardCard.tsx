@@ -79,7 +79,7 @@ function ProposalPill({ proposal }: { proposal: BoardProposal }) {
   );
 }
 
-/** The proposal pill's place and shape, for a reported task without a proposal: the mark and the coder's note. */
+/** The proposal pill's place and shape, for a reported task without a proposal: the mark and the task worker's note. */
 function LeadCheckPill({ mark }: { mark: LeadCheckMark }) {
   return (
     <div className="flex flex-col gap-4">

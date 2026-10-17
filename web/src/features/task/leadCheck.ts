@@ -12,7 +12,7 @@ export type LeadCheckState =
 export interface LeadCheck {
   state: LeadCheckState;
   title: string;
-  /** The newest report; null before the coder's first one. */
+  /** The newest report; null before the task worker's first one. */
   report: TaskReport | null;
   /** A report waits on a task that is still on the board, so a human may complete it or send it back. */
   canCheck: boolean;
@@ -21,13 +21,13 @@ export interface LeadCheck {
 const TITLES: Record<LeadCheckState, string> = {
   not_reported: "Not reported yet",
   waiting: "Waits for a lead check",
-  sent_back: "Sent back to the coder",
+  sent_back: "Sent back to the task worker",
   completed: "Completed by a lead check",
 };
 
 /** What the kind means, for the side group of the task. */
 export const KIND_NOTE =
-  "This task needs no proposal. Its coder works with the tools the task names and reports the work; a lead check completes the task or sends it back.";
+  "This task needs no proposal. Its task worker works with the tools the task names and reports the work; a lead check completes the task or sends it back.";
 
 /** A `no_proposal` or `human` task has no workspace, so the workspace and proposal parts of the task are left out. */
 export function needsProposal(task: Pick<TaskDetail, "kind">): boolean {
@@ -58,7 +58,7 @@ export function leadCheck(
   };
 }
 
-/** `Reported by @web-coder · 2 min ago`. */
+/** `Reported by @web-worker · 2 min ago`. */
 export function reportedText(report: TaskReport, now: number): Segment[] {
   return seg`Reported by ${actorSegment(report.by)} · ${formatSince(now, report.at)}`;
 }
