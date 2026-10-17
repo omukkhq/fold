@@ -4,6 +4,7 @@ mod doctor;
 mod hook;
 mod init;
 mod mcp;
+mod news;
 mod output;
 mod platform;
 #[cfg(feature = "dev-seed")]
@@ -42,6 +43,8 @@ enum Command {
     Claude(claude::ClaudeArgs),
     /// Start the daemon when needed, then a new Claude Code session as the project's main agent; fld new claude is the same
     New(claude::NewArgs),
+    /// Subscribe an email address to fold release news; the address goes once to Omukk and fld does not keep it
+    Subscribe(news::SubscribeArgs),
     /// Manage the tokens that sign humans in to the web interface off localhost
     Token(token::TokenArgs),
     /// Link the project to a remote Git repository
@@ -76,6 +79,7 @@ enum Failure {
     Gc(commands::gc::GcError),
     Claude(claude::ClaudeError),
     Token(token::TokenError),
+    News(news::NewsError),
     Remote(commands::remote::RemoteError),
     #[cfg(feature = "dev-seed")]
     Seed(seed::SeedError),
@@ -104,6 +108,9 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         }
         Some(Command::New(args)) => {
             claude::run_new(&args, &serve::Dirs::from_env()).map_err(Failure::Claude)
+        }
+        Some(Command::Subscribe(args)) => {
+            news::run(&args, &serve::Dirs::from_env(), out).map_err(Failure::News)
         }
         Some(Command::Token(args)) => {
             token::run(&args, &serve::Dirs::from_env(), out).map_err(Failure::Token)
@@ -164,6 +171,7 @@ macro_rules! coded {
 coded!(serve::ServeError);
 coded!(init::InitError, hint);
 coded!(claude::ClaudeError, hint);
+coded!(news::NewsError, hint);
 coded!(token::TokenError, hint);
 coded!(doctor::DoctorError, hint);
 coded!(service::ServiceError, hint);
@@ -211,6 +219,7 @@ fn main() -> anyhow::Result<()> {
         Err(Failure::Init(error)) => Err(failure_message(&error)),
         Err(Failure::Claude(error)) => Err(failure_message(&error)),
         Err(Failure::Token(error)) => Err(failure_message(&error)),
+        Err(Failure::News(error)) => Err(failure_message(&error)),
         Err(Failure::Mcp(error)) => {
             let _ = output::line(&mut io::stderr().lock(), &format!("fld mcp: {error}"));
             std::process::exit(1)

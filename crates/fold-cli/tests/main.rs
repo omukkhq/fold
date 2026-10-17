@@ -33,6 +33,7 @@ mod hook_session_start;
 mod hook_stop;
 mod init;
 mod init_folder;
+mod news;
 mod remote;
 #[cfg(feature = "dev-seed")]
 mod seed_dev;

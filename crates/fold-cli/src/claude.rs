@@ -174,6 +174,7 @@ pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), Claud
             || Ok(new_session_id()?),
         )?)
     };
+    crate::news::ask_once_on_terminal(dirs);
     let error = command(
         Path::new("claude"),
         &root,
