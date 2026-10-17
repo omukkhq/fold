@@ -143,12 +143,13 @@ pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), Claud
         .map_err(ClaudeError::Cwd)?;
     let config = serve::client_config(args.socket.as_deref(), dirs)?;
     let socket = args.socket.is_some().then(|| config.socket.clone());
+    let human = crate::fold_name::current();
     let runtime = serve::current_thread_runtime().map_err(ClaudeError::Runtime)?;
     let root = runtime.block_on(async {
         let root = root_for_dir_on_host(&host, &cwd).await?;
         let slug = slug_for_dir_on_host(&host, &cwd).await?;
         daemon_client::connect(&config).await?;
-        if let Ok(human) = daemon_client::human_from_env() {
+        if let Some(human) = human {
             let client = DaemonClient::new(config, Some(human));
             let path = format!("/api/v1/projects/{slug}/agents");
             main_is_free(&client.request(Method::GET, &path, None).await?, &agent)?;

@@ -380,6 +380,7 @@ mod tests {
                 file_modes: true,
             },
             probe: Probe::new(config_home.join("root")),
+            names: crate::fold_name::Environment::default(),
         }
     }
 

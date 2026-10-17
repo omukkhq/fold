@@ -2,7 +2,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand};
-use fold_cli::daemon_client::{self, ClientError, DaemonClient, Response};
+use fold_cli::daemon_client::{ClientError, DaemonClient, Response};
 use fold_core::config::{
     GIT_SECTION, REMOTES_SECTION, UNNAMED_REMOTE, check_branch, check_remote, check_remote_name,
 };
@@ -423,7 +423,7 @@ pub(crate) fn post_to_project(
     let start = project.map_or_else(|| PathBuf::from("."), Path::to_path_buf);
     let dir = std::fs::canonicalize(&start).map_err(RemoteError::Cwd)?;
     let config = serve::client_config(socket, &dirs)?;
-    let client = DaemonClient::new(config, daemon_client::human_from_env().ok());
+    let client = DaemonClient::new(config, crate::fold_name::current());
     let runtime = serve::current_thread_runtime().map_err(RemoteError::Runtime)?;
     runtime.block_on(async {
         let slug = slug_for_dir_on_host(&host, &dir).await?;

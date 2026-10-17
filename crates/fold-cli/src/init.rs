@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use clap::Args;
 use fold_cli::claude_files::{self, ClaudeFileError};
-use fold_cli::daemon_client::{self, ClientConfig, ClientError, DaemonClient, Response};
+use fold_cli::daemon_client::{ClientConfig, ClientError, DaemonClient, Response};
 use fold_core::{FoldError, HostPaths, ProjectPaths, codes};
 use fold_daemon::SystemClock;
 use fold_daemon::services::projects::{
@@ -150,6 +150,8 @@ pub(crate) fn initialise(
             let _ = runtime.block_on(register(&client(socket.clone()), &slug));
         }
     }
+    // The fold name comes first, so its question comes before the Git identity's.
+    let _ = crate::fold_name::current();
     // The question comes before the project exists, because every commit fold writes, `r1`'s first, takes the identity from the repository's config.
     let identity = (!args.from_git).then(|| {
         let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
@@ -313,10 +315,7 @@ fn write_claude_files(root: &Path, dirs: &Dirs, out: &mut impl Write) -> Result<
 
 /// Init uses a running daemon and never starts one.
 fn client(socket: PathBuf) -> DaemonClient {
-    DaemonClient::new(
-        ClientConfig::running(socket),
-        daemon_client::human_from_env().ok(),
-    )
+    DaemonClient::new(ClientConfig::running(socket), crate::fold_name::current())
 }
 
 /// The nearest directory at or above `dir` that holds a project database. The caller decides how `dir` is made absolute, because a symlink in it decides which project is found.

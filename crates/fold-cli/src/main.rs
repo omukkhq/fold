@@ -1,6 +1,7 @@
 mod claude;
 mod commands;
 mod doctor;
+mod fold_name;
 mod git_identity;
 mod hook;
 mod init;
@@ -101,7 +102,7 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
             &args,
             &serve::Dirs::from_env(),
             std::env::current_dir(),
-            fold_cli::daemon_client::human_from_env().ok(),
+            fold_name::current(),
             out,
         )
         .map_err(Failure::Gc),

@@ -73,6 +73,8 @@ pub(crate) struct Host {
     pub(crate) path: Option<OsString>,
     pub(crate) platform: Platform,
     pub(crate) probe: Probe,
+    /// The variables that decide the human's fold name.
+    pub(crate) names: crate::fold_name::Environment,
 }
 
 impl Host {
@@ -89,6 +91,7 @@ impl Host {
             path: std::env::var_os("PATH"),
             platform: Platform::current(),
             probe: Probe::new("/"),
+            names: crate::fold_name::Environment::from_env(),
         }
     }
 
@@ -206,6 +209,7 @@ mod tests {
                 file_modes: true,
             },
             probe: Probe::new("/nonexistent-root"),
+            names: crate::fold_name::Environment::default(),
         }
     }
 

@@ -71,6 +71,10 @@ impl Fixture {
                 file_modes: true,
             },
             probe: Probe::new(self.path("root")),
+            names: crate::fold_name::Environment {
+                user: Some("ana".into()),
+                ..crate::fold_name::Environment::default()
+            },
         }
     }
 
@@ -1538,4 +1542,45 @@ fn an_info_exclude_that_is_not_the_link_names_the_refresh() {
     assert!(plain.fix.as_deref().unwrap().contains("fld init --refresh"));
     std::fs::remove_dir_all(root.join(".git")).unwrap();
     assert_eq!(check(&root).message, NOT_APPLICABLE);
+}
+
+#[test]
+fn the_fold_name_shows_where_it_comes_from() {
+    let fixture = Fixture::new();
+    let mut host = fixture.bare_host();
+    let check = find(
+        &host_checks(None, &FileConfig::default(), &host),
+        "fold name",
+    )
+    .clone();
+    assert_eq!(
+        (check.status, check.message.as_str()),
+        (Status::Ok, "ana from USER")
+    );
+    let stored = fixture.path("config/fold/human.toml");
+    std::fs::create_dir_all(stored.parent().unwrap()).unwrap();
+    std::fs::write(&stored, "name = \"bo\"\n").unwrap();
+    let check = find(
+        &host_checks(None, &FileConfig::default(), &host),
+        "fold name",
+    )
+    .clone();
+    assert_eq!(check.message, format!("bo from {}", stored.display()));
+    host.names.fold_human = Some("Lead Dev".into());
+    let check = find(
+        &host_checks(None, &FileConfig::default(), &host),
+        "fold name",
+    )
+    .clone();
+    assert_eq!(check.status, Status::Warn);
+    assert_eq!(
+        check.message,
+        "Lead Dev from FOLD_HUMAN is not a name fold accepts"
+    );
+    assert!(check.fix.as_deref().unwrap().contains("FOLD_HUMAN"));
+    let none = fold_name_check(None);
+    assert_eq!(
+        (none.status, none.message.as_str()),
+        (Status::Warn, "fld cannot tell who you are")
+    );
 }

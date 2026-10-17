@@ -222,3 +222,20 @@ fn a_host_without_a_home_stops_with_the_invalid_host_paths_code() {
     assert_eq!(output.status.code(), Some(1));
     assert!(stderr(&output).contains("invalid_host_paths"));
 }
+
+#[test]
+fn doctor_names_the_stored_fold_name_and_its_file() {
+    let sandbox = Sandbox::new().unwrap();
+    let stored = sandbox.path("home/.config/fold/human.toml");
+    std::fs::create_dir_all(stored.parent().unwrap()).unwrap();
+    std::fs::write(&stored, "name = \"ana\"\n").unwrap();
+    let socket = sandbox.path("absent.sock");
+    let output = sandbox
+        .fold(&["doctor", "--socket", socket.to_str().unwrap()])
+        .unwrap();
+    let text = stdout(&output);
+    assert!(
+        text.contains(&format!("ok   fold name: ana from {}", stored.display())),
+        "{text}"
+    );
+}

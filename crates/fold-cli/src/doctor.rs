@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use clap::Args;
 use fold_core::events::types;
-use fold_core::{Clock, FoldError, ProjectPaths, Role, Timestamp, codes};
+use fold_core::{Clock, FoldError, HumanName, ProjectPaths, Role, Timestamp, codes};
 use fold_daemon::SystemClock;
 use fold_daemon::projects::database_missing_hint;
 use fold_daemon::services::agents::claude::{AuthStatus, ClaudeVersion, MIN_CLAUDE_VERSION};
@@ -266,6 +266,17 @@ fn host_checks(socket_flag: Option<&Path>, file: &FileConfig, host: &Host) -> Ve
         lock_check(lock.as_deref(), answers),
         http_check(listen),
         git_check(host),
+        fold_name_check(
+            crate::fold_name::resolve(
+                &host.names,
+                crate::fold_name::file(&host.dirs).as_deref(),
+                false,
+                &mut io::empty(),
+                &mut io::sink(),
+            )
+            .ok()
+            .as_ref(),
+        ),
         claude_check(host),
         service_manager_check(host),
         linger_check(host),
@@ -403,6 +414,25 @@ fn git_check(host: &Host) -> Check {
             "git is not on PATH; fold needs it for fld init, the Git commit of every integration, which the project folder follows, fld record, fld remote, fld push and fld pull",
             "install git",
         )
+    }
+}
+
+/// The name fld sends as the human, and where it comes from. The daemon refuses a name outside the fold name rules, so such a name is a warning.
+pub(crate) fn fold_name_check(found: Option<&crate::fold_name::Found>) -> Check {
+    const FIX: &str = "run fld claude on a terminal to choose a fold name, or set FOLD_HUMAN to 1 to 32 characters of a-z, 0-9, - and _";
+    match found {
+        Some(found) if HumanName::parse(&found.name).is_ok() => {
+            Check::ok("fold name", format!("{} from {}", found.name, found.source))
+        }
+        Some(found) => Check::warn(
+            "fold name",
+            format!(
+                "{} from {} is not a name fold accepts",
+                found.name, found.source
+            ),
+            FIX,
+        ),
+        None => Check::warn("fold name", "fld cannot tell who you are", FIX),
     }
 }
 

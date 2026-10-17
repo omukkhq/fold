@@ -339,7 +339,11 @@ fn exchange(
             fold_exe: None,
             ..config
         };
-        let client = DaemonClient::new(running, daemon_client::human_from_env().ok());
+        // A hook has no person to answer, so it never asks.
+        let human = crate::fold_name::known(&serve::Dirs::from_env())
+            .ok()
+            .map(|found| found.name);
+        let client = DaemonClient::new(running, human);
         match tokio::time::timeout(
             ANSWER_TIMEOUT,
             client.request(Method::POST, path, Some(body)),
