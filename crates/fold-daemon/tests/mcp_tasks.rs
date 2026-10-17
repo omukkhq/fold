@@ -563,6 +563,42 @@ async fn a_plan_publishes_only_final_readiness_with_parent_links_and_review_mark
 }
 
 #[tokio::test]
+async fn a_plan_creates_checklist_items_before_the_ready_notice_and_refuses_a_bad_item_whole() {
+    let fx = Fixture::new().await;
+    let lead = fx.connect("lead").await;
+    give_role(fx.project.store(), "lead", Role::AreaLead, None).await;
+    let bad = err(&lead, "create_task_plan", json!({"tasks": [
+        {"key": "a", "title": "A", "description": "A", "labels": ["work"], "checklist": [{"text": "Fine"}]},
+        {"key": "b", "title": "B", "description": "B", "labels": ["work"], "checklist": [{"text": "Fine"}, {"text": "  "}]}
+    ]})).await;
+    assert_eq!(bad["code"], "invalid_step_text");
+    assert_eq!(bad["details"]["position"], 2);
+    assert_eq!(bad["details"]["item"], 2);
+    assert!(fx.tasks.graph(true).await.unwrap().is_empty());
+    let mut notices = fx.bus.subscribe();
+    ok(&lead, "create_task_plan", json!({"tasks": [
+        {"key": "a", "title": "A", "description": "Check A", "labels": ["work"], "checklist": [
+            {"text": "Write the test"}, {"text": "Run the check", "checklist": "QA"}, {"text": "Ship it"}
+        ]}
+    ]})).await;
+    let mut seen = 0;
+    while let Ok(notice) = notices.try_recv() {
+        if let fold_daemon::services::events::BusMessage::Durable(event) = notice
+            && event.event_type == types::TASK_STATUS_CHANGED
+            && event.data["to"] == "todo"
+        {
+            let lists = fx.tasks.checklists(event.task.unwrap()).await.unwrap();
+            assert_eq!(lists.len(), 2);
+            assert_eq!(lists[0].name.as_str(), "Subtasks");
+            assert_eq!(lists[0].items.len(), 2);
+            assert_eq!(lists[1].name.as_str(), "QA");
+            seen += 1;
+        }
+    }
+    assert_eq!(seen, 1);
+}
+
+#[tokio::test]
 async fn a_plan_publishes_a_human_task_that_holds_its_dependent_until_a_human_marks_it_done() {
     let fx = Fixture::new().await;
     let lead = fx.connect("lead").await;
@@ -720,6 +756,7 @@ async fn a_plan_links_existing_work_and_validates_named_human_review() {
         parent: None,
         human_review: None,
         blocker: None,
+        checklist: Vec::new(),
     };
     let base = fx
         .tasks
@@ -831,7 +868,7 @@ async fn a_plan_that_fails_at_its_fiftieth_task_creates_none_of_them() {
     give_role(fx.project.store(), "lead", Role::AreaLead, None).await;
     let chain = |last: Value| {
         let mut tasks: Vec<Value> = (1..50)
-            .map(|n| json!({"key": format!("t{n}"), "title": format!("Step {n}"), "description": "Check", "labels": ["work"], "needs": [format!("t{}", n + 1)]}))
+            .map(|n| json!({"key": format!("t{n}"), "title": format!("Step {n}"), "description": "Check", "labels": ["work"], "needs": [format!("t{}", n + 1)], "checklist": [{"text": "Build"}, {"text": "Test", "checklist": "QA"}]}))
             .collect();
         tasks.push(last);
         Value::Array(tasks)
@@ -868,11 +905,22 @@ async fn a_plan_that_fails_at_its_fiftieth_task_creates_none_of_them() {
             "invalid_request",
             Some("duplicate_key"),
         ),
+        (
+            chain(
+                json!({"key": "t50", "title": "Step 50", "description": "Check", "labels": ["work"], "checklist": [{"text": "Build"}, {"text": "Test"}, {"text": "two\nlines"}]}),
+            ),
+            "invalid_step_text",
+            None,
+        ),
     ] {
         let error = err(&lead, "create_task_plan", json!({"tasks": tasks})).await;
         assert_eq!(error["code"], code, "{error}");
         if let Some(reason) = reason {
             assert_eq!(error["details"]["reason"], reason, "{error}");
+        }
+        if code == "invalid_step_text" {
+            assert_eq!(error["details"]["position"], 50, "{error}");
+            assert_eq!(error["details"]["item"], 3, "{error}");
         }
         assert!(fx.tasks.graph(true).await.unwrap().is_empty());
         assert_eq!(
@@ -886,12 +934,18 @@ async fn a_plan_that_fails_at_its_fiftieth_task_creates_none_of_them() {
         &lead,
         "create_task_plan",
         json!({"tasks": [
-            {"key": "base", "title": "Base", "description": "Check", "labels": ["work"]},
+            {"key": "base", "title": "Base", "description": "Check", "labels": ["work"], "checklist": [{"text": "Build"}]},
             {"key": "top", "title": "Top", "description": "Check", "labels": ["work"], "needs": ["base", "base"]}
         ]}),
     )
     .await;
     assert_eq!(created["tasks"][0]["id"], "T-1");
+    let lists = fx
+        .tasks
+        .checklists(TaskId::from_number(1).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(lists[0].items[0].id.to_string(), "ci-1");
     let graph = fx.tasks.graph(false).await.unwrap();
     assert_eq!(graph[1].needs, [TaskId::from_number(1).unwrap()]);
 }

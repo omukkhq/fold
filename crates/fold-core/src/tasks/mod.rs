@@ -16,7 +16,9 @@ pub mod readiness;
 pub mod requests;
 pub mod status;
 
-pub use plan::{MAX_PLAN_TASKS, PlanRef, PlannedReview, PlannedTask, check_task_plan};
+pub use plan::{
+    MAX_PLAN_TASKS, PlanRef, PlannedChecklistItem, PlannedReview, PlannedTask, check_task_plan,
+};
 
 /// The messages never repeat the rejected text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]

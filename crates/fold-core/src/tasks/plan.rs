@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use serde_json::json;
 
-use super::{HoldReason, LabelName, TaskDescription, TaskKind, TaskTitle};
+use super::{ChecklistName, HoldReason, LabelName, StepText, TaskDescription, TaskKind, TaskTitle};
 use crate::reviews::human_review_reason;
 use crate::{FoldError, HumanName, TaskId, codes};
 
@@ -31,6 +31,14 @@ pub struct PlannedReview {
     pub reason: String,
 }
 
+/// A plain checklist step a plan creates with its task. Both fields are checked by [`check_task_plan`] with the rules of `add_checklist_item`.
+#[derive(Debug, Clone)]
+pub struct PlannedChecklistItem {
+    pub text: String,
+    /// The checklist name; `Subtasks` when `None`.
+    pub checklist: Option<String>,
+}
+
 /// A task and all inputs that must exist before workers can see it.
 #[derive(Debug, Clone)]
 pub struct PlannedTask {
@@ -44,6 +52,8 @@ pub struct PlannedTask {
     pub human_review: Option<PlannedReview>,
     /// The reason of a blocker the task carries from its creation, so no agent sees it ready before the blocker exists.
     pub blocker: Option<String>,
+    /// Plain steps created with the task, in order, before any worker sees it.
+    pub checklist: Vec<PlannedChecklistItem>,
 }
 
 /// Checks plan-local names and review reasons. Edges use the same DAG rules as individual task commands after references resolve.
@@ -75,6 +85,21 @@ pub fn check_task_plan(tasks: &[PlannedTask]) -> Result<(), FoldError> {
                     .with_details([("field", json!("blocker.reason")), ("position", json!(position + 1))])
                     .with_hint("say in a line or two why the task must wait for a person, then call create_task_plan again")
             })?;
+        }
+        for (index, item) in task.checklist.iter().enumerate() {
+            let refuse = |error: super::TaskValueError, field: &'static str| {
+                FoldError::from(error)
+                    .with_details([
+                        ("field", json!(field)),
+                        ("position", json!(position + 1)),
+                        ("item", json!(index + 1)),
+                    ])
+                    .with_hint("give each checklist item a text of one line and an optional checklist name of one line, then call create_task_plan again")
+            };
+            StepText::parse(&item.text).map_err(|error| refuse(error, "checklist.text"))?;
+            if let Some(name) = &item.checklist {
+                ChecklistName::parse(name).map_err(|error| refuse(error, "checklist.checklist"))?;
+            }
         }
     }
     for (position, task) in tasks.iter().enumerate() {
@@ -110,6 +135,7 @@ mod tests {
             parent: None,
             human_review: None,
             blocker: None,
+            checklist: Vec::new(),
         }
     }
 
@@ -178,6 +204,39 @@ mod tests {
             let error = check_task_plan(&[task("ok"), bad.clone()]).unwrap_err();
             assert_eq!(error.code(), codes::INVALID_HOLD_REASON);
             assert_eq!(error.details().unwrap()["position"], 2);
+        }
+    }
+
+    #[test]
+    fn an_invalid_checklist_item_refuses_the_plan_with_its_position() {
+        let item = |text: &str, checklist: Option<&str>| PlannedChecklistItem {
+            text: text.to_owned(),
+            checklist: checklist.map(str::to_owned),
+        };
+        let mut good = task("ok");
+        good.checklist = vec![item("Write tests", None), item("Ship", Some("QA"))];
+        assert!(check_task_plan(&[good.clone()]).is_ok());
+        for (bad_item, field, code) in [
+            (item(" ", None), "checklist.text", codes::INVALID_STEP_TEXT),
+            (
+                item("two\nlines", None),
+                "checklist.text",
+                codes::INVALID_STEP_TEXT,
+            ),
+            (
+                item("Fine", Some("")),
+                "checklist.checklist",
+                codes::INVALID_CHECKLIST_NAME,
+            ),
+        ] {
+            let mut bad = task("bad");
+            bad.checklist = vec![item("Fine", None), bad_item];
+            let error = check_task_plan(&[good.clone(), bad]).unwrap_err();
+            assert_eq!(error.code(), code);
+            let details = error.details().unwrap();
+            assert_eq!(details["position"], 2);
+            assert_eq!(details["item"], 2);
+            assert_eq!(details["field"], field);
         }
     }
 }

@@ -5,7 +5,7 @@ use fold_core::reviews::{HumanReviewMark, human_review_reason};
 use fold_core::tasks::{PlanRef, PlannedTask, check_task_plan};
 use fold_core::{
     Actor, ChecklistName, DependencyOrigin, FoldError, HoldMark, HoldReason, HumanName, NewEvent,
-    TaskId, TaskKind, codes, policy,
+    StepText, TaskId, TaskKind, codes, policy,
 };
 use fold_store::{Store, StoreError, projects, tasks};
 use serde_json::json;
@@ -18,7 +18,7 @@ use crate::services::agents::starter_of;
 use crate::services::events::EventBuffer;
 
 impl TaskService {
-    /// Creates a plan's tasks, edges, parent links, review marks and blockers in one transaction, so a planned blocker is on before any lead can start the task. A task that names the same prerequisite twice gets one edge. Notices are published only after all task statuses have been calculated. `registry` names the humans eligible for a named review mark.
+    /// Creates a plan's tasks, edges, parent links, review marks, blockers and plain checklist items in one transaction, so a planned blocker is on before any lead can start the task. A task that names the same prerequisite twice gets one edge. Notices are published only after all task statuses have been calculated. `registry` names the humans eligible for a named review mark.
     pub async fn create_task_plan(
         &self,
         actor: &Actor,
@@ -77,6 +77,16 @@ impl TaskService {
                 let id = create_in_tx(tx, &mut buffer, actor, &input, task.kind, now).await?;
                 by_key.insert(task.key.as_str(), id);
                 created.push((task.key.clone(), id));
+                for planned in &task.checklist {
+                    let item = NewChecklistItem {
+                        content: ItemContent::Step(StepText::parse(&planned.text).map_err(FoldError::from)?),
+                        checklist: Some(match &planned.checklist {
+                            Some(name) => ChecklistName::parse(name).map_err(FoldError::from)?,
+                            None => ChecklistName::subtasks(),
+                        }),
+                    };
+                    checklists::add_item_in_tx(tx, &mut buffer, actor, id, &item, now).await?;
+                }
                 if let Some(review) = &task.human_review {
                     let reason = human_review_reason(&review.reason)?;
                     policy::can_set_human_review(actor, None, review.reviewer.as_ref(), &reason).map_err(FoldError::from)?;

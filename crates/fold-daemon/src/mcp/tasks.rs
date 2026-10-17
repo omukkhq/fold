@@ -2,7 +2,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::str::FromStr;
 
-use fold_core::tasks::{PlanRef, PlannedReview, PlannedTask};
+use fold_core::tasks::{PlanRef, PlannedChecklistItem, PlannedReview, PlannedTask};
 use fold_core::{
     Actor, ChecklistItemId, ChecklistName, FoldError, HumanName, IdParseError, LabelColor,
     LabelName, StepText, TaskDescription, TaskId, TaskKind, TaskTitle, WorkerName,
@@ -148,6 +148,17 @@ pub struct PlannedBlockerInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
+pub struct PlannedChecklistItemInput {
+    /// The text of a plain step: one line, not empty.
+    pub text: String,
+    /// The checklist name. Leave it out for Subtasks; a name the task does not have creates that checklist.
+    #[serde(default)]
+    pub checklist: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
 pub struct PlannedTaskInput {
     /// A unique plan-local key: 1 to 32 ASCII letters, digits, - or _, distinct from a public task id.
     pub key: String,
@@ -173,6 +184,9 @@ pub struct PlannedTaskInput {
     /// A blocker to set before workers can see this task, for agent work that waits until a person says it can start. Only a human or the main agent clears it with clear_blocker.
     #[serde(default)]
     pub blocker: Option<PlannedBlockerInput>,
+    /// Plain checklist steps to create with the task, in order, so they exist before any worker sees it. Do not add them with add_checklist_item after the plan.
+    #[serde(default)]
+    pub checklist: Vec<PlannedChecklistItemInput>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -313,7 +327,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             CREATE_TASK_PLAN,
-            "Publish an approved plan atomically: create all tasks, dependencies, parent links, human review marks and blockers before workers receive ready notices. Each task has kind proposal, no_proposal or human. A refusal creates nothing. Re-read the graph before retrying an uncertain result.",
+            "Publish an approved plan atomically: create all tasks, dependencies, parent links, human review marks, blockers and plain checklist items before workers receive ready notices. Each task has kind proposal, no_proposal or human. A refusal creates nothing. Re-read the graph before retrying an uncertain result.",
             schema_for_type::<CreateTaskPlanInput>(),
         ),
         Tool::new(
@@ -724,6 +738,14 @@ async fn create_task_plan(
                     })
                     .transpose()?,
                 blocker: task.blocker.map(|blocker| blocker.reason),
+                checklist: task
+                    .checklist
+                    .into_iter()
+                    .map(|item| PlannedChecklistItem {
+                        text: item.text,
+                        checklist: item.checklist,
+                    })
+                    .collect(),
             })
         })
         .collect::<Result<Vec<_>, FoldError>>()?;

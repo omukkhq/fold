@@ -39,7 +39,7 @@ Approval covers implementation and task splits within the agreed scope, acceptan
 After the OK:
 
 1. Reuse existing labels and areas. Use `create_label` and `define_area` for missing ones, or `update_area` for an approved profile change.
-2. Publish tasks together with `create_task_plan`: include each key, description, labels, kind, dependencies, parent, human review mark and blocker. References use plan-local keys or existing task ids. All tasks and gates become visible together; do not create ready tasks and add their dependencies or marks later. A plan can hold up to 100 tasks. For a larger plan, publish complete dependency groups in prerequisite order, with all children of each new parent together.
+2. Publish tasks together with `create_task_plan`: include each key, description, labels, kind, dependencies, parent, human review mark, blocker and checklist items. References use plan-local keys or existing task ids. All tasks and gates become visible together; do not create ready tasks and add their dependencies or marks later. A plan can hold up to 100 tasks. For a larger plan, publish complete dependency groups in prerequisite order, with all children of each new parent together.
 3. Check the returned ids and graph against the approved plan. On an uncertain result, read the graph before retrying. Correct a refused plan and submit only its missing work.
 4. Use `start_worker` with role `area_lead` for missing area leads, and role `review_lead` for the review lead. Give each the approved scope and constraints in `instructions`. Message running leads about new work instead of starting duplicates.
 
