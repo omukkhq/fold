@@ -142,14 +142,17 @@ fn a_damaged_database_is_a_failure_while_the_daemon_is_down() {
 fn claude_md_files_warn_once_per_path_and_keep_exit_0() {
     let sandbox = Sandbox::new().unwrap();
     let project = sandbox.init("alpha").unwrap();
-    std::fs::write(project.join("CLAUDE.md"), "rules").unwrap();
+    std::fs::write(project.join(".claude/CLAUDE.md"), "rules").unwrap();
     std::fs::write(sandbox.path("CLAUDE.local.md"), "mine").unwrap();
     let output = sandbox
         .fold(&["doctor", "--project", project.to_str().unwrap()])
         .unwrap();
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let text = stdout(&output);
-    for path in [project.join("CLAUDE.md"), sandbox.path("CLAUDE.local.md")] {
+    for path in [
+        project.join(".claude/CLAUDE.md"),
+        sandbox.path("CLAUDE.local.md"),
+    ] {
         let shown = path.display();
         assert!(
             text.contains(&format!("{shown} makes Claude Code skip AGENTS.md")),

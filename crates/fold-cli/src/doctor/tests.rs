@@ -8,8 +8,8 @@ use tempfile::TempDir;
 use super::*;
 use crate::platform::Probe;
 use fold_cli::claude_files::{
-    AGENTS_BEGIN, AGENTS_END, AGENTS_FILE, ALLOW_FOLD_TOOLS, HOOKS, MCP_FILE, MCP_SERVER_NAME,
-    MCP_SERVERS_KEY, SETTINGS_FILE,
+    AGENTS_BEGIN, AGENTS_END, AGENTS_FILE, ALLOW_FOLD_TOOLS, CLAUDE_FILE, HOOKS, MCP_FILE,
+    MCP_SERVER_NAME, MCP_SERVERS_KEY, SETTINGS_FILE,
 };
 
 const HOUR_MS: i64 = 60 * 60 * 1000;
@@ -1041,9 +1041,10 @@ fn the_claude_files_warn_for_each_missing_fold_entry() {
     let agents = &good_agents();
     let mcp = &good_mcp();
     let good = &good_settings();
-    assert!(claude_file_problems(Some(mcp), Some(good), Some(agents)).is_empty());
+    let named = (AGENTS_FILE, Some(agents.as_str()));
+    assert!(claude_file_problems(Some(mcp), Some(good), named).is_empty());
 
-    let none = claude_file_problems(None, None, None);
+    let none = claude_file_problems(None, None, (AGENTS_FILE, None));
     assert_eq!(
         none,
         [
@@ -1052,13 +1053,14 @@ fn the_claude_files_warn_for_each_missing_fold_entry() {
             "AGENTS.md is missing"
         ]
     );
-    let other_server = claude_file_problems(
-        Some(r#"{"mcpServers":{"other":{}}}"#),
-        Some(good),
-        Some(agents),
-    );
+    let other_server =
+        claude_file_problems(Some(r#"{"mcpServers":{"other":{}}}"#), Some(good), named);
     assert_eq!(other_server, [".mcp.json lacks the fold server"]);
-    let broken = claude_file_problems(Some("not json"), Some("not json"), Some("no markers"));
+    let broken = claude_file_problems(
+        Some("not json"),
+        Some("not json"),
+        (AGENTS_FILE, Some("no markers")),
+    );
     assert_eq!(
         broken,
         [
@@ -1070,12 +1072,16 @@ fn the_claude_files_warn_for_each_missing_fold_entry() {
     );
     let no_stop = settings(ALLOW_FOLD_TOOLS, &HOOKS[..1]);
     assert_eq!(
-        claude_file_problems(Some(mcp), Some(&no_stop), Some(agents)),
+        claude_file_problems(Some(mcp), Some(&no_stop), named),
         [".claude/settings.json lacks the fold hooks"]
     );
     assert_eq!(
-        claude_file_problems(Some(mcp), Some(good), Some(AGENTS_BEGIN)),
+        claude_file_problems(Some(mcp), Some(good), (AGENTS_FILE, Some(AGENTS_BEGIN))),
         ["AGENTS.md lacks the fold section"]
+    );
+    assert_eq!(
+        claude_file_problems(Some(mcp), Some(good), (CLAUDE_FILE, None)),
+        ["CLAUDE.md is missing"]
     );
 }
 
@@ -1157,7 +1163,7 @@ fn an_agents_file_without_the_markers_gives_the_claude_files_warning() {
 fn claude_md_files_in_the_root_and_a_parent_warn_once_per_path() {
     let fixture = Fixture::new();
     let root = fixture.project("demo");
-    std::fs::write(root.join("CLAUDE.md"), "rules").unwrap();
+    std::fs::write(root.join(".claude/CLAUDE.md"), "rules").unwrap();
     std::fs::write(fixture.path("CLAUDE.local.md"), "mine").unwrap();
     let checks = project_report(&fixture.bare_host(), &root, at(0));
     let shadows: Vec<_> = checks
@@ -1168,7 +1174,7 @@ fn claude_md_files_in_the_root_and_a_parent_warn_once_per_path() {
     for check in &shadows {
         assert_eq!(check.status, Status::Warn);
     }
-    let root_file = root.join("CLAUDE.md");
+    let root_file = root.join(".claude/CLAUDE.md");
     assert_eq!(
         shadows[0].message,
         format!("{} makes Claude Code skip AGENTS.md", root_file.display())
@@ -1192,6 +1198,59 @@ fn claude_md_files_in_the_root_and_a_parent_warn_once_per_path() {
             checks
         }]),
         0
+    );
+}
+
+/// The section belongs in a root `CLAUDE.md` file, which then hides nothing; a `CLAUDE.md` link to `AGENTS.md` hides nothing either, and a link to another file does.
+#[test]
+fn the_claude_files_check_reads_the_file_that_gets_the_section() {
+    let fixture = Fixture::new();
+    let root = fixture.project("demo");
+    let report = |root: &Path| project_report(&fixture.bare_host(), root, at(0));
+    let claude_md = |checks: &[Check]| {
+        let check = find(checks, "claude md");
+        (check.status, check.message.clone())
+    };
+
+    std::fs::write(root.join(CLAUDE_FILE), "# mine\n").unwrap();
+    let checks = report(&root);
+    let check = find(&checks, "claude files");
+    assert_eq!(check.status, Status::Warn);
+    assert_eq!(
+        check.message,
+        "CLAUDE.md lacks the fold section; AGENTS.md holds a second fold section, which belongs in CLAUDE.md"
+    );
+    assert_eq!(check.fix.as_deref(), Some("fld init --refresh"));
+    assert_eq!(
+        claude_md(&checks),
+        (Status::Ok, "no CLAUDE.md hides AGENTS.md".to_owned())
+    );
+
+    std::fs::write(root.join(CLAUDE_FILE), good_agents()).unwrap();
+    std::fs::write(root.join(AGENTS_FILE), "# shared\n").unwrap();
+    assert_eq!(find(&report(&root), "claude files").status, Status::Ok);
+
+    std::fs::remove_file(root.join(CLAUDE_FILE)).unwrap();
+    std::fs::write(root.join(AGENTS_FILE), good_agents()).unwrap();
+    std::os::unix::fs::symlink(AGENTS_FILE, root.join(CLAUDE_FILE)).unwrap();
+    let checks = report(&root);
+    assert_eq!(find(&checks, "claude files").status, Status::Ok);
+    assert_eq!(claude_md(&checks).0, Status::Ok);
+
+    std::fs::remove_file(root.join(CLAUDE_FILE)).unwrap();
+    std::fs::write(root.join("rules.md"), "# rules\n").unwrap();
+    std::os::unix::fs::symlink("rules.md", root.join(CLAUDE_FILE)).unwrap();
+    let checks = report(&root);
+    assert_eq!(find(&checks, "claude files").status, Status::Ok);
+    assert_eq!(
+        claude_md(&checks),
+        (
+            Status::Warn,
+            format!(
+                "{} makes Claude Code skip AGENTS.md",
+                root.join(CLAUDE_FILE).display()
+            )
+        )
     );
 }
 

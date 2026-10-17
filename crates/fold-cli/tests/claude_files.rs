@@ -3,8 +3,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use fold_cli::claude_files::{
-    self, AGENTS_BEGIN, AGENTS_END, AGENTS_FILE, ClaudeFileError, MALFORMED_REASON, MCP_FILE,
-    SETTINGS_FILE, SKILL_FILE, agents_md, shadowing_files,
+    self, AGENTS_BEGIN, AGENTS_END, AGENTS_FILE, CLAUDE_FILE, ClaudeFileError, MALFORMED_REASON,
+    MCP_FILE, SETTINGS_FILE, SKILL_FILE, agents_md, instructions_file, shadowing_files,
+    stale_section, without_section,
 };
 use tempfile::TempDir;
 
@@ -356,6 +357,7 @@ fn shadowing_files_finds_each_name_in_the_root_and_its_parents_nearest_first() {
     std::fs::create_dir_all(parent.join(".claude")).unwrap();
     let home = dir.path().canonicalize().unwrap().join("home");
     let mut expected = Vec::new();
+    std::fs::write(root.join("rules.md"), "rules").unwrap();
     for dir in [&root, &parent] {
         for name in ["CLAUDE.md", ".claude/CLAUDE.md", "CLAUDE.local.md"] {
             assert_eq!(
@@ -365,7 +367,12 @@ fn shadowing_files_finds_each_name_in_the_root_and_its_parents_nearest_first() {
                     .collect::<Vec<_>>(),
                 expected
             );
-            std::fs::write(dir.join(name), "rules").unwrap();
+            // A root CLAUDE.md file gets fold's section, so only a link to another file hides it.
+            if dir == &root && name == CLAUDE_FILE {
+                std::os::unix::fs::symlink("rules.md", dir.join(name)).unwrap();
+            } else {
+                std::fs::write(dir.join(name), "rules").unwrap();
+            }
             expected.push(dir.join(name));
         }
     }
@@ -507,16 +514,19 @@ fn init_warns_for_each_shadowing_file_writes_the_files_and_exits_0() {
 
     std::fs::create_dir_all(project.join(".claude")).unwrap();
     for name in names {
-        std::fs::write(project.join(name), "rules").unwrap();
+        std::fs::write(project.join(name), "rules\n").unwrap();
     }
     let output = sandbox.fold_in(&["init", "--refresh"], &project.join(".claude"));
     assert_eq!(output.status.code(), Some(0), "{output:?}");
-    let expected: Vec<String> = names
+    let expected: Vec<String> = names[1..]
+        .iter()
         .map(|name| warning(project.join(name)))
-        .into_iter()
         .chain(names.map(|name| warning(parent.join(name))))
         .collect();
     assert_eq!(sandbox.warnings(&output), expected);
+    let claude = read(&project, CLAUDE_FILE);
+    assert!(claude.starts_with("rules\n\n") && claude.contains(AGENTS_BEGIN));
+    assert_eq!(read(&project, AGENTS_FILE), "");
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     assert!(
         stdout.ends_with(&format!(
@@ -591,4 +601,226 @@ fn refresh_outside_a_project_and_with_a_malformed_file_fails() {
         "{stderr}"
     );
     assert_eq!(read(&project, MCP_FILE), "{");
+}
+
+/// The number of fold sections in a text.
+#[cfg(test)]
+fn sections(text: &str) -> usize {
+    text.lines().filter(|line| *line == AGENTS_BEGIN).count()
+}
+
+#[cfg(test)]
+fn is_link(path: &Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .unwrap()
+        .file_type()
+        .is_symlink()
+}
+
+#[test]
+fn the_section_goes_into_claude_md_when_it_is_a_file() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join(CLAUDE_FILE), "# mine\n").unwrap();
+    assert_eq!(instructions_file(root), CLAUDE_FILE);
+    claude_files::write(root).unwrap();
+    let claude = read(root, CLAUDE_FILE);
+    assert!(
+        claude.starts_with(&format!("# mine\n\n{AGENTS_BEGIN}\n")),
+        "{claude}"
+    );
+    assert!(!root.join(AGENTS_FILE).exists());
+
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join(CLAUDE_FILE), "# claude\n").unwrap();
+    std::fs::write(root.join(AGENTS_FILE), "# agents\n").unwrap();
+    claude_files::write(root).unwrap();
+    assert_eq!(sections(&read(root, CLAUDE_FILE)), 1);
+    assert_eq!(read(root, AGENTS_FILE), "# agents\n");
+    let canonical = root.canonicalize().unwrap();
+    assert!(
+        shadowing_files(&canonical, None)
+            .iter()
+            .all(|path| !path.starts_with(&canonical))
+    );
+    assert_eq!(stale_section(root), None);
+}
+
+#[test]
+fn the_section_goes_into_agents_md_when_claude_md_is_absent_or_a_link() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    assert_eq!(instructions_file(root), AGENTS_FILE);
+    std::fs::write(root.join(AGENTS_FILE), "# agents\n").unwrap();
+    claude_files::write(root).unwrap();
+    assert!(read(root, AGENTS_FILE).starts_with("# agents\n\n"));
+    assert!(!root.join(CLAUDE_FILE).exists());
+
+    for agents in [None, Some("# agents\n")] {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        if let Some(text) = agents {
+            std::fs::write(root.join(AGENTS_FILE), text).unwrap();
+        }
+        std::os::unix::fs::symlink(AGENTS_FILE, root.join(CLAUDE_FILE)).unwrap();
+        assert_eq!(instructions_file(root), AGENTS_FILE);
+        claude_files::write(root).unwrap();
+        claude_files::write(root).unwrap();
+        assert!(is_link(&root.join(CLAUDE_FILE)));
+        assert!(!is_link(&root.join(AGENTS_FILE)));
+        let text = read(root, AGENTS_FILE);
+        assert!(text.starts_with(agents.unwrap_or(AGENTS_BEGIN)), "{text}");
+        assert_eq!(sections(&text), 1);
+        let canonical = root.canonicalize().unwrap();
+        assert!(
+            shadowing_files(&canonical, None)
+                .iter()
+                .all(|path| !path.starts_with(&canonical))
+        );
+        assert_eq!(stale_section(root), None);
+    }
+}
+
+#[test]
+fn an_agents_md_link_to_claude_md_stays_a_link_and_the_file_holds_one_section() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join(CLAUDE_FILE), "# claude\n").unwrap();
+    std::os::unix::fs::symlink(CLAUDE_FILE, root.join(AGENTS_FILE)).unwrap();
+    assert_eq!(instructions_file(root), CLAUDE_FILE);
+    claude_files::write(root).unwrap();
+    claude_files::write(root).unwrap();
+    assert!(is_link(&root.join(AGENTS_FILE)));
+    let text = read(root, CLAUDE_FILE);
+    assert!(text.starts_with("# claude\n\n"));
+    assert_eq!(sections(&text), 1);
+    assert_eq!(stale_section(root), None);
+}
+
+#[test]
+fn an_instructions_link_that_leads_outside_the_root_or_nowhere_is_refused() {
+    let outside = TempDir::new().unwrap();
+    let target = outside.path().join("rules.md");
+    std::fs::write(&target, "# shared\n").unwrap();
+    std::fs::create_dir(outside.path().join("folder")).unwrap();
+    for (link, problem) in [
+        (target.clone(), "leads outside the project folder"),
+        (PathBuf::from("missing.md"), "leads to no file"),
+        (PathBuf::from(".claude"), "leads to no regular file"),
+    ] {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join(".claude")).unwrap();
+        std::os::unix::fs::symlink(&link, root.join(AGENTS_FILE)).unwrap();
+        let error = match claude_files::write(root).unwrap_err() {
+            ClaudeFileError::Link(error) => error,
+            other => panic!("expected a refused link, got {other:?}"),
+        };
+        assert_eq!(error.code(), "invalid_path");
+        assert!(error.message().ends_with(problem), "{}", error.message());
+        assert!(error.message().contains(AGENTS_FILE));
+        assert_eq!(
+            error.hint(),
+            Some(
+                "point AGENTS.md at a file inside the project folder or replace the link with a file, then run the command again"
+            )
+        );
+        assert!(is_link(&root.join(AGENTS_FILE)));
+        assert!(!root.join(MCP_FILE).exists(), "nothing is written");
+        assert!(!root.join(SKILL_FILE).exists());
+    }
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "# shared\n");
+}
+
+/// Claude Code reads the file a `CLAUDE.md` link leads to, so a link to anything but `AGENTS.md` still hides the section and keeps its warning.
+#[test]
+fn a_claude_md_link_to_another_file_gets_agents_md_and_keeps_the_warning() {
+    let outside = TempDir::new().unwrap();
+    let target = outside.path().join("rules.md");
+    std::fs::write(&target, "# shared\n").unwrap();
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    std::os::unix::fs::symlink(&target, root.join(CLAUDE_FILE)).unwrap();
+    claude_files::write(&root).unwrap();
+    assert!(is_link(&root.join(CLAUDE_FILE)));
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "# shared\n");
+    assert_eq!(sections(&read(&root, AGENTS_FILE)), 1);
+    assert!(shadowing_files(&root, None).contains(&root.join(CLAUDE_FILE)));
+}
+
+#[test]
+fn the_section_moves_between_the_files_and_the_old_one_keeps_its_other_bytes() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join(AGENTS_FILE), "# agents\n").unwrap();
+    claude_files::write(root).unwrap();
+    let with_tail = format!("{}tail\n", read(root, AGENTS_FILE));
+    std::fs::write(root.join(AGENTS_FILE), &with_tail).unwrap();
+
+    std::fs::write(root.join(CLAUDE_FILE), "# claude\n").unwrap();
+    assert_eq!(stale_section(root), Some(AGENTS_FILE));
+    claude_files::write(root).unwrap();
+    assert_eq!(read(root, AGENTS_FILE), "# agents\n\ntail\n");
+    assert_eq!(sections(&read(root, CLAUDE_FILE)), 1);
+    assert_eq!(stale_section(root), None);
+    let before = std::fs::metadata(root.join(AGENTS_FILE))
+        .unwrap()
+        .modified()
+        .unwrap();
+    claude_files::write(root).unwrap();
+    let after = std::fs::metadata(root.join(AGENTS_FILE))
+        .unwrap()
+        .modified()
+        .unwrap();
+    assert_eq!(before, after, "a file without a section is not written");
+
+    std::fs::remove_file(root.join(CLAUDE_FILE)).unwrap();
+    claude_files::write(root).unwrap();
+    let agents = read(root, AGENTS_FILE);
+    assert!(agents.starts_with("# agents\n\ntail\n\n"), "{agents}");
+    assert_eq!(sections(&agents), 1);
+}
+
+#[test]
+fn stale_markers_that_cannot_be_removed_refuse_the_write() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join(CLAUDE_FILE), "# claude\n").unwrap();
+    let broken = format!("# agents\n{AGENTS_BEGIN}\n");
+    std::fs::write(root.join(AGENTS_FILE), &broken).unwrap();
+    assert_eq!(stale_section(root), Some(AGENTS_FILE));
+    let error = malformed(claude_files::write(root).unwrap_err());
+    assert!(error.message().contains(AGENTS_FILE), "{}", error.message());
+    assert_eq!(read(root, CLAUDE_FILE), "# claude\n");
+    assert_eq!(read(root, AGENTS_FILE), broken);
+}
+
+#[test]
+fn removing_the_section_keeps_every_byte_outside_the_markers() {
+    assert_eq!(without_section("no markers\n").unwrap(), None);
+    let text = format!("a\r\n{AGENTS_BEGIN}\r\nx\n{AGENTS_END}\nb");
+    assert_eq!(without_section(&text).unwrap().as_deref(), Some("a\r\nb"));
+    let last = format!("a\n{AGENTS_BEGIN}\n{AGENTS_END}");
+    assert_eq!(without_section(&last).unwrap().as_deref(), Some("a\n"));
+    assert!(without_section(&format!("{AGENTS_END}\n")).is_err());
+}
+
+#[test]
+fn refresh_with_a_refused_link_prints_the_hint() {
+    let sandbox = Sandbox::new();
+    let project = sandbox.path("project");
+    let output = sandbox.fold(&["init", project.to_str().unwrap()]);
+    assert!(output.status.success(), "{output:?}");
+    std::fs::remove_file(project.join(AGENTS_FILE)).unwrap();
+    std::os::unix::fs::symlink(sandbox.path("rules.md"), project.join(AGENTS_FILE)).unwrap();
+    std::fs::write(sandbox.path("rules.md"), "# shared\n").unwrap();
+    let output = sandbox.fold(&["init", "--refresh", project.to_str().unwrap()]);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(stderr.contains("invalid_path"), "{stderr}");
+    assert!(
+        stderr.contains("point AGENTS.md at a file inside the project folder"),
+        "{stderr}"
+    );
 }

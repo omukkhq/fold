@@ -30,7 +30,8 @@ const FILE_TOOLS: &str = "Edit|Write|MultiEdit|NotebookEdit";
 const HOOK_PREFIXES: [&str; 2] = ["fld hook", "fold hook"];
 
 pub const AGENTS_FILE: &str = "AGENTS.md";
-/// fold's own text in `AGENTS.md` sits between these lines.
+pub const CLAUDE_FILE: &str = "CLAUDE.md";
+/// fold's own text in the file from [`instructions_file`] sits between these lines.
 pub const AGENTS_BEGIN: &str = "<!-- fold:begin -->";
 pub const AGENTS_END: &str = "<!-- fold:end -->";
 
@@ -43,8 +44,8 @@ const SKILL: &str = include_str!("../templates/SKILL.md");
 /// `details.reason` of a Claude Code file that fold cannot merge into.
 pub const MALFORMED_REASON: &str = "malformed_claude_file";
 
-/// Each of these in the project root or a parent directory makes Claude Code skip `AGENTS.md`.
-pub const SHADOWING_FILES: [&str; 3] = ["CLAUDE.md", ".claude/CLAUDE.md", "CLAUDE.local.md"];
+/// Each of these in the project root or a parent directory makes Claude Code skip `AGENTS.md`. The root `CLAUDE.md` is the exception when it gets fold's section or links to the root `AGENTS.md`.
+pub const SHADOWING_FILES: [&str; 3] = [CLAUDE_FILE, ".claude/CLAUDE.md", "CLAUDE.local.md"];
 /// The user's own instructions below `HOME`, which never shadow `AGENTS.md`.
 const USER_FILE: &str = ".claude/CLAUDE.md";
 
@@ -53,6 +54,9 @@ pub enum ClaudeFileError {
     /// `invalid_request` with `details.reason` [`MALFORMED_REASON`]; the file is left as it is.
     #[error(transparent)]
     Malformed(FoldError),
+    /// `invalid_path`: the instructions file is a symbolic link that does not lead to a regular file inside the project folder; every file is left as it is.
+    #[error(transparent)]
+    Link(FoldError),
     #[error("cannot write {}: {source}", path.display())]
     Io {
         path: PathBuf,
@@ -64,32 +68,161 @@ pub enum ClaudeFileError {
 impl ClaudeFileError {
     pub fn code(&self) -> Option<&'static str> {
         match self {
-            Self::Malformed(error) => Some(error.code()),
+            Self::Malformed(error) | Self::Link(error) => Some(error.code()),
+            Self::Io { .. } => None,
+        }
+    }
+
+    pub fn hint(&self) -> Option<&str> {
+        match self {
+            Self::Malformed(error) | Self::Link(error) => error.hint(),
             Self::Io { .. } => None,
         }
     }
 }
 
-/// Writes or refreshes the four Claude Code files in the project root, keeping everything in them that fold does not own. Every file is checked before the first one is written, so a malformed file leaves all four untouched. A file whose content would not change is not written, so its modification time stays.
+/// The root file that gets fold's marked section, which is the one Claude Code reads: `CLAUDE.md` when it is there and is no symbolic link, else `AGENTS.md`. Claude Code reads a `CLAUDE.md` file in place of `AGENTS.md`, and a `CLAUDE.md` link usually leads to `AGENTS.md`.
+pub fn instructions_file(root: &Path) -> &'static str {
+    match std::fs::symlink_metadata(root.join(CLAUDE_FILE)) {
+        Ok(meta) if !meta.file_type().is_symlink() => CLAUDE_FILE,
+        _ => AGENTS_FILE,
+    }
+}
+
+/// The root instructions file that does not get the section.
+fn other_instructions_file(name: &str) -> &'static str {
+    if name == CLAUDE_FILE {
+        AGENTS_FILE
+    } else {
+        CLAUDE_FILE
+    }
+}
+
+/// Whether both paths lead to one existing file.
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// The other root instructions file when a refresh would remove a fold section from it, such as `AGENTS.md` after a `CLAUDE.md` file was added. A file whose fold markers a refresh refuses counts too.
+pub fn stale_section(root: &Path) -> Option<&'static str> {
+    let project = std::fs::canonicalize(root).ok()?;
+    let name = instructions_file(root);
+    match without_stale_section(&project, root, name) {
+        Ok(Some(_)) | Err(ClaudeFileError::Malformed(_)) => Some(other_instructions_file(name)),
+        Ok(None) | Err(_) => None,
+    }
+}
+
+/// Writes or refreshes the Claude Code files in the project root, keeping everything in them that fold does not own. The marked section goes into [`instructions_file`], and the other root instructions file loses a section an earlier write left there, so the project holds one. Every file is checked and every symbolic link followed before the first file is written, so a refusal leaves all of them untouched. A file whose content would not change is not written, so its modification time stays.
 pub fn write(root: &Path) -> Result<(), ClaudeFileError> {
+    let project = std::fs::canonicalize(root).map_err(|source| ClaudeFileError::Io {
+        path: root.to_owned(),
+        source,
+    })?;
     let mcp_path = root.join(MCP_FILE);
     let settings_path = root.join(SETTINGS_FILE);
-    let agents_path = root.join(AGENTS_FILE);
     let mcp = merge_json(&mcp_path, read(&mcp_path)?, merge_mcp)?;
     let settings = merge_json(&settings_path, read(&settings_path)?, merge_settings)?;
-    let agents_text = match read(&agents_path)? {
-        Some(bytes) => {
-            Some(String::from_utf8(bytes).map_err(|_| malformed(&agents_path, "is not UTF-8"))?)
-        }
-        None => None,
-    };
-    let agents = agents_md(agents_text.as_deref(), AGENTS_SECTION)
-        .map_err(|problem| malformed(&agents_path, problem))?;
-    replace(&mcp_path, &mcp)?;
-    replace(&settings_path, &settings)?;
-    replace(&agents_path, agents.as_bytes())?;
-    replace(&root.join(SKILL_FILE), SKILL.as_bytes())?;
+    let name = instructions_file(root);
+    let instructions_path = root.join(name);
+    let instructions_end = in_project(&project, &instructions_path)?;
+    let instructions = agents_md(
+        read_text(&instructions_path, &instructions_end)?.as_deref(),
+        AGENTS_SECTION,
+    )
+    .map_err(|problem| malformed(&instructions_path, problem))?;
+    let mut writes = vec![
+        (link_end_of(&mcp_path)?, mcp),
+        (link_end_of(&settings_path)?, settings),
+        (instructions_end, instructions.into_bytes()),
+    ];
+    writes.extend(without_stale_section(&project, root, name)?);
+    let skill_path = root.join(SKILL_FILE);
+    writes.push((link_end_of(&skill_path)?, SKILL.as_bytes().to_vec()));
+    for (path, content) in &writes {
+        replace(path, content)?;
+    }
     Ok(())
+}
+
+/// The other root instructions file without fold's section, when it holds one and is a regular file inside the project folder other than the one that gets the section. A link that leads elsewhere is left as it is.
+fn without_stale_section(
+    project: &Path,
+    root: &Path,
+    name: &str,
+) -> Result<Option<(PathBuf, Vec<u8>)>, ClaudeFileError> {
+    let path = root.join(other_instructions_file(name));
+    let Ok(end) = std::fs::canonicalize(&path) else {
+        return Ok(None);
+    };
+    if !end.starts_with(project) || !end.is_file() || same_file(&end, &root.join(name)) {
+        return Ok(None);
+    }
+    let Some(text) = read_text(&path, &end)? else {
+        return Ok(None);
+    };
+    let stripped = without_section(&text).map_err(|problem| malformed(&path, problem))?;
+    Ok(stripped.map(|text| (end, text.into_bytes())))
+}
+
+/// The file fold writes for the instructions file at `path`: `path` itself when it is no symbolic link, else the regular file inside the project folder (`project`, canonical) that the link leads to. A link that leads elsewhere is refused, so the section is part of the project's revisions and reaches every workspace.
+fn in_project(project: &Path, path: &Path) -> Result<PathBuf, ClaudeFileError> {
+    let io_error = |source| ClaudeFileError::Io {
+        path: path.to_owned(),
+        source,
+    };
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => {}
+        Ok(_) => return Ok(path.to_owned()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(path.to_owned()),
+        Err(source) => return Err(io_error(source)),
+    }
+    match std::fs::canonicalize(path) {
+        Ok(end) if !end.starts_with(project) => {
+            Err(link_refused(path, "leads outside the project folder"))
+        }
+        Ok(end) if end.is_file() => Ok(end),
+        Ok(_) => Err(link_refused(path, "leads to no regular file")),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            Err(link_refused(path, "leads to no file"))
+        }
+        Err(source) => Err(io_error(source)),
+    }
+}
+
+fn link_refused(path: &Path, problem: &str) -> ClaudeFileError {
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    ClaudeFileError::Link(
+        FoldError::new(
+            codes::INVALID_PATH,
+            format!("{} is a symbolic link that {problem}", path.display()),
+        )
+        .with_details([("path", json!(path.display().to_string()))])
+        .with_hint(format!(
+            "point {name} at a file inside the project folder or replace the link with a file, then run the command again"
+        )),
+    )
+}
+
+/// The end of the links that start at `path`, which may lead anywhere and to a file that does not exist yet.
+fn link_end_of(path: &Path) -> Result<PathBuf, ClaudeFileError> {
+    link_end(path).map_err(|source| ClaudeFileError::Io {
+        path: path.to_owned(),
+        source,
+    })
+}
+
+/// The text at `end`, the file `path` leads to; an error names `path`.
+fn read_text(path: &Path, end: &Path) -> Result<Option<String>, ClaudeFileError> {
+    match read(end)? {
+        Some(bytes) => Ok(Some(
+            String::from_utf8(bytes).map_err(|_| malformed(path, "is not UTF-8"))?,
+        )),
+        None => Ok(None),
+    }
 }
 
 fn read(path: &Path) -> Result<Option<Vec<u8>>, ClaudeFileError> {
@@ -239,40 +372,37 @@ fn is_fold_hook(hook: &Value) -> bool {
         })
 }
 
-/// The text of `AGENTS.md` with `section` between the markers. A file without markers keeps its bytes as the prefix and gains the section after one blank line; a file with one pair keeps every byte outside it. Markers count only as whole lines. The error says what is wrong with the markers.
-pub fn agents_md(existing: Option<&str>, section: &str) -> Result<String, &'static str> {
-    let body = section.trim_end_matches('\n');
-    let block = format!("{AGENTS_BEGIN}\n{body}\n{AGENTS_END}\n");
-    let existing = match existing {
-        None | Some("") => return Ok(block),
-        Some(text) => text,
-    };
+/// Byte offsets of the one fold section in a text: the begin marker line starts at `begin` and ends at `inner_start`, the end marker line starts at `inner_end` and ends at `end`.
+struct Section {
+    begin: usize,
+    inner_start: usize,
+    inner_end: usize,
+    end: usize,
+}
+
+/// The fold section of `text`, if it has one. Markers count only as whole lines. The error says what is wrong with the markers.
+fn section(text: &str) -> Result<Option<Section>, &'static str> {
     let mut begins = Vec::new();
     let mut ends = Vec::new();
     let mut offset = 0;
-    for line in existing.split_inclusive('\n') {
+    for line in text.split_inclusive('\n') {
         let content = line.trim_end_matches('\n').trim_end_matches('\r');
         if content == AGENTS_BEGIN {
-            begins.push(offset + line.len());
+            begins.push((offset, offset + line.len()));
         } else if content == AGENTS_END {
-            ends.push(offset);
+            ends.push((offset, offset + line.len()));
         }
         offset += line.len();
     }
     match (begins.as_slice(), ends.as_slice()) {
-        ([], []) => {
-            let mut text = existing.to_owned();
-            if !text.ends_with('\n') {
-                text.push('\n');
-            }
-            text.push('\n');
-            text.push_str(&block);
-            Ok(text)
-        }
-        ([inner_start], [inner_end]) if inner_start <= inner_end => {
-            let before = existing.get(..*inner_start).unwrap_or_default();
-            let after = existing.get(*inner_end..).unwrap_or_default();
-            Ok(format!("{before}{body}\n{after}"))
+        ([], []) => Ok(None),
+        ([(begin, inner_start)], [(inner_end, end)]) if inner_start <= inner_end => {
+            Ok(Some(Section {
+                begin: *begin,
+                inner_start: *inner_start,
+                inner_end: *inner_end,
+                end: *end,
+            }))
         }
         ([_], [_]) => Err("has the fold end marker before its begin marker"),
         ([], _) => Err("has a fold end marker without a begin marker"),
@@ -281,17 +411,50 @@ pub fn agents_md(existing: Option<&str>, section: &str) -> Result<String, &'stat
     }
 }
 
-/// Atomic through `write_atomic`; an existing file keeps its permissions. A symbolic link stays a link, also one whose file does not exist yet: the file it points to is the one that changes, because the user put the link there to keep the content elsewhere.
-fn replace(path: &Path, content: &[u8]) -> Result<(), ClaudeFileError> {
-    let io_error = |source| ClaudeFileError::Io {
-        path: path.to_owned(),
-        source,
+/// The text of the instructions file with `section` between the markers. A file without markers keeps its bytes as the prefix and gains the section after one blank line; a file with one pair keeps every byte outside it. Markers count only as whole lines. The error says what is wrong with the markers.
+pub fn agents_md(existing: Option<&str>, section_text: &str) -> Result<String, &'static str> {
+    let body = section_text.trim_end_matches('\n');
+    let block = format!("{AGENTS_BEGIN}\n{body}\n{AGENTS_END}\n");
+    let existing = match existing {
+        None | Some("") => return Ok(block),
+        Some(text) => text,
     };
+    match section(existing)? {
+        None => {
+            let mut text = existing.to_owned();
+            if !text.ends_with('\n') {
+                text.push('\n');
+            }
+            text.push('\n');
+            text.push_str(&block);
+            Ok(text)
+        }
+        Some(found) => {
+            let before = existing.get(..found.inner_start).unwrap_or_default();
+            let after = existing.get(found.inner_end..).unwrap_or_default();
+            Ok(format!("{before}{body}\n{after}"))
+        }
+    }
+}
+
+/// The text without its fold section, both marker lines included, keeping every other byte; `None` when it has no section.
+pub fn without_section(text: &str) -> Result<Option<String>, &'static str> {
+    Ok(section(text)?.map(|found| {
+        let before = text.get(..found.begin).unwrap_or_default();
+        let after = text.get(found.end..).unwrap_or_default();
+        format!("{before}{after}")
+    }))
+}
+
+/// Atomic through `write_atomic`; an existing file keeps its permissions. `path` is the end of any symbolic link, so a link stays a link, also one whose file does not exist yet: the file it points to is the one that changes, because the user put the link there to keep the content elsewhere.
+fn replace(path: &Path, content: &[u8]) -> Result<(), ClaudeFileError> {
     if read(path)?.as_deref() == Some(content) {
         return Ok(());
     }
-    let target = link_end(path).map_err(io_error)?;
-    fold_vcs::atomic::write_atomic(&target, content).map_err(io_error)
+    fold_vcs::atomic::write_atomic(path, content).map_err(|source| ClaudeFileError::Io {
+        path: path.to_owned(),
+        source,
+    })
 }
 
 /// How many symbolic links [`link_end`] follows, as Linux does for one path.
@@ -324,12 +487,23 @@ pub fn shadowing_files(root: &Path, home: Option<&Path>) -> Vec<PathBuf> {
         for relative in SHADOWING_FILES {
             let user_file = relative == USER_FILE && home == Some(dir);
             let path = dir.join(relative);
-            if !user_file && path.is_file() {
+            let read_for_fold = dir == root && relative == CLAUDE_FILE && claude_md_is_read(root);
+            if !user_file && !read_for_fold && path.is_file() {
                 found.push(path);
             }
         }
     }
     found
+}
+
+/// Whether the root `CLAUDE.md` is the file that holds fold's section or a link to the root `AGENTS.md`, so the section is what Claude Code reads.
+fn claude_md_is_read(root: &Path) -> bool {
+    let claude = root.join(CLAUDE_FILE);
+    match std::fs::symlink_metadata(&claude) {
+        Ok(meta) if meta.file_type().is_symlink() => same_file(&claude, &root.join(AGENTS_FILE)),
+        Ok(_) => true,
+        Err(_) => false,
+    }
 }
 
 /// The line `fld init` prints for one file from [`shadowing_files`].
@@ -367,8 +541,8 @@ mod tests {
     fn a_dangling_link_stays_a_link_and_its_file_is_created() {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir(root.path().join("shared")).unwrap();
-        let link = root.path().join(AGENTS_FILE);
-        std::os::unix::fs::symlink("shared/rules.md", &link).unwrap();
+        let link = root.path().join(MCP_FILE);
+        std::os::unix::fs::symlink("shared/mcp.json", &link).unwrap();
         write(root.path()).unwrap();
         assert!(
             std::fs::symlink_metadata(&link)
@@ -376,8 +550,8 @@ mod tests {
                 .file_type()
                 .is_symlink()
         );
-        let text = std::fs::read_to_string(root.path().join("shared/rules.md")).unwrap();
-        assert!(text.contains(AGENTS_BEGIN));
+        let text = std::fs::read_to_string(root.path().join("shared/mcp.json")).unwrap();
+        assert!(text.contains(MCP_SERVER_NAME));
     }
 
     #[test]
@@ -387,7 +561,7 @@ mod tests {
         std::os::unix::fs::symlink("other.md", &link).unwrap();
         std::os::unix::fs::symlink(AGENTS_FILE, root.path().join("other.md")).unwrap();
         assert!(link_end(&link).is_err());
-        assert!(replace(&link, b"x").is_err());
+        assert!(write(root.path()).is_err());
         assert!(
             std::fs::symlink_metadata(&link)
                 .unwrap()

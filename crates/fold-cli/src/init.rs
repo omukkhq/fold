@@ -71,6 +71,7 @@ impl InitError {
     pub fn hint(&self) -> Option<&str> {
         match self {
             Self::Refused(error) | Self::Project(ProjectError::Fold(error)) => error.hint(),
+            Self::ClaudeFiles(error) => error.hint(),
             _ => None,
         }
     }
@@ -208,10 +209,13 @@ fn refresh(dir: Option<&Path>, dirs: &Dirs, out: &mut impl Write) -> Result<(), 
 /// Writes the Claude Code files into a new project's folder before init records it, so they are part of `r1`, and returns the files and folders that did not exist before.
 fn new_claude_files(root: &Path) -> Result<Vec<PathBuf>, FoldError> {
     // A folder comes before the files below it, so only the topmost new path is recorded.
-    let written = [claude_files::MCP_FILE, claude_files::AGENTS_FILE]
-        .into_iter()
-        .chain(claude_files::FOLDERS)
-        .chain([claude_files::SETTINGS_FILE, claude_files::SKILL_FILE]);
+    let written = [
+        claude_files::MCP_FILE,
+        claude_files::instructions_file(root),
+    ]
+    .into_iter()
+    .chain(claude_files::FOLDERS)
+    .chain([claude_files::SETTINGS_FILE, claude_files::SKILL_FILE]);
     let mut created: Vec<PathBuf> = Vec::new();
     for path in written.map(|relative| root.join(relative)) {
         if std::fs::symlink_metadata(&path).is_err()
@@ -222,7 +226,7 @@ fn new_claude_files(root: &Path) -> Result<Vec<PathBuf>, FoldError> {
     }
     match claude_files::write(root) {
         Ok(()) => Ok(created),
-        Err(ClaudeFileError::Malformed(error)) => Err(error),
+        Err(ClaudeFileError::Malformed(error) | ClaudeFileError::Link(error)) => Err(error),
         Err(ClaudeFileError::Io { source, .. }) => Err(FoldError::new(
             codes::WORKSPACE_IO,
             format!("cannot write the Claude Code files: {}", source.kind()),

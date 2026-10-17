@@ -885,13 +885,13 @@ fn objects_check(path: &Path) -> Check {
     objects_verdict(path, inspect_objects(path))
 }
 
-/// The problems with the Claude Code files the project root should hold: the fold MCP server, the allowed fold tools, the fold hooks and the marked section of `AGENTS.md`.
+/// The problems with the Claude Code files the project root should hold: the fold MCP server, the allowed fold tools, the fold hooks and the marked section of the instructions file, which `instructions` names with its text.
 pub(crate) fn claude_file_problems(
     mcp: Option<&str>,
     settings: Option<&str>,
-    agents: Option<&str>,
+    instructions: (&str, Option<&str>),
 ) -> Vec<String> {
-    use claude_files::{AGENTS_BEGIN, AGENTS_END, AGENTS_FILE, MCP_FILE, SETTINGS_FILE};
+    use claude_files::{AGENTS_BEGIN, AGENTS_END, MCP_FILE, SETTINGS_FILE};
     let json = |text: &str| serde_json::from_str::<serde_json::Value>(text).unwrap_or_default();
     let mut problems = Vec::new();
     match mcp.map(json) {
@@ -916,10 +916,11 @@ pub(crate) fn claude_file_problems(
             }
         }
     }
-    match agents {
-        None => problems.push(format!("{AGENTS_FILE} is missing")),
+    let (name, text) = instructions;
+    match text {
+        None => problems.push(format!("{name} is missing")),
         Some(text) if !text.contains(AGENTS_BEGIN) || !text.contains(AGENTS_END) => {
-            problems.push(format!("{AGENTS_FILE} lacks the fold section"));
+            problems.push(format!("{name} lacks the fold section"));
         }
         Some(_) => {}
     }
@@ -1020,11 +1021,17 @@ fn folder_check(paths: &ProjectPaths, host: &Host) -> Check {
 
 fn claude_files_check(root: &Path) -> Check {
     let read = |relative: &str| std::fs::read_to_string(root.join(relative)).ok();
-    let problems = claude_file_problems(
+    let instructions = claude_files::instructions_file(root);
+    let mut problems = claude_file_problems(
         read(claude_files::MCP_FILE).as_deref(),
         read(claude_files::SETTINGS_FILE).as_deref(),
-        read(claude_files::AGENTS_FILE).as_deref(),
+        (instructions, read(instructions).as_deref()),
     );
+    if let Some(stale) = claude_files::stale_section(root) {
+        problems.push(format!(
+            "{stale} holds a second fold section, which belongs in {instructions}"
+        ));
+    }
     if problems.is_empty() {
         Check::ok("claude files", "the fold entries are in place")
     } else {
