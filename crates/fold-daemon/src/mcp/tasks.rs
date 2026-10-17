@@ -91,7 +91,7 @@ pub struct CreateTaskInput {
     /// Tasks the new task needs, such as T-3. Each adds one direct dependency.
     #[serde(default)]
     pub needs: Vec<String>,
-    /// A task to split: the new task becomes a linked item of its Subtasks checklist, so the parent needs the new task.
+    /// A task to split: the new task becomes a linked item of its Subtasks checklist, so the parent needs the new task. Only an agent that may change the parent's checklist passes it (checklist_denied).
     #[serde(default)]
     pub parent: Option<String>,
     /// proposal (the default), no_proposal or human. A no_proposal task is for work that changes no project file, such as designs made through an MCP server: its coder claims it, does the work without a workspace and calls report_task, and a lead check completes it. A human task is work only a person can do outside every agent, such as verifying an app with a provider: no agent claims it, and a human, or the main agent when the user says so, marks it Done with complete_task. Only the main agent, a human or the lead of the task's area creates a no_proposal or human task.
@@ -357,22 +357,22 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             ADD_CHECKLIST_ITEM,
-            "Add a plain step or a linked child task to a checklist of a task.",
+            "Add a plain step or a linked child task to a checklist of a task. On a held task only its holder's agent, its lead, the main agent or a human changes the checklist; on a task nobody holds, the lead of its area, the main agent or a human. Anyone else gets checklist_denied.",
             schema_for_type::<AddChecklistItemInput>(),
         ),
         Tool::new(
             UPDATE_CHECKLIST_ITEM,
-            "Change the text of a plain step, or tick or untick it.",
+            "Change the text of a plain step, or tick or untick it. A task coder ticks each step of its own task when the step is done and checked. On a held task only its holder's agent, its lead, the main agent or a human changes the checklist; on a task nobody holds, the lead of its area, the main agent or a human. Anyone else gets checklist_denied.",
             schema_for_type::<UpdateChecklistItemInput>(),
         ),
         Tool::new(
             MOVE_CHECKLIST_ITEM,
-            "Move a checklist item to a new place in its checklist or into another checklist of the same task.",
+            "Move a checklist item to a new place in its checklist or into another checklist of the same task. The rights of update_checklist_item apply.",
             schema_for_type::<MoveChecklistItemInput>(),
         ),
         Tool::new(
             REMOVE_CHECKLIST_ITEM,
-            "Remove a checklist item. Removing a linked item also removes its dependency.",
+            "Remove a checklist item. Removing a linked item also removes its dependency. The rights of update_checklist_item apply.",
             schema_for_type::<ChecklistItemIdInput>(),
         ),
         Tool::new(

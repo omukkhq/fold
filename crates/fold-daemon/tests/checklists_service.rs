@@ -3,7 +3,7 @@ use std::sync::Arc;
 use fold_core::events::types;
 use fold_core::{
     Actor, AgentActor, ChecklistItemId, ChecklistName, Event, EventActor, EventFilter, EventType,
-    StepText, TaskDescription, TaskId, TaskStatus, TaskTitle, WorkerName,
+    HumanName, StepText, Tag, TaskDescription, TaskId, TaskStatus, TaskTitle, WorkerName,
 };
 use fold_daemon::services::events::EventBus;
 use fold_daemon::services::tasks::{
@@ -27,14 +27,31 @@ fn ci(number: u32) -> ChecklistItemId {
     ChecklistItemId::from_number(number).unwrap()
 }
 
+/// `backend` with the `main` tag, so it may change every checklist.
 #[cfg(test)]
 fn agent() -> Actor {
     let worker = WorkerName::parse("backend").unwrap();
     Actor::Agent(AgentActor {
         agent: worker.agent(),
         worker,
+        tags: vec![Tag::parse("main").unwrap()],
+    })
+}
+
+/// An agent that neither holds nor leads any task, so the checklist rights refuse it.
+#[cfg(test)]
+fn stranger() -> Actor {
+    let worker = WorkerName::parse("frontend").unwrap();
+    Actor::Agent(AgentActor {
+        agent: worker.agent(),
+        worker,
         tags: Vec::new(),
     })
+}
+
+#[cfg(test)]
+fn human() -> Actor {
+    Actor::human(HumanName::parse("ana").unwrap())
 }
 
 #[cfg(test)]
@@ -756,6 +773,14 @@ async fn a_done_task_locks_its_whole_checklist() {
                 Some(0),
                 Some(ChecklistName::parse("QA").unwrap()),
             )
+            .await
+            .unwrap_err(),
+        fx.tasks
+            .update_checklist_item(&stranger(), open, patch(None, Some(true)))
+            .await
+            .unwrap_err(),
+        fx.tasks
+            .update_checklist_item(&human(), open, patch(None, Some(true)))
             .await
             .unwrap_err(),
     ];

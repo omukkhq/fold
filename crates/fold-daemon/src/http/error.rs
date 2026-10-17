@@ -136,9 +136,10 @@ fn status_of(code: &str) -> Option<StatusCode> {
         | codes::WORKER_EXISTS
         | codes::PERMISSION_QUESTION_CLOSED => Some(StatusCode::CONFLICT),
         codes::INVALID_TASK_KIND | codes::INVALID_HOLD_REASON => Some(StatusCode::BAD_REQUEST),
-        codes::TASK_KIND_DENIED | codes::TASK_CHECK_DENIED | codes::TASK_HOLD_DENIED => {
-            Some(StatusCode::FORBIDDEN)
-        }
+        codes::TASK_KIND_DENIED
+        | codes::TASK_CHECK_DENIED
+        | codes::TASK_HOLD_DENIED
+        | codes::CHECKLIST_DENIED => Some(StatusCode::FORBIDDEN),
         codes::TASK_KIND_MISMATCH
         | codes::TASK_ALREADY_REPORTED
         | codes::TASK_NOT_REPORTED
@@ -377,6 +378,7 @@ mod tests {
             (codes::PROJECT_PAUSED, StatusCode::CONFLICT),
             (codes::INVALID_HOLD_REASON, StatusCode::BAD_REQUEST),
             (codes::TASK_HOLD_DENIED, StatusCode::FORBIDDEN),
+            (codes::CHECKLIST_DENIED, StatusCode::FORBIDDEN),
             (codes::TASK_ON_HOLD, StatusCode::CONFLICT),
             (codes::TASK_NEEDS_HUMAN, StatusCode::CONFLICT),
         ] {

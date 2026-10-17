@@ -28,7 +28,9 @@ pub use projects::can_pull;
 pub use questions::can_answer_worker_permission;
 pub use requests::{can_claim_request, can_create_request, is_drafter, is_requester};
 pub use sessions::{SessionPeer, can_bind_agent, can_name_human};
-pub use tasks::{TaskHolder, TaskStart, can_archive_task, can_delete_task, can_hold_task};
+pub use tasks::{
+    TaskHolder, TaskStart, can_archive_task, can_change_checklist, can_delete_task, can_hold_task,
+};
 pub use workers::{
     Starter, can_check_task, can_choose_no_proposal, can_clear_hold, can_complete_human_task,
     can_define_area, can_pause_project, can_publish_task_plan, can_set_hold, can_set_worker_limits,

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use fold_core::events::types;
 use fold_core::{
     Actor, AgentActor, ChecklistName, Event, EventFilter, EventType, LabelColor, LabelName,
-    StepText, TaskDescription, TaskId, TaskStatus, TaskTitle, WorkerName,
+    StepText, Tag, TaskDescription, TaskId, TaskStatus, TaskTitle, WorkerName,
 };
 use fold_daemon::services::events::{BusMessage, EventBus};
 use fold_daemon::services::tasks::{
@@ -22,13 +22,14 @@ fn t(number: u32) -> TaskId {
     TaskId::from_number(number).unwrap()
 }
 
+/// `backend` with the `main` tag, so it may change every checklist.
 #[cfg(test)]
 fn agent() -> Actor {
     let worker = WorkerName::parse("backend").unwrap();
     Actor::Agent(AgentActor {
         agent: worker.agent(),
         worker,
-        tags: Vec::new(),
+        tags: vec![Tag::parse("main").unwrap()],
     })
 }
 

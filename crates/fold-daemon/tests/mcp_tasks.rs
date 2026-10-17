@@ -6,7 +6,7 @@ use std::time::Duration;
 use crate::common::roles::give_role;
 use fold_core::events::types;
 use fold_core::tasks::{PlanRef, PlannedReview, PlannedTask};
-use fold_core::{Actor, HumanName, Role, TaskId, TaskStatus};
+use fold_core::{Actor, AgentName, HumanName, Role, Tag, TaskId, TaskStatus};
 use fold_daemon::mcp::{FoldServer, FooterPart, FooterSource};
 use fold_daemon::services::agents::{AgentService, SessionContext};
 use fold_daemon::services::events::{EventBus, EventService};
@@ -111,6 +111,19 @@ impl Fixture {
         ok(&client, "register_agent", json!({"name": name})).await;
         client
     }
+
+    /// Gives the registered agent `name` the `main` tag through a handshake registration of its own, as `fld claude` gives it; the agent's session stays.
+    async fn make_main(&self, name: &str) {
+        let mut session = self.agents.start_session(8).await.unwrap();
+        self.agents
+            .register_agent(
+                &mut session,
+                &AgentName::parse(name).unwrap(),
+                &[Tag::parse("main").unwrap()],
+            )
+            .await
+            .unwrap();
+    }
 }
 
 #[cfg(test)]
@@ -158,6 +171,7 @@ async fn err(client: &Client, tool: &str, arguments: Value) -> Value {
 async fn every_task_tool_succeeds_and_ends_with_the_footer() {
     let fx = Fixture::new().await;
     let client = fx.connect("frontend").await;
+    fx.make_main("frontend").await;
 
     assert_eq!(
         ok(
@@ -346,6 +360,7 @@ async fn every_task_tool_succeeds_and_ends_with_the_footer() {
 async fn a_cycle_names_the_cycle_and_a_create_with_a_cycle_leaves_nothing() {
     let fx = Fixture::new().await;
     let client = fx.connect("frontend").await;
+    fx.make_main("frontend").await;
     ok(&client, "create_task", json!({"title": "A"})).await;
     ok(
         &client,
@@ -979,4 +994,183 @@ async fn only_a_planner_publishes_a_plan_and_a_lead_only_for_its_own_area() {
         );
     }
     assert!(fx.tasks.graph(true).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_checklist_is_changed_by_its_holder_its_lead_the_main_agent_or_a_human() {
+    let fx = Fixture::new().await;
+    let lead = fx.connect("lead").await;
+    give_role(fx.project.store(), "lead", Role::AreaLead, None).await;
+    let coder = fx.connect("coder").await;
+    give_role(fx.project.store(), "coder", Role::TaskCoder, None).await;
+    let other = fx.connect("other").await;
+    give_role(fx.project.store(), "other", Role::TaskCoder, None).await;
+    let main = fx.connect("boss").await;
+    fx.make_main("boss").await;
+    ok(
+        &lead,
+        "create_task",
+        json!({"title": "Form", "labels": ["work"]}),
+    )
+    .await;
+    for text in ["Fields", "Errors", "Submit", "Docs"] {
+        ok(
+            &lead,
+            "add_checklist_item",
+            json!({"task": "T-1", "text": text}),
+        )
+        .await;
+    }
+    let tick = |item: &str| json!({"id": item, "done": true});
+
+    let unheld = err(&other, "update_checklist_item", tick("ci-1")).await;
+    assert_eq!(unheld["code"], "checklist_denied");
+    assert_eq!(unheld["details"]["task"], "T-1");
+    assert!(
+        unheld["hint"]
+            .as_str()
+            .unwrap()
+            .contains("lead of its area")
+    );
+
+    ok(&coder, "claim_task", json!({"id": "T-1"})).await;
+    ok(&other, "create_task", json!({"title": "Other work"})).await;
+    ok(&other, "claim_task", json!({"id": "T-2"})).await;
+    assert_eq!(
+        ok(&coder, "update_checklist_item", tick("ci-1")).await,
+        json!({"item": "ci-1"})
+    );
+    ok(
+        &coder,
+        "add_checklist_item",
+        json!({"task": "T-1", "text": "Focus"}),
+    )
+    .await;
+    for (tool, arguments) in [
+        ("update_checklist_item", tick("ci-2")),
+        (
+            "update_checklist_item",
+            json!({"id": "ci-2", "text": "Mine"}),
+        ),
+        (
+            "add_checklist_item",
+            json!({"task": "T-1", "text": "Extra"}),
+        ),
+        ("move_checklist_item", json!({"id": "ci-2", "position": 0})),
+        ("remove_checklist_item", json!({"id": "ci-2"})),
+    ] {
+        let denied = err(&other, tool, arguments).await;
+        assert_eq!(denied["code"], "checklist_denied", "{tool}");
+        assert!(
+            denied["hint"].as_str().unwrap().contains("get_task"),
+            "{tool}"
+        );
+    }
+    ok(&lead, "update_checklist_item", tick("ci-2")).await;
+    ok(&main, "update_checklist_item", tick("ci-3")).await;
+    fx.tasks
+        .update_checklist_item(
+            &Actor::human(HumanName::parse("ana").unwrap()),
+            "ci-4".parse().unwrap(),
+            fold_daemon::services::tasks::ChecklistItemPatch {
+                text: None,
+                done: Some(true),
+            },
+        )
+        .await
+        .unwrap();
+    ok(
+        &coder,
+        "move_checklist_item",
+        json!({"id": "ci-5", "position": 0}),
+    )
+    .await;
+    ok(&coder, "remove_checklist_item", json!({"id": "ci-5"})).await;
+
+    let task = ok(&coder, "get_task", json!({"id": "T-1"})).await;
+    assert_eq!(task["progress"], json!({"done": 4, "total": 4}));
+}
+
+#[tokio::test]
+async fn reviewers_other_leads_and_the_system_change_no_checklist_and_a_parent_needs_the_rights() {
+    let fx = Fixture::new().await;
+    let lead = fx.connect("lead").await;
+    give_role(fx.project.store(), "lead", Role::AreaLead, None).await;
+    let coder = fx.connect("coder").await;
+    give_role(fx.project.store(), "coder", Role::TaskCoder, None).await;
+    let api_lead = fx.connect("api-lead").await;
+    give_role(fx.project.store(), "api-lead", Role::AreaLead, Some("api")).await;
+    let review_lead = fx.connect("review-lead").await;
+    give_role(fx.project.store(), "review-lead", Role::ReviewLead, None).await;
+    let batch = fx.connect("batch").await;
+    give_role(fx.project.store(), "batch", Role::BatchReviewer, None).await;
+    let stranger = fx.connect("stranger").await;
+    ok(
+        &lead,
+        "create_task",
+        json!({"title": "Form", "labels": ["work"]}),
+    )
+    .await;
+    ok(
+        &lead,
+        "add_checklist_item",
+        json!({"task": "T-1", "text": "Fields"}),
+    )
+    .await;
+    let tick = json!({"id": "ci-1", "done": true});
+    let refused = async |held: &str| {
+        for (case, client) in [
+            ("area lead of another area", &api_lead),
+            ("review lead", &review_lead),
+            ("batch reviewer", &batch),
+        ] {
+            let denied = err(client, "update_checklist_item", tick.clone()).await;
+            assert_eq!(denied["code"], "checklist_denied", "{held}: {case}");
+            assert_eq!(denied["details"]["task"], "T-1", "{held}: {case}");
+        }
+        let system = fx
+            .tasks
+            .update_checklist_item(
+                &Actor::System,
+                "ci-1".parse().unwrap(),
+                fold_daemon::services::tasks::ChecklistItemPatch {
+                    text: None,
+                    done: Some(true),
+                },
+            )
+            .await
+            .unwrap_err();
+        let fold_daemon::services::tasks::TaskError::Fold(system) = system else {
+            panic!("{held}: the system is refused by a policy: {system:?}");
+        };
+        assert_eq!(system.code(), "checklist_denied", "{held}");
+    };
+    refused("unheld").await;
+
+    let parent = err(
+        &stranger,
+        "create_task",
+        json!({"title": "Split", "parent": "T-1"}),
+    )
+    .await;
+    assert_eq!(parent["code"], "checklist_denied");
+    assert_eq!(parent["details"], json!({"parent": "T-1"}));
+    assert!(
+        parent["hint"]
+            .as_str()
+            .unwrap()
+            .contains("leave out parent")
+    );
+    assert_eq!(fx.tasks.graph(true).await.unwrap().len(), 1);
+
+    ok(&coder, "claim_task", json!({"id": "T-1"})).await;
+    refused("held").await;
+    ok(
+        &coder,
+        "create_task",
+        json!({"title": "Split", "parent": "T-1"}),
+    )
+    .await;
+    let task = ok(&coder, "get_task", json!({"id": "T-1"})).await;
+    assert_eq!(task["progress"], json!({"done": 0, "total": 2}));
 }

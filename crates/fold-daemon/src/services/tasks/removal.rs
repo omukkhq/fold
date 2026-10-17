@@ -205,7 +205,10 @@ async fn archive_in_tx(
 }
 
 /// The worker holding `id`'s unreleased implementation claim and the agents that lead it: the area lead of a task coder's area, or the review lead of a batch reviewer.
-async fn holder_of(tx: &mut WriteTx, id: TaskId) -> Result<Option<TaskHolder>, StoreError> {
+pub(super) async fn holder_of(
+    tx: &mut WriteTx,
+    id: TaskId,
+) -> Result<Option<TaskHolder>, StoreError> {
     let Some(claim) = claims::unreleased_for_task(tx.conn(), id).await? else {
         return Ok(None);
     };

@@ -655,7 +655,7 @@ impl Seeder {
         .await
     }
 
-    /// A parent task whose checklist links two Done tasks and one step. The last tick completes it by the container rule, which is why the step is added first and ticked last.
+    /// A parent task whose checklist links two Done tasks and one step. The last tick completes it by the container rule, which is why the step is added first and ticked last. Nobody holds the parent, so the main agent changes its checklist.
     async fn container(&mut self, tasks: &Tasks) -> Result<(), SeedError> {
         let parent = self
             .task(
@@ -666,21 +666,21 @@ impl Seeder {
             )
             .await?;
         let step = self
-            .frontend
+            .review
             .call(
                 "add_checklist_item",
                 json!({"task": parent, "text": "Check the empty state"}),
             )
             .await?;
         for child in [&tasks.schema, &tasks.local_dates] {
-            self.frontend
+            self.review
                 .call(
                     "add_checklist_item",
                     json!({"task": parent, "linked_task": child}),
                 )
                 .await?;
         }
-        self.frontend
+        self.review
             .call(
                 "update_checklist_item",
                 json!({"id": text(&step["item"], "add_checklist_item")?, "done": true}),

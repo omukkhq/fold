@@ -5,9 +5,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::common::acceptance::{AGENTS, Harness, WAIT, read_tree};
+use crate::common::acceptance::{AGENTS, HUMAN, Harness, SLUG, WAIT, read_tree};
 use crate::common::invariants::assert_store_consistent;
 use crate::common::sse::Sse;
+use axum::http::{Method, StatusCode};
 use fold_core::events::types;
 use fold_core::object::ObjectKind;
 use fold_core::tree::{EntryKind, Tree, flatten};
@@ -317,14 +318,16 @@ async fn restart_recovery(stop: Stop) {
         )
         .await;
     let later = later["id"].as_str().unwrap().to_owned();
-    scene
+    let (code, answer) = scene
         .harness
-        .call(
-            "review",
-            "add_checklist_item",
-            json!({"task": later, "text": "List the login changes"}),
+        .http(
+            Method::POST,
+            &format!("/api/v1/projects/{SLUG}/tasks/{later}/checklist-items"),
+            Some(&json!({"text": "List the login changes"})),
+            HUMAN,
         )
         .await;
+    assert_eq!(code, StatusCode::CREATED, "{answer}");
     let mut statuses = Vec::new();
     for task in &scene.tasks {
         let detail = scene

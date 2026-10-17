@@ -286,7 +286,9 @@ impl TaskService {
                         content: ItemContent::Linked(id),
                         checklist: Some(ChecklistName::subtasks()),
                     };
-                    checklists::add_item_in_tx(tx, &mut buffer, actor, parent, &item, now).await?;
+                    checklists::add_item_in_tx(tx, &mut buffer, actor, parent, &item, now)
+                        .await
+                        .map_err(|error| parent_refusal(error, parent))?;
                     seeds.push(parent);
                 }
                 buffer.extend(recompute(tx, &seeds, now).await?.events);
@@ -444,6 +446,19 @@ pub(crate) fn task_not_found(id: TaskId) -> TaskError {
 pub(crate) fn task_missing(id: TaskId) -> FoldError {
     FoldError::new(codes::TASK_NOT_FOUND, format!("{id} does not exist"))
         .with_hint("call get_task_graph to see the tasks")
+}
+
+/// A `parent` adds a linked item to the parent's checklist, so a caller without the checklist rights is refused on a create call; the refusal names the parent, because the task it would have created does not exist.
+fn parent_refusal(error: TaskError, parent: TaskId) -> TaskError {
+    match error {
+        TaskError::Fold(error) if error.code() == codes::CHECKLIST_DENIED => {
+            FoldError::new(codes::CHECKLIST_DENIED, error.message().to_owned())
+                .with_details([("parent", json!(parent.to_string()))])
+                .with_hint("leave out parent, or call get_task on the parent and ask its holder, its lead or the main agent to link the new task with add_checklist_item")
+                .into()
+        }
+        other => other,
+    }
 }
 
 async fn require_labels(tx: &mut WriteTx, names: &[LabelName]) -> Result<(), TaskError> {

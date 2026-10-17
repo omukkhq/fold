@@ -1,16 +1,17 @@
 use fold_core::events::types;
 use fold_core::{
-    Actor, ChecklistItemId, ChecklistName, DependencyOrigin, FoldError, IdKind, NewEvent, StepText,
-    TaskId, TaskStatus, Timestamp, codes,
+    Actor, AgentName, ChecklistItemId, ChecklistName, DependencyOrigin, FoldError, IdKind,
+    NewEvent, StepText, TaskId, TaskStatus, Timestamp, codes, policy,
 };
 use fold_store::tasks::checklists::{self, ItemRow, NewItem};
 use fold_store::tasks::{self, TaskRow};
-use fold_store::{StoreError, WriteTx, counters};
+use fold_store::{StoreError, WriteTx, agents, counters};
 use serde_json::json;
 
 pub use fold_store::tasks::checklists::ItemContent;
 
 use super::dependencies::refusal;
+use super::removal::holder_of;
 use super::{TaskError, TaskService, add_edge_in_tx, recompute, task_not_found};
 use crate::services::events::EventBuffer;
 
@@ -86,7 +87,7 @@ pub struct ChecklistProgress {
 }
 
 impl TaskService {
-    /// Adds a plain step or a linked item and recomputes the task in the same transaction. A linked item adds the edge "task needs child" with the checklist origin, so it is refused as a direct edge would be; a child that is already Done ticks the item in the same transaction.
+    /// Adds a plain step or a linked item and recomputes the task in the same transaction. This command and the edit, tick, move and remove commands are refused with `checklist_denied` for an actor that `policy::can_change_checklist` refuses. A linked item adds the edge "task needs child" with the checklist origin, so it is refused as a direct edge would be; a child that is already Done ticks the item in the same transaction.
     pub async fn add_checklist_item(
         &self,
         actor: &Actor,
@@ -265,6 +266,23 @@ async fn open_task(tx: &mut WriteTx, task: TaskId) -> Result<TaskRow, TaskError>
     Ok(row)
 }
 
+/// Refuses an actor that may not change `task`'s checklists (`policy::can_change_checklist`), reading the holder and the leads of the task's areas in the same transaction as the change.
+async fn check_rights(tx: &mut WriteTx, actor: &Actor, task: TaskId) -> Result<(), TaskError> {
+    let holder = holder_of(tx, task).await?;
+    let labels = tasks::labels_for_conn(tx.conn(), task).await?;
+    let area_leads: Vec<AgentName> = agents::list_areas(tx.conn())
+        .await?
+        .into_iter()
+        .filter(|area| labels.iter().any(|label| label.name == area.label))
+        .filter_map(|area| area.lead)
+        .collect();
+    policy::can_change_checklist(actor, holder.as_ref(), &area_leads).map_err(|denied| {
+        FoldError::from(denied)
+            .with_details([("task", json!(task.to_string()))])
+            .into()
+    })
+}
+
 pub(super) async fn add_item_in_tx(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,
@@ -274,6 +292,7 @@ pub(super) async fn add_item_in_tx(
     now: Timestamp,
 ) -> Result<ChecklistItemId, TaskError> {
     open_task(tx, task).await?;
+    check_rights(tx, actor, task).await?;
     let checklist = match &item.checklist {
         Some(name) => name.clone(),
         None => checklists::checklists(tx.conn(), task)
@@ -336,6 +355,7 @@ async fn update_item_in_tx(
         .await?
         .ok_or_else(|| item_not_found(item))?;
     open_task(tx, row.task).await?;
+    check_rights(tx, actor, row.task).await?;
     let current = match &row.content {
         ItemContent::Step(text) => text,
         ItemContent::Linked(child) => {
@@ -397,6 +417,7 @@ async fn remove_item_in_tx(
         .await?
         .ok_or_else(|| item_not_found(item))?;
     open_task(tx, row.task).await?;
+    check_rights(tx, actor, row.task).await?;
     checklists::delete_item(tx, item).await?;
     let mut data = json!({"item": item.to_string()});
     if let ItemContent::Linked(child) = row.content {
@@ -438,6 +459,7 @@ async fn move_item_in_tx(
         .ok_or_else(|| item_not_found(item))?;
     let task = row.task;
     open_task(tx, task).await?;
+    check_rights(tx, actor, task).await?;
     let source = row.checklist;
     let target = checklist.cloned().unwrap_or_else(|| source.clone());
     if target != source && checklists::ensure_checklist(tx, task, &target, now).await? {
