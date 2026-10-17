@@ -80,10 +80,7 @@ impl TaskService {
                 for planned in &task.checklist {
                     let item = NewChecklistItem {
                         content: ItemContent::Step(StepText::parse(&planned.text).map_err(FoldError::from)?),
-                        checklist: Some(match &planned.checklist {
-                            Some(name) => ChecklistName::parse(name).map_err(FoldError::from)?,
-                            None => ChecklistName::subtasks(),
-                        }),
+                        checklist: planned.checklist.as_deref().map(ChecklistName::parse).transpose().map_err(FoldError::from)?,
                     };
                     checklists::add_item_in_tx(tx, &mut buffer, actor, id, &item, now).await?;
                 }

@@ -33,7 +33,7 @@ pub fn item_content(
     }
 }
 
-/// A new checklist item. Without a `checklist` it goes to the task's first checklist, and a task without one gets `Subtasks`.
+/// A new checklist item. Without a `checklist` a plain step goes to the task's only checklist, or to `Subtasks` when the task has none, and is refused with `checklist_ambiguous` when the task has two or more; a linked item goes to the first checklist, else `Subtasks`.
 #[derive(Debug, Clone)]
 pub struct NewChecklistItem {
     pub content: ItemContent,
@@ -283,6 +283,33 @@ async fn check_rights(tx: &mut WriteTx, actor: &Actor, task: TaskId) -> Result<(
     })
 }
 
+/// Applies [`fold_core::unnamed_item_checklist`] to the task's checklists. The refusal lists names only, never the step text.
+async fn default_checklist(
+    tx: &mut WriteTx,
+    task: TaskId,
+    content: &ItemContent,
+) -> Result<ChecklistName, TaskError> {
+    let names = checklists::checklists(tx.conn(), task).await?;
+    if let Some(name) =
+        fold_core::unnamed_item_checklist(&names, matches!(content, ItemContent::Linked(_)))
+    {
+        return Ok(name);
+    }
+    let listed: Vec<&str> = names.iter().map(ChecklistName::as_str).collect();
+    Err(refusal(
+        codes::CHECKLIST_AMBIGUOUS,
+        format!(
+            "{task} has {} checklists and the item names none",
+            names.len()
+        ),
+        [
+            ("task", json!(task.to_string())),
+            ("checklists", json!(listed)),
+        ],
+        "name one of them in `checklist`",
+    ))
+}
+
 pub(super) async fn add_item_in_tx(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,
@@ -295,11 +322,7 @@ pub(super) async fn add_item_in_tx(
     check_rights(tx, actor, task).await?;
     let checklist = match &item.checklist {
         Some(name) => name.clone(),
-        None => checklists::checklists(tx.conn(), task)
-            .await?
-            .into_iter()
-            .next()
-            .unwrap_or_else(ChecklistName::subtasks),
+        None => default_checklist(tx, task, &item.content).await?,
     };
     if let ItemContent::Linked(child) = item.content {
         add_edge_in_tx(

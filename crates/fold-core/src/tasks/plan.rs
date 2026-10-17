@@ -35,7 +35,7 @@ pub struct PlannedReview {
 #[derive(Debug, Clone)]
 pub struct PlannedChecklistItem {
     pub text: String,
-    /// The checklist name; `Subtasks` when `None`.
+    /// The checklist name; chosen by the same rule as `add_checklist_item` when `None`: `Subtasks` for a task without a checklist, the only checklist when there is one, a refusal when there are several.
     pub checklist: Option<String>,
 }
 

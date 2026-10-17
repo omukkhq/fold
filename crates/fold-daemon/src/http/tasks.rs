@@ -907,7 +907,7 @@ pub struct NewChecklistItemBody {
     /// A child task to link; the task then needs it.
     #[serde(default)]
     pub linked_task: Option<String>,
-    /// The checklist name; the task's first checklist when left out. A new name creates the checklist.
+    /// The checklist name. Left out, a plain step goes to the task's only checklist, or to `Subtasks` when the task has none; with two or more checklists the request is refused with `checklist_ambiguous`. A new name creates the checklist.
     #[serde(default)]
     pub checklist: Option<String>,
 }
@@ -1466,7 +1466,7 @@ pub async fn remove_dependency(
         (status = 400, description = "`invalid_request`, `invalid_id`, `invalid_name`, `invalid_step_text` or `invalid_checklist_name`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 404, description = "`task_not_found` or `project_not_found`", body = ErrorEnvelope),
-        (status = 409, description = "`dependency_cycle`, `dependency_exists` or `task_closed`", body = ErrorEnvelope),
+        (status = 409, description = "`dependency_cycle`, `dependency_exists`, `task_closed` or `checklist_ambiguous`", body = ErrorEnvelope),
         (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )

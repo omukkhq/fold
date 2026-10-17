@@ -140,6 +140,7 @@ fn status_of(code: &str) -> Option<StatusCode> {
         | codes::TASK_CHECK_DENIED
         | codes::TASK_HOLD_DENIED
         | codes::CHECKLIST_DENIED => Some(StatusCode::FORBIDDEN),
+        codes::CHECKLIST_AMBIGUOUS => Some(StatusCode::CONFLICT),
         codes::TASK_KIND_MISMATCH
         | codes::TASK_ALREADY_REPORTED
         | codes::TASK_NOT_REPORTED
@@ -379,6 +380,7 @@ mod tests {
             (codes::INVALID_HOLD_REASON, StatusCode::BAD_REQUEST),
             (codes::TASK_HOLD_DENIED, StatusCode::FORBIDDEN),
             (codes::CHECKLIST_DENIED, StatusCode::FORBIDDEN),
+            (codes::CHECKLIST_AMBIGUOUS, StatusCode::CONFLICT),
             (codes::TASK_ON_HOLD, StatusCode::CONFLICT),
             (codes::TASK_NEEDS_HUMAN, StatusCode::CONFLICT),
         ] {

@@ -593,7 +593,7 @@ async fn a_plan_creates_checklist_items_before_the_ready_notice_and_refuses_a_ba
     let mut notices = fx.bus.subscribe();
     ok(&lead, "create_task_plan", json!({"tasks": [
         {"key": "a", "title": "A", "description": "Check A", "labels": ["work"], "checklist": [
-            {"text": "Write the test"}, {"text": "Run the check", "checklist": "QA"}, {"text": "Ship it"}
+            {"text": "Write the test"}, {"text": "Run the check", "checklist": "QA"}, {"text": "Ship it", "checklist": "Subtasks"}
         ]}
     ]})).await;
     let mut seen = 0;
@@ -644,6 +644,66 @@ async fn a_plan_publishes_a_human_task_that_holds_its_dependent_until_a_human_ma
         .unwrap();
     let ship = fx.tasks.get(TaskId::from_number(1).unwrap()).await.unwrap();
     assert_eq!(ship.status, TaskStatus::Todo);
+}
+
+/// Each checklist of a task as its name and its item count.
+#[cfg(test)]
+async fn checklist_shape(tasks: &TaskService, task: u32) -> Vec<(String, usize)> {
+    tasks
+        .checklists(TaskId::from_number(task).unwrap())
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|list| (list.name.to_string(), list.items.len()))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_plan_chooses_the_checklist_of_an_unnamed_step_as_adding_one_by_one_does() {
+    let fx = Fixture::new().await;
+    let lead = fx.connect("lead").await;
+    give_role(fx.project.store(), "lead", Role::AreaLead, None).await;
+    ok(&lead, "create_task_plan", json!({"tasks": [
+        {"key": "none", "title": "None", "description": "No checklist named", "labels": ["work"],
+         "checklist": [{"text": "a"}, {"text": "b"}]},
+        {"key": "one", "title": "One", "description": "One checklist named", "labels": ["work"],
+         "checklist": [{"text": "a", "checklist": "QA"}, {"text": "b"}]}
+    ]})).await;
+    assert_eq!(
+        checklist_shape(&fx.tasks, 1).await,
+        [("Subtasks".to_owned(), 2)]
+    );
+    assert_eq!(checklist_shape(&fx.tasks, 2).await, [("QA".to_owned(), 2)]);
+
+    let refused = err(
+        &lead,
+        "create_task_plan",
+        json!({"tasks": [
+            {"key": "two", "title": "Two", "description": "Two checklists", "labels": ["work"],
+             "checklist": [
+                {"text": "a", "checklist": "QA"},
+                {"text": "b", "checklist": "Later"},
+                {"text": "secret text"}
+             ]}
+        ]}),
+    )
+    .await;
+    assert_eq!(refused["code"], "checklist_ambiguous");
+    assert_eq!(refused["details"]["checklists"], json!(["QA", "Later"]));
+    assert!(!refused.to_string().contains("secret"));
+
+    let refused = err(
+        &lead,
+        "create_task_plan",
+        json!({"tasks": [
+            {"key": "late", "title": "Late", "description": "Subtasks, then QA", "labels": ["work"],
+             "checklist": [{"text": "a"}, {"text": "b", "checklist": "QA"}, {"text": "c"}]}
+        ]}),
+    )
+    .await;
+    assert_eq!(refused["code"], "checklist_ambiguous");
+    assert_eq!(refused["details"]["checklists"], json!(["Subtasks", "QA"]));
+    assert_eq!(fx.tasks.graph(true).await.unwrap().len(), 2);
 }
 
 #[tokio::test]

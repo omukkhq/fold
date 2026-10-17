@@ -151,7 +151,7 @@ pub struct PlannedBlockerInput {
 pub struct PlannedChecklistItemInput {
     /// The text of a plain step: one line, not empty.
     pub text: String,
-    /// The checklist name. Leave it out for Subtasks; a name the task does not have creates that checklist.
+    /// The checklist name. Leave it out for the same rule as add_checklist_item: Subtasks when the task has no checklist, else its only checklist. A plan item in a task that gets two checklists from earlier items must name one. A name the task does not have creates that checklist.
     #[serde(default)]
     pub checklist: Option<String>,
 }
@@ -242,7 +242,7 @@ pub struct AddChecklistItemInput {
     /// A child task to link, such as T-13. The task then needs the child, and fold ticks the item when the child is Done.
     #[serde(default)]
     pub linked_task: Option<String>,
-    /// The checklist name. Leave it out for the task's first checklist; a name the task does not have creates that checklist.
+    /// The checklist name. Leave it out for a plain step to use the task's only checklist, or Subtasks when it has none; with two or more checklists the call is refused with `checklist_ambiguous`, so name one. A name the task does not have creates that checklist.
     #[serde(default)]
     pub checklist: Option<String>,
     /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.

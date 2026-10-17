@@ -152,3 +152,4 @@ task_on_hold
 task_needs_human
 task_hold_denied
 checklist_denied
+checklist_ambiguous

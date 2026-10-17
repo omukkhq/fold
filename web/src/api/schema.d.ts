@@ -2247,7 +2247,7 @@ export interface components {
         NeedsYouScreen: "messages" | "worker" | "proposal" | "request" | "task";
         /** @description Exactly one of `text` and `linked_task`. */
         NewChecklistItemBody: {
-            /** @description The checklist name; the task's first checklist when left out. A new name creates the checklist. */
+            /** @description The checklist name. Left out, a plain step goes to the task's only checklist, or to `Subtasks` when the task has none; with two or more checklists the request is refused with `checklist_ambiguous`. A new name creates the checklist. */
             checklist?: string | null;
             /** @description A child task to link; the task then needs it. */
             linked_task?: string | null;
@@ -8436,7 +8436,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `dependency_cycle`, `dependency_exists` or `task_closed` */
+            /** @description `dependency_cycle`, `dependency_exists`, `task_closed` or `checklist_ambiguous` */
             409: {
                 headers: {
                     [name: string]: unknown;

@@ -663,6 +663,32 @@ async fn the_first_checklist_is_subtasks_and_items_without_a_name_join_the_first
 }
 
 #[tokio::test]
+async fn a_plain_step_without_a_name_follows_one_rule_by_the_number_of_checklists() {
+    let fx = Fixture::new(2).await;
+    fx.add(1, step("first")).await;
+    assert_eq!(fx.shape(1).await, [("Subtasks".to_owned(), 1)]);
+
+    fx.add(2, in_checklist(step("check"), "QA")).await;
+    fx.add(2, step("joins")).await;
+    assert_eq!(fx.shape(2).await, [("QA".to_owned(), 2)]);
+
+    fx.add(2, in_checklist(step("later"), "Later")).await;
+    let (code, details) = refusal(
+        fx.tasks
+            .add_checklist_item(&agent(), t(2), step("secret text"))
+            .await
+            .unwrap_err(),
+    );
+    assert_eq!(code, "checklist_ambiguous");
+    assert_eq!(details["checklists"], json!(["QA", "Later"]));
+    assert!(!details.to_string().contains("secret"));
+    assert_eq!(
+        fx.shape(2).await,
+        [("QA".to_owned(), 2), ("Later".to_owned(), 1)]
+    );
+}
+
+#[tokio::test]
 async fn done_and_archived_tasks_take_no_new_items() {
     let fx = Fixture::new(3).await;
     let item = fx.add(3, step("kept")).await;

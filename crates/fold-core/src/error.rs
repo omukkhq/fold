@@ -168,6 +168,7 @@ define_codes! {
     TASK_NEEDS_HUMAN = "task_needs_human",
     TASK_HOLD_DENIED = "task_hold_denied",
     CHECKLIST_DENIED = "checklist_denied",
+    CHECKLIST_AMBIGUOUS = "checklist_ambiguous",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

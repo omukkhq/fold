@@ -50,6 +50,6 @@ pub use projects::{choose_slug, slugify};
 pub use tasks::status::TaskStatus;
 pub use tasks::{
     ChecklistName, DependencyOrigin, HoldMark, HoldReason, LabelColor, LabelName, StepText,
-    TaskDescription, TaskKind, TaskTitle, TaskValueError,
+    TaskDescription, TaskKind, TaskTitle, TaskValueError, unnamed_item_checklist,
 };
 pub use time::{TimeError, Timestamp};

@@ -135,6 +135,16 @@ impl ChecklistName {
     }
 }
 
+/// The checklist of an item that names none, from the task's checklists in position order; `None` when the caller must name one. A plain step goes to the only checklist, or to `Subtasks` when there is none, so the add command and a plan place the same steps alike. A linked item goes to the first checklist, else `Subtasks`.
+pub fn unnamed_item_checklist(checklists: &[ChecklistName], linked: bool) -> Option<ChecklistName> {
+    match checklists {
+        [] => Some(ChecklistName::subtasks()),
+        [only] => Some(only.clone()),
+        [first, ..] if linked => Some(first.clone()),
+        _ => None,
+    }
+}
+
 /// The longest hold reason, in characters.
 pub const MAX_HOLD_REASON_CHARS: usize = 500;
 
@@ -301,6 +311,25 @@ mod tests {
             "a\nb".parse::<LabelName>(),
             Err(TaskValueError::InvalidLabelName)
         );
+    }
+
+    #[test]
+    fn an_unnamed_plain_step_needs_a_name_only_when_the_task_has_several_checklists() {
+        let qa = ChecklistName::parse("QA").unwrap();
+        let later = ChecklistName::parse("Later").unwrap();
+        let both = [qa.clone(), later];
+        for linked in [false, true] {
+            assert_eq!(
+                unnamed_item_checklist(&[], linked),
+                Some(ChecklistName::subtasks())
+            );
+            assert_eq!(
+                unnamed_item_checklist(std::slice::from_ref(&qa), linked),
+                Some(qa.clone())
+            );
+        }
+        assert_eq!(unnamed_item_checklist(&both, false), None);
+        assert_eq!(unnamed_item_checklist(&both, true), Some(qa));
     }
 
     #[test]
