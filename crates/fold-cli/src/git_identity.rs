@@ -17,11 +17,13 @@ pub struct Given {
     pub email: Option<String>,
 }
 
-/// What the environment already settles, read once. Git takes author and committer from separate variables, so a value counts as set only when both are.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+/// What `decide` reads from the environment, once. The commits fold writes take the identity from the repository's config files, which never see Git's identity variables, so a value from them has to go into the config to count.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Environment {
-    pub name_set: bool,
-    pub email_set: bool,
+    /// The name Git takes from `GIT_AUTHOR_NAME`, else `GIT_COMMITTER_NAME`; a value [`valid_name`] refuses counts as unset.
+    pub name: Option<String>,
+    /// The email Git takes from `GIT_AUTHOR_EMAIL`, else `GIT_COMMITTER_EMAIL`, else `EMAIL`; a value [`valid_email`] refuses counts as unset.
+    pub email: Option<String>,
     /// Nobody answers a question in a CI run.
     pub ci: bool,
 }
@@ -32,21 +34,31 @@ impl Environment {
     }
 
     fn from_vars(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Self {
-        let set = |name: &str| var(name).is_some_and(|value| !value.is_empty());
+        let first = |names: &[&str], valid: fn(&str) -> bool| {
+            names.iter().find_map(|name| {
+                var(name)
+                    .and_then(|value| value.into_string().ok())
+                    .map(|value| value.trim().to_owned())
+                    .filter(|value| valid(value))
+            })
+        };
         Self {
-            name_set: set("GIT_AUTHOR_NAME") && set("GIT_COMMITTER_NAME"),
-            email_set: set("EMAIL") || (set("GIT_AUTHOR_EMAIL") && set("GIT_COMMITTER_EMAIL")),
-            ci: set("CI"),
+            name: first(&["GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"], valid_name),
+            email: first(
+                &["GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL", "EMAIL"],
+                valid_email,
+            ),
+            ci: var("CI").is_some_and(|value| !value.is_empty()),
         }
     }
 }
 
-/// A name Git accepts and a person can read: not blank, no control characters.
+/// A name a commit's author line can carry and a person can read: not blank, no control characters, no `<` or `>`.
 pub fn valid_name(name: &str) -> bool {
-    !name.trim().is_empty() && !name.contains(char::is_control)
+    !name.trim().is_empty() && !name.contains(|c: char| c.is_control() || matches!(c, '<' | '>'))
 }
 
-/// One `@` with text on both sides, and no spaces or control characters.
+/// One `@` with text on both sides, and no spaces, control characters, `<` or `>`.
 pub fn valid_email(email: &str) -> bool {
     let Some((local, domain)) = email.split_once('@') else {
         return false;
@@ -54,7 +66,7 @@ pub fn valid_email(email: &str) -> bool {
     !local.is_empty()
         && !domain.is_empty()
         && !domain.contains('@')
-        && !email.contains(|c: char| c.is_whitespace() || c.is_control())
+        && !email.contains(|c: char| c.is_whitespace() || c.is_control() || matches!(c, '<' | '>'))
 }
 
 /// Refuses a flag value that Git would store as a broken identity.
@@ -67,7 +79,7 @@ pub fn check_given(given: &Given) -> Result<(), FoldError> {
     if given.name.as_deref().is_some_and(|name| !valid_name(name)) {
         return Err(refuse(
             "--git-name",
-            "must not be empty or hold control characters",
+            "must not be empty or hold control characters, < or >",
         ));
     }
     if given
@@ -87,11 +99,26 @@ struct Missing {
     email: bool,
 }
 
-fn configured(git: &Git, root: &Path, key: &str) -> bool {
-    git.config_get(root, key)
+/// Whether Git resolves `key` from the global and system config and their includes. A new project has no config of its own yet, so any directory outside a repository answers the same.
+fn configured(git: &Git, key: &str) -> bool {
+    git.config_get(Path::new("/"), key)
         .ok()
         .flatten()
         .is_some_and(|value| !value.trim().is_empty())
+}
+
+/// Whether a plain init at `dir` gets to create a Git repository there: `dir` holds no `.git` and no working tree holds it. Init refuses a folder at or inside a repository, and a stopped init that made its repository already writes no config into it, so neither needs the question.
+pub fn creates_repository(git: &Git, dir: &Path) -> bool {
+    let Ok(dir) = std::path::absolute(dir) else {
+        return true;
+    };
+    if std::fs::symlink_metadata(dir.join(".git")).is_ok() {
+        return false;
+    }
+    // `fld init DIR` creates DIR itself, so the nearest folder that exists tells whether a working tree would hold it.
+    !dir.ancestors()
+        .find(|folder| folder.is_dir())
+        .is_some_and(|folder| git.working_tree_top(folder).ok().flatten().is_some())
 }
 
 /// Reads one required line, `None` after too many bad answers or at the end of input.
@@ -151,46 +178,76 @@ fn store(git: &Git, root: &Path, key: &str, value: &str, warn: &mut impl Write) 
     }
 }
 
-/// How `ensure` decides: the flag values, the environment, and whether a person can answer.
+/// How `decide` works: the flag values, the environment, whether a person can answer, and the folder init makes the project in.
 #[derive(Debug, Clone, Copy)]
 pub struct Plan<'a> {
     pub given: &'a Given,
     pub env: &'a Environment,
     pub interactive: bool,
+    pub dir: &'a Path,
 }
 
-/// Gives the repository at `root`, which `git init` just created, a name and an email for the human's own commits. Values from the flags are written as they are. A value that Git already resolves, from any config file or the environment, is left alone. A missing value is asked for on a terminal and otherwise named in a warning on `warn`; init goes on either way. Values are written to the repository's own config and never logged.
-pub fn ensure(
+/// The values `decide` settled for the repository's own config: the flag values and the answers.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Identity {
+    pub name: Option<String>,
+    pub email: Option<String>,
+}
+
+/// Settles the name and email for the commits in a project whose repository does not exist yet, before init writes the first commit, which takes them. A folder where init creates no repository (see [`creates_repository`]) settles nothing and asks nothing. Values from the flags are used as they are. A value that a Git config file already sets is left alone and never copied. A value that only Git's identity variables give is taken from them, so it goes into the repository's own config. A value still missing is asked for on a terminal and otherwise named in a warning on `warn`; init goes on either way. Nothing is written and no value is logged.
+pub fn decide(
     git: &Git,
-    root: &Path,
     plan: Plan<'_>,
     input: &mut impl BufRead,
     out: &mut impl Write,
     warn: &mut impl Write,
-) {
+) -> Identity {
     let Plan {
         given,
         env,
         interactive,
+        dir,
     } = plan;
-    let mut name = given.name.clone();
-    let mut email = given.email.clone();
+    if !creates_repository(git, dir) {
+        return Identity::default();
+    }
+    let (mut name, missing_name) = settle(&given.name, &env.name, || configured(git, NAME_KEY));
+    let (mut email, missing_email) =
+        settle(&given.email, &env.email, || configured(git, EMAIL_KEY));
     let mut missing = Missing {
-        name: name.is_none() && !env.name_set && !configured(git, root, NAME_KEY),
-        email: email.is_none() && !env.email_set && !configured(git, root, EMAIL_KEY),
+        name: missing_name,
+        email: missing_email,
     };
     if (missing.name || missing.email) && interactive && !env.ci {
         // A broken terminal leaves the unanswered values marked missing, which the warning names.
         let _ = ask(input, out, &mut missing, &mut name, &mut email);
     }
-    if let Some(name) = &name {
-        store(git, root, NAME_KEY, name, warn);
-    }
-    if let Some(email) = &email {
-        store(git, root, EMAIL_KEY, email, warn);
-    }
     if missing.name || missing.email {
         let _ = output::line(warn, &warning(&missing));
+    }
+    Identity { name, email }
+}
+
+/// One value for the repository's own config and whether it is still missing: the flag value, else nothing when a config file sets it, else the environment's value.
+fn settle(
+    given: &Option<String>,
+    from_env: &Option<String>,
+    configured: impl FnOnce() -> bool,
+) -> (Option<String>, bool) {
+    match given {
+        Some(value) => (Some(value.clone()), false),
+        None if configured() => (None, false),
+        None => (from_env.clone(), from_env.is_none()),
+    }
+}
+
+/// Writes the settled values into the own config of the repository at `root`, which `git init` just created. A failed write is a warning that names the key and no value.
+pub fn store_in(git: &Git, root: &Path, identity: &Identity, warn: &mut impl Write) {
+    if let Some(name) = &identity.name {
+        store(git, root, NAME_KEY, name, warn);
+    }
+    if let Some(email) = &identity.email {
+        store(git, root, EMAIL_KEY, email, warn);
     }
 }
 
@@ -281,18 +338,19 @@ mod tests {
 
         fn run(&self, given: &Given, env: Environment, interactive: bool, typed: &str) -> Run {
             let (mut out, mut warn) = (Vec::new(), Vec::new());
-            ensure(
+            let identity = decide(
                 &self.git,
-                &self.root(),
                 Plan {
                     given,
                     env: &env,
                     interactive,
+                    dir: &self.dir.path().join("new"),
                 },
                 &mut typed.as_bytes(),
                 &mut out,
                 &mut warn,
             );
+            store_in(&self.git, &self.root(), &identity, &mut warn);
             Run {
                 out: String::from_utf8(out).unwrap(),
                 warn: String::from_utf8(warn).unwrap(),
@@ -310,6 +368,8 @@ mod tests {
         assert!(valid_name("Ana Lima"));
         assert!(!valid_name("  "));
         assert!(!valid_name("a\u{7}b"));
+        assert!(!valid_name("Ana <ana>"));
+        assert!(!valid_email("<ana@example.com>"));
         assert!(valid_email("ana@example.com"));
         assert!(valid_email("ana@localhost"));
         for bad in ["ana", "@example.com", "ana@", "a@b@c", "a na@x.com", ""] {
@@ -329,19 +389,77 @@ mod tests {
     }
 
     #[test]
-    fn the_environment_needs_author_and_committer() {
-        let vars = |pairs: &'static [&str]| {
+    fn identity_variables_follow_git_and_skip_invalid_values() {
+        let vars = |pairs: &[(&str, &str)]| {
+            let pairs: Vec<(String, String)> = pairs
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+                .collect();
             Environment::from_vars(move |name| {
-                pairs.contains(&name).then(|| std::ffi::OsString::from("x"))
+                pairs
+                    .iter()
+                    .find(|(key, _)| key == name)
+                    .map(|(_, value)| std::ffi::OsString::from(value))
             })
         };
-        assert!(!vars(&["GIT_AUTHOR_NAME"]).name_set);
-        assert!(vars(&["GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"]).name_set);
-        assert!(!vars(&["GIT_COMMITTER_EMAIL"]).email_set);
-        assert!(vars(&["GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"]).email_set);
-        assert!(vars(&["EMAIL"]).email_set);
-        assert!(vars(&["CI"]).ci);
+        let all = vars(&[
+            ("GIT_AUTHOR_NAME", "Author"),
+            ("GIT_COMMITTER_NAME", "Committer"),
+            ("GIT_AUTHOR_EMAIL", "author@example.com"),
+            ("GIT_COMMITTER_EMAIL", "committer@example.com"),
+            ("EMAIL", "email@example.com"),
+        ]);
+        assert_eq!(all.name.as_deref(), Some("Author"));
+        assert_eq!(all.email.as_deref(), Some("author@example.com"));
+        let later = vars(&[
+            ("GIT_AUTHOR_NAME", "Bad <name>"),
+            ("GIT_COMMITTER_NAME", "Committer"),
+            ("GIT_AUTHOR_EMAIL", ""),
+            ("GIT_COMMITTER_EMAIL", "not-an-email"),
+            ("EMAIL", "email@example.com"),
+        ]);
+        assert_eq!(later.name.as_deref(), Some("Committer"));
+        assert_eq!(later.email.as_deref(), Some("email@example.com"));
+        let invalid = vars(&[("GIT_AUTHOR_NAME", " "), ("EMAIL", "a@b@c")]);
+        assert_eq!((invalid.name, invalid.email), (None, None));
+        assert!(vars(&[("CI", "1")]).ci);
         assert_eq!(vars(&[]), Environment::default());
+    }
+
+    #[test]
+    fn identity_variables_go_into_the_repository_config_without_a_question() {
+        let env = Environment {
+            name: Some("Env Name".to_owned()),
+            email: Some("env@example.com".to_owned()),
+            ci: false,
+        };
+        let fixture = Fixture::new("");
+        let run = fixture.run(&Given::default(), env.clone(), true, "typed\n");
+        assert_eq!((run.out.as_str(), run.warn.as_str()), ("", ""));
+        assert_eq!(fixture.value("user.name").as_deref(), Some("Env Name"));
+        assert_eq!(
+            fixture.value("user.email").as_deref(),
+            Some("env@example.com")
+        );
+
+        let configured = Fixture::new("[user]\n\tname = Global\n\temail = g@example.com\n");
+        let run = configured.run(&Given::default(), env.clone(), true, "typed\n");
+        assert_eq!((run.out.as_str(), run.warn.as_str()), ("", ""));
+        assert_eq!(configured.value("user.name").as_deref(), Some("Global"));
+        let own = std::fs::read_to_string(configured.root().join(".git/config")).unwrap();
+        assert!(!own.contains("[user]"), "{own}");
+
+        let flags = Fixture::new("");
+        let given = Given {
+            name: Some("Flag".to_owned()),
+            email: None,
+        };
+        flags.run(&given, env, false, "");
+        assert_eq!(flags.value("user.name").as_deref(), Some("Flag"));
+        assert_eq!(
+            flags.value("user.email").as_deref(),
+            Some("env@example.com")
+        );
     }
 
     #[test]
@@ -452,26 +570,52 @@ mod tests {
     }
 
     #[test]
+    fn only_a_folder_outside_every_repository_gets_a_new_one() {
+        let fixture = Fixture::new("");
+        let root = fixture.root();
+        assert!(!creates_repository(&fixture.git, &root));
+        std::fs::create_dir(root.join("sub")).unwrap();
+        assert!(!creates_repository(&fixture.git, &root.join("sub")));
+        assert!(!creates_repository(
+            &fixture.git,
+            &root.join("sub/new/deeper")
+        ));
+        let outside = fixture.dir.path().join("outside");
+        assert!(creates_repository(&fixture.git, &outside));
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join(".git"), "not a repository").unwrap();
+        assert!(!creates_repository(&fixture.git, &outside));
+        let (mut out, mut warn) = (Vec::new(), Vec::new());
+        let given = Given {
+            name: Some("Ana".to_owned()),
+            email: None,
+        };
+        let identity = decide(
+            &fixture.git,
+            Plan {
+                given: &given,
+                env: &Environment::default(),
+                interactive: true,
+                dir: &root.join("sub"),
+            },
+            &mut "ana@example.com\n".as_bytes(),
+            &mut out,
+            &mut warn,
+        );
+        assert_eq!(identity, Identity::default());
+        assert!(out.is_empty() && warn.is_empty());
+    }
+
+    #[test]
     fn a_failed_write_is_a_warning_that_names_no_value() {
         let fixture = Fixture::new("");
-        let given = Given {
+        let identity = Identity {
             name: Some("Ana".to_owned()),
             email: Some("ana@example.com".to_owned()),
         };
         let gone = fixture.dir.path().join("missing");
         let mut warn = Vec::new();
-        ensure(
-            &fixture.git,
-            &gone,
-            Plan {
-                given: &given,
-                env: &Environment::default(),
-                interactive: false,
-            },
-            &mut "".as_bytes(),
-            &mut Vec::new(),
-            &mut warn,
-        );
+        store_in(&fixture.git, &gone, &identity, &mut warn);
         let text = String::from_utf8(warn).unwrap();
         assert!(text.contains("cannot write user.name"), "{text}");
         assert!(!text.contains("ana@example.com") && !text.contains("Ana"));

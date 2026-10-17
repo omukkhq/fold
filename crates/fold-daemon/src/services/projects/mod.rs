@@ -105,10 +105,16 @@ pub struct InitializedProject {
 /// Files a caller writes into a new project's folder before init records it, so they are part of `r1` and its first commit. It returns the files and folders it created, which a failed init removes; a file it changed stays changed. Blocking.
 pub type FolderFiles = Box<dyn FnOnce(&Path) -> Result<Vec<PathBuf>, FoldError> + Send>;
 
+/// Work a caller does in a new project's folder right after init creates its Git repository and before init writes `r1`'s commit, such as giving the repository's own config the Git identity that every commit fold writes takes. Blocking.
+pub type RepositorySetup = Box<dyn FnOnce(&Path) + Send>;
+
 /// How init takes the project folder.
 enum Start {
     /// The folder is not a Git repository: init runs `git init`, and the folder's files, less the ignore rules, with the `.gitignore` and `.foldignore` init writes or changes and the `files` it writes, become `r1` and its first commit.
-    New { files: Option<FolderFiles> },
+    New {
+        files: Option<FolderFiles>,
+        setup: Option<RepositorySetup>,
+    },
     /// The folder is a Git repository with a clean tree on `branch`: `r1` is the committed tree at `head`, whose commit is `head` itself.
     FromGit { head: CommitId, branch: String },
 }
@@ -129,7 +135,7 @@ pub async fn init_project(
     name: Option<&str>,
     clock: &dyn Clock,
 ) -> Result<InitializedProject, ProjectError> {
-    init_new_project(host, root, name, Git::default(), None, clock).await
+    init_new_project(host, root, name, Git::default(), None, None, clock).await
 }
 
 /// What a plain init finds where the project folder is.
@@ -158,13 +164,14 @@ fn inside_repository(root: &Path, top: &Path) -> FoldError {
     .with_details([("reason", serde_json::json!("inside_git_repository"))])
 }
 
-/// [`init_project`] with the given `git` program, writing `files` into the folder with the ignore files.
+/// [`init_project`] with the given `git` program, writing `files` into the folder with the ignore files and running `setup` in the folder once its repository exists.
 pub async fn init_new_project(
     host: &HostPaths,
     root: &Path,
     name: Option<&str>,
     git: Git,
     files: Option<FolderFiles>,
+    setup: Option<RepositorySetup>,
     clock: &dyn Clock,
 ) -> Result<InitializedProject, ProjectError> {
     let root = prepare_root(root).await?;
@@ -200,7 +207,7 @@ pub async fn init_new_project(
         }
         Found::Inside(top) => return Err(inside_repository(&root, &top).into()),
     }
-    init_with(host, &root, name, git, Start::New { files }, clock).await
+    init_with(host, &root, name, git, Start::New { files, setup }, clock).await
 }
 
 /// Makes the Git repository whose top is `root` a fold project whose folder is main, as [`init_project`] does, keeping the repository and its history: `r1` is the committed tree at `HEAD`, free of ignore rules, and its commit is `HEAD` itself, which `.fold/git-sync.map` records as its first line. The folder must be the top of a repository whose `.git` is a directory, with a branch checked out that has a commit and no change in the index or a tracked file; anything else is refused with a hint. The `[git]` branch becomes the checked-out branch. Nothing in the repository changes but `info/exclude`, which becomes the link to `.fold/exclude` with `/.fold/` in it.
@@ -334,7 +341,11 @@ async fn create_and_register(
         if registered.is_some() {
             return Err(registered_refusal(&paths).await.into());
         }
-        return finish_stopped(registry, &paths, root_text, name, git, clock).await;
+        let setup = match start {
+            Start::New { setup, .. } => setup,
+            Start::FromGit { .. } => None,
+        };
+        return finish_stopped(registry, &paths, root_text, name, git, setup, clock).await;
     }
     let replaces = registered.map(|row| row.slug);
     let _init = match lock_fold_dir(&paths).await {
@@ -466,6 +477,7 @@ async fn finish_stopped(
     root_text: &str,
     name: String,
     git: &Git,
+    setup: Option<RepositorySetup>,
     clock: &dyn Clock,
 ) -> Result<InitializedProject, ProjectError> {
     let Some(_init) = try_lock_fold_dir(paths).await? else {
@@ -496,6 +508,9 @@ async fn finish_stopped(
         if !paths_owned.git_dir().exists() {
             git.init_checkout(paths_owned.root(), &branch)?;
             exclude_fold_dir(&paths_owned.git_dir())?;
+            if let Some(setup) = setup {
+                setup(paths_owned.root());
+            }
         }
         let git_commit = match head.import_source {
             Some(_) => SyncMap::load(&fold_dir)?.commit_of(head.number).cloned(),
@@ -563,9 +578,9 @@ async fn create_first_revision(
     now: Timestamp,
 ) -> Result<(RevisionId, ImportResult, Option<CommitId>), ProjectError> {
     let (max_file_bytes, branch) = (config.max_file_bytes, config.git.branch.clone());
-    let head = match start {
-        Start::FromGit { head, .. } => Some(head),
-        Start::New { files } => {
+    let (head, setup) = match start {
+        Start::FromGit { head, .. } => (Some(head), None),
+        Start::New { files, setup } => {
             let root = paths.root().to_owned();
             let plan = blocking(move || plan_ignore_files(&root)).await?;
             // The old bytes are kept before the file changes, so a failure in between can still write them back.
@@ -581,7 +596,7 @@ async fn create_first_revision(
                 let written = blocking(move || Ok(files(&root)?)).await?;
                 created.files.extend(written);
             }
-            None
+            (None, setup)
         }
     };
     let (git_owned, paths_owned, head_owned) = (git.clone(), paths.clone(), head.clone());
@@ -632,6 +647,9 @@ async fn create_first_revision(
         blocking(move || {
             git.init_checkout(paths.root(), &branch)?;
             exclude_fold_dir(&paths.git_dir())?;
+            if let Some(setup) = setup {
+                setup(paths.root());
+            }
             Ok(())
         })
         .await?;

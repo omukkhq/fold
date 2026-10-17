@@ -194,7 +194,7 @@ impl Project {
         )
         .await
         .unwrap();
-        commit_message(&row, &[])
+        commit_message(&row)
     }
 
     /// Writes the commits the project's job may not have written yet, so a test starts from a known map.
@@ -265,6 +265,15 @@ INSERT INTO integrations (id, number, kind, proposal_id, version_id, result, act
 async fn three_revisions_become_three_commits_and_later_ones_go_on_top() {
     let host = Host::new();
     let project = host.plain_project().await;
+    // Every commit fold writes after this takes the identity of the repository's own config, whatever agent or human made its revision.
+    git(
+        &project.paths.git_dir(),
+        &["config", "user.name", "Ana Lima"],
+    );
+    git(
+        &project.paths.git_dir(),
+        &["config", "user.email", "ana@example.com"],
+    );
     let remote = host.remote("remote.git");
     project.set_remote(&remote);
     project.seed(PROPOSAL).await;
@@ -314,14 +323,12 @@ async fn three_revisions_become_three_commits_and_later_ones_go_on_top() {
             &["log", "-1", "--format=%an <%ae>|%cn <%ce>", commit],
         )
     };
-    assert_eq!(
-        people(&commits[1]),
-        "frontend/ui <frontend.ui@fold.local>|fold <fold@localhost>\n"
-    );
-    assert_eq!(
-        people(&commits[0]),
-        "fold <fold@localhost>|fold <fold@localhost>\n"
-    );
+    for commit in &commits[..2] {
+        assert_eq!(
+            people(commit),
+            "Ana Lima <ana@example.com>|Ana Lima <ana@example.com>\n"
+        );
+    }
     let map = project.map();
     assert_eq!(map.lines().count(), 3);
     assert!(map.ends_with(&format!("r3 {}\n", commits[0])));

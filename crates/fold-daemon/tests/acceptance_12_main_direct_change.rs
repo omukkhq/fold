@@ -70,6 +70,10 @@ fn paths(compared: &Value) -> Vec<&str> {
 async fn acceptance_12_the_main_agent_changes_main_directly_after_the_users_ok() {
     let mut h = Harness::start().await;
     h.connect_tagged(MAIN, &["main"]).await;
+    // The direct change's commit takes the repository's Git identity, never the main agent's name.
+    let git_dir = h.project.paths().git_dir();
+    git(&git_dir, &["config", "user.name", "Ana Lima"]);
+    git(&git_dir, &["config", "user.email", "ana@example.com"]);
 
     // Nobody but the main agent opens the main workspace.
     let refused = h
@@ -177,17 +181,24 @@ async fn acceptance_12_the_main_agent_changes_main_directly_after_the_users_ok()
         count => Err(count),
     })
     .await;
-    let git_dir = h.project.paths().git_dir();
     let body = git(&git_dir, &["log", "-1", "--format=%B", "refs/fold/head"]);
     assert!(body.starts_with(&format!("{message}\n\n")), "{body}");
     assert!(
         body.contains(&format!("Fold-Changeset: {changeset}\n")),
         "{body}"
     );
-    assert!(body.contains("Integrated-by: main\n"), "{body}");
+    assert!(!body.contains("main"), "{body}");
     assert_eq!(
-        git(&git_dir, &["log", "-1", "--format=%an", "refs/fold/head"]),
-        "main\n"
+        git(
+            &git_dir,
+            &[
+                "log",
+                "-1",
+                "--format=%an <%ae>|%cn <%ce>",
+                "refs/fold/head"
+            ]
+        ),
+        "Ana Lima <ana@example.com>|Ana Lima <ana@example.com>\n"
     );
 
     let events = h.events().await;

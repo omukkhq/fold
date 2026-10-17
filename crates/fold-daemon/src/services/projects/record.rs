@@ -2,11 +2,13 @@ use std::sync::Arc;
 
 use fold_core::events::types;
 use fold_core::object::ObjectHash;
-use fold_core::{Actor, FoldError, HumanName, NewEvent, RevisionId, codes, policy};
+use fold_core::{Actor, FoldError, NewEvent, RevisionId, codes, policy};
 use fold_store::workspaces::{self, ConflictRow, NewHumanChange};
 use fold_store::{Store, StoreError};
 use fold_vcs::git::{CommitId, Git};
-use fold_vcs::git_export::{ExportBase, ExportCommit, ExportTarget, Signature, write_commit};
+use fold_vcs::git_export::{
+    ExportBase, ExportCommit, ExportTarget, repository_identity, write_commit,
+};
 use fold_vcs::git_import::{GitImportOptions, import_commit};
 use fold_vcs::git_remote::{
     branch_ref, checked_out_branch, is_ancestor, project_repository, set_ref,
@@ -20,7 +22,7 @@ use fold_vcs::platform::Capabilities;
 use fold_vcs::scan::Skipped;
 use serde_json::json;
 
-use super::commits::{commit_locked, commit_main, fold_signature};
+use super::commits::{commit_locked, commit_main};
 use super::pull::{
     PulledConflict, SyncCheck, map_fast_forward, own_repository, project_error, sync_base,
 };
@@ -130,8 +132,7 @@ async fn run(
     if committed.outside.is_some() {
         return Err(outside_commits(&branch).into());
     }
-    let snapshot =
-        snapshot_folder(handle, git, &branch, &map, human, config.max_file_bytes).await?;
+    let snapshot = snapshot_folder(handle, git, &branch, &map, config.max_file_bytes).await?;
     let skipped = snapshot.skipped;
     #[cfg(feature = "failpoints")]
     fail::fail_point!("record_after_commit", |_| Err(
@@ -334,7 +335,7 @@ struct Snapshot {
     skipped: Vec<Skipped>,
 }
 
-/// Reads the project folder as an import does and, when it differs from the commit its changes are based on, writes it as one commit of `human` on top of that commit under [`RECORD_REF`]. No file, ref of the branch or index entry of the folder is written. The folder must have the branch checked out, so its files are the branch's files.
+/// Reads the project folder as an import does and, when it differs from the commit its changes are based on, writes it as one commit on top of that commit under [`RECORD_REF`], with the Git identity of the repository's config as author and committer, as every commit fold writes. No file, ref of the branch or index entry of the folder is written. The folder must have the branch checked out, so its files are the branch's files.
 ///
 /// The base is the branch tip, except while the folder still holds the newest human change because it did not follow main yet: the branch tip is then an ancestor of that change's commit, and the new commit continues it, so the next merge does not see the recorded change a second time.
 async fn snapshot_folder(
@@ -342,7 +343,6 @@ async fn snapshot_folder(
     git: &Git,
     branch: &str,
     map: &SyncMap,
-    human: &HumanName,
     max_file_bytes: u64,
 ) -> Result<Snapshot, ProjectError> {
     let paths = handle.paths.clone();
@@ -412,8 +412,7 @@ async fn snapshot_folder(
     };
     let objects_guard = handle.objects.clone().read_owned().await;
     let (git, fold_dir) = (git.clone(), paths.fold_dir());
-    let (now, author) = (handle.clock.now(), human_signature(human));
-    let message = format!("Changes of {} in the project folder\n", human.as_str());
+    let now = handle.clock.now();
     blocking(move || {
         let _objects = objects_guard;
         let objects = ObjectStore::open_existing(&fold_dir)?;
@@ -455,6 +454,7 @@ async fn snapshot_folder(
         }
         // fast-import moves a ref only forward, so the record ref starts on the base.
         set_ref(&git, &repo, RECORD_REF, Some(&base))?;
+        let identity = repository_identity(&git, &repo)?;
         let commit = write_commit(
             &objects,
             &git,
@@ -469,9 +469,9 @@ async fn snapshot_folder(
             &ExportCommit {
                 tree: imported.tree,
                 created_at: now,
-                message,
-                author,
-                committer: fold_signature(),
+                message: "Changes in the project folder\n".to_owned(),
+                author: identity.clone(),
+                committer: identity,
             },
             &fold_dir,
         )?;
@@ -524,14 +524,6 @@ fn other_branch(branch: &str, checked_out: Option<&str>) -> FoldError {
         "run git switch {branch} in the project folder, then fld record again"
     ))
     .with_details([("reason", json!("other_branch")), ("branch", json!(branch))])
-}
-
-/// The author of the commit `fld record` makes for a human.
-fn human_signature(human: &HumanName) -> Signature {
-    Signature {
-        name: human.as_str().to_owned(),
-        email: format!("human.{}@fold.local", human.as_str()),
-    }
 }
 
 /// The conflicted paths of the human change of `tip`, when it waits for the main agent already.

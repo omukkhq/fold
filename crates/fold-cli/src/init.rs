@@ -8,8 +8,8 @@ use fold_cli::daemon_client::{self, ClientConfig, ClientError, DaemonClient, Res
 use fold_core::{FoldError, HostPaths, ProjectPaths, codes};
 use fold_daemon::SystemClock;
 use fold_daemon::services::projects::{
-    FolderFiles, ProjectError, deleted_project_slug, init_new_project, init_project_from_git,
-    root_for_dir_on_host,
+    FolderFiles, ProjectError, RepositorySetup, deleted_project_slug, init_new_project,
+    init_project_from_git, root_for_dir_on_host,
 };
 use fold_vcs::git::Git;
 use hyper::Method;
@@ -150,12 +150,41 @@ pub(crate) fn initialise(
             let _ = runtime.block_on(register(&client(socket.clone()), &slug));
         }
     }
+    // The question comes before the project exists, because every commit fold writes, `r1`'s first, takes the identity from the repository's config.
+    let identity = (!args.from_git).then(|| {
+        let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
+        git_identity::decide(
+            &Git::default(),
+            git_identity::Plan {
+                given: &given(args),
+                env: &git_identity::Environment::from_env(),
+                interactive,
+                dir,
+            },
+            &mut io::stdin().lock(),
+            out,
+            &mut io::stderr(),
+        )
+    });
     let project = runtime.block_on(async {
-        if args.from_git {
-            init_project_from_git(&host, dir, name, Git::default(), &SystemClock).await
-        } else {
-            let files: FolderFiles = Box::new(|root: &Path| new_claude_files(root));
-            init_new_project(&host, dir, name, Git::default(), Some(files), &SystemClock).await
+        match identity {
+            None => init_project_from_git(&host, dir, name, Git::default(), &SystemClock).await,
+            Some(identity) => {
+                let files: FolderFiles = Box::new(|root: &Path| new_claude_files(root));
+                let setup: RepositorySetup = Box::new(move |root: &Path| {
+                    git_identity::store_in(&Git::default(), root, &identity, &mut io::stderr());
+                });
+                init_new_project(
+                    &host,
+                    dir,
+                    name,
+                    Git::default(),
+                    Some(files),
+                    Some(setup),
+                    &SystemClock,
+                )
+                .await
+            }
         }
     })?;
     let root = project.root.display();
@@ -200,21 +229,6 @@ pub(crate) fn initialise(
         output::line(out, &format!("{} is Git commit {commit}", project.revision))?;
     }
     write_claude_files(&project.root, dirs, out)?;
-    if !args.from_git {
-        let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
-        git_identity::ensure(
-            &Git::default(),
-            &project.root,
-            git_identity::Plan {
-                given: &given(args),
-                env: &git_identity::Environment::from_env(),
-                interactive,
-            },
-            &mut io::stdin().lock(),
-            out,
-            &mut io::stderr(),
-        );
-    }
     let note = match socket {
         Ok(Some(socket)) => match runtime.block_on(register(&client(socket), &project.slug)) {
             Registration::NoDaemon => None,

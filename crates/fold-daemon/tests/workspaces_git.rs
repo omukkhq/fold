@@ -288,6 +288,7 @@ async fn a_missing_git_program_fails_init_with_git_not_found() {
         None,
         missing,
         None,
+        None,
         &host.clock,
     )
     .await
@@ -368,10 +369,10 @@ async fn commits_carry_the_revision_messages() {
     let expected = [
         "fold r4\n\nFold-Revision: r4\n\n".to_owned(),
         format!(
-            "Merge remote commit {}\n\nFold-Revision: r3\nIntegrated-by: human:ana\n\n",
+            "Merge remote commit {}\n\nFold-Revision: r3\n\n",
             &pulled[..12]
         ),
-        "Database schema for reports\n\nthree\n\nFold-Proposal: P-4\nFold-Version: 1\nFold-Task: T-3\nFold-Revision: r2\nReviewed-by: worker-a\nReviewed-by: human:ana\nIntegrated-by: backend.worker-a\n\n".to_owned(),
+        "Database schema for reports\n\nthree\n\nFold-Proposal: P-4\nFold-Version: 1\nFold-Task: T-3\nFold-Revision: r2\n\n".to_owned(),
         "fold r1\n\nFold-Revision: r1\n\n".to_owned(),
     ];
     let found: Vec<String> = commits

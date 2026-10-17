@@ -491,6 +491,15 @@ async fn a_fast_forward_records_the_remote_tree_and_the_map_line() {
 async fn both_sides_moved_cleanly_and_the_next_push_is_a_merge() {
     let host = Host::new();
     let project = host.project().await;
+    // The merge commit of the pull takes the repository's Git identity, never the pulling human's name.
+    git(
+        &project.paths.git_dir(),
+        &["config", "user.name", "Ana Lima"],
+    );
+    git(
+        &project.paths.git_dir(),
+        &["config", "user.email", "ana@example.com"],
+    );
     let remote = host.remote();
     project.set_remote(&remote, false);
     project.add_revision(&[("a.txt", b"one\n")]).await;
@@ -516,6 +525,16 @@ async fn both_sides_moved_cleanly_and_the_next_push_is_a_merge() {
     let parents: Vec<&str> = merges.split_whitespace().collect();
     assert_eq!(parents.len(), 2);
     assert_eq!(parents[1], tip);
+    assert_eq!(
+        git(
+            &remote,
+            &["log", "-1", "--format=%an <%ae>|%cn <%ce>|%B", "main"]
+        ),
+        format!(
+            "Ana Lima <ana@example.com>|Ana Lima <ana@example.com>|Merge remote commit {}\n\nFold-Revision: r4\n\n",
+            &tip[..12]
+        )
+    );
     assert_eq!(git(&remote, &["show", "main:a.txt"]), "two\n");
     assert_eq!(
         project.pull().await.unwrap(),

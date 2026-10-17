@@ -200,6 +200,8 @@ async fn fld_record_makes_the_folder_one_commit_of_the_human_on_main_and_the_fol
     branch_born(&h).await;
     let before = tip(&h);
     let dir = root(&h);
+    git(&dir, &["config", "user.name", "Ana Lima"]);
+    git(&dir, &["config", "user.email", "ana@example.com"]);
     write(&dir, "README.md", "# mine\n");
     write(&dir, "docs/plan.md", "the plan\n");
     write(&dir, ".foldignore", "build/\n");
@@ -237,10 +239,17 @@ async fn fld_record_makes_the_folder_one_commit_of_the_human_on_main_and_the_fol
     assert_eq!(
         git(
             &dir,
-            &["log", "-1", "--format=%an <%ae>|%P", commit.as_str()]
+            &[
+                "log",
+                "-1",
+                "--format=%an <%ae>|%cn <%ce>|%s|%P",
+                commit.as_str()
+            ]
         )
         .trim(),
-        format!("ana <human.ana@fold.local>|{before}")
+        format!(
+            "Ana Lima <ana@example.com>|Ana Lima <ana@example.com>|Changes in the project folder|{before}"
+        )
     );
     assert_eq!(changed(&h), "");
     assert_eq!(read(&h, "build/out.txt"), "generated\n");
@@ -272,6 +281,8 @@ async fn a_record_after_main_moved_merges_three_way_and_tells_the_leads_of_touch
     let mut lead_inbox = h.register_inbox("backend").await;
     give_role(&h.handle.store, "backend", Role::AreaLead, Some("work")).await;
     let dir = root(&h);
+    git(&dir, &["config", "user.name", "Ana Lima"]);
+    git(&dir, &["config", "user.email", "ana@example.com"]);
     write(&dir, "README.md", "# mine\n");
     // An agent integrates while the folder holds the human's unrecorded edit, so the folder stays behind.
     integrate(&h, "frontend", &[("src.txt", "agent\n")]).await;
@@ -325,7 +336,7 @@ async fn a_record_after_main_moved_merges_three_way_and_tells_the_leads_of_touch
     assert_eq!(parents.split_whitespace().count(), 2);
     assert_eq!(
         git(&dir, &["log", "-1", "--format=%an", commit.as_str()]).trim(),
-        "ana"
+        "Ana Lima"
     );
     assert_ne!(merge, commit.as_str());
     assert_eq!(read(&h, "src.txt"), "agent\n");
