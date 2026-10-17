@@ -11,9 +11,12 @@ use fold_daemon::services::projects::{
     init_project, init_project_from_git, load_config,
 };
 use fold_store::projects;
+use fold_store::testing::remove_dir_eventually;
 use fold_store::{Store, StoreError};
 use fold_vcs::git::Git;
 use tempfile::TempDir;
+
+use crate::common::acceptance::WAIT;
 
 #[cfg(test)]
 struct Host {
@@ -659,10 +662,10 @@ async fn a_failure_keeps_the_folder_files_and_a_rerun_succeeds() {
     );
 }
 
-/// Deletes what `fld init` made in the folder that makes it a project: `.fold/` and the repository, so a plain init can run there again.
+/// Deletes what `fld init` made in the folder that makes it a project: `.fold/` and the repository, so a plain init can run there again. A project the daemon still has open can write into `.fold/` during the removal.
 #[cfg(test)]
-fn delete_fold_data(root: &Path) {
-    std::fs::remove_dir_all(root.join(".fold")).unwrap();
+async fn delete_fold_data(root: &Path) {
+    remove_dir_eventually(&root.join(".fold"), WAIT).await;
     std::fs::remove_dir_all(root.join(".git")).unwrap();
 }
 
@@ -678,7 +681,7 @@ async fn init_replaces_the_registration_of_a_folder_whose_fold_data_was_deleted(
         deleted_project_slug(&host.paths, &root).await.unwrap(),
         None
     );
-    delete_fold_data(&root);
+    delete_fold_data(&root).await;
     assert_eq!(
         deleted_project_slug(&host.paths, &root).await.unwrap(),
         Some("app".to_owned())
@@ -736,7 +739,7 @@ async fn init_replaces_a_registered_folder_whose_fold_holds_only_leftovers_of_th
     init_project(&host.paths, &root, None, &host.clock)
         .await
         .unwrap();
-    delete_fold_data(&root);
+    delete_fold_data(&root).await;
     write_leftovers(&root);
     assert_eq!(
         deleted_project_slug(&host.paths, &root).await.unwrap(),
@@ -765,7 +768,7 @@ async fn init_refuses_a_registered_folder_whose_fold_holds_content_without_a_dat
         "fold.db-wal",
         "config.toml",
     ] {
-        delete_fold_data(&root);
+        delete_fold_data(&root).await;
         write_leftovers(&root);
         let path = root.join(".fold").join(content);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -827,7 +830,7 @@ async fn the_daemon_closes_a_project_whose_fold_data_was_deleted_and_opens_the_n
     assert!(!old.database_replaced().await);
 
     // `fld init` asks the daemon to open the old slug before it creates the new project, which closes the old one.
-    delete_fold_data(&root);
+    delete_fold_data(&root).await;
     assert!(old.database_replaced().await);
     // Until then, the daemon's own writers leave the deleted `.fold/` deleted.
     let gc = project_service::gc(&old, false).await.unwrap_err();
@@ -858,7 +861,7 @@ async fn the_daemon_closes_a_project_whose_fold_data_was_deleted_and_opens_the_n
     assert!(listed[0].available && listed[0].overview.is_some());
 
     // Without that request, the open after init finds a database file that is not the one the handle holds.
-    delete_fold_data(&root);
+    delete_fold_data(&root).await;
     init_project(&host.paths, &root, None, &host.clock)
         .await
         .unwrap();

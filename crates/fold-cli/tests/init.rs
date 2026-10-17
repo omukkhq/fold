@@ -1,11 +1,13 @@
 use std::path::Path;
 use std::process::{Command, Output};
 use std::sync::Arc;
+use std::time::Duration;
 
 use fold_cli::claude_files;
 use fold_core::ManualClock;
 use fold_daemon::{Daemon, DaemonConfig};
 use fold_store::Store;
+use fold_store::testing::remove_dir_eventually;
 use serde_json::Value;
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -167,9 +169,9 @@ async fn init_in_a_folder_whose_fold_data_was_deleted_registers_it_again_in_the_
         panic!("the daemon opened the project");
     };
 
-    for dir in [".fold", ".git"] {
-        std::fs::remove_dir_all(project.join(dir)).unwrap();
-    }
+    // The open project can write into `.fold/` while it is removed.
+    remove_dir_eventually(&project.join(".fold"), Duration::from_secs(10)).await;
+    std::fs::remove_dir_all(project.join(".git")).unwrap();
     let (sandbox_again, cwd) = (sandbox.clone(), project.clone());
     let second = tokio::task::spawn_blocking(move || {
         sandbox_again.fold_in(&cwd, &["init", "--socket", &socket], &[])

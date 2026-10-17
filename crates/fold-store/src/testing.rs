@@ -258,3 +258,24 @@ pub async fn eventually<T, V: Debug>(
         tokio::time::sleep(POLL_INTERVAL).await;
     }
 }
+
+/// Removes the folder `dir` and everything in it while a writer that still has it open may add or remove entries during the walk, which fails the removal with `DirectoryNotEmpty` or `NotFound`. Tries again through [`eventually`] until `dir` is gone or `timeout` passes; any other error fails the test at once.
+pub async fn remove_dir_eventually(dir: &Path, timeout: Duration) {
+    eventually(timeout, async || match std::fs::remove_dir_all(dir) {
+        Ok(()) => Ok(()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::DirectoryNotEmpty | std::io::ErrorKind::NotFound
+            ) =>
+        {
+            if dir.exists() {
+                Err(error.kind())
+            } else {
+                Ok(())
+            }
+        }
+        Err(error) => panic!("remove {}: {error}", dir.display()),
+    })
+    .await;
+}

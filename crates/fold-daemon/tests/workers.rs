@@ -10,7 +10,7 @@ use fold_core::{Actor, AgentActor, AgentName, Clock, HumanName, WorkerName, Work
 use fold_daemon::services::agents::RESTART_TURN;
 use fold_daemon::services::events::BusMessage;
 use fold_store::agents::WorkerProcessRow;
-use fold_store::testing::eventually;
+use fold_store::testing::{eventually, remove_dir_eventually};
 use serde_json::{Value, json};
 
 use crate::common::acceptance::{Harness, SLUG, WAIT};
@@ -770,7 +770,7 @@ async fn opening_a_project_whose_fold_data_was_deleted_removes_it_and_ends_its_w
     let lead = start_lead(&mut harness, "web").await;
     until_state(&harness, &lead, WorkerState::Idle).await;
     let run = fake.runs_of(&lead).remove(0);
-    std::fs::remove_dir_all(harness.project.paths().fold_dir()).unwrap();
+    remove_dir_eventually(&harness.project.paths().fold_dir(), WAIT).await;
     let state = harness.state.clone();
     let open =
         tokio::spawn(async move { fold_daemon::services::projects::open(&state, SLUG).await });
