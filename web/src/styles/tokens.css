@@ -148,6 +148,14 @@
   --diff-selected: #ddeae8;
   --diff-comment-marker: #a07f3b;
   --diff-outdated: #96948e;
+  --syntax-keyword: #7a5874;
+  --syntax-string: #516a3b;
+  --syntax-comment: #676660;
+  --syntax-number: #7b5f27;
+  --syntax-function: #356c67;
+  --syntax-type: #5a6675;
+  --syntax-constant: #a5463a;
+  --syntax-punctuation: #55544f;
 }
 
 :root[data-theme="dark"] {
@@ -214,6 +222,14 @@
   --diff-selected: #8ab5b02e;
   --diff-comment-marker: #d9bd80;
   --diff-outdated: #62615b;
+  --syntax-keyword: #c9a3c0;
+  --syntax-string: #a8bd82;
+  --syntax-comment: #9b9a94;
+  --syntax-number: #d9bd80;
+  --syntax-function: #8ebfb9;
+  --syntax-type: #a9b5c2;
+  --syntax-constant: #e39a87;
+  --syntax-punctuation: #b5b4ae;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -281,5 +297,13 @@
     --diff-selected: #8ab5b02e;
     --diff-comment-marker: #d9bd80;
     --diff-outdated: #62615b;
+    --syntax-keyword: #c9a3c0;
+    --syntax-string: #a8bd82;
+    --syntax-comment: #9b9a94;
+    --syntax-number: #d9bd80;
+    --syntax-function: #8ebfb9;
+    --syntax-type: #a9b5c2;
+    --syntax-constant: #e39a87;
+    --syntax-punctuation: #b5b4ae;
   }
 }

@@ -7,6 +7,27 @@ import tokensCss from "./tokens.css?raw";
 
 const sources = readSources(import.meta.url, "", ["ts", "tsx", "css"]);
 
+const SYNTAX = [
+  "keyword",
+  "string",
+  "comment",
+  "number",
+  "function",
+  "type",
+  "constant",
+  "punctuation",
+];
+/** Code is drawn on these fills: the file view, Markdown code blocks and every diff row state. */
+const CODE_FILLS = [
+  "surface",
+  "bg",
+  "sunken",
+  "diff-add",
+  "diff-del",
+  "diff-context",
+  "diff-selected",
+];
+
 const DESIGN_COLOURS = [
   "bg",
   "surface",
@@ -70,6 +91,7 @@ const DESIGN_COLOURS = [
   "diff-selected",
   "diff-comment-marker",
   "diff-outdated",
+  ...SYNTAX.map((kind) => `syntax-${kind}`),
 ];
 const DESIGN_OTHER = [
   "font-ui",
@@ -220,6 +242,9 @@ describe("contrast", () => {
     ["text-muted", "diff-selected"],
     ...["sage", "slate", "teal", "ink", "gold", "moss", "plum", "stone"].map(
       (hue): [string, string] => [`label-${hue}`, `label-${hue}-soft`],
+    ),
+    ...SYNTAX.flatMap((kind) =>
+      CODE_FILLS.map((fill): [string, string] => [`syntax-${kind}`, fill]),
     ),
   ];
   const nonText: [string, string][] = [

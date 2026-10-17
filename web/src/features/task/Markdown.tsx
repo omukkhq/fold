@@ -1,12 +1,27 @@
 import { memo, useMemo, type ComponentProps } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { SyntaxText } from "@/components/code/SyntaxText";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { MentionLink } from "@/mentions/MentionLink";
 import type { Known } from "@/mentions/parse";
 import { remarkMentions } from "@/mentions/remark";
 import { usePeople } from "@/mentions/usePeople";
+import { languageForFence } from "@/syntax/languages";
+
+/** A fenced block's text, highlighted when its fence names a language fold carries; inline code and other fences stay plain. */
+function FencedCode({
+  code,
+  className,
+}: {
+  code: string;
+  className: string | undefined;
+}) {
+  const language = languageForFence(className);
+  if (language === null) return code;
+  return <SyntaxText code={code.replace(/\n$/, "")} language={language} />;
+}
 
 // Every element takes token classes; the description is 14 / 400 body text with 600 subheads.
 const COMPONENTS: Components = {
@@ -89,9 +104,13 @@ const COMPONENTS: Components = {
       </a>
     );
   },
-  code: ({ children }) => (
+  code: ({ children, className }) => (
     <code className="rounded-xs bg-sunken px-4 font-mono text-meta">
-      {children}
+      {typeof children === "string" ? (
+        <FencedCode code={children} className={className} />
+      ) : (
+        children
+      )}
     </code>
   ),
   pre: ({ children }) => (

@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -304,6 +310,27 @@ describe("DiffViewer", () => {
     expect(within(list).getAllByRole("button")).toHaveLength(2);
     expect(screen.getByText(/kept changing while fold read it/)).toBeTruthy();
     expect(screen.queryByRole("grid")).toBeNull();
+  });
+
+  it("colours the code of a file whose language fold knows, over the added and removed fills", async () => {
+    const diff = fileDiff(A, [
+      hunk(1, 1, [del("let total = 1;"), add("const total = 2;")]),
+    ]);
+    render(<Harness fileDiff={{ status: "ready", diff }} />);
+    const added = cell(/^Added line, new 1: const total = 2;$/);
+    const removed = cell(/^Removed line, old 1: let total = 1;$/);
+    await waitFor(() => {
+      expect(added.querySelector("code span")).not.toBeNull();
+    });
+    const colour = (row: HTMLElement, text: string) =>
+      [...row.querySelectorAll<HTMLElement>("code span")].find(
+        (span) => span.textContent === text,
+      )?.style.color;
+    expect(colour(added, "const")).toBe("var(--syntax-keyword)");
+    expect(colour(removed, "let")).toBe("var(--syntax-keyword)");
+    expect(added.querySelector("code")?.textContent).toBe("const total = 2;");
+    expect(added.className).toContain("bg-diff-add");
+    expect(removed.className).toContain("bg-diff-del");
   });
 
   it("marks the last line of a file without a terminator", () => {
