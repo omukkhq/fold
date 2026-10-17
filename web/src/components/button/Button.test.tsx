@@ -15,18 +15,31 @@ describe("Button", () => {
     expect(button.getAttribute("type")).toBe("button");
   });
 
-  it("is disabled and busy while pending, and does not fire", async () => {
+  it("says its pending label, is disabled and busy while pending, and does not fire", async () => {
     const onClick = vi.fn();
     render(
-      <Button pending onClick={onClick}>
+      <Button pending pendingLabel="Saving…" onClick={onClick}>
         Save
       </Button>,
     );
-    const button = screen.getByRole("button", { name: "Save" });
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    const button = screen.getByRole("button", { name: "Saving…" });
     expect(button).toHaveProperty("disabled", true);
     expect(button.getAttribute("aria-busy")).toBe("true");
     await userEvent.click(button);
     expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it("says its idle label when a write control is not pending", () => {
+    render(
+      <Button pending={false} pendingLabel="Saving…">
+        Save
+      </Button>,
+    );
+    expect(screen.getByRole("button", { name: "Save" })).toHaveProperty(
+      "disabled",
+      false,
+    );
   });
 
   it("is disabled when disabled", () => {
@@ -52,7 +65,7 @@ describe("Button", () => {
     );
     expect(screen.queryByTestId("icon")).not.toBeNull();
     rerender(
-      <Button pending icon={<i data-testid="icon" />}>
+      <Button pending pendingLabel="Saving…" icon={<i data-testid="icon" />}>
         Save
       </Button>,
     );
@@ -73,15 +86,21 @@ describe("IconButton", () => {
     );
   });
 
-  it("is disabled and busy while pending", () => {
+  it("is named by its pending label, disabled and busy while pending", () => {
     render(
-      <IconButton aria-label="Close" pending>
+      <IconButton aria-label="Close" pending pendingLabel="Closing…">
         <i />
       </IconButton>,
     );
-    const button = screen.getByRole("button", { name: "Close" });
+    const button = screen.getByRole("button", { name: "Closing…" });
     expect(button).toHaveProperty("disabled", true);
     expect(button.getAttribute("aria-busy")).toBe("true");
+  });
+
+  it("fails type checking for a pending control without a pending label", () => {
+    // @ts-expect-error a pending control needs its pending label
+    const element = <Button pending>x</Button>;
+    expect(element).toBeTruthy();
   });
 
   it("fails type checking without a label", () => {

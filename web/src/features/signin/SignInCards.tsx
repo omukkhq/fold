@@ -76,6 +76,7 @@ export function NameCard({ pending, error, onSubmit }: CardProps) {
           variant="primary"
           className="w-full"
           pending={pending}
+          pendingLabel="Continuing…"
           icon={<ArrowRight aria-hidden size={15} />}
         >
           Continue
@@ -121,6 +122,7 @@ export function TokenCard({ pending, error, onSubmit }: CardProps) {
           variant="primary"
           className="w-full"
           pending={pending}
+          pendingLabel="Signing in…"
           icon={<ArrowRight aria-hidden size={15} />}
         >
           Sign in

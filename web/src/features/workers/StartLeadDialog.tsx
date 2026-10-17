@@ -292,9 +292,10 @@ export function StartLeadDialog({
                 type="submit"
                 variant="primary"
                 pending={isSubmitting}
+                pendingLabel="Starting lead…"
                 icon={<Play aria-hidden="true" size={15} />}
               >
-                {isSubmitting ? "Starting lead" : "Start lead"}
+                Start lead
               </Button>
             </div>
           </form>

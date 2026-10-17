@@ -3,6 +3,7 @@ import { CirclePause } from "lucide-react";
 import { projectQuery } from "@/api/queries";
 import { cn } from "@/lib/cn";
 import { useNow } from "@/live/useNow";
+import { ActorText } from "@/people/ActorText";
 import { pausedBanner } from "./pause";
 
 /** The band that says the project's agents are paused, since when and by whom; nothing while they run. */
@@ -39,7 +40,7 @@ export function PausedBanner({
         className="shrink-0 text-warning"
       />
       <p className="text-bar leading-snug font-semibold text-text">
-        {text.title}
+        <ActorText segments={text.title} />
       </p>
       <p className="min-w-0 flex-1 text-bar leading-snug text-secondary-text">
         {text.detail}

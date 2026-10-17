@@ -196,23 +196,25 @@ function QuestionBody({
               <Button
                 variant="primary"
                 pending={pending === "allow"}
+                pendingLabel="Allowing…"
                 disabled={pending !== null}
                 icon={<Check aria-hidden="true" size={15} />}
                 onClick={() => {
                   onAnswer("allow");
                 }}
               >
-                {pending === "allow" ? "Sending" : "Allow"}
+                Allow
               </Button>
               <Button
                 pending={pending === "deny"}
+                pendingLabel="Denying…"
                 disabled={pending !== null}
                 icon={<X aria-hidden="true" size={15} />}
                 onClick={() => {
                   onAnswer("deny");
                 }}
               >
-                {pending === "deny" ? "Sending" : "Deny"}
+                Deny
               </Button>
             </div>
             {error ? <ErrorNote failure={answerFailure(error)} /> : null}

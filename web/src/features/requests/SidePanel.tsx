@@ -129,11 +129,12 @@ export function DecisionPanel({
           <Button
             variant="primary"
             pending={pending === "approve"}
+            pendingLabel={`Approving ${v}…`}
             disabled={busy}
             icon={<Check aria-hidden="true" size={15} />}
             onClick={onApprove}
           >
-            {pending === "approve" ? `Approving ${v}…` : `Approve ${v}`}
+            Approve {v}
           </Button>
           <p className="text-meta text-text-muted">
             {pending === "approve"
@@ -180,12 +181,11 @@ export function DecisionPanel({
           <Button
             type="submit"
             pending={pending === "request_changes"}
+            pendingLabel="Requesting changes…"
             disabled={busy}
             icon={<MessageSquareWarning aria-hidden="true" size={15} />}
           >
-            {pending === "request_changes"
-              ? "Requesting changes…"
-              : "Request changes"}
+            Request changes
           </Button>
           {pending === "request_changes" ? (
             <p className="text-meta text-text-muted">
@@ -209,11 +209,12 @@ export function DecisionPanel({
           <Button
             className="flex-1 text-danger"
             pending={pending === "close"}
+            pendingLabel="Closing…"
             disabled={busy}
             icon={<X aria-hidden="true" size={15} />}
             onClick={onClose}
           >
-            {pending === "close" ? "Closing…" : "Close"}
+            Close
           </Button>
         ) : null}
       </div>
@@ -287,10 +288,11 @@ export function EditingPanel({
         <Button
           variant="primary"
           pending={saving}
+          pendingLabel={`Saving ${next}…`}
           icon={<Save aria-hidden="true" size={15} />}
           onClick={onSave}
         >
-          {saving ? `Saving ${next}…` : `Save as ${next}`}
+          Save as {next}
         </Button>
         <Button
           disabled={saving}

@@ -56,7 +56,7 @@ describe("NameCard", () => {
 
   it("is busy while the write is in flight", () => {
     render(<NameCard pending onSubmit={vi.fn()} />);
-    const button = screen.getByRole("button", { name: "Continue" });
+    const button = screen.getByRole("button", { name: "Continuing…" });
     expect(button.getAttribute("aria-busy")).toBe("true");
     expect((button as HTMLButtonElement).disabled).toBe(true);
   });
@@ -81,7 +81,9 @@ describe("TokenCard", () => {
   it("shows a pending state and an inline error", () => {
     const { rerender } = render(<TokenCard pending onSubmit={vi.fn()} />);
     expect(
-      screen.getByRole("button", { name: "Sign in" }).getAttribute("aria-busy"),
+      screen
+        .getByRole("button", { name: "Signing in…" })
+        .getAttribute("aria-busy"),
     ).toBe("true");
     rerender(
       <TokenCard pending={false} error="Not accepted." onSubmit={vi.fn()} />,

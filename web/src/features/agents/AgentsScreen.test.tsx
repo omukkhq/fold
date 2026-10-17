@@ -180,8 +180,9 @@ describe("AgentsScreen", () => {
     const coder = row("web-coder");
     expect(within(coder).getByText("T-12")).toBeTruthy();
     expect(
-      within(coder).getByRole("button", { name: "Stop web-coder" }).textContent,
-    ).toContain("Stopping");
+      within(coder).getByRole("button", { name: "Stopping web-coder…" })
+        .textContent,
+    ).toContain("Stopping…");
     expect(
       within(row("review")).getByText("waiting for its next turn"),
     ).toBeTruthy();

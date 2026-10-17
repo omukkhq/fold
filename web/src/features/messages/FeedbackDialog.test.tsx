@@ -69,7 +69,7 @@ describe("FeedbackDialog", () => {
     await waitFor(() => {
       expect(
         screen
-          .getByRole("button", { name: "Send feedback" })
+          .getByRole("button", { name: "Sending feedback…" })
           .getAttribute("aria-busy"),
       ).toBe("true");
     });

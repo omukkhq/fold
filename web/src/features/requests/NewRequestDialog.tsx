@@ -278,10 +278,11 @@ export function NewRequestDialog({
                 type="submit"
                 variant="primary"
                 pending={isSubmitting}
+                pendingLabel="Creating request…"
                 disabled={blocking !== null}
                 icon={<Send aria-hidden="true" size={15} />}
               >
-                {isSubmitting ? "Creating…" : "Create request"}
+                Create request
               </Button>
             </div>
           </form>

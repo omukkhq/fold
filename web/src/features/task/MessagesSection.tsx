@@ -165,6 +165,7 @@ function FeedbackBox({
           type="submit"
           variant="primary"
           pending={write.isPending}
+          pendingLabel="Sending…"
           icon={<Send aria-hidden="true" size={15} />}
         >
           Send

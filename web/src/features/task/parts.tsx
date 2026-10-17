@@ -5,7 +5,10 @@ import { ApiError } from "@/api/errors";
 import { HrefLink } from "@/app/HrefLink";
 import {
   buttonClasses,
+  controlLabel,
+  isInert,
   type ButtonVariant,
+  type PendingProps,
 } from "@/components/button/buttonStyles";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { cn } from "@/lib/cn";
@@ -116,15 +119,21 @@ export function SmallAction({
   icon: Icon,
   children,
   className,
+  pending,
+  pendingLabel,
+  disabled,
   ...rest
-}: Omit<ComponentProps<"button">, "children"> & {
-  icon: LucideIcon;
-  children: string;
-}) {
+}: Omit<ComponentProps<"button">, "children"> &
+  PendingProps & {
+    icon: LucideIcon;
+    children: string;
+  }) {
   return (
     <button
       type="button"
       {...rest}
+      disabled={isInert(disabled, pending)}
+      aria-busy={pending ? true : undefined}
       className={cn(
         "inline-flex items-center gap-6 rounded-m px-6 py-3 text-meta font-medium text-text-muted hover:bg-sunken",
         focusRing,
@@ -132,7 +141,7 @@ export function SmallAction({
       )}
     >
       <Icon aria-hidden="true" size={13} />
-      {children}
+      {controlLabel(children, pending, pendingLabel)}
     </button>
   );
 }

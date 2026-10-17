@@ -144,6 +144,7 @@ export function QuestionChoices({
               sending !== null &&
               !question.choices.some((choice) => choice.label === sending)
             }
+            pendingLabel="Answering…"
             disabled={pending || text.trim() === ""}
             icon={<Send aria-hidden="true" size={13} />}
           >

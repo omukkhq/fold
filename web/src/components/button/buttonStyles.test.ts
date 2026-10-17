@@ -4,6 +4,7 @@ import {
   buttonIconClass,
   iconButtonClasses,
   iconPixels,
+  controlLabel,
   isInert,
   type ButtonVariant,
 } from "./buttonStyles";
@@ -70,5 +71,14 @@ describe("isInert", () => {
     expect(isInert(true, false)).toBe(true);
     expect(isInert(false, true)).toBe(true);
     expect(isInert(undefined, undefined)).toBe(false);
+  });
+});
+
+describe("controlLabel", () => {
+  it("is the pending label only while pending", () => {
+    expect(controlLabel("Save", true, "Saving…")).toBe("Saving…");
+    expect(controlLabel("Save", false, "Saving…")).toBe("Save");
+    expect(controlLabel("Save", undefined, undefined)).toBe("Save");
+    expect(controlLabel("Save", true, undefined)).toBe("Save");
   });
 });

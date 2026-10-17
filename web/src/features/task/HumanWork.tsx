@@ -32,6 +32,7 @@ export function HumanWork({ slug, task }: { slug: string; task: TaskDetail }) {
             icon={<Check aria-hidden="true" size={15} />}
             disabled={!work.canMarkDone}
             pending={done.isPending}
+            pendingLabel="Marking Done…"
             onClick={() => {
               done.mutate(undefined);
             }}

@@ -134,6 +134,7 @@ export function CommentComposer({
           type="submit"
           variant="primary"
           pending={isSubmitting}
+          pendingLabel="Adding to review…"
           icon={<MessageSquarePlus aria-hidden="true" size={14} />}
         >
           Add to review

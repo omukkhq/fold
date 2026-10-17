@@ -1,6 +1,16 @@
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 export type ButtonSize = "md" | "sm";
 
+/** A control that can send a write names what it says while the write is in flight, so no write control keeps its idle label. */
+export type PendingProps =
+  | { pending?: undefined; pendingLabel?: undefined }
+  | {
+      /** The write is in flight: the control shows a spinner, says it is busy and cannot be pressed. */
+      pending: boolean;
+      /** The label while pending: the "-ing" form of the idle label, ending in "…". */
+      pendingLabel: string;
+    };
+
 // A stroke sits inside the box, so it is an inset ring: a CSS border would add 2px to the size.
 // `leading-snug` follows the type size in each string, because tailwind-merge drops a leading that comes before a size.
 const BASE =
@@ -60,4 +70,13 @@ export function isInert(
   pending: boolean | undefined,
 ): boolean {
   return Boolean(disabled) || Boolean(pending);
+}
+
+/** What a control says: its pending label while the write is in flight, its idle label otherwise. */
+export function controlLabel<T>(
+  idle: T,
+  pending: boolean | undefined,
+  pendingLabel: string | undefined,
+): T | string {
+  return pending && pendingLabel !== undefined ? pendingLabel : idle;
 }

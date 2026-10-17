@@ -34,6 +34,7 @@ export function PauseControl({ slug }: { slug: string }) {
       <Button
         size="sm"
         pending={view.pending}
+        pendingLabel={view.pendingLabel}
         icon={
           <Icon
             aria-hidden="true"

@@ -642,7 +642,7 @@ describe("Proposal detail", () => {
     );
     expect(
       within(form)
-        .getByRole("button", { name: "Add to review" })
+        .getByRole("button", { name: "Adding to review…" })
         .getAttribute("aria-busy"),
     ).toBe("true");
     expect(
@@ -780,7 +780,7 @@ describe("Proposal detail", () => {
     await user.click(within(panel).getByRole("button", { name: "Approve v2" }));
     expect(
       within(panel)
-        .getByRole("button", { name: "Approve v2" })
+        .getByRole("button", { name: "Approving v2…" })
         .getAttribute("aria-busy"),
     ).toBe("true");
     expect(within(reviews).getAllByRole("listitem")).toHaveLength(before);
@@ -827,7 +827,7 @@ describe("Proposal detail", () => {
     );
     expect(
       within(form)
-        .getByRole("button", { name: "Send request" })
+        .getByRole("button", { name: "Sending request…" })
         .getAttribute("aria-busy"),
     ).toBe("true");
     const reviews = screen.getByRole("region", { name: "Reviews" });
@@ -884,7 +884,7 @@ describe("Proposal detail", () => {
     await user.click(within(panel).getByRole("button", { name: "Integrate" }));
     expect(
       within(panel)
-        .getByRole("button", { name: "Integrate" })
+        .getByRole("button", { name: "Integrating…" })
         .getAttribute("aria-busy"),
     ).toBe("true");
     expect(within(panel).queryByText(/Integrated as/)).toBeNull();

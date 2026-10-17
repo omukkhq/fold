@@ -532,7 +532,7 @@ describe("New request dialog", () => {
       within(dialog).getByRole("button", { name: "Create request" }),
     );
     const pending = await within(dialog).findByRole("button", {
-      name: "Creating…",
+      name: "Creating request…",
     });
     expect(pending.getAttribute("aria-busy")).toBe("true");
     expect(

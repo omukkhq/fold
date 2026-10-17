@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { segmentsText } from "@/people/segments";
 import { pauseControl, pausedBanner } from "./pause";
 
 const AT = new Date(2026, 9, 17, 23, 40).getTime();
@@ -12,12 +13,14 @@ describe("pauseControl", () => {
     expect(pauseControl(null, null)).toEqual({
       action: "pause",
       label: "Pause agents",
+      pendingLabel: "Pausing…",
       paused: false,
       pending: false,
     });
     expect(pauseControl(AT, null)).toEqual({
       action: "resume",
       label: "Resume agents",
+      pendingLabel: "Resuming…",
       paused: true,
       pending: false,
     });
@@ -26,13 +29,15 @@ describe("pauseControl", () => {
   it("stays pending until the daemon's state shows the action done", () => {
     expect(pauseControl(null, "pause")).toEqual({
       action: "pause",
-      label: "Pausing…",
+      label: "Pause agents",
+      pendingLabel: "Pausing…",
       paused: false,
       pending: true,
     });
     expect(pauseControl(AT, "resume")).toEqual({
       action: "resume",
-      label: "Resuming…",
+      label: "Resume agents",
+      pendingLabel: "Resuming…",
       paused: true,
       pending: true,
     });
@@ -44,13 +49,16 @@ describe("pauseControl", () => {
 describe("pausedBanner", () => {
   it("names the time and who paused, and says nothing while the agents run", () => {
     expect(pausedBanner(AT + 60_000, null, null)).toBeNull();
-    expect(pausedBanner(AT + 60_000, AT, "human:ana")?.title).toBe(
-      "Agents paused since 23:40 by @ana",
-    );
-    expect(pausedBanner(AT + 60_000, AT, "frontend")?.title).toBe(
-      "Agents paused since 23:40 by @frontend",
-    );
-    expect(pausedBanner(AT + 60_000, AT, null)?.title).toBe(
+    expect(
+      segmentsText(pausedBanner(AT + 60_000, AT, "human:ana")?.title ?? []),
+    ).toBe("Agents paused since 23:40 by @ana");
+    expect(
+      segmentsText(pausedBanner(AT + 60_000, AT, "frontend")?.title ?? []),
+    ).toBe("Agents paused since 23:40 by @frontend");
+    expect(pausedBanner(AT + 60_000, AT, "frontend")?.title).toContainEqual({
+      actor: "frontend",
+    });
+    expect(segmentsText(pausedBanner(AT + 60_000, AT, null)?.title ?? [])).toBe(
       "Agents paused since 23:40",
     );
     expect(pausedBanner(AT, AT, "frontend")?.detail).toContain(

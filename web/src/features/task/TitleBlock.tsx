@@ -71,7 +71,12 @@ function TitleEditor({
       />
       <WriteError error={write.error} />
       <div className="flex gap-8">
-        <Button type="submit" variant="primary" pending={write.isPending}>
+        <Button
+          type="submit"
+          variant="primary"
+          pending={write.isPending}
+          pendingLabel="Saving title…"
+        >
           Save title
         </Button>
         <Button variant="ghost" disabled={write.isPending} onClick={onDone}>
@@ -115,6 +120,7 @@ function LabelEditor({ slug, task }: { slug: string; task: TaskDetail }) {
                 size="sm"
                 aria-label={`Remove label ${label.name}`}
                 pending={remove.isPending && remove.variables === label.name}
+                pendingLabel={`Removing label ${label.name}…`}
                 disabled={remove.isPending}
                 onClick={() => {
                   remove.mutate(label.name);
@@ -138,6 +144,8 @@ function LabelEditor({ slug, task }: { slug: string; task: TaskDetail }) {
               <SmallAction
                 icon={Plus}
                 aria-label={`Add label ${label.name}`}
+                pending={attach.isPending && attach.variables === label.name}
+                pendingLabel="Adding…"
                 disabled={attach.isPending}
                 onClick={() => {
                   attach.mutate(label.name);
@@ -187,7 +195,12 @@ function LabelEditor({ slug, task }: { slug: string; task: TaskDetail }) {
           ))}
         </Select>
         <WriteError error={create.error} />
-        <Button type="submit" variant="primary" pending={create.isPending}>
+        <Button
+          type="submit"
+          variant="primary"
+          pending={create.isPending}
+          pendingLabel="Creating label…"
+        >
           Create label
         </Button>
       </form>

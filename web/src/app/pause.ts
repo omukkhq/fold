@@ -1,12 +1,24 @@
 import { formatAsOfMinute } from "@/format/time";
-import { atName } from "@/people/names";
+import { actorSegment, seg, type Segments } from "@/people/segments";
 
 export type PauseAction = "pause" | "resume";
+
+const IDLE_LABEL: Record<PauseAction, string> = {
+  pause: "Pause agents",
+  resume: "Resume agents",
+};
+
+const PENDING_LABEL: Record<PauseAction, string> = {
+  pause: "Pausing…",
+  resume: "Resuming…",
+};
 
 export interface PauseControlView {
   /** What a press asks the daemon for. */
   action: PauseAction;
   label: string;
+  /** What the control says while the action is in flight. */
+  pendingLabel: string;
   /** The paused look: the control offers the resume. */
   paused: boolean;
   pending: boolean;
@@ -26,18 +38,32 @@ export function pauseControl(
   if (sent !== null && (sent === "pause") !== paused) {
     return {
       action: sent,
-      label: sent === "pause" ? "Pausing…" : "Resuming…",
+      label: IDLE_LABEL[sent],
+      pendingLabel: PENDING_LABEL[sent],
       paused,
       pending: true,
     };
   }
   return paused
-    ? { action: "resume", label: "Resume agents", paused, pending: false }
-    : { action: "pause", label: "Pause agents", paused, pending: false };
+    ? {
+        action: "resume",
+        label: IDLE_LABEL.resume,
+        pendingLabel: PENDING_LABEL.resume,
+        paused,
+        pending: false,
+      }
+    : {
+        action: "pause",
+        label: IDLE_LABEL.pause,
+        pendingLabel: PENDING_LABEL.pause,
+        paused,
+        pending: false,
+      };
 }
 
 export interface PausedBannerText {
-  title: string;
+  /** The sentence with the person who paused as an actor, so the screen draws a coloured `@name`. */
+  title: Segments;
   detail: string;
 }
 
@@ -50,9 +76,12 @@ export function pausedBanner(
   if (pausedSince === null) {
     return null;
   }
-  const by = pausedBy === null ? "" : ` by ${atName(pausedBy)}`;
+  const since = formatAsOfMinute(now, pausedSince);
   return {
-    title: `Agents paused since ${formatAsOfMinute(now, pausedSince)}${by}`,
+    title:
+      pausedBy === null
+        ? seg`Agents paused since ${since}`
+        : seg`Agents paused since ${since} by ${actorSegment(pausedBy)}`,
     detail:
       "Every worker is stopped and keeps its session. Claims keep their leases. Approved proposals still integrate. Resume starts the workers again.",
   };

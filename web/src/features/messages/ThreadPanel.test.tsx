@@ -124,7 +124,9 @@ describe("ThreadPanel", () => {
     await userEvent.click(screen.getByRole("button", { name: "Send" }));
     await waitFor(() => {
       expect(
-        screen.getByRole("button", { name: "Send" }).getAttribute("aria-busy"),
+        screen
+          .getByRole("button", { name: "Sending…" })
+          .getAttribute("aria-busy"),
       ).toBe("true");
     });
     expect(onReply).toHaveBeenCalledWith(MESSAGE, "Recharts");

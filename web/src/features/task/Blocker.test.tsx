@@ -50,6 +50,17 @@ function mount(node: ReactNode) {
   );
 }
 
+/** Holds the next call of a mocked write until `release` runs, so a test sees the control while it is pending. */
+function holdNext(write: (...args: never[]) => Promise<unknown>) {
+  let release = () => {};
+  vi.mocked(write).mockImplementationOnce(
+    () => new Promise<void>((resolve) => (release = resolve)),
+  );
+  return () => {
+    release();
+  };
+}
+
 const HOLD = { reason: "Wait for the logo", set_by: "web-lead", set_at: 0 };
 
 describe("the blocker group", () => {
@@ -64,6 +75,7 @@ describe("the blocker group", () => {
       within(group).getByRole("textbox", { name: "Reason" }),
       "Wait for the logo",
     );
+    const release = holdNext(seam.setBlocker);
     await userEvent.click(
       within(group).getByRole("button", { name: "Set blocker" }),
     );
@@ -74,6 +86,12 @@ describe("the blocker group", () => {
         "Wait for the logo",
       );
     });
+    expect(
+      within(group)
+        .getByRole("button", { name: "Setting blocker…" })
+        .getAttribute("aria-busy"),
+    ).toBe("true");
+    release();
   });
 
   it("shows the reason and clears the blocker", async () => {
@@ -85,12 +103,19 @@ describe("the blocker group", () => {
     mount(<TaskSide slug="demo" task={task} live={null} now={0} />);
     const group = await screen.findByRole("region", { name: "Blocker" });
     expect(within(group).getByText("Wait for the logo")).toBeTruthy();
+    const release = holdNext(seam.clearBlocker);
     await userEvent.click(
       within(group).getByRole("button", { name: "Clear blocker" }),
     );
     await waitFor(() => {
       expect(seam.clearBlocker).toHaveBeenCalledWith("demo", "T-2");
     });
+    expect(
+      within(group)
+        .getByRole("button", { name: "Clearing blocker…" })
+        .getAttribute("aria-busy"),
+    ).toBe("true");
+    release();
   });
 
   it("offers no control without a named human", async () => {
@@ -106,12 +131,19 @@ describe("the human task control", () => {
     const task = taskView("T-3", { kind: "human", can_mark_done: true });
     mount(<HumanWork slug="demo" task={task} />);
     const section = await screen.findByRole("region", { name: "Human task" });
+    const release = holdNext(seam.completeTask);
     await userEvent.click(
       within(section).getByRole("button", { name: "Mark Done" }),
     );
     await waitFor(() => {
       expect(seam.completeTask).toHaveBeenCalledWith("demo", "T-3");
     });
+    expect(
+      within(section)
+        .getByRole("button", { name: "Marking Done…" })
+        .getAttribute("aria-busy"),
+    ).toBe("true");
+    release();
   });
 
   it("draws nothing for a task an agent works on", async () => {

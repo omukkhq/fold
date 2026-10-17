@@ -6,18 +6,20 @@ import {
   buttonClasses,
   buttonIconClass,
   iconButtonClasses,
+  controlLabel,
   iconPixels,
   isInert,
+  type PendingProps,
   type ButtonSize,
   type ButtonVariant,
 } from "./buttonStyles";
 
-interface CommonProps {
+interface StyleProps {
   variant?: ButtonVariant;
   size?: ButtonSize;
-  /** The write is in flight: the control shows a spinner, says it is busy and cannot be pressed. */
-  pending?: boolean;
 }
+
+type CommonProps = StyleProps & PendingProps;
 
 function Spinner({ size }: { size: ButtonSize }) {
   return (
@@ -42,6 +44,7 @@ export function Button({
   variant = "secondary",
   size = "md",
   pending,
+  pendingLabel,
   icon,
   disabled,
   className,
@@ -62,7 +65,7 @@ export function Button({
           {pending ? <Spinner size={size} /> : icon}
         </span>
       ) : null}
-      {children}
+      {controlLabel(children, pending, pendingLabel)}
     </button>
   );
 }
@@ -78,16 +81,19 @@ export function IconButton({
   variant = "ghost",
   size = "md",
   pending,
+  pendingLabel,
   disabled,
   className,
   children,
   type = "button",
+  "aria-label": ariaLabel,
   ...rest
 }: IconButtonProps) {
   return (
     <button
       {...rest}
       type={type}
+      aria-label={controlLabel(ariaLabel, pending, pendingLabel)}
       disabled={isInert(disabled, pending)}
       aria-busy={pending ? true : undefined}
       className={cn(iconButtonClasses(variant, size), focusRing, className)}

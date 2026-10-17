@@ -154,7 +154,7 @@ function StopReviewer({
       control={control}
       size="md"
       idleLabel="Stop reviewer"
-      busyLabel="Stopping reviewer"
+      busyLabel="Stopping reviewer…"
       className="items-end"
     />
   );

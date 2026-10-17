@@ -882,7 +882,7 @@ describe("creating a task", () => {
     );
     expect(
       within(dialog)
-        .getByRole("button", { name: "Create task" })
+        .getByRole("button", { name: "Creating task…" })
         .getAttribute("aria-busy"),
     ).toBe("true");
     expect(
@@ -955,7 +955,9 @@ describe("the human edits", () => {
     await userEvent.click(
       within(dialog).getByRole("button", { name: "Save title" }),
     );
-    const save = within(dialog).getByRole("button", { name: "Save title" });
+    const save = within(dialog).getByRole("button", {
+      name: "Saving title…",
+    });
     expect(save.getAttribute("aria-busy")).toBe("true");
     expect(
       within(dialog).queryByRole("heading", { name: "Sign-in form" }),
@@ -1003,7 +1005,7 @@ describe("the human edits", () => {
     );
     expect(
       within(section)
-        .getByRole("button", { name: "Save description" })
+        .getByRole("button", { name: "Saving description…" })
         .getAttribute("aria-busy"),
     ).toBe("true");
     expect(
@@ -1085,7 +1087,7 @@ describe("the human edits", () => {
     );
     expect(
       within(popover)
-        .getByRole("button", { name: "Create label" })
+        .getByRole("button", { name: "Creating label…" })
         .getAttribute("aria-busy"),
     ).toBe("true");
     expect(
@@ -1178,7 +1180,7 @@ describe("the human edits", () => {
     );
     expect(
       within(subtasks)
-        .getByRole("button", { name: "Add step" })
+        .getByRole("button", { name: "Adding step…" })
         .getAttribute("aria-busy"),
     ).toBe("true");
     expect(
@@ -1250,7 +1252,7 @@ describe("the human edits", () => {
     );
     expect(
       within(deps)
-        .getByRole("button", { name: "Add dependency" })
+        .getByRole("button", { name: "Adding dependency…" })
         .getAttribute("aria-busy"),
     ).toBe("true");
     const needs = within(deps).getByRole("list", { name: "Needs" });
@@ -1355,7 +1357,7 @@ describe("the human edits", () => {
     );
     expect(
       within(messages)
-        .getByRole("button", { name: "Send" })
+        .getByRole("button", { name: "Sending…" })
         .getAttribute("aria-busy"),
     ).toBe("true");
     await waitFor(() => {
@@ -1425,7 +1427,7 @@ describe("a task without a proposal", () => {
     );
     expect(
       within(lead)
-        .getByRole("button", { name: "Complete task" })
+        .getByRole("button", { name: "Completing task…" })
         .getAttribute("aria-busy"),
     ).toBe("true");
     expect(
@@ -1468,7 +1470,7 @@ describe("a task without a proposal", () => {
     );
     expect(
       within(form)
-        .getByRole("button", { name: "Send back" })
+        .getByRole("button", { name: "Sending back…" })
         .getAttribute("aria-busy"),
     ).toBe("true");
     const after = region(dialog, "Lead check");
@@ -1535,7 +1537,7 @@ describe("archiving from the dialog head", () => {
     );
     expect(
       within(confirm)
-        .getByRole("button", { name: "Archive task" })
+        .getByRole("button", { name: "Archiving task…" })
         .getAttribute("aria-busy"),
     ).toBe("true");
     await waitFor(() => {

@@ -57,7 +57,12 @@ function DescriptionEditor({
       />
       <WriteError error={write.error} />
       <div className="flex gap-8">
-        <Button type="submit" variant="primary" pending={write.isPending}>
+        <Button
+          type="submit"
+          variant="primary"
+          pending={write.isPending}
+          pendingLabel="Saving description…"
+        >
           Save description
         </Button>
         <Button variant="ghost" disabled={write.isPending} onClick={onDone}>

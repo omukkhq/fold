@@ -95,7 +95,12 @@ export function FeedbackDialog({
           >
             Cancel
           </Button>
-          <Button type="submit" variant="primary" pending={isSubmitting}>
+          <Button
+            type="submit"
+            variant="primary"
+            pending={isSubmitting}
+            pendingLabel="Sending feedback…"
+          >
             Send feedback
           </Button>
         </div>

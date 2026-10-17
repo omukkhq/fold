@@ -17,6 +17,8 @@ interface StopWorkerProps {
   idleLabel: string;
   busyLabel: string;
   ariaLabel?: string;
+  /** The accessible name while pending, where `ariaLabel` replaces the visible label. */
+  ariaBusyLabel?: string;
   /** The alignment of the button and its refusal in the column the control sits in. */
   className?: string;
 }
@@ -30,6 +32,7 @@ export function StopWorker({
   idleLabel,
   busyLabel,
   ariaLabel,
+  ariaBusyLabel,
   className,
 }: StopWorkerProps) {
   const queryClient = useQueryClient();
@@ -44,13 +47,14 @@ export function StopWorker({
       <Button
         size={size}
         pending={pending}
+        pendingLabel={busyLabel}
         icon={<Square aria-hidden="true" size={size === "sm" ? 13 : 15} />}
-        aria-label={ariaLabel}
+        aria-label={pending ? ariaBusyLabel : ariaLabel}
         onClick={() => {
           stop.mutate();
         }}
       >
-        {pending ? busyLabel : idleLabel}
+        {idleLabel}
       </Button>
       {stop.isError ? <ErrorNote failure={stopFailure(stop.error)} /> : null}
     </div>

@@ -75,8 +75,9 @@ function StopCell({
       control={row.stop}
       size="sm"
       idleLabel="Stop"
-      busyLabel="Stopping"
+      busyLabel="Stopping…"
       ariaLabel={`Stop ${row.name}`}
+      ariaBusyLabel={`Stopping ${row.name}…`}
       className="items-start"
     />
   );

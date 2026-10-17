@@ -509,6 +509,7 @@ export function ThreadSection({
             type="submit"
             variant="primary"
             pending={isSubmitting}
+            pendingLabel="Sending…"
             disabled={closed !== null}
             icon={<Send aria-hidden="true" size={13} />}
           >

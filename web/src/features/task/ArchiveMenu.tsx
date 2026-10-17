@@ -55,6 +55,7 @@ export function ArchiveMenu({
           <Button
             variant="danger"
             pending={archive.isPending}
+            pendingLabel="Archiving task…"
             onClick={() => {
               archive.mutate(undefined, { onSuccess: onArchived });
             }}

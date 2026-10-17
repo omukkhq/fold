@@ -358,6 +358,7 @@ function SendBackForm({
           variant="primary"
           size="sm"
           pending={write.isPending}
+          pendingLabel="Sending back…"
         >
           Send back
         </Button>
@@ -445,6 +446,7 @@ function LeadCheck({
             variant="primary"
             size="sm"
             pending={complete.isPending}
+            pendingLabel="Completing task…"
             onClick={() => {
               complete.mutate(undefined);
             }}
@@ -522,6 +524,7 @@ function HumanReviewForm({
           variant="primary"
           size="sm"
           pending={write.isPending}
+          pendingLabel="Requiring review…"
         >
           Require review
         </Button>
@@ -599,6 +602,7 @@ function HumanReview({ slug, task }: { slug: string; task: TaskDetail }) {
           size="sm"
           className="self-start"
           pending={clear.isPending}
+          pendingLabel="Turning off human review…"
           onClick={() => {
             clear.mutate(undefined);
           }}
@@ -654,6 +658,7 @@ function BlockerForm({
           variant="primary"
           size="sm"
           pending={write.isPending}
+          pendingLabel="Setting blocker…"
         >
           Set blocker
         </Button>
@@ -738,13 +743,13 @@ function Blocker({
           {controls.canClear ? (
             <SmallAction
               icon={X}
-              disabled={clear.isPending}
-              aria-busy={clear.isPending ? true : undefined}
+              pending={clear.isPending}
+              pendingLabel="Clearing blocker…"
               onClick={() => {
                 clear.mutate(undefined);
               }}
             >
-              {clear.isPending ? "Clearing blocker…" : "Clear blocker"}
+              Clear blocker
             </SmallAction>
           ) : null}
           {controls.canSet ? (
@@ -806,6 +811,7 @@ function EdgeRow({
           size="sm"
           aria-label={`Remove the dependency on ${row.task}`}
           pending={removing}
+          pendingLabel={`Removing the dependency on ${row.task}…`}
           onClick={onRemove}
         >
           <X aria-hidden="true" size={13} />
@@ -856,6 +862,7 @@ function AddDependencyForm({
           variant="primary"
           size="sm"
           pending={write.isPending}
+          pendingLabel="Adding dependency…"
         >
           Add dependency
         </Button>

@@ -224,6 +224,7 @@ function RequestChangesForm({
           type="submit"
           variant="danger"
           pending={isSubmitting}
+          pendingLabel="Sending request…"
           icon={<Undo2 aria-hidden="true" size={15} />}
           className="flex-1 justify-center"
         >
@@ -295,6 +296,7 @@ function HumanActions({
             <Button
               variant="primary"
               pending={actions.pending === "approve"}
+              pendingLabel={`Approving ${v}…`}
               disabled={busy || actions.approveBlock !== null}
               aria-describedby={
                 actions.approveBlock === null ? undefined : approveBlockId
@@ -327,6 +329,7 @@ function HumanActions({
             {shows("integrate") ? (
               <Button
                 pending={actions.pending === "integrate"}
+                pendingLabel="Integrating…"
                 disabled={busy || actions.integrateBlock !== null}
                 aria-describedby={
                   actions.integrateBlock === null ? undefined : blockId

@@ -123,6 +123,7 @@ function RowMenu({
           size="sm"
           aria-label={`Actions for ${name}`}
           pending={pending}
+          pendingLabel={`Updating ${name}…`}
           className={ROW_MENU}
         >
           <Ellipsis aria-hidden="true" size={13} />
@@ -174,6 +175,7 @@ function RenameForm({
             variant="primary"
             size="sm"
             pending={write.isPending}
+            pendingLabel="Saving step…"
           >
             Save step
           </Button>
@@ -329,6 +331,7 @@ function LinkedRow({
               variant="danger"
               size="sm"
               pending={remove.isPending}
+              pendingLabel="Removing link…"
               onClick={() => {
                 remove.mutate(undefined, {
                   onSuccess: () => {
@@ -421,6 +424,7 @@ function AddItemForm({
           variant="primary"
           size="sm"
           pending={write.isPending}
+          pendingLabel={kind === "step" ? "Adding step…" : "Linking task…"}
         >
           {kind === "step" ? "Add step" : "Link task"}
         </Button>

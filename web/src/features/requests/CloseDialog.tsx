@@ -111,9 +111,10 @@ export function CloseDialog({
             type="submit"
             variant="danger"
             pending={isSubmitting}
+            pendingLabel="Closing request…"
             icon={<X aria-hidden="true" size={15} />}
           >
-            {isSubmitting ? "Closing…" : "Close request"}
+            Close request
           </Button>
         </div>
       </form>

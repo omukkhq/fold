@@ -70,6 +70,9 @@ describe("PauseControl", () => {
     expect(screen.getByRole("status").textContent).toContain(
       "Agents paused since 23:40 by @tanim",
     );
+    const name = screen.getByText("@tanim");
+    expect(name.getAttribute("data-person")).toBe("human");
+    expect(name.className).toContain("text-primary-text");
   });
 
   it("shows the refusal of a resume", async () => {

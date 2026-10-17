@@ -182,6 +182,7 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
             type="submit"
             variant="primary"
             pending={isSubmitting}
+            pendingLabel="Sending…"
             icon={<Send aria-hidden="true" size={13} />}
           >
             Send

@@ -133,7 +133,12 @@ export function NewTaskDialog({
         />
         <WriteError error={create.error} />
         <div className="flex gap-8">
-          <Button type="submit" variant="primary" pending={create.isPending}>
+          <Button
+            type="submit"
+            variant="primary"
+            pending={create.isPending}
+            pendingLabel="Creating task…"
+          >
             Create task
           </Button>
           <Button variant="ghost" disabled={create.isPending} onClick={onClose}>

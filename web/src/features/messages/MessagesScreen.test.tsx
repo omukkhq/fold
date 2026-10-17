@@ -185,7 +185,7 @@ describe("MessagesScreen", () => {
     await userEvent.click(within(panel).getByRole("button", { name: "Send" }));
     expect(
       within(panel)
-        .getByRole("button", { name: "Send" })
+        .getByRole("button", { name: "Sending…" })
         .getAttribute("aria-busy"),
     ).toBe("true");
     expect(within(panel).getAllByRole("article")).toHaveLength(1);
