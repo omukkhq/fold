@@ -27,7 +27,7 @@ use super::{ReviewError, ReviewService};
 use crate::services::events::EventBuffer;
 use crate::services::tasks::{recompute, worker_row};
 use crate::services::workspaces::{
-    ArchiveReason, WorkspaceError, WorkspaceRef, WorkspaceView, archive_in_tx,
+    ArchiveReason, CARRY_CACHE_ENTRIES, WorkspaceError, WorkspaceRef, WorkspaceView, archive_in_tx,
 };
 
 /// The earlier version whose change a member shows: only an open proposal that has a version after the newest one with a verdict, or after the one it joined at, has one.
@@ -53,6 +53,11 @@ const MIN_MEMBERS: usize = 2;
 
 /// The most proposals one batch holds, so one checkout and one verdict call stay a reviewable size.
 const MAX_MEMBERS: usize = 20;
+
+const _: () = assert!(
+    CARRY_CACHE_ENTRIES > MAX_MEMBERS,
+    "one batch view must find every member's carried state in the cache"
+);
 
 /// The `release_reason` of a review claim that leaves with its member.
 const REMOVED_FROM_BATCH: &str = "removed_from_batch";

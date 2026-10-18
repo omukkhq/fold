@@ -47,8 +47,10 @@ pub use changes::{WorkspaceChanges, WorkspaceEntry};
 pub(crate) use changesets::ProposalSnapshot;
 pub use changesets::RecordedChanges;
 pub use checkpoints::{CheckpointView, Restored};
+pub(crate) use compare::CARRY_CACHE_ENTRIES;
 pub use compare::{
-    CarriedComparison, Carry, ResolvedState, StateComparison, StateKind, StateRef, StateSummary,
+    CarriedComparison, Carry, CarryCache, ResolvedState, StateComparison, StateKind, StateRef,
+    StateSummary,
 };
 pub use direct::OpenedMainWorkspace;
 pub(crate) use direct::{main_agent, main_agent_in_tx};
@@ -122,6 +124,8 @@ pub struct WorkspaceService {
     objects: Arc<RwLock<()>>,
     ops: Arc<WorkspaceLocks>,
     live: Option<LiveState>,
+    /// The project's carried states (`ProjectHandle::carries`), so every request's reads of one revised proposal share one merge.
+    carries: Arc<CarryCache>,
 }
 
 impl std::fmt::Debug for WorkspaceService {
@@ -151,6 +155,7 @@ impl WorkspaceService {
             objects: Arc::new(RwLock::new(())),
             ops: Arc::new(WorkspaceLocks::default()),
             live: None,
+            carries: Arc::new(CarryCache::default()),
         }
     }
 
@@ -167,6 +172,7 @@ impl WorkspaceService {
         .with_locks(handle.objects.clone(), handle.workspace_locks.clone())
         .with_capabilities(handle.capabilities.clone())
         .with_live(handle.live.clone())
+        .with_carries(handle.carries.clone())
     }
 
     /// Reads the claim lease from the service's project `config.toml` on every command that takes a claim; an invalid file fails that command with `invalid_config`.
@@ -185,6 +191,13 @@ impl WorkspaceService {
     #[must_use]
     pub fn with_capabilities(mut self, caps: Arc<OnceLock<Capabilities>>) -> Self {
         self.caps = caps;
+        self
+    }
+
+    /// Shares one cache of carried states with every other service of the project.
+    #[must_use]
+    pub fn with_carries(mut self, carries: Arc<CarryCache>) -> Self {
+        self.carries = carries;
         self
     }
 

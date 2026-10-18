@@ -20,7 +20,7 @@ use crate::services::messages::MessageService;
 use crate::services::projects::{GitAttention, RemoteContext, load_config};
 use crate::services::reviews::ReviewService;
 use crate::services::tasks::TaskService;
-use crate::services::workspaces::{WorkspaceLocks, WorkspaceService};
+use crate::services::workspaces::{CarryCache, WorkspaceLocks, WorkspaceService};
 use crate::support::unpoisoned;
 
 /// An open project: its database, its clock and the live state shared by every request. Later domains add their state here.
@@ -56,6 +56,8 @@ pub struct ProjectHandle {
     pub capabilities: Arc<OnceLock<Capabilities>>,
     /// The in-memory state of the project's active workspaces.
     pub live: LiveState,
+    /// The earlier proposal versions that reads carried onto a newer base, shared by every review read of the project.
+    pub carries: Arc<CarryCache>,
     /// The Claude Code inbox sockets of the project's agents. They live in memory only, so a restarted daemon has none until the session-start hooks run again.
     pub push: PushTargets,
     push_task: PushTask,
@@ -205,6 +207,7 @@ impl ProjectHandle {
             workspace_locks,
             capabilities,
             live,
+            carries: Arc::new(CarryCache::default()),
             push,
             push_task,
             workers,

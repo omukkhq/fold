@@ -334,6 +334,116 @@ async fn the_proposal_diff_reads_the_change_since_an_earlier_version() {
     );
 }
 
+/// The worker syncs with a newer main between versions: the HTTP change since v1 holds only the worker's own edit, never the file main gained, and every read of it shares one carry of v1 onto the new base.
+#[tokio::test]
+async fn the_proposal_diff_since_an_earlier_version_leaves_out_what_main_gained() {
+    let fx = with_p1().await;
+    let (p1, p2) = (
+        fold_core::ProposalId::from_number(1).unwrap(),
+        fold_core::ProposalId::from_number(2).unwrap(),
+    );
+    fx.reviews()
+        .submit_review(
+            &human("tanim"),
+            p1,
+            1,
+            fold_core::reviews::Verdict::RequestChanges,
+            "add z",
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let backend = fx.agent("backend").await;
+    fx.workspaces()
+        .create_workspace(&backend, t(2))
+        .await
+        .unwrap();
+    fx.write(2, "docs/guide.md", "guide\n");
+    fx.reviews()
+        .create_proposal(&backend, t(2), "Add a guide", None)
+        .await
+        .unwrap();
+    let review = fx.agent("review").await;
+    give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
+    fx.reviews()
+        .submit_review(
+            &review,
+            p2,
+            1,
+            fold_core::reviews::Verdict::Approve,
+            "good",
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    fx.reviews()
+        .integrate_proposal(&review, p2, None)
+        .await
+        .unwrap();
+    let frontend = fx.agent("frontend").await;
+    let synced = fx
+        .workspaces()
+        .sync_workspace(&frontend, fold_core::WorkspaceId::from_number(1).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(synced.base.to_string(), "r2");
+    fx.write(1, "src/lib.rs", "pub fn y() {}\npub fn z() {}\n");
+    fx.reviews()
+        .update_proposal(&frontend, p1, None)
+        .await
+        .unwrap();
+
+    let answer = send(&fx, Method::GET, "/proposals/P-1/diff?since=1", None, &[]).await;
+    assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
+    let paths: Vec<&Value> = answer.body["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|file| &file["path"])
+        .collect();
+    assert_eq!(paths, [&json!("src/lib.rs")]);
+    assert_eq!(
+        answer.body["totals"],
+        json!({"files": 1, "added_lines": 1, "removed_lines": 0})
+    );
+    let answer = send(
+        &fx,
+        Method::GET,
+        "/proposals/P-1/diff?since=1&path=src/lib.rs",
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
+    let lines = &answer.body["hunks"][0]["lines"];
+    assert_eq!(lines.as_array().unwrap().len(), 2);
+    assert_eq!(
+        (&lines[1]["kind"], &lines[1]["new_no"]),
+        (&json!("added"), &json!(2))
+    );
+    let answer = send(
+        &fx,
+        Method::GET,
+        "/proposals/P-1/diff?since=1&path=docs/guide.md",
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(
+        (answer.status, answer.code()),
+        (StatusCode::NOT_FOUND, "path_not_in_comparison")
+    );
+    assert_eq!(fx.handle.carries.misses(), 1);
+    assert_eq!(fx.handle.carries.hits(), 2);
+
+    let answer = send(&fx, Method::GET, "/proposals/P-1/diff?version=2", None, &[]).await;
+    assert_eq!(answer.body["from"]["id"], "r2");
+    assert_eq!(
+        answer.body["totals"],
+        json!({"files": 1, "added_lines": 2, "removed_lines": 1})
+    );
+}
+
 #[tokio::test]
 async fn get_proposal_reports_the_gates_for_the_requesting_human() {
     let fx = with_p1().await;

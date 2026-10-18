@@ -1,5 +1,7 @@
+use std::collections::VecDeque;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use fold_core::object::ObjectHash;
 use fold_core::{
@@ -7,12 +9,13 @@ use fold_core::{
 };
 use fold_store::Store;
 use fold_store::workspaces::{self, WorkspaceState};
-use fold_vcs::compare::{self as vcs, FileChange, FileDiff, State, Totals};
+use fold_vcs::compare::{self as vcs, CarriedState, FileChange, FileDiff, State, Totals};
 use fold_vcs::paths::RepoPath;
 use fold_vcs::snapshot::Warning;
 use serde_json::json;
 
 use super::{WorkspaceError, WorkspaceService, blocking, capabilities, load_config, open_objects};
+use crate::support::lock;
 
 /// A state of the project that can be compared. Working files and recorded states are different kinds, so a caller never mistakes live edits for history.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,6 +142,70 @@ pub struct Carry {
     pub onto: ObjectHash,
 }
 
+/// How many carried states a [`CarryCache`] keeps. One view of a review batch carries each member whose base moved, so a bound below the most members of a batch would evict every member before the next view reads it again; the rest leaves room for reviewers who read single proposals at the same time. An entry holds the flat tree of the carried state and only the files that both sides changed, so a few dozen of them stay small next to the project's object store.
+pub(crate) const CARRY_CACHE_ENTRIES: usize = 32;
+
+/// The carried states the project's reads last built, by their three trees, so the file list, each file read and the batch view of one revised proposal run one three-way merge between them. The trees are content addresses, so an entry never goes stale; the least recently used one leaves when the cache is full. The merged files stay in memory and never reach the object store.
+#[derive(Default)]
+pub struct CarryCache {
+    /// The most recently used first.
+    entries: Mutex<VecDeque<(Carry, Arc<CarriedState>)>>,
+    hits: AtomicU64,
+    misses: AtomicU64,
+}
+
+/// The counts only: an entry holds file content, which never goes into a log line.
+impl fmt::Debug for CarryCache {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CarryCache")
+            .field("entries", &lock(&self.entries).len())
+            .field("hits", &self.hits())
+            .field("misses", &self.misses())
+            .finish()
+    }
+}
+
+impl CarryCache {
+    /// The carried state of `key`, built by `carry` when the cache does not hold it. The lock is free while `carry` runs, so a slow merge never holds up another read; two reads that miss the same key at once both build it and keep one. Blocking: call it through `spawn_blocking`.
+    pub fn get_or_carry(
+        &self,
+        key: Carry,
+        carry: impl FnOnce() -> Result<CarriedState, FoldError>,
+    ) -> Result<Arc<CarriedState>, FoldError> {
+        if let Some(found) = self.take(&key) {
+            self.hits.fetch_add(1, Ordering::Relaxed);
+            return Ok(found);
+        }
+        self.misses.fetch_add(1, Ordering::Relaxed);
+        let carried = Arc::new(carry()?);
+        let mut entries = lock(&self.entries);
+        entries.retain(|(held, _)| *held != key);
+        entries.push_front((key, Arc::clone(&carried)));
+        entries.truncate(CARRY_CACHE_ENTRIES);
+        Ok(carried)
+    }
+
+    /// The reads the cache answered without a merge.
+    pub fn hits(&self) -> u64 {
+        self.hits.load(Ordering::Relaxed)
+    }
+
+    /// The reads that ran the merge.
+    pub fn misses(&self) -> u64 {
+        self.misses.load(Ordering::Relaxed)
+    }
+
+    /// The entry of `key`, moved to the front.
+    fn take(&self, key: &Carry) -> Option<Arc<CarriedState>> {
+        let mut entries = lock(&self.entries);
+        let position = entries.iter().position(|(held, _)| held == key)?;
+        let entry = entries.remove(position)?;
+        let found = Arc::clone(&entry.1);
+        entries.push_front(entry);
+        Some(found)
+    }
+}
+
 /// See [`WorkspaceService::compare_carried`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CarriedComparison {
@@ -249,22 +316,25 @@ impl WorkspaceService {
         .await
     }
 
-    /// The files that differ from the carried state `from` to the stored tree `to`, with line counts, and the paths where the carried change conflicts. A read: it writes nothing, the line-merged files stay in memory.
+    /// The files that differ from the carried state `from` to the stored tree `to`, with line counts, and the paths where the carried change conflicts. A read: it writes nothing, the line-merged files stay in memory, and the service's [`CarryCache`] keeps the carried state for the next read of the same carry.
     pub async fn compare_carried(
         &self,
         from: Carry,
         to: ObjectHash,
     ) -> Result<CarriedComparison, WorkspaceError> {
         let paths = self.paths.clone();
+        let carries = Arc::clone(&self.carries);
         blocking(move || {
             let objects = open_objects(&paths)?;
-            let carried = vcs::carried_state(&objects, &from.base, &from.tree, &from.onto)?;
+            let carried = carries.get_or_carry(from, || {
+                vcs::carried_state(&objects, &from.base, &from.tree, &from.onto)
+            })?;
             let to = State::recorded(vcs::load_flat(&objects, &to)?);
             let comparison = vcs::compare(&objects, &carried.state, &to)?;
             Ok(CarriedComparison {
                 files: comparison.files,
                 totals: comparison.totals,
-                conflicts: carried.conflicts,
+                conflicts: carried.conflicts.clone(),
             })
         })
         .await
@@ -279,9 +349,12 @@ impl WorkspaceService {
     ) -> Result<FileDiff, WorkspaceError> {
         let path = RepoPath::parse(path.as_bytes()).map_err(FoldError::from)?;
         let paths = self.paths.clone();
+        let carries = Arc::clone(&self.carries);
         blocking(move || {
             let objects = open_objects(&paths)?;
-            let carried = vcs::carried_state(&objects, &from.base, &from.tree, &from.onto)?;
+            let carried = carries.get_or_carry(from, || {
+                vcs::carried_state(&objects, &from.base, &from.tree, &from.onto)
+            })?;
             let to = State::recorded(vcs::load_flat(&objects, &to)?);
             vcs::file_diff(&objects, &carried.state, &to, &path)
         })
@@ -385,4 +458,92 @@ async fn checkpoint(
                 .with_details([("checkpoint", json!(id))])
                 .into()
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use fold_core::object::{ObjectKind, hash_object};
+    use fold_core::tree::FlatTree;
+
+    use super::*;
+
+    fn hash(n: usize) -> ObjectHash {
+        hash_object(ObjectKind::Blob, n.to_string().as_bytes())
+    }
+
+    fn key(n: usize) -> Carry {
+        Carry {
+            base: hash(0),
+            tree: hash(n),
+            onto: hash(1),
+        }
+    }
+
+    fn carried(conflict: &str) -> CarriedState {
+        CarriedState {
+            state: State::recorded(FlatTree::new()),
+            conflicts: vec![RepoPath::parse(conflict.as_bytes()).unwrap()],
+        }
+    }
+
+    #[test]
+    fn a_second_read_of_a_carry_reuses_the_first_merge() {
+        let cache = CarryCache::default();
+        let merges = Cell::new(0);
+        let carry = || {
+            merges.set(merges.get() + 1);
+            Ok(carried("src/lib.rs"))
+        };
+        let first = cache.get_or_carry(key(2), carry).unwrap();
+        let second = cache
+            .get_or_carry(key(2), || panic!("the second read merged again"))
+            .unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(merges.get(), 1);
+        assert_eq!((cache.hits(), cache.misses()), (1, 1));
+        let other = cache.get_or_carry(key(3), carry).unwrap();
+        assert!(!Arc::ptr_eq(&first, &other));
+        assert_eq!(merges.get(), 2);
+        assert_eq!(
+            format!("{cache:?}"),
+            "CarryCache { entries: 2, hits: 1, misses: 2 }"
+        );
+    }
+
+    #[test]
+    fn a_failed_merge_is_not_kept() {
+        let cache = CarryCache::default();
+        let failed = cache.get_or_carry(key(2), || Err(FoldError::new(codes::NOT_FOUND, "gone")));
+        assert_eq!(failed.unwrap_err().code(), codes::NOT_FOUND);
+        cache.get_or_carry(key(2), || Ok(carried("a"))).unwrap();
+        assert_eq!((cache.hits(), cache.misses()), (0, 2));
+    }
+
+    #[test]
+    fn a_full_cache_lets_the_least_recently_used_carry_go() {
+        let cache = CarryCache::default();
+        for n in 0..CARRY_CACHE_ENTRIES {
+            cache.get_or_carry(key(n), || Ok(carried("a"))).unwrap();
+        }
+        cache
+            .get_or_carry(key(0), || panic!("the first carry left too early"))
+            .unwrap();
+        cache
+            .get_or_carry(key(CARRY_CACHE_ENTRIES), || Ok(carried("a")))
+            .unwrap();
+        cache
+            .get_or_carry(key(0), || panic!("the most recently read carry left"))
+            .unwrap();
+        let merges = Cell::new(0);
+        cache
+            .get_or_carry(key(1), || {
+                merges.set(1);
+                Ok(carried("a"))
+            })
+            .unwrap();
+        assert_eq!(merges.get(), 1, "the least recently used carry stayed");
+        assert_eq!(lock(&cache.entries).len(), CARRY_CACHE_ENTRIES);
+    }
 }

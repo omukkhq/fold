@@ -293,6 +293,64 @@ async fn a_reviewer_batches_checks_out_and_reviews_two_proposals_through_the_too
     );
 }
 
+/// A member's worker syncs with a newer main before its next version: the member's change since the reviewed version holds only the worker's own edit, never the file main gained, and a second view reuses the carry of the earlier version onto the new base.
+#[tokio::test]
+async fn a_member_synced_with_a_newer_main_counts_only_its_own_change() {
+    let fx = Fixture::new().await;
+    two_proposals(&fx).await;
+    let review = connect(&fx, "review").await;
+    give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
+    ok(
+        &review,
+        "create_review_batch",
+        json!({"proposals": ["P-1", "P-2"]}),
+    )
+    .await;
+    ok(
+        &review,
+        "submit_batch_review",
+        json!({
+            "id": "rb-1",
+            "verdicts": [
+                {"proposal": "P-1", "verdict": "approve"},
+                {"proposal": "P-2", "verdict": "request_changes", "body": "drop the second line"}
+            ]
+        }),
+    )
+    .await;
+    let integrated = ok(&review, "integrate_proposal", json!({"id": "P-1"})).await;
+    assert_eq!(integrated["revision"], "r2");
+    let backend = fx.agent("backend").await;
+    let synced = fx
+        .workspaces()
+        .sync_workspace(&backend, fold_core::WorkspaceId::from_number(2).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(synced.base.to_string(), "r2");
+    assert_eq!(synced.conflicted, Vec::<String>::new());
+    fx.write(2, "src/two.rs", "first\n");
+    fx.reviews()
+        .update_proposal(
+            &backend,
+            fold_core::ProposalId::from_number(2).unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    let since = json!({"version": "v1", "files": 1, "added": 0, "removed": 1});
+    let read = ok(&review, "get_review_batch", json!({"id": "rb-1"})).await;
+    assert_eq!(read["members"][0]["since"], Value::Null);
+    assert_eq!(read["members"][1]["since"], since);
+    assert_eq!(fx.handle.carries.misses(), 1);
+    let listed = ok(&review, "list_review_batches", json!({})).await;
+    assert_eq!(listed["batches"][0]["members"][1]["since"], since);
+    assert_eq!(
+        (fx.handle.carries.misses(), fx.handle.carries.hits()),
+        (1, 1)
+    );
+}
+
 #[tokio::test]
 async fn the_batch_tools_explain_their_refusals() {
     let fx = Fixture::new().await;
