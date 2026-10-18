@@ -223,9 +223,9 @@ async fn the_running_daemon_closes_a_project_whose_fold_was_deleted_and_init_mak
         panic!("the daemon opened the project");
     };
 
-    for dir in [".fold", ".git"] {
-        std::fs::remove_dir_all(project.join(dir)).unwrap();
-    }
+    // The open project can write into `.fold/` while it is removed.
+    remove_dir_eventually(&project.join(".fold"), Duration::from_secs(10)).await;
+    std::fs::remove_dir_all(project.join(".git")).unwrap();
     // The daemon's live job finds the deleted database on its next tick, with no request for the project.
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         while !old.store.read().is_closed() {
