@@ -1,5 +1,7 @@
 import {
   Activity,
+  Archive,
+  ArchiveRestore,
   Bookmark,
   Bot,
   Check,
@@ -192,6 +194,15 @@ function resumedText(event: DurableEvent): string {
   return event.data.resumed === false
     ? `restarted ${worker} in a new session for ${why}`
     : `resumed ${worker} for ${why}`;
+}
+
+/** The number of files a stash event names, as words. */
+function filesText(event: DurableEvent): string {
+  const files = count(event.data.file_count);
+  if (files === null) {
+    return "changes";
+  }
+  return files === 1 ? "1 file" : `${String(files)} files`;
 }
 
 function fixed(line: string): (event: DurableEvent) => string {
@@ -729,6 +740,33 @@ const SPECS: Record<EventType, Spec> = {
     text: fixed(
       "took back the change of the project folder that waited for the main agent",
     ),
+  },
+  "stash.pushed": {
+    icon: Archive,
+    text: (e) => `stashed ${filesText(e)} of the project folder`,
+  },
+  "stash.applied": {
+    icon: ArchiveRestore,
+    text: (e) => `unstashed ${filesText(e)} into the project folder`,
+  },
+  "stash.conflicted": {
+    icon: TriangleAlert,
+    text: (e) => {
+      const paths = heldText(e.data.conflicted, e.data.conflicted_count);
+      return paths === null
+        ? "unstashed changes that conflict with the project folder; the entry stays"
+        : `unstashed changes that conflict with the project folder in ${paths}; the entry stays`;
+    },
+  },
+  "stash.dropped": {
+    icon: Check,
+    text: (e) => {
+      // fold drops the entry itself when a Git commit put the markers on main, and names the task that fixes them.
+      const task = text(e.data.task);
+      return task === null
+        ? "fixed the conflict of the unstash; the stash entry is dropped"
+        : `recorded the conflict of the unstash on main; ${task} fixes it`;
+    },
   },
 };
 

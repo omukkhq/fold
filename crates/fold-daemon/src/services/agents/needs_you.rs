@@ -32,6 +32,8 @@ pub enum NeedsYouKind {
     HeadMoved,
     /// Paths main changed hold changes of the human's that no revision records, so fold does not update the project folder until the human records them with `fld record` or takes them back; `paths` names them.
     FolderHeld,
+    /// `fld unstash` wrote conflict markers into the files `paths` names and kept the stash entry, so fold does not update the project folder until the human fixes the files and records them with `fld record`.
+    UnstashConflicted,
 }
 
 /// The screen on which a human answers an item.
@@ -53,9 +55,10 @@ impl NeedsYouKind {
             NeedsYouKind::HumanReview => Screen::Proposal,
             NeedsYouKind::RequestDraft => Screen::Request,
             NeedsYouKind::HumanTask | NeedsYouKind::Blocker => Screen::Task,
-            NeedsYouKind::HumanChange | NeedsYouKind::HeadMoved | NeedsYouKind::FolderHeld => {
-                Screen::Repository
-            }
+            NeedsYouKind::HumanChange
+            | NeedsYouKind::HeadMoved
+            | NeedsYouKind::FolderHeld
+            | NeedsYouKind::UnstashConflicted => Screen::Repository,
         }
     }
 }
@@ -82,11 +85,11 @@ pub struct NeedsYouItem {
     pub header: Option<String>,
     /// The proposal title of a `HumanReview`; the request title of a `RequestDraft`, which the claim gave it before any draft; the task title of a `HumanTask` or a `Blocker`.
     pub title: Option<String>,
-    /// The reason of a `Blocker`; the command that brings the branch back for `HeadMoved`, or records the folder's changes for `FolderHeld`.
+    /// The reason of a `Blocker`; the command that brings the branch back for `HeadMoved`, records the folder's changes for `FolderHeld`, or ends the conflict for `UnstashConflicted`.
     pub reason: Option<String>,
     /// The human's Git commit of a `HumanChange`.
     pub commit: Option<String>,
-    /// The paths of a `HumanChange` that conflict with main, or those of a `FolderHeld` that keep the folder where it is, in path order.
+    /// The paths of a `HumanChange` that conflict with main, those of a `FolderHeld` that keep the folder where it is, or those of an `UnstashConflicted` that hold the conflict, in path order.
     pub paths: Vec<String>,
 }
 
@@ -128,7 +131,7 @@ impl NeedsYouItem {
     }
 }
 
-/// `items` with the items of the project folder's Git attention, oldest first: the branch that moved, from `moved`, and the folder that waits on the human's changes, from `held`. While a conflicted human change waits, its item alone stands for the folder: it names the conflicting files, and its resolution lets the folder go on, so the waiting folder shows again only when it still waits after that.
+/// `items` with the items of the project folder's Git attention, oldest first: the branch that moved, from `moved`, and the folder that waits on the human's changes, from `held`. While a conflicted human change or a conflicted unstash waits, its item alone stands for the folder: it names the conflicting files, and its end lets the folder go on, so the waiting folder shows again only when it still waits after that.
 pub fn with_folder_attention(
     mut items: Vec<NeedsYouItem>,
     moved: Option<(Timestamp, String)>,
@@ -137,9 +140,12 @@ pub fn with_folder_attention(
     if let Some((since, hint)) = moved {
         items.push(NeedsYouItem::head_moved(since, hint));
     }
-    let conflicted = items
-        .iter()
-        .any(|item| item.kind == NeedsYouKind::HumanChange);
+    let conflicted = items.iter().any(|item| {
+        matches!(
+            item.kind,
+            NeedsYouKind::HumanChange | NeedsYouKind::UnstashConflicted
+        )
+    });
     if let Some((since, paths)) = held.filter(|_| !conflicted) {
         items.push(NeedsYouItem::folder_held(since, paths));
     }
@@ -194,6 +200,20 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
         item.human = HumanName::parse(&change.human).ok();
         item.commit = change.commit;
         item.paths = change
+            .conflicts
+            .iter()
+            .map(|row| String::from_utf8_lossy(&row.path).into_owned())
+            .collect();
+        items.push(item);
+    }
+    let stack = fold_store::workspaces::stash_stack(&mut conn).await?;
+    if let Some(entry) = stack.first()
+        && let Some(since) = entry.conflicted_at
+    {
+        let mut item = NeedsYouItem::new(NeedsYouKind::UnstashConflicted, since);
+        item.reason =
+            Some("fix the conflict markers in these files, then run fld record".to_owned());
+        item.paths = entry
             .conflicts
             .iter()
             .map(|row| String::from_utf8_lossy(&row.path).into_owned())
@@ -266,5 +286,11 @@ mod tests {
         assert_eq!(kinds(&items), [NeedsYouKind::FolderHeld]);
         assert_eq!(items[0].paths, ["README.md"]);
         assert!(with_folder_attention(Vec::new(), None, None).is_empty());
+        let unstash = NeedsYouItem::new(NeedsYouKind::UnstashConflicted, at(7));
+        assert_eq!(
+            kinds(&with_folder_attention(vec![unstash], None, held())),
+            [NeedsYouKind::UnstashConflicted]
+        );
+        assert_eq!(NeedsYouKind::UnstashConflicted.screen(), Screen::Repository);
     }
 }

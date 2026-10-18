@@ -143,6 +143,10 @@ define_event_types! {
     GIT_HEAD_MOVED = "git.head_moved",
     HUMAN_CHANGE_WITHDRAWN = "human_change.withdrawn",
     PROPOSAL_REVIEWER_FIXED = "proposal.reviewer_fixed",
+    STASH_PUSHED = "stash.pushed",
+    STASH_APPLIED = "stash.applied",
+    STASH_CONFLICTED = "stash.conflicted",
+    STASH_DROPPED = "stash.dropped",
 }
 
 impl EventType {

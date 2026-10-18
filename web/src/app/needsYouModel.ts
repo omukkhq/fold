@@ -4,7 +4,7 @@ import { messagesHref } from "@/features/messages/search";
 import { asksText } from "@/features/workers/permission";
 import { projectPath, withQuery } from "@/routes/paths";
 
-/** A line of the list: a person who asks, or an item chip, then the words and the screen it opens. */
+/** A line of the list: a person who asks, or an item chip, then the words and the screen it opens, if any. */
 export interface NeedsYouLine {
   key: string;
   kind: NeedsYouKind;
@@ -13,11 +13,12 @@ export interface NeedsYouLine {
   chip: string | null;
   text: string;
   task: string | null;
-  /** The second line's title: the proposal title of a review, the request title of a draft, the task title of a human task, the reason of a blocker, the conflicting files of a human change, the files that hold the project folder back. */
+  /** The second line's title: the proposal title of a review, the request title of a draft, the task title of a human task, the reason of a blocker, the conflicting files of a human change or of an unstash, the files that hold the project folder back. */
   title: string | null;
   since: number;
-  hint: string;
-  href: string;
+  /** What the line opens; null for a line that opens nothing, with `href`. */
+  hint: string | null;
+  href: string | null;
 }
 
 export interface NeedsYouGroup {
@@ -36,6 +37,7 @@ const GROUPS: readonly { kind: NeedsYouKind; title: string }[] = [
   { kind: "human_change", title: "Your changes" },
   { kind: "head_moved", title: "Git branch" },
   { kind: "folder_held", title: "Project folder" },
+  { kind: "unstash_conflicted", title: "Unstash conflict" },
 ];
 
 /** The items for this human: an item that waits for another named human is theirs. Before a name, every item shows. */
@@ -162,6 +164,17 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         hint: "opens the history of main",
         href: projectPath(slug, "repository"),
       };
+    case "unstash_conflicted":
+      return {
+        ...base,
+        person: null,
+        chip: null,
+        task: null,
+        title: pathsText(item.paths),
+        text: "Unstash conflicts. Fix the files and run fld record",
+        hint: null,
+        href: null,
+      };
     case "human_review":
       return {
         ...base,
@@ -183,7 +196,7 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
   }
 }
 
-/** The list in group order: questions, permissions, reviews, request drafts, human tasks, blockers, human changes, the Git branch, the project folder; a group without items is left out. */
+/** The list in group order: questions, permissions, reviews, request drafts, human tasks, blockers, human changes, the Git branch, the project folder, an unstash conflict; a group without items is left out. */
 export function needsYouGroups(
   slug: string,
   items: readonly NeedsYouItem[],

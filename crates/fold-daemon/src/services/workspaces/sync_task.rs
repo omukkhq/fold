@@ -67,7 +67,7 @@ impl WorkspaceService {
         let probed = Arc::clone(&self.caps);
         let labels = MarkerLabels {
             ours: "workspace".to_owned(),
-            base: sync.base_label.clone(),
+            base: Some(sync.base_label.clone()),
             theirs: format!("main {}", sync.head),
         };
         let (remote_tree, merge) = (sync.remote_tree, sync.merge.clone());

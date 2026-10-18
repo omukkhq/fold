@@ -564,32 +564,94 @@ fn index_follow(
         info.extend_from_slice(&change.path);
         info.push(0);
     }
-    if !info.is_empty() {
-        let mut command = git.command(paths.root());
-        command
-            .args(in_folder(paths, &["update-index", "-z", "--index-info"]))
-            .stdin(Stdio::piped());
-        let mut child = Git::spawn(&mut command, "update-index")?;
-        if let Some(mut stdin) = child.stdin.take() {
-            use std::io::Write as _;
-            stdin
-                .write_all(&info)
-                .map_err(|error| wait_error(&error, "update-index"))?;
-        }
-        let status = child
-            .wait()
-            .map_err(|error| wait_error(&error, "update-index"))?;
-        if !status.success() {
-            return Err(failed("update-index", status));
+    write_index_info(git, paths, &info)?;
+    refresh_index(git, paths)?;
+    Ok(true)
+}
+
+/// Puts the index entries of `reset`, paths of the project folder, back to their entries in `commit`, and removes those `commit` does not hold, or every one of them without a commit, then refreshes the index's file stats. A change the human staged on those paths is undone; every other entry stays. Blocking.
+pub fn reset_index_paths(
+    git: &Git,
+    paths: &ProjectPaths,
+    commit: Option<&CommitId>,
+    reset: &[Vec<u8>],
+) -> Result<(), FoldError> {
+    if reset.is_empty() {
+        return Ok(());
+    }
+    let mut committed = std::collections::HashMap::new();
+    if let Some(commit) = commit {
+        let out = git.output(
+            &paths.git_dir(),
+            &["ls-tree", "-r", "-z", "--full-tree", commit.as_str()],
+            "ls-tree",
+        )?;
+        for line in out.split(|&byte| byte == 0).filter(|line| !line.is_empty()) {
+            let (head, path) = line
+                .iter()
+                .position(|&byte| byte == b'\t')
+                .map(|at| (&line[..at], &line[at + 1..]))
+                .ok_or_else(|| unexpected_output("ls-tree"))?;
+            let parts: Vec<&[u8]> = head.split(|&byte| byte == b' ').collect();
+            let [mode, _kind, object] = parts[..] else {
+                return Err(unexpected_output("ls-tree"));
+            };
+            committed.insert(path.to_vec(), (mode.to_vec(), object.to_vec()));
         }
     }
+    let mut info = Vec::new();
+    for path in reset {
+        match committed.get(path) {
+            Some((mode, object)) => {
+                info.extend_from_slice(mode);
+                info.push(b' ');
+                info.extend_from_slice(object);
+            }
+            None => info.extend_from_slice(b"0 0000000000000000000000000000000000000000"),
+        }
+        info.push(b'\t');
+        info.extend_from_slice(path);
+        info.push(0);
+    }
+    write_index_info(git, paths, &info)?;
+    refresh_index(git, paths)
+}
+
+/// Feeds `info`, lines of `git update-index -z --index-info`, to the folder's index. Blocking.
+fn write_index_info(git: &Git, paths: &ProjectPaths, info: &[u8]) -> Result<(), FoldError> {
+    if info.is_empty() {
+        return Ok(());
+    }
+    let mut command = git.command(paths.root());
+    command
+        .args(in_folder(paths, &["update-index", "-z", "--index-info"]))
+        .stdin(Stdio::piped());
+    let mut child = Git::spawn(&mut command, "update-index")?;
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write as _;
+        stdin
+            .write_all(info)
+            .map_err(|error| wait_error(&error, "update-index"))?;
+    }
+    let status = child
+        .wait()
+        .map_err(|error| wait_error(&error, "update-index"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(failed("update-index", status))
+    }
+}
+
+/// Refreshes the file stats of the folder's index; a path whose file differs from its entry is no failure. Blocking.
+fn refresh_index(git: &Git, paths: &ProjectPaths) -> Result<(), FoldError> {
     let refreshed = git.status(
         paths.root(),
         &in_folder(paths, &["update-index", "-q", "--refresh"]),
         "update-index",
     )?;
     match refreshed.code() {
-        Some(0 | 1) => Ok(true),
+        Some(0 | 1) => Ok(()),
         _ => Err(failed("update-index", refreshed)),
     }
 }

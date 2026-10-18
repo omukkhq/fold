@@ -59,6 +59,7 @@ mod git_status;
 mod pull;
 mod record;
 mod remote;
+mod stash;
 mod web_auth;
 
 pub(crate) use commits::error_code;
@@ -72,6 +73,9 @@ pub use pull::{PullOutcome, PulledConflict, pull};
 pub use record::{RecordOutcome, TouchedTask, record};
 pub(crate) use remote::push_with;
 pub use remote::{PushOutcome, RemoteContext, push};
+pub use stash::{
+    StashEntry, StashOutcome, UnstashConflict, UnstashOutcome, stash, stash_list, unstash,
+};
 pub use web_auth::{
     DEFAULT_SESSION_LIFETIME, SignedIn, WEB_TOUCH_INTERVAL, check_web_session, create_web_session,
     create_web_token, create_web_token_on_host, end_web_session, list_humans, list_web_tokens,
@@ -1492,7 +1496,7 @@ pub struct ProjectOverview {
 /// Why the project, rather than one of its tasks, needs a person. The daemon decides every kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProjectAttention {
-    /// The project folder has changes that no revision records, which the human records with `fld record`. Such a change on a path main changed keeps the whole folder, and while Git sync is on the branch too, where they are until it is recorded or taken back.
+    /// The project folder has changes that no revision records, which the human records with `fld record` or puts aside with `fld stash`. Such a change on a path main changed, or the conflict markers of `fld unstash`, keep the whole folder, and while Git sync is on the branch too, where they are until it is recorded or taken back.
     UncommittedChanges,
     /// The `[git]` branch or `HEAD` shows a change fold did not make, such as another branch checked out, a reset or a stash, so the project folder stops following main until the human brings the branch back.
     HeadMoved,

@@ -9,6 +9,7 @@ mod lifecycle;
 mod refs;
 mod remotes;
 mod revisions;
+mod stashes;
 
 pub(crate) use changesets::parse_stats;
 pub use changesets::{
@@ -49,4 +50,8 @@ pub use revisions::{
     IntegratedProposal, IntegrationInfo, IntegrationKind, MAX_PAGE, RevisionRow, ancestors,
     create_initial_revision, genesis, genesis_revision, get_by_hash, get_by_number, head,
     initial_revision, insert_revision, list_after, list_recent,
+};
+pub use stashes::{
+    NewStash, StashRow, StashState, apply_stash, conflict_stash, drop_stash, insert_stash,
+    stash_stack,
 };

@@ -23,6 +23,7 @@ mod acceptance_13_human_edit;
 mod acceptance_14_human_changes;
 mod acceptance_15_genesis_and_git;
 mod acceptance_16_reviewer_fix;
+mod acceptance_17_stash;
 mod acceptance_1_three_sessions;
 mod acceptance_2_messaging;
 mod acceptance_3_parallel_workspaces;
@@ -59,6 +60,8 @@ mod crash_integration;
 mod crash_messages;
 #[cfg(feature = "failpoints")]
 mod crash_record;
+#[cfg(feature = "failpoints")]
+mod crash_stash;
 mod daemon_shell;
 mod delete_archive;
 mod deleted_projects;
@@ -69,6 +72,7 @@ mod enable_git;
 mod event_bus;
 mod events_service;
 mod exclude_file;
+mod folder_stash;
 mod gc;
 mod git_commits;
 mod handoffs;

@@ -436,6 +436,16 @@ pub(crate) fn post_to_project(
     project: Option<&Path>,
     action: &str,
 ) -> Result<Response, RemoteError> {
+    request_project(socket, project, Method::POST, action)
+}
+
+/// [`post_to_project`] with any method.
+pub(crate) fn request_project(
+    socket: Option<&Path>,
+    project: Option<&Path>,
+    method: Method,
+    action: &str,
+) -> Result<Response, RemoteError> {
     let dirs = Dirs::from_env();
     let host = init::host_paths(&dirs)?;
     let start = project.map_or_else(|| PathBuf::from("."), Path::to_path_buf);
@@ -446,7 +456,7 @@ pub(crate) fn post_to_project(
     runtime.block_on(async {
         let slug = slug_for_dir_on_host(&host, &dir).await?;
         let path = format!("/api/v1/projects/{slug}/{action}");
-        Ok::<_, RemoteError>(client.request(Method::POST, &path, None).await?)
+        Ok::<_, RemoteError>(client.request(method, &path, None).await?)
     })
 }
 

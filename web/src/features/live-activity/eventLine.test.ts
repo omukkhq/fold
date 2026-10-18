@@ -480,6 +480,36 @@ describe("eventLine", () => {
     );
   });
 
+  it("writes a line for each step of a stash", () => {
+    expect(
+      eventLine(event("stash.pushed", { data: { file_count: 2 } })).text,
+    ).toBe("stashed 2 files of the project folder");
+    expect(eventLine(event("stash.pushed")).text).toBe(
+      "stashed changes of the project folder",
+    );
+    expect(
+      eventLine(event("stash.applied", { data: { file_count: 1 } })).text,
+    ).toBe("unstashed 1 file into the project folder");
+    expect(
+      eventLine(
+        event("stash.conflicted", {
+          data: { conflicted: ["a.txt"], conflicted_count: 3 },
+        }),
+      ).text,
+    ).toBe(
+      "unstashed changes that conflict with the project folder in a.txt and 2 more; the entry stays",
+    );
+    expect(eventLine(event("stash.conflicted")).text).toBe(
+      "unstashed changes that conflict with the project folder; the entry stays",
+    );
+    expect(eventLine(event("stash.dropped")).text).toBe(
+      "fixed the conflict of the unstash; the stash entry is dropped",
+    );
+    expect(
+      eventLine(event("stash.dropped", { data: { task: "T-9" } })).text,
+    ).toBe("recorded the conflict of the unstash on main; T-9 fixes it");
+  });
+
   it("marks integrations, main moves, request approvals and recorded human changes as emphasised, review approvals by their verdict", () => {
     const emphasised = EVENT_TYPES.filter(
       (type) => eventLine(event(type)).emphasis,

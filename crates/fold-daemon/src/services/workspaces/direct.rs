@@ -214,10 +214,10 @@ impl WorkspaceService {
         let (base_tree, human_tree) = (change.base_tree, change.tree);
         let labels = MarkerLabels {
             ours: "workspace".to_owned(),
-            base: match &change.commit {
+            base: Some(match &change.commit {
                 Some(commit) => format!("base {}", short_commit(commit)),
                 None => "base project folder".to_owned(),
-            },
+            }),
             theirs: format!("main {head}"),
         };
         blocking(move || {

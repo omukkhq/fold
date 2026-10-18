@@ -65,6 +65,10 @@ enum Command {
     Resume(commands::pause::PauseArgs),
     /// Record your changes in the project folder on main as one change of yours; a conflict with the agents' work waits for the main agent
     Record(commands::record::RecordArgs),
+    /// Put your changes in the project folder aside, so the folder follows main; fld stash list shows the stash, newest first
+    Stash(commands::stash::StashArgs),
+    /// Merge the newest stash entry into the project folder as it is now; a conflict writes conflict markers and keeps the entry until fld record
+    Unstash(commands::stash::UnstashArgs),
     /// Development helpers
     #[cfg(feature = "dev-seed")]
     #[command(hide = true)]
@@ -141,6 +145,12 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         }
         Some(Command::Record(args)) => {
             commands::record::run_record(&args, out).map_err(Failure::Remote)
+        }
+        Some(Command::Stash(args)) => {
+            commands::stash::run_stash(&args, out).map_err(Failure::Remote)
+        }
+        Some(Command::Unstash(args)) => {
+            commands::stash::run_unstash(&args, out).map_err(Failure::Remote)
         }
         #[cfg(feature = "dev-seed")]
         Some(Command::Dev(args)) => {

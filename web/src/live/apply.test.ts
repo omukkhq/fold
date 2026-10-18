@@ -469,6 +469,21 @@ describe("invalidation rules", () => {
     expect(hit(keys.needsYou(slug))).toBe(false);
   });
 
+  it("refreshes Needs you and the project for each step of a stash", () => {
+    for (const type of [
+      "stash.pushed",
+      "stash.applied",
+      "stash.conflicted",
+      "stash.dropped",
+    ]) {
+      invalidated = [];
+      applyEvent(client, slug, ev(type));
+      expect(hit(keys.needsYou(slug))).toBe(true);
+      expect(hit(keys.project(slug))).toBe(true);
+      expect(hit(keys.board(slug))).toBe(false);
+    }
+  });
+
   it("invalidates repository and board, and no proposal key, for a pull integration", () => {
     for (const type of [
       "integration.succeeded",

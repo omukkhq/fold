@@ -24,6 +24,7 @@ pub mod restore;
 pub mod revision_store;
 pub mod scan;
 pub mod snapshot;
+pub mod stash;
 pub mod sync;
 pub mod watch;
 

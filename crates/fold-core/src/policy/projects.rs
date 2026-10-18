@@ -30,6 +30,19 @@ pub fn can_record(actor: &Actor) -> Result<(), PolicyDenied> {
     }
 }
 
+/// The stash holds the human's own unrecorded changes and writes them into the project folder, so only a named human runs `fld stash` and `fld unstash`; an agent never puts the human's work aside.
+pub fn can_stash(actor: &Actor) -> Result<(), PolicyDenied> {
+    if actor.is_human() {
+        Ok(())
+    } else {
+        Err(PolicyDenied {
+            code: codes::HUMAN_REQUIRED,
+            message: "only a human stashes the changes of the project folder",
+            hint: "ask a human to run fld stash or fld unstash in the project folder",
+        })
+    }
+}
+
 /// Turning Git on writes `.git` into the human's project folder, records the `.gitignore` as the human's own revision and stays on for good, so only a named human runs `fld init --with-git`.
 pub fn can_enable_git(actor: &Actor) -> Result<(), PolicyDenied> {
     if actor.is_human() {
@@ -93,6 +106,21 @@ mod tests {
             let denied = can_record(&actor).unwrap_err();
             assert_eq!(denied.code(), codes::HUMAN_REQUIRED);
             assert!(denied.hint().contains("fld record"));
+        }
+    }
+
+    #[test]
+    fn only_a_human_stashes_the_project_folder() {
+        assert!(can_stash(&Actor::human(HumanName::parse("ana").unwrap())).is_ok());
+        let agent = Actor::Agent(AgentActor {
+            agent: AgentName::parse("main").unwrap(),
+            worker: WorkerName::parse("main").unwrap(),
+            tags: Vec::new(),
+        });
+        for actor in [agent, Actor::System] {
+            let denied = can_stash(&actor).unwrap_err();
+            assert_eq!(denied.code(), codes::HUMAN_REQUIRED);
+            assert!(denied.hint().contains("fld stash"));
         }
     }
 

@@ -15,6 +15,7 @@ mod completions;
 mod counters;
 mod dependencies;
 mod events;
+mod folder_stashes_schema;
 mod gc;
 mod handoffs_schema;
 mod human_changes_schema;

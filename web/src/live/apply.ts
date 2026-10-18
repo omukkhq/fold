@@ -36,6 +36,7 @@ const DOMAINS = new Set([
   "request",
   "project",
   "human_change",
+  "stash",
 ]);
 
 export function domainOf(type: string): string | null {
@@ -430,6 +431,14 @@ function invalidationKeys(
               keys.needsYou(slug),
             ]
           : [repository, keys.git(slug), keys.project(slug)];
+    case "stash":
+      // Needs you lists an unstash whose conflict markers wait in the project folder.
+      return [
+        repository,
+        keys.git(slug),
+        keys.project(slug),
+        keys.needsYou(slug),
+      ];
     case "project":
       return [keys.project(slug), keys.workers(slug), keys.agents(slug)];
     case "request":

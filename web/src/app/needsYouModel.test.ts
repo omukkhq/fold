@@ -246,6 +246,38 @@ describe("needsYouGroups", () => {
     });
   });
 
+  it("shows an unstash whose conflict markers wait with the conflicted files, opening nothing", () => {
+    const [group] = needsYouGroups("demo", [
+      needsItem({
+        kind: "unstash_conflicted",
+        screen: "repository",
+        reason: "fix the conflict markers in these files, then run fld record",
+        paths: ["src/forms/index.ts", "src/forms/a.ts", "src/forms/b.ts"],
+      }),
+    ]);
+    expect(group?.title).toBe("Unstash conflict");
+    expect(group?.lines[0]).toMatchObject({
+      person: null,
+      chip: null,
+      task: null,
+      title: "src/forms/index.ts and 2 more",
+      text: "Unstash conflicts. Fix the files and run fld record",
+      hint: null,
+      href: null,
+    });
+  });
+
+  it("puts an unstash conflict last of the groups", () => {
+    const groups = needsYouGroups("demo", [
+      needsItem({ kind: "unstash_conflicted", paths: ["a.md"] }),
+      needsItem({ kind: "blocker", task: "T-3" }),
+    ]);
+    expect(groups.map((group) => group.kind)).toEqual([
+      "blocker",
+      "unstash_conflicted",
+    ]);
+  });
+
   it("counts what waits", () => {
     expect(waitingText(4)).toBe("4 waiting");
   });

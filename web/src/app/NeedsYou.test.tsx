@@ -121,4 +121,35 @@ describe("NeedsYou", () => {
     expect(within(list).getByText("RQ-5")).toBeTruthy();
     expect(within(list).getByText("needs your review")).toBeTruthy();
   });
+
+  it("shows an unstash conflict as a line that opens nothing and counts it", async () => {
+    await renderBadge(
+      [
+        permission,
+        needsItem({
+          kind: "unstash_conflicted",
+          screen: "repository",
+          paths: ["src/forms/index.ts", "a.ts", "b.ts"],
+        }),
+      ],
+      null,
+    );
+    const badge = await screen.findByRole("button", { name: /Needs you/ });
+    expect(badge.textContent).toBe("Needs you2");
+    await userEvent.click(badge);
+    const list = screen.getByRole("dialog", { name: "Needs you" });
+    const group = within(list).getByRole("region", {
+      name: "Unstash conflict",
+    });
+    expect(
+      within(group).getByText(
+        "Unstash conflicts. Fix the files and run fld record",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(group).getByText("src/forms/index.ts and 2 more"),
+    ).toBeTruthy();
+    expect(within(group).queryByRole("link")).toBeNull();
+    expect(within(list).getAllByRole("link")).toHaveLength(1);
+  });
 });
