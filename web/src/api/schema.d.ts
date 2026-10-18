@@ -338,7 +338,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Every item that waits for a human, oldest first: questions with choices from agents to the humans, workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, and a Git branch of the project folder that fold did not move. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved` and `git.attention_cleared`. */
+        /** Every item that waits for a human, oldest first: questions with choices from agents to the humans, workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, and a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes` and `git.attention_cleared`. */
         get: operations["list_needs_you"];
         put?: never;
         post?: never;
@@ -2343,7 +2343,7 @@ export interface components {
              * @example m-31
              */
             message: string | null;
-            /** @description The files of a `human_change` that conflict with main, in path order; empty otherwise. */
+            /** @description The files of a `human_change` that conflict with main, or those of a `folder_held` that keep the project folder where it is, in path order; empty otherwise. */
             paths: string[];
             /** @example P-3 */
             proposal: string | null;
@@ -2353,7 +2353,7 @@ export interface components {
              */
             question: string | null;
             /**
-             * @description The reason of a `blocker`; the command that brings the Git branch back for `head_moved`.
+             * @description The reason of a `blocker`; the command that brings the Git branch back for `head_moved`, or records the folder's changes for `folder_held`.
              * @example Wait until the design is signed off
              */
             reason: string | null;
@@ -2387,7 +2387,7 @@ export interface components {
          * @description Why an item waits for a human.
          * @enum {string}
          */
-        NeedsYouItemKind: "question" | "permission" | "human_review" | "request_draft" | "human_task" | "blocker" | "human_change" | "head_moved";
+        NeedsYouItemKind: "question" | "permission" | "human_review" | "request_draft" | "human_task" | "blocker" | "human_change" | "head_moved" | "folder_held";
         /** @description Every item that waits for a human, oldest first. */
         NeedsYouList: {
             items: components["schemas"]["NeedsYouEntry"][];
@@ -2440,7 +2440,7 @@ export interface components {
             presence: components["schemas"]["PresenceState"];
         };
         /**
-         * @description Why the project, rather than one of its tasks, needs a person. The daemon decides every kind. `uncommitted_changes`: the project folder has changes that no revision records, which the human records with `fld record`. `head_moved`: the Git branch or HEAD shows a change fold did not make, such as another branch checked out, a reset or a stash, so the project folder stops following main until the human brings the branch back.
+         * @description Why the project, rather than one of its tasks, needs a person. The daemon decides every kind. `uncommitted_changes`: the project folder has changes that no revision records, which the human records with `fld record`; such a change on a path main changed keeps the whole folder where it is until then. `head_moved`: the Git branch or HEAD shows a change fold did not make, such as another branch checked out, a reset or a stash, so the project folder stops following main until the human brings the branch back.
          * @enum {string}
          */
         ProjectAttentionKind: "uncommitted_changes" | "head_moved";
@@ -2780,6 +2780,11 @@ export interface components {
          */
         ReportResolution: "completed" | "sent_back";
         RepositoryView: {
+            /**
+             * @description The main revision the project folder holds, apart from the changes no revision records, such as `r16`: behind `head` while the folder waits on such a change on a path main changed, or on the Git branch. Null before fold first wrote the folder.
+             * @example r16
+             */
+            folder: string | null;
             /**
              * @description The revision `main` names; null only before `r1` exists.
              * @example r17

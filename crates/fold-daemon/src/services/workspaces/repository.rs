@@ -119,6 +119,8 @@ pub struct RepositoryState {
     pub head: Option<RevisionId>,
     /// The project folder, whose files follow main through fold's checkout of it.
     pub main_path: PathBuf,
+    /// The main revision the project folder holds, apart from the changes no revision records: behind `head` while the folder waits on such a change on a path main changed, or on the Git branch. `None` before fold first wrote the folder.
+    pub folder: Option<RevisionId>,
     /// The newest revisions, newest first.
     pub recent: Vec<RevisionSummary>,
 }
@@ -143,9 +145,11 @@ impl WorkspaceService {
         let read = self.store.read();
         let head = workspaces::head(read).await?.map(|row| row.number);
         let recent = workspaces::list_recent(read, RECENT_REVISIONS, None).await?;
+        let folder = workspaces::checkout(read).await?.map(|row| row.revision);
         Ok(RepositoryState {
             head,
             main_path: self.paths.root().to_path_buf(),
+            folder,
             recent: recent.into_iter().map(RevisionSummary::from).collect(),
         })
     }

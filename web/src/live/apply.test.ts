@@ -453,8 +453,12 @@ describe("invalidation rules", () => {
     }
   });
 
-  it("refreshes Needs you when the Git branch moves or comes back", () => {
-    for (const type of ["git.head_moved", "git.attention_cleared"]) {
+  it("refreshes Needs you when the Git branch moves or comes back, or the project folder waits", () => {
+    for (const type of [
+      "git.head_moved",
+      "git.uncommitted_changes",
+      "git.attention_cleared",
+    ]) {
       invalidated = [];
       applyEvent(client, slug, ev(type));
       expect(hit(keys.needsYou(slug))).toBe(true);

@@ -433,6 +433,13 @@ async fn a_conflict_waits_in_needs_you_and_the_main_agent_resolves_it_in_its_mai
     assert_eq!(item.commit, None);
     assert_eq!(item.paths, ["README.md"]);
     assert_eq!(item.human.as_ref().map(|human| human.as_str()), Some("ana"));
+    // The folder waits on README.md too, but the waiting conflict alone stands for it in Needs you.
+    eventually(WAIT, async || match h.handle.git_attention.folder_held() {
+        Some((_, paths)) if paths == ["README.md"] => Ok(()),
+        other => Err(other),
+    })
+    .await;
+    assert_eq!(needs_you_kinds(&h).await, ["human_change"]);
     let notice = notice_with(&mut inbox, "conflicts with main").await;
     assert!(
         notice.contains("human:ana's change conflicts with main in README.md; main did not move; explain it and prepare the merge. Call open_main_workspace."),
@@ -509,6 +516,30 @@ async fn a_conflict_waits_in_needs_you_and_the_main_agent_resolves_it_in_its_mai
         file_of(&h, &resolved_at, "README.md").await.as_deref(),
         Some("# mine and fold\n")
     );
+    eventually(WAIT, async || {
+        let kinds = needs_you_kinds(&h).await;
+        if kinds.is_empty() { Ok(()) } else { Err(kinds) }
+    })
+    .await;
+}
+
+/// The kinds of the items the Needs you route lists for ana, oldest first.
+async fn needs_you_kinds(h: &Harness) -> Vec<String> {
+    let (status, body): (_, Value) = h
+        .http(
+            axum::http::Method::GET,
+            "/api/v1/projects/demo/needs-you",
+            None,
+            "ana",
+        )
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["kind"].as_str().unwrap().to_owned())
+        .collect()
 }
 
 /// The leads of the open tasks that change the same files hear of a conflicted human change when the main agent's merge brings it onto main.
@@ -760,7 +791,7 @@ async fn a_pull_that_only_adds_the_waiting_human_change_resolves_it_and_the_fold
     a_pull_that_holds_the_waiting_human_change(false).await;
 }
 
-/// While the folder holds more than the resolved human change, the folder follows main around the rest and the index keeps what the human staged; the next record brings the rest in.
+/// While the folder holds more than the resolved human change on paths main did not change, the folder follows main and the index keeps what the human staged; the next record brings the rest in.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_folder_that_holds_more_than_the_resolved_change_keeps_the_rest_and_the_staged_file() {
     let mut h = Harness::start().await;
@@ -807,7 +838,7 @@ async fn a_folder_that_holds_more_than_the_resolved_change_keeps_the_rest_and_th
         .await
         .unwrap();
     assert!(synced.followed.unrecorded);
-    assert!(synced.followed.kept.is_empty());
+    assert!(synced.followed.held.is_empty());
     assert_ne!(tip(&h), tip_before);
     assert_eq!(read(&h, "README.md"), "# mine and fold\n");
     assert_eq!(

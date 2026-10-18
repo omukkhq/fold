@@ -8,6 +8,7 @@ use fold_core::events::{EventType, types};
 use fold_core::{Actor, NewEvent, Timestamp, WorkspaceId, codes};
 use fold_store::{StoreError, workspaces};
 use fold_vcs::git::Git;
+use fold_vcs::paths::RepoPath;
 use serde_json::json;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio::sync::{Semaphore, broadcast, watch};
@@ -16,7 +17,7 @@ use tokio::task::{JoinHandle, JoinSet};
 use crate::daemon::AppState;
 use crate::projects::ProjectHandle;
 use crate::services::events::{BusMessage, EventBuffer};
-use crate::services::projects::{self, AttentionChange, ProjectAttention, RemoteContext};
+use crate::services::projects::{self, RemoteContext};
 use crate::services::tasks::sweep_leases;
 use crate::services::workspaces::{
     QuietCheckpoint, Reconciliation, WorkspaceService, check_stalls,
@@ -683,7 +684,7 @@ pub type AutoCommit = ProjectTask;
 /// How often the Git job looks at the files of the project's Git branch and `HEAD` while Git sync is on.
 pub const GIT_WATCH_TICK: Duration = Duration::from_secs(1);
 
-/// Starts `auto_commit` for one project. It brings the project folder to main through fold's own checkout and, while Git sync is on, writes the commit of every revision that has none into the project's repository and moves the branch and the index to the revision the folder holds: once at the start, which catches up an integration a stopped daemon never followed, again after every committed integration of any kind, which the bus carries only after its commit, and whenever the files of the `[git]` branch, `HEAD` or the stash change, which it reads every [`GIT_WATCH_TICK`] without running `git`. After an integration it then runs the push of `fld push` as `fold` to each remote whose `push_on_integrate` is true, read at that moment. A run covers every revision so far, so the integrations that arrive while one runs need one more run at most. Each commit recorded in `revision_commits` gets its `git.committed` event in the same transaction, published once the run returns, so the web interface shows the commit without a reload. A failed commit appends `git.commit_failed`, and a failed push appends `remote.push_failed` with the remote's failure in `remote_states`, each in its own transaction, and logs the project and the code only; the integration stands either way.
+/// Starts `auto_commit` for one project. It brings the project folder to main through fold's own checkout and, while Git sync is on, writes the commit of every revision that has none into the project's repository and moves the branch and the index to the revision the folder holds: once at the start, which catches up an integration a stopped daemon never followed, again after every committed integration of any kind, which the bus carries only after its commit, and whenever the files of the `[git]` branch, `HEAD` or the stash change, or one of the paths that hold the project folder back, with or without Git sync, which it reads every [`GIT_WATCH_TICK`] from their metadata without running `git`. After an integration it then runs the push of `fld push` as `fold` to each remote whose `push_on_integrate` is true, read at that moment. A run covers every revision so far, so the integrations that arrive while one runs need one more run at most. Each commit recorded in `revision_commits` gets its `git.committed` event in the same transaction, published once the run returns, so the web interface shows the commit without a reload. A failed commit appends `git.commit_failed`, and a failed push appends `remote.push_failed` with the remote's failure in `remote_states`, each in its own transaction, and logs the project and the code only; the integration stands either way.
 pub fn auto_commit(context: RemoteContext, git: Git) -> AutoCommit {
     let receiver = context.bus.subscribe();
     ProjectTask::spawn(run_auto_commit(context, git, receiver))
@@ -696,7 +697,7 @@ async fn run_auto_commit(
     mut receiver: broadcast::Receiver<BusMessage>,
 ) {
     let mut closing = context.bus.closing();
-    let mut watch = BranchWatch::default();
+    let mut watch = FolderWatch::default();
     // The files are noted before each run, so a change made while it runs starts the next one; a run that moved the branch itself costs one more run.
     watch.stamp(&context).await;
     // The handle becomes known once the opener shares it, which can be after this first run; until then a run cannot record the human's Git commits, such as those made while the daemon was down, so the first tick that finds the handle runs again.
@@ -738,14 +739,14 @@ async fn run_auto_commit(
     }
 }
 
-/// What the Git job last saw of the files of the `[git]` branch, `HEAD` and the stash, read only while Git sync is on.
+/// What the Git job last saw of the files of the `[git]` branch, `HEAD` and the stash, read only while Git sync is on, and of the paths that hold the project folder back, read only while there are any, with or without Git sync, so a change the human takes back lets the folder follow at the next tick.
 #[derive(Default)]
-struct BranchWatch {
+struct FolderWatch {
     synced: bool,
     seen: Option<Vec<u8>>,
 }
 
-impl BranchWatch {
+impl FolderWatch {
     /// Notes the files as they are now, before a run.
     async fn stamp(&mut self, context: &RemoteContext) {
         self.seen = self.read(context).await;
@@ -768,22 +769,43 @@ impl BranchWatch {
                 workspaces::git_sync(context.store.read()).await,
                 Ok(Some(_))
             );
-            if !self.synced {
-                return None;
-            }
         }
-        let branch = projects::load_config(&context.paths)
-            .await
-            .map(|config| config.git.branch)
-            .ok()?;
+        let branch = if self.synced {
+            Some(
+                projects::load_config(&context.paths)
+                    .await
+                    .map(|config| config.git.branch)
+                    .ok()?,
+            )
+        } else {
+            None
+        };
+        let held: Vec<RepoPath> = context
+            .git_attention
+            .folder_held()
+            .map(|(_, paths)| paths)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|path| RepoPath::parse(path.as_bytes()).ok())
+            .collect();
+        if branch.is_none() && held.is_empty() {
+            return None;
+        }
         let paths = context.paths.clone();
-        tokio::task::spawn_blocking(move || fold_vcs::git_remote::branch_stamp(&paths, &branch))
-            .await
-            .ok()
+        tokio::task::spawn_blocking(move || {
+            let mut stamp = branch
+                .map(|branch| fold_vcs::git_remote::branch_stamp(&paths, &branch))
+                .unwrap_or_default();
+            stamp.push(b'\n');
+            stamp.extend(fold_vcs::checkout::folder_stamp(paths.root(), &held));
+            stamp
+        })
+        .await
+        .ok()
     }
 }
 
-/// Whether every revision has its commit now. What the run found that needs a person goes to the project's Git attention, and each change of it appends an event in its own transaction: `git.uncommitted_changes` with the branch, `git.head_moved` with the branch and the reason, or `git.attention_cleared` with the kind that ended. The first run after the project opens compares with nothing found, so it appends the events of what it finds again.
+/// Whether every revision has its commit now. What the run found that needs a person goes to the project's Git attention, with an event for each change, as [`projects::note_attention`] describes. The first run after the project opens compares with nothing found, so it appends the events of what it finds again.
 async fn commit_after_integration(context: &RemoteContext, git: &Git) -> bool {
     let synced = match projects::sync_folder(context, git).await {
         Ok(synced) => synced,
@@ -792,18 +814,7 @@ async fn commit_after_integration(context: &RemoteContext, git: &Git) -> bool {
             return false;
         }
     };
-    let change = context.git_attention.set(&synced.attention());
-    let branch = projects::load_config(&context.paths)
-        .await
-        .map(|config| config.git.branch)
-        .unwrap_or_default();
-    context.git_attention.note_moved(
-        synced.moved().map(|moved| moved.hint(&branch)),
-        context.clock.now(),
-    );
-    if change != AttentionChange::default() {
-        record_attention(context, &change, &synced).await;
-    }
+    projects::note_attention(context, &synced, true).await;
     let error = match synced.committed {
         Ok(mut committed) => {
             context.bus.publish(std::mem::take(&mut committed.events));
@@ -824,53 +835,8 @@ async fn commit_after_integration(context: &RemoteContext, git: &Git) -> bool {
             Some(head) => event.revision(head),
             None => event,
         });
-    record_failure(context, event, "git.commit_failed").await;
+    projects::append_alone(context, event, "git.commit_failed").await;
     false
-}
-
-async fn record_attention(
-    context: &RemoteContext,
-    change: &AttentionChange,
-    synced: &projects::FolderSync,
-) {
-    let branch = projects::load_config(&context.paths)
-        .await
-        .map(|config| config.git.branch)
-        .unwrap_or_default();
-    let actor = Actor::System.event_actor();
-    for kind in &change.raised {
-        let event = match kind {
-            ProjectAttention::UncommittedChanges => {
-                let staged = synced.staged_only();
-                if staged {
-                    tracing::info!(project = %context.slug, "the Git index holds a staged change on a file main changed; git restore --staged undoes it");
-                } else {
-                    tracing::info!(project = %context.slug, "the project folder has changes that no revision records; fld record records them");
-                }
-                NewEvent::new(types::GIT_UNCOMMITTED_CHANGES, actor.clone())
-                    .and_then(|event| event.data(json!({"branch": branch, "staged": staged})))
-            }
-            ProjectAttention::HeadMoved => {
-                let reason = synced
-                    .moved()
-                    .map_or("branch_moved", |moved| moved.reason());
-                tracing::warn!(project = %context.slug, reason, "the Git branch or HEAD changed in a way fold did not make; the project folder waits");
-                NewEvent::new(types::GIT_HEAD_MOVED, actor.clone()).and_then(|event| {
-                    event.data(json!({
-                        "branch": branch,
-                        "reason": reason,
-                        "hint": synced.moved().map(|moved| moved.hint(&branch)),
-                    }))
-                })
-            }
-        };
-        record_failure(context, event, "git attention").await;
-    }
-    for kind in &change.cleared {
-        let event = NewEvent::new(types::GIT_ATTENTION_CLEARED, actor.clone())
-            .and_then(|event| event.data(json!({"branch": branch, "kind": kind.as_str()})));
-        record_failure(context, event, "git.attention_cleared").await;
-    }
 }
 
 /// Pushes to every remote whose `push_on_integrate` is true, one after the other.
@@ -924,32 +890,6 @@ async fn record_failed_push(
         Ok(buffer) => context.bus.publish(buffer),
         Err(error) => {
             tracing::warn!(project = %context.slug, event = "remote.push_failed", code = error.log_code(), "an event was not recorded");
-        }
-    }
-}
-
-/// Appends a failure or attention event in its own transaction and publishes it.
-async fn record_failure(
-    context: &RemoteContext,
-    event: Result<NewEvent, fold_core::EventError>,
-    name: &'static str,
-) {
-    let Ok(event) = event else {
-        return;
-    };
-    let now = context.clock.now();
-    let recorded = context
-        .store
-        .write(async |tx| -> Result<EventBuffer, StoreError> {
-            let mut buffer = EventBuffer::new();
-            buffer.append(tx, &event, now).await?;
-            Ok(buffer)
-        })
-        .await;
-    match recorded {
-        Ok(buffer) => context.bus.publish(buffer),
-        Err(error) => {
-            tracing::warn!(project = %context.slug, event = name, code = error.log_code(), "an event was not recorded");
         }
     }
 }

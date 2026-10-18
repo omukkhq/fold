@@ -62,6 +62,20 @@ function count(value: unknown): number | null {
   return typeof value === "number" ? value : null;
 }
 
+/** The paths an event lists, joined, with the number the event left out; null when it lists none. */
+function heldText(listed: unknown, total: unknown): string | null {
+  const paths = Array.isArray(listed)
+    ? listed.filter((path): path is string => typeof path === "string")
+    : [];
+  if (paths.length === 0) {
+    return null;
+  }
+  const more = (count(total) ?? paths.length) - paths.length;
+  return more > 0
+    ? `${paths.join(", ")} and ${String(more)} more`
+    : paths.join(", ");
+}
+
 function on(event: DurableEvent): string {
   return event.task === null ? "" : ` on ${event.task}`;
 }
@@ -554,10 +568,15 @@ const SPECS: Record<EventType, Spec> = {
   },
   "git.uncommitted_changes": {
     icon: TriangleAlert,
-    text: (e) =>
-      e.data.staged === true
-        ? "the Git index holds a staged change on a file main changed; run git restore --staged on it"
-        : "the project folder has changes that are not recorded; run fld record",
+    text: (e) => {
+      if (e.data.staged === true) {
+        return "the Git index holds a staged change on a file main changed; run git restore --staged on it";
+      }
+      const held = heldText(e.data.held, e.data.held_count);
+      return held === null
+        ? "the project folder has changes that are not recorded; run fld record"
+        : `the project folder waits on your changes to ${held} that are not recorded; run fld record, or take them back`;
+    },
   },
   "git.sync_enabled": {
     icon: GitCommitHorizontal,

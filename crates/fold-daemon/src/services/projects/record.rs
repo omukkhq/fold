@@ -23,7 +23,7 @@ use super::commits::commit_main;
 use super::folder::follow_folder;
 use super::pull::{PulledConflict, map_fast_forward, project_error};
 use super::remote::blocking;
-use super::{FolderFollowed, ProjectError, load_config};
+use super::{FolderFollowed, FolderSync, ProjectError, load_config};
 use crate::projects::ProjectHandle;
 use crate::services::events::EventBuffer;
 #[cfg(feature = "failpoints")]
@@ -231,7 +231,7 @@ async fn withdraw_waiting(handle: &ProjectHandle, actor: &Actor) -> Result<(), P
     Ok(())
 }
 
-/// The folder follows main, after any commits of the human on the branch are recorded, and while Git sync is on the commit writer writes main's missing commits and moves the branch to the revision the folder holds. The caller holds the folder lock. The outcome of the human's commits comes back when there were any.
+/// The folder follows main, after any commits of the human on the branch are recorded, and while Git sync is on the commit writer writes main's missing commits and moves the branch to the revision the folder holds. What the run finds ends the project's attention that it no longer finds, and notes the paths that keep the folder where it is, at once and with their events, so a record that leaves the folder clean ends the attention and Needs you drops the waiting folder, also with no integration. The caller holds the folder lock. The outcome of the human's commits comes back when there were any.
 async fn sync(
     handle: &ProjectHandle,
     git: &Git,
@@ -246,6 +246,11 @@ async fn sync(
     )
     .await?;
     handle.bus.publish(std::mem::take(&mut committed.events));
+    let synced = FolderSync {
+        followed: followed.clone(),
+        committed: Ok(committed),
+    };
+    super::folder::note_attention(&super::RemoteContext::of(handle), &synced, false).await;
     Ok((followed, from_branch))
 }
 

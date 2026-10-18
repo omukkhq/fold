@@ -59,7 +59,7 @@ pub struct ProjectOverview {
     pub paused_by: Option<String>,
 }
 
-/// Why the project, rather than one of its tasks, needs a person. The daemon decides every kind. `uncommitted_changes`: the project folder has changes that no revision records, which the human records with `fld record`. `head_moved`: the Git branch or HEAD shows a change fold did not make, such as another branch checked out, a reset or a stash, so the project folder stops following main until the human brings the branch back.
+/// Why the project, rather than one of its tasks, needs a person. The daemon decides every kind. `uncommitted_changes`: the project folder has changes that no revision records, which the human records with `fld record`; such a change on a path main changed keeps the whole folder where it is until then. `head_moved`: the Git branch or HEAD shows a change fold did not make, such as another branch checked out, a reset or a stash, so the project folder stops following main until the human brings the branch back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectAttentionKind {

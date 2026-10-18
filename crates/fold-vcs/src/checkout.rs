@@ -1,4 +1,5 @@
 use std::io;
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 use fold_core::object::{ObjectKind, hash_object};
@@ -84,6 +85,48 @@ pub fn read_folder_entry(
     Ok(FolderEntry::Entry(FlatEntry { kind, hash }))
 }
 
+/// A cheap fingerprint of what the folder holds at `paths` below `root`, from their metadata alone, read one directory handle at a time with no symlink followed and no file opened: it changes when one of them is written, removed, replaced or swapped for another kind, so a watch runs a follow only then. Blocking.
+pub fn folder_stamp(root: &Path, paths: &[RepoPath]) -> Vec<u8> {
+    let root = DirHandle::open(root).ok();
+    let mut stamp = Vec::new();
+    for path in paths {
+        stamp.extend_from_slice(path.as_bytes());
+        stamp.push(0);
+        match root.as_ref().map(|root| entry_metadata(root, path)) {
+            Some(Ok(Some(meta))) => {
+                for value in [
+                    u64::from(meta.mode()),
+                    meta.len(),
+                    meta.ino(),
+                    meta.mtime().cast_unsigned(),
+                    meta.mtime_nsec().cast_unsigned(),
+                    meta.ctime().cast_unsigned(),
+                    meta.ctime_nsec().cast_unsigned(),
+                ] {
+                    stamp.extend_from_slice(&value.to_le_bytes());
+                }
+            }
+            Some(Ok(None)) => stamp.push(1),
+            Some(Err(error)) if error.kind() == io::ErrorKind::NotFound => stamp.push(2),
+            _ => stamp.push(3),
+        }
+    }
+    stamp
+}
+
+/// The metadata of `path` itself below `root`; `None` when a parent is not a directory.
+fn entry_metadata(root: &DirHandle, path: &RepoPath) -> io::Result<Option<std::fs::Metadata>> {
+    let (parents, name) = path.parents_and_name();
+    let mut dir = root.try_clone()?;
+    for parent in parents {
+        match dir.child(parent)? {
+            Some(child) => dir = child,
+            None => return Ok(None),
+        }
+    }
+    dir.metadata(name).map(Some)
+}
+
 /// What one follow of main did in the project folder.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Followed {
@@ -91,8 +134,24 @@ pub struct Followed {
     pub record: FlatTree,
     /// The paths fold wrote or removed.
     pub written: Vec<RepoPath>,
-    /// The paths where main and the record differ and the folder holds neither, which a human changed: fold left them as they are. In path order.
-    pub kept: Vec<RepoPath>,
+    /// The paths where main and the record differ and the folder holds neither, which a human changed and did not record. While there is one, fold writes nothing in the folder. In path order.
+    pub held: Vec<RepoPath>,
+}
+
+/// The paths of `changes` where the folder holds neither the entry of `record` nor that of `main`: a human changed them, and no revision records the change. In the order of `changes`.
+pub fn held(
+    record: &FlatTree,
+    main: &FlatTree,
+    changes: &[(RepoPath, FolderEntry)],
+) -> Vec<RepoPath> {
+    changes
+        .iter()
+        .filter(|(path, found)| {
+            let key = path.as_bytes();
+            !found.holds(record.get(key)) && !found.holds(main.get(key))
+        })
+        .map(|(path, _)| path.clone())
+        .collect()
 }
 
 /// The paths where `record` and `main` differ, each with what the folder holds there now, in path order. Blocking.
@@ -192,7 +251,7 @@ fn dir_holds_only(
     Ok(true)
 }
 
-/// Brings the project folder at `root` from `record`, the entries fold last wrote there, to `main`, for every path where the two differ: a path that still holds the record's entry gets main's, written through a staging file and renamed into place, or removed with the directories it leaves empty; a path that holds main's entry already only moves the record; any other path is the human's and stays as it is. `changes` is what [`folder_changes`] read. Removals come before writes, so a directory main puts where a file was, or a file main puts where a directory of fold's files was, finds its place free. The written entries are on disk when this returns. A stop part-way leaves files that hold main's entries with the old record, which the next follow takes as written. Blocking.
+/// Brings the project folder at `root` from `record`, the entries fold last wrote there, to `main`, for every path where the two differ, all at once or not at all. When one of those paths holds a change of the human's (see [`held`]), nothing is written: the folder stays on the record until the human records the change or takes it back, as `git pull` refuses to overwrite local changes. Otherwise a path that still holds the record's entry gets main's, written through a staging file and renamed into place, or removed with the directories it leaves empty. Either way a path that holds main's entry already only moves the record. Paths where the record and main agree are never read or written. `changes` is what [`folder_changes`] read. Removals come before writes, so a directory main puts where a file was, or a file main puts where a directory of fold's files was, finds its place free. The written entries are on disk when this returns. A stop part-way leaves files that hold main's entries with the old record, which the next follow takes as written. Blocking.
 pub fn follow(
     objects: &ObjectStore,
     root: &Path,
@@ -201,24 +260,20 @@ pub fn follow(
     changes: &[(RepoPath, FolderEntry)],
     caps: Capabilities,
 ) -> Result<Followed, WorkspaceError> {
-    let mut followed = Followed {
-        record: record.clone(),
-        ..Followed::default()
-    };
+    let mut followed = hold(record, main, changes);
+    if !followed.held.is_empty() {
+        return Ok(followed);
+    }
     let mut removals = Vec::new();
     let mut writes = Vec::new();
     for (path, found) in changes {
         let key = path.as_bytes();
-        let (old, new) = (record.get(key), main.get(key));
-        if found.holds(new) {
-            settle(&mut followed.record, key, new);
-        } else if found.holds(old) {
-            match new {
-                Some(entry) => writes.push((path, *entry)),
-                None => removals.push(path),
-            }
-        } else {
-            followed.kept.push(path.clone());
+        if found.holds(main.get(key)) {
+            continue;
+        }
+        match main.get(key) {
+            Some(entry) => writes.push((path, *entry)),
+            None => removals.push(path),
         }
     }
     if removals.is_empty() && writes.is_empty() {
@@ -244,6 +299,22 @@ pub fn follow(
     batch.finish()?;
     followed.written.sort();
     Ok(followed)
+}
+
+/// What a follow knows before it writes: `record` with main's entry for every path of `changes` that holds it already, and the [`held`] paths. Reads no file.
+fn hold(record: &FlatTree, main: &FlatTree, changes: &[(RepoPath, FolderEntry)]) -> Followed {
+    let mut followed = Followed {
+        record: record.clone(),
+        written: Vec::new(),
+        held: held(record, main, changes),
+    };
+    for (path, found) in changes {
+        let key = path.as_bytes();
+        if found.holds(main.get(key)) {
+            settle(&mut followed.record, key, main.get(key));
+        }
+    }
+    followed
 }
 
 fn settle(record: &mut FlatTree, key: &[u8], entry: Option<&FlatEntry>) {

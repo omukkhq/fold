@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { FolderLock, SearchX } from "lucide-react";
+import { FolderClock, FolderLock, SearchX } from "lucide-react";
 import { useState } from "react";
 import { useNow } from "@/live/useNow";
 import { olderNotListed } from "@/api/pages";
@@ -15,7 +15,7 @@ import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
 import { CompareBar } from "./CompareBar";
 import { FileView } from "./FileView";
-import { mainCopyText } from "./describe";
+import { folderWaits, mainCopyText } from "./describe";
 import { isMissingRevision, pickRevision } from "./revision";
 import { folderAt, parentDirs, parentOf } from "./search";
 import { CommitId } from "@/components/mono/CommitId";
@@ -205,7 +205,11 @@ export function RepositoryScreen({
         )}
         {mainCopy === null ? null : (
           <p className="flex items-center gap-8 rounded-m bg-sunken px-12 py-10 text-bar text-text-muted">
-            <FolderLock aria-hidden size={15} className="shrink-0" />
+            {folderWaits(repository.data) ? (
+              <FolderClock aria-hidden size={15} className="shrink-0" />
+            ) : (
+              <FolderLock aria-hidden size={15} className="shrink-0" />
+            )}
             {mainCopy}
           </p>
         )}

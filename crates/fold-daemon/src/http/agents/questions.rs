@@ -13,7 +13,7 @@ use super::super::actor::Human;
 use super::super::error::{ApiError, ApiJson, ErrorEnvelope};
 use super::super::messages::MessageChoice;
 use crate::daemon::AppState;
-use crate::services::agents::{NeedsYouItem, NeedsYouKind, Screen};
+use crate::services::agents::{NeedsYouItem, NeedsYouKind, Screen, with_folder_attention};
 
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -136,6 +136,8 @@ pub enum NeedsYouItemKind {
     HumanChange,
     /// The project folder's Git branch or HEAD shows a change fold did not make, such as another branch checked out, a reset or a stash, so fold does not update the folder; `reason` is the command that brings the branch back.
     HeadMoved,
+    /// Paths main changed hold changes of the human's that no revision records, so fold does not update the project folder until the human records them with `fld record` or takes them back; `paths` names them and `reason` the command.
+    FolderHeld,
 }
 
 /// The screen that answers an item: `messages` opens the thread, `worker` the asking worker, `proposal` the proposal, `request` the request, `task` the task and `repository` the history of main.
@@ -190,13 +192,13 @@ pub struct NeedsYouEntry {
     /// The second line of a `human_review` (the proposal title) and of a `request_draft` (the request title, which the claim gave it); the task title of a `human_task` or a `blocker`.
     #[schema(required = true, example = "Database schema for reports")]
     pub title: Option<String>,
-    /// The reason of a `blocker`; the command that brings the Git branch back for `head_moved`.
+    /// The reason of a `blocker`; the command that brings the Git branch back for `head_moved`, or records the folder's changes for `folder_held`.
     #[schema(required = true, example = "Wait until the design is signed off")]
     pub reason: Option<String>,
     /// The human's Git commit of a `human_change`.
     #[schema(required = true, example = "9f2c4e1a7b3d5f6e8a0c2b4d6f8e0a1c3b5d7f9e")]
     pub commit: Option<String>,
-    /// The files of a `human_change` that conflict with main, in path order; empty otherwise.
+    /// The files of a `human_change` that conflict with main, or those of a `folder_held` that keep the project folder where it is, in path order; empty otherwise.
     pub paths: Vec<String>,
 }
 
@@ -211,6 +213,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             NeedsYouKind::Blocker => NeedsYouItemKind::Blocker,
             NeedsYouKind::HumanChange => NeedsYouItemKind::HumanChange,
             NeedsYouKind::HeadMoved => NeedsYouItemKind::HeadMoved,
+            NeedsYouKind::FolderHeld => NeedsYouItemKind::FolderHeld,
         };
         let screen = match item.kind.screen() {
             Screen::Messages => NeedsYouScreen::Messages,
@@ -306,7 +309,7 @@ pub async fn answer_worker_question(
     Ok(Json(answered.into()))
 }
 
-/// Every item that waits for a human, oldest first: questions with choices from agents to the humans, workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, and a Git branch of the project folder that fold did not move. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved` and `git.attention_cleared`.
+/// Every item that waits for a human, oldest first: questions with choices from agents to the humans, workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, and a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes` and `git.attention_cleared`.
 #[utoipa::path(
     get,
     path = "/api/v1/projects/{slug}/needs-you",
@@ -320,11 +323,11 @@ pub async fn answer_worker_question(
     )
 )]
 pub async fn list_needs_you(project: Project) -> Result<Json<NeedsYouList>, ApiError> {
-    let mut items = project.0.agents().needs_you().await?;
-    if let Some((since, hint)) = project.0.git_attention.head_moved() {
-        items.push(NeedsYouItem::head_moved(since, hint));
-        items.sort_by_key(|item| item.since);
-    }
+    let items = with_folder_attention(
+        project.0.agents().needs_you().await?,
+        project.0.git_attention.head_moved(),
+        project.0.git_attention.folder_held(),
+    );
     Ok(Json(NeedsYouList {
         items: items.into_iter().map(Into::into).collect(),
     }))

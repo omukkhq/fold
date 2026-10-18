@@ -405,6 +405,30 @@ describe("eventLine", () => {
     );
     expect(
       eventLine(
+        event("git.uncommitted_changes", {
+          data: { staged: false, held: ["README.md", 7] },
+        }),
+      ).text,
+    ).toBe(
+      "the project folder waits on your changes to README.md that are not recorded; run fld record, or take them back",
+    );
+    expect(
+      eventLine(
+        event("git.uncommitted_changes", {
+          data: { held: ["a.md", "b.md"], held_count: 52 },
+        }),
+      ).text,
+    ).toBe(
+      "the project folder waits on your changes to a.md, b.md and 50 more that are not recorded; run fld record, or take them back",
+    );
+    expect(
+      eventLine(event("git.uncommitted_changes", { data: { held: "a.md" } }))
+        .text,
+    ).toBe(
+      "the project folder has changes that are not recorded; run fld record",
+    );
+    expect(
+      eventLine(
         event("git.head_moved", {
           data: { hint: "run git switch main in the project folder" },
         }),

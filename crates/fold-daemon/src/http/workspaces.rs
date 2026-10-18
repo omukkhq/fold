@@ -55,6 +55,9 @@ pub struct RepositoryView {
     pub head: Option<RevisionId>,
     /// The project folder, whose files follow main through fold's checkout of it.
     pub main_path: String,
+    /// The main revision the project folder holds, apart from the changes no revision records, such as `r16`: behind `head` while the folder waits on such a change on a path main changed, or on the Git branch. Null before fold first wrote the folder.
+    #[schema(value_type = Option<String>, required = true, example = "r16")]
+    pub folder: Option<RevisionId>,
     /// The newest 10 revisions, newest first.
     pub recent: Vec<RevisionView>,
 }
@@ -130,6 +133,7 @@ impl From<RepositoryState> for RepositoryView {
         Self {
             head: state.head,
             main_path: state.main_path.to_string_lossy().into_owned(),
+            folder: state.folder,
             recent: state.recent.into_iter().map(RevisionView::from).collect(),
         }
     }

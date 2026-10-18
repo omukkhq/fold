@@ -6,7 +6,7 @@ use fold_store::workspaces::{
     Checkout, checkout, genesis, git_sync, head, merged_commits, newest_human_change, set_checkout,
 };
 use fold_store::{Store, StoreError};
-use fold_vcs::checkout::{FolderEntry, folder_changes, follow, overlay};
+use fold_vcs::checkout::{Followed, folder_changes, follow, overlay};
 use fold_vcs::compare::load_flat;
 use fold_vcs::git::{CommitId, Git};
 use fold_vcs::git_remote::{BranchState, branch_state};
@@ -18,20 +18,27 @@ use fold_vcs::platform::Capabilities;
 use fold_vcs::revision_store::write_initial_tree;
 use fold_vcs::scan::{ScanOptions, scan};
 
+use fold_core::events::types;
+use fold_core::{Actor, EventError, NewEvent};
+
 use super::commits::{Committed, commit_main};
 use super::remote::{RemoteContext, blocking};
 use super::{ProjectAttention, ProjectError, load_config};
+use crate::services::events::EventBuffer;
 #[cfg(feature = "failpoints")]
 use crate::services::fired;
+
+/// The most held paths a `git.uncommitted_changes` event lists; the rest are counted.
+const LISTED_PATHS: usize = 50;
 
 /// What one follow of main did in the project folder.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct FolderFollowed {
-    /// The main revision the folder holds now, apart from the paths a human changed; `None` when the folder did not follow.
+    /// The main revision the folder holds now, apart from the changes no revision records; `None` when the folder did not follow.
     pub at: Option<RevisionId>,
-    /// The paths main changed that a human changed too, which fold left as they are; in path order.
-    pub kept: Vec<String>,
-    /// The folder has changes that no revision records: the kept paths, or any other path that differs from the checkout record.
+    /// The paths main changed that hold a change of the human's that no revision records, which keep the whole folder where it is until the human records the change or takes it back; in path order.
+    pub held: Vec<String>,
+    /// The folder has changes that no revision records: the held paths, or any other path that differs from the checkout record.
     pub unrecorded: bool,
     /// What the `[git]` branch shows, read while Git sync is on.
     pub branch: Option<BranchState>,
@@ -62,6 +69,11 @@ impl FolderSync {
         found
     }
 
+    /// The paths main changed that hold changes of the human's that no revision records and keep the folder where it is. While the branch is not fold's, none is named: the branch keeps the folder where it is.
+    pub fn held(&self) -> &[String] {
+        &self.followed.held
+    }
+
     /// Whether the changes that no revision records are only in the Git index: a change the human staged on a path main changed, such as a staged deletion, holds the branch back while the folder holds nothing to record, so `git restore --staged` undoes it and `fld record` does not.
     pub fn staged_only(&self) -> bool {
         let ahead = matches!(self.followed.branch, Some(BranchState::Ahead { .. }));
@@ -81,6 +93,126 @@ impl FolderSync {
                 .as_ref()
                 .ok()
                 .and_then(|committed| committed.moved.as_ref()),
+        }
+    }
+}
+
+/// The `git.uncommitted_changes` event: the folder has changes that no revision records, with the paths main changed that hold the folder back, empty when none does.
+pub(crate) fn uncommitted_changes_event(
+    branch: &str,
+    staged: bool,
+    held: &[String],
+) -> Result<NewEvent, EventError> {
+    NewEvent::new(types::GIT_UNCOMMITTED_CHANGES, Actor::System.event_actor()).and_then(|event| {
+        event.data(serde_json::json!({
+            "branch": branch,
+            "staged": staged,
+            "held": held.iter().take(LISTED_PATHS).collect::<Vec<_>>(),
+            "held_count": held.len(),
+        }))
+    })
+}
+
+/// Notes what a run of [`sync_folder`] found in the project's Git attention and appends, each in its own transaction, an event for each change: `git.uncommitted_changes` with the branch and the paths main changed that hold the folder back, also when only those paths change while the attention stays, `git.head_moved` with the branch and the reason, or `git.attention_cleared` with the kind that ended. With `raise` false the run only ends what was raised: `fld record` reads the folder while it records it, so what it finds there before the record is no news. The held paths are noted only while the attention of changes that no revision records is raised.
+pub(crate) async fn note_attention(context: &RemoteContext, synced: &FolderSync, raise: bool) {
+    let attention = &context.git_attention;
+    let found = synced.attention();
+    let change = if raise {
+        attention.set(&found)
+    } else {
+        let raised = attention.kinds();
+        let ended: Vec<ProjectAttention> = found
+            .into_iter()
+            .filter(|kind| raised.contains(kind))
+            .collect();
+        attention.set(&ended)
+    };
+    let branch = load_config(&context.paths)
+        .await
+        .map(|config| config.git.branch)
+        .unwrap_or_default();
+    let raised = attention.kinds();
+    if raise || !raised.contains(&ProjectAttention::HeadMoved) {
+        attention.note_moved(
+            synced.moved().map(|moved| moved.hint(&branch)),
+            context.clock.now(),
+        );
+    }
+    let uncommitted = raised.contains(&ProjectAttention::UncommittedChanges);
+    let held = if uncommitted { synced.held() } else { &[] };
+    // A raised or cleared attention appends its own event, which tells of the held paths too.
+    let told = change
+        .raised
+        .contains(&ProjectAttention::UncommittedChanges)
+        || change
+            .cleared
+            .contains(&ProjectAttention::UncommittedChanges);
+    if attention.note_held(held, context.clock.now()) && !told {
+        append_alone(
+            context,
+            uncommitted_changes_event(&branch, synced.staged_only(), held),
+            "git.uncommitted_changes",
+        )
+        .await;
+    }
+    let actor = Actor::System.event_actor();
+    for kind in &change.raised {
+        let event = match kind {
+            ProjectAttention::UncommittedChanges => {
+                let staged = synced.staged_only();
+                if staged {
+                    tracing::info!(project = %context.slug, "the Git index holds a staged change on a file main changed; git restore --staged undoes it");
+                } else {
+                    tracing::info!(project = %context.slug, held = held.len(), "the project folder has changes that no revision records; fld record records them");
+                }
+                uncommitted_changes_event(&branch, staged, held)
+            }
+            ProjectAttention::HeadMoved => {
+                let reason = synced
+                    .moved()
+                    .map_or("branch_moved", |moved| moved.reason());
+                tracing::warn!(project = %context.slug, reason, "the Git branch or HEAD changed in a way fold did not make; the project folder waits");
+                NewEvent::new(types::GIT_HEAD_MOVED, actor.clone()).and_then(|event| {
+                    event.data(serde_json::json!({
+                        "branch": branch,
+                        "reason": reason,
+                        "hint": synced.moved().map(|moved| moved.hint(&branch)),
+                    }))
+                })
+            }
+        };
+        append_alone(context, event, "git attention").await;
+    }
+    for kind in &change.cleared {
+        let event = NewEvent::new(types::GIT_ATTENTION_CLEARED, actor.clone()).and_then(|event| {
+            event.data(serde_json::json!({"branch": branch, "kind": kind.as_str()}))
+        });
+        append_alone(context, event, "git.attention_cleared").await;
+    }
+}
+
+/// Appends a failure or attention event in its own transaction and publishes it.
+pub(crate) async fn append_alone(
+    context: &RemoteContext,
+    event: Result<NewEvent, EventError>,
+    name: &'static str,
+) {
+    let Ok(event) = event else {
+        return;
+    };
+    let now = context.clock.now();
+    let recorded = context
+        .store
+        .write(async |tx| -> Result<EventBuffer, StoreError> {
+            let mut buffer = EventBuffer::new();
+            buffer.append(tx, &event, now).await?;
+            Ok(buffer)
+        })
+        .await;
+    match recorded {
+        Ok(buffer) => context.bus.publish(buffer),
+        Err(error) => {
+            tracing::warn!(project = %context.slug, event = name, code = error.log_code(), "an event was not recorded");
         }
     }
 }
@@ -122,7 +254,7 @@ pub async fn sync_folder(context: &RemoteContext, git: &Git) -> Result<FolderSyn
     })
 }
 
-/// Brings the project folder to main through its checkout record, as [`fold_vcs::checkout::follow`] describes: a path that still holds the entry fold last wrote gets main's, and a path a human changed stays theirs. The newest human change that main holds is laid over the record first, so the human's recorded files count as fold's. While Git sync is on the folder moves only together with its branch: when the branch shows a change fold did not make, or commits fold did not write, or a path main changed holds the human's own change, nothing is written, so `git status` keeps telling the human's changes from main's. The record tree goes into the object store, then the record row, so a stop between the writes and the row leaves files that the next follow finds holding main's entries and takes as written. The caller holds the project's folder lock.
+/// Brings the project folder to main through its checkout record, as [`fold_vcs::checkout::follow`] describes, the same way with Git sync on or off: when a path main changed holds a change of the human's that no revision records, nothing is written and the folder stays on its revision until `fld record` records the change, a resolution of the human change brings it onto main, or the human takes it back; otherwise every path main changed gets main's entry. Paths main did not change are never touched. The newest human change that main holds is laid over the record first, so the human's recorded files count as fold's. While Git sync is on the folder also moves only together with its branch: when the branch shows a change fold did not make, or commits fold did not write, nothing is written, so `git status` keeps telling the human's changes from main's. The record tree goes into the object store, then the record row, so a stop between the writes and the row leaves files that the next follow finds holding main's entries and takes as written. The caller holds the project's folder lock.
 pub(crate) async fn follow_folder(
     store: &Store,
     paths: &ProjectPaths,
@@ -194,7 +326,7 @@ pub(crate) async fn follow_folder(
     let (paths_owned, max_file_bytes) = (paths.clone(), config.max_file_bytes);
     let head_tree = head.tree_hash;
     let lay = lay.map(|change| (change.base_tree, change.tree));
-    let (tree, kept, unrecorded, wrote) = blocking(move || {
+    let (tree, held, unrecorded, wrote) = blocking(move || {
         let _objects = objects_guard;
         let paths = paths_owned;
         let fold_dir = paths.fold_dir();
@@ -211,33 +343,26 @@ pub(crate) async fn follow_folder(
         let caps = Capabilities::probe(&fold_dir).map_err(|error| io_error(&error))?;
         let root = paths.root();
         let changes = folder_changes(root, &record, &main, max_file_bytes, &caps)?;
-        let human = changes
-            .iter()
-            .any(|(path, found)| is_human(found, &record, &main, path.as_bytes()));
-        let wrote = may_write && !(synced && human);
-        let followed = if wrote {
+        let followed = if may_write {
             follow(&objects, root, &record, &main, &changes, caps)?
         } else {
-            fold_vcs::checkout::Followed {
-                kept: changes
-                    .iter()
-                    .filter(|(path, found)| is_human(found, &record, &main, path.as_bytes()))
-                    .map(|(path, _)| path.clone())
-                    .collect(),
+            // The folder holds files of a branch fold did not write, which Git puts back when fold's branch returns, so they settle no path of the record and hold none.
+            Followed {
                 record,
-                written: Vec::new(),
+                ..Followed::default()
             }
         };
+        let wrote = may_write && followed.held.is_empty();
         #[cfg(feature = "failpoints")]
         fail::fail_point!("folder_after_write", |_| Err(fired("folder_after_write")));
         let tree = write_initial_tree(&objects, followed.record.clone())?;
         let unrecorded =
-            !followed.kept.is_empty() || differs(&paths, &followed.record, max_file_bytes, caps)?;
-        let kept: Vec<String> = followed.kept.iter().map(ToString::to_string).collect();
-        Ok((tree, kept, unrecorded, wrote))
+            !followed.held.is_empty() || differs(&paths, &followed.record, max_file_bytes, caps)?;
+        let held: Vec<String> = followed.held.iter().map(ToString::to_string).collect();
+        Ok((tree, held, unrecorded, wrote))
     })
     .await?;
-    let at = (wrote && (!synced || kept.is_empty())).then_some(head.number);
+    let at = wrote.then_some(head.number);
     let row = Checkout {
         tree,
         revision: at.unwrap_or(from),
@@ -248,12 +373,12 @@ pub(crate) async fn follow_folder(
             .write(async |tx| set_checkout(tx, &row, now).await)
             .await?;
     }
-    if !kept.is_empty() {
-        tracing::info!(revision = %head.number, kept = kept.len(), "the project folder kept the paths a human changed");
+    if !held.is_empty() {
+        tracing::info!(revision = %head.number, held = held.len(), "the project folder waits: paths main changed hold changes that are not recorded");
     }
     Ok(FolderFollowed {
         at,
-        kept,
+        held,
         unrecorded,
         branch,
     })
@@ -303,11 +428,6 @@ fn differs(
         .entries
         .keys()
         .any(|path| !record.contains_key(path)))
-}
-
-/// Whether the folder holds neither the record's nor main's entry at `key`: a human changed it.
-fn is_human(found: &FolderEntry, record: &FlatTree, main: &FlatTree, key: &[u8]) -> bool {
-    !found.holds(record.get(key)) && !found.holds(main.get(key))
 }
 
 fn io_error(error: &std::io::Error) -> ProjectError {

@@ -30,6 +30,8 @@ pub enum NeedsYouKind {
     HumanChange,
     /// The project folder's Git branch or `HEAD` shows a change fold did not make, so fold does not update the folder until the human brings the branch back; `reason` holds the command that does it.
     HeadMoved,
+    /// Paths main changed hold changes of the human's that no revision records, so fold does not update the project folder until the human records them with `fld record` or takes them back; `paths` names them.
+    FolderHeld,
 }
 
 /// The screen on which a human answers an item.
@@ -51,7 +53,9 @@ impl NeedsYouKind {
             NeedsYouKind::HumanReview => Screen::Proposal,
             NeedsYouKind::RequestDraft => Screen::Request,
             NeedsYouKind::HumanTask | NeedsYouKind::Blocker => Screen::Task,
-            NeedsYouKind::HumanChange | NeedsYouKind::HeadMoved => Screen::Repository,
+            NeedsYouKind::HumanChange | NeedsYouKind::HeadMoved | NeedsYouKind::FolderHeld => {
+                Screen::Repository
+            }
         }
     }
 }
@@ -78,11 +82,11 @@ pub struct NeedsYouItem {
     pub header: Option<String>,
     /// The proposal title of a `HumanReview`; the request title of a `RequestDraft`, which the claim gave it before any draft; the task title of a `HumanTask` or a `Blocker`.
     pub title: Option<String>,
-    /// The reason of a `Blocker`; the command that brings the branch back for `HeadMoved`.
+    /// The reason of a `Blocker`; the command that brings the branch back for `HeadMoved`, or records the folder's changes for `FolderHeld`.
     pub reason: Option<String>,
     /// The human's Git commit of a `HumanChange`.
     pub commit: Option<String>,
-    /// The paths of a `HumanChange` that conflict with main, in path order.
+    /// The paths of a `HumanChange` that conflict with main, or those of a `FolderHeld` that keep the folder where it is, in path order.
     pub paths: Vec<String>,
 }
 
@@ -91,6 +95,14 @@ impl NeedsYouItem {
     pub fn head_moved(since: Timestamp, hint: String) -> Self {
         let mut item = Self::new(NeedsYouKind::HeadMoved, since);
         item.reason = Some(hint);
+        item
+    }
+
+    /// The `FolderHeld` item of a project folder that waits since `since` on the human's changes to `paths`.
+    pub fn folder_held(since: Timestamp, paths: Vec<String>) -> Self {
+        let mut item = Self::new(NeedsYouKind::FolderHeld, since);
+        item.reason = Some("run fld record, or take the changes back".to_owned());
+        item.paths = paths;
         item
     }
 
@@ -114,6 +126,25 @@ impl NeedsYouItem {
             paths: Vec::new(),
         }
     }
+}
+
+/// `items` with the items of the project folder's Git attention, oldest first: the branch that moved, from `moved`, and the folder that waits on the human's changes, from `held`. While a conflicted human change waits, its item alone stands for the folder: it names the conflicting files, and its resolution lets the folder go on, so the waiting folder shows again only when it still waits after that.
+pub fn with_folder_attention(
+    mut items: Vec<NeedsYouItem>,
+    moved: Option<(Timestamp, String)>,
+    held: Option<(Timestamp, Vec<String>)>,
+) -> Vec<NeedsYouItem> {
+    if let Some((since, hint)) = moved {
+        items.push(NeedsYouItem::head_moved(since, hint));
+    }
+    let conflicted = items
+        .iter()
+        .any(|item| item.kind == NeedsYouKind::HumanChange);
+    if let Some((since, paths)) = held.filter(|_| !conflicted) {
+        items.push(NeedsYouItem::folder_held(since, paths));
+    }
+    items.sort_by_key(|item| item.since);
+    items
 }
 
 /// Every item that waits for a human, oldest first. The daemon decides each item, so no client derives one.
@@ -207,4 +238,33 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
     }
     items.sort_by_key(|item| item.since);
     Ok(items)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn at(millis: i64) -> Timestamp {
+        Timestamp::from_millis(millis).unwrap()
+    }
+
+    fn kinds(items: &[NeedsYouItem]) -> Vec<NeedsYouKind> {
+        items.iter().map(|item| item.kind).collect()
+    }
+
+    #[test]
+    fn a_waiting_conflict_stands_for_the_held_folder_until_it_is_resolved() {
+        let held = || Some((at(5), vec!["README.md".to_owned()]));
+        let moved = Some((at(3), "run git switch main".to_owned()));
+        let mut conflict = NeedsYouItem::new(NeedsYouKind::HumanChange, at(9));
+        conflict.paths = vec!["README.md".to_owned()];
+        assert_eq!(
+            kinds(&with_folder_attention(vec![conflict], moved, held())),
+            [NeedsYouKind::HeadMoved, NeedsYouKind::HumanChange]
+        );
+        let items = with_folder_attention(Vec::new(), None, held());
+        assert_eq!(kinds(&items), [NeedsYouKind::FolderHeld]);
+        assert_eq!(items[0].paths, ["README.md"]);
+        assert!(with_folder_attention(Vec::new(), None, None).is_empty());
+    }
 }

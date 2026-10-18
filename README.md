@@ -93,7 +93,7 @@ A project's history starts at the genesis revision `r0`: an empty tree, or the c
 
 ## Change files yourself
 
-You can edit the files in the project folder. fold does not overwrite a file you changed, and agents do not see your changes until you record them:
+You can edit the files in the project folder. fold does not overwrite a file you changed, and agents do not see your changes until you record them. While a file you changed is also changed on main, fold does not update the project folder until you record your changes or take them back:
 
 ```bash
 fld record

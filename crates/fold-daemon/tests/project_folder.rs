@@ -52,39 +52,317 @@ fn head_moved_reason(error: ProjectError) -> String {
         .to_owned()
 }
 
+/// Waits until the Git job notes that the folder waits on the human's changes to `paths`, or that it waits on nothing for an empty `paths`.
+async fn held_on(h: &Harness, paths: &[&str]) {
+    eventually(WAIT, async || {
+        let held = h.handle.git_attention.folder_held().map(|(_, held)| held);
+        let expected = (!paths.is_empty()).then(|| paths.iter().map(ToString::to_string).collect());
+        if held == expected { Ok(()) } else { Err(held) }
+    })
+    .await;
+}
+
+/// Every file of the project folder with its text, leaving out fold's and Git's own folders and the `.gitignore` that Git sync writes.
+fn folder_files(dir: &Path) -> std::collections::BTreeMap<String, String> {
+    fn walk(root: &Path, dir: &Path, files: &mut std::collections::BTreeMap<String, String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path
+                .strip_prefix(root)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_owned();
+            if [".fold", ".git", ".gitignore"].contains(&name.as_str()) {
+                continue;
+            }
+            if path.is_dir() {
+                walk(root, &path, files);
+            } else {
+                files.insert(name, std::fs::read_to_string(&path).unwrap());
+            }
+        }
+    }
+    let mut files = std::collections::BTreeMap::new();
+    walk(dir, dir, &mut files);
+    files
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_plain_folder_follows_main_and_keeps_the_files_a_human_changed() {
+async fn a_change_on_a_path_main_changed_holds_the_whole_folder_until_it_is_taken_back() {
     let h = Harness::start_plain().await;
     let dir = root(&h);
     write(&dir, "README.md", "# mine\n");
+    write(&dir, "docs/own.md", "mine\n");
     let revision = integrate(
         &h,
         "frontend",
         &[("README.md", "# fold\n"), ("src/new.rs", "fn new() {}\n")],
     )
     .await;
-    eventually(WAIT, async || {
-        let at = checkout_revision(&h).await;
-        if at == revision { Ok(()) } else { Err(at) }
-    })
-    .await;
-    // The human's file stays theirs; main's other file is written.
+    held_on(&h, &["README.md"]).await;
+    // Nothing of main's is written while one path main changed holds the human's change.
+    assert_eq!(checkout_revision(&h).await, "r1");
     assert_eq!(read(&dir, "README.md"), "# mine\n");
-    assert_eq!(read(&dir, "src/new.rs"), "fn new() {}\n");
+    assert!(!dir.join("src/new.rs").exists());
     let synced = sync(&h).await;
-    assert_eq!(synced.followed.kept, ["README.md"]);
+    assert_eq!(synced.followed.at, None);
+    assert_eq!(synced.followed.held, ["README.md"]);
     assert!(synced.followed.unrecorded);
     assert_eq!(synced.attention(), [ProjectAttention::UncommittedChanges]);
     assert!(!dir.join(".git").exists());
 
-    // The human takes main's text; the record finds nothing new and the attention clears.
+    // The human takes main's text back and removes their own file, so a record finds nothing to record and the folder catches up at once.
     write(&dir, "README.md", "# fold\n");
-    let synced = sync(&h).await;
-    assert!(synced.followed.kept.is_empty() && !synced.followed.unrecorded);
+    std::fs::remove_file(dir.join("docs/own.md")).unwrap();
     assert!(matches!(
         record_as_ana(&h).await.unwrap(),
         RecordOutcome::UpToDate { .. }
     ));
+    assert_eq!(h.handle.git_attention.folder_held(), None);
+    // A new file of the human's on a path main did not change neither holds the folder nor is touched.
+    write(&dir, "docs/own.md", "mine\n");
+    let synced = sync(&h).await;
+    assert_eq!(
+        synced.followed.at.map(|at| at.to_string()),
+        Some(revision.clone())
+    );
+    assert!(synced.followed.held.is_empty());
+    assert!(synced.followed.unrecorded, "docs/own.md is not recorded");
+    assert_eq!(checkout_revision(&h).await, revision);
+    assert_eq!(read(&dir, "src/new.rs"), "fn new() {}\n");
+    assert_eq!(read(&dir, "docs/own.md"), "mine\n");
+}
+
+/// A human change on a path main changes, one on a path main does not change and a new file of the human's, then `fld record`: what the folder holds at each step, which is the same with Git sync on or off.
+async fn a_held_folder_catches_up_after_the_record(
+    git_sync: bool,
+) -> Vec<std::collections::BTreeMap<String, String>> {
+    let h = if git_sync {
+        let h = Harness::start().await;
+        branch_born(&h).await;
+        h
+    } else {
+        Harness::start_plain().await
+    };
+    let dir = root(&h);
+    let mut steps = Vec::new();
+    integrate(&h, "frontend", &[("plan.md", "a\nb\nc\nd\ne\n")]).await;
+    eventually(WAIT, async || {
+        if dir.join("plan.md").is_file() {
+            Ok(())
+        } else {
+            Err("the folder follows main")
+        }
+    })
+    .await;
+    held_on(&h, &[]).await;
+    write(&dir, "plan.md", "A\nb\nc\nd\ne\n");
+    write(&dir, "README.md", "# mine\n");
+    write(&dir, "notes.md", "draft\n");
+    let readme = std::fs::metadata(dir.join("README.md"))
+        .unwrap()
+        .modified()
+        .unwrap();
+    integrate(
+        &h,
+        "frontend",
+        &[
+            ("plan.md", "a\nb\nc\nd\nE\n"),
+            ("src/new.rs", "fn new() {}\n"),
+        ],
+    )
+    .await;
+    held_on(&h, &["plan.md"]).await;
+    // A later integration while the folder waits reaches it neither.
+    let newest = integrate(&h, "backend", &[("src/two.rs", "fn two() {}\n")]).await;
+    let synced = sync(&h).await;
+    assert_eq!(synced.followed.at, None);
+    assert_eq!(synced.followed.held, ["plan.md"]);
+    assert!(!dir.join("src/new.rs").exists());
+    assert!(!dir.join("src/two.rs").exists());
+    steps.push(folder_files(&dir));
+
+    // Needs you names the paths that hold the folder back and the command that lets it go on.
+    let (status, body): (_, serde_json::Value) = h
+        .http(
+            axum::http::Method::GET,
+            "/api/v1/projects/demo/needs-you",
+            None,
+            "ana",
+        )
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let item = body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["kind"] == "folder_held")
+        .unwrap();
+    assert_eq!(item["paths"], serde_json::json!(["plan.md"]), "{item}");
+    assert!(
+        item["reason"].as_str().unwrap().contains("fld record"),
+        "{item}"
+    );
+    assert_eq!(item["screen"], "repository");
+    // The repository view tells the revision the folder holds from main's head.
+    let (status, state): (_, serde_json::Value) = h
+        .http(
+            axum::http::Method::GET,
+            "/api/v1/projects/demo/repository",
+            None,
+            "ana",
+        )
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(
+        state["folder"].as_str(),
+        Some(checkout_revision(&h).await.as_str())
+    );
+    assert_ne!(state["folder"], state["head"], "{state}");
+
+    let told = uncommitted_events(&h).await.len();
+    let RecordOutcome::Recorded { files, .. } = record_as_ana(&h).await.unwrap() else {
+        panic!("a clean record");
+    };
+    assert_eq!(files, ["README.md", "notes.md", "plan.md"]);
+    // The clean record ends the attention itself: Needs you drops the folder, and no event says that changes are not recorded.
+    assert_eq!(h.handle.git_attention.folder_held(), None);
+    assert!(RemoteContext::of(&h.handle).attention().is_empty());
+    assert_eq!(
+        cleared_kinds(&h).await.last().map(String::as_str),
+        Some("uncommitted_changes")
+    );
+    assert_eq!(uncommitted_events(&h).await.len(), told);
+    let (status, body): (_, serde_json::Value) = h
+        .http(
+            axum::http::Method::GET,
+            "/api/v1/projects/demo/needs-you",
+            None,
+            "ana",
+        )
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(
+        body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["kind"] != "folder_held"),
+        "{body}"
+    );
+    eventually(WAIT, async || {
+        if dir.join("src/new.rs").is_file() {
+            Ok(())
+        } else {
+            Err("the folder follows main after the record")
+        }
+    })
+    .await;
+    held_on(&h, &[]).await;
+    // The folder catches up to the newest main in one step.
+    assert_eq!(read(&dir, "src/two.rs"), "fn two() {}\n");
+    let head = fold_store::workspaces::head(h.handle.store.read())
+        .await
+        .unwrap()
+        .unwrap()
+        .number
+        .to_string();
+    assert_eq!(checkout_revision(&h).await, head);
+    assert_ne!(head, newest);
+    // A path main never changed is never written.
+    assert_eq!(
+        std::fs::metadata(dir.join("README.md"))
+            .unwrap()
+            .modified()
+            .unwrap(),
+        readme
+    );
+    if git_sync {
+        assert_eq!(git(&dir, &["status", "--porcelain"]), "");
+    }
+    // The Git job's run after the record's integration finds nothing new to tell.
+    assert_eq!(uncommitted_events(&h).await.len(), told);
+    steps.push(folder_files(&dir));
+    steps
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_held_folder_is_the_same_with_and_without_git_sync() {
+    let plain = a_held_folder_catches_up_after_the_record(false).await;
+    assert_eq!(plain[0]["plan.md"], "A\nb\nc\nd\ne\n");
+    assert_eq!(plain[1]["plan.md"], "A\nb\nc\nd\nE\n");
+    assert_eq!(plain[1]["README.md"], "# mine\n");
+    assert_eq!(plain[1]["src/new.rs"], "fn new() {}\n");
+    assert_eq!(a_held_folder_catches_up_after_the_record(true).await, plain);
+}
+
+/// A change on a path main changes holds the folder; the human then takes it back by hand, with no record, integration or restart. What the folder holds once it caught up, which is the same with Git sync on or off.
+async fn a_held_change_taken_back_by_hand(
+    git_sync: bool,
+) -> std::collections::BTreeMap<String, String> {
+    let h = if git_sync {
+        let h = Harness::start().await;
+        branch_born(&h).await;
+        h
+    } else {
+        Harness::start_plain().await
+    };
+    let dir = root(&h);
+    integrate(&h, "frontend", &[("plan.md", "a\nb\nc\nd\ne\n")]).await;
+    eventually(WAIT, async || {
+        if dir.join("plan.md").is_file() {
+            Ok(())
+        } else {
+            Err("the folder follows main")
+        }
+    })
+    .await;
+    write(&dir, "plan.md", "A\nb\nc\nd\ne\n");
+    integrate(
+        &h,
+        "frontend",
+        &[
+            ("plan.md", "a\nb\nc\nd\nE\n"),
+            ("src/new.rs", "fn new() {}\n"),
+        ],
+    )
+    .await;
+    held_on(&h, &["plan.md"]).await;
+    assert!(!dir.join("src/new.rs").exists());
+
+    write(&dir, "plan.md", "a\nb\nc\nd\ne\n");
+    held_on(&h, &[]).await;
+    eventually(WAIT, async || {
+        let attention = RemoteContext::of(&h.handle).attention();
+        if dir.join("src/new.rs").is_file() && attention.is_empty() {
+            Ok(())
+        } else {
+            Err(attention)
+        }
+    })
+    .await;
+    assert_eq!(
+        checkout_revision(&h).await,
+        fold_store::workspaces::head(h.handle.store.read())
+            .await
+            .unwrap()
+            .unwrap()
+            .number
+            .to_string()
+    );
+    if git_sync {
+        assert_eq!(git(&dir, &["status", "--porcelain"]), "");
+    }
+    folder_files(&dir)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_held_change_taken_back_by_hand_lets_the_folder_catch_up_with_and_without_git_sync() {
+    let plain = a_held_change_taken_back_by_hand(false).await;
+    assert_eq!(plain["plan.md"], "a\nb\nc\nd\nE\n");
+    assert_eq!(plain["src/new.rs"], "fn new() {}\n");
+    assert_eq!(a_held_change_taken_back_by_hand(true).await, plain);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -129,7 +407,7 @@ async fn a_file_a_human_added_or_removed_is_theirs_and_main_removes_its_own_file
     .await;
     assert_eq!(read(&dir, "notes.md"), "mine\n");
     let synced = sync(&h).await;
-    assert!(synced.followed.kept.is_empty());
+    assert!(synced.followed.held.is_empty());
     assert!(synced.followed.unrecorded, "notes.md is not recorded");
 }
 
@@ -194,6 +472,41 @@ async fn another_branch_checked_out_stops_the_folder_until_the_branch_is_back() 
     .await;
     assert_eq!(checkout_revision(&h).await, revision);
     assert_eq!(git(&dir, &["status", "--porcelain"]), "");
+}
+
+/// While another branch is checked out, the folder holds that branch's files, which Git puts back when the branch returns: a file of it that matches main's tells nothing of what fold wrote.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_file_of_another_branch_that_matches_main_is_written_once_the_branch_is_back() {
+    let h = Harness::start().await;
+    branch_born(&h).await;
+    let dir = root(&h);
+    git(&dir, &["checkout", "--quiet", "-b", "mine"]);
+    write(&dir, "plan.md", "agent\n");
+    git(&dir, &["add", "plan.md"]);
+    git(&dir, &["commit", "--quiet", "-m", "plan"]);
+    let revision = integrate(
+        &h,
+        "frontend",
+        &[("plan.md", "agent\n"), ("src.txt", "agent\n")],
+    )
+    .await;
+    let synced = sync(&h).await;
+    assert!(synced.moved().is_some());
+    assert!(synced.followed.held.is_empty());
+
+    git(&dir, &["switch", "--quiet", "main"]);
+    eventually(WAIT, async || {
+        if dir.join("src.txt").is_file() && h.handle.git_attention.head_moved().is_none() {
+            Ok(())
+        } else {
+            Err("the folder follows main once the branch is back")
+        }
+    })
+    .await;
+    assert_eq!(checkout_revision(&h).await, revision);
+    assert_eq!(read(&dir, "plan.md"), "agent\n");
+    assert_eq!(git(&dir, &["status", "--porcelain"]), "");
+    assert!(!sync(&h).await.followed.unrecorded);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -407,4 +720,104 @@ async fn a_merge_commit_of_the_human_is_recorded_as_one_change_with_the_merge_as
     .await;
     assert_eq!(git(&dir, &["rev-parse", "main"]).trim(), merge);
     assert_eq!(git(&dir, &["status", "--porcelain"]), "");
+}
+
+/// The stored `git.uncommitted_changes` events, oldest first, with their data.
+async fn uncommitted_events(h: &Harness) -> Vec<serde_json::Value> {
+    let filter = fold_core::EventFilter {
+        types: vec![fold_core::events::types::GIT_UNCOMMITTED_CHANGES],
+        ..fold_core::EventFilter::default()
+    };
+    fold_store::events::read_after(h.handle.store.read(), 0, &filter, 50)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|event| event.data)
+        .collect()
+}
+
+/// The kinds that the stored `git.attention_cleared` events name, oldest first.
+async fn cleared_kinds(h: &Harness) -> Vec<String> {
+    let filter = fold_core::EventFilter {
+        types: vec![fold_core::events::types::GIT_ATTENTION_CLEARED],
+        ..fold_core::EventFilter::default()
+    };
+    fold_store::events::read_after(h.handle.store.read(), 0, &filter, 50)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|event| event.data["kind"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_held_change_taken_back_while_another_file_waits_tells_needs_you_once() {
+    let h = Harness::start_plain().await;
+    let dir = root(&h);
+    write(&dir, "README.md", "# mine\n");
+    write(&dir, "docs/own.md", "mine\n");
+    integrate(&h, "frontend", &[("README.md", "# fold\n")]).await;
+    held_on(&h, &["README.md"]).await;
+    eventually(WAIT, async || {
+        match uncommitted_events(&h).await.as_slice() {
+            [raised] => Ok(raised.clone()),
+            other => Err(other.len()),
+        }
+    })
+    .await;
+    assert_eq!(
+        uncommitted_events(&h).await[0]["held"],
+        serde_json::json!(["README.md"])
+    );
+
+    // The human takes the held change back; docs/own.md stays unrecorded, so the attention stays and only the held set changes.
+    write(&dir, "README.md", "# fold\n");
+    integrate(&h, "backend", &[("src/new.rs", "fn new() {}\n")]).await;
+    held_on(&h, &[]).await;
+    eventually(WAIT, async || {
+        let events = uncommitted_events(&h).await;
+        if events.len() == 2 {
+            Ok(())
+        } else {
+            Err(events)
+        }
+    })
+    .await;
+    let events = uncommitted_events(&h).await;
+    assert_eq!(events[1]["held"], serde_json::json!([]), "{events:?}");
+    assert_eq!(events[1]["held_count"], 0);
+    assert_eq!(
+        RemoteContext::of(&h.handle).attention(),
+        [ProjectAttention::UncommittedChanges]
+    );
+    let (status, body): (_, serde_json::Value) = h
+        .http(
+            axum::http::Method::GET,
+            "/api/v1/projects/demo/needs-you",
+            None,
+            "ana",
+        )
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(
+        body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["kind"] != "folder_held"),
+        "{body}"
+    );
+
+    // A quiet folder writes no more events.
+    integrate(&h, "backend", &[("src/more.rs", "fn more() {}\n")]).await;
+    eventually(WAIT, async || {
+        if dir.join("src/more.rs").is_file() {
+            Ok(())
+        } else {
+            Err("the folder follows main")
+        }
+    })
+    .await;
+    assert_eq!(read(&dir, "docs/own.md"), "mine\n");
+    assert_eq!(uncommitted_events(&h).await.len(), 2);
 }

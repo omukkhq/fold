@@ -81,6 +81,19 @@ async fn attention_events(fx: &Fixture) -> Vec<String> {
         .collect()
 }
 
+/// The paths the newest `git.uncommitted_changes` event names as holding the folder back.
+async fn last_held(fx: &Fixture) -> Option<serde_json::Value> {
+    let filter = EventFilter {
+        types: vec![types::GIT_UNCOMMITTED_CHANGES],
+        ..EventFilter::default()
+    };
+    fold_store::events::read_after(fx.project.store().read(), 0, &filter, 10)
+        .await
+        .unwrap()
+        .pop()
+        .map(|event| event.data["held"].clone())
+}
+
 /// `P-1` integrated as `r2`: it changes `src/lib.rs`, adds `src/new.rs` and the symlink `docs/readme`.
 async fn integrate(fx: &Fixture) {
     let review = approved(fx).await;
@@ -222,13 +235,19 @@ async fn a_change_on_a_path_main_changed_holds_the_folder_and_the_branch_until_i
         std::fs::read_to_string(root.join("src/lib.rs")).unwrap(),
         "pub fn mine() {}\n"
     );
-    until(async || attention_events(&fx).await == ["git.uncommitted_changes"]).await;
+    // A run before the integration may have told of the change with no path held yet.
+    until(async || last_held(&fx).await == Some(serde_json::json!(["src/lib.rs"]))).await;
+    let told = attention_events(&fx).await;
+    assert!(
+        told.iter().all(|kind| kind == "git.uncommitted_changes"),
+        "{told:?}"
+    );
     drop(job);
 
     // The attention item is derived from the folder, so a restart shows it again.
     let (job, context) = start_watched_job(&fx, Git::default());
     until(async || context.attention() == [ProjectAttention::UncommittedChanges]).await;
-    until(async || attention_events(&fx).await.len() == 2).await;
+    until(async || attention_events(&fx).await.len() == told.len() + 1).await;
     assert_eq!(branch(&root), first);
     drop(job);
 

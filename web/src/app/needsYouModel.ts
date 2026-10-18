@@ -13,7 +13,7 @@ export interface NeedsYouLine {
   chip: string | null;
   text: string;
   task: string | null;
-  /** The second line's title: the proposal title of a review, the request title of a draft, the task title of a human task, the reason of a blocker, the conflicting files of a human change. */
+  /** The second line's title: the proposal title of a review, the request title of a draft, the task title of a human task, the reason of a blocker, the conflicting files of a human change, the files that hold the project folder back. */
   title: string | null;
   since: number;
   hint: string;
@@ -35,6 +35,7 @@ const GROUPS: readonly { kind: NeedsYouKind; title: string }[] = [
   { kind: "blocker", title: "Blockers" },
   { kind: "human_change", title: "Your changes" },
   { kind: "head_moved", title: "Git branch" },
+  { kind: "folder_held", title: "Project folder" },
 ];
 
 /** The items for this human: an item that waits for another named human is theirs. Before a name, every item shows. */
@@ -53,9 +54,15 @@ export function titleText(title: string | null): string | null {
   return text === "" ? null : text;
 }
 
-/** The conflicting files of a human change, joined for the second line; null when none is named. */
-export function conflictedText(paths: readonly string[]): string | null {
-  return paths.length === 0 ? null : paths.join(", ");
+/** The files an item names, such as the conflicting files of a human change, for the second line, which holds one short path: the first file, and how many more there are; null when none is named. */
+export function pathsText(paths: readonly string[]): string | null {
+  const [first] = paths;
+  if (first === undefined) {
+    return null;
+  }
+  return paths.length === 1
+    ? first
+    : `${first} and ${String(paths.length - 1)} more`;
 }
 
 /** `asks about Chart library` with the question's header, else what kind of answer it wants. */
@@ -128,7 +135,7 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         person: null,
         chip: item.commit === null ? null : item.commit.slice(0, 7),
         task: null,
-        title: conflictedText(item.paths),
+        title: pathsText(item.paths),
         text: "conflicts with main; the main agent explains it",
         hint: "opens the history of main",
         href: projectPath(slug, "repository"),
@@ -141,6 +148,17 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         task: null,
         title: titleText(item.reason),
         text: "fold does not update the project folder until the Git branch is back",
+        hint: "opens the history of main",
+        href: projectPath(slug, "repository"),
+      };
+    case "folder_held":
+      return {
+        ...base,
+        person: null,
+        chip: null,
+        task: null,
+        title: pathsText(item.paths),
+        text: "fold does not update the project folder until you record your changes with fld record or take them back",
         hint: "opens the history of main",
         href: projectPath(slug, "repository"),
       };
@@ -165,7 +183,7 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
   }
 }
 
-/** The list in group order: questions, permissions, reviews, request drafts, human tasks, blockers, human changes; a group without items is left out. */
+/** The list in group order: questions, permissions, reviews, request drafts, human tasks, blockers, human changes, the Git branch, the project folder; a group without items is left out. */
 export function needsYouGroups(
   slug: string,
   items: readonly NeedsYouItem[],

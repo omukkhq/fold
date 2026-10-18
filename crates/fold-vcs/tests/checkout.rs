@@ -5,7 +5,9 @@ use std::os::unix::fs::{PermissionsExt, symlink};
 
 use fold_core::object::{ObjectKind, hash_object};
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
-use fold_vcs::checkout::{FolderEntry, folder_changes, follow, overlay, read_folder_entry};
+use fold_vcs::checkout::{
+    FolderEntry, folder_changes, folder_stamp, follow, held, overlay, read_folder_entry,
+};
 use fold_vcs::paths::RepoPath;
 
 use crate::common::*;
@@ -30,6 +32,30 @@ fn flat(entries: &[(&str, FlatEntry)]) -> FlatTree {
 
 fn path(text: &str) -> RepoPath {
     RepoPath::parse(text.as_bytes()).unwrap()
+}
+
+#[test]
+fn a_folder_stamp_changes_with_what_the_paths_hold_and_with_nothing_else() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(root, "a.txt", b"one\n");
+    write(root, "other.txt", b"one\n");
+    let paths = [path("a.txt"), path("gone/b.txt"), path("a.txt/c")];
+    let first = folder_stamp(root, &paths);
+    assert_eq!(folder_stamp(root, &paths), first);
+    // A path the stamp does not name changes nothing.
+    write(root, "other.txt", b"two\n");
+    assert_eq!(folder_stamp(root, &paths), first);
+    write(root, "a.txt", b"two\n");
+    let written = folder_stamp(root, &paths);
+    assert_ne!(written, first);
+    write(root, "gone/b.txt", b"new\n");
+    assert_ne!(folder_stamp(root, &paths), written);
+    fs::remove_file(root.join("a.txt")).unwrap();
+    symlink("other.txt", root.join("a.txt")).unwrap();
+    let linked = folder_stamp(root, &paths);
+    assert_eq!(folder_stamp(root, &paths), linked);
+    assert_ne!(folder_stamp(&root.join("missing"), &paths), linked);
 }
 
 #[test]
@@ -77,7 +103,7 @@ fn an_entry_is_read_without_following_a_symlink() {
 }
 
 #[test]
-fn a_follow_writes_what_still_holds_the_record_and_keeps_what_a_human_changed() {
+fn a_follow_waits_while_a_path_main_changed_holds_a_human_change_then_writes_everything() {
     let (dir, store) = store();
     let root = dir.path().join("folder");
     fs::create_dir(&root).unwrap();
@@ -96,30 +122,48 @@ fn a_follow_writes_what_still_holds_the_record_and_keeps_what_a_human_changed() 
     write(&root, "b.txt", b"mine\n");
     write(&root, "gone/c.txt", b"kept\n");
     write(&root, "same.txt", b"two\n");
+    write(&root, "own.txt", b"mine\n");
     let record = flat(&[
         ("a.txt", file(b"one\n")),
         ("b.txt", file(b"one\n")),
         ("gone/c.txt", file(b"kept\n")),
         ("same.txt", file(b"one\n")),
+        ("own.txt", file(b"one\n")),
     ]);
     let main = flat(&[
         ("a.txt", file(b"two\n")),
         ("b.txt", file(b"two\n")),
         ("same.txt", file(b"two\n")),
+        ("own.txt", file(b"one\n")),
         ("new/d.txt", file(b"new\n")),
         ("run.sh", entry(EntryKind::Executable, b"#!/bin/sh\n")),
         ("link", entry(EntryKind::Symlink, b"a.txt")),
     ]);
     let changes = folder_changes(&root, &record, &main, 1024, &HOST).unwrap();
-    let followed = follow(&store, &root, &record, &main, &changes, HOST).unwrap();
-    // `b.txt` holds the human's own text, so it stays theirs and the record keeps fold's entry.
-    assert_eq!(followed.kept, [path("b.txt")]);
-    assert_eq!(fs::read(root.join("b.txt")).unwrap(), b"mine\n");
-    assert_eq!(
-        followed.record.get(b"b.txt".as_slice()),
-        Some(&file(b"one\n"))
+    // `own.txt` is the human's too, but main did not change it, so it is not even read.
+    assert!(
+        changes
+            .iter()
+            .all(|(changed, _)| *changed != path("own.txt"))
     );
-    // The rest follows main: written, removed with the directory it empties, or only noted where the folder holds main already.
+    assert_eq!(held(&record, &main, &changes), [path("b.txt")]);
+    let followed = follow(&store, &root, &record, &main, &changes, HOST).unwrap();
+    // `b.txt` holds the human's own text, so nothing of main's is written; only the path that holds main's entry already moves the record.
+    assert_eq!(followed.held, [path("b.txt")]);
+    assert!(followed.written.is_empty());
+    assert_eq!(fs::read(root.join("a.txt")).unwrap(), b"one\n");
+    assert_eq!(fs::read(root.join("b.txt")).unwrap(), b"mine\n");
+    assert!(root.join("gone/c.txt").is_file());
+    assert!(!root.join("new").exists());
+    let mut settled = record.clone();
+    settled.insert(b"same.txt".to_vec(), file(b"two\n"));
+    assert_eq!(followed.record, settled);
+
+    // The human takes main's text: the next follow writes, removes or notes every path main changed.
+    write(&root, "b.txt", b"two\n");
+    let again = folder_changes(&root, &followed.record, &main, 1024, &HOST).unwrap();
+    let second = follow(&store, &root, &followed.record, &main, &again, HOST).unwrap();
+    assert!(second.held.is_empty());
     assert_eq!(fs::read(root.join("a.txt")).unwrap(), b"two\n");
     assert!(!root.join("gone").exists());
     assert_eq!(fs::read(root.join("new/d.txt")).unwrap(), b"new\n");
@@ -135,11 +179,10 @@ fn a_follow_writes_what_still_holds_the_record_and_keeps_what_a_human_changed() 
         fs::read_link(root.join("link")).unwrap().to_str(),
         Some("a.txt")
     );
-    let mut expected = main.clone();
-    expected.insert(b"b.txt".to_vec(), file(b"one\n"));
-    assert_eq!(followed.record, expected);
+    assert_eq!(fs::read(root.join("own.txt")).unwrap(), b"mine\n");
+    assert_eq!(second.record, main);
     assert_eq!(
-        followed.written,
+        second.written,
         [
             path("a.txt"),
             path("gone/c.txt"),
@@ -148,12 +191,6 @@ fn a_follow_writes_what_still_holds_the_record_and_keeps_what_a_human_changed() 
             path("run.sh")
         ]
     );
-
-    // A second follow from the new record finds only the human's file.
-    let again = folder_changes(&root, &followed.record, &main, 1024, &HOST).unwrap();
-    let second = follow(&store, &root, &followed.record, &main, &again, HOST).unwrap();
-    assert_eq!(second.kept, [path("b.txt")]);
-    assert!(second.written.is_empty());
 }
 
 #[test]
@@ -166,7 +203,7 @@ fn a_follow_cut_off_after_its_writes_takes_them_as_written_the_next_time() {
     let main = flat(&[("a.txt", file(b"two\n"))]);
     let changes = folder_changes(&root, &record, &main, 1024, &HOST).unwrap();
     let followed = follow(&store, &root, &record, &main, &changes, HOST).unwrap();
-    assert!(followed.kept.is_empty() && followed.written.is_empty());
+    assert!(followed.held.is_empty() && followed.written.is_empty());
     assert_eq!(followed.record, main);
 }
 
@@ -180,7 +217,7 @@ fn a_directory_main_puts_where_a_file_was_finds_its_place_free() {
     let main = flat(&[("a/b", file(b"below\n"))]);
     let changes = folder_changes(&root, &record, &main, 1024, &HOST).unwrap();
     let followed = follow(&store, &root, &record, &main, &changes, HOST).unwrap();
-    assert!(followed.kept.is_empty());
+    assert!(followed.held.is_empty());
     assert_eq!(fs::read(root.join("a/b")).unwrap(), b"below\n");
     assert_eq!(followed.record, main);
 }
@@ -197,12 +234,25 @@ fn a_file_main_puts_where_a_directory_of_its_files_was_takes_the_emptied_place()
     let main = flat(&[("a", file(b"file\n")), ("c", file(b"file\n"))]);
     let changes = folder_changes(&root, &record, &main, 1024, &HOST).unwrap();
     let followed = follow(&store, &root, &record, &main, &changes, HOST).unwrap();
-    assert_eq!(fs::read(root.join("a")).unwrap(), b"file\n");
-    // A directory that still holds a file of the human's stays, and main's file waits for it.
-    assert_eq!(followed.kept, [path("c")]);
+    // A directory that still holds a file of the human's stands where main's file goes, so the folder waits.
+    assert_eq!(followed.held, [path("c")]);
+    assert!(followed.written.is_empty());
+    assert_eq!(fs::read(root.join("a/b")).unwrap(), b"below\n");
     assert_eq!(fs::read(root.join("c/own.txt")).unwrap(), b"the human's\n");
-    assert_eq!(followed.written, [path("a"), path("a/b"), path("c/d")]);
-    assert_eq!(followed.record, flat(&[("a", file(b"file\n"))]));
+    assert_eq!(followed.record, record);
+
+    // Once the human's file is gone, both directories of fold's files give their place to main's files.
+    fs::remove_file(root.join("c/own.txt")).unwrap();
+    let again = folder_changes(&root, &record, &main, 1024, &HOST).unwrap();
+    let second = follow(&store, &root, &record, &main, &again, HOST).unwrap();
+    assert!(second.held.is_empty());
+    assert_eq!(fs::read(root.join("a")).unwrap(), b"file\n");
+    assert_eq!(fs::read(root.join("c")).unwrap(), b"file\n");
+    assert_eq!(
+        second.written,
+        [path("a"), path("a/b"), path("c"), path("c/d")]
+    );
+    assert_eq!(second.record, main);
 }
 
 #[test]

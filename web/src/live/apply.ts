@@ -417,10 +417,12 @@ function invalidationKeys(
         keys.needsYou(slug),
       ];
     case "git":
-      // `git.committed` names the revision whose commit the revision, proposal and task reads show; Needs you lists a Git branch that fold did not move.
+      // `git.committed` names the revision whose commit the revision, proposal and task reads show; Needs you lists a Git branch that fold did not move and a project folder that waits on the human's changes.
       return type === "git.committed"
         ? [repository, keys.git(slug), keys.proposals(slug), keys.tasks(slug)]
-        : type === "git.head_moved" || type === "git.attention_cleared"
+        : type === "git.head_moved" ||
+            type === "git.uncommitted_changes" ||
+            type === "git.attention_cleared"
           ? [
               repository,
               keys.git(slug),

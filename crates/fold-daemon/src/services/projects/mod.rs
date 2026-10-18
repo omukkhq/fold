@@ -64,6 +64,7 @@ pub(crate) use commits::error_code;
 pub use commits::{Committed, commit_main, commit_message};
 pub use enable_git::{GitEnabled, GitIdentity, enable_git};
 pub use folder::{FolderFollowed, FolderSync, sync_folder};
+pub(crate) use folder::{append_alone, note_attention};
 pub use gc::{GcReport, gc};
 pub use git_status::{GitStatus, PushFailed, Pushed, RemoteStatus, git_status, public_location};
 pub use pull::{PullOutcome, PulledConflict, pull};
@@ -1470,7 +1471,7 @@ pub struct ProjectOverview {
 /// Why the project, rather than one of its tasks, needs a person. The daemon decides every kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProjectAttention {
-    /// The project folder has changes that no revision records, which the human records with `fld record`. While Git sync is on, such a change on a path main changed also keeps the folder and the branch where they are.
+    /// The project folder has changes that no revision records, which the human records with `fld record`. Such a change on a path main changed keeps the whole folder, and while Git sync is on the branch too, where they are until it is recorded or taken back.
     UncommittedChanges,
     /// The `[git]` branch or `HEAD` shows a change fold did not make, such as another branch checked out, a reset or a stash, so the project folder stops following main until the human brings the branch back.
     HeadMoved,
@@ -1504,6 +1505,8 @@ pub struct GitAttention {
     raised: [AtomicBool; 2],
     /// Since when the branch shows a change fold did not make, with the command that brings it back.
     moved: std::sync::Mutex<Option<(Timestamp, String)>>,
+    /// Since when the project folder waits on changes of the human's that no revision records, with the paths main changed that hold them.
+    held: std::sync::Mutex<Option<(Timestamp, Vec<String>)>>,
 }
 
 /// How a run changed the project's attention.
@@ -1533,6 +1536,25 @@ impl GitAttention {
             let since = moved.as_ref().map_or(now, |(since, _)| *since);
             (since, hint)
         });
+    }
+
+    /// Since when the project folder waits on changes of the human's that no revision records, with the paths main changed that hold them.
+    pub fn folder_held(&self) -> Option<(Timestamp, Vec<String>)> {
+        crate::support::lock(&self.held).clone()
+    }
+
+    /// Notes the paths that keep the project folder where it is, keeping the time the folder first waited, or clears them with an empty list. Returns whether the set of paths changed.
+    pub(crate) fn note_held(&self, paths: &[String], now: Timestamp) -> bool {
+        let mut held = crate::support::lock(&self.held);
+        let before: &[String] = held.as_ref().map_or(&[], |(_, before)| before);
+        if before == paths {
+            return false;
+        }
+        *held = (!paths.is_empty()).then(|| {
+            let since = held.as_ref().map_or(now, |(since, _)| *since);
+            (since, paths.to_vec())
+        });
+        true
     }
 
     /// Records the kinds a run found and returns what changed since the run before; the first run after the project opens compares with nothing found.
@@ -1887,5 +1909,26 @@ mod tests {
         );
         attention.note_moved(None, Timestamp::from_millis(9).unwrap());
         assert_eq!(attention.head_moved(), None);
+    }
+
+    #[test]
+    fn the_held_folder_keeps_the_time_it_first_waited_and_the_newest_paths() {
+        let attention = GitAttention::default();
+        let at = |millis| Timestamp::from_millis(millis).unwrap();
+        assert!(!attention.note_held(&[], at(1)));
+        assert!(attention.note_held(&["a.txt".to_owned()], at(5)));
+        assert!(!attention.note_held(&["a.txt".to_owned()], at(7)));
+        assert!(attention.note_held(&["a.txt".to_owned(), "b.txt".to_owned()], at(9)));
+        assert_eq!(
+            attention.folder_held(),
+            Some((at(5), vec!["a.txt".to_owned(), "b.txt".to_owned()]))
+        );
+        assert!(attention.note_held(&[], at(12)));
+        assert_eq!(attention.folder_held(), None);
+        assert!(attention.note_held(&["c.txt".to_owned()], at(20)));
+        assert_eq!(
+            attention.folder_held(),
+            Some((at(20), vec!["c.txt".to_owned()]))
+        );
     }
 }

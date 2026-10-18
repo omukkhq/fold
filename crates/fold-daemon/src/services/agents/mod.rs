@@ -33,7 +33,7 @@ pub use context::{
     CONTEXT_READY_TASKS, ContextClaim, MAX_SESSION_CONTEXT, SessionFacts,
     render as render_session_context,
 };
-pub use needs_you::{NeedsYouItem, NeedsYouKind, Screen, needs_you};
+pub use needs_you::{NeedsYouItem, NeedsYouKind, Screen, needs_you, with_folder_attention};
 pub use overview::{
     AgentAttention, AgentOverview, ClaimSummary, MAX_OVERVIEW_EVENTS, OverviewFilter,
     ProposalSummary, SessionSummary, WorkerOverview, WorkspaceSummary,

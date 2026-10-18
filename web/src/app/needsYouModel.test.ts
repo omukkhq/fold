@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { needsItem } from "@/test/workers";
 import {
-  conflictedText,
   itemsFor,
   needsYouGroups,
+  pathsText,
   questionText,
   titleText,
   waitingText,
@@ -196,7 +196,7 @@ describe("needsYouGroups", () => {
       key: "human_change:9f2c4e1a7b3d5f6e8a0c2b4d6f8e0a1c3b5d7f9e",
       chip: "9f2c4e1",
       person: null,
-      title: "README.md, src/lib.rs",
+      title: "README.md and 1 more",
       text: "conflicts with main; the main agent explains it",
       href: "/p/demo/repository",
     });
@@ -204,7 +204,9 @@ describe("needsYouGroups", () => {
       needsItem({ kind: "human_change" }),
     ]);
     expect(bare?.lines[0]).toMatchObject({ chip: null, title: null });
-    expect(conflictedText([])).toBeNull();
+    expect(pathsText([])).toBeNull();
+    expect(pathsText(["src/forms/index.ts"])).toBe("src/forms/index.ts");
+    expect(pathsText(["a.md", "b.md", "c.md"])).toBe("a.md and 2 more");
   });
 
   it("links a Git branch that fold did not move to the history of main with the command that brings it back", () => {
@@ -221,6 +223,25 @@ describe("needsYouGroups", () => {
       chip: null,
       title: "run git switch main in the project folder",
       text: "fold does not update the project folder until the Git branch is back",
+      href: "/p/demo/repository",
+    });
+  });
+
+  it("links a project folder that waits on the human's changes to the history of main with the files that hold it back", () => {
+    const [group] = needsYouGroups("demo", [
+      needsItem({
+        kind: "folder_held",
+        screen: "repository",
+        reason: "run fld record, or take the changes back",
+        paths: ["README.md", "src/app.ts"],
+      }),
+    ]);
+    expect(group?.title).toBe("Project folder");
+    expect(group?.lines[0]).toMatchObject({
+      person: null,
+      chip: null,
+      title: "README.md and 1 more",
+      text: "fold does not update the project folder until you record your changes with fld record or take them back",
       href: "/p/demo/repository",
     });
   });
