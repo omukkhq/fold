@@ -15,9 +15,7 @@ use fold_daemon::http::host::CLIENT_HEADER;
 use fold_daemon::http::socket_router;
 use fold_daemon::projects::ProjectHandle;
 use fold_daemon::services::events::BusMessage;
-use fold_daemon::services::projects::{
-    PushOutcome, commit_main, commit_message, init_project_from_git, push,
-};
+use fold_daemon::services::projects::{PushOutcome, commit_message, init_project_from_git, push};
 use fold_daemon::{Daemon, DaemonConfig};
 use fold_store::StoreError;
 use fold_store::projects::ProjectRow;
@@ -197,15 +195,15 @@ impl Project {
         commit_message(&row)
     }
 
-    /// Writes the commits the project's job may not have written yet, so a test starts from a known map.
+    /// Runs the project's Git job once: the folder follows main and the commits the job may not have written yet are written, so a test starts from a known map.
     async fn committed(&self) {
-        commit_main(
-            &self.handle.store,
-            &self.paths,
+        fold_daemon::services::projects::sync_folder(
+            &fold_daemon::services::projects::RemoteContext::of(&self.handle),
             &Git::default(),
-            self.handle.clock.as_ref(),
         )
         .await
+        .unwrap()
+        .committed
         .unwrap();
     }
 }
@@ -364,11 +362,12 @@ async fn three_revisions_become_three_commits_and_later_ones_go_on_top() {
     assert_eq!(after[2..], commits[..]);
     assert_eq!(project.map().lines().count(), 5);
     assert_eq!(project.pushed_events().await.len(), 2);
-    // The project's repository is the folder's own, and the folder shows main.
+    // The project's repository is the folder's own, and the folder shows main once the Git job ran.
     assert_eq!(
         git(&mirror, &["rev-parse", "--is-bare-repository"]),
         "false\n"
     );
+    project.committed().await;
     assert_eq!(
         fs::read(project.paths.root().join("a.txt")).unwrap(),
         b"four\n"
@@ -607,6 +606,7 @@ async fn a_project_made_from_a_git_repository_pushes_on_top_of_its_head() {
         .await;
     let outcome = project.push().await.unwrap();
     assert!(matches!(outcome, PushOutcome::Synced { commits: 2, .. }));
+    project.committed().await;
     let commits = log(&source);
     assert_eq!(commits.len(), 3);
     assert_eq!(commits[2], head);

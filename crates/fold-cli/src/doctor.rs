@@ -1100,7 +1100,7 @@ fn git_history_check(paths: &ProjectPaths, host: &Host) -> Check {
     }
 }
 
-/// The project folder follows main only while its index and tracked files match its branch, as Git's `updateInstead` requires, so changes that are not committed hold it back.
+/// While Git sync is on, the project folder and its branch follow main together, so a change of the human on a file main changes holds both back until `fld record` records it.
 fn folder_check(paths: &ProjectPaths, host: &Host) -> Check {
     const NAME: &str = "project folder";
     let Some(program) = on_path("git", host.path.as_deref()) else {
@@ -1120,8 +1120,8 @@ fn folder_check(paths: &ProjectPaths, host: &Host) -> Check {
         ),
         Ok(true) => Check::warn(
             NAME,
-            "the project folder has changes that are not committed, so it does not follow main",
-            "run fld record in the project folder to record them on main, or commit or stash them; fold brings the folder to main at the next integration or daemon start",
+            "the project folder has changes that are not committed; on a file main changes they hold the folder and its branch back",
+            "run fld record in the project folder to record them on main; fold brings the folder to main at the next integration or daemon start",
         ),
         Err(_) => Check::warn(
             NAME,

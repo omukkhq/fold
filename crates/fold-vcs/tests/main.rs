@@ -3,6 +3,7 @@
 pub mod common;
 
 mod browse;
+mod checkout;
 mod compare;
 mod diff;
 mod dir_handles;

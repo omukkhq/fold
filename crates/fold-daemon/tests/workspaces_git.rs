@@ -102,11 +102,15 @@ fn source_repo(repo: &Path) -> String {
 }
 
 #[cfg(test)]
+/// The first-parent history of the commits fold wrote, newest first.
 fn log(repo: &Path) -> Vec<String> {
-    git(repo, &["log", "--first-parent", "--format=%H", "main"])
-        .lines()
-        .map(str::to_owned)
-        .collect()
+    git(
+        repo,
+        &["log", "--first-parent", "--format=%H", "refs/fold/head"],
+    )
+    .lines()
+    .map(str::to_owned)
+    .collect()
 }
 
 #[cfg(test)]
@@ -168,7 +172,7 @@ async fn add_revision(
 async fn commit(root: &Path) {
     let paths = ProjectPaths::new(root);
     let store = Store::open_project(&paths).await.unwrap();
-    commit_main(&store, &paths, &Git::default(), &ManualClock::new())
+    commit_main(&store, &paths, &Git::default(), None, &ManualClock::new())
         .await
         .unwrap();
     store.close().await.unwrap();

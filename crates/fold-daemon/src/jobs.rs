@@ -680,29 +680,44 @@ impl Drop for ProjectTask {
 /// The Git job of one project. A push already started finishes in its own task.
 pub type AutoCommit = ProjectTask;
 
-/// Starts `auto_commit` for one project. It writes the commit of every revision that has none into the project's repository, and brings the project folder to it, once at the start, which catches up an integration a stopped daemon never committed, and again after every committed integration of either kind, which the bus carries only after its commit. After an integration it then runs the push of `fld push` as `fold` to each remote whose `push_on_integrate` is true, read at that moment. A commit covers every revision so far, so the integrations that arrive while one runs need one more run at most. Each commit recorded in `revision_commits` gets its `git.committed` event in the same transaction, published once the run returns, so the web interface shows the commit without a reload. A failed commit appends `git.commit_failed`, and a failed push appends `remote.push_failed` with the remote's failure in `remote_states`, each in its own transaction, and logs the project and the code only; the integration stands either way.
+/// How often the Git job looks at the files of the project's Git branch and `HEAD` while Git sync is on.
+pub const GIT_WATCH_TICK: Duration = Duration::from_secs(1);
+
+/// Starts `auto_commit` for one project. It brings the project folder to main through fold's own checkout and, while Git sync is on, writes the commit of every revision that has none into the project's repository and moves the branch and the index to the revision the folder holds: once at the start, which catches up an integration a stopped daemon never followed, again after every committed integration of any kind, which the bus carries only after its commit, and whenever the files of the `[git]` branch, `HEAD` or the stash change, which it reads every [`GIT_WATCH_TICK`] without running `git`. After an integration it then runs the push of `fld push` as `fold` to each remote whose `push_on_integrate` is true, read at that moment. A run covers every revision so far, so the integrations that arrive while one runs need one more run at most. Each commit recorded in `revision_commits` gets its `git.committed` event in the same transaction, published once the run returns, so the web interface shows the commit without a reload. A failed commit appends `git.commit_failed`, and a failed push appends `remote.push_failed` with the remote's failure in `remote_states`, each in its own transaction, and logs the project and the code only; the integration stands either way.
 pub fn auto_commit(context: RemoteContext, git: Git) -> AutoCommit {
     let receiver = context.bus.subscribe();
     ProjectTask::spawn(run_auto_commit(context, git, receiver))
 }
 
-/// It ends once the project's bus closes; a commit or push it is running finishes first.
+/// It ends once the project's bus closes; a run or push it started finishes first.
 async fn run_auto_commit(
     context: RemoteContext,
     git: Git,
     mut receiver: broadcast::Receiver<BusMessage>,
 ) {
     let mut closing = context.bus.closing();
+    let mut watch = BranchWatch::default();
+    // The files are noted before each run, so a change made while it runs starts the next one; a run that moved the branch itself costs one more run.
+    watch.stamp(&context).await;
     commit_after_integration(&context, &git).await;
+    let mut ticks = tokio::time::interval(GIT_WATCH_TICK);
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         let received = tokio::select! {
             biased;
             _ = closing.wait_for(|closed| *closed) => return,
-            received = receiver.recv() => received,
+            received = receiver.recv() => Some(received),
+            _ = ticks.tick() => None,
+        };
+        let Some(received) = received else {
+            if watch.changed(&context).await {
+                commit_after_integration(&context, &git).await;
+            }
+            continue;
         };
         match received {
             Ok(BusMessage::Durable(event)) if event.event_type == types::INTEGRATION_SUCCEEDED => {}
-            // A missed event may have been an integration; a commit is cheap when nothing is new.
+            // A missed event may have been an integration; a run is cheap when nothing is new.
             Err(RecvError::Lagged(_)) => {}
             Ok(_) => continue,
             Err(RecvError::Closed) => return,
@@ -712,25 +727,82 @@ async fn run_auto_commit(
             receiver.try_recv(),
             Err(TryRecvError::Empty | TryRecvError::Closed)
         ) {}
+        watch.stamp(&context).await;
         if commit_after_integration(&context, &git).await {
             push_after_integration(&context, &git).await;
         }
     }
 }
 
-/// Whether every revision has its commit now. What the run found that needs a person goes to the project's Git attention, and each change of it appends an event in its own transaction: `git.outside_commits` with the branch and its tip, `git.uncommitted_changes` with the branch, or `git.attention_cleared` with the kind that ended. The first run after the project opens compares with nothing found, so it appends the events of what it finds again.
+/// What the Git job last saw of the files of the `[git]` branch, `HEAD` and the stash, read only while Git sync is on.
+#[derive(Default)]
+struct BranchWatch {
+    synced: bool,
+    seen: Option<Vec<u8>>,
+}
+
+impl BranchWatch {
+    /// Notes the files as they are now, before a run.
+    async fn stamp(&mut self, context: &RemoteContext) {
+        self.seen = self.read(context).await;
+    }
+
+    /// Whether the files changed since they were last noted, which notes them again.
+    async fn changed(&mut self, context: &RemoteContext) -> bool {
+        let now = self.read(context).await;
+        if now.is_none() || now == self.seen {
+            return false;
+        }
+        self.seen = now;
+        true
+    }
+
+    async fn read(&mut self, context: &RemoteContext) -> Option<Vec<u8>> {
+        if !self.synced {
+            // Git sync never goes off, so once it is on it is not read again.
+            self.synced = matches!(
+                workspaces::git_sync(context.store.read()).await,
+                Ok(Some(_))
+            );
+            if !self.synced {
+                return None;
+            }
+        }
+        let branch = projects::load_config(&context.paths)
+            .await
+            .map(|config| config.git.branch)
+            .ok()?;
+        let paths = context.paths.clone();
+        tokio::task::spawn_blocking(move || fold_vcs::git_remote::branch_stamp(&paths, &branch))
+            .await
+            .ok()
+    }
+}
+
+/// Whether every revision has its commit now. What the run found that needs a person goes to the project's Git attention, and each change of it appends an event in its own transaction: `git.outside_commits` with the branch and its tip, `git.uncommitted_changes` with the branch, `git.head_moved` with the branch and the reason, or `git.attention_cleared` with the kind that ended. The first run after the project opens compares with nothing found, so it appends the events of what it finds again.
 async fn commit_after_integration(context: &RemoteContext, git: &Git) -> bool {
-    let committed =
-        projects::commit_main(&context.store, &context.paths, git, context.clock.as_ref()).await;
-    let error = match committed {
+    let synced = match projects::sync_folder(context, git).await {
+        Ok(synced) => synced,
+        Err(error) => {
+            tracing::warn!(project = %context.slug, code = error.log_code(), "the project folder did not follow main");
+            return false;
+        }
+    };
+    let change = context.git_attention.set(&synced.attention());
+    let branch = projects::load_config(&context.paths)
+        .await
+        .map(|config| config.git.branch)
+        .unwrap_or_default();
+    context.git_attention.note_moved(
+        synced.moved().map(|moved| moved.hint(&branch)),
+        context.clock.now(),
+    );
+    if change != AttentionChange::default() {
+        record_attention(context, &change, &synced).await;
+    }
+    let error = match synced.committed {
         Ok(mut committed) => {
             context.bus.publish(std::mem::take(&mut committed.events));
-            let change = context
-                .git_attention
-                .set(committed.outside.is_some(), committed.uncommitted);
-            if change != AttentionChange::default() {
-                record_attention(context, &change, committed.outside.as_ref()).await;
-            }
             return true;
         }
         Err(error) => error,
@@ -755,25 +827,48 @@ async fn commit_after_integration(context: &RemoteContext, git: &Git) -> bool {
 async fn record_attention(
     context: &RemoteContext,
     change: &AttentionChange,
-    tip: Option<&CommitId>,
+    synced: &projects::FolderSync,
 ) {
     let branch = projects::load_config(&context.paths)
         .await
         .map(|config| config.git.branch)
         .unwrap_or_default();
     let actor = Actor::System.event_actor();
+    let tip: Option<CommitId> = match &synced.followed.branch {
+        Some(fold_vcs::git_remote::BranchState::Ahead { tip, .. }) => Some(tip.clone()),
+        _ => synced
+            .committed
+            .as_ref()
+            .ok()
+            .and_then(|committed| committed.outside.clone()),
+    };
     for kind in &change.raised {
         let event = match kind {
             ProjectAttention::OutsideCommits => {
                 tracing::warn!(project = %context.slug, "the Git branch of main has commits fold did not write; the project folder waits for fld pull");
                 NewEvent::new(types::GIT_OUTSIDE_COMMITS, actor.clone()).and_then(|event| {
-                    event.data(json!({"branch": branch, "commit": tip.map(CommitId::as_str)}))
+                    event.data(
+                        json!({"branch": branch, "commit": tip.as_ref().map(CommitId::as_str)}),
+                    )
                 })
             }
             ProjectAttention::UncommittedChanges => {
-                tracing::info!(project = %context.slug, "the project folder has changes that are not committed; it follows main once they are recorded with fld record, committed or stashed");
+                tracing::info!(project = %context.slug, "the project folder has changes that no revision records; fld record records them");
                 NewEvent::new(types::GIT_UNCOMMITTED_CHANGES, actor.clone())
                     .and_then(|event| event.data(json!({"branch": branch})))
+            }
+            ProjectAttention::HeadMoved => {
+                let reason = synced
+                    .moved()
+                    .map_or("branch_moved", |moved| moved.reason());
+                tracing::warn!(project = %context.slug, reason, "the Git branch or HEAD changed in a way fold did not make; the project folder waits");
+                NewEvent::new(types::GIT_HEAD_MOVED, actor.clone()).and_then(|event| {
+                    event.data(json!({
+                        "branch": branch,
+                        "reason": reason,
+                        "hint": synced.moved().map(|moved| moved.hint(&branch)),
+                    }))
+                })
             }
         };
         record_failure(context, event, "git attention").await;

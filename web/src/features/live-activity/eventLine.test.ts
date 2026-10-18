@@ -391,8 +391,25 @@ describe("eventLine", () => {
       "the Git branch has commits fold did not write; run fld pull",
     );
     expect(eventLine(event("git.uncommitted_changes")).text).toBe(
-      "the project folder has changes that are not committed; run fld record, commit or stash them",
+      "the project folder has changes that are not recorded; run fld record",
     );
+    expect(
+      eventLine(
+        event("git.head_moved", {
+          data: { hint: "run git switch main in the project folder" },
+        }),
+      ).text,
+    ).toBe(
+      "the Git branch changed in a way fold did not make; run git switch main in the project folder",
+    );
+    expect(eventLine(event("git.head_moved", { data: {} })).text).toBe(
+      "the Git branch changed in a way fold did not make; the project folder waits",
+    );
+    expect(
+      eventLine(
+        event("git.attention_cleared", { data: { kind: "head_moved" } }),
+      ).text,
+    ).toBe("the Git branch is back where fold left it");
     expect(
       eventLine(
         event("git.attention_cleared", { data: { kind: "outside_commits" } }),

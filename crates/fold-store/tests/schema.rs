@@ -93,6 +93,7 @@ async fn baseline_creates_every_table_of_the_data_model() {
         "changesets",
         "checklist_items",
         "checklists",
+        "checkout",
         "checkpoints",
         "claims",
         "completions",

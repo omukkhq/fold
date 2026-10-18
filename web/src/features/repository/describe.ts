@@ -72,7 +72,7 @@ export function mainCopyText(
   if (state?.head == null) {
     return null;
   }
-  return `The project folder ${state.main_path} shows ${state.head} while it has no changes that are not committed. Agents read it; builds run in workspaces.`;
+  return `The project folder ${state.main_path} shows ${state.head}, apart from your changes that are not recorded. Agents read it; builds run in workspaces.`;
 }
 
 /** `→ ../shared/config.ts` beside a symlink in the tree, or null when the entry carries no target. The target is never followed. */

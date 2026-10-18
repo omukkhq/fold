@@ -9,7 +9,7 @@ use crate::store::WriteTx;
 
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// Every object hash a row refers to: each revision's own hash and tree, the trees of every changeset, every proposal version and every unpruned checkpoint, the blob of every request attachment, and both trees of every human change. The bases of workspaces are revisions, so they are covered. One statement reads all of them, so the list is one consistent snapshot.
+/// Every object hash a row refers to: each revision's own hash and tree, the trees of every changeset, every proposal version and every unpruned checkpoint, the blob of every request attachment, both trees of every human change, and the project folder's checkout record. The bases of workspaces are revisions, so they are covered. One statement reads all of them, so the list is one consistent snapshot.
 pub async fn gc_roots<'e>(db: impl SqliteExecutor<'e>) -> Result<Vec<ObjectHash>, StoreError> {
     let rows = sqlx::query_scalar!(
         r#"SELECT hash AS "hash!: String" FROM revisions
@@ -19,7 +19,8 @@ pub async fn gc_roots<'e>(db: impl SqliteExecutor<'e>) -> Result<Vec<ObjectHash>
            UNION SELECT tree_hash FROM checkpoints WHERE pruned_at IS NULL
            UNION SELECT object FROM request_attachments
            UNION SELECT base_tree_hash FROM human_changes
-           UNION SELECT tree_hash FROM human_changes"#
+           UNION SELECT tree_hash FROM human_changes
+           UNION SELECT tree_hash FROM checkout"#
     )
     .fetch_all(db)
     .await?;

@@ -98,6 +98,7 @@ async fn a_commit_run_appends_git_committed_with_each_row_it_records() {
         fx.project.store(),
         fx.project.paths(),
         &Git::default(),
+        None,
         fx.project.clock(),
     )
     .await
@@ -180,24 +181,47 @@ async fn an_integration_moves_the_branch_and_the_folder_and_leaves_it_clean() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_folder_with_changes_waits_with_the_attention_item_and_catches_up_once_clean() {
+async fn a_change_main_does_not_touch_stays_and_the_folder_follows_around_it() {
+    let fx = Fixture::new().await;
+    let (_job, context) = start_watched_job(&fx, Git::default());
+    wait_for_rows(&fx, 1).await;
+    let root = fx.project.paths().root().to_owned();
+    std::fs::write(root.join("README.md"), "# mine\n").unwrap();
+
+    integrate(&fx).await;
+    wait_for_rows(&fx, 2).await;
+    let second = commit_of(&fx, 2).await;
+    until(async || branch(&root) == second).await;
+    assert!(root.join("src/new.rs").is_file());
+    assert_eq!(
+        std::fs::read_to_string(root.join("README.md")).unwrap(),
+        "# mine\n"
+    );
+    // The index follows main for the paths fold wrote, so Git shows only the human's change.
+    assert_eq!(git(&root, &["status", "--porcelain"]), " M README.md\n");
+    until(async || context.attention() == [ProjectAttention::UncommittedChanges]).await;
+    until(async || attention_events(&fx).await == ["git.uncommitted_changes"]).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_change_on_a_path_main_changed_holds_the_folder_and_the_branch_until_it_is_undone() {
     let fx = Fixture::new().await;
     let (job, context) = start_watched_job(&fx, Git::default());
     wait_for_rows(&fx, 1).await;
     let root = fx.project.paths().root().to_owned();
     let first = commit_of(&fx, 1).await;
-    std::fs::write(root.join("README.md"), "# mine\n").unwrap();
+    std::fs::write(root.join("src/lib.rs"), "pub fn mine() {}\n").unwrap();
 
     integrate(&fx).await;
     wait_for_rows(&fx, 2).await;
     until(async || context.attention() == [ProjectAttention::UncommittedChanges]).await;
     assert_eq!(branch(&root), first);
+    // The folder and the branch move together or not at all, so nothing of r2 is written.
     assert!(!root.join("src/new.rs").exists());
     assert_eq!(
-        std::fs::read_to_string(root.join("README.md")).unwrap(),
-        "# mine\n"
+        std::fs::read_to_string(root.join("src/lib.rs")).unwrap(),
+        "pub fn mine() {}\n"
     );
-    // The event is stored after the attention changes in memory.
     until(async || attention_events(&fx).await == ["git.uncommitted_changes"]).await;
     drop(job);
 
@@ -209,7 +233,7 @@ async fn a_folder_with_changes_waits_with_the_attention_item_and_catches_up_once
     drop(job);
 
     // The human puts the change away; the next start brings the folder to main.
-    git(&root, &["checkout", "--quiet", "--", "README.md"]);
+    git(&root, &["checkout", "--quiet", "--", "src/lib.rs"]);
     let (_job, context) = start_watched_job(&fx, Git::default());
     let second = commit_of(&fx, 2).await;
     until(async || branch(&root) == second).await;
@@ -349,14 +373,12 @@ impl Opened {
     }
 
     async fn commit(&self) -> fold_daemon::services::projects::Committed {
-        commit_main(
-            &self.handle.store,
-            &self.handle.paths,
-            &Git::default(),
-            self.handle.clock.as_ref(),
-        )
-        .await
-        .unwrap()
+        let context = fold_daemon::services::projects::RemoteContext::of(&self.handle);
+        fold_daemon::services::projects::sync_folder(&context, &Git::default())
+            .await
+            .unwrap()
+            .committed
+            .unwrap()
     }
 
     /// `fld pull` with no remote, by the human `ana`.

@@ -44,7 +44,9 @@ pub struct ProjectHandle {
     pub objects: Arc<tokio::sync::RwLock<()>>,
     /// Held for a whole push or pull, so two of them never run together in one project; a pull takes the integration mutex after it. It is an `Arc` so the guard can move into the blocking Git work and outlive an aborted caller.
     pub remote_lock: Arc<tokio::sync::Mutex<()>>,
-    /// What the commit writer last found that needs a person: commits made outside fold, or changes in the project folder that keep it from following main.
+    /// Held for each follow of main in the project folder and for a whole `fld record`.
+    pub folder_lock: Arc<tokio::sync::Mutex<()>>,
+    /// What the folder's last follow and the commit writer last found that needs a person: changes in the project folder that no revision records, commits made outside fold, or a branch that fold did not move.
     pub git_attention: Arc<GitAttention>,
     /// One restore, sync or record per workspace at a time, across every session of the project.
     pub workspace_locks: Arc<WorkspaceLocks>,
@@ -57,7 +59,7 @@ pub struct ProjectHandle {
     push_task: PushTask,
     /// The Claude Code processes of the project's worker agents.
     pub workers: Supervisor,
-    /// Commits each integration to the project's repository, moves the project folder to it and pushes it when the configuration asks.
+    /// Brings the project folder to main after each integration and when its Git branch changes, commits each revision to the project's repository while Git sync is on, and pushes it when the configuration asks.
     auto_commit: AutoCommit,
     /// The device and inode of the database file this handle opened. SQLite keeps reading a file that was deleted, so only this tells the handle's database from a new one at the same path.
     database_file: Option<(u64, u64)>,
@@ -157,6 +159,7 @@ impl ProjectHandle {
             launcher,
         );
         let remote_lock = Arc::new(tokio::sync::Mutex::new(()));
+        let folder_lock = Arc::new(tokio::sync::Mutex::new(()));
         let git_attention = Arc::new(GitAttention::default());
         let auto_commit = jobs::auto_commit(
             RemoteContext {
@@ -166,6 +169,8 @@ impl ProjectHandle {
                 clock: clock.clone(),
                 bus: bus.clone(),
                 remote_lock: remote_lock.clone(),
+                folder_lock: folder_lock.clone(),
+                objects: objects.clone(),
                 git_attention: git_attention.clone(),
             },
             Git::default(),
@@ -183,6 +188,7 @@ impl ProjectHandle {
             gc: tokio::sync::Mutex::new(()),
             objects,
             remote_lock,
+            folder_lock,
             git_attention,
             workspace_locks,
             capabilities,

@@ -99,3 +99,20 @@ pub async fn assert_map_matches_rows(fx: &Fixture, revisions: u32) {
     }
     assert_eq!(map, expected);
 }
+
+/// One run of the Git job on the fixture: the project folder follows main, and the commits and the branch follow it.
+pub async fn sync(
+    fx: &Fixture,
+) -> Result<fold_daemon::services::projects::Committed, fold_daemon::services::projects::ProjectError>
+{
+    let context = RemoteContext::new(
+        "app".to_owned(),
+        fx.project.paths().clone(),
+        fx.project.store().clone(),
+        Arc::new(fx.project.clock().clone()),
+        fx.bus.clone(),
+    );
+    fold_daemon::services::projects::sync_folder(&context, &Git::default())
+        .await?
+        .committed
+}

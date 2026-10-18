@@ -7,9 +7,7 @@ use fold_core::events::types;
 use fold_core::roles::Role;
 use fold_core::{Actor, EventFilter, HumanName, codes};
 use fold_daemon::services::agents::{NeedsYouKind, needs_you};
-use fold_daemon::services::projects::{
-    ProjectError, PullOutcome, RecordOutcome, commit_main, pull, record,
-};
+use fold_daemon::services::projects::{ProjectError, PullOutcome, RecordOutcome, pull, record};
 use fold_store::testing::eventually;
 use fold_vcs::git::Git;
 use serde_json::{Value, json};
@@ -162,22 +160,19 @@ async fn stored(h: &Harness, kind: fold_core::EventType) -> Vec<fold_core::Event
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn nothing_is_recorded_without_fld_record() {
-    let h = Harness::start().await;
-    branch_born(&h).await;
+    let h = Harness::start_plain().await;
     write(&root(&h), "README.md", "# mine\n");
     write(&root(&h), "notes.md", "half done\n");
-    // An agent's integration in the meantime records nothing of the folder, and the folder waits.
+    // An agent's integration in the meantime records nothing of the folder; the folder gets the agent's file and keeps the human's.
     let revision = integrate(&h, "frontend", &[("src.txt", "agent\n")]).await;
-    let committed = commit_main(
-        &h.handle.store,
-        &h.handle.paths,
-        &Git::default(),
-        h.handle.clock.as_ref(),
-    )
-    .await
-    .unwrap();
-    assert!(committed.uncommitted);
-    assert_eq!(committed.outside, None);
+    eventually(WAIT, async || {
+        if root(&h).join("src.txt").is_file() {
+            Ok(())
+        } else {
+            Err("the folder follows main")
+        }
+    })
+    .await;
     assert_eq!(revision, "r2");
     assert_eq!(h.head().await.number.to_string(), "r2");
     assert_eq!(file_of(&h, "r2", "notes.md").await, None);
@@ -188,6 +183,7 @@ async fn nothing_is_recorded_without_fld_record() {
     assert!(human_change_states(&h).await.is_empty());
     assert_eq!(read(&h, "README.md"), "# mine\n");
     assert_eq!(read(&h, "notes.md"), "half done\n");
+    assert!(!root(&h).join(".git").exists());
 
     // Only a human runs it.
     let refused = record(&h.handle, &Actor::System, &Git::default())
@@ -197,7 +193,36 @@ async fn nothing_is_recorded_without_fld_record() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn fld_record_makes_the_folder_one_commit_of_the_human_on_main_and_the_folder_follows() {
+async fn fld_record_in_a_plain_folder_records_a_change_of_the_human_with_no_git() {
+    let h = Harness::start_plain().await;
+    let dir = root(&h);
+    write(&dir, "README.md", "# mine\n");
+    write(&dir, "docs/plan.md", "the plan\n");
+    let outcome = record_as_ana(&h).await.unwrap();
+    let RecordOutcome::Recorded {
+        commit,
+        revision,
+        files,
+        ..
+    } = outcome
+    else {
+        panic!("a clean record: {outcome:?}");
+    };
+    assert_eq!(revision.to_string(), "r2");
+    assert_eq!(commit, None);
+    assert_eq!(files, ["README.md", "docs/plan.md"]);
+    assert_eq!(human_change_states(&h).await, ["recorded"]);
+    let recorded = stored(&h, types::HUMAN_CHANGE_RECORDED).await;
+    assert_eq!(recorded[0].data["commit"], Value::Null);
+    assert!(!dir.join(".git").exists());
+    assert!(matches!(
+        record_as_ana(&h).await.unwrap(),
+        RecordOutcome::UpToDate { revision } if revision.to_string() == "r2"
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fld_record_makes_the_folder_one_revision_of_the_human_and_its_commit_on_the_branch() {
     let h = Harness::start().await;
     branch_born(&h).await;
     let before = tip(&h);
@@ -236,7 +261,8 @@ async fn fld_record_makes_the_folder_one_commit_of_the_human_on_main_and_the_fol
     assert_eq!((kind.as_str(), actor.as_str()), ("record", "human:ana"));
     assert_eq!(human_change_states(&h).await, ["recorded"]);
 
-    // Main did not move meanwhile, so the human's own commit is r2's commit and the branch follows it.
+    // While Git sync is on, r2 gets its commit, on top of r1's, and the branch and the index follow it.
+    let commit = commit.unwrap();
     assert_eq!(tip(&h), commit.as_str());
     assert_eq!(
         git(
@@ -250,7 +276,7 @@ async fn fld_record_makes_the_folder_one_commit_of_the_human_on_main_and_the_fol
         )
         .trim(),
         format!(
-            "Ana Lima <ana@example.com>|Ana Lima <ana@example.com>|Changes in the project folder|{before}"
+            "Ana Lima <ana@example.com>|Ana Lima <ana@example.com>|Record the changes of the project folder|{before}"
         )
     );
     assert_eq!(changed(&h), "");
@@ -263,7 +289,7 @@ async fn fld_record_makes_the_folder_one_commit_of_the_human_on_main_and_the_fol
         Some("r2")
     );
     assert_eq!(recorded[0].data["file_count"], 3);
-    assert_eq!(recorded[0].data["commit"], commit.as_str());
+    assert_eq!(recorded[0].data["commit"], Value::Null);
 
     // A second record finds nothing new.
     let again = record_as_ana(&h).await.unwrap();
@@ -286,10 +312,17 @@ async fn a_record_after_main_moved_merges_three_way_and_tells_the_leads_of_touch
     git(&dir, &["config", "user.name", "Ana Lima"]);
     git(&dir, &["config", "user.email", "ana@example.com"]);
     write(&dir, "README.md", "# mine\n");
-    // An agent integrates while the folder holds the human's unrecorded edit, so the folder stays behind.
+    // An agent integrates while the folder holds the human's unrecorded edit of another file, so the folder gets the agent's file and keeps the human's.
     integrate(&h, "frontend", &[("src.txt", "agent\n")]).await;
     let after_agent = h.head().await;
-    assert!(!dir.join("src.txt").exists());
+    eventually(WAIT, async || {
+        if dir.join("src.txt").is_file() {
+            Ok(())
+        } else {
+            Err("the folder follows main")
+        }
+    })
+    .await;
     // Another open task changes README.md too.
     let created = h
         .call(
@@ -318,6 +351,7 @@ async fn a_record_after_main_moved_merges_three_way_and_tells_the_leads_of_touch
     else {
         panic!("a clean merge: {outcome:?}");
     };
+    let commit = commit.unwrap();
     assert_eq!(revision.to_string(), "r3");
     assert_eq!(touched.len(), 1);
     assert_eq!(touched[0].task.to_string(), task);
@@ -331,16 +365,14 @@ async fn a_record_after_main_moved_merges_three_way_and_tells_the_leads_of_touch
         Some("agent\n")
     );
 
-    // The revision's commit merges the human's commit, and the folder follows main with the agent's file.
-    let merge = tip(&h);
-    let parents = git(&dir, &["log", "-1", "--format=%P", &merge]);
-    assert!(parents.trim().ends_with(commit.as_str()), "{parents}");
-    assert_eq!(parents.split_whitespace().count(), 2);
+    // The revision's commit continues the agent's, and the branch holds it.
+    assert_eq!(tip(&h), commit.as_str());
+    let parents = git(&dir, &["log", "-1", "--format=%P", commit.as_str()]);
+    assert_eq!(parents.split_whitespace().count(), 1);
     assert_eq!(
         git(&dir, &["log", "-1", "--format=%an", commit.as_str()]).trim(),
         "Ana Lima"
     );
-    assert_ne!(merge, commit.as_str());
     assert_eq!(read(&h, "src.txt"), "agent\n");
     assert_eq!(changed(&h), "");
     assert!(h.head().await.number > after_agent.number);
@@ -379,7 +411,6 @@ async fn a_conflict_waits_in_needs_you_and_the_main_agent_resolves_it_in_its_mai
 
     let outcome = record_as_ana(&h).await.unwrap();
     let RecordOutcome::Conflicted {
-        commit,
         conflicted,
         created,
         ..
@@ -399,7 +430,7 @@ async fn a_conflict_waits_in_needs_you_and_the_main_agent_resolves_it_in_its_mai
         .iter()
         .find(|item| item.kind == NeedsYouKind::HumanChange)
         .unwrap();
-    assert_eq!(item.commit.as_deref(), Some(commit.as_str()));
+    assert_eq!(item.commit, None);
     assert_eq!(item.paths, ["README.md"]);
     assert_eq!(item.human.as_ref().map(|human| human.as_str()), Some("ana"));
     let notice = notice_with(&mut inbox, "conflicts with main").await;
@@ -411,7 +442,7 @@ async fn a_conflict_waits_in_needs_you_and_the_main_agent_resolves_it_in_its_mai
     // The same folder again writes nothing new.
     let again = record_as_ana(&h).await.unwrap();
     assert!(
-        matches!(&again, RecordOutcome::Conflicted { created: false, commit: same, .. } if *same == commit),
+        matches!(&again, RecordOutcome::Conflicted { created: false, .. }),
         "{again:?}"
     );
     assert_eq!(human_change_states(&h).await, ["conflicted"]);
@@ -419,7 +450,7 @@ async fn a_conflict_waits_in_needs_you_and_the_main_agent_resolves_it_in_its_mai
     // The main agent prepares the merge with the user in its main workspace.
     let opened = h.call("main", "open_main_workspace", json!({})).await;
     assert_eq!(opened["human_change"]["held"], true, "{opened}");
-    assert_eq!(opened["human_change"]["commit"], commit.as_str());
+    assert_eq!(opened["human_change"]["commit"], Value::Null);
     assert_eq!(opened["human_change"]["conflicted"], json!(["README.md"]));
     let ws = opened["workspace"].as_str().unwrap().to_owned();
     let main_dir = dir.join(opened["path"].as_str().unwrap());
@@ -464,7 +495,7 @@ async fn a_conflict_waits_in_needs_you_and_the_main_agent_resolves_it_in_its_mai
     );
     assert_eq!(stored(&h, types::HUMAN_CHANGE_RESOLVED).await.len(), 1);
 
-    // The resolution's commit has the human's commit as its second parent, so the folder follows main again.
+    // The resolved change counts as fold's in the checkout record, so the folder follows main again.
     eventually(WAIT, async || {
         let readme = read(&h, "README.md");
         if readme == "# mine and fold\n" && changed(&h).is_empty() {
@@ -474,8 +505,6 @@ async fn a_conflict_waits_in_needs_you_and_the_main_agent_resolves_it_in_its_mai
         }
     })
     .await;
-    let parents = git(&dir, &["log", "-1", "--format=%P", "refs/heads/main"]);
-    assert!(parents.trim().ends_with(commit.as_str()), "{parents}");
     assert_eq!(
         file_of(&h, &resolved_at, "README.md").await.as_deref(),
         Some("# mine and fold\n")
@@ -564,7 +593,7 @@ async fn an_integration_that_holds_a_waiting_human_change_resolves_it() {
     let dir = root(&h);
     write(&dir, "README.md", "# mine\n");
     integrate(&h, "frontend", &[("README.md", "# fold\n")]).await;
-    let RecordOutcome::Conflicted { commit, .. } = record_as_ana(&h).await.unwrap() else {
+    let RecordOutcome::Conflicted { .. } = record_as_ana(&h).await.unwrap() else {
         panic!("a conflict");
     };
     let opened = h.call("main", "open_main_workspace", json!({})).await;
@@ -583,6 +612,7 @@ async fn an_integration_that_holds_a_waiting_human_change_resolves_it() {
         .to_owned();
 
     // An agent integrates the human's own line.
+    let tip_before = tip(&h);
     let revision = integrate(&h, "backend", &[("README.md", "# mine\n")]).await;
     assert_eq!(human_change_states(&h).await, ["resolved"]);
     assert!(
@@ -594,7 +624,7 @@ async fn an_integration_that_holds_a_waiting_human_change_resolves_it() {
     );
     let resolved = stored(&h, types::HUMAN_CHANGE_RESOLVED).await;
     assert_eq!(resolved.len(), 1);
-    assert_eq!(resolved[0].data["commit"], commit.as_str());
+    assert_eq!(resolved[0].data["commit"], Value::Null);
     assert_eq!(
         resolved[0].revision.map(|r| r.to_string()).as_deref(),
         Some(revision.as_str())
@@ -617,22 +647,20 @@ async fn an_integration_that_holds_a_waiting_human_change_resolves_it() {
         "{refused}"
     );
     eventually(WAIT, async || {
-        if changed(&h).is_empty() {
+        if changed(&h).is_empty() && tip(&h) != tip_before {
             Ok(())
         } else {
             Err(changed(&h))
         }
     })
     .await;
-    let parents = git(&dir, &["log", "-1", "--format=%P", "refs/heads/main"]);
-    assert!(parents.trim().ends_with(commit.as_str()), "{parents}");
     assert!(matches!(
         record_as_ana(&h).await.unwrap(),
         RecordOutcome::UpToDate { .. }
     ));
 }
 
-/// A pull whose remote commit holds the waiting human change resolves it, as any integration does: the main agent hears of it, and the revision's commit merges the pulled commit and then the human's commit, so the folder follows main through the human's commit. When main moved after the remote's commit, the revision is a merge of the pull; otherwise the remote only added to main, and the revision still gets a commit of its own rather than the remote commit, which does not hold the human's commit.
+/// A pull whose remote commit holds the waiting human change resolves it, as any integration does: the main agent hears of it, and the folder follows main, since the resolved change counts as fold's in the checkout record. When main moved after the remote's commit, the revision is a merge of the pull; otherwise the remote only added to main.
 async fn a_pull_that_holds_the_waiting_human_change(main_moved: bool) {
     let mut h = Harness::start().await;
     branch_born(&h).await;
@@ -641,7 +669,7 @@ async fn a_pull_that_holds_the_waiting_human_change(main_moved: bool) {
     let dir = root(&h);
     write(&dir, "README.md", "# mine\n");
     integrate(&h, "frontend", &[("README.md", "# fold\n")]).await;
-    let RecordOutcome::Conflicted { commit, .. } = record_as_ana(&h).await.unwrap() else {
+    let RecordOutcome::Conflicted { .. } = record_as_ana(&h).await.unwrap() else {
         panic!("a conflict");
     };
 
@@ -696,7 +724,7 @@ async fn a_pull_that_holds_the_waiting_human_change(main_moved: bool) {
     assert_eq!(human_change_states(&h).await, ["resolved"]);
     let resolved = stored(&h, types::HUMAN_CHANGE_RESOLVED).await;
     assert_eq!(resolved.len(), 1);
-    assert_eq!(resolved[0].data["commit"], commit.as_str());
+    assert_eq!(resolved[0].data["commit"], Value::Null);
     assert_eq!(resolved[0].revision, Some(revision));
     let notice = notice_with(&mut inbox, "waiting change is resolved").await;
     assert!(
@@ -714,10 +742,8 @@ async fn a_pull_that_holds_the_waiting_human_change(main_moved: bool) {
     })
     .await;
     assert_eq!(root(&h).join("notes.md").exists(), main_moved);
-    let parents = git(&dir, &["log", "-1", "--format=%P", "refs/heads/main"]);
-    let parents: Vec<&str> = parents.split_whitespace().collect();
-    assert_eq!(parents.len(), 3, "{parents:?}");
-    assert_eq!(parents[1..], [pulled.as_str(), commit.as_str()]);
+    let parents = git(&dir, &["log", "--format=%H %P", "refs/heads/main"]);
+    assert!(parents.contains(&pulled), "{parents}");
     assert!(matches!(
         record_as_ana(&h).await.unwrap(),
         RecordOutcome::UpToDate { .. }
@@ -730,13 +756,13 @@ async fn a_pull_that_holds_the_waiting_human_change_resolves_it_and_the_folder_f
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_pull_that_only_adds_the_waiting_human_change_still_merges_the_humans_commit() {
+async fn a_pull_that_only_adds_the_waiting_human_change_resolves_it_and_the_folder_follows() {
     a_pull_that_holds_the_waiting_human_change(false).await;
 }
 
-/// While the folder holds more than the recorded human change, the commit writer leaves it and its index as the human left them, at every run; the next record brings the rest in and the folder follows main.
+/// While the folder holds more than the resolved human change, the folder follows main around the rest and the index keeps what the human staged; the next record brings the rest in.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_commit_writer_keeps_the_index_of_a_folder_that_holds_more_than_the_recorded_change() {
+async fn a_folder_that_holds_more_than_the_resolved_change_keeps_the_rest_and_the_staged_file() {
     let mut h = Harness::start().await;
     branch_born(&h).await;
     h.connect_tagged("main", &["main"]).await;
@@ -776,16 +802,14 @@ async fn the_commit_writer_keeps_the_index_of_a_folder_that_holds_more_than_the_
         )
         .await;
     assert_eq!(submitted["result"], "succeeded", "{submitted}");
-    let committed = commit_main(
-        &h.handle.store,
-        &h.handle.paths,
-        &Git::default(),
-        h.handle.clock.as_ref(),
-    )
-    .await
-    .unwrap();
-    assert!(committed.uncommitted);
-    assert_eq!(tip(&h), tip_before);
+    let context = fold_daemon::services::projects::RemoteContext::of(&h.handle);
+    let synced = fold_daemon::services::projects::sync_folder(&context, &Git::default())
+        .await
+        .unwrap();
+    assert!(synced.followed.unrecorded);
+    assert!(synced.followed.kept.is_empty());
+    assert_ne!(tip(&h), tip_before);
+    assert_eq!(read(&h, "README.md"), "# mine and fold\n");
     assert_eq!(
         git(&dir, &["diff", "--cached", "--name-only"]),
         "notes.md\n"

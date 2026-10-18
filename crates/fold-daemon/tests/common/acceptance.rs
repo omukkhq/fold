@@ -90,7 +90,25 @@ impl Harness {
 
     /// [`Harness::start_without_roles`] with the programs the project's worker processes run, such as a stand-in for Claude Code.
     pub async fn start_with_launcher(launcher: Launcher) -> Self {
-        let project = TestProject::new().await;
+        Self::start_on(TestProject::new().await, launcher).await
+    }
+
+    /// [`Harness::start`] in a plain project: no Git repository, and Git sync off.
+    pub async fn start_plain() -> Self {
+        let harness = Self::start_on(TestProject::plain().await, Launcher::default()).await;
+        crate::common::roles::give_role(&harness.handle.store, "review", Role::ReviewLead, None)
+            .await;
+        fold_daemon::services::projects::ensure_human(
+            harness.project.registry(),
+            harness.project.clock(),
+            &fold_core::HumanName::parse(HUMAN).unwrap(),
+        )
+        .await
+        .unwrap();
+        harness
+    }
+
+    async fn start_on(project: TestProject, launcher: Launcher) -> Self {
         let objects = ObjectStore::open(&project.paths().fold_dir()).unwrap();
         let mut tree = FlatTree::new();
         tree.insert(

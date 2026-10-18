@@ -117,7 +117,7 @@ impl From<RevisionRow> for RevisionSummary {
 pub struct RepositoryState {
     /// `None` only before `r1` exists.
     pub head: Option<RevisionId>,
-    /// The project folder, whose files follow main through its own Git repository.
+    /// The project folder, whose files follow main through fold's checkout of it.
     pub main_path: PathBuf,
     /// The newest revisions, newest first.
     pub recent: Vec<RevisionSummary>,

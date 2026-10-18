@@ -34,6 +34,7 @@ const GROUPS: readonly { kind: NeedsYouKind; title: string }[] = [
   { kind: "human_task", title: "Human tasks" },
   { kind: "blocker", title: "Blockers" },
   { kind: "human_change", title: "Your changes" },
+  { kind: "head_moved", title: "Git branch" },
 ];
 
 /** The items for this human: an item that waits for another named human is theirs. Before a name, every item shows. */
@@ -129,6 +130,17 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         task: null,
         title: conflictedText(item.paths),
         text: "conflicts with main; the main agent explains it",
+        hint: "opens the history of main",
+        href: projectPath(slug, "repository"),
+      };
+    case "head_moved":
+      return {
+        ...base,
+        person: null,
+        chip: null,
+        task: null,
+        title: titleText(item.reason),
+        text: "fold does not update the project folder until the Git branch is back",
         hint: "opens the history of main",
         href: projectPath(slug, "repository"),
       };

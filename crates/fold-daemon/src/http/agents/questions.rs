@@ -132,8 +132,10 @@ pub enum NeedsYouItemKind {
     HumanTask,
     /// A task with a blocker, which waits until a human clears it; `reason` says why.
     Blocker,
-    /// A human change from the project folder that conflicts with main: main did not move, and the main agent explains the conflict in its conversation and prepares the merge for the human's OK. `commit` is the human's commit and `paths` the conflicting files.
+    /// A human change from the project folder that conflicts with main: main did not move, and the main agent explains the conflict in its conversation and prepares the merge for the human's OK. `commit` is the human's Git commit, null for a change `fld record` read from the folder, and `paths` the conflicting files.
     HumanChange,
+    /// The project folder's Git branch or HEAD shows a change fold did not make, such as another branch checked out, a reset or a stash, so fold does not update the folder; `reason` is the command that brings the branch back.
+    HeadMoved,
 }
 
 /// The screen that answers an item: `messages` opens the thread, `worker` the asking worker, `proposal` the proposal, `request` the request, `task` the task and `repository` the history of main.
@@ -188,7 +190,7 @@ pub struct NeedsYouEntry {
     /// The second line of a `human_review` (the proposal title) and of a `request_draft` (the request title, which the claim gave it); the task title of a `human_task` or a `blocker`.
     #[schema(required = true, example = "Database schema for reports")]
     pub title: Option<String>,
-    /// The reason of a `blocker`.
+    /// The reason of a `blocker`; the command that brings the Git branch back for `head_moved`.
     #[schema(required = true, example = "Wait until the design is signed off")]
     pub reason: Option<String>,
     /// The human's Git commit of a `human_change`.
@@ -208,6 +210,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             NeedsYouKind::HumanTask => NeedsYouItemKind::HumanTask,
             NeedsYouKind::Blocker => NeedsYouItemKind::Blocker,
             NeedsYouKind::HumanChange => NeedsYouItemKind::HumanChange,
+            NeedsYouKind::HeadMoved => NeedsYouItemKind::HeadMoved,
         };
         let screen = match item.kind.screen() {
             Screen::Messages => NeedsYouScreen::Messages,
@@ -303,7 +306,7 @@ pub async fn answer_worker_question(
     Ok(Json(answered.into()))
 }
 
-/// Every item that waits for a human, oldest first: questions with choices from agents to the humans, workers' permission questions, proposals waiting for a human approval and card drafts waiting for their human requester. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*` and `request.*`.
+/// Every item that waits for a human, oldest first: questions with choices from agents to the humans, workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, and a Git branch of the project folder that fold did not move. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved` and `git.attention_cleared`.
 #[utoipa::path(
     get,
     path = "/api/v1/projects/{slug}/needs-you",
@@ -317,7 +320,11 @@ pub async fn answer_worker_question(
     )
 )]
 pub async fn list_needs_you(project: Project) -> Result<Json<NeedsYouList>, ApiError> {
-    let items = project.0.agents().needs_you().await?;
+    let mut items = project.0.agents().needs_you().await?;
+    if let Some((since, hint)) = project.0.git_attention.head_moved() {
+        items.push(NeedsYouItem::head_moved(since, hint));
+        items.sort_by_key(|item| item.since);
+    }
     Ok(Json(NeedsYouList {
         items: items.into_iter().map(Into::into).collect(),
     }))

@@ -453,6 +453,18 @@ describe("invalidation rules", () => {
     }
   });
 
+  it("refreshes Needs you when the Git branch moves or comes back", () => {
+    for (const type of ["git.head_moved", "git.attention_cleared"]) {
+      invalidated = [];
+      applyEvent(client, slug, ev(type));
+      expect(hit(keys.needsYou(slug))).toBe(true);
+      expect(hit(keys.project(slug))).toBe(true);
+    }
+    invalidated = [];
+    applyEvent(client, slug, ev("git.outside_commits"));
+    expect(hit(keys.needsYou(slug))).toBe(false);
+  });
+
   it("invalidates repository and board, and no proposal key, for a pull integration", () => {
     for (const type of [
       "integration.succeeded",

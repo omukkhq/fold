@@ -546,19 +546,30 @@ const SPECS: Record<EventType, Spec> = {
   "git.uncommitted_changes": {
     icon: TriangleAlert,
     text: fixed(
-      "the project folder has changes that are not committed; run fld record, commit or stash them",
+      "the project folder has changes that are not recorded; run fld record",
     ),
   },
   "git.sync_enabled": {
     icon: GitCommitHorizontal,
     text: fixed("turned Git sync on: every revision gets its Git commit"),
   },
+  "git.head_moved": {
+    icon: TriangleAlert,
+    text: (e) => {
+      const hint = text(e.data.hint);
+      return hint === null
+        ? "the Git branch changed in a way fold did not make; the project folder waits"
+        : `the Git branch changed in a way fold did not make; ${hint}`;
+    },
+  },
   "git.attention_cleared": {
     icon: GitCommitHorizontal,
     text: (e) =>
       e.data.kind === "outside_commits"
         ? "the Git branch has no commits fold did not write"
-        : "the project folder follows main again",
+        : e.data.kind === "head_moved"
+          ? "the Git branch is back where fold left it"
+          : "the project folder follows main again",
   },
   "message.sent": {
     icon: MessageSquare,

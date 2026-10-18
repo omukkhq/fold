@@ -64,6 +64,8 @@ impl Fixture {
             },
         );
         let tree = write_initial_tree(&objects, tree).unwrap();
+        // The project folder holds r1's file, so the folder has no change of its own to report.
+        std::fs::write(project.paths().root().join("README.md"), b"# demo\n").unwrap();
         let revision = initial_revision(tree, project.now()).unwrap();
         let stored = write_revision(&objects, &revision).unwrap();
         create_initial_revision(project.store(), &stored, None)

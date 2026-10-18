@@ -19,7 +19,8 @@ pub use checkpoints::{
     insert_checkpoint, latest_checkpoint, list_checkpoints, prune_auto, prune_workspace,
 };
 pub use commits::{
-    GitSync, enable_git_sync, git_sync, insert_revision_commits, uncommitted_revisions,
+    Checkout, GitSync, checkout, enable_git_sync, git_sync, insert_revision_commits,
+    merged_commits, set_checkout, uncommitted_revisions,
 };
 pub use conflicts::{ConflictRow, clear_conflict, list_conflicts, set_conflicts};
 pub use gc::{

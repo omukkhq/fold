@@ -207,6 +207,24 @@ describe("needsYouGroups", () => {
     expect(conflictedText([])).toBeNull();
   });
 
+  it("links a Git branch that fold did not move to the history of main with the command that brings it back", () => {
+    const [group] = needsYouGroups("demo", [
+      needsItem({
+        kind: "head_moved",
+        screen: "repository",
+        reason: "run git switch main in the project folder",
+      }),
+    ]);
+    expect(group?.title).toBe("Git branch");
+    expect(group?.lines[0]).toMatchObject({
+      person: null,
+      chip: null,
+      title: "run git switch main in the project folder",
+      text: "fold does not update the project folder until the Git branch is back",
+      href: "/p/demo/repository",
+    });
+  });
+
   it("counts what waits", () => {
     expect(waitingText(4)).toBe("4 waiting");
   });

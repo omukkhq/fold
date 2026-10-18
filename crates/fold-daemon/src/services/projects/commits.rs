@@ -3,7 +3,7 @@ use fold_core::tree::empty_tree_hash;
 use fold_core::{Actor, Clock, FoldError, NewEvent, ProjectPaths, RevisionId, Timestamp, codes};
 use fold_store::workspaces::{
     IntegrationKind, RevisionRow, genesis, get_by_number, git_sync, insert_revision_commits,
-    list_after, newest_human_change, uncommitted_revisions,
+    list_after, merged_commits, uncommitted_revisions,
 };
 use fold_store::{Store, StoreError};
 use fold_vcs::git::{CommitId, Git};
@@ -11,8 +11,8 @@ use fold_vcs::git_export::{
     ExportBase, ExportRevision, ExportTarget, Signature, repository_identity, write_commits,
 };
 use fold_vcs::git_remote::{
-    FOLD_HEAD_REF, Followed, branch_ref, follow_main, follow_main_via, index_to, is_ancestor,
-    move_branch, project_repository, set_ref,
+    BranchState, FOLD_HEAD_REF, Moved, branch_state, is_ancestor, move_branch_and_index,
+    project_repository, set_ref,
 };
 use fold_vcs::git_sync_map::SyncMap;
 use fold_vcs::objects::ObjectStore;
@@ -31,17 +31,20 @@ pub struct Committed {
     pub added: Vec<(RevisionId, CommitId)>,
     /// The tip of the `[git]` branch when it holds commits fold did not write: the commits are recorded, the branch and the project folder stay. `fld pull` brings them in.
     pub outside: Option<CommitId>,
-    /// The project folder has changes that are not committed, or an untracked file in the way, so the branch and the folder stay on the older commit until the next run finds the folder clean.
+    /// The index holds a change of the human on a path main changed, so the branch stays on the older commit until the change is recorded or undone.
     pub uncommitted: bool,
+    /// The branch or `HEAD` shows a change fold did not make, so the branch stays where it is.
+    pub moved: Option<Moved>,
     /// One `git.committed` per `revision_commits` row the run added, appended in the transaction that added the rows; the caller publishes them.
     pub events: EventBuffer,
 }
 
-/// Writes the commit of every main revision that `.fold/git-sync.map` does not name yet into the project's Git repository at [`ProjectPaths::git_dir`], records each in `revision_commits`, and brings the `[git]` branch and the project folder to the newest. The project's Git sync lock is held throughout, so this, a push and a pull run one after the other, in this process or another. Running it again with nothing new changes nothing, and so does a run while Git sync is off: nothing touches Git then.
+/// Writes the commit of every main revision that `.fold/git-sync.map` does not name yet into the project's Git repository at [`ProjectPaths::git_dir`], records each in `revision_commits`, and moves the `[git]` branch and the index to the commit of `folder_at`, the revision the project folder holds now, when fold wrote the folder there. The project's Git sync lock is held throughout, so this, a push and a pull run one after the other, in this process or another. Running it again with nothing new changes nothing, and so does a run while Git sync is off: nothing touches Git then.
 pub async fn commit_main(
     store: &Store,
     paths: &ProjectPaths,
     git: &Git,
+    folder_at: Option<RevisionId>,
     clock: &dyn Clock,
 ) -> Result<Committed, ProjectError> {
     if git_sync(store.read()).await?.is_none() {
@@ -50,14 +53,27 @@ pub async fn commit_main(
     let branch = load_config(paths).await?.git.branch;
     let fold_dir = paths.fold_dir();
     let (held, map) = blocking(move || SyncMap::lock(&fold_dir)).await?;
-    let (_held, _map, committed) =
-        commit_locked(store, paths, git, &branch, held, map, clock.now()).await?;
+    let (_held, _map, committed) = commit_locked(
+        store,
+        paths,
+        git,
+        &branch,
+        held,
+        map,
+        folder_at,
+        clock.now(),
+    )
+    .await?;
     Ok(committed)
 }
 
 /// [`commit_main`] for a caller that holds the Git sync lock (`held`) and read `map` under it; both come back for the caller's next step.
 ///
-/// The map is the record of which revision is which commit, so [`FOLD_HEAD_REF`] is first put on the map's last commit: a ref a stopped write moved past it is written again. A commit's id depends on its revision and on the Git identity the repository's config names when the commit is written, which is its author and committer, so the same identity writes the same commits again; once the map names a commit, it is that revision's commit for good, whatever the config says later. `git fast-import` writes the new commits there, and the map gains their lines. The `[git]` branch is checked out in the project folder and moves only by fast-forward, after the map: an unborn branch is created on the newest commit, whose tree the folder holds as init and turning Git sync on leave it, with the index set to it; a tip that is not an ancestor of fold's newest commit holds commits someone made outside fold, so nothing moves and the tip is returned in [`Committed::outside`]; otherwise the folder follows as [`follow_main`] describes, or stays when it has changes of its own. A stop between the map and the move leaves a branch that the next run moves. Then one transaction adds a `revision_commits` row and a `git.committed` event for every mapped revision that has none, which also covers a map line whose row a stop cut off.
+/// The map is the record of which revision is which commit, so [`FOLD_HEAD_REF`] is first put on the map's last commit: a ref a stopped write moved past it is written again. A commit's id depends on its revision and on the Git identity the repository's config names when the commit is written, which is its author and committer, so the same identity writes the same commits again; once the map names a commit, it is that revision's commit for good, whatever the config says later. `git fast-import` writes the new commits there, and the map gains their lines. The `[git]` branch is checked out in the project folder and moves only by fast-forward, after the map, and only to the commit of `folder_at`, the revision fold's own checkout wrote into the folder, so the branch and the index tell the human's changes from main's: [`move_branch_and_index`] moves both, or neither when the index holds a change of the human on a path main changed, which [`Committed::uncommitted`] reports. An unborn branch is created there with the index set to it. A tip with commits fold did not write is returned in [`Committed::outside`], and a branch or `HEAD` that shows a change fold did not make in [`Committed::moved`]; neither moves. A stop between the map and the move leaves a branch that the next run moves. Then one transaction adds a `revision_commits` row and a `git.committed` event for every mapped revision that has none, which also covers a map line whose row a stop cut off.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is one input of the run, and the lock and the map move through it"
+)]
 pub(crate) async fn commit_locked<H: Send + 'static>(
     store: &Store,
     paths: &ProjectPaths,
@@ -65,6 +81,7 @@ pub(crate) async fn commit_locked<H: Send + 'static>(
     branch: &str,
     held: H,
     map: SyncMap,
+    folder_at: Option<RevisionId>,
     now: Timestamp,
 ) -> Result<(H, SyncMap, Committed), ProjectError> {
     let last = map.last().cloned();
@@ -76,13 +93,7 @@ pub(crate) async fn commit_locked<H: Send + 'static>(
         .iter()
         .map(merge_parents)
         .collect::<Result<Vec<_>, _>>()?;
-    let via = {
-        let mut conn = store.read().acquire().await.map_err(StoreError::from)?;
-        newest_human_change(&mut conn, true).await?
-    }
-    .and_then(|change| change.commit)
-    .map(|commit| commit.parse::<CommitId>())
-    .transpose()?;
+    let merged = merged_commits(store.read()).await?;
     let (git, paths_owned, branch_owned) = (git.clone(), paths.clone(), branch.to_owned());
     let (held, map, mut committed) = blocking(move || {
         let (paths, branch) = (paths_owned, branch_owned);
@@ -139,33 +150,30 @@ pub(crate) async fn commit_locked<H: Send + 'static>(
             added,
             ..Committed::default()
         };
-        let Some(newest) = newest else {
+        if newest.is_none() {
             return Ok((held, map, committed));
+        }
+        let known = |commit: &CommitId| {
+            map.revision_of(commit).is_some() || merged.contains(commit.as_str())
         };
-        let tip = match git.ref_commit(&repo, &branch_ref(&branch))? {
-            Some(tip) => tip,
-            None => {
-                // The folder holds main's files when its branch is born, as init and turning Git sync on leave them.
-                move_branch(&git, &repo, &branch, &newest, None)?;
-                index_to(&git, &paths, &newest)?;
-                newest.clone()
-            }
-        };
-        match tip {
-            tip if tip == newest => {}
-            tip if is_ancestor(&git, &repo, &tip, &newest)? => {
-                let mut followed = follow_main(&git, &paths, &branch, &tip, &newest)?;
-                // A folder that still holds the newest recorded human change follows from that change's commit.
-                if followed == Followed::Dirty
-                    && let Some(via) = via.as_ref().filter(|via| **via != tip)
-                    && is_ancestor(&git, &repo, &tip, via)?
-                    && (*via == newest || is_ancestor(&git, &repo, via, &newest)?)
-                {
-                    followed = follow_main_via(&git, &paths, &branch, &tip, via, &newest)?;
+        let last = map.last().map(|(_, commit)| commit.clone());
+        match branch_state(&git, &paths, &branch, &known, last.as_ref())? {
+            BranchState::Moved(moved) => committed.moved = Some(moved),
+            BranchState::Ahead { tip, .. } => committed.outside = Some(tip),
+            BranchState::Fold { tip } => {
+                let target = folder_at.and_then(|at| map.commit_of(at).cloned());
+                if let Some(target) = target {
+                    let descends = match &tip {
+                        None => true,
+                        Some(tip) => tip == &target || is_ancestor(&git, &repo, tip, &target)?,
+                    };
+                    if descends
+                        && !move_branch_and_index(&git, &paths, &branch, tip.as_ref(), &target)?
+                    {
+                        committed.uncommitted = true;
+                    }
                 }
-                committed.uncommitted = followed == Followed::Dirty;
             }
-            tip => committed.outside = Some(tip),
         }
         Ok((held, map, committed))
     })

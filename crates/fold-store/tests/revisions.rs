@@ -472,3 +472,53 @@ async fn git_sync_stays_on_once_it_is_on() {
         );
     }
 }
+
+#[tokio::test]
+async fn the_checkout_record_names_a_revision_and_is_a_gc_root() {
+    let project = TestProject::new().await;
+    let r1 = init(&project).await;
+    assert_eq!(
+        workspaces::checkout(project.store().read()).await.unwrap(),
+        None
+    );
+    let record = workspaces::Checkout {
+        tree: hash(42),
+        revision: r1.number,
+        human_change: None,
+    };
+    project
+        .store()
+        .write(async |tx| workspaces::set_checkout(tx, &record, project.now()).await)
+        .await
+        .unwrap();
+    assert_eq!(
+        workspaces::checkout(project.store().read()).await.unwrap(),
+        Some(record.clone())
+    );
+    let roots = workspaces::gc_roots(project.store().read()).await.unwrap();
+    assert!(roots.contains(&hash(42)));
+    let moved = workspaces::Checkout {
+        tree: hash(43),
+        ..record
+    };
+    project
+        .store()
+        .write(async |tx| workspaces::set_checkout(tx, &moved, project.now()).await)
+        .await
+        .unwrap();
+    assert_eq!(
+        count(project.store(), "SELECT COUNT(*) FROM checkout").await,
+        1
+    );
+    let unknown = workspaces::Checkout {
+        revision: id(9),
+        ..moved
+    };
+    assert!(matches!(
+        project
+            .store()
+            .write(async |tx| workspaces::set_checkout(tx, &unknown, project.now()).await)
+            .await,
+        Err(StoreError::RevisionNotFound(_))
+    ));
+}

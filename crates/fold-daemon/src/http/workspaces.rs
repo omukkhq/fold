@@ -53,7 +53,7 @@ pub struct RepositoryView {
     /// The revision `main` names; null only before `r1` exists.
     #[schema(value_type = Option<String>, required = true, example = "r17")]
     pub head: Option<RevisionId>,
-    /// The project folder, whose files follow main through its own Git repository.
+    /// The project folder, whose files follow main through fold's checkout of it.
     pub main_path: String,
     /// The newest 10 revisions, newest first.
     pub recent: Vec<RevisionView>,

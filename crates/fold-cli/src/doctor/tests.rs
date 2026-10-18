@@ -817,7 +817,7 @@ fn a_project_folder_with_changes_that_are_not_committed_is_a_warning() {
     let check = folder(&host);
     assert_eq!(check.status, Status::Warn);
     assert!(
-        check.fix.as_deref().unwrap().contains("commit or stash"),
+        check.fix.as_deref().unwrap().contains("fld record"),
         "{check:?}"
     );
     assert!(check.fix.as_deref().unwrap().contains("fld record"));

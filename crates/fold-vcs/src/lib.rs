@@ -1,6 +1,7 @@
 pub mod atomic;
 pub mod batch;
 pub mod browse;
+pub mod checkout;
 pub mod compare;
 pub mod diff;
 pub mod edit;

@@ -63,7 +63,7 @@ enum Command {
     Pause(commands::pause::PauseArgs),
     /// Resume the agents of a paused project: each stopped worker runs again in its own session
     Resume(commands::pause::PauseArgs),
-    /// Record your uncommitted changes in the project folder on main as one commit of yours; a conflict with the agents' work waits for the main agent
+    /// Record your changes in the project folder on main as one change of yours; a conflict with the agents' work waits for the main agent
     Record(commands::record::RecordArgs),
     /// Development helpers
     #[cfg(feature = "dev-seed")]

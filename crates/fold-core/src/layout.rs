@@ -118,6 +118,11 @@ impl ProjectPaths {
     pub fn workspace_index(&self, workspace: WorkspaceId) -> PathBuf {
         self.index().join(format!("{workspace}.idx"))
     }
+
+    /// The stat index of the project folder, which tells the folder's unchanged files from those a human changed without reading them all.
+    pub fn folder_index(&self) -> PathBuf {
+        self.index().join("folder.idx")
+    }
 }
 
 /// The environment variable that names the agent of a fold Claude Code session: `fld claude` sets it for the main agent, the worker supervisor for each worker, and `fld mcp` and `fld hook` read it.

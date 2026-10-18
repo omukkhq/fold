@@ -22,15 +22,18 @@ use fold_store::counters;
 use fold_store::projects::{self, HumanRow, ProjectRow};
 use fold_store::reviews::{IntegrationSubject, NewIntegration, insert_succeeded};
 use fold_store::workspaces::{
-    NewHumanChange, RevisionRow, advance_main, create_main, genesis_revision, head,
-    insert_recorded_human_change, insert_revision,
+    Checkout, NewHumanChange, RevisionRow, advance_main, create_main, genesis_revision, head,
+    insert_recorded_human_change, insert_revision, newest_human_change, set_checkout,
 };
 use fold_store::{Store, StoreError, WriteTx};
 use fold_vcs::atomic::write_atomic;
 use fold_vcs::gc::mark;
 use fold_vcs::git::{CommitId, Git};
 use fold_vcs::git_import::{GitImportOptions, import_commit};
-use fold_vcs::git_remote::{checked_out_branch, exclude_fold_dir, folder_clean};
+use fold_vcs::git_remote::{
+    FOLD_BRANCH_REF, FOLD_STASH_REF, STASH_REF, checked_out_branch, exclude_fold_dir, folder_clean,
+    set_ref,
+};
 use fold_vcs::git_sync_map::SyncMap;
 use fold_vcs::ignore::{FOLDIGNORE, GITIGNORE, IgnoreRules};
 use fold_vcs::import::{ImportOptions, ImportResult, import_dir};
@@ -48,6 +51,7 @@ use crate::services::events::EventBuffer;
 use crate::services::fired;
 
 mod commits;
+mod folder;
 mod gc;
 mod git_status;
 mod pull;
@@ -57,6 +61,7 @@ mod web_auth;
 
 pub(crate) use commits::error_code;
 pub use commits::{Committed, commit_main, commit_message};
+pub use folder::{FolderFollowed, FolderSync, sync_folder};
 pub use gc::{GcReport, gc};
 pub use git_status::{GitStatus, PushFailed, Pushed, RemoteStatus, git_status, public_location};
 pub use pull::{PullOutcome, PulledConflict, pull};
@@ -437,7 +442,9 @@ impl Init<'_> {
                 .create_first_revisions(&project_store, paths, start, &config, created, now)
                 .await?;
             // The daemon writes the commits that are missing when it opens the project, so a failure here only delays them.
-            if let Err(error) = commit_main(&project_store, paths, self.git, self.clock).await {
+            // The folder holds main's files when init returns.
+            let at = Some(first.gitignore.unwrap_or(first.revision));
+            if let Err(error) = commit_main(&project_store, paths, self.git, at, self.clock).await {
                 tracing::warn!(code = error.code().unwrap_or(codes::INTERNAL_ERROR), "the Git commits of main were not written; the daemon writes them when it opens the project");
             }
             Ok::<_, ProjectError>(first)
@@ -627,6 +634,16 @@ impl Init<'_> {
                 for change in &changes {
                     change.record(tx, &mut buffer, &label, &human, now).await?;
                 }
+                let held = changes
+                    .last()
+                    .map_or(*genesis.revision(), |change| *change.stored.revision());
+                let newest = newest_human_change(tx.conn(), true).await?;
+                let record = Checkout {
+                    tree: held.tree,
+                    revision: held.number,
+                    human_change: newest.map(|change| change.id),
+                };
+                set_checkout(tx, &record, now).await?;
                 if git_sync {
                     enable_sync(tx, &mut buffer, &label, &config.git.branch, now).await?;
                 }
@@ -670,6 +687,11 @@ impl Init<'_> {
             let paths = paths_owned;
             let objects = ObjectStore::open(&paths.fold_dir()).map_err(FoldError::from)?;
             exclude_fold_dir(&paths.git_dir())?;
+            // A stash the repository holds already is the human's, and only a change of it counts as one fold did not make.
+            let repo = paths.git_dir();
+            let stash = git.ref_commit(&repo, STASH_REF)?;
+            set_ref(&git, &repo, FOLD_STASH_REF, stash.as_ref())?;
+            set_ref(&git, &repo, FOLD_BRANCH_REF, Some(&commit))?;
             let opts = GitImportOptions { max_file_bytes };
             let imported = import_commit(&objects, &git, paths.root(), commit.as_str(), &opts)?;
             let genesis = write_revision(&objects, &genesis_revision(imported.tree, now))
@@ -689,6 +711,12 @@ impl Init<'_> {
             .write(async |tx| -> Result<(), ProjectError> {
                 insert_revision(tx, &genesis).await?;
                 create_main(tx, RevisionId::GENESIS).await?;
+                let record = Checkout {
+                    tree: genesis.revision().tree,
+                    revision: RevisionId::GENESIS,
+                    human_change: None,
+                };
+                set_checkout(tx, &record, now).await?;
                 enable_sync(tx, &mut EventBuffer::new(), &label, &branch, now).await?;
                 Ok(())
             })
@@ -1440,28 +1468,46 @@ pub struct ProjectOverview {
 pub enum ProjectAttention {
     /// The `[git]` branch has commits fold did not write, so the project folder stops following main until a human runs `fld pull`, which brings them in.
     OutsideCommits,
-    /// The project folder has changes that are not committed, so it stops following main until the human records them with `fld record`, commits or stashes them.
+    /// The project folder has changes that no revision records, which the human records with `fld record`. While Git sync is on, such a change on a path main changed also keeps the folder and the branch where they are.
     UncommittedChanges,
+    /// The `[git]` branch or `HEAD` shows a change fold did not make, such as another branch checked out, a reset or a stash, so the project folder stops following main until the human brings the branch back.
+    HeadMoved,
 }
 
 impl ProjectAttention {
+    pub const ALL: [ProjectAttention; 3] = [
+        ProjectAttention::OutsideCommits,
+        ProjectAttention::UncommittedChanges,
+        ProjectAttention::HeadMoved,
+    ];
+
     /// The name the HTTP view and the `git.attention_cleared` event give the kind.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::OutsideCommits => "outside_commits",
             Self::UncommittedChanges => "uncommitted_changes",
+            Self::HeadMoved => "head_moved",
+        }
+    }
+
+    fn index(self) -> usize {
+        match self {
+            Self::OutsideCommits => 0,
+            Self::UncommittedChanges => 1,
+            Self::HeadMoved => 2,
         }
     }
 }
 
-/// What the commit writer's last run found that needs a person. It is derived from the repository, never stored: the writer's first run after the project opens finds it again.
+/// What the project folder's last follow and the commit writer's last run found that needs a person. It is derived from the folder and the repository, never stored: the first run after the project opens finds it again.
 #[derive(Debug, Default)]
 pub struct GitAttention {
-    outside: AtomicBool,
-    uncommitted: AtomicBool,
+    raised: [AtomicBool; 3],
+    /// Since when the branch shows a change fold did not make, with the command that brings it back.
+    moved: std::sync::Mutex<Option<(Timestamp, String)>>,
 }
 
-/// How a run of the commit writer changed the project's Git attention.
+/// How a run changed the project's attention.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct AttentionChange {
     pub(crate) raised: Vec<ProjectAttention>,
@@ -1470,28 +1516,32 @@ pub(crate) struct AttentionChange {
 
 impl GitAttention {
     pub fn kinds(&self) -> Vec<ProjectAttention> {
-        let mut kinds = Vec::new();
-        if self.outside.load(Ordering::Relaxed) {
-            kinds.push(ProjectAttention::OutsideCommits);
-        }
-        if self.uncommitted.load(Ordering::Relaxed) {
-            kinds.push(ProjectAttention::UncommittedChanges);
-        }
-        kinds
+        ProjectAttention::ALL
+            .into_iter()
+            .filter(|kind| self.raised[kind.index()].load(Ordering::Relaxed))
+            .collect()
     }
 
-    /// Records what a run found and returns what changed since the run before; the first run after the project opens compares with nothing found.
-    pub(crate) fn set(&self, outside: bool, uncommitted: bool) -> AttentionChange {
+    /// Since when the branch shows a change fold did not make, with the command that brings it back.
+    pub fn head_moved(&self) -> Option<(Timestamp, String)> {
+        crate::support::lock(&self.moved).clone()
+    }
+
+    /// Notes the hint of a branch change fold did not make, keeping the time it was first seen, or clears it with `None`.
+    pub(crate) fn note_moved(&self, hint: Option<String>, now: Timestamp) {
+        let mut moved = crate::support::lock(&self.moved);
+        *moved = hint.map(|hint| {
+            let since = moved.as_ref().map_or(now, |(since, _)| *since);
+            (since, hint)
+        });
+    }
+
+    /// Records the kinds a run found and returns what changed since the run before; the first run after the project opens compares with nothing found.
+    pub(crate) fn set(&self, found: &[ProjectAttention]) -> AttentionChange {
         let mut change = AttentionChange::default();
-        for (flag, now, kind) in [
-            (&self.outside, outside, ProjectAttention::OutsideCommits),
-            (
-                &self.uncommitted,
-                uncommitted,
-                ProjectAttention::UncommittedChanges,
-            ),
-        ] {
-            match (flag.swap(now, Ordering::Relaxed), now) {
+        for kind in ProjectAttention::ALL {
+            let now = found.contains(&kind);
+            match (self.raised[kind.index()].swap(now, Ordering::Relaxed), now) {
                 (false, true) => change.raised.push(kind),
                 (true, false) => change.cleared.push(kind),
                 _ => {}
@@ -1800,23 +1850,29 @@ mod tests {
             raised: raised.to_vec(),
             cleared: cleared.to_vec(),
         };
-        use ProjectAttention::{OutsideCommits, UncommittedChanges};
-        assert_eq!(attention.set(false, false), change(&[], &[]));
+        use ProjectAttention::{HeadMoved, OutsideCommits, UncommittedChanges};
+        assert_eq!(attention.set(&[]), change(&[], &[]));
         assert_eq!(
-            attention.set(true, true),
+            attention.set(&[UncommittedChanges, OutsideCommits]),
             change(&[OutsideCommits, UncommittedChanges], &[])
         );
         assert_eq!(attention.kinds(), [OutsideCommits, UncommittedChanges]);
-        assert_eq!(attention.set(true, true), change(&[], &[]));
         assert_eq!(
-            attention.set(true, false),
-            change(&[], &[UncommittedChanges])
+            attention.set(&[OutsideCommits, UncommittedChanges]),
+            change(&[], &[])
         );
-        assert_eq!(attention.set(false, false), change(&[], &[OutsideCommits]));
+        assert_eq!(
+            attention.set(&[OutsideCommits, HeadMoved]),
+            change(&[HeadMoved], &[UncommittedChanges])
+        );
+        assert_eq!(
+            attention.set(&[]),
+            change(&[], &[OutsideCommits, HeadMoved])
+        );
         assert!(attention.kinds().is_empty());
         assert_eq!(
-            [OutsideCommits.as_str(), UncommittedChanges.as_str()],
-            ["outside_commits", "uncommitted_changes"]
+            ProjectAttention::ALL.map(ProjectAttention::as_str),
+            ["outside_commits", "uncommitted_changes", "head_moved"]
         );
     }
 }

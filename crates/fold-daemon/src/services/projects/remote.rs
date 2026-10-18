@@ -65,7 +65,11 @@ pub struct RemoteContext {
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) bus: EventBus,
     pub(crate) remote_lock: Arc<tokio::sync::Mutex<()>>,
-    /// What the commit writer last found that needs a person.
+    /// Held for each follow of main in the project folder and for a whole `fld record`, so only one of them reads and writes the folder and its checkout record at a time.
+    pub(crate) folder_lock: Arc<tokio::sync::Mutex<()>>,
+    /// The project's object lock, held shared while a follow reads and writes objects.
+    pub(crate) objects: Arc<tokio::sync::RwLock<()>>,
+    /// What the folder's last follow and the commit writer last found that needs a person.
     pub(crate) git_attention: Arc<GitAttention>,
 }
 
@@ -85,6 +89,8 @@ impl RemoteContext {
             clock,
             bus,
             remote_lock: Arc::new(tokio::sync::Mutex::new(())),
+            folder_lock: Arc::new(tokio::sync::Mutex::new(())),
+            objects: Arc::new(tokio::sync::RwLock::new(())),
             git_attention: Arc::new(GitAttention::default()),
         }
     }
@@ -94,7 +100,8 @@ impl RemoteContext {
         self.git_attention.kinds()
     }
 
-    pub(crate) fn of(handle: &ProjectHandle) -> Self {
+    /// The context of an open project, sharing its locks and its attention.
+    pub fn of(handle: &ProjectHandle) -> Self {
         Self {
             slug: handle.slug.clone(),
             paths: handle.paths.clone(),
@@ -102,6 +109,8 @@ impl RemoteContext {
             clock: handle.clock.clone(),
             bus: handle.bus.clone(),
             remote_lock: handle.remote_lock.clone(),
+            folder_lock: handle.folder_lock.clone(),
+            objects: handle.objects.clone(),
             git_attention: handle.git_attention.clone(),
         }
     }
@@ -159,6 +168,7 @@ async fn run(
         &local,
         held,
         map,
+        None,
         handle.clock.now(),
     )
     .await?;

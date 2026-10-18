@@ -320,7 +320,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Every item that waits for a human, oldest first: questions with choices from agents to the humans, workers' permission questions, proposals waiting for a human approval and card drafts waiting for their human requester. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*` and `request.*`. */
+        /** Every item that waits for a human, oldest first: questions with choices from agents to the humans, workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, and a Git branch of the project folder that fold did not move. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved` and `git.attention_cleared`. */
         get: operations["list_needs_you"];
         put?: never;
         post?: never;
@@ -544,7 +544,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Records the human's uncommitted changes in the project folder on main, as `fld record` asks: they become one commit of the human's, which a clean merge integrates with no review, and the folder follows main; a conflict leaves main as it is and waits in Needs you while the main agent prepares the merge. A project whose Git branch has commits fold did not write is refused until `fld pull` brings them in. Socket only; the human comes from `x-fold-human`, and a process under a worker fold started is refused. */
+        /** Records the human's changes in the project folder on main, as `fld record` asks: what the folder holds against the entries fold last wrote there is one change of the human's, which a clean merge integrates with no review, and the folder follows main; a conflict leaves main as it is and waits in Needs you while the main agent prepares the merge. While Git sync is on, a project whose Git branch has commits fold did not write is refused until `fld pull` brings them in, and one whose branch or HEAD shows a change fold did not make until the human undoes it. Socket only; the human comes from `x-fold-human`, and a process under a worker fold started is refused. */
         post: operations["record_project"];
         delete?: never;
         options?: never;
@@ -1851,7 +1851,7 @@ export interface components {
             workspace: string | null;
         };
         /** @enum {string} */
-        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved" | "git.sync_enabled";
+        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved" | "git.sync_enabled" | "git.head_moved";
         /**
          * @description `needs`: this task needs the other task. `needed_by`: the other task needs this one.
          * @enum {string}
@@ -2291,7 +2291,7 @@ export interface components {
              */
             question: string | null;
             /**
-             * @description The reason of a `blocker`.
+             * @description The reason of a `blocker`; the command that brings the Git branch back for `head_moved`.
              * @example Wait until the design is signed off
              */
             reason: string | null;
@@ -2325,7 +2325,7 @@ export interface components {
          * @description Why an item waits for a human.
          * @enum {string}
          */
-        NeedsYouItemKind: "question" | "permission" | "human_review" | "request_draft" | "human_task" | "blocker" | "human_change";
+        NeedsYouItemKind: "question" | "permission" | "human_review" | "request_draft" | "human_task" | "blocker" | "human_change" | "head_moved";
         /** @description Every item that waits for a human, oldest first. */
         NeedsYouList: {
             items: components["schemas"]["NeedsYouEntry"][];
@@ -2378,10 +2378,10 @@ export interface components {
             presence: components["schemas"]["PresenceState"];
         };
         /**
-         * @description Why the project, rather than one of its tasks, needs a person. The daemon decides every kind. `outside_commits`: the Git branch of main has commits fold did not write, so the project folder stops following main until a human runs `fld pull`. `uncommitted_changes`: the project folder has changes that are not committed, so it follows main again once the human records them with `fld record`, commits or stashes them.
+         * @description Why the project, rather than one of its tasks, needs a person. The daemon decides every kind. `outside_commits`: the Git branch of main has commits fold did not write, so the project folder stops following main until a human runs `fld pull`. `uncommitted_changes`: the project folder has changes that no revision records, which the human records with `fld record`. `head_moved`: the Git branch or HEAD shows a change fold did not make, such as another branch checked out, a reset or a stash, so the project folder stops following main until the human brings the branch back.
          * @enum {string}
          */
-        ProjectAttentionKind: "outside_commits" | "uncommitted_changes";
+        ProjectAttentionKind: "outside_commits" | "uncommitted_changes" | "head_moved";
         /** @description The project's Git repository and the state of its remotes. */
         ProjectGit: {
             /** @description The branch every integration is committed to. */
@@ -2678,7 +2678,7 @@ export interface components {
             name: string;
         };
         RecordResult: {
-            /** @description The human's commit on the project's Git branch; null when up to date. */
+            /** @description The Git commit of the new revision while Git sync is on; null otherwise. */
             commit: string | null;
             /** @description In path order; empty unless conflicted. */
             conflicted: components["schemas"]["PullConflict"][];
@@ -6746,7 +6746,7 @@ export interface operations {
                     "application/json": components["schemas"]["RecordResult"];
                 };
             };
-            /** @description The human name is not valid, the project folder has another branch checked out, or the branch has commits fold did not write (`reason` `outside_commits`) */
+            /** @description The human name is not valid, the branch has commits fold did not write (`reason` `outside_commits`), or the branch or HEAD shows a change fold did not make (`reason` `head_moved`) */
             400: {
                 headers: {
                     [name: string]: unknown;

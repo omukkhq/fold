@@ -72,11 +72,11 @@ async fn stopped_at(failpoint: &str) {
     scenario.teardown();
 }
 
-/// A crash after the human's commit is written but before anything refers to it, or inside the integration's transaction, leaves no trace on main, and the next `fld record` brings in the same files.
+/// A crash after the folder is read and its objects are written but before anything refers to them, or inside the integration's transaction, leaves no trace on main, and the next `fld record` brings in the same files.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_crash_inside_fld_record_loses_nothing_and_records_nothing_twice() {
     for failpoint in [
-        "record_after_commit",
+        "record_after_snapshot",
         "integration_after_objects",
         "integration_in_transaction",
     ] {

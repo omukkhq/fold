@@ -363,7 +363,7 @@ describe("Repository screen", () => {
     renderRepository("r3");
     expect(
       await screen.findByText(
-        /The project folder \/srv\/demo shows r5 while it has no changes that are not committed/,
+        /The project folder \/srv\/demo shows r5, apart from your changes that are not recorded/,
       ),
     ).toBeTruthy();
   });

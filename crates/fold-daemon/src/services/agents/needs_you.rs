@@ -28,6 +28,8 @@ pub enum NeedsYouKind {
     Blocker,
     /// A human change from the project folder that conflicts with main. Main did not move; the main agent explains the conflict in its conversation and prepares the merge for the human's OK.
     HumanChange,
+    /// The project folder's Git branch or `HEAD` shows a change fold did not make, so fold does not update the folder until the human brings the branch back; `reason` holds the command that does it.
+    HeadMoved,
 }
 
 /// The screen on which a human answers an item.
@@ -49,7 +51,7 @@ impl NeedsYouKind {
             NeedsYouKind::HumanReview => Screen::Proposal,
             NeedsYouKind::RequestDraft => Screen::Request,
             NeedsYouKind::HumanTask | NeedsYouKind::Blocker => Screen::Task,
-            NeedsYouKind::HumanChange => Screen::Repository,
+            NeedsYouKind::HumanChange | NeedsYouKind::HeadMoved => Screen::Repository,
         }
     }
 }
@@ -76,7 +78,7 @@ pub struct NeedsYouItem {
     pub header: Option<String>,
     /// The proposal title of a `HumanReview`; the request title of a `RequestDraft`, which the claim gave it before any draft; the task title of a `HumanTask` or a `Blocker`.
     pub title: Option<String>,
-    /// The reason of a `Blocker`.
+    /// The reason of a `Blocker`; the command that brings the branch back for `HeadMoved`.
     pub reason: Option<String>,
     /// The human's Git commit of a `HumanChange`.
     pub commit: Option<String>,
@@ -85,6 +87,13 @@ pub struct NeedsYouItem {
 }
 
 impl NeedsYouItem {
+    /// The `HeadMoved` item of a branch that moved at `since`, with the command that brings it back.
+    pub fn head_moved(since: Timestamp, hint: String) -> Self {
+        let mut item = Self::new(NeedsYouKind::HeadMoved, since);
+        item.reason = Some(hint);
+        item
+    }
+
     fn new(kind: NeedsYouKind, since: Timestamp) -> Self {
         Self {
             kind,

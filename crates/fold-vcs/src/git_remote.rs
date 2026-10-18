@@ -252,118 +252,315 @@ pub fn folder_has_changes(git: &Git, paths: &ProjectPaths) -> Result<bool, FoldE
     Ok(!out.is_empty())
 }
 
-/// What [`follow_main`] did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Followed {
-    /// The branch moved, and with it the folder's files and index when the branch is checked out.
-    Moved,
-    /// The folder has changes that are not committed, or a file in the way of the update, so nothing moved.
-    Dirty,
+/// The ref that names where fold last left the `[git]` branch. A tip somewhere else is a change of the branch that fold did not make.
+pub const FOLD_BRANCH_REF: &str = "refs/fold/branch";
+
+/// Git's ref of the newest stash.
+pub const STASH_REF: &str = "refs/stash";
+
+/// The ref that holds [`STASH_REF`] as it was when fold turned Git sync on, so a stash made since is a change fold did not make.
+pub const FOLD_STASH_REF: &str = "refs/fold/stash";
+
+/// What the `[git]` branch and `HEAD` of the project folder show, against where fold left them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BranchState {
+    /// `HEAD` names the branch, whose tip is where fold left it, or a commit fold wrote after that, or nothing yet.
+    Fold { tip: Option<CommitId> },
+    /// The tip descends from `from`, where fold left the branch, with commits fold did not write.
+    Ahead { tip: CommitId, from: CommitId },
+    /// A change fold did not make: fold neither updates the folder nor moves the branch until it is undone.
+    Moved(Moved),
 }
 
-/// Moves `branch` from `tip` to `new`, a commit that descends from it, and updates the project folder as Git's `receive.denyCurrentBranch=updateInstead` does: only when the index and the tracked files match `tip`, the files and the index are brought to `new` first and the branch moves after, while it still points to `tip`. A branch that is not checked out moves alone. Untracked files stay, and one that the update would overwrite makes the folder dirty. Never by force. Blocking.
-pub fn follow_main(
-    git: &Git,
-    paths: &ProjectPaths,
-    branch: &str,
-    tip: &CommitId,
-    new: &CommitId,
-) -> Result<Followed, FoldError> {
-    let repo = paths.git_dir();
-    if checked_out_branch(git, &repo)?.as_deref() == Some(branch) {
-        if !folder_clean(git, paths, tip)? {
-            return Ok(Followed::Dirty);
+/// Why the branch counts as moved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Moved {
+    /// `HEAD` names another branch, or no branch when it is `None`.
+    OtherBranch(Option<String>),
+    /// The tip is neither fold's commit nor one of its descendants, as after a reset, an amend or a rebase; `fold` is where fold left it.
+    Rewritten { tip: CommitId, fold: CommitId },
+    /// A stash was made, or dropped, since fold turned Git sync on.
+    Stash,
+}
+
+impl Moved {
+    /// The name the `git.head_moved` event and a refusal give the reason.
+    pub fn reason(&self) -> &'static str {
+        match self {
+            Self::OtherBranch(Some(_)) => "other_branch",
+            Self::OtherBranch(None) => "detached_head",
+            Self::Rewritten { .. } => "branch_moved",
+            Self::Stash => "stash",
         }
-        let updated = git.status(
-            paths.root(),
-            &in_folder(
-                paths,
-                &["read-tree", "-u", "-m", tip.as_str(), new.as_str()],
+    }
+
+    /// The command that brings the folder back to what fold left, without losing a file: the human's own files stay, and `fld record` records what differs.
+    pub fn hint(&self, branch: &str) -> String {
+        match self {
+            Self::OtherBranch(_) => format!("run git switch {branch} in the project folder"),
+            Self::Rewritten { fold, .. } => format!(
+                "run git reset --soft {} in the project folder; your files stay as they are and fld record records them",
+                &fold.as_str()[..12]
             ),
-            "read-tree",
-        )?;
-        if !updated.success() {
-            return Ok(Followed::Dirty);
+            Self::Stash => "run git stash pop in the project folder".to_owned(),
         }
     }
-    move_branch(git, &repo, branch, new, Some(tip))?;
-    Ok(Followed::Moved)
 }
 
-/// [`follow_main`] for a folder that holds the commit `via` rather than its branch tip `tip`: `fld record` made `via` of the folder's changes on top of `tip`, and `new` descends from it. The files are first compared with `via` through an index file of fold's own, so a folder that holds other changes keeps its index as the human left it, also across the many runs of the commit writer until the next record. Only when they match is the index set to `via` and are the files and the index brought to `new`, and the branch moves from `tip` to `new`; a file that changes in between sets the index back to `tip` and nothing else changes. Blocking.
-pub fn follow_main_via(
+/// Reads [`BranchState`] for `branch` of the project folder's repository. `fold_commit` tells whether a commit is one fold wrote, as the sync map knows them, and `fold_last` is the newest of them, which stands in for [`FOLD_BRANCH_REF`] until fold first moved the branch. Blocking.
+pub fn branch_state(
     git: &Git,
     paths: &ProjectPaths,
     branch: &str,
-    tip: &CommitId,
-    via: &CommitId,
-    new: &CommitId,
-) -> Result<Followed, FoldError> {
+    fold_commit: &dyn Fn(&CommitId) -> bool,
+    fold_last: Option<&CommitId>,
+) -> Result<BranchState, FoldError> {
     let repo = paths.git_dir();
-    if checked_out_branch(git, &repo)?.as_deref() != Some(branch) || !files_match(git, paths, via)?
+    let checked_out = checked_out_branch(git, &repo)?;
+    if checked_out.as_deref() != Some(branch) {
+        // A repository with no commit yet, as `git init` leaves it, gets fold's branch when fold writes its first commit.
+        let unborn = |name: &str| -> Result<bool, FoldError> {
+            Ok(git.ref_commit(&repo, &branch_ref(name))?.is_none())
+        };
+        if let Some(other) = &checked_out
+            && unborn(other)?
+            && unborn(branch)?
+        {
+            return Ok(BranchState::Fold { tip: None });
+        }
+        return Ok(BranchState::Moved(Moved::OtherBranch(checked_out)));
+    }
+    if git.ref_commit(&repo, STASH_REF)? != git.ref_commit(&repo, FOLD_STASH_REF)? {
+        return Ok(BranchState::Moved(Moved::Stash));
+    }
+    let Some(tip) = git.ref_commit(&repo, &branch_ref(branch))? else {
+        return Ok(BranchState::Fold { tip: None });
+    };
+    let Some(left) = git
+        .ref_commit(&repo, FOLD_BRANCH_REF)?
+        .or_else(|| fold_last.cloned())
+    else {
+        return Ok(BranchState::Fold { tip: Some(tip) });
+    };
+    if left == tip {
+        return Ok(BranchState::Fold { tip: Some(tip) });
+    }
+    if !is_ancestor(git, &repo, &left, &tip)? {
+        return Ok(BranchState::Moved(Moved::Rewritten { tip, fold: left }));
+    }
+    // A commit fold wrote past where it left the branch is a move whose ref write a stop cut off, and a commit of the human that a revision of fold's merged is one main holds.
+    if fold_commit(&tip)
+        || fold_last.is_some_and(|last| {
+            *last != tip && is_ancestor(git, &repo, &tip, last).unwrap_or(false)
+        })
     {
-        return Ok(Followed::Dirty);
+        return Ok(BranchState::Fold { tip: Some(tip) });
     }
-    index_to(git, paths, via)?;
-    let moved = folder_clean(git, paths, via)?
-        && git
-            .status(
-                paths.root(),
-                &in_folder(
-                    paths,
-                    &["read-tree", "-u", "-m", via.as_str(), new.as_str()],
-                ),
-                "read-tree",
-            )?
-            .success();
-    if !moved {
-        index_to(git, paths, tip)?;
-        return Ok(Followed::Dirty);
-    }
-    move_branch(git, &repo, branch, new, Some(tip))?;
-    Ok(Followed::Moved)
+    Ok(BranchState::Ahead { tip, from: left })
 }
 
-static INDEX_FILES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// A cheap fingerprint of the refs [`branch_state`] reads, from their files alone with no `git` process: `HEAD`, the branch's loose ref, `packed-refs` and the stash. It changes when one of them changes, so a watch reads the state only then. Blocking.
+pub fn branch_stamp(paths: &ProjectPaths, branch: &str) -> Vec<u8> {
+    let repo = paths.git_dir();
+    let mut stamp = Vec::new();
+    for file in [
+        repo.join("HEAD"),
+        repo.join("refs/heads").join(branch),
+        repo.join("refs/stash"),
+        repo.join("packed-refs"),
+    ] {
+        match fs::read(&file) {
+            Ok(bytes) => stamp.extend_from_slice(&bytes),
+            Err(_) => stamp.push(0),
+        }
+        stamp.push(b'\n');
+    }
+    stamp
+}
 
-/// Whether the tracked files of the project folder match the tree of `commit`, read through an index file of fold's own in the repository that holds that tree, so the folder's index is never written. Untracked files do not count. Blocking.
-fn files_match(git: &Git, paths: &ProjectPaths, commit: &CommitId) -> Result<bool, FoldError> {
-    let index = paths.git_dir().join(format!(
-        "fold-index-{}-{}",
-        std::process::id(),
-        INDEX_FILES.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    ));
-    let run = |args: &[&str], what: &'static str| {
+/// Moves `branch` from `tip` to `new`, a commit that descends from it, while it still points to `tip`, or creates it on `new` when `tip` is `None`, and then records the move in [`FOLD_BRANCH_REF`]. Before the branch moves, the index follows: every path that differs between the two commits gets `new`'s entry when the index still holds `tip`'s, and a path whose index entry is the human's own keeps it, so `git status` shows only the human's changes. An unborn branch is created on `new` with `HEAD` naming it and the index set to `new` whole. False, with nothing moved, when an index entry of a path that differs is the human's own: committing it would undo main's change. Never by force. Blocking.
+pub fn move_branch_and_index(
+    git: &Git,
+    paths: &ProjectPaths,
+    branch: &str,
+    tip: Option<&CommitId>,
+    new: &CommitId,
+) -> Result<bool, FoldError> {
+    let repo = paths.git_dir();
+    match tip {
+        None => {
+            // The index comes first, so the branch exists only once the folder's Git state is whole.
+            index_to(git, paths, new)?;
+            move_branch(git, &repo, branch, new, None)?;
+            git.output(
+                &repo,
+                &["symbolic-ref", "HEAD", &branch_ref(branch)],
+                "symbolic-ref",
+            )?;
+        }
+        Some(tip) if tip == new => {}
+        Some(tip) => {
+            if !index_follow(git, paths, tip, new)? {
+                return Ok(false);
+            }
+            move_branch(git, &repo, branch, new, Some(tip))?;
+        }
+    }
+    set_ref(git, &repo, FOLD_BRANCH_REF, Some(new))?;
+    Ok(true)
+}
+
+/// A mode and an object id, as an index or tree entry names them in Git's text.
+type GitEntry = (Vec<u8>, Vec<u8>);
+
+/// One path of `git diff-tree -r -z` between two commits: its old and new mode and object.
+struct TreeChange {
+    path: Vec<u8>,
+    old: Option<GitEntry>,
+    new: Option<GitEntry>,
+}
+
+const ZERO_MODE: &[u8] = b"000000";
+
+fn entry(mode: &[u8], object: &[u8]) -> Option<GitEntry> {
+    (mode != ZERO_MODE).then(|| (mode.to_vec(), object.to_vec()))
+}
+
+/// The paths that differ between `old` and `new`. Blocking.
+fn tree_changes(
+    git: &Git,
+    repo: &Path,
+    old: &CommitId,
+    new: &CommitId,
+) -> Result<Vec<TreeChange>, FoldError> {
+    let out = git.output(
+        repo,
+        &[
+            "diff-tree",
+            "-r",
+            "-z",
+            "--no-renames",
+            "--no-commit-id",
+            old.as_str(),
+            new.as_str(),
+        ],
+        "diff-tree",
+    )?;
+    let mut fields = out.split(|&byte| byte == 0).filter(|part| !part.is_empty());
+    let mut changes = Vec::new();
+    while let Some(header) = fields.next() {
+        let header = header
+            .strip_prefix(b":")
+            .ok_or_else(|| unexpected_output("diff-tree"))?;
+        let parts: Vec<&[u8]> = header.split(|&byte| byte == b' ').collect();
+        let [old_mode, new_mode, old_object, new_object, _status] = parts[..] else {
+            return Err(unexpected_output("diff-tree"));
+        };
+        let path = fields
+            .next()
+            .ok_or_else(|| unexpected_output("diff-tree"))?;
+        changes.push(TreeChange {
+            path: path.to_vec(),
+            old: entry(old_mode, old_object),
+            new: entry(new_mode, new_object),
+        });
+    }
+    Ok(changes)
+}
+
+/// The stage-0 entries of the folder's index, by path. Blocking.
+fn index_entries(
+    git: &Git,
+    paths: &ProjectPaths,
+) -> Result<std::collections::HashMap<Vec<u8>, Option<GitEntry>>, FoldError> {
+    let out = git.output(
+        paths.root(),
+        &in_folder(paths, &["ls-files", "-s", "-z"]),
+        "ls-files",
+    )?;
+    let mut entries = std::collections::HashMap::new();
+    for line in out.split(|&byte| byte == 0).filter(|line| !line.is_empty()) {
+        let (head, path) = line
+            .iter()
+            .position(|&byte| byte == b'\t')
+            .map(|at| (&line[..at], &line[at + 1..]))
+            .ok_or_else(|| unexpected_output("ls-files"))?;
+        let parts: Vec<&[u8]> = head.split(|&byte| byte == b' ').collect();
+        let [mode, object, stage] = parts[..] else {
+            return Err(unexpected_output("ls-files"));
+        };
+        // An entry with a merge stage is the human's own unfinished merge.
+        let found = (stage == b"0").then(|| (mode.to_vec(), object.to_vec()));
+        entries.insert(path.to_vec(), found);
+    }
+    Ok(entries)
+}
+
+/// Brings the index entries of the paths that differ between `old` and `new` from `old`'s to `new`'s, as [`move_branch_and_index`] describes. Blocking.
+fn index_follow(
+    git: &Git,
+    paths: &ProjectPaths,
+    old: &CommitId,
+    new: &CommitId,
+) -> Result<bool, FoldError> {
+    let changes = tree_changes(git, &paths.git_dir(), old, new)?;
+    if changes.is_empty() {
+        return Ok(true);
+    }
+    let index = index_entries(git, paths)?;
+    let mut info = Vec::new();
+    for change in &changes {
+        let now = index.get(&change.path).cloned().unwrap_or(None);
+        let present = index.contains_key(&change.path);
+        if present && now.is_none() {
+            return Ok(false);
+        }
+        if now == change.new {
+            continue;
+        }
+        if now != change.old {
+            return Ok(false);
+        }
+        match &change.new {
+            Some((mode, object)) => {
+                info.extend_from_slice(mode);
+                info.push(b' ');
+                info.extend_from_slice(object);
+            }
+            None => info.extend_from_slice(b"0 0000000000000000000000000000000000000000"),
+        }
+        info.push(b'\t');
+        info.extend_from_slice(&change.path);
+        info.push(0);
+    }
+    if !info.is_empty() {
         let mut command = git.command(paths.root());
         command
-            .args(in_folder(paths, args))
-            .env("GIT_INDEX_FILE", &index);
-        Git::spawn(&mut command, what)?
+            .args(in_folder(paths, &["update-index", "-z", "--index-info"]))
+            .stdin(Stdio::piped());
+        let mut child = Git::spawn(&mut command, "update-index")?;
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write as _;
+            stdin
+                .write_all(&info)
+                .map_err(|error| wait_error(&error, "update-index"))?;
+        }
+        let status = child
             .wait()
-            .map_err(|error| wait_error(&error, what))
-    };
-    let matched = (|| {
-        let read = run(&["read-tree", commit.as_str()], "read-tree")?;
-        if !read.success() {
-            return Err(failed("read-tree", read));
+            .map_err(|error| wait_error(&error, "update-index"))?;
+        if !status.success() {
+            return Err(failed("update-index", status));
         }
-        // The fresh index has no file stats; the refresh compares each file's content, and its exit code is what the check below answers.
-        run(
-            &["update-index", "-q", "--ignore-submodules", "--refresh"],
-            "update-index",
-        )?;
-        let diff = run(
-            &["diff-files", "--quiet", "--ignore-submodules", "--"],
-            "diff-files",
-        )?;
-        match diff.code() {
-            Some(0) => Ok(true),
-            Some(1) => Ok(false),
-            _ => Err(failed("diff-files", diff)),
-        }
-    })();
-    let _ = fs::remove_file(&index);
-    matched
+    }
+    let refreshed = git.status(
+        paths.root(),
+        &in_folder(paths, &["update-index", "-q", "--refresh"]),
+        "update-index",
+    )?;
+    match refreshed.code() {
+        Some(0 | 1) => Ok(true),
+        _ => Err(failed("update-index", refreshed)),
+    }
 }
 
 /// Points the remote `name` of the project's repository `mirror` at `url`. The URL is never put in an error, because it can hold credentials. Blocking.

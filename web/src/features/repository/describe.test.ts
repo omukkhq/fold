@@ -196,7 +196,7 @@ describe("mainCopyText", () => {
     expect(
       mainCopyText({ head: "r17", main_path: "/srv/demo", recent: [] }),
     ).toBe(
-      "The project folder /srv/demo shows r17 while it has no changes that are not committed. Agents read it; builds run in workspaces.",
+      "The project folder /srv/demo shows r17, apart from your changes that are not recorded. Agents read it; builds run in workspaces.",
     );
   });
 

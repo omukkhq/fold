@@ -59,12 +59,13 @@ pub struct ProjectOverview {
     pub paused_by: Option<String>,
 }
 
-/// Why the project, rather than one of its tasks, needs a person. The daemon decides every kind. `outside_commits`: the Git branch of main has commits fold did not write, so the project folder stops following main until a human runs `fld pull`. `uncommitted_changes`: the project folder has changes that are not committed, so it follows main again once the human records them with `fld record`, commits or stashes them.
+/// Why the project, rather than one of its tasks, needs a person. The daemon decides every kind. `outside_commits`: the Git branch of main has commits fold did not write, so the project folder stops following main until a human runs `fld pull`. `uncommitted_changes`: the project folder has changes that no revision records, which the human records with `fld record`. `head_moved`: the Git branch or HEAD shows a change fold did not make, such as another branch checked out, a reset or a stash, so the project folder stops following main until the human brings the branch back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectAttentionKind {
     OutsideCommits,
     UncommittedChanges,
+    HeadMoved,
 }
 
 impl From<projects::ProjectAttention> for ProjectAttentionKind {
@@ -72,6 +73,7 @@ impl From<projects::ProjectAttention> for ProjectAttentionKind {
         match attention {
             projects::ProjectAttention::OutsideCommits => Self::OutsideCommits,
             projects::ProjectAttention::UncommittedChanges => Self::UncommittedChanges,
+            projects::ProjectAttention::HeadMoved => Self::HeadMoved,
         }
     }
 }
@@ -672,7 +674,7 @@ pub struct RecordTouched {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct RecordResult {
     pub outcome: RecordState,
-    /// The human's commit on the project's Git branch; null when up to date.
+    /// The Git commit of the new revision while Git sync is on; null otherwise.
     #[schema(required = true)]
     pub commit: Option<String>,
     /// Main's head: the new revision of a recorded change, else the head main stays on.
@@ -727,7 +729,7 @@ impl From<RecordOutcome> for RecordResult {
                 skipped: left,
             } => Self {
                 outcome: RecordState::Recorded,
-                commit: Some(commit.to_string()),
+                commit: commit.map(|commit| commit.to_string()),
                 revision: revision.to_string(),
                 files,
                 conflicted: Vec::new(),
@@ -736,7 +738,6 @@ impl From<RecordOutcome> for RecordResult {
                 created: true,
             },
             RecordOutcome::Conflicted {
-                commit,
                 head,
                 conflicted,
                 touched: found,
@@ -744,7 +745,7 @@ impl From<RecordOutcome> for RecordResult {
                 created,
             } => Self {
                 outcome: RecordState::Conflicted,
-                commit: Some(commit.to_string()),
+                commit: None,
                 revision: head.to_string(),
                 files: Vec::new(),
                 conflicted: conflicted
@@ -762,7 +763,7 @@ impl From<RecordOutcome> for RecordResult {
     }
 }
 
-/// Records the human's uncommitted changes in the project folder on main, as `fld record` asks: they become one commit of the human's, which a clean merge integrates with no review, and the folder follows main; a conflict leaves main as it is and waits in Needs you while the main agent prepares the merge. A project whose Git branch has commits fold did not write is refused until `fld pull` brings them in. Socket only; the human comes from `x-fold-human`, and a process under a worker fold started is refused.
+/// Records the human's changes in the project folder on main, as `fld record` asks: what the folder holds against the entries fold last wrote there is one change of the human's, which a clean merge integrates with no review, and the folder follows main; a conflict leaves main as it is and waits in Needs you while the main agent prepares the merge. While Git sync is on, a project whose Git branch has commits fold did not write is refused until `fld pull` brings them in, and one whose branch or HEAD shows a change fold did not make until the human undoes it. Socket only; the human comes from `x-fold-human`, and a process under a worker fold started is refused.
 #[utoipa::path(
     post,
     path = "/api/v1/projects/{slug}/record",
@@ -770,7 +771,7 @@ impl From<RecordOutcome> for RecordResult {
     params(("slug" = String, Path, description = "The project slug")),
     responses(
         (status = 200, description = "Main holds the human change, or it waits for the main agent", body = RecordResult),
-        (status = 400, description = "The human name is not valid, the project folder has another branch checked out, or the branch has commits fold did not write (`reason` `outside_commits`)", body = ErrorEnvelope),
+        (status = 400, description = "The human name is not valid, the branch has commits fold did not write (`reason` `outside_commits`), or the branch or HEAD shows a change fold did not make (`reason` `head_moved`)", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
         (status = 404, description = "Not on the socket, or the slug is not registered", body = ErrorEnvelope),
         (status = 409, description = "Main moved during every attempt, or the config or sync map is invalid", body = ErrorEnvelope),

@@ -45,9 +45,12 @@ fn summary(response: &Response) -> Result<Vec<String>, RemoteError> {
         }
         "recorded" => {
             let files = list("files")?;
+            let commit = body["commit"]
+                .as_str()
+                .map(|commit| format!(", Git commit {}", short(commit)))
+                .unwrap_or_default();
             let mut lines = vec![format!(
-                "recorded {} in main as {revision}: {}; the project folder follows main",
-                short(text("commit")?),
+                "recorded your changes in main as {revision}{commit}: {}; the project folder follows main",
                 output::count(files.len(), "file", "files")
             )];
             push_paths(
@@ -62,13 +65,11 @@ fn summary(response: &Response) -> Result<Vec<String>, RemoteError> {
             let paths = output::count(conflicted.len(), "path", "paths");
             let mut lines = vec![if body["created"].as_bool().ok_or(RemoteError::Answer)? {
                 format!(
-                    "{} conflicts with main {revision} in {paths}; main did not move. Your files stay as they are and the change waits in Needs you; ask the main agent to explain the conflict and prepare the merge for your OK",
-                    short(text("commit")?)
+                    "your changes conflict with main {revision} in {paths}; main did not move. Your files stay as they are and the change waits in Needs you; ask the main agent to explain the conflict and prepare the merge for your OK"
                 )
             } else {
                 format!(
-                    "{} waits for the main agent already ({paths} conflicted); nothing new was recorded",
-                    short(text("commit")?)
+                    "your changes wait for the main agent already ({paths} conflicted); nothing new was recorded"
                 )
             }];
             for conflict in conflicted.iter().take(LISTED_PATHS) {
@@ -156,30 +157,37 @@ mod tests {
                 "skipped": [{"path": "big.bin", "reason": "too_large"}], "created": true,
             })),
             [
-                "recorded 0123456 in main as r4: 2 files; the project folder follows main",
+                "recorded your changes in main as r4, Git commit 0123456: 2 files; the project folder follows main",
                 "  README.md",
                 "  docs/plan.md",
                 "T-2 changes the same files in ws-3; fold tells its lead and the main agent",
                 "left out big.bin (too_large), as an import leaves it out",
             ]
         );
+        assert_eq!(
+            lines(json!({
+                "outcome": "recorded", "commit": null, "revision": "r4", "files": ["a.txt"],
+                "conflicted": [], "touched": [], "skipped": [], "created": true,
+            }))[0],
+            "recorded your changes in main as r4: 1 file; the project folder follows main"
+        );
         let conflicted = lines(json!({
-            "outcome": "conflicted", "commit": COMMIT, "revision": "r5", "files": [],
+            "outcome": "conflicted", "commit": null, "revision": "r5", "files": [],
             "conflicted": [{"path": "a.txt", "kind": "both_modified_text"}], "touched": [], "skipped": [], "created": true,
         }));
         assert!(
             conflicted[0]
-                .starts_with("0123456 conflicts with main r5 in 1 path; main did not move.")
+                .starts_with("your changes conflict with main r5 in 1 path; main did not move.")
         );
         assert!(conflicted[0].contains("main agent"));
         assert_eq!(conflicted[1], "  a.txt (both_modified_text)");
         let waiting = lines(json!({
-            "outcome": "conflicted", "commit": COMMIT, "revision": "r5", "files": [],
+            "outcome": "conflicted", "commit": null, "revision": "r5", "files": [],
             "conflicted": [{"path": "a.txt", "kind": "both_modified_text"}], "touched": [], "skipped": [], "created": false,
         }));
         assert_eq!(
             waiting[0],
-            "0123456 waits for the main agent already (1 path conflicted); nothing new was recorded"
+            "your changes wait for the main agent already (1 path conflicted); nothing new was recorded"
         );
     }
 

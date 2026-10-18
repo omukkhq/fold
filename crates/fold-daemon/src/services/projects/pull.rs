@@ -112,6 +112,7 @@ async fn run(
         &local,
         held,
         map,
+        None,
         handle.clock.now(),
     )
     .await?;

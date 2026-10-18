@@ -46,6 +46,8 @@ mod crash_checkpoint;
 #[cfg(feature = "failpoints")]
 mod crash_direct_change;
 #[cfg(feature = "failpoints")]
+mod crash_folder;
+#[cfg(feature = "failpoints")]
 mod crash_git_commit;
 #[cfg(feature = "failpoints")]
 mod crash_init;
@@ -105,6 +107,7 @@ mod no_proposal_tasks;
 mod notifications;
 mod openapi;
 mod presence_events;
+mod project_folder;
 mod project_git;
 mod project_pause;
 mod projects;
