@@ -26,7 +26,7 @@ We use fold to build and maintain our own projects.
 
 ### Install fold
 
-fold uses your installed Claude Code. Before you start, install Git **2.36 or newer** and sign in to Claude Code version **2.1.299 or newer**. See the [Claude Code installation guide](https://code.claude.com/docs/en/overview#get-started).
+fold uses your installed Claude Code. Before you start, sign in to Claude Code version **2.1.299 or newer**. To use Git with a project, also install Git **2.36 or newer**. See the [Claude Code installation guide](https://code.claude.com/docs/en/overview#get-started).
 
 Install fold on **Linux AMD64 (x86_64)**, **Linux ARM64 (aarch64)**, or **macOS 13 or newer with Apple silicon (ARM64)**. The Linux binaries are static and run on any distribution.
 
@@ -42,14 +42,7 @@ The `fld` binary includes the web application.
 
 ### Open a project
 
-For an existing Git repository, run these commands from its root. Commit or stash pending changes first, and check out a branch.
-
-```bash
-fld init --from-git
-fld claude
-```
-
-Or create a new project:
+Create a new project:
 
 ```bash
 fld init my-project
@@ -57,7 +50,16 @@ cd my-project
 fld claude
 ```
 
-`fld init` adds the fold connection, skill, and hooks to your project's Claude Code configuration. `fld claude` starts the daemon when needed and opens your main agent session. To start the daemon at login instead, run `fld setup` once: it installs a systemd user service on Linux and a launchd agent on macOS.
+Run `fld init` without a name to make the current folder a project. For an existing Git repository, run these commands from its root. Commit or stash pending changes first, and check out a branch.
+
+```bash
+fld init --with-git
+fld claude
+```
+
+The first time you use fld on a device, it asks for the name that fold shows for you, and keeps it for every project. Set `FOLD_HUMAN` to use another name.
+
+`fld init` adds fold's section to the project's agent instructions and the fold skill to the project. The first `fld claude` or `fld setup` asks once to add the fold connection and hooks to your Claude Code user configuration. `fld claude` starts the daemon when needed and opens your main agent session. To start the daemon at login instead, run `fld setup` once: it installs a systemd user service on Linux and a launchd agent on macOS.
 
 ### Describe the work
 
@@ -83,19 +85,38 @@ flowchart LR
 1. **Plan.** Your main agent turns the goal into tasks, dependencies, and review requirements. You approve the scope before execution.
 2. **Build.** Lead agents coordinate workers, each with a task and its own workspace. Workers submit their changes as proposals.
 3. **Review.** Reviewer agents inspect and test the proposals. Requested changes go back to the author. Tasks marked for human review also need your approval.
-4. **Integrate.** By default, fold integrates approved proposals when their prerequisites are complete. The project folder follows integrated main, and each integration creates a Git commit.
+4. **Integrate.** By default, fold integrates approved proposals when their prerequisites are complete. The project folder follows integrated main. When Git is on, each integration also creates a Git commit.
 
 fold keeps its project data in `.fold/`. Agents build in workspaces under `.fold/ws/`; the project folder holds the integrated result. Checkpoints and persistent messages help agents continue work across sessions.
 
-## Work with Git
+A project's history starts at the genesis revision `r0`: an empty tree, or the commit at `HEAD` of an existing Git repository. The files of a new project are your first change, `r1`.
 
-An existing repository keeps its history when you initialize it with `fld init --from-git`. Use fold's commands to connect a remote and exchange changes:
+## Change files yourself
+
+You can edit the files in the project folder. fold does not overwrite a file you changed, and agents do not see your changes until you record them:
 
 ```bash
-fld remote set origin <repository-url> <branch>
+fld record
+```
+
+`fld record` makes your changes one revision of main. If they conflict with the agents' work, they wait in **Needs you**, and the main agent helps you resolve them. When Git is on, a commit that you make yourself is recorded at once.
+
+## Work with Git
+
+`fld init --with-git` turns Git on for a project, and Git stays on after that:
+
+- In a Git repository, the commit at `HEAD` becomes the genesis, and the repository keeps its history.
+- In a fold project or a new folder, fold creates the repository. If your Git configuration has no name and email, fold asks for them and keeps them in the repository's own configuration. `--git-name` and `--git-email` give them without the question.
+
+When Git is on, every revision of main becomes a commit on the checked-out branch, with your Git identity as author and committer. Use fold's commands to connect a remote and exchange changes:
+
+```bash
+fld remote add origin <repository-url> [<branch>]
 fld push
 fld pull
 ```
+
+Without a branch, fold uses the branch that the remote's `HEAD` names, or `main` when the remote is empty. A project that has no Git yet needs `fld init --with-git` first. When a project has more than one remote, give its name: `fld push <name>` or `fld pull <name>`. `fld remote list` shows the remotes, and `fld remote remove <name>` deletes one.
 
 fold pushes without force. If incoming changes conflict, fold creates a sync task to resolve them through its task and review workflow.
 
@@ -109,6 +130,7 @@ Run these commands inside your project:
 | `fld new` | Start a fresh main agent session. |
 | `fld pause` | Stop project workers and keep their sessions. |
 | `fld resume` | Resume workers stopped by a project pause. |
+| `fld record` | Record your own changes in the project folder on main. |
 | `fld setup` | Start the daemon at login. |
 | `fld doctor` | Check the installation, daemon, and projects, with suggested fixes. |
 | `fld --help` | See the command reference. |
