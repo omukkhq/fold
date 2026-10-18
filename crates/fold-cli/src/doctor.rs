@@ -414,7 +414,7 @@ fn git_check(host: &Host) -> Check {
     } else {
         Check::warn(
             "git",
-            "git is not on PATH; fold needs it for fld init, the Git commit of every integration, which the project folder follows, fld record, fld remote, fld push and fld pull",
+            "git is not on PATH; fold needs it only in a project whose Git sync is on: for fld init --with-git, the Git commit of every revision, fld remote, fld push and fld pull",
             "install git",
         )
     }
@@ -799,10 +799,20 @@ fn project_checks(
     let mut checks = vec![
         database_check(&paths, &facts),
         objects_check(&paths.objects()),
-        git_history_check(&paths, host),
-        folder_check(&paths, host),
-        exclude_check(&paths),
     ];
+    if facts.git_sync == Some(false) {
+        // A plain folder has no Git repository, so fold reads no Git state of it.
+        checks.push(Check::ok(
+            "git sync",
+            "Git sync is off; fld init --with-git turns Git on",
+        ));
+    } else {
+        checks.extend([
+            git_history_check(&paths, host),
+            folder_check(&paths, host),
+            exclude_check(&paths),
+        ]);
+    }
     checks.push(if watch_applicable {
         degraded_check(&facts, now)
     } else {
@@ -841,6 +851,8 @@ pub(crate) struct DatabaseFacts {
     /// The pragma itself returned an error, which SQLite does for a damaged page it cannot read.
     pub(crate) quick_check_errored: bool,
     pub(crate) degraded: Vec<Timestamp>,
+    /// Whether the project's Git sync is on; `None` when the database cannot tell.
+    pub(crate) git_sync: Option<bool>,
 }
 
 /// SQLite sets bytes 18 and 19 of the header to 2 in WAL mode. Reading the header avoids the journal-mode pragma, which a connection may try to change.
@@ -882,6 +894,11 @@ async fn inspect_database(path: &Path, events_now: Option<Timestamp>) -> Databas
     {
         facts.degraded = degraded_events(&mut conn, now).await.unwrap_or_default();
     }
+    facts.git_sync = sqlx::query_scalar!(r#"SELECT COUNT(*) AS "count!: i64" FROM git_sync"#)
+        .fetch_one(&mut conn)
+        .await
+        .ok()
+        .map(|rows| rows > 0);
     let _ = conn.close().await;
     facts
 }
@@ -1078,7 +1095,7 @@ fn git_history_check(paths: &ProjectPaths, host: &Host) -> Check {
             format!(
                 ".git does not hold {commit}, the commit of {revision}, so new revisions get no Git commit"
             ),
-            "run fld remote set <name> <url> with a repository that holds that commit, then fld pull <name>",
+            "run fld remote add <name> <url> with a repository that holds that commit, then fld pull <name>",
         ),
     }
 }

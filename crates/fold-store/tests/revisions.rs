@@ -1,7 +1,8 @@
 use crate::revisions_support::{append, child, count, exec, hash, id, init, integration, stored};
-use fold_core::codes;
 use fold_core::revision::Revision;
+use fold_core::{RevisionId, codes};
 use fold_store::testing::{TestProject, assert_append_only};
+use fold_store::workspaces::{create_initial_revision, genesis_revision};
 use fold_store::{StoreError, workspaces};
 
 #[tokio::test]
@@ -144,20 +145,20 @@ async fn a_missing_parent_or_integration_is_refused() {
 }
 
 #[tokio::test]
-async fn revision_one_and_a_parent_go_together() {
+async fn only_the_first_revision_has_no_parent() {
     let project = TestProject::new().await;
-    init(&project).await;
     let with_parent = exec(
         project.store(),
-        "INSERT INTO revisions (number, hash, tree_hash, parent_id, created_at) VALUES (1, 'a', 'b', 1, 0)",
+        "INSERT INTO revisions (number, hash, tree_hash, parent_id, created_at) VALUES (0, 'a', 'b', 7, 0)",
     )
     .await
     .unwrap_err();
     assert!(
         with_parent
             .to_string()
-            .contains("revisions_number_one_iff_no_parent")
+            .contains("revisions_genesis_only_without_parent")
     );
+    init(&project).await;
     let without_parent = exec(
         project.store(),
         "INSERT INTO revisions (number, hash, tree_hash, created_at) VALUES (2, 'a', 'b', 0)",
@@ -167,8 +168,38 @@ async fn revision_one_and_a_parent_go_together() {
     assert!(
         without_parent
             .to_string()
-            .contains("revisions_number_one_iff_no_parent")
+            .contains("revisions_genesis_only_without_parent")
     );
+}
+
+#[tokio::test]
+async fn the_genesis_is_r0_and_the_next_revision_is_r1() {
+    let project = TestProject::new().await;
+    let genesis = genesis_revision(fold_core::tree::empty_tree_hash(), project.now());
+    let row = create_initial_revision(project.store(), &stored(&genesis), None)
+        .await
+        .unwrap();
+    assert_eq!(row.number, RevisionId::GENESIS);
+    assert_eq!(row.parent, None);
+    let found = workspaces::genesis(project.store().read())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(found.number, RevisionId::GENESIS);
+    assert_eq!(
+        workspaces::head(project.store().read())
+            .await
+            .unwrap()
+            .unwrap()
+            .number,
+        RevisionId::GENESIS
+    );
+    let next = project
+        .store()
+        .write(async |tx| fold_store::counters::allocate(tx, fold_core::IdKind::Revision).await)
+        .await
+        .unwrap();
+    assert_eq!(next, 1, "the genesis takes no number from the counter");
 }
 
 #[tokio::test]
@@ -408,5 +439,36 @@ async fn a_remote_keeps_its_last_push_and_the_failure_after_it() {
         "INSERT INTO remote_states (name, pushed_at) VALUES ('y', 0)",
     ] {
         assert!(exec(store, bad).await.is_err(), "{bad}");
+    }
+}
+
+#[tokio::test]
+async fn git_sync_stays_on_once_it_is_on() {
+    let plain = TestProject::plain().await;
+    assert_eq!(
+        workspaces::git_sync(plain.store().read()).await.unwrap(),
+        None
+    );
+    let project = TestProject::new().await;
+    let on = workspaces::git_sync(project.store().read())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(on.enabled_by, fold_store::testing::GIT_SYNC_HUMAN);
+    let again = project
+        .store()
+        .write(async |tx| workspaces::enable_git_sync(tx, "human:bo", project.now()).await)
+        .await
+        .unwrap();
+    assert!(!again, "it stays as it was turned on");
+    for sql in [
+        "UPDATE git_sync SET enabled_by = 'human:bo'",
+        "DELETE FROM git_sync",
+    ] {
+        let refused = exec(project.store(), sql).await.unwrap_err();
+        assert!(
+            refused.to_string().contains("git_sync is append-only"),
+            "{sql}"
+        );
     }
 }

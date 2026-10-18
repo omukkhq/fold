@@ -152,7 +152,7 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
     if let Some(change) = fold_store::workspaces::conflicted_human_change(&mut conn).await? {
         let mut item = NeedsYouItem::new(NeedsYouKind::HumanChange, change.created_at);
         item.human = HumanName::parse(&change.human).ok();
-        item.commit = Some(change.commit);
+        item.commit = change.commit;
         item.paths = change
             .conflicts
             .iter()

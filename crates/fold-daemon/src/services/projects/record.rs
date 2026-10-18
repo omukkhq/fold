@@ -23,16 +23,14 @@ use fold_vcs::scan::Skipped;
 use serde_json::json;
 
 use super::commits::{commit_locked, commit_main};
-use super::pull::{
-    PulledConflict, SyncCheck, map_fast_forward, own_repository, project_error, sync_base,
-};
+use super::pull::{PulledConflict, SyncCheck, map_fast_forward, project_error, sync_base};
 use super::remote::blocking;
 use super::{ProjectError, load_config};
 use crate::projects::ProjectHandle;
 use crate::services::events::EventBuffer;
 #[cfg(feature = "failpoints")]
 use crate::services::fired;
-use crate::services::reviews::{self as review, HumanRecord, PullIntegration, ReviewService};
+use crate::services::reviews::{self as review, HumanRecord, RecordIntegration, ReviewService};
 use crate::services::workspaces::{WorkspaceError, WorkspaceService};
 
 /// How many times a record starts again from reading main when main moved between its own merge and the integration's.
@@ -106,6 +104,7 @@ async fn run(
         )
         .into());
     };
+    super::require_git_sync(&handle.store, "fld record").await?;
     let config = load_config(&handle.paths).await?;
     let branch = config.git.branch.clone();
     let remote_guard = handle.remote_lock.clone().lock_owned().await;
@@ -177,9 +176,9 @@ async fn run(
         }
         SyncCheck::Base(base) => base,
     };
-    let first = RevisionId::from_number(1).ok_or(StoreError::Corrupt("revision number 1"))?;
-    let first_tree = workspaces::get_by_number(handle.store.read(), first)
+    let first_tree = workspaces::genesis(handle.store.read())
         .await?
+        .ok_or(StoreError::Corrupt("revisions.genesis"))?
         .tree_hash;
     let base_tree = {
         // Shared while the trees are written or refreshed, so a collection never deletes an object before the row that names it commits.
@@ -241,13 +240,13 @@ async fn run(
                 })
                 .collect();
             let change = NewHumanChange {
-                commit: tip.as_str(),
+                commit: Some(tip.as_str()),
                 human: human.as_str(),
                 base_tree,
                 tree: human_tree,
                 now: handle.clock.now(),
             };
-            let mut data = reach.event_data(tip.as_str());
+            let mut data = reach.event_data(Some(tip.as_str()));
             let conflicted: Vec<String> = rows
                 .iter()
                 .map(|row| String::from_utf8_lossy(&row.path).into_owned())
@@ -282,19 +281,17 @@ async fn run(
             });
         }
         drop(serial);
-        let request = PullIntegration {
-            remote_commit: tip.to_string(),
-            remote: own_repository(&handle.paths),
-            branch: branch.clone(),
+        let request = RecordIntegration {
+            commit: Some(tip.to_string()),
             base_tree,
-            remote_tree: human_tree,
-            human: Some(HumanRecord {
+            tree: human_tree,
+            human: HumanRecord {
                 human: human.clone(),
-                data: reach.event_data(tip.as_str()),
-            }),
+                data: reach.event_data(Some(tip.as_str())),
+            },
         };
         let revision = match reviews
-            .integrate_pull(actor, request)
+            .integrate_record(actor, request)
             .await
             .map_err(project_error)?
         {
@@ -365,7 +362,9 @@ async fn snapshot_folder(
             .acquire()
             .await
             .map_err(StoreError::from)?;
-        workspaces::newest_human_change(&mut conn, false).await?
+        workspaces::newest_human_change(&mut conn, false)
+            .await?
+            .and_then(|change| Some((change.commit?, change.tree)))
     };
     let (tip, newest) = {
         let (git, repo, branch) = (git.clone(), repo.clone(), branch.to_owned());
@@ -534,7 +533,7 @@ async fn waiting_change(
     let mut conn = store.read().acquire().await.map_err(StoreError::from)?;
     Ok(workspaces::conflicted_human_change(&mut conn)
         .await?
-        .filter(|row| row.commit == tip.as_str())
+        .filter(|row| row.commit.as_deref() == Some(tip.as_str()))
         .map(|row| row.conflicts.iter().map(pulled_conflict).collect()))
 }
 

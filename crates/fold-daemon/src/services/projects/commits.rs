@@ -1,8 +1,9 @@
 use fold_core::events::types;
+use fold_core::tree::empty_tree_hash;
 use fold_core::{Actor, Clock, FoldError, NewEvent, ProjectPaths, RevisionId, Timestamp, codes};
 use fold_store::workspaces::{
-    IntegrationKind, RevisionRow, get_by_number, head, insert_revision_commits, list_after,
-    newest_human_change, uncommitted_revisions,
+    IntegrationKind, RevisionRow, genesis, get_by_number, git_sync, insert_revision_commits,
+    list_after, newest_human_change, uncommitted_revisions,
 };
 use fold_store::{Store, StoreError};
 use fold_vcs::git::{CommitId, Git};
@@ -36,13 +37,16 @@ pub struct Committed {
     pub events: EventBuffer,
 }
 
-/// Writes the commit of every main revision that `.fold/git-sync.map` does not name yet into the project's Git repository at [`ProjectPaths::git_dir`], records each in `revision_commits`, and brings the `[git]` branch and the project folder to the newest. The project's Git sync lock is held throughout, so this, a push and a pull run one after the other, in this process or another. Running it again with nothing new changes nothing.
+/// Writes the commit of every main revision that `.fold/git-sync.map` does not name yet into the project's Git repository at [`ProjectPaths::git_dir`], records each in `revision_commits`, and brings the `[git]` branch and the project folder to the newest. The project's Git sync lock is held throughout, so this, a push and a pull run one after the other, in this process or another. Running it again with nothing new changes nothing, and so does a run while Git sync is off: nothing touches Git then.
 pub async fn commit_main(
     store: &Store,
     paths: &ProjectPaths,
     git: &Git,
     clock: &dyn Clock,
 ) -> Result<Committed, ProjectError> {
+    if git_sync(store.read()).await?.is_none() {
+        return Ok(Committed::default());
+    }
     let branch = load_config(paths).await?.git.branch;
     let fold_dir = paths.fold_dir();
     let (held, map) = blocking(move || SyncMap::lock(&fold_dir)).await?;
@@ -53,7 +57,7 @@ pub async fn commit_main(
 
 /// [`commit_main`] for a caller that holds the Git sync lock (`held`) and read `map` under it; both come back for the caller's next step.
 ///
-/// The map is the record of which revision is which commit, so [`FOLD_HEAD_REF`] is first put on the map's last commit: a ref a stopped write moved past it is written again. A commit's id depends on its revision and on the Git identity the repository's config names when the commit is written, which is its author and committer, so the same identity writes the same commits again; once the map names a commit, it is that revision's commit for good, whatever the config says later. `git fast-import` writes the new commits there, and the map gains their lines. The `[git]` branch is checked out in the project folder and moves only by fast-forward, after the map: an unborn branch is created on `r1`'s commit, whose tree the folder holds as `fld init` leaves it, with the index set to it, and then follows as any branch does; a tip that is not an ancestor of fold's newest commit holds commits someone made outside fold, so nothing moves and the tip is returned in [`Committed::outside`]; otherwise the folder follows as [`follow_main`] describes, or stays when it has changes of its own. A stop between the map and the move leaves a branch that the next run moves. Then one transaction adds a `revision_commits` row and a `git.committed` event for every mapped revision that has none, which also covers a map line whose row a stop cut off.
+/// The map is the record of which revision is which commit, so [`FOLD_HEAD_REF`] is first put on the map's last commit: a ref a stopped write moved past it is written again. A commit's id depends on its revision and on the Git identity the repository's config names when the commit is written, which is its author and committer, so the same identity writes the same commits again; once the map names a commit, it is that revision's commit for good, whatever the config says later. `git fast-import` writes the new commits there, and the map gains their lines. The `[git]` branch is checked out in the project folder and moves only by fast-forward, after the map: an unborn branch is created on the newest commit, whose tree the folder holds as init and turning Git sync on leave it, with the index set to it; a tip that is not an ancestor of fold's newest commit holds commits someone made outside fold, so nothing moves and the tip is returned in [`Committed::outside`]; otherwise the folder follows as [`follow_main`] describes, or stays when it has changes of its own. A stop between the map and the move leaves a branch that the next run moves. Then one transaction adds a `revision_commits` row and a `git.committed` event for every mapped revision that has none, which also covers a map line whose row a stop cut off.
 pub(crate) async fn commit_locked<H: Send + 'static>(
     store: &Store,
     paths: &ProjectPaths,
@@ -76,7 +80,8 @@ pub(crate) async fn commit_locked<H: Send + 'static>(
         let mut conn = store.read().acquire().await.map_err(StoreError::from)?;
         newest_human_change(&mut conn, true).await?
     }
-    .map(|(commit, _)| commit.parse::<CommitId>())
+    .and_then(|change| change.commit)
+    .map(|commit| commit.parse::<CommitId>())
     .transpose()?;
     let (git, paths_owned, branch_owned) = (git.clone(), paths.clone(), branch.to_owned());
     let (held, map, mut committed) = blocking(move || {
@@ -140,14 +145,10 @@ pub(crate) async fn commit_locked<H: Send + 'static>(
         let tip = match git.ref_commit(&repo, &branch_ref(&branch))? {
             Some(tip) => tip,
             None => {
-                // The folder's files are r1's when its branch is born, as `fld init` leaves them.
-                let first = map
-                    .entries()
-                    .first()
-                    .map_or_else(|| newest.clone(), |(_, commit)| commit.clone());
-                move_branch(&git, &repo, &branch, &first, None)?;
-                index_to(&git, &paths, &first)?;
-                first
+                // The folder holds main's files when its branch is born, as init and turning Git sync on leave them.
+                move_branch(&git, &repo, &branch, &newest, None)?;
+                index_to(&git, &paths, &newest)?;
+                newest.clone()
             }
         };
         match tip {
@@ -212,14 +213,14 @@ fn history_missing(revision: RevisionId, commit: &CommitId) -> FoldError {
             "the project's Git repository does not hold {commit}, the commit of {revision}, so the commits of the revisions after it cannot be written"
         ),
     )
-    .with_hint("run fld remote set <name> <url> with a repository that holds that commit, such as one the project was pushed to, then fld pull <name>")
+    .with_hint("run fld remote add <name> <url> with a repository that holds that commit, such as one the project was pushed to, then fld pull <name>")
     .with_details([
         ("revision", json!(revision.to_string())),
         ("commit", json!(commit.as_str())),
     ])
 }
 
-/// The main revisions after `last`, the newest mapped revision and its commit, oldest first, with the base the first of them continues; every revision and no base when nothing is mapped, and none when main has no revision.
+/// The main revisions after `last`, the newest mapped revision and its commit, oldest first, with the base the first of them continues; every revision and no base when nothing is mapped, and none when main has no revision. A genesis with the empty tree gets no commit, so the Git history of a plain folder starts at `r1`, a commit without a parent.
 async fn unsynced(
     store: &Store,
     last: Option<&(RevisionId, CommitId)>,
@@ -234,13 +235,15 @@ async fn unsynced(
             Ok((list_after(pool, *number).await?, Some(base)))
         }
         None => {
-            if head(pool).await?.is_none() {
+            let Some(genesis) = genesis(pool).await? else {
                 return Ok((Vec::new(), None));
+            };
+            let after = list_after(pool, genesis.number).await?;
+            let mut rows = Vec::with_capacity(after.len() + 1);
+            if genesis.tree_hash != empty_tree_hash() {
+                rows.push(genesis);
             }
-            let first =
-                RevisionId::from_number(1).ok_or(StoreError::Corrupt("revision number 1"))?;
-            let mut rows = vec![get_by_number(pool, first).await?];
-            rows.extend(list_after(pool, first).await?);
+            rows.extend(after);
             Ok((rows, None))
         }
     }
@@ -325,6 +328,15 @@ pub fn commit_message(row: &RevisionRow) -> String {
         (None, IntegrationKind::Proposal) => {
             format!("fold {revision}\n\nFold-Revision: {revision}\n")
         }
+        (None, IntegrationKind::Record) => match integration.remote_commit.as_deref() {
+            Some(commit) => {
+                let short = commit.get(..12).unwrap_or(commit);
+                format!("Merge commit {short} of the project folder\n\nFold-Revision: {revision}\n")
+            }
+            None => {
+                format!("Record the changes of the project folder\n\nFold-Revision: {revision}\n")
+            }
+        },
     }
 }
 

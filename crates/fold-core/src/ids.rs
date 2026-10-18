@@ -196,7 +196,74 @@ macro_rules! define_id {
 define_id!(TaskId, IdKind::Task);
 define_id!(ProposalId, IdKind::Proposal);
 define_id!(ChangesetId, IdKind::Changeset);
-define_id!(RevisionId, IdKind::Revision);
+
+/// The public id of a revision. Unlike the other ids it starts at `r0`, the genesis revision every project starts from, so its number may be zero.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RevisionId(u32);
+
+impl RevisionId {
+    pub const KIND: IdKind = IdKind::Revision;
+    pub const PREFIX: &'static str = IdKind::Revision.prefix();
+    /// `r0`, the genesis revision.
+    pub const GENESIS: Self = Self(0);
+
+    pub fn number(self) -> u32 {
+        self.0
+    }
+
+    /// Every number is a revision number; the `Option` keeps the signature of the other ids.
+    pub fn from_number(number: u32) -> Option<Self> {
+        Some(Self(number))
+    }
+
+    /// The value of the `number` column.
+    pub fn to_db(self) -> i64 {
+        i64::from(self.0)
+    }
+
+    pub fn try_from_db(value: i64) -> Option<Self> {
+        u32::try_from(value).ok().map(Self)
+    }
+
+    /// The revision after this one, `None` past the last number.
+    pub fn next(self) -> Option<Self> {
+        self.0.checked_add(1).map(Self)
+    }
+}
+
+impl fmt::Display for RevisionId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}{}", Self::PREFIX, self.0)
+    }
+}
+
+impl FromStr for RevisionId {
+    type Err = IdParseError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let rest = text
+            .strip_prefix(Self::PREFIX)
+            .ok_or(IdParseError::WrongPrefix)?;
+        if rest == "0" {
+            return Ok(Self::GENESIS);
+        }
+        parse_number(rest).map(|number| Self(number.get()))
+    }
+}
+
+impl Serialize for RevisionId {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for RevisionId {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        text.parse().map_err(serde::de::Error::custom)
+    }
+}
+
 define_id!(WorkspaceId, IdKind::Workspace);
 define_id!(CheckpointId, IdKind::Checkpoint);
 define_id!(MessageId, IdKind::Message);
@@ -292,6 +359,14 @@ mod tests {
             assert_eq!(text.parse::<TaskId>(), Err(expected), "{text:?}");
         }
         assert_eq!("rc-0".parse::<CommentId>(), Err(IdParseError::Zero));
+        assert_eq!("r0".parse::<RevisionId>(), Ok(RevisionId::GENESIS));
+        assert_eq!(RevisionId::GENESIS.to_string(), "r0");
+        assert_eq!(RevisionId::try_from_db(0), Some(RevisionId::GENESIS));
+        assert_eq!("r00".parse::<RevisionId>(), Err(IdParseError::LeadingZero));
+        assert_eq!("r01".parse::<RevisionId>(), Err(IdParseError::LeadingZero));
+        assert_eq!("r".parse::<RevisionId>(), Err(IdParseError::NotANumber));
+        assert_eq!(RevisionId::GENESIS.next(), RevisionId::from_number(1));
+        assert_eq!(RevisionId::from_number(u32::MAX).unwrap().next(), None);
         assert_eq!("i-0".parse::<IntegrationId>(), Err(IdParseError::Zero));
         assert_eq!(
             "r3".parse::<IntegrationId>(),

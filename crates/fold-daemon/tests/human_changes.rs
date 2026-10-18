@@ -233,7 +233,7 @@ async fn fld_record_makes_the_folder_one_commit_of_the_human_on_main_and_the_fol
             .fetch_one(h.handle.store.read())
             .await
             .unwrap();
-    assert_eq!((kind.as_str(), actor.as_str()), ("pull", "human:ana"));
+    assert_eq!((kind.as_str(), actor.as_str()), ("record", "human:ana"));
     assert_eq!(human_change_states(&h).await, ["recorded"]);
 
     // Main did not move meanwhile, so the human's own commit is r2's commit and the branch follows it.

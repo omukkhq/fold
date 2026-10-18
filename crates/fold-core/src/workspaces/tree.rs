@@ -90,6 +90,11 @@ pub fn validate_name(name: &[u8]) -> Result<(), TreeError> {
     }
 }
 
+/// The hash of the tree with no entries, which a plain folder's genesis `r0` holds.
+pub fn empty_tree_hash() -> ObjectHash {
+    hash_object(ObjectKind::Tree, &[])
+}
+
 impl Tree {
     /// Entries may be given in any order; the payload is always sorted by name bytes.
     pub fn encode(&self) -> Result<Vec<u8>, TreeError> {
@@ -615,6 +620,7 @@ mod tests {
     #[test]
     fn empty_tree_is_empty_payload() {
         assert_eq!(Tree::default().encode().unwrap(), Vec::<u8>::new());
+        assert_eq!(Tree::default().hash().unwrap(), empty_tree_hash());
         assert_eq!(Tree::decode(&[]).unwrap(), Tree::default());
     }
 

@@ -39,8 +39,8 @@ pub struct OpenedMainWorkspace {
 /// A conflicted human change as the main agent sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WaitingHumanChange {
-    /// The human's commit on the project's Git branch.
-    pub commit: String,
+    /// The human's Git commit; `None` for a change `fld record` read from the project folder.
+    pub commit: Option<String>,
     pub human: String,
     /// Whether the main workspace holds its merge. A main workspace that was open before the change came holds other work, which the main agent submits or abandons first.
     pub held: bool,
@@ -214,7 +214,10 @@ impl WorkspaceService {
         let (base_tree, human_tree) = (change.base_tree, change.tree);
         let labels = MarkerLabels {
             ours: "workspace".to_owned(),
-            base: format!("base {}", short_commit(&change.commit)),
+            base: match &change.commit {
+                Some(commit) => format!("base {}", short_commit(commit)),
+                None => "base project folder".to_owned(),
+            },
             theirs: format!("main {head}"),
         };
         blocking(move || {

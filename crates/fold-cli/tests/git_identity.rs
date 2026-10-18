@@ -148,7 +148,7 @@ fn local(project: &Path, key: &str) -> Option<String> {
 fn without_a_terminal_init_warns_and_succeeds() {
     let sandbox = Sandbox::new();
     let project = sandbox.path("p");
-    let output = sandbox.fold(&["init", project.to_str().unwrap()], &[]);
+    let output = sandbox.fold(&["init", "--with-git", project.to_str().unwrap()], &[]);
     assert!(output.status.success(), "{output:?}");
     let text = stderr(&output);
     assert!(text.contains("git config user.name"), "{text}");
@@ -164,6 +164,7 @@ fn the_flags_write_the_project_config_only() {
     let output = sandbox.fold(
         &[
             "init",
+            "--with-git",
             project.to_str().unwrap(),
             "--git-name",
             "Ana Lima",
@@ -187,7 +188,12 @@ fn a_flag_value_that_starts_with_a_dash_is_a_value() {
     let sandbox = Sandbox::new();
     let project = sandbox.path("p");
     let output = sandbox.fold(
-        &["init", project.to_str().unwrap(), "--git-name=-dash"],
+        &[
+            "init",
+            "--with-git",
+            project.to_str().unwrap(),
+            "--git-name=-dash",
+        ],
         &[],
     );
     assert!(output.status.success(), "{output:?}");
@@ -202,7 +208,7 @@ fn a_global_identity_is_left_alone() {
     let sandbox = Sandbox::new();
     sandbox.write_global("[user]\n\tname = Global\n\temail = global@example.com\n");
     let project = sandbox.path("p");
-    let output = sandbox.fold(&["init", project.to_str().unwrap()], &[]);
+    let output = sandbox.fold(&["init", "--with-git", project.to_str().unwrap()], &[]);
     assert!(output.status.success(), "{output:?}");
     assert_eq!(stderr(&output), "");
     assert_eq!(local(&project, "user.name"), None);
@@ -214,7 +220,7 @@ fn only_the_missing_value_is_named() {
     let sandbox = Sandbox::new();
     sandbox.write_global("[user]\n\tname = Global\n");
     let project = sandbox.path("p");
-    let output = sandbox.fold(&["init", project.to_str().unwrap()], &[]);
+    let output = sandbox.fold(&["init", "--with-git", project.to_str().unwrap()], &[]);
     assert!(output.status.success(), "{output:?}");
     let text = stderr(&output);
     assert!(text.contains("git config user.email"), "{text}");
@@ -234,7 +240,10 @@ const IDENTITY_VARIABLES: [(&str, &str); 4] = [
 fn identity_variables_alone_go_into_the_project_config_and_every_fold_commit() {
     let sandbox = Sandbox::new();
     let project = sandbox.path("p");
-    let output = sandbox.fold(&["init", project.to_str().unwrap()], &IDENTITY_VARIABLES);
+    let output = sandbox.fold(
+        &["init", "--with-git", project.to_str().unwrap()],
+        &IDENTITY_VARIABLES,
+    );
     assert!(output.status.success(), "{output:?}");
     assert_eq!(stderr(&output), "");
     assert_eq!(local(&project, "user.name").as_deref(), Some("Env Name"));
@@ -276,7 +285,10 @@ fn a_config_identity_wins_over_identity_variables_and_is_not_copied() {
     let sandbox = Sandbox::new();
     sandbox.write_global("[user]\n\tname = Global\n\temail = global@example.com\n");
     let project = sandbox.path("p");
-    let output = sandbox.fold(&["init", project.to_str().unwrap()], &IDENTITY_VARIABLES);
+    let output = sandbox.fold(
+        &["init", "--with-git", project.to_str().unwrap()],
+        &IDENTITY_VARIABLES,
+    );
     assert!(output.status.success(), "{output:?}");
     assert_eq!(stderr(&output), "");
     assert_eq!(local(&project, "user.name"), None);
@@ -292,7 +304,7 @@ fn invalid_identity_variables_count_as_unset() {
     let sandbox = Sandbox::new();
     let project = sandbox.path("p");
     let output = sandbox.fold(
-        &["init", project.to_str().unwrap()],
+        &["init", "--with-git", project.to_str().unwrap()],
         &[("GIT_AUTHOR_NAME", "Bad <name>"), ("EMAIL", "nobody")],
     );
     assert!(output.status.success(), "{output:?}");
@@ -307,7 +319,13 @@ fn a_bad_flag_value_is_refused_before_anything_is_created() {
     let sandbox = Sandbox::new();
     let project = sandbox.path("p");
     let output = sandbox.fold(
-        &["init", project.to_str().unwrap(), "--git-email", "nobody"],
+        &[
+            "init",
+            "--with-git",
+            project.to_str().unwrap(),
+            "--git-email",
+            "nobody",
+        ],
         &[],
     );
     assert!(!output.status.success());
@@ -343,6 +361,29 @@ fn from_git_takes_no_identity_flags() {
     assert!(!output.status.success());
 }
 
+#[test]
+fn a_plain_init_asks_nothing_and_makes_no_repository() {
+    let sandbox = Sandbox::new();
+    let project = sandbox.path("p");
+    let output = sandbox.fold(&["init", project.to_str().unwrap()], &[]);
+    assert!(output.status.success(), "{output:?}");
+    assert!(!stderr(&output).contains("git config"), "{output:?}");
+    assert!(!project.join(".git").exists());
+    let output = sandbox.fold(
+        &[
+            "init",
+            sandbox.path("q").to_str().unwrap(),
+            "--git-name",
+            "Ana",
+        ],
+        &[],
+    );
+    assert!(
+        !output.status.success(),
+        "the identity is only for --with-git"
+    );
+}
+
 /// The author and committer of the commit of `r1`, as Git shows them.
 #[cfg(test)]
 fn first_commit(project: &Path) -> String {
@@ -364,6 +405,7 @@ fn the_first_commit_takes_the_flag_identity() {
     let output = sandbox.fold(
         &[
             "init",
+            "--with-git",
             project.to_str().unwrap(),
             "--git-name",
             "Ana Lima",
@@ -384,7 +426,7 @@ fn the_first_commit_takes_the_global_identity() {
     let sandbox = Sandbox::new();
     sandbox.write_global("[user]\n\tname = Global\n\temail = global@example.com\n");
     let project = sandbox.path("p");
-    let output = sandbox.fold(&["init", project.to_str().unwrap()], &[]);
+    let output = sandbox.fold(&["init", "--with-git", project.to_str().unwrap()], &[]);
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
         first_commit(&project),
@@ -396,7 +438,7 @@ fn the_first_commit_takes_the_global_identity() {
 fn the_first_commit_has_the_fold_signature_without_an_identity() {
     let sandbox = Sandbox::new();
     let project = sandbox.path("p");
-    let output = sandbox.fold(&["init", project.to_str().unwrap()], &[]);
+    let output = sandbox.fold(&["init", "--with-git", project.to_str().unwrap()], &[]);
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
         first_commit(&project),

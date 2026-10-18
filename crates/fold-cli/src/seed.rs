@@ -131,6 +131,7 @@ fn seed(args: &SeedArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), SeedEr
         dir: Some(dir.clone()),
         name: Some("Demo".to_owned()),
         from_git: false,
+        with_git: true,
         socket: Some(socket.clone()),
         refresh: false,
         git_name: Some("Demo".to_owned()),

@@ -36,10 +36,10 @@ impl From<RevisionError> for FoldError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Revision {
     pub tree: ObjectHash,
-    /// `None` only for `r1`.
+    /// `None` only for the genesis, the first revision.
     pub parent: Option<ObjectHash>,
     pub number: RevisionId,
-    /// The number of the integration that made this revision; never a row id. `None` for `r1`.
+    /// The number of the integration that made this revision; never a row id. `None` for the genesis.
     pub integration: Option<IntegrationId>,
     pub created_at: Timestamp,
 }
@@ -257,7 +257,11 @@ mod tests {
         .encode();
         // tree(32) + parent flag(1) then the number varint.
         zero.splice(33..35, [0u8]);
-        assert_eq!(Revision::decode(&zero), Err(RevisionError::BadNumber));
+        // The genesis is `r0`.
+        assert_eq!(
+            Revision::decode(&zero).map(|revision| revision.number),
+            Ok(RevisionId::GENESIS)
+        );
         let mut non_minimal = Revision {
             parent: None,
             integration: None,

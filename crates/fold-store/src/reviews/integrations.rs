@@ -70,6 +70,10 @@ pub enum IntegrationSubject<'a> {
         changeset: ChangesetId,
         message: &'a str,
     },
+    /// A change of the project folder by a human, with the id of the human's Git commit when it is one.
+    Record {
+        remote_commit: Option<&'a str>,
+    },
 }
 
 /// One integration attempt as the `integrations` row records it. `number` comes from the `integration` counter; `actor` is a worker name or `human:<name>`.
@@ -196,12 +200,15 @@ async fn insert(
         ),
         IntegrationSubject::Pull { remote_commit } => ("pull", None, None, Some(remote_commit)),
         IntegrationSubject::Direct { .. } => ("direct", None, None, None),
+        IntegrationSubject::Record { remote_commit } => ("record", None, None, remote_commit),
     };
     let (changeset, message) = match new.subject {
         IntegrationSubject::Direct { changeset, message } => {
             (Some(changeset.to_db()), Some(message))
         }
-        IntegrationSubject::Proposal { .. } | IntegrationSubject::Pull { .. } => (None, None),
+        IntegrationSubject::Proposal { .. }
+        | IntegrationSubject::Pull { .. }
+        | IntegrationSubject::Record { .. } => (None, None),
     };
     let succeeded = result == "succeeded";
     let created_at = new.created_at.as_millis();

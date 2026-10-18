@@ -37,7 +37,7 @@ pub use human_edits::HumanEdit;
 pub use human_review::{AwaitingHumanReview, awaiting_human_review, awaiting_human_review_in};
 pub use integrate::{
     AutomaticIntegration, DirectChange, DirectOutcome, HumanRecord, IntegrationOutcome,
-    PullIntegration, PullOutcome,
+    PullIntegration, PullOutcome, RecordIntegration,
 };
 pub(crate) use proposals::proposal_missing;
 pub use proposals::{

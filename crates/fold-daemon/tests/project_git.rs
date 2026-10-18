@@ -12,9 +12,7 @@ use fold_core::revision::Revision;
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
 use fold_core::{Actor, EventFilter, HumanName, ManualClock, RevisionId, Timestamp};
 use fold_daemon::projects::ProjectHandle;
-use fold_daemon::services::projects::{
-    ProjectAttention, PullOutcome, commit_main, init_project, pull,
-};
+use fold_daemon::services::projects::{ProjectAttention, PullOutcome, commit_main, pull};
 use fold_store::projects::ProjectRow;
 use fold_store::testing::TestProject;
 use fold_store::workspaces::{self, advance_main, insert_revision};
@@ -297,7 +295,9 @@ impl Opened {
         let folder = dir.path().join("app");
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join("a.txt"), "one\n").unwrap();
-        let made = init_project(&host, &folder, None, &clock).await.unwrap();
+        let made = crate::common::init_with_git(&host, &folder, &clock)
+            .await
+            .unwrap();
         let row = ProjectRow {
             slug: made.slug.clone(),
             name: made.name.clone(),

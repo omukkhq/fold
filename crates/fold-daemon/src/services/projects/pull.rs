@@ -91,6 +91,7 @@ async fn run(
     git: &Git,
     remote: Option<&str>,
 ) -> Result<PullOutcome, ProjectError> {
+    super::require_git_sync(&handle.store, "fld pull").await?;
     let config = load_config(&handle.paths).await?;
     let local = config.git.branch.clone();
     let remote_guard = handle.remote_lock.clone().lock_owned().await;
@@ -165,10 +166,10 @@ async fn run(
     if let Some(open) = open_sync_task(&handle.store, &name, &branch, &tip).await? {
         return Ok(open);
     }
-    let first = RevisionId::from_number(1).ok_or(StoreError::Corrupt("revision number 1"))?;
-    let first_tree = workspaces::get_by_number(handle.store.read(), first)
+    let genesis = workspaces::genesis(handle.store.read())
         .await?
-        .tree_hash;
+        .ok_or(StoreError::Corrupt("revisions.genesis"))?;
+    let first_tree = genesis.tree_hash;
     let (remote_tree, base_tree) = {
         // Shared while the trees are written or refreshed, so a collection never deletes an object between its refresh and the end of this read; from then on the grace period keeps them until the revision that names them commits.
         let objects_guard = handle.objects.clone().read_owned().await;
@@ -193,7 +194,7 @@ async fn run(
     };
     let base_label = match &base {
         Some(base) => format!("base {}", short_commit(base.commit.as_str())),
-        None => format!("base {first}"),
+        None => format!("base {}", genesis.number),
     };
     let workspaces = WorkspaceService::for_project(handle);
     let reviews = ReviewService::new(
@@ -260,7 +261,6 @@ async fn run(
             branch: branch.clone(),
             base_tree,
             remote_tree,
-            human: None,
         };
         let revision = match reviews
             .integrate_pull(actor, request)

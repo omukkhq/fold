@@ -19,13 +19,15 @@ pub const DEFAULT_REVISION_PAGE: usize = 50;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RevisionOrigin {
-    /// `r1`, from `fld init` or an import.
+    /// The genesis `r0`, which every project starts from: the empty tree, or the `HEAD` commit of a Git repository.
     Initial,
     Proposal,
     /// A revision `fld pull` made from a remote commit.
     Pull,
     /// A direct change of the main agent, on the user's word.
     Direct,
+    /// A change of the project folder by a human: what `fld record` read from the folder, or a Git commit the human made there.
+    Record,
 }
 
 impl RevisionOrigin {
@@ -35,6 +37,7 @@ impl RevisionOrigin {
             Self::Proposal => "proposal",
             Self::Pull => "pull",
             Self::Direct => "direct",
+            Self::Record => "record",
         }
     }
 }
@@ -67,12 +70,16 @@ impl From<RevisionRow> for RevisionSummary {
             Some(IntegrationKind::Proposal) => RevisionOrigin::Proposal,
             Some(IntegrationKind::Pull) => RevisionOrigin::Pull,
             Some(IntegrationKind::Direct) => RevisionOrigin::Direct,
+            Some(IntegrationKind::Record) => RevisionOrigin::Record,
         };
         let proposal = integration.as_ref().and_then(|info| info.proposal.clone());
         let author = match (&proposal, &integration) {
             (Some(proposal), _) => Some(proposal.agent.clone()),
             (None, Some(info))
-                if matches!(info.kind, IntegrationKind::Pull | IntegrationKind::Direct) =>
+                if matches!(
+                    info.kind,
+                    IntegrationKind::Pull | IntegrationKind::Direct | IntegrationKind::Record
+                ) =>
             {
                 Some(info.actor.clone())
             }
@@ -98,7 +105,9 @@ impl From<RevisionRow> for RevisionSummary {
                     .map(str::to_owned),
             },
             author,
-            pull: integration.and_then(|info| info.remote_commit),
+            pull: integration
+                .filter(|info| info.kind != IntegrationKind::Record)
+                .and_then(|info| info.remote_commit),
             commit: row.commit,
         }
     }

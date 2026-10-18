@@ -145,7 +145,9 @@ impl Harness {
         let mut initialized = None;
         let project = TestProject::initialized(async |root, host, clock| {
             copy_dir(source, root);
-            let made = init_project(host, root, Some("Demo"), clock).await.unwrap();
+            let made = init_project(host, root, Some("Demo"), &crate::common::ana(), clock)
+                .await
+                .unwrap();
             initialized = Some(made);
         })
         .await;

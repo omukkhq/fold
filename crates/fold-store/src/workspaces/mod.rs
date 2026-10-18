@@ -18,7 +18,9 @@ pub use checkpoints::{
     AUTO_CHECKPOINTS_KEPT, Checkpoint, CheckpointKind, CheckpointReason, get_checkpoint,
     insert_checkpoint, latest_checkpoint, list_checkpoints, prune_auto, prune_workspace,
 };
-pub use commits::{insert_revision_commits, uncommitted_revisions};
+pub use commits::{
+    GitSync, enable_git_sync, git_sync, insert_revision_commits, uncommitted_revisions,
+};
 pub use conflicts::{ConflictRow, clear_conflict, list_conflicts, set_conflicts};
 pub use gc::{
     ClosedWorkspace, closed_workspaces_due, gc_roots, mark_directory_removed,
@@ -44,6 +46,6 @@ pub use remotes::{
 };
 pub use revisions::{
     IntegratedProposal, IntegrationInfo, IntegrationKind, MAX_PAGE, RevisionRow, ancestors,
-    create_initial_revision, get_by_hash, get_by_number, head, initial_revision, insert_revision,
-    list_after, list_recent,
+    create_initial_revision, genesis, genesis_revision, get_by_hash, get_by_number, head,
+    initial_revision, insert_revision, list_after, list_recent,
 };

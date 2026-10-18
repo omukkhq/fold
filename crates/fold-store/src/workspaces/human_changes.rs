@@ -37,11 +37,11 @@ impl HumanChangeState {
     }
 }
 
-/// A human's commit on the project's Git branch with the two trees its merge needs.
+/// A human's change of the project folder with the two trees its merge needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewHumanChange<'a> {
-    /// The full Git object id.
-    pub commit: &'a str,
+    /// The full Git object id of the human's commit; `None` for a change `fld record` read from the folder.
+    pub commit: Option<&'a str>,
     pub human: &'a str,
     pub base_tree: ObjectHash,
     pub tree: ObjectHash,
@@ -50,7 +50,9 @@ pub struct NewHumanChange<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HumanChangeRow {
-    pub commit: String,
+    /// The row id, which the daemon keeps to itself.
+    pub id: i64,
+    pub commit: Option<String>,
     pub human: String,
     pub base_tree: ObjectHash,
     pub tree: ObjectHash,
@@ -63,24 +65,20 @@ pub struct HumanChangeRow {
     pub conflicts: Vec<ConflictRow>,
 }
 
-/// Closes the conflicted human change, when one waits, as `superseded`: a newer human change replaces it. Returns its commit.
-pub async fn supersede_conflicted(
-    tx: &mut WriteTx,
-    now: Timestamp,
-) -> Result<Option<String>, StoreError> {
+/// Closes the conflicted human change, when one waits, as `superseded`: a newer human change replaces it. True when one closed.
+pub async fn supersede_conflicted(tx: &mut WriteTx, now: Timestamp) -> Result<bool, StoreError> {
     let closed_at = now.as_millis();
-    let commit = sqlx::query_scalar!(
-        r#"UPDATE human_changes SET state = 'superseded', closed_at = ?
-           WHERE state = 'conflicted'
-           RETURNING commit_id AS "commit!""#,
+    let closed = sqlx::query!(
+        "UPDATE human_changes SET state = 'superseded', closed_at = ? WHERE state = 'conflicted'",
         closed_at
     )
-    .fetch_optional(tx.conn())
-    .await?;
-    Ok(commit)
+    .execute(tx.conn())
+    .await?
+    .rows_affected();
+    Ok(closed == 1)
 }
 
-/// Inserts a human change that the `pull` integration `integration` brought onto main.
+/// Inserts a human change that the `record` integration `integration` brought onto main.
 pub async fn insert_recorded_human_change(
     tx: &mut WriteTx,
     change: &NewHumanChange<'_>,
@@ -162,10 +160,10 @@ pub async fn set_human_change_workspace(
     Ok(updated == 1)
 }
 
-/// Closes the conflicted human change of `commit` as `resolved` by `integration`, the integration that brought its changes onto main: the direct change of the merge the main agent prepared, or any other integration whose tree holds them. False when that change no longer waits.
+/// Closes the conflicted human change `id` as `resolved` by `integration`, the integration that brought its changes onto main: the direct change of the merge the main agent prepared, or any other integration whose tree holds them. False when that change no longer waits.
 pub async fn resolve_human_change(
     tx: &mut WriteTx,
-    commit: &str,
+    id: i64,
     integration: IntegrationId,
     now: Timestamp,
 ) -> Result<bool, StoreError> {
@@ -174,10 +172,10 @@ pub async fn resolve_human_change(
         r#"UPDATE human_changes
            SET state = 'resolved', closed_at = ?,
                integration_id = (SELECT id FROM integrations WHERE number = ?)
-           WHERE state = 'conflicted' AND commit_id = ?"#,
+           WHERE state = 'conflicted' AND id = ?"#,
         closed_at,
         integration,
-        commit
+        id
     )
     .execute(tx.conn())
     .await?
@@ -204,6 +202,7 @@ pub async fn conflicted_human_change(
         return Ok(None);
     };
     let fields = Fields {
+        id: row.id,
         commit: row.commit_id,
         human: row.human,
         base_tree: row.base_tree_hash,
@@ -240,6 +239,7 @@ pub async fn human_change_of_workspace(
         return Ok(None);
     };
     let fields = Fields {
+        id: row.id,
         commit: row.commit_id,
         human: row.human,
         base_tree: row.base_tree_hash,
@@ -253,7 +253,8 @@ pub async fn human_change_of_workspace(
 }
 
 struct Fields {
-    commit: String,
+    id: i64,
+    commit: Option<String>,
     human: String,
     base_tree: String,
     tree: String,
@@ -266,6 +267,7 @@ struct Fields {
 impl Fields {
     fn into_row(self, conflicts: Vec<ConflictRow>) -> Result<HumanChangeRow, StoreError> {
         Ok(HumanChangeRow {
+            id: self.id,
             commit: self.commit,
             human: self.human,
             base_tree: tree_hash(&self.base_tree, "human_changes.base_tree_hash")?,
@@ -308,25 +310,38 @@ async fn conflicts_of<'e>(
         .collect()
 }
 
-/// The commit and tree of the newest human change, or of the newest one that main holds (`recorded` or `resolved`) when `on_main` is true.
+/// The newest human change, or the newest one that main holds (`recorded` or `resolved`) when `on_main` is true.
 pub async fn newest_human_change(
     conn: &mut SqliteConnection,
     on_main: bool,
-) -> Result<Option<(String, ObjectHash)>, StoreError> {
+) -> Result<Option<HumanChangeRow>, StoreError> {
     let row = sqlx::query!(
-        r#"SELECT commit_id, tree_hash FROM human_changes
-           WHERE NOT ?1 OR state IN ('recorded', 'resolved')
-           ORDER BY id DESC
+        r#"SELECT hc.id AS "id!: i64", hc.commit_id, hc.human, hc.base_tree_hash, hc.tree_hash, hc.state,
+                  i.number AS "integration?: i64", w.number AS "workspace?: i64",
+                  hc.created_at AS "created_at!: i64"
+           FROM human_changes hc
+           LEFT JOIN integrations i ON i.id = hc.integration_id
+           LEFT JOIN workspaces w ON w.id = hc.workspace_id
+           WHERE NOT ?1 OR hc.state IN ('recorded', 'resolved')
+           ORDER BY hc.id DESC
            LIMIT 1"#,
         on_main
     )
     .fetch_optional(&mut *conn)
     .await?;
-    row.map(|row| {
-        Ok((
-            row.commit_id,
-            tree_hash(&row.tree_hash, "human_changes.tree_hash")?,
-        ))
-    })
-    .transpose()
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let fields = Fields {
+        id: row.id,
+        commit: row.commit_id,
+        human: row.human,
+        base_tree: row.base_tree_hash,
+        tree: row.tree_hash,
+        state: row.state,
+        integration: row.integration,
+        workspace: row.workspace,
+        created_at: row.created_at,
+    };
+    Ok(Some(fields.into_row(conflicts_of(conn, row.id).await?)?))
 }

@@ -58,3 +58,47 @@ pub async fn insert_revision_commits(
     }
     Ok(())
 }
+
+/// When and by whom Git sync was turned on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitSync {
+    /// The event actor label of the human who turned it on.
+    pub enabled_by: String,
+    pub enabled_at: Timestamp,
+}
+
+/// The project's Git sync, `None` while it is off.
+pub async fn git_sync<'e>(
+    executor: impl sqlx::SqliteExecutor<'e>,
+) -> Result<Option<GitSync>, StoreError> {
+    let row = sqlx::query!(
+        r#"SELECT enabled_by, enabled_at AS "enabled_at!: i64" FROM git_sync WHERE id = 1"#
+    )
+    .fetch_optional(executor)
+    .await?;
+    row.map(|row| {
+        Ok(GitSync {
+            enabled_by: row.enabled_by,
+            enabled_at: Timestamp::from_millis(row.enabled_at)
+                .map_err(|_| StoreError::Corrupt("git_sync.enabled_at"))?,
+        })
+    })
+    .transpose()
+}
+
+/// Turns Git sync on in the caller's write transaction, for the human whose event actor label is `enabled_by`. False when it is on already: it stays as it was turned on.
+pub async fn enable_git_sync(
+    tx: &mut WriteTx,
+    enabled_by: &str,
+    now: Timestamp,
+) -> Result<bool, StoreError> {
+    let enabled_at = now.as_millis();
+    let inserted = sqlx::query!(
+        "INSERT INTO git_sync (id, enabled_by, enabled_at) VALUES (1, ?, ?) ON CONFLICT (id) DO NOTHING",
+        enabled_by,
+        enabled_at
+    )
+    .execute(tx.conn())
+    .await?;
+    Ok(inserted.rows_affected() == 1)
+}

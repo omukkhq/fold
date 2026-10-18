@@ -59,7 +59,7 @@ async fn init_creates_the_layout_and_registers_the_project() {
     let host = Host::new();
     let root = host.root("My App");
     let created = host.clock.now();
-    let project = init_project(&host.paths, &root, None, &host.clock)
+    let project = init_project(&host.paths, &root, None, &crate::common::ana(), &host.clock)
         .await
         .unwrap();
     assert_eq!(project.slug, "my-app");
@@ -76,21 +76,14 @@ async fn init_creates_the_layout_and_registers_the_project() {
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     entries.sort();
-    assert_eq!(entries, [".fold", ".foldignore", ".git", ".gitignore"]);
-    assert!(
-        std::fs::symlink_metadata(project.root.join(".gitignore"))
-            .unwrap()
-            .is_file()
-    );
+    // A plain init writes no Git data and no `.gitignore`, only an empty `.foldignore`.
+    assert_eq!(entries, [".fold", ".foldignore"]);
     assert_eq!(
         std::fs::metadata(project.root.join(".foldignore"))
             .unwrap()
             .len(),
         0
     );
-    let gitignore = std::fs::read_to_string(project.root.join(".gitignore")).unwrap();
-    assert!(gitignore.starts_with("# "));
-    assert!(gitignore.ends_with("\n.fold/\n"));
     let mut inside: Vec<_> = std::fs::read_dir(paths.fold_dir())
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
@@ -102,19 +95,60 @@ async fn init_creates_the_layout_and_registers_the_project() {
     assert!(
         !inside
             .iter()
-            .any(|found| found == "main-materialised" || found == "git")
+            .any(|found| found == "main-materialised" || found == "git" || found == "git-sync.map")
     );
     assert_eq!(project.revision.to_string(), "r1");
-    // The folder's own repository holds r1's commit with the ignore files init wrote, and keeps `.fold/` out.
-    assert_eq!(git(&project.root, &["log", "--format=%s"]), "fold r1\n");
-    assert!(
-        std::fs::read_to_string(paths.git_dir().join("info/exclude"))
-            .unwrap()
-            .lines()
-            .any(|line| line == "/.fold/")
+    assert!(!project.git_sync && project.gitignore.is_none());
+    assert_eq!(project.imported.files, 1);
+    // The genesis `r0` holds the empty tree, and the folder's files are `r1`, the human's change on top of it.
+    let store = Store::open_project(&paths).await.unwrap();
+    let genesis = fold_store::workspaces::genesis(store.read())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(genesis.number, fold_core::RevisionId::GENESIS);
+    assert_eq!(genesis.tree_hash, fold_core::tree::empty_tree_hash());
+    let r1 = fold_store::workspaces::head(store.read())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(r1.parent, Some(fold_core::RevisionId::GENESIS));
+    let integration = r1.integration.unwrap();
+    assert_eq!(
+        (integration.kind, integration.actor.as_str()),
+        (fold_store::workspaces::IntegrationKind::Record, "human:ana")
     );
-    assert_eq!(git(&project.root, &["status", "--porcelain"]), "");
-    assert_eq!(project.imported.files, 2);
+    let mut conn = store.read().acquire().await.unwrap();
+    let change = fold_store::workspaces::newest_human_change(&mut conn, true)
+        .await
+        .unwrap()
+        .unwrap();
+    drop(conn);
+    assert_eq!(change.commit, None);
+    assert_eq!(change.human, "ana");
+    assert_eq!(
+        (change.base_tree, change.tree),
+        (genesis.tree_hash, r1.tree_hash)
+    );
+    let events: Vec<String> = sqlx::query_scalar("SELECT type FROM events ORDER BY seq")
+        .fetch_all(store.read())
+        .await
+        .unwrap();
+    assert_eq!(
+        events,
+        [
+            "integration.succeeded",
+            "main.advanced",
+            "human_change.recorded"
+        ]
+    );
+    assert!(
+        fold_store::workspaces::git_sync(store.read())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    store.close().await.unwrap();
 
     let registry = host.registry().await;
     let rows = projects::list_projects(registry.read()).await.unwrap();
@@ -141,6 +175,7 @@ async fn init_uses_the_given_name_for_the_slug() {
         &host.paths,
         &host.root("dir"),
         Some("Shop Front!"),
+        &crate::common::ana(),
         &host.clock,
     )
     .await
@@ -153,10 +188,10 @@ async fn init_uses_the_given_name_for_the_slug() {
 async fn init_twice_is_refused_with_project_exists() {
     let host = Host::new();
     let root = host.root("app");
-    init_project(&host.paths, &root, None, &host.clock)
+    init_project(&host.paths, &root, None, &crate::common::ana(), &host.clock)
         .await
         .unwrap();
-    let again = init_project(&host.paths, &root, None, &host.clock)
+    let again = init_project(&host.paths, &root, None, &crate::common::ana(), &host.clock)
         .await
         .unwrap_err();
     assert_eq!(code(&again), Some("project_exists"));
@@ -169,9 +204,15 @@ async fn init_twice_is_refused_with_project_exists() {
     // An unregistered `.fold/` without a database is an init that stopped early: refused, kept, and no database is created in it.
     let stale = host.root("stale");
     std::fs::create_dir_all(stale.join(".fold")).unwrap();
-    let error = init_project(&host.paths, &stale, None, &host.clock)
-        .await
-        .unwrap_err();
+    let error = init_project(
+        &host.paths,
+        &stale,
+        None,
+        &crate::common::ana(),
+        &host.clock,
+    )
+    .await
+    .unwrap_err();
     assert_eq!(code(&error), Some("project_incomplete"));
     let ProjectError::Fold(error) = error else {
         panic!("a fold error");
@@ -210,7 +251,7 @@ async fn init_failure_after_layout_removes_what_it_created() {
     registry.close().await.unwrap();
 
     let root = host.root("app");
-    let error = init_project(&host.paths, &root, None, &host.clock)
+    let error = init_project(&host.paths, &root, None, &crate::common::ana(), &host.clock)
         .await
         .unwrap_err();
     assert!(matches!(error, ProjectError::Store(_)));
@@ -225,7 +266,7 @@ async fn slugs_stay_unique_in_one_registry() {
     let mut slugs = Vec::new();
     for parent in ["a", "b", "c"] {
         let root = host.root(parent).join("app");
-        let project = init_project(&host.paths, &root, None, &host.clock)
+        let project = init_project(&host.paths, &root, None, &crate::common::ana(), &host.clock)
             .await
             .unwrap();
         slugs.push(project.slug);
@@ -238,9 +279,10 @@ async fn concurrent_inits_choose_different_slugs() {
     let host = Host::new();
     let first = host.root("x").join("app");
     let second = host.root("y").join("app");
+    let ana = fold_core::HumanName::parse("ana").unwrap();
     let (a, b) = tokio::join!(
-        init_project(&host.paths, &first, None, &host.clock),
-        init_project(&host.paths, &second, None, &host.clock),
+        init_project(&host.paths, &first, None, &ana, &host.clock),
+        init_project(&host.paths, &second, None, &ana, &host.clock),
     );
     let mut slugs = [a.unwrap().slug, b.unwrap().slug];
     slugs.sort();
@@ -257,9 +299,15 @@ async fn load_config_returns_defaults_when_the_file_is_absent() {
 #[tokio::test]
 async fn load_config_reads_the_file_and_refuses_bad_values() {
     let host = Host::new();
-    let project = init_project(&host.paths, &host.root("app"), None, &host.clock)
-        .await
-        .unwrap();
+    let project = init_project(
+        &host.paths,
+        &host.root("app"),
+        None,
+        &crate::common::ana(),
+        &host.clock,
+    )
+    .await
+    .unwrap();
     let paths = ProjectPaths::new(&project.root);
     assert_eq!(load_config(&paths).await.unwrap(), ProjectConfig::default());
     std::fs::write(paths.config(), "lease_minutes = 7\n").unwrap();
@@ -276,9 +324,15 @@ async fn load_config_reads_the_file_and_refuses_bad_values() {
 #[tokio::test]
 async fn the_footer_lease_parses_the_file_again_only_when_a_stat_shows_a_change() {
     let host = Host::new();
-    let project = init_project(&host.paths, &host.root("app"), None, &host.clock)
-        .await
-        .unwrap();
+    let project = init_project(
+        &host.paths,
+        &host.root("app"),
+        None,
+        &crate::common::ana(),
+        &host.clock,
+    )
+    .await
+    .unwrap();
     let paths = ProjectPaths::new(&project.root);
     let config = paths.config();
     let lease = Lease::config(paths.clone());
@@ -322,7 +376,7 @@ async fn a_file_in_place_of_the_directory_is_an_io_error() {
     let host = Host::new();
     let file = host.root("file");
     std::fs::write(&file, "x").unwrap();
-    let error = init_project(&host.paths, &file, None, &host.clock)
+    let error = init_project(&host.paths, &file, None, &crate::common::ana(), &host.clock)
         .await
         .unwrap_err();
     assert_eq!(code(&error), Some("workspace_io"));
@@ -355,7 +409,25 @@ fn git(dir: &Path, args: &[&str]) -> String {
 }
 
 #[tokio::test]
-async fn init_records_the_folder_files_as_r1_and_adds_fold_to_its_gitignore() {
+async fn a_plain_init_keeps_the_gitignore_and_writes_no_git_data() {
+    let host = Host::new();
+    let root = host.root("app");
+    std::fs::create_dir_all(root.join("target")).unwrap();
+    std::fs::write(root.join("target/out"), "built").unwrap();
+    std::fs::write(root.join(".gitignore"), "target/\n").unwrap();
+    let project = init_project(&host.paths, &root, None, &crate::common::ana(), &host.clock)
+        .await
+        .unwrap();
+    assert_eq!(project.revision.to_string(), "r1");
+    // `.gitignore` and the empty `.foldignore`; the ignore rules leave `target/` out.
+    assert_eq!(project.imported.files, 2);
+    assert_eq!(read(&root, ".gitignore"), "target/\n");
+    assert_eq!(read(&root, ".foldignore"), "");
+    assert!(!root.join(".git").exists());
+}
+
+#[tokio::test]
+async fn init_with_git_records_the_folder_as_r1_and_the_gitignore_as_r2() {
     let host = Host::new();
     let root = host.root("app");
     std::fs::create_dir_all(root.join("src")).unwrap();
@@ -363,22 +435,79 @@ async fn init_records_the_folder_files_as_r1_and_adds_fold_to_its_gitignore() {
     std::fs::write(root.join("src/lib.rs"), "pub fn x() {}\n").unwrap();
     std::fs::write(root.join("target/out"), "built").unwrap();
     std::fs::write(root.join(".gitignore"), "target/\n").unwrap();
-    let project = init_project(&host.paths, &root, None, &host.clock)
-        .await
-        .unwrap();
+    let project = with_git(&host, &root).await.unwrap();
     assert_eq!(project.revision.to_string(), "r1");
-    assert_eq!(project.imported.files, 2);
-    assert_eq!(project.git_commit, None);
     assert_eq!(
-        std::fs::read_to_string(root.join(".gitignore")).unwrap(),
-        "target/\n.fold/\n"
+        project.gitignore.map(|r| r.to_string()).as_deref(),
+        Some("r2")
     );
-    assert!(!root.join(".foldignore").exists());
+    assert!(project.git_sync);
+    assert_eq!(project.imported.files, 3);
+    assert_eq!(project.git_commit, None);
+    assert_eq!(read(&root, ".gitignore"), "target/\n.fold/\n");
+    assert_eq!(read(&root, ".foldignore"), "");
     assert_eq!(
         git(&root, &["ls-tree", "-r", "--name-only", "HEAD"]),
-        ".gitignore\nsrc/lib.rs\n"
+        ".foldignore\n.gitignore\nsrc/lib.rs\n"
+    );
+    // The empty genesis gets no commit: the history starts at r1.
+    assert_eq!(
+        git(&root, &["log", "--format=%s"]),
+        "Record the changes of the project folder\nRecord the changes of the project folder\n"
+    );
+    assert_eq!(
+        git(&root, &["rev-list", "--max-parents=0", "HEAD"])
+            .lines()
+            .count(),
+        1
+    );
+    assert!(
+        std::fs::read_to_string(root.join(".git/info/exclude"))
+            .unwrap()
+            .lines()
+            .any(|line| line == "/.fold/")
     );
     assert_eq!(git(&root, &["status", "--porcelain"]), "");
+    let store = Store::open_project(&ProjectPaths::new(&project.root))
+        .await
+        .unwrap();
+    let events: Vec<String> = sqlx::query_scalar("SELECT type FROM events ORDER BY seq")
+        .fetch_all(store.read())
+        .await
+        .unwrap();
+    store.close().await.unwrap();
+    assert_eq!(
+        events,
+        [
+            "integration.succeeded",
+            "main.advanced",
+            "human_change.recorded",
+            "integration.succeeded",
+            "main.advanced",
+            "human_change.recorded",
+            "git.sync_enabled",
+            "git.committed",
+            "git.committed"
+        ]
+    );
+}
+
+#[cfg(test)]
+async fn with_git(
+    host: &Host,
+    root: &Path,
+) -> Result<project_service::InitializedProject, ProjectError> {
+    project_service::init_new_project(
+        &host.paths,
+        root,
+        None,
+        &crate::common::ana(),
+        Git::default(),
+        None,
+        Some(Box::new(|_: &Path| {})),
+        &host.clock,
+    )
+    .await
 }
 
 #[tokio::test]
@@ -387,9 +516,7 @@ async fn init_copies_the_foldignore_into_a_new_gitignore() {
     let root = host.root("app");
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join(".foldignore"), "out/\n").unwrap();
-    init_project(&host.paths, &root, None, &host.clock)
-        .await
-        .unwrap();
+    with_git(&host, &root).await.unwrap();
     assert_eq!(
         std::fs::read_to_string(root.join(".foldignore")).unwrap(),
         "out/\n"
@@ -411,7 +538,7 @@ async fn init_copies_the_foldignore_into_a_new_gitignore() {
 }
 
 #[cfg(test)]
-/// Runs a plain init in a folder holding `files` and returns the folder.
+/// Runs an init with Git in a folder holding `files` and returns the folder.
 async fn init_with_files(files: &[(&str, &str)]) -> (Host, std::path::PathBuf) {
     let host = Host::new();
     let root = host.root("app");
@@ -419,9 +546,7 @@ async fn init_with_files(files: &[(&str, &str)]) -> (Host, std::path::PathBuf) {
     for (name, text) in files {
         std::fs::write(root.join(name), text).unwrap();
     }
-    init_project(&host.paths, &root, None, &host.clock)
-        .await
-        .unwrap();
+    with_git(&host, &root).await.unwrap();
     (host, root)
 }
 
@@ -501,9 +626,7 @@ async fn init_leaves_an_ignore_file_that_is_not_a_regular_file() {
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(host.root("rules"), "target/\n").unwrap();
     std::os::unix::fs::symlink("../rules", root.join(".gitignore")).unwrap();
-    init_project(&host.paths, &root, None, &host.clock)
-        .await
-        .unwrap();
+    with_git(&host, &root).await.unwrap();
     assert!(
         std::fs::symlink_metadata(root.join(".gitignore"))
             .unwrap()
@@ -513,7 +636,7 @@ async fn init_leaves_an_ignore_file_that_is_not_a_regular_file() {
         std::fs::read_to_string(host.root("rules")).unwrap(),
         "target/\n"
     );
-    assert!(!root.join(".foldignore").exists());
+    assert_eq!(read(&root, ".foldignore"), "");
     assert_eq!(git(&root, &["status", "--porcelain"]), "");
 
     // A `.foldignore` that is not a regular file counts as empty.
@@ -522,9 +645,7 @@ async fn init_leaves_an_ignore_file_that_is_not_a_regular_file() {
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(host.root("rules"), "out/\n").unwrap();
     std::os::unix::fs::symlink("../rules", root.join(".foldignore")).unwrap();
-    init_project(&host.paths, &root, None, &host.clock)
-        .await
-        .unwrap();
+    with_git(&host, &root).await.unwrap();
     assert_eq!(read(&root, ".gitignore"), ".fold/\n");
     assert!(
         std::fs::symlink_metadata(root.join(".foldignore"))
@@ -559,19 +680,15 @@ async fn a_failed_init_writes_back_the_gitignore_it_changed() {
     let root = host.root("app");
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join(".gitignore"), "target").unwrap();
-    let error = init_project(&host.paths, &root, None, &host.clock)
-        .await
-        .unwrap_err();
+    let error = with_git(&host, &root).await.unwrap_err();
     assert!(matches!(error, ProjectError::Store(_)));
     assert_eq!(read(&root, ".gitignore"), "target");
     assert!(!root.join(".foldignore").exists());
-    assert!(!root.join(".fold").exists());
+    assert!(!root.join(".fold").exists() && !root.join(".git").exists());
 
     std::fs::remove_file(root.join(".gitignore")).unwrap();
     std::fs::write(root.join(".foldignore"), "out/\n").unwrap();
-    init_project(&host.paths, &root, None, &host.clock)
-        .await
-        .unwrap_err();
+    with_git(&host, &root).await.unwrap_err();
     assert_eq!(read(&root, ".foldignore"), "out/\n");
     assert!(!root.join(".gitignore").exists());
 }
@@ -582,7 +699,7 @@ async fn init_refuses_a_git_repository_and_from_git_refuses_anything_else() {
     let repo = host.root("repo");
     std::fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "--quiet", "--initial-branch=main"]);
-    let error = init_project(&host.paths, &repo, None, &host.clock)
+    let error = init_project(&host.paths, &repo, None, &crate::common::ana(), &host.clock)
         .await
         .unwrap_err();
     assert_eq!(code(&error), Some("invalid_request"));
@@ -595,18 +712,31 @@ async fn init_refuses_a_git_repository_and_from_git_refuses_anything_else() {
     // A `.git` that is no repository is refused too, and kept.
     let broken = host.root("broken");
     std::fs::create_dir_all(broken.join(".git")).unwrap();
-    let error = init_project(&host.paths, &broken, None, &host.clock)
-        .await
-        .unwrap_err();
+    let error = init_project(
+        &host.paths,
+        &broken,
+        None,
+        &crate::common::ana(),
+        &host.clock,
+    )
+    .await
+    .unwrap_err();
     assert_eq!(code(&error), Some("invalid_request"));
     assert!(broken.join(".git").is_dir() && !broken.join(".fold").exists());
 
     let plain = host.root("plain");
     std::fs::create_dir_all(&plain).unwrap();
     for folder in [plain.clone(), host.root("absent")] {
-        let error = init_project_from_git(&host.paths, &folder, None, Git::default(), &host.clock)
-            .await
-            .unwrap_err();
+        let error = init_project_from_git(
+            &host.paths,
+            &folder,
+            None,
+            &crate::common::ana(),
+            Git::default(),
+            &host.clock,
+        )
+        .await
+        .unwrap_err();
         let ProjectError::Fold(error) = error else {
             panic!("a fold error");
         };
@@ -641,7 +771,7 @@ async fn a_failure_keeps_the_folder_files_and_a_rerun_succeeds() {
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("a.txt"), "a").unwrap();
     refuse_registrations(&host, true).await;
-    let error = init_project(&host.paths, &root, None, &host.clock)
+    let error = init_project(&host.paths, &root, None, &crate::common::ana(), &host.clock)
         .await
         .unwrap_err();
     assert!(matches!(error, ProjectError::Store(_)), "{error:?}");
@@ -652,28 +782,29 @@ async fn a_failure_keeps_the_folder_files_and_a_rerun_succeeds() {
     assert_eq!(entries, ["a.txt"]);
 
     refuse_registrations(&host, false).await;
-    init_project(&host.paths, &root, None, &host.clock)
+    init_project(&host.paths, &root, None, &crate::common::ana(), &host.clock)
         .await
         .unwrap();
     assert_eq!(std::fs::read(root.join("a.txt")).unwrap(), b"a");
-    assert_eq!(
-        git(&root, &["ls-tree", "-r", "--name-only", "HEAD"]),
-        ".foldignore\n.gitignore\na.txt\n"
-    );
+    let mut entries: Vec<_> = std::fs::read_dir(&root)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    entries.sort();
+    assert_eq!(entries, [".fold", ".foldignore", "a.txt"]);
 }
 
-/// Deletes what `fld init` made in the folder that makes it a project: `.fold/` and the repository, so a plain init can run there again. A project the daemon still has open can write into `.fold/` during the removal.
+/// Deletes what `fld init` made in the folder that makes it a project: `.fold/`, so a plain init can run there again. A project the daemon still has open can write into `.fold/` during the removal.
 #[cfg(test)]
 async fn delete_fold_data(root: &Path) {
     remove_dir_eventually(&root.join(".fold"), WAIT).await;
-    std::fs::remove_dir_all(root.join(".git")).unwrap();
 }
 
 #[tokio::test]
 async fn init_replaces_the_registration_of_a_folder_whose_fold_data_was_deleted() {
     let host = Host::new();
     let root = host.root("app");
-    let first = init_project(&host.paths, &root, None, &host.clock)
+    let first = init_project(&host.paths, &root, None, &crate::common::ana(), &host.clock)
         .await
         .unwrap();
     assert!(!first.replaced);
@@ -693,9 +824,15 @@ async fn init_replaces_the_registration_of_a_folder_whose_fold_data_was_deleted(
         None
     );
 
-    let second = init_project(&host.paths, &root, Some("Shop"), &host.clock)
-        .await
-        .unwrap();
+    let second = init_project(
+        &host.paths,
+        &root,
+        Some("Shop"),
+        &crate::common::ana(),
+        &host.clock,
+    )
+    .await
+    .unwrap();
     assert!(second.replaced && !second.resumed);
     assert_eq!(second.slug, "app", "the slug stays when the name changes");
     assert_eq!(second.name, "Shop");
@@ -713,7 +850,7 @@ async fn init_replaces_the_registration_of_a_folder_whose_fold_data_was_deleted(
     registry.close().await.unwrap();
 
     // The new project holds `.fold/`, so the folder is a project again.
-    let again = init_project(&host.paths, &root, None, &host.clock)
+    let again = init_project(&host.paths, &root, None, &crate::common::ana(), &host.clock)
         .await
         .unwrap_err();
     assert_eq!(code(&again), Some("project_exists"));
@@ -736,7 +873,7 @@ fn write_leftovers(root: &Path) {
 async fn init_replaces_a_registered_folder_whose_fold_holds_only_leftovers_of_the_daemon() {
     let host = Host::new();
     let root = host.root("app");
-    init_project(&host.paths, &root, None, &host.clock)
+    init_project(&host.paths, &root, None, &crate::common::ana(), &host.clock)
         .await
         .unwrap();
     delete_fold_data(&root).await;
@@ -745,7 +882,7 @@ async fn init_replaces_a_registered_folder_whose_fold_holds_only_leftovers_of_th
         deleted_project_slug(&host.paths, &root).await.unwrap(),
         Some("app".to_owned())
     );
-    let replaced = init_project(&host.paths, &root, None, &host.clock)
+    let replaced = init_project(&host.paths, &root, None, &crate::common::ana(), &host.clock)
         .await
         .unwrap();
     assert!(replaced.replaced);
@@ -759,7 +896,7 @@ async fn init_replaces_a_registered_folder_whose_fold_holds_only_leftovers_of_th
 async fn init_refuses_a_registered_folder_whose_fold_holds_content_without_a_database() {
     let host = Host::new();
     let root = host.root("app");
-    init_project(&host.paths, &root, None, &host.clock)
+    init_project(&host.paths, &root, None, &crate::common::ana(), &host.clock)
         .await
         .unwrap();
     for content in [
@@ -773,7 +910,7 @@ async fn init_refuses_a_registered_folder_whose_fold_holds_content_without_a_dat
         let path = root.join(".fold").join(content);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "data").unwrap();
-        let refused = init_project(&host.paths, &root, None, &host.clock)
+        let refused = init_project(&host.paths, &root, None, &crate::common::ana(), &host.clock)
             .await
             .unwrap_err();
         assert_eq!(code(&refused), Some("project_incomplete"), "{content}");
@@ -792,7 +929,7 @@ async fn init_refuses_a_registered_folder_whose_fold_holds_content_without_a_dat
         );
 
         std::fs::remove_dir_all(root.join(".fold")).unwrap();
-        let replaced = init_project(&host.paths, &root, None, &host.clock)
+        let replaced = init_project(&host.paths, &root, None, &crate::common::ana(), &host.clock)
             .await
             .unwrap();
         assert!(replaced.replaced, "{content}");
@@ -822,7 +959,7 @@ fn closed(handle: &fold_daemon::projects::ProjectHandle) -> bool {
 async fn the_daemon_closes_a_project_whose_fold_data_was_deleted_and_opens_the_new_one() {
     let host = Host::new();
     let root = host.root("app");
-    init_project(&host.paths, &root, None, &host.clock)
+    init_project(&host.paths, &root, None, &crate::common::ana(), &host.clock)
         .await
         .unwrap();
     let state = daemon_state(&host).await;
@@ -849,7 +986,7 @@ async fn the_daemon_closes_a_project_whose_fold_data_was_deleted_and_opens_the_n
         "the open removed the project"
     );
 
-    let fresh = init_project(&host.paths, &root, None, &host.clock)
+    let fresh = init_project(&host.paths, &root, None, &crate::common::ana(), &host.clock)
         .await
         .unwrap();
     assert!(!fresh.replaced && fresh.slug == "app");
@@ -862,7 +999,7 @@ async fn the_daemon_closes_a_project_whose_fold_data_was_deleted_and_opens_the_n
 
     // Without that request, the open after init finds a database file that is not the one the handle holds.
     delete_fold_data(&root).await;
-    init_project(&host.paths, &root, None, &host.clock)
+    init_project(&host.paths, &root, None, &crate::common::ana(), &host.clock)
         .await
         .unwrap();
     let newest = project_service::open(&state, "app").await.unwrap();

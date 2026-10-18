@@ -171,7 +171,6 @@ async fn init_in_a_folder_whose_fold_data_was_deleted_registers_it_again_in_the_
 
     // The open project can write into `.fold/` while it is removed.
     remove_dir_eventually(&project.join(".fold"), Duration::from_secs(10)).await;
-    std::fs::remove_dir_all(project.join(".git")).unwrap();
     let (sandbox_again, cwd) = (sandbox.clone(), project.clone());
     let second = tokio::task::spawn_blocking(move || {
         sandbox_again.fold_in(&cwd, &["init", "--socket", &socket], &[])
@@ -225,7 +224,6 @@ async fn the_running_daemon_closes_a_project_whose_fold_was_deleted_and_init_mak
 
     // The open project can write into `.fold/` while it is removed.
     remove_dir_eventually(&project.join(".fold"), Duration::from_secs(10)).await;
-    std::fs::remove_dir_all(project.join(".git")).unwrap();
     // The daemon's live job finds the deleted database on its next tick, with no request for the project.
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         while !old.store.read().is_closed() {
@@ -278,9 +276,7 @@ async fn doctor_with_a_running_daemon_reports_nothing_for_a_project_whose_fold_w
         assert!(output.status.success(), "{output:?}");
     }
     let gone = sandbox.path("gone");
-    for dir in [".fold", ".git"] {
-        std::fs::remove_dir_all(gone.join(dir)).unwrap();
-    }
+    std::fs::remove_dir_all(gone.join(".fold")).unwrap();
 
     let doctor = fold_blocking(
         sandbox.clone(),
@@ -507,7 +503,7 @@ fn an_init_the_registry_does_not_know_is_finished_with_its_claude_files() {
 }
 
 #[test]
-fn name_sets_the_slug_and_a_new_folder_gets_the_ignore_files() {
+fn name_sets_the_slug_and_a_new_folder_gets_only_an_empty_foldignore() {
     let sandbox = Sandbox::new();
     let project = sandbox.path("dir");
     let output = sandbox.fold(&["init", project.to_str().unwrap(), "--name", "Big Shop"]);
@@ -518,6 +514,6 @@ fn name_sets_the_slug_and_a_new_folder_gets_the_ignore_files() {
             .len(),
         0
     );
-    assert!(project.join(".gitignore").is_file());
-    assert!(!project.join(".gitignore").is_symlink());
+    assert!(!project.join(".gitignore").exists());
+    assert!(!project.join(".git").exists());
 }

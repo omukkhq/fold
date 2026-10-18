@@ -210,8 +210,16 @@ async fn a_daemon_killed_inside_the_integration_transaction_shows_none_of_it() {
 
     let mut daemon = serve(&host, &socket, None).await;
     assert_eq!(head(&store).await, RevisionId::from_number(1).unwrap());
-    assert_eq!(count(&store, "SELECT COUNT(*) FROM revisions").await, 1);
-    assert_eq!(count(&store, "SELECT COUNT(*) FROM integrations").await, 0);
+    // The genesis `r0` and `r1`, the folder's files that init recorded through its own `record` integration.
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM revisions").await, 2);
+    assert_eq!(
+        count(
+            &store,
+            "SELECT COUNT(*) FROM integrations WHERE kind <> 'record'"
+        )
+        .await,
+        0
+    );
     assert_eq!(count(&store, "SELECT COUNT(*) FROM completions").await, 0);
     let detail = proposal(&socket).await;
     assert_eq!(detail["summary"]["state"], "open");
@@ -227,10 +235,10 @@ async fn a_daemon_killed_inside_the_integration_transaction_shows_none_of_it() {
     assert_eq!(
         count(
             &store,
-            "SELECT number FROM integrations WHERE result = 'succeeded'"
+            "SELECT number FROM integrations WHERE kind = 'proposal' AND result = 'succeeded'"
         )
         .await,
-        2
+        3
     );
     assert_store_consistent(&store, &paths).await;
     store.close().await.unwrap();

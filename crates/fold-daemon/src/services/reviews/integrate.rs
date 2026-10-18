@@ -67,11 +67,19 @@ pub struct PullIntegration {
     pub branch: String,
     pub base_tree: ObjectHash,
     pub remote_tree: ObjectHash,
-    /// Set when the commit is a human change from the project folder, which `fld record` brings in: the integration records it with `human_change.recorded` in its transaction.
-    pub human: Option<HumanRecord>,
 }
 
-/// A human change as its integration records it: the human whose commit it is, and the data of its `human_change.recorded` event, which names the changed files, the open workspaces they touch and the leads of their tasks.
+/// A clean change of the project folder by a human: what `fld record` read from the folder, or a Git commit the human made there. `base_tree` is the tree the change is based on and `tree` its own; both are already in the object store. The integration records the human change with `human_change.recorded` in its transaction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordIntegration {
+    /// The full id of the human's Git commit; `None` for a change read from the folder.
+    pub commit: Option<String>,
+    pub base_tree: ObjectHash,
+    pub tree: ObjectHash,
+    pub human: HumanRecord,
+}
+
+/// A human change as its integration records it: the human whose change it is, and the data of its `human_change.recorded` event, which names the changed files, the open workspaces they touch and the leads of their tasks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HumanRecord {
     pub human: HumanName,
@@ -120,6 +128,7 @@ enum IntegrationRequest<'a> {
     },
     Pull(&'a PullIntegration),
     Direct(&'a DirectChange),
+    Record(&'a RecordIntegration),
 }
 
 enum Integrated {
@@ -185,9 +194,12 @@ enum Subject {
         remote_commit: String,
         remote: String,
         branch: String,
+    },
+    Record {
+        commit: Option<String>,
         base_tree: ObjectHash,
-        remote_tree: ObjectHash,
-        human: Option<HumanRecord>,
+        tree: ObjectHash,
+        human: HumanRecord,
     },
     Direct {
         changeset: ChangesetId,
@@ -245,6 +257,23 @@ impl ReviewService {
         Ok(
             match self
                 .integrate(actor, IntegrationRequest::Pull(&pull))
+                .await?
+            {
+                Integrated::Succeeded(revision) => PullOutcome::Succeeded { revision },
+                Integrated::Conflicted(conflicts) => PullOutcome::Conflicted(conflicts),
+            },
+        )
+    }
+
+    /// Integrates a change of the project folder by the named human whose change it is: what `fld record` read from the folder, or a Git commit the human made there. There is no proposal, task or review, so only the merge decides. A clean merge moves main and records a `record` integration with the human change and `human_change.recorded`; a conflicting one writes nothing and returns the conflicts to the caller.
+    pub async fn integrate_record(
+        &self,
+        actor: &Actor,
+        record: RecordIntegration,
+    ) -> Result<PullOutcome, ReviewError> {
+        Ok(
+            match self
+                .integrate(actor, IntegrationRequest::Record(&record))
                 .await?
             {
                 Integrated::Succeeded(revision) => PullOutcome::Succeeded { revision },
@@ -363,6 +392,7 @@ impl ReviewService {
             }
             IntegrationRequest::Pull(pull) => self.pull_plan(actor, pull).await?,
             IntegrationRequest::Direct(change) => self.direct_plan(actor, change).await?,
+            IntegrationRequest::Record(record) => record_plan(actor, record)?,
         };
         let locks = self.workspaces.lock_for_integration(plan.workspace).await;
         let merged = self
@@ -465,6 +495,9 @@ impl ReviewService {
             }
             Subject::Pull { remote_commit, .. } => {
                 tracing::info!(remote_commit = %remote_commit, revision = %next, integration = %integration, "remote commit integrated");
+            }
+            Subject::Record { commit, .. } => {
+                tracing::info!(commit = commit.as_deref().unwrap_or("none"), revision = %next, integration = %integration, "human change integrated");
             }
             Subject::Direct { changeset, .. } => {
                 tracing::info!(changeset = %changeset, revision = %next, integration = %integration, "direct change integrated");
@@ -610,12 +643,50 @@ impl ReviewService {
                 remote_commit: commit.to_owned(),
                 remote: pull.remote.clone(),
                 branch: pull.branch.clone(),
-                base_tree: pull.base_tree,
-                remote_tree: pull.remote_tree,
-                human: pull.human.clone(),
             },
         })
     }
+}
+
+/// Step 2 of a record: only a named human records a change of the project folder, and the merge base is the tree the change is based on.
+fn record_plan(actor: &Actor, record: &RecordIntegration) -> Result<Plan, Step> {
+    if !actor.is_human() {
+        return Err(FoldError::new(
+            codes::HUMAN_REQUIRED,
+            "only a human records a change of the project folder",
+        )
+        .with_hint("ask a human to run fld record")
+        .into());
+    }
+    if let Some(commit) = &record.commit
+        && !is_commit_id(commit)
+    {
+        return Err(FoldError::new(
+            codes::INVALID_REQUEST,
+            "the human's commit must be a Git object id in hex",
+        )
+        .with_details([("field", json!("commit"))])
+        .into());
+    }
+    Ok(Plan {
+        base_tree: record.base_tree,
+        other_tree: record.tree,
+        workspace: None,
+        subject: Subject::Record {
+            commit: record.commit.clone(),
+            base_tree: record.base_tree,
+            tree: record.tree,
+            human: record.human.clone(),
+        },
+    })
+}
+
+/// A full Git object id in lower-case hex, SHA-1 or SHA-256.
+fn is_commit_id(commit: &str) -> bool {
+    matches!(commit.len(), 40 | MAX_COMMIT_CHARS)
+        && commit
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 impl ReviewService {
@@ -690,7 +761,7 @@ impl ReviewService {
         plan: &Plan,
         tree: ObjectHash,
     ) -> Result<Option<HumanResolution>, Step> {
-        if matches!(plan.subject, Subject::Pull { human: Some(_), .. }) {
+        if matches!(plan.subject, Subject::Record { .. }) {
             return Ok(None);
         }
         let mut conn = self
@@ -722,10 +793,10 @@ impl ReviewService {
             .human_change_reach(change.base_tree, change.tree)
             .await
             .map_err(ReviewError::from)?;
-        let mut data = reach.event_data(&change.commit);
+        let mut data = reach.event_data(change.commit.as_deref());
         data["human"] = json!(format!("human:{}", change.human));
         Ok(Some(HumanResolution {
-            commit: change.commit,
+            id: change.id,
             data,
         }))
     }
@@ -856,7 +927,8 @@ struct Commit<'a> {
 
 /// A conflicted human change that an integration brings onto main, with the data of its `human_change.resolved` event: the human, and the files, open workspaces and leads it touches.
 struct HumanResolution {
-    commit: String,
+    /// The row id of the waiting change.
+    id: i64,
     data: serde_json::Value,
 }
 
@@ -906,9 +978,6 @@ impl Commit<'_> {
                 remote_commit,
                 remote,
                 branch,
-                base_tree,
-                remote_tree,
-                human,
             } => {
                 let subject = IntegrationSubject::Pull {
                     remote_commit: remote_commit.as_str(),
@@ -929,23 +998,40 @@ impl Commit<'_> {
                         "revision": revision.to_string(),
                     }))?;
                 buffer.append(tx, &pulled, self.now).await?;
-                if let Some(human) = human {
-                    workspaces::supersede_conflicted(tx, self.now).await?;
-                    let change = NewHumanChange {
-                        commit: remote_commit.as_str(),
-                        human: human.human.as_str(),
-                        base_tree: *base_tree,
-                        tree: *remote_tree,
-                        now: self.now,
-                    };
-                    workspaces::insert_recorded_human_change(tx, &change, self.integration).await?;
-                    let mut data = human.data.clone();
-                    data["integration"] = json!(self.integration.to_string());
-                    let recorded = NewEvent::new(types::HUMAN_CHANGE_RECORDED, label.clone())?
-                        .revision(revision)
-                        .data(data)?;
-                    buffer.append(tx, &recorded, self.now).await?;
-                }
+                buffer.extend(recompute(tx, &[], self.now).await?.events);
+                Vec::new()
+            }
+            Subject::Record {
+                commit,
+                base_tree,
+                tree,
+                human,
+            } => {
+                let subject = IntegrationSubject::Record {
+                    remote_commit: commit.as_deref(),
+                };
+                let succeeded =
+                    NewEvent::new(types::INTEGRATION_SUCCEEDED, label.clone())?.data(json!({
+                        "integration": self.integration.to_string(),
+                        "kind": "record",
+                        "commit": commit,
+                    }))?;
+                self.advance(tx, buffer, &label, subject, succeeded).await?;
+                workspaces::supersede_conflicted(tx, self.now).await?;
+                let change = NewHumanChange {
+                    commit: commit.as_deref(),
+                    human: human.human.as_str(),
+                    base_tree: *base_tree,
+                    tree: *tree,
+                    now: self.now,
+                };
+                workspaces::insert_recorded_human_change(tx, &change, self.integration).await?;
+                let mut data = human.data.clone();
+                data["integration"] = json!(self.integration.to_string());
+                let recorded = NewEvent::new(types::HUMAN_CHANGE_RECORDED, label.clone())?
+                    .revision(revision)
+                    .data(data)?;
+                buffer.append(tx, &recorded, self.now).await?;
                 buffer.extend(recompute(tx, &[], self.now).await?.events);
                 Vec::new()
             }
@@ -987,8 +1073,7 @@ impl Commit<'_> {
         };
         // The integration resolves the waiting human change it brings onto main, and the human's commit becomes a parent of the revision's commit, after a Git commit the integration merged, so the project folder follows main again.
         if let Some(human) = self.human
-            && workspaces::resolve_human_change(tx, &human.commit, self.integration, self.now)
-                .await?
+            && workspaces::resolve_human_change(tx, human.id, self.integration, self.now).await?
         {
             let mut data = human.data.clone();
             data["integration"] = json!(self.integration.to_string());

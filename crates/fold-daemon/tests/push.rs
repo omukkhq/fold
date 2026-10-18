@@ -16,7 +16,7 @@ use fold_daemon::http::socket_router;
 use fold_daemon::projects::ProjectHandle;
 use fold_daemon::services::events::BusMessage;
 use fold_daemon::services::projects::{
-    PushOutcome, commit_main, commit_message, init_project, init_project_from_git, push,
+    PushOutcome, commit_main, commit_message, init_project_from_git, push,
 };
 use fold_daemon::{Daemon, DaemonConfig};
 use fold_store::StoreError;
@@ -66,7 +66,7 @@ impl Host {
     }
 
     async fn plain_project(&self) -> Project {
-        let project = init_project(&self.paths, &self.path("app"), None, &self.clock)
+        let project = crate::common::init_with_git(&self.paths, &self.path("app"), &self.clock)
             .await
             .unwrap();
         Project::open(&project.slug, &project.root, &self.clock).await
@@ -258,7 +258,7 @@ INSERT INTO workspaces (id, number, task_id, worker_id, kind, path, base_revisio
 INSERT INTO changesets (id, number, workspace_id, task_id, base_revision_id, tree_hash, message, created_by, created_at) VALUES (1, 1, 1, 1, 1, 't', 'm', 'frontend/ui', 0);
 INSERT INTO proposals (id, number, task_id, author_worker_id, title, created_at, updated_at) VALUES (1, 4, 1, 2, 'Login form', 0, 0);
 INSERT INTO proposal_versions (id, proposal_id, version, base_revision_id, tree_hash, head_changeset_id, created_by, created_at) VALUES (1, 1, 1, 1, 't', 1, 'frontend', 0);
-INSERT INTO integrations (id, number, kind, proposal_id, version_id, result, actor, created_at) VALUES (1, 1, 'proposal', 1, 1, 'succeeded', 'human:ana', 0);
+INSERT INTO integrations (id, number, kind, proposal_id, version_id, result, actor, created_at) VALUES (2, 2, 'proposal', 1, 1, 'succeeded', 'human:ana', 0);
 ";
 
 #[tokio::test]
@@ -278,7 +278,8 @@ async fn three_revisions_become_three_commits_and_later_ones_go_on_top() {
     project.set_remote(&remote);
     project.seed(PROPOSAL).await;
     project
-        .add_revision(&[("a.txt", b"one\n")], IntegrationId::from_number(1))
+        // `i-1` recorded the folder's files as `r1`.
+        .add_revision(&[("a.txt", b"one\n")], IntegrationId::from_number(2))
         .await;
     project
         .add_revision(&[("a.txt", b"two\n"), ("src/b.rs", b"fn b() {}\n")], None)
@@ -578,9 +579,16 @@ async fn a_project_made_from_a_git_repository_pushes_on_top_of_its_head() {
     );
     let source = host.path("source.git");
     let head = log(&source)[0].clone();
-    let imported = init_project_from_git(&host.paths, &work, None, Git::default(), &host.clock)
-        .await
-        .unwrap();
+    let imported = init_project_from_git(
+        &host.paths,
+        &work,
+        None,
+        &crate::common::ana(),
+        Git::default(),
+        &host.clock,
+    )
+    .await
+    .unwrap();
     let project = Project::open(&imported.slug, &imported.root, &host.clock).await;
     project.set_remote(&source);
     assert_eq!(
@@ -588,7 +596,7 @@ async fn a_project_made_from_a_git_repository_pushes_on_top_of_its_head() {
         PushOutcome::UpToDate {
             remote: "origin".to_owned(),
             branch: "main".to_owned(),
-            last: Some(id(1)),
+            last: Some(RevisionId::GENESIS),
         }
     );
     project
@@ -642,7 +650,7 @@ fn log_is_empty(repo: &Path) -> bool {
 #[tokio::test]
 async fn the_push_route_is_socket_only_and_names_the_human() {
     let host = Host::new();
-    let project = init_project(&host.paths, &host.path("app"), None, &host.clock)
+    let project = crate::common::init_with_git(&host.paths, &host.path("app"), &host.clock)
         .await
         .unwrap();
     let remote = host.remote("remote.git");

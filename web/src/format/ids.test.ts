@@ -29,8 +29,16 @@ describe("findIds", () => {
   });
 
   it("ignores numbers with a leading zero, zero and numbers past 32 bits", () => {
-    expect(findIds("T-012 T-0 r0 T-4294967296 T-99999999999")).toEqual([]);
+    expect(findIds("T-012 T-0 r00 r01 T-4294967296 T-99999999999")).toEqual([]);
     expect(findIds("T-4294967295")).toHaveLength(1);
+  });
+
+  it("finds the genesis revision r0", () => {
+    const found = findIds("from r0 to r1");
+    expect(found.map((id) => [id.kind, id.number])).toEqual([
+      ["revision", 0],
+      ["revision", 1],
+    ]);
   });
 
   it("finds ids next to punctuation", () => {

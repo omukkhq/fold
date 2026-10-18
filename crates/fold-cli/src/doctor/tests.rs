@@ -104,7 +104,29 @@ impl Fixture {
     }
 
     /// A project directory with a migrated database, the objects directory and every Claude Code file.
+    /// A project with Git sync on and its own repository.
     fn project(&self, name: &str) -> PathBuf {
+        let root = self.plain_project(name);
+        rt().block_on(async {
+            let store = Store::open_project(&ProjectPaths::new(&root))
+                .await
+                .unwrap();
+            store
+                .write::<_, StoreError>(async |tx| {
+                    fold_store::workspaces::enable_git_sync(tx, "human:ana", at(0)).await?;
+                    Ok(())
+                })
+                .await
+                .unwrap();
+            store.close().await.unwrap();
+        });
+        git(&root, &["init", "--quiet"]);
+        fold_vcs::git_remote::exclude_fold_dir(&root.join(".git")).unwrap();
+        root
+    }
+
+    /// A project with Git sync off and no repository, as a plain `fld init` leaves it.
+    fn plain_project(&self, name: &str) -> PathBuf {
         let root = self.path(name);
         std::fs::create_dir_all(root.join(".fold/objects")).unwrap();
         rt().block_on(async {
@@ -116,8 +138,6 @@ impl Fixture {
         std::fs::create_dir_all(root.join(".claude/skills/fold")).unwrap();
         std::fs::write(root.join(SKILL_FILE), "# fold\n").unwrap();
         std::fs::write(root.join(AGENTS_FILE), good_agents()).unwrap();
-        git(&root, &["init", "--quiet"]);
-        fold_vcs::git_remote::exclude_fold_dir(&root.join(".git")).unwrap();
         root
     }
 }
@@ -653,6 +673,30 @@ fn a_healthy_project_is_all_ok_and_nothing_changes_on_disk() {
 }
 
 #[test]
+fn a_project_without_git_sync_gets_no_git_check() {
+    let fixture = Fixture::new();
+    let host = fixture.linux_host(524_288);
+    let root = fixture.plain_project("plain");
+    let checks = project_report(&host, &root, at(1_000));
+    let names: Vec<_> = checks.iter().map(|check| check.name).collect();
+    assert_eq!(
+        names,
+        [
+            "database",
+            "objects",
+            "git sync",
+            "inotify watches",
+            "claude files",
+            "role prompts",
+            "claude md"
+        ]
+    );
+    let sync = find(&checks, "git sync");
+    assert_eq!(sync.status, Status::Ok);
+    assert!(sync.message.contains("fld init --with-git"), "{sync:?}");
+}
+
+#[test]
 fn a_git_history_without_the_last_mapped_commit_names_the_repair() {
     let fixture = Fixture::new();
     let mut host = fixture.bare_host();
@@ -852,6 +896,7 @@ fn the_database_facts_map_to_issues() {
         quick_check_problems: Some(0),
         quick_check_errored: false,
         degraded: Vec::new(),
+        git_sync: Some(true),
     };
     assert!(database_issues(&healthy).is_empty());
     let unknown_journal = DatabaseFacts {

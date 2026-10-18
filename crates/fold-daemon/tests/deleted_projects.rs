@@ -54,7 +54,10 @@ impl Running {
         let root = dir.path().join("app");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("README.md"), "hello\n").unwrap();
-        let root = init_project(&host, &root, None, &clock).await.unwrap().root;
+        let root = init_project(&host, &root, None, &crate::common::ana(), &clock)
+            .await
+            .unwrap()
+            .root;
         let registry = Store::open_registry(&host.registry_db()).await.unwrap();
         let state: AppState = Arc::new(DaemonState {
             projects: Projects::default().with_registry(registry.clone()),
@@ -108,10 +111,9 @@ impl Running {
         self.root.join(".fold")
     }
 
-    /// Deletes what `fld init` made in the folder: `.fold/` and the repository.
+    /// Deletes what `fld init` made in the folder: `.fold/`.
     fn delete_fold_data(&self) {
         std::fs::remove_dir_all(self.fold_dir()).unwrap();
-        std::fs::remove_dir_all(self.root.join(".git")).unwrap();
     }
 
     async fn get(&self, path: &str) -> (StatusCode, Value) {
@@ -239,9 +241,15 @@ async fn a_request_removes_a_project_whose_fold_was_deleted_and_its_handle_write
         .into();
     assert_eq!(refused.code(), "project_unavailable");
 
-    let project = init_project(&running.host, &running.root, None, &running.clock)
-        .await
-        .unwrap();
+    let project = init_project(
+        &running.host,
+        &running.root,
+        None,
+        &crate::common::ana(),
+        &running.clock,
+    )
+    .await
+    .unwrap();
     assert!(!project.replaced, "the row was gone");
     assert_eq!(project.slug, "app");
     let new = project_service::open(&running.state, "app").await.unwrap();
@@ -349,7 +357,7 @@ async fn a_project_that_keeps_its_fold_is_never_removed() {
         1
     );
     assert_eq!(running.get("").await.0, StatusCode::OK);
-    std::fs::remove_dir_all(running.root.join(".git")).unwrap();
+    std::fs::remove_file(running.root.join(".foldignore")).unwrap();
     assert_eq!(
         project_service::sweep_deleted(&running.state)
             .await
@@ -400,7 +408,9 @@ async fn without_a_daemon_the_host_registry_loses_only_the_projects_whose_fold_w
     for name in ["kept", "gone", "away", "nodb"] {
         let root = dir.path().join(name);
         std::fs::create_dir_all(&root).unwrap();
-        init_project(&host, &root, None, &clock).await.unwrap();
+        init_project(&host, &root, None, &crate::common::ana(), &clock)
+            .await
+            .unwrap();
     }
     std::fs::remove_dir_all(dir.path().join("gone/.fold")).unwrap();
     std::fs::rename(dir.path().join("away"), dir.path().join("away.moved")).unwrap();
@@ -548,9 +558,15 @@ async fn a_fold_dir_without_its_database_keeps_the_project_and_says_how_to_get_i
     );
     assert!(running.registered().await);
 
-    let refused = init_project(&running.host, &running.root, None, &running.clock)
-        .await
-        .unwrap_err();
+    let refused = init_project(
+        &running.host,
+        &running.root,
+        None,
+        &crate::common::ana(),
+        &running.clock,
+    )
+    .await
+    .unwrap_err();
     assert_eq!(refused.code(), Some("project_incomplete"));
     running.close().await;
 }

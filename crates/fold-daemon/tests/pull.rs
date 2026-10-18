@@ -19,9 +19,7 @@ use fold_daemon::http::host::CLIENT_HEADER;
 use fold_daemon::http::socket_router;
 use fold_daemon::projects::ProjectHandle;
 use fold_daemon::services::events::BusMessage;
-use fold_daemon::services::projects::{
-    PullOutcome, PushOutcome, git_status, init_project, pull, push,
-};
+use fold_daemon::services::projects::{PullOutcome, PushOutcome, git_status, pull, push};
 use fold_daemon::services::reviews::{IntegrationOutcome, ReviewService};
 use fold_daemon::services::tasks::CreateTask;
 use fold_daemon::services::workspaces::{WorkspaceError, WorkspaceRef, WorkspaceService};
@@ -80,7 +78,7 @@ impl Host {
     }
 
     async fn project(&self) -> Project {
-        let project = init_project(&self.paths, &self.path("app"), None, &self.clock)
+        let project = crate::common::init_with_git(&self.paths, &self.path("app"), &self.clock)
             .await
             .unwrap();
         let row = ProjectRow {
@@ -398,7 +396,12 @@ async fn an_unchanged_remote_is_up_to_date_and_records_nothing() {
             remote_commit: Some(tip.parse().unwrap()),
         }
     );
-    assert_eq!(project.count("SELECT COUNT(*) FROM integrations").await, 0);
+    assert_eq!(
+        project
+            .count("SELECT COUNT(*) FROM integrations WHERE kind = 'pull'")
+            .await,
+        0
+    );
     assert_eq!(project.head().await, r(2));
     assert_eq!(project.map(), map);
     assert!(
@@ -460,12 +463,19 @@ async fn a_fast_forward_records_the_remote_tree_and_the_map_line() {
         .iter()
         .map(|event| event.event_type.as_str())
         .collect();
+    // The first two record the folder's files as `r1`.
     assert_eq!(
         names,
-        ["integration.succeeded", "main.advanced", "remote.pulled"]
+        [
+            "integration.succeeded",
+            "main.advanced",
+            "integration.succeeded",
+            "main.advanced",
+            "remote.pulled"
+        ]
     );
     assert_eq!(
-        events[2].data,
+        events[4].data,
         json!({"remote": "origin", "branch": "main", "remote_commit": tip, "revision": "r3"})
     );
     assert!(project.map().ends_with(&format!("r3 {tip}\n")));

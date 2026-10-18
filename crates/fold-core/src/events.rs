@@ -139,6 +139,7 @@ define_event_types! {
     HUMAN_CHANGE_RECORDED = "human_change.recorded",
     HUMAN_CHANGE_CONFLICTED = "human_change.conflicted",
     HUMAN_CHANGE_RESOLVED = "human_change.resolved",
+    GIT_SYNC_ENABLED = "git.sync_enabled",
 }
 
 impl EventType {

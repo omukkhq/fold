@@ -549,6 +549,10 @@ const SPECS: Record<EventType, Spec> = {
       "the project folder has changes that are not committed; run fld record, commit or stash them",
     ),
   },
+  "git.sync_enabled": {
+    icon: GitCommitHorizontal,
+    text: fixed("turned Git sync on: every revision gets its Git commit"),
+  },
   "git.attention_cleared": {
     icon: GitCommitHorizontal,
     text: (e) =>

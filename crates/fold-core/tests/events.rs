@@ -110,6 +110,7 @@ fn all_equals_the_plans_event_types() {
         "human_change.recorded",
         "human_change.conflicted",
         "human_change.resolved",
+        "git.sync_enabled",
     ]);
     assert_eq!(declared, expected);
 }

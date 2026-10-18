@@ -29,8 +29,8 @@ pub(crate) struct HumanChangeReach {
 }
 
 impl HumanChangeReach {
-    /// What every human-change event carries for its notices: the commit, the changed files, the open workspaces they touch and the leads of their tasks.
-    pub(crate) fn event_data(&self, commit: &str) -> serde_json::Value {
+    /// What every human-change event carries for its notices: the human's Git commit, `null` for a change read from the project folder, the changed files, the open workspaces they touch and the leads of their tasks.
+    pub(crate) fn event_data(&self, commit: Option<&str>) -> serde_json::Value {
         json!({
             "commit": commit,
             "files": self.files.iter().take(LISTED_PATHS).collect::<Vec<_>>(),

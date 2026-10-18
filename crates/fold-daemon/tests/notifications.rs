@@ -428,7 +428,6 @@ async fn pull_integration_sends_no_message_or_push() {
             .unwrap()
             .tree_hash,
         remote_tree: write_initial_tree(&objects, tree).unwrap(),
-        human: None,
     };
 
     let outcome = n.fx.reviews.integrate_pull(&human(), pull).await.unwrap();

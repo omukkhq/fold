@@ -945,10 +945,14 @@ mod tests {
             .enable_all()
             .build()
             .unwrap()
-            .block_on(fold_daemon::services::projects::init_project(
+            .block_on(fold_daemon::services::projects::init_new_project(
                 &host,
                 &root,
                 None,
+                &fold_core::HumanName::parse("ana").unwrap(),
+                Git::default(),
+                None,
+                Some(Box::new(|_: &Path| {})),
                 &fold_core::ManualClock::new(),
             ))
             .unwrap();

@@ -103,8 +103,17 @@ describe("describeRevision", () => {
       ).title,
     ).toBe("Imported");
     expect(describeRevision(revision({ origin: "initial" }), NOW).title).toBe(
-      "Initial revision",
+      "Genesis revision",
     );
+  });
+
+  it("names the human who changed the project folder for a record", () => {
+    const lines = describeRevision(
+      revision({ origin: "record", author: "human:tanim" }),
+      NOW,
+    );
+    expect(lines.title).toBe("record · changes of the project folder");
+    expect(lines.meta).toEqual([{ actor: "human:tanim" }, " · 14:06:00"]);
   });
 });
 

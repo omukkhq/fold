@@ -67,6 +67,8 @@ pub enum RevisionOriginView {
     Pull,
     /// A direct change of the main agent, which the user approved in the conversation.
     Direct,
+    /// A change of the project folder by a human: what fld record read from the folder, or a Git commit the human made there.
+    Record,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -111,6 +113,7 @@ impl From<RevisionSummary> for RevisionView {
                 RevisionOrigin::Proposal => RevisionOriginView::Proposal,
                 RevisionOrigin::Pull => RevisionOriginView::Pull,
                 RevisionOrigin::Direct => RevisionOriginView::Direct,
+                RevisionOrigin::Record => RevisionOriginView::Record,
             },
             task: summary.task,
             proposal: summary.proposal,

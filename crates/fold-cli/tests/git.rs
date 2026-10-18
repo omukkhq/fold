@@ -106,7 +106,7 @@ fn repo(sandbox: &Sandbox) -> (PathBuf, String) {
 }
 
 #[test]
-fn init_from_git_prints_r1_and_its_commit() {
+fn init_from_git_prints_the_genesis_and_its_commit() {
     let sandbox = Sandbox::new();
     let (repo, head) = repo(&sandbox);
     let output = sandbox.fold_in(&repo, &system_path(), &["init", "--from-git"]);
@@ -115,13 +115,13 @@ fn init_from_git_prints_r1_and_its_commit() {
     assert_eq!(
         stdout(&output),
         format!(
-            "initialised project repo at {}\nr1: 2 files, 70 bytes\nr1 is Git commit {head}\n{}",
+            "initialised project repo at {}\nr0: 2 files, 70 bytes\nr0 is Git commit {head}\nGit sync is on: every revision gets its Git commit in .git\n{}",
             canonical.display(),
             machine_warnings(&repo)
         )
     );
     let map = fs::read_to_string(repo.join(".fold/git-sync.map")).unwrap();
-    assert_eq!(map, format!("r1 {head}\n"));
+    assert_eq!(map, format!("r0 {head}\n"));
     assert_eq!(git(&repo, &["rev-parse", "HEAD"]).trim(), head);
     let both = sandbox.fold(&["init", "x", "--from-git", "b"]);
     assert!(!both.status.success());

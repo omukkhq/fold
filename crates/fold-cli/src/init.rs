@@ -5,7 +5,7 @@ use std::time::Duration;
 use clap::Args;
 use fold_cli::claude_files::{self, ClaudeFileError};
 use fold_cli::daemon_client::{ClientConfig, ClientError, DaemonClient, Response};
-use fold_core::{FoldError, HostPaths, ProjectPaths, codes};
+use fold_core::{FoldError, HostPaths, HumanName, ProjectPaths, codes};
 use fold_daemon::SystemClock;
 use fold_daemon::services::projects::{
     FolderFiles, ProjectError, RepositorySetup, deleted_project_slug, init_new_project,
@@ -28,20 +28,23 @@ pub struct InitArgs {
     /// The project name; defaults to the directory name
     #[arg(long)]
     pub(crate) name: Option<String>,
-    /// Make a Git repository the project: its folder stays main, its history stays, and the commit at HEAD becomes the first revision. The tree must be clean, with a branch checked out
-    #[arg(long)]
+    /// Make a Git repository the project: its folder stays main, its history stays, and the commit at HEAD becomes the genesis revision r0. The tree must be clean, with a branch checked out
+    #[arg(long, conflicts_with = "with_git")]
     pub(crate) from_git: bool,
+    /// Turn Git on for the new project: fold creates .git, writes a commit of every revision and keeps the Git branch on main
+    #[arg(long)]
+    pub(crate) with_git: bool,
     /// Unix socket of the running daemon; overrides daemon.toml (default $XDG_RUNTIME_DIR/fold/fold.sock)
     #[arg(long)]
     pub(crate) socket: Option<PathBuf>,
     /// Rewrite fold's Claude Code files of an existing project, and remove the entries an earlier fold wrote into .mcp.json and .claude/settings.json, keeping every entry fold does not own, instead of creating a project
-    #[arg(long, conflicts_with_all = ["name", "from_git", "socket"])]
+    #[arg(long, conflicts_with_all = ["name", "from_git", "with_git", "socket"])]
     pub(crate) refresh: bool,
     /// The name for the project's own Git config, instead of asking for it; only a new Git repository gets one
-    #[arg(long, conflicts_with_all = ["from_git", "refresh"])]
+    #[arg(long, requires = "with_git", conflicts_with_all = ["from_git", "refresh"])]
     pub(crate) git_name: Option<String>,
     /// The email for the project's own Git config, instead of asking for it; only a new Git repository gets one
-    #[arg(long, conflicts_with_all = ["from_git", "refresh"])]
+    #[arg(long, requires = "with_git", conflicts_with_all = ["from_git", "refresh"])]
     pub(crate) git_email: Option<String>,
 }
 
@@ -150,10 +153,10 @@ pub(crate) fn initialise(
             let _ = runtime.block_on(register(&client(socket.clone()), &slug));
         }
     }
-    // The fold name comes first, so its question comes before the Git identity's.
-    let _ = crate::fold_name::current();
+    // The fold name comes first, so its question comes before the Git identity's. The folder's files become the change of this human.
+    let human = human_name()?;
     // The question comes before the project exists, because every commit fold writes, `r1`'s first, takes the identity from the repository's config.
-    let identity = (!args.from_git).then(|| {
+    let identity = args.with_git.then(|| {
         let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
         git_identity::decide(
             &Git::default(),
@@ -169,25 +172,27 @@ pub(crate) fn initialise(
         )
     });
     let project = runtime.block_on(async {
-        match identity {
-            None => init_project_from_git(&host, dir, name, Git::default(), &SystemClock).await,
-            Some(identity) => {
-                let files: FolderFiles = Box::new(|root: &Path| new_claude_files(root));
-                let setup: RepositorySetup = Box::new(move |root: &Path| {
-                    git_identity::store_in(&Git::default(), root, &identity, &mut io::stderr());
-                });
-                init_new_project(
-                    &host,
-                    dir,
-                    name,
-                    Git::default(),
-                    Some(files),
-                    Some(setup),
-                    &SystemClock,
-                )
-                .await
-            }
+        if args.from_git {
+            return init_project_from_git(&host, dir, name, &human, Git::default(), &SystemClock)
+                .await;
         }
+        let files: FolderFiles = Box::new(|root: &Path| new_claude_files(root));
+        let setup = identity.map(|identity| -> RepositorySetup {
+            Box::new(move |root: &Path| {
+                git_identity::store_in(&Git::default(), root, &identity, &mut io::stderr());
+            })
+        });
+        init_new_project(
+            &host,
+            dir,
+            name,
+            &human,
+            Git::default(),
+            Some(files),
+            setup,
+            &SystemClock,
+        )
+        .await
     })?;
     let root = project.root.display();
     output::line(
@@ -230,6 +235,18 @@ pub(crate) fn initialise(
     if let Some(commit) = &project.git_commit {
         output::line(out, &format!("{} is Git commit {commit}", project.revision))?;
     }
+    if let Some(revision) = &project.gitignore {
+        output::line(
+            out,
+            &format!("{revision} records the .gitignore that keeps .fold/ out of Git"),
+        )?;
+    }
+    if project.git_sync {
+        output::line(
+            out,
+            "Git sync is on: every revision gets its Git commit in .git",
+        )?;
+    }
     write_claude_files(&project.root, dirs, out)?;
     let note = match socket {
         Ok(Some(socket)) => match runtime.block_on(register(&client(socket), &project.slug)) {
@@ -248,6 +265,21 @@ pub(crate) fn initialise(
         output::line(out, &note)?;
     }
     Ok(project.slug)
+}
+
+/// The fold name of the human who runs init, whose change the folder's files become.
+fn human_name() -> Result<HumanName, InitError> {
+    let refused = || {
+        InitError::Refused(
+            FoldError::new(
+                codes::HUMAN_REQUIRED,
+                "cannot tell who you are, and the folder's files become your change",
+            )
+            .with_hint("set FOLD_HUMAN to your fold name, then run fld init again"),
+        )
+    };
+    let name = crate::fold_name::current().ok_or_else(refused)?;
+    HumanName::parse(&name).map_err(|_| refused())
 }
 
 /// Rewrites the Claude Code files of the registered project that holds `dir`, and makes `.git/info/exclude` the link to `.fold/exclude` again.
@@ -493,6 +525,7 @@ mod tests {
             dir: Some(dir.path().join("p")),
             name: None,
             from_git: false,
+            with_git: false,
             socket: None,
             refresh: false,
             git_name: None,
@@ -513,6 +546,7 @@ mod tests {
             dir: Some(dir.path().to_owned()),
             name: None,
             from_git: false,
+            with_git: false,
             socket: None,
             refresh: false,
             git_name: None,
@@ -537,6 +571,7 @@ mod tests {
             dir: Some(spaced.clone()),
             name: None,
             from_git: false,
+            with_git: false,
             socket: None,
             refresh: false,
             git_name: None,

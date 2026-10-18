@@ -8,15 +8,24 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 
 use fold_core::config::GIT_SECTION;
+use fold_core::events::types;
+use fold_core::object::{ObjectHash, ObjectKind};
 use fold_core::projects::find_root;
+use fold_core::revision::{Revision, StoredRevision};
+use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
 use fold_core::{
-    AgentName, CONFIG_TEMPLATE, Clock, FoldError, GitConfig, HostPaths, HumanName, Presence,
-    ProjectConfig, ProjectPaths, RevisionId, SessionFact, TaskStatus, Timestamp, choose_slug,
-    codes, presence_of, slugify,
+    Actor, AgentName, CONFIG_TEMPLATE, Clock, EventActor, FoldError, GitConfig, HostPaths,
+    HumanName, IdKind, IntegrationId, NewEvent, Presence, ProjectConfig, ProjectPaths, RevisionId,
+    SessionFact, TaskStatus, Timestamp, choose_slug, codes, presence_of, slugify,
 };
+use fold_store::counters;
 use fold_store::projects::{self, HumanRow, ProjectRow};
-use fold_store::workspaces::{RevisionRow, create_initial_revision, head, initial_revision};
-use fold_store::{Store, StoreError};
+use fold_store::reviews::{IntegrationSubject, NewIntegration, insert_succeeded};
+use fold_store::workspaces::{
+    NewHumanChange, RevisionRow, advance_main, create_main, genesis_revision, head,
+    insert_recorded_human_change, insert_revision,
+};
+use fold_store::{Store, StoreError, WriteTx};
 use fold_vcs::atomic::write_atomic;
 use fold_vcs::gc::mark;
 use fold_vcs::git::{CommitId, Git};
@@ -27,13 +36,14 @@ use fold_vcs::ignore::{FOLDIGNORE, GITIGNORE, IgnoreRules};
 use fold_vcs::import::{ImportOptions, ImportResult, import_dir};
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::platform::Capabilities;
-use fold_vcs::revision_store::{read_revision, write_revision};
+use fold_vcs::revision_store::{read_revision, write_initial_tree, write_revision};
 use thiserror::Error;
 
 use crate::daemon::DaemonState;
 use crate::projects::{
     ProjectFolder, ProjectHandle, Slot, database_missing_hint, project_folder, removed, unopened,
 };
+use crate::services::events::EventBuffer;
 #[cfg(feature = "failpoints")]
 use crate::services::fired;
 
@@ -90,32 +100,36 @@ pub struct InitializedProject {
     pub name: String,
     /// The canonical project directory.
     pub root: PathBuf,
-    /// `r1`, which `main` names.
+    /// The revision that holds the folder's files: `r1`, the human's first change on top of the empty genesis `r0`, or `r0` itself when it is a Git repository's `HEAD` or the folder held no file.
     pub revision: RevisionId,
-    /// What `r1` holds: the empty tree when nothing was imported.
+    /// What `revision` holds.
     pub imported: ImportResult,
-    /// The commit a Git import read, which `.fold/git-sync.map` records as `r1`.
+    /// The commit a Git import read, which `.fold/git-sync.map` records as the genesis `r0`.
     pub git_commit: Option<CommitId>,
+    /// The revision that records the `.gitignore` init wrote or changed when it turned Git on.
+    pub gitignore: Option<RevisionId>,
+    /// True when Git sync is on: the project folder has its own Git repository, which holds a commit of every revision.
+    pub git_sync: bool,
     /// True when this init finished one that had stopped before it registered the project. `imported` then holds what `revision` records, with no skipped paths: the stopped run's list is gone.
     pub resumed: bool,
     /// True when the registry held the folder for a project whose `.fold/` was deleted: this project took that registration's place and its slug.
     pub replaced: bool,
 }
 
-/// Files a caller writes into a new project's folder before init records it, so they are part of `r1` and its first commit. It returns the files and folders it created, which a failed init removes; a file it changed stays changed. Blocking.
+/// Files a caller writes into a new project's folder before init records it, so they are part of `r1`. It returns the files and folders it created, which a failed init removes; a file it changed stays changed. Blocking.
 pub type FolderFiles = Box<dyn FnOnce(&Path) -> Result<Vec<PathBuf>, FoldError> + Send>;
 
-/// Work a caller does in a new project's folder right after init creates its Git repository and before init writes `r1`'s commit, such as giving the repository's own config the Git identity that every commit fold writes takes. Blocking.
+/// Work a caller does in a new project's folder right after init creates its Git repository and before the commits are written, such as giving the repository's own config the Git identity that every commit fold writes takes. Blocking.
 pub type RepositorySetup = Box<dyn FnOnce(&Path) + Send>;
 
 /// How init takes the project folder.
 enum Start {
-    /// The folder is not a Git repository: init runs `git init`, and the folder's files, less the ignore rules, with the `.gitignore` and `.foldignore` init writes or changes and the `files` it writes, become `r1` and its first commit.
+    /// The folder is not a Git repository: the genesis `r0` is the empty tree, and the folder's files, less the ignore rules, with the empty `.foldignore` init writes when the folder has none and the `files` it writes, become `r1`, the change of the human who runs init. With `repository`, init then turns Git on as [`init_new_project`] describes.
     New {
         files: Option<FolderFiles>,
-        setup: Option<RepositorySetup>,
+        repository: Option<RepositorySetup>,
     },
-    /// The folder is a Git repository with a clean tree on `branch`: `r1` is the committed tree at `head`, whose commit is `head` itself.
+    /// The folder is a Git repository with a clean tree on `branch`: the genesis `r0` is the committed tree at `head`, whose commit is `head` itself, and Git sync is on.
     FromGit { head: CommitId, branch: String },
 }
 
@@ -128,14 +142,15 @@ struct Created {
     restore: Vec<(PathBuf, Vec<u8>)>,
 }
 
-/// Makes `root` a fold project whose folder is main: creates `.fold/`, migrates the project database, writes the commented config, records the folder's files, less the ignore rules, as `r1`, runs `git init` and writes `r1`'s commit, and only then registers the project under a free slug. A folder that is a Git repository is refused with a hint to use `--from-git`. A folder that is inside another repository's working tree is refused with a hint to use `--from-git` at that repository's top, so no repository is nested in another. Git ignores `.fold/` in the new repository, so init writes the ignore files before the folder's files are recorded and both are in `r1` and its commit, and the folder is clean after init. Without a `.gitignore`, init writes one as a regular file that copies `.foldignore` (a comment when the folder has no `.foldignore`) and ends with a `.fold/` line, and also writes an empty `.foldignore` when the folder has none. An existing `.gitignore` is kept and gets a `.fold/` line only when no line of it is `.fold`, `.fold/`, `/.fold` or `/.fold/`. The copy happens once: `.foldignore` only adds rules on top of `.gitignore` or brings back a path it ignores. Init is a host command, so it has no actor and appends no event. A failure after `.fold/` exists removes `.fold/` and what init created beside it and writes back the bytes of a `.gitignore` that init changed, never touching another file of the folder. A `.fold/` that the registry does not know is an init that stopped part-way, or a project that fold removed while its `.fold/` was away: when its database is complete the init finishes it and registers it, and otherwise it is refused with `project_incomplete` and nothing is removed. A registered folder that holds `.fold/` is refused with `project_exists`, or with `project_incomplete` when `.fold/` holds project content without a database, or a database without `main`; a registered folder without `.fold/`, or whose `.fold/` holds only what a daemon that still had the project open wrote after it was deleted, holds no project, so the new project replaces that registration in the transaction that registers it and keeps its slug.
+/// Makes `root` a fold project whose folder is main: creates `.fold/`, migrates the project database, writes the commented config, writes an empty `.foldignore` when the folder has none, and in one transaction makes the genesis `r0` with the empty tree and records the folder's files, less the ignore rules, as `r1`, the change of the human `human` (an integration of kind `record` with its human change and events), then registers the project under a free slug. It needs no `git` and writes no Git data: Git sync stays off. A folder that is a Git repository, or inside another repository's working tree, is refused with a hint to use `--from-git` at the repository's top. A failure after `.fold/` exists removes `.fold/` and what init created beside it and writes back the bytes of a file that init changed, never touching another file of the folder. A `.fold/` that the registry does not know is an init that stopped part-way, or a project that fold removed while its `.fold/` was away: when its database is complete the init finishes it and registers it, and otherwise it is refused with `project_incomplete` and nothing is removed. A registered folder that holds `.fold/` is refused with `project_exists`, or with `project_incomplete` when `.fold/` holds project content without a database, or a database without `main`; a registered folder without `.fold/`, or whose `.fold/` holds only what a daemon that still had the project open wrote after it was deleted, holds no project, so the new project replaces that registration in the transaction that registers it and keeps its slug.
 pub async fn init_project(
     host: &HostPaths,
     root: &Path,
     name: Option<&str>,
+    human: &HumanName,
     clock: &dyn Clock,
 ) -> Result<InitializedProject, ProjectError> {
-    init_new_project(host, root, name, Git::default(), None, None, clock).await
+    init_new_project(host, root, name, human, Git::default(), None, None, clock).await
 }
 
 /// What a plain init finds where the project folder is.
@@ -164,18 +179,24 @@ fn inside_repository(root: &Path, top: &Path) -> FoldError {
     .with_details([("reason", serde_json::json!("inside_git_repository"))])
 }
 
-/// [`init_project`] with the given `git` program, writing `files` into the folder with the ignore files and running `setup` in the folder once its repository exists.
+/// [`init_project`] with the given `git` program, writing `files` into the folder with `.foldignore`. With `repository`, init also turns Git on once the folder's files are `r1`: a missing `.gitignore` is written as a copy of `.foldignore` with a `.fold/` line, and an existing one gets the `.fold/` line when no line of it is `.fold`, `.fold/`, `/.fold` or `/.fold/`; the new or changed `.gitignore` is the human's next change, its own revision, in the same transaction, which also turns Git sync on with `git.sync_enabled`. The repository comes after that transaction: `git init` on the `[git]` branch, `info/exclude` as the link to `.fold/exclude`, and `repository` run in the folder; then the commits are written from `r1`, because the empty genesis gets none, and the branch is created on the newest with the index set to it. A stop before the repository exists leaves it to the init that finishes this one.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is one input of the init, and grouping them would only rename them"
+)]
 pub async fn init_new_project(
     host: &HostPaths,
     root: &Path,
     name: Option<&str>,
+    human: &HumanName,
     git: Git,
     files: Option<FolderFiles>,
-    setup: Option<RepositorySetup>,
+    repository: Option<RepositorySetup>,
     clock: &dyn Clock,
 ) -> Result<InitializedProject, ProjectError> {
     let root = prepare_root(root).await?;
     let (checked, git_checked) = (root.clone(), git.clone());
+    let needs_git = repository.is_some();
     // A folder with `.fold/` is an init that stopped or a project, which `create_and_register` tells apart; the stopped init may have made the repository already.
     let found = blocking(move || {
         let paths = ProjectPaths::new(&checked);
@@ -183,12 +204,17 @@ pub async fn init_new_project(
             return Ok(Found::Nothing);
         }
         // A `.git` that Git does not read as a repository is refused too, so init never writes into it or deletes it.
-        if std::fs::symlink_metadata(paths.git_dir()).is_ok()
-            || git_checked.repository(&checked)?.is_some()
-        {
+        if std::fs::symlink_metadata(paths.git_dir()).is_ok() {
             return Ok(Found::Repository);
         }
-        Ok(match git_checked.working_tree_top(&checked)? {
+        // A plain init needs no `git`; without one on the PATH no repository can be found around the folder either.
+        let top = match git_checked.working_tree_top(&checked) {
+            Ok(top) => top,
+            Err(error) if !needs_git && error.code() == codes::GIT_NOT_FOUND => None,
+            Err(error) => return Err(error.into()),
+        };
+        Ok(match top {
+            Some(top) if top == checked => Found::Repository,
             Some(top) => Found::Inside(top),
             None => Found::Nothing,
         })
@@ -207,14 +233,16 @@ pub async fn init_new_project(
         }
         Found::Inside(top) => return Err(inside_repository(&root, &top).into()),
     }
-    init_with(host, &root, name, git, Start::New { files, setup }, clock).await
+    let start = Start::New { files, repository };
+    init_with(host, &root, name, human, git, start, clock).await
 }
 
-/// Makes the Git repository whose top is `root` a fold project whose folder is main, as [`init_project`] does, keeping the repository and its history: `r1` is the committed tree at `HEAD`, free of ignore rules, and its commit is `HEAD` itself, which `.fold/git-sync.map` records as its first line. The folder must be the top of a repository whose `.git` is a directory, with a branch checked out that has a commit and no change in the index or a tracked file; anything else is refused with a hint. The `[git]` branch becomes the checked-out branch. Nothing in the repository changes but `info/exclude`, which becomes the link to `.fold/exclude` with `/.fold/` in it.
+/// Makes the Git repository whose top is `root` a fold project whose folder is main, as [`init_project`] does, keeping the repository and its history: the genesis `r0` is the committed tree at `HEAD`, free of ignore rules, and its commit is `HEAD` itself, which `.fold/git-sync.map` records as its first line. Git sync is on from the start, turned on by `human`. The folder must be the top of a repository whose `.git` is a directory, with a branch checked out that has a commit and no change in the index or a tracked file; anything else is refused with a hint. The `[git]` branch becomes the checked-out branch. Nothing in the repository changes but `info/exclude`, which becomes the link to `.fold/exclude` with `/.fold/` in it.
 pub async fn init_project_from_git(
     host: &HostPaths,
     root: &Path,
     name: Option<&str>,
+    human: &HumanName,
     git: Git,
     clock: &dyn Clock,
 ) -> Result<InitializedProject, ProjectError> {
@@ -228,7 +256,7 @@ pub async fn init_project_from_git(
             codes::INVALID_REQUEST,
             format!("{} is not the top of a Git repository", root.display()),
         )
-        .with_hint("run fld init there to make a new project with a new repository")
+        .with_hint("run fld init there to make a new project")
         .with_details([("reason", serde_json::json!("not_git_repository"))])
     };
     let Some(root) = found else {
@@ -245,7 +273,7 @@ pub async fn init_project_from_git(
         Err(Some(top)) => return Err(inside_repository(&root, &top).into()),
         Err(None) => return Err(not_repository(&root).into()),
     };
-    init_with(host, &root, name, git, start, clock).await
+    init_with(host, &root, name, human, git, start, clock).await
 }
 
 /// The start of a `--from-git` init in `root`, or `None` when `root` is not the top of a repository. Blocking.
@@ -295,6 +323,7 @@ async fn init_with(
     host: &HostPaths,
     root: &Path,
     name: Option<&str>,
+    human: &HumanName,
     git: Git,
     start: Start,
     clock: &dyn Clock,
@@ -316,124 +345,549 @@ async fn init_with(
             .unwrap_or_default(),
     };
     let registry = Store::open_registry(&host.registry_db()).await?;
-    let outcome = create_and_register(&registry, root, &root_text, name, &git, start, clock).await;
+    let init = Init {
+        registry: &registry,
+        root_text: &root_text,
+        human,
+        git: &git,
+        clock,
+    };
+    let outcome = init.create_and_register(root, name, start).await;
     // The outcome is what the caller needs; a failed close only delays the WAL checkpoint.
     let _ = registry.close().await;
     outcome
 }
 
-async fn create_and_register(
-    registry: &Store,
-    root: &Path,
-    root_text: &str,
-    name: String,
-    git: &Git,
-    start: Start,
-    clock: &dyn Clock,
-) -> Result<InitializedProject, ProjectError> {
-    let registered = projects::find_by_root(registry.read(), root_text).await?;
-    let paths = ProjectPaths::new(root);
-    let mut made = create_fold_dir(&paths).await?;
-    if !made && registered.is_some() && remove_leftovers(&paths).await? {
-        made = create_fold_dir(&paths).await?;
-    }
-    if !made {
-        if registered.is_some() {
-            return Err(registered_refusal(&paths).await.into());
+/// The inputs every step of one init shares.
+struct Init<'a> {
+    registry: &'a Store,
+    root_text: &'a str,
+    human: &'a HumanName,
+    git: &'a Git,
+    clock: &'a dyn Clock,
+}
+
+impl Init<'_> {
+    async fn create_and_register(
+        &self,
+        root: &Path,
+        name: String,
+        start: Start,
+    ) -> Result<InitializedProject, ProjectError> {
+        let registered = projects::find_by_root(self.registry.read(), self.root_text).await?;
+        let paths = ProjectPaths::new(root);
+        let mut made = create_fold_dir(&paths).await?;
+        if !made && registered.is_some() && remove_leftovers(&paths).await? {
+            made = create_fold_dir(&paths).await?;
         }
-        let setup = match start {
-            Start::New { setup, .. } => setup,
-            Start::FromGit { .. } => None,
-        };
-        return finish_stopped(registry, &paths, root_text, name, git, setup, clock).await;
-    }
-    let replaces = registered.map(|row| row.slug);
-    let _init = match lock_fold_dir(&paths).await {
-        Ok(lock) => lock,
-        Err(error) => {
-            remove_created(&paths, Created::default()).await;
-            return Err(error);
+        if !made {
+            if registered.is_some() {
+                return Err(registered_refusal(&paths).await.into());
+            }
+            let setup = match start {
+                Start::New { repository, .. } => repository,
+                Start::FromGit { .. } => None,
+            };
+            return self.finish_stopped(&paths, name, setup).await;
         }
-    };
-    let mut created = Created::default();
-    match populate_and_register(
-        registry,
-        &paths,
-        root_text,
-        name,
-        replaces.as_deref(),
-        git,
-        start,
-        &mut created,
-        clock,
-    )
-    .await
-    {
-        Ok(project) => Ok(project),
-        Err(error) => {
-            // A fired failpoint stands for a crash at that point, and a crashed process removes nothing.
-            #[cfg(feature = "failpoints")]
-            if error.code() == Some(codes::FAILPOINT) {
+        let replaces = registered.map(|row| row.slug);
+        let _init = match lock_fold_dir(&paths).await {
+            Ok(lock) => lock,
+            Err(error) => {
+                remove_created(&paths, Created::default()).await;
                 return Err(error);
             }
-            remove_created(&paths, created).await;
-            Err(error)
+        };
+        let mut created = Created::default();
+        match self
+            .populate_and_register(&paths, name, replaces.as_deref(), start, &mut created)
+            .await
+        {
+            Ok(project) => Ok(project),
+            Err(error) => {
+                // A fired failpoint stands for a crash at that point, and a crashed process removes nothing.
+                #[cfg(feature = "failpoints")]
+                if error.code() == Some(codes::FAILPOINT) {
+                    return Err(error);
+                }
+                remove_created(&paths, created).await;
+                Err(error)
+            }
         }
+    }
+
+    async fn populate_and_register(
+        &self,
+        paths: &ProjectPaths,
+        name: String,
+        replaces: Option<&str>,
+        start: Start,
+        created: &mut Created,
+    ) -> Result<InitializedProject, ProjectError> {
+        let now = self.clock.now();
+        let project_store = Store::open_project(paths).await?;
+        let first = async {
+            let branch = match &start {
+                Start::FromGit { branch, .. } => Some(branch.as_str()),
+                Start::New { .. } => None,
+            };
+            write_config(paths, branch).await?;
+            let config = load_config(paths).await?;
+            let first = self
+                .create_first_revisions(&project_store, paths, start, &config, created, now)
+                .await?;
+            // The daemon writes the commits that are missing when it opens the project, so a failure here only delays them.
+            if let Err(error) = commit_main(&project_store, paths, self.git, self.clock).await {
+                tracing::warn!(code = error.code().unwrap_or(codes::INTERNAL_ERROR), "the Git commits of main were not written; the daemon writes them when it opens the project");
+            }
+            Ok::<_, ProjectError>(first)
+        }
+        .await;
+        let closed = project_store.close().await;
+        let first = first?;
+        closed?;
+        #[cfg(feature = "failpoints")]
+        fail::fail_point!("init_before_register", |_| Err(fired(
+            "init_before_register"
+        )
+        .into()));
+        let (row, replaced) = register(self.registry, self.root_text, name, replaces, now).await?;
+        Ok(InitializedProject {
+            slug: row.slug,
+            name: row.name,
+            root: PathBuf::from(row.root),
+            revision: first.revision,
+            imported: first.imported,
+            git_commit: first.git_commit,
+            gitignore: first.gitignore,
+            git_sync: first.git_sync,
+            resumed: false,
+            replaced,
+        })
+    }
+
+    /// Finishes an init that stopped after it made `.fold/` and before it registered the project. A migrated database whose `main` names a revision with every object below it in the store is a project the stopped run completed, except perhaps for the repository of a project whose Git sync is on, which is then created, and the registry row, which is then inserted; the daemon writes the missing commits when it opens the project. Anything less is refused with `project_incomplete`, and so is a `.fold/` that a running init holds. Nothing is removed in either case, and no database is created in a `.fold/` that has none.
+    async fn finish_stopped(
+        &self,
+        paths: &ProjectPaths,
+        name: String,
+        setup: Option<RepositorySetup>,
+    ) -> Result<InitializedProject, ProjectError> {
+        let Some(_init) = try_lock_fold_dir(paths).await? else {
+            return Err(incomplete(paths).into());
+        };
+        let db = paths.db();
+        let has_db = tokio::task::spawn_blocking(move || db.is_file()).await;
+        if !has_db.unwrap_or(false) {
+            return Err(incomplete(paths).into());
+        }
+        let store = Store::open_project(paths).await?;
+        let read = async {
+            let head = head(store.read()).await?;
+            let genesis = fold_store::workspaces::genesis(store.read()).await?;
+            let synced = fold_store::workspaces::git_sync(store.read())
+                .await?
+                .is_some();
+            Ok::<_, StoreError>((head, genesis, synced))
+        }
+        .await;
+        let closed = store.close().await;
+        let (row, genesis, git_sync) = read?;
+        closed?;
+        let (Some(head), Some(genesis)) = (row, genesis) else {
+            return Err(incomplete(paths).into());
+        };
+        let fold_dir = paths.fold_dir();
+        let revision = head.number;
+        let branch = load_config(paths).await?.git.branch;
+        let (git, paths_owned) = (self.git.clone(), paths.clone());
+        let finished = blocking(move || {
+            let objects = ObjectStore::open(&fold_dir).map_err(FoldError::from)?;
+            let Some(imported) = stored_contents(&objects, &head)? else {
+                return Ok(None);
+            };
+            if !git_sync {
+                return Ok(Some((imported, None)));
+            }
+            if !paths_owned.git_dir().exists() {
+                git.init_checkout(paths_owned.root(), &branch)?;
+                exclude_fold_dir(&paths_owned.git_dir())?;
+                if let Some(setup) = setup {
+                    setup(paths_owned.root());
+                }
+            }
+            let git_commit = SyncMap::load(&fold_dir)?.commit_of(genesis.number).cloned();
+            Ok(Some((imported, git_commit)))
+        })
+        .await?;
+        let Some((imported, git_commit)) = finished else {
+            return Err(incomplete(paths).into());
+        };
+        let (row, _) =
+            register(self.registry, self.root_text, name, None, self.clock.now()).await?;
+        Ok(InitializedProject {
+            slug: row.slug,
+            name: row.name,
+            root: PathBuf::from(row.root),
+            revision,
+            imported,
+            git_commit,
+            gitignore: None,
+            git_sync,
+            resumed: true,
+            replaced: false,
+        })
+    }
+
+    /// A new project's revisions, as [`Start`] describes them. Every file init writes into the folder and every object is in place before the one transaction that inserts the revisions, moves `main` by compare-and-swap from each to the next and appends their events, so a database that holds `main` holds the whole start; the sync map line of a Git genesis comes before that transaction too. A new repository comes after it, so an init that stops before its database is complete leaves no repository; one that stops after has it created when the init runs again. Both kinds of repository get `info/exclude` as the link to `.fold/exclude`, with `/.fold/` in it.
+    async fn create_first_revisions(
+        &self,
+        store: &Store,
+        paths: &ProjectPaths,
+        start: Start,
+        config: &ProjectConfig,
+        created: &mut Created,
+        now: Timestamp,
+    ) -> Result<FirstRevisions, ProjectError> {
+        let max_file_bytes = config.max_file_bytes;
+        let label = Actor::Human {
+            name: self.human.clone(),
+        }
+        .event_actor();
+        let (files, repository) = match start {
+            Start::FromGit { head, .. } => {
+                return self
+                    .genesis_from_git(store, paths, head, max_file_bytes, now)
+                    .await;
+            }
+            Start::New { files, repository } => (files, repository),
+        };
+        let root = paths.root().to_owned();
+        if let Some(foldignore) = blocking(move || write_foldignore(&root)).await? {
+            created.files.push(foldignore);
+        }
+        if let Some(files) = files {
+            let root = paths.root().to_owned();
+            let written = blocking(move || Ok(files(&root)?)).await?;
+            created.files.extend(written);
+        }
+        let paths_owned = paths.clone();
+        let (imported, genesis, mut changes) = blocking(move || {
+            let paths = paths_owned;
+            let root = paths.root();
+            let fold_dir = paths.fold_dir();
+            let objects = ObjectStore::open(&fold_dir).map_err(FoldError::from)?;
+            let caps = Capabilities::probe(&fold_dir).map_err(|error| io_error(&error))?;
+            let opts = ImportOptions {
+                max_file_bytes,
+                caps,
+            };
+            let imported = import_dir(&objects, root, &IgnoreRules::new(root), &opts)?;
+            #[cfg(feature = "failpoints")]
+            fail::fail_point!("init_after_import", |_| Err(
+                fired("init_after_import").into()
+            ));
+            let empty = write_initial_tree(&objects, FlatTree::new())?;
+            let genesis =
+                write_revision(&objects, &genesis_revision(empty, now)).map_err(FoldError::from)?;
+            let mut changes = Vec::new();
+            if imported.tree != empty {
+                changes.push(first_change(&objects, &genesis, empty, imported.tree, now)?);
+            }
+            Ok((imported, genesis, changes))
+        })
+        .await?;
+        let mut gitignore_change = None;
+        if repository.is_some() {
+            let root = paths.root().to_owned();
+            if let Some(plan) = blocking(move || plan_gitignore(&root)).await? {
+                // The old bytes are kept before the file changes, so a failure in between can still write them back.
+                match &plan.old {
+                    Some(old) => created.restore.push((plan.path.clone(), old.clone())),
+                    None => created.files.push(plan.path.clone()),
+                }
+                let previous = changes.last().map_or(genesis, |change| change.stored);
+                let fold_dir = paths.fold_dir();
+                gitignore_change =
+                    blocking(move || gitignore_change_after(&fold_dir, &plan, &previous, now))
+                        .await?;
+            }
+        }
+        let gitignore = gitignore_change
+            .as_ref()
+            .map(|change| change.stored.revision().number);
+        changes.extend(gitignore_change);
+        let git_sync = repository.is_some();
+        let human = self.human.as_str().to_owned();
+        store
+            .write(async |tx| -> Result<(), ProjectError> {
+                insert_revision(tx, &genesis).await?;
+                create_main(tx, RevisionId::GENESIS).await?;
+                let mut buffer = EventBuffer::new();
+                for change in &changes {
+                    change.record(tx, &mut buffer, &label, &human, now).await?;
+                }
+                if git_sync {
+                    enable_sync(tx, &mut buffer, &label, &config.git.branch, now).await?;
+                }
+                Ok(())
+            })
+            .await?;
+        if let Some(setup) = repository {
+            let (git, paths, branch) = (self.git.clone(), paths.clone(), config.git.branch.clone());
+            created.repository = true;
+            blocking(move || {
+                git.init_checkout(paths.root(), &branch)?;
+                exclude_fold_dir(&paths.git_dir())?;
+                setup(paths.root());
+                Ok(())
+            })
+            .await?;
+        }
+        let revision = changes.first().map_or(RevisionId::GENESIS, |change| {
+            change.stored.revision().number
+        });
+        Ok(FirstRevisions {
+            revision,
+            imported,
+            git_commit: None,
+            gitignore,
+            git_sync,
+        })
+    }
+
+    /// The genesis of a Git repository's project: `HEAD`'s tree as `r0`, its map line, and Git sync on.
+    async fn genesis_from_git(
+        &self,
+        store: &Store,
+        paths: &ProjectPaths,
+        head: CommitId,
+        max_file_bytes: u64,
+        now: Timestamp,
+    ) -> Result<FirstRevisions, ProjectError> {
+        let (git, paths_owned, commit) = (self.git.clone(), paths.clone(), head.clone());
+        let (imported, genesis) = blocking(move || {
+            let paths = paths_owned;
+            let objects = ObjectStore::open(&paths.fold_dir()).map_err(FoldError::from)?;
+            exclude_fold_dir(&paths.git_dir())?;
+            let opts = GitImportOptions { max_file_bytes };
+            let imported = import_commit(&objects, &git, paths.root(), commit.as_str(), &opts)?;
+            let genesis = write_revision(&objects, &genesis_revision(imported.tree, now))
+                .map_err(FoldError::from)?;
+            Ok((imported, genesis))
+        })
+        .await?;
+        let fold_dir = paths.fold_dir();
+        let synced = (RevisionId::GENESIS, head.clone());
+        blocking(move || Ok(SyncMap::load(&fold_dir)?.append(&[synced])?)).await?;
+        let label = Actor::Human {
+            name: self.human.clone(),
+        }
+        .event_actor();
+        let branch = load_config(paths).await?.git.branch;
+        store
+            .write(async |tx| -> Result<(), ProjectError> {
+                insert_revision(tx, &genesis).await?;
+                create_main(tx, RevisionId::GENESIS).await?;
+                enable_sync(tx, &mut EventBuffer::new(), &label, &branch, now).await?;
+                Ok(())
+            })
+            .await?;
+        Ok(FirstRevisions {
+            revision: RevisionId::GENESIS,
+            imported,
+            git_commit: Some(head),
+            gitignore: None,
+            git_sync: true,
+        })
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each argument is one input of the init, and grouping them would only rename them"
-)]
-async fn populate_and_register(
-    registry: &Store,
-    paths: &ProjectPaths,
-    root_text: &str,
-    name: String,
-    replaces: Option<&str>,
-    git: &Git,
-    start: Start,
-    created: &mut Created,
-    clock: &dyn Clock,
-) -> Result<InitializedProject, ProjectError> {
-    let now = clock.now();
-    let project_store = Store::open_project(paths).await?;
-    let first = async {
-        let branch = match &start {
-            Start::FromGit { branch, .. } => Some(branch.as_str()),
-            Start::New { .. } => None,
-        };
-        write_config(paths, branch).await?;
-        let config = load_config(paths).await?;
-        let first =
-            create_first_revision(&project_store, paths, git, start, &config, created, now).await?;
-        // The daemon writes a commit that is missing when it opens the project, so a failure here only delays `r1`'s.
-        if let Err(error) = commit_main(&project_store, paths, git, clock).await {
-            tracing::warn!(code = error.code().unwrap_or(codes::INTERNAL_ERROR), "the Git commit of r1 was not written; the daemon writes it when it opens the project");
+/// What [`Init::create_first_revisions`] made.
+struct FirstRevisions {
+    revision: RevisionId,
+    imported: ImportResult,
+    git_commit: Option<CommitId>,
+    gitignore: Option<RevisionId>,
+    git_sync: bool,
+}
+
+/// One change of the human that a new project starts with: the folder's files as `r1`, or the `.gitignore` init wrote when it turned Git on.
+struct FirstChange {
+    stored: StoredRevision,
+    base: ObjectHash,
+    tree: ObjectHash,
+    /// The paths it changes, in path order.
+    files: Vec<String>,
+}
+
+impl FirstChange {
+    /// Records the change as the `record` integration its revision names, in the init's transaction: the integration and the revision, `main` moved from the parent by compare-and-swap, the human change, and `integration.succeeded`, `main.advanced` and `human_change.recorded`. The integration number is the next one, as the revision encodes it; a fresh database gives the numbers in order.
+    async fn record(
+        &self,
+        tx: &mut WriteTx,
+        buffer: &mut EventBuffer,
+        label: &EventActor,
+        human: &str,
+        now: Timestamp,
+    ) -> Result<(), ProjectError> {
+        let revision = self.stored.revision();
+        let integration = revision
+            .integration
+            .ok_or(StoreError::Corrupt("revisions.integration_id"))?;
+        let allocated = counters::allocate(tx, IdKind::Integration).await?;
+        if allocated != integration.number() {
+            return Err(StoreError::Corrupt("counters.next").into());
         }
-        Ok::<_, ProjectError>(first)
+        let previous = RevisionId::from_number(revision.number.number().saturating_sub(1))
+            .ok_or(StoreError::Corrupt("revisions.number"))?;
+        let new = NewIntegration {
+            number: integration,
+            subject: IntegrationSubject::Record {
+                remote_commit: None,
+            },
+            actor: label.as_str(),
+            created_at: now,
+        };
+        insert_succeeded(tx, &new, &self.stored).await?;
+        advance_main(tx, previous, revision.number).await?;
+        let change = NewHumanChange {
+            commit: None,
+            human,
+            base_tree: self.base,
+            tree: self.tree,
+            now,
+        };
+        insert_recorded_human_change(tx, &change, integration).await?;
+        let event = |kind, data: serde_json::Value| {
+            NewEvent::new(kind, label.clone())
+                .and_then(|event| event.data(data))
+                .map(|event| event.revision(revision.number))
+                .map_err(|error| FoldError::new(codes::INTERNAL_ERROR, error.to_string()))
+        };
+        let events = [
+            event(
+                types::INTEGRATION_SUCCEEDED,
+                serde_json::json!({
+                    "integration": integration.to_string(),
+                    "kind": "record",
+                    "commit": null,
+                }),
+            )?,
+            event(
+                types::MAIN_ADVANCED,
+                serde_json::json!({
+                    "revision": revision.number.to_string(),
+                    "previous": previous.to_string(),
+                }),
+            )?,
+            event(
+                types::HUMAN_CHANGE_RECORDED,
+                serde_json::json!({
+                    "commit": null,
+                    "files": self.files.iter().take(LISTED_PATHS).collect::<Vec<_>>(),
+                    "file_count": self.files.len(),
+                    "tasks": [],
+                    "workspaces": [],
+                    "leads": [],
+                    "integration": integration.to_string(),
+                }),
+            )?,
+        ];
+        for event in &events {
+            buffer.append(tx, event, now).await?;
+        }
+        Ok(())
     }
-    .await;
-    let closed = project_store.close().await;
-    let (revision, imported, git_commit) = first?;
-    closed?;
-    #[cfg(feature = "failpoints")]
-    fail::fail_point!("init_before_register", |_| Err(fired(
-        "init_before_register"
-    )
-    .into()));
-    let (row, replaced) = register(registry, root_text, name, replaces, now).await?;
-    Ok(InitializedProject {
-        slug: row.slug,
-        name: row.name,
-        root: PathBuf::from(row.root),
-        revision,
-        imported,
-        git_commit,
-        resumed: false,
-        replaced,
+}
+
+/// The most paths a human-change event lists; the rest are counted.
+const LISTED_PATHS: usize = 50;
+
+/// Writes the `.gitignore` of `plan` and returns its change on top of `previous`, the revision before it; `None` when the tree stays as it was. Blocking.
+fn gitignore_change_after(
+    fold_dir: &Path,
+    plan: &GitignorePlan,
+    previous: &StoredRevision,
+    now: Timestamp,
+) -> Result<Option<FirstChange>, ProjectError> {
+    write_atomic(&plan.path, &plan.new).map_err(|error| io_error(&error))?;
+    let objects = ObjectStore::open(fold_dir).map_err(FoldError::from)?;
+    let blob = objects
+        .write(ObjectKind::Blob, &plan.new)
+        .map_err(FoldError::from)?;
+    let base = previous.revision().tree;
+    let mut entries = fold_vcs::compare::load_flat(&objects, &base)?;
+    entries.insert(
+        GITIGNORE.as_bytes().to_vec(),
+        FlatEntry {
+            kind: EntryKind::File,
+            hash: blob,
+        },
+    );
+    let tree = write_initial_tree(&objects, entries)?;
+    if tree == base {
+        return Ok(None);
+    }
+    first_change(&objects, previous, base, tree, now).map(Some)
+}
+
+/// The change from `base` to `tree` as the revision after `parent`, with the next integration number, its object written. Blocking.
+fn first_change(
+    objects: &ObjectStore,
+    parent: &StoredRevision,
+    base: ObjectHash,
+    tree: ObjectHash,
+    now: Timestamp,
+) -> Result<FirstChange, ProjectError> {
+    let parent_revision = parent.revision();
+    let number = parent_revision
+        .number
+        .next()
+        .ok_or(StoreError::Corrupt("revisions.number"))?;
+    // The genesis has no integration, and each change after it takes the next number.
+    let integration = IntegrationId::from_number(number.number())
+        .ok_or(StoreError::Corrupt("integrations.number"))?;
+    let revision = Revision {
+        tree,
+        parent: Some(parent.hash()),
+        number,
+        integration: Some(integration),
+        created_at: now,
+    };
+    let stored = write_revision(objects, &revision).map_err(FoldError::from)?;
+    let (before, after) = (
+        fold_vcs::compare::load_flat(objects, &base)?,
+        fold_vcs::compare::load_flat(objects, &tree)?,
+    );
+    let files = fold_vcs::scan::changes(&before, &after)
+        .into_iter()
+        .map(|change| String::from_utf8_lossy(&change.path).into_owned())
+        .collect();
+    Ok(FirstChange {
+        stored,
+        base,
+        tree,
+        files,
     })
+}
+
+/// Turns Git sync on with `git.sync_enabled` in the caller's transaction, for the human `label`. Nothing happens when it is on already.
+pub(crate) async fn enable_sync(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    label: &EventActor,
+    branch: &str,
+    now: Timestamp,
+) -> Result<bool, ProjectError> {
+    if !fold_store::workspaces::enable_git_sync(tx, label.as_str(), now).await? {
+        return Ok(false);
+    }
+    let event = NewEvent::new(types::GIT_SYNC_ENABLED, label.clone())
+        .and_then(|event| event.data(serde_json::json!({ "branch": branch })))
+        .map_err(|error| FoldError::new(codes::INTERNAL_ERROR, error.to_string()))?;
+    buffer.append(tx, &event, now).await?;
+    Ok(true)
 }
 
 /// Inserts the registry row under a free slug made from `name`. With `replaces`, the slug of the folder's registration whose `.fold/` was deleted, that row goes in the same transaction and the new row takes its slug, so the web addresses of the project stay; a row that changed since init read it stays, and the insert then refuses the folder with `project_exists`. The flag tells whether a row went.
@@ -470,71 +924,6 @@ async fn register(
         .await
 }
 
-/// Finishes an init that stopped after it made `.fold/` and before it registered the project. A migrated database whose `main` names a revision with every object below it in the store is a project the stopped run completed, except perhaps for the new repository, which is then created, and the registry row, which is then inserted; the daemon writes a missing commit when it opens the project. Anything less is refused with `project_incomplete`, and so is a `.fold/` that a running init holds. Nothing is removed in either case, and no database is created in a `.fold/` that has none.
-async fn finish_stopped(
-    registry: &Store,
-    paths: &ProjectPaths,
-    root_text: &str,
-    name: String,
-    git: &Git,
-    setup: Option<RepositorySetup>,
-    clock: &dyn Clock,
-) -> Result<InitializedProject, ProjectError> {
-    let Some(_init) = try_lock_fold_dir(paths).await? else {
-        return Err(incomplete(paths).into());
-    };
-    let db = paths.db();
-    let has_db = tokio::task::spawn_blocking(move || db.is_file()).await;
-    if !has_db.unwrap_or(false) {
-        return Err(incomplete(paths).into());
-    }
-    let store = Store::open_project(paths).await?;
-    let row = head(store.read()).await;
-    let closed = store.close().await;
-    let row = row?;
-    closed?;
-    let Some(head) = row else {
-        return Err(incomplete(paths).into());
-    };
-    let fold_dir = paths.fold_dir();
-    let revision = head.number;
-    let branch = load_config(paths).await?.git.branch;
-    let (git, paths_owned) = (git.clone(), paths.clone());
-    let finished = blocking(move || {
-        let objects = ObjectStore::open(&fold_dir).map_err(FoldError::from)?;
-        let Some(imported) = stored_contents(&objects, &head)? else {
-            return Ok(None);
-        };
-        if !paths_owned.git_dir().exists() {
-            git.init_checkout(paths_owned.root(), &branch)?;
-            exclude_fold_dir(&paths_owned.git_dir())?;
-            if let Some(setup) = setup {
-                setup(paths_owned.root());
-            }
-        }
-        let git_commit = match head.import_source {
-            Some(_) => SyncMap::load(&fold_dir)?.commit_of(head.number).cloned(),
-            None => None,
-        };
-        Ok(Some((imported, git_commit)))
-    })
-    .await?;
-    let Some((imported, git_commit)) = finished else {
-        return Err(incomplete(paths).into());
-    };
-    let (row, _) = register(registry, root_text, name, None, clock.now()).await?;
-    Ok(InitializedProject {
-        slug: row.slug,
-        name: row.name,
-        root: PathBuf::from(row.root),
-        revision,
-        imported,
-        git_commit,
-        resumed: true,
-        replaced: false,
-    })
-}
-
 /// What `row` records, when its revision object holds the row's tree and every object it reaches is in the store; `None` when one is missing or the object names another tree.
 fn stored_contents(
     objects: &ObjectStore,
@@ -561,109 +950,8 @@ fn stored_contents(
     }))
 }
 
-/// The comment of the `.gitignore` init writes when the folder has neither ignore file.
-const GITIGNORE_COMMENT: &str = "# Paths that Git and fold leave out, one pattern per line. Add a .foldignore for rules that only fold uses.\n";
-
 /// The line init adds to a `.gitignore` that does not ignore `.fold`, before its line ending.
 const FOLD_DIR_LINE: &str = ".fold/";
-
-/// A new project's ignore files (see [`plan_ignore_files`]) and the caller's `files` first, so `r1` holds them and the folder is clean against `r1`'s commit; then the objects of `r1`, the sync map that names `r1` for [`Start::FromGit`], and the one transaction that inserts `r1` and creates `main`. The map comes before the row, so a database that holds `r1` always has the map that names its commit. A new project's repository comes last, so an init that stops before its database is complete leaves no repository; one that stops after has it created when the init runs again. Both kinds get `info/exclude` as the link to `.fold/exclude`, with `/.fold/` in it.
-async fn create_first_revision(
-    store: &Store,
-    paths: &ProjectPaths,
-    git: &Git,
-    start: Start,
-    config: &ProjectConfig,
-    created: &mut Created,
-    now: Timestamp,
-) -> Result<(RevisionId, ImportResult, Option<CommitId>), ProjectError> {
-    let (max_file_bytes, branch) = (config.max_file_bytes, config.git.branch.clone());
-    let (head, setup) = match start {
-        Start::FromGit { head, .. } => (Some(head), None),
-        Start::New { files, setup } => {
-            let root = paths.root().to_owned();
-            let plan = blocking(move || plan_ignore_files(&root)).await?;
-            // The old bytes are kept before the file changes, so a failure in between can still write them back.
-            created.files = plan.create.iter().map(|(path, _)| path.clone()).collect();
-            created.restore = plan
-                .change
-                .iter()
-                .map(|(path, old, _)| (path.clone(), old.clone()))
-                .collect();
-            blocking(move || write_ignore_files(plan)).await?;
-            if let Some(files) = files {
-                let root = paths.root().to_owned();
-                let written = blocking(move || Ok(files(&root)?)).await?;
-                created.files.extend(written);
-            }
-            (None, setup)
-        }
-    };
-    let (git_owned, paths_owned, head_owned) = (git.clone(), paths.clone(), head.clone());
-    let (imported, stored) = blocking(move || {
-        let (git, paths) = (git_owned, paths_owned);
-        let root = paths.root();
-        let fold_dir = paths.fold_dir();
-        let objects = ObjectStore::open(&fold_dir).map_err(FoldError::from)?;
-        let imported = match &head_owned {
-            Some(head) => {
-                exclude_fold_dir(&paths.git_dir())?;
-                let opts = GitImportOptions { max_file_bytes };
-                import_commit(&objects, &git, root, head.as_str(), &opts)?
-            }
-            None => {
-                let caps = Capabilities::probe(&fold_dir).map_err(|error| io_error(&error))?;
-                let opts = ImportOptions {
-                    max_file_bytes,
-                    caps,
-                };
-                let imported = import_dir(&objects, root, &IgnoreRules::new(root), &opts)?;
-                #[cfg(feature = "failpoints")]
-                fail::fail_point!("init_after_import", |_| Err(
-                    fired("init_after_import").into()
-                ));
-                imported
-            }
-        };
-        let revision = initial_revision(imported.tree, now)?;
-        let stored = write_revision(&objects, &revision).map_err(FoldError::from)?;
-        Ok((imported, stored))
-    })
-    .await?;
-    if let Some(commit) = head.clone() {
-        let fold_dir = paths.fold_dir();
-        let synced = (stored.revision().number, commit);
-        blocking(move || Ok(SyncMap::load(&fold_dir)?.append(&[synced])?)).await?;
-    }
-    // A Git import names the repository it read, so a stopped init that is finished later still reports `r1`'s commit; a new project's `r1` has none.
-    let import_source = match head {
-        Some(_) => paths.root().to_str(),
-        None => None,
-    };
-    let row = create_initial_revision(store, &stored, import_source).await?;
-    if head.is_none() {
-        let (git, paths) = (git.clone(), paths.clone());
-        created.repository = true;
-        blocking(move || {
-            git.init_checkout(paths.root(), &branch)?;
-            exclude_fold_dir(&paths.git_dir())?;
-            if let Some(setup) = setup {
-                setup(paths.root());
-            }
-            Ok(())
-        })
-        .await?;
-    }
-    Ok((row.number, imported, head))
-}
-
-/// What init does to the ignore files of a new project's folder.
-struct IgnorePlan {
-    /// Files that do not exist yet, with their content.
-    create: Vec<(PathBuf, Vec<u8>)>,
-    /// A `.gitignore` that exists, with its bytes now and the bytes it gets.
-    change: Option<(PathBuf, Vec<u8>, Vec<u8>)>,
-}
 
 /// True when a line of `text` is exactly `.fold`, `.fold/`, `/.fold` or `/.fold/` once trailing spaces are trimmed, as Git trims them; leading spaces stay part of a Git pattern, and a comment or a negation is not one of the four.
 fn ignores_fold_dir(text: &str) -> bool {
@@ -705,46 +993,45 @@ fn read_regular(path: &Path) -> Result<(bool, Option<Vec<u8>>), ProjectError> {
     }
 }
 
-/// Decides the ignore files of a new project's folder, because Git starts with them. A folder without a `.gitignore` gets one that copies `.foldignore` (or a comment when there is none) and ends with a `.fold/` line, and an empty `.foldignore` when it has none. An existing `.gitignore` gets the `.fold/` line when it lacks one, and no `.foldignore` is written. A `.gitignore` that is not a regular file is left alone. Blocking.
-fn plan_ignore_files(root: &Path) -> Result<IgnorePlan, ProjectError> {
-    let gitignore = root.join(GITIGNORE);
+/// Writes an empty `.foldignore` into the folder when it has none, through [`write_atomic`], and returns its path; anything at the path, a symlink included, is left alone. Blocking.
+fn write_foldignore(root: &Path) -> Result<Option<PathBuf>, ProjectError> {
     let foldignore = root.join(FOLDIGNORE);
-    let (git_exists, git_text) = read_regular(&gitignore)?;
-    let (fold_exists, fold_text) = read_regular(&foldignore)?;
-    let mut plan = IgnorePlan {
-        create: Vec::new(),
-        change: None,
-    };
-    if git_exists {
-        if let Some(old) = git_text {
-            let new = with_fold_dir_line(old.clone());
-            if new != old {
-                plan.change = Some((gitignore, old, new));
-            }
-        }
-        return Ok(plan);
+    if read_regular(&foldignore)?.0 {
+        return Ok(None);
     }
-    let text = match fold_text {
-        Some(text) => with_fold_dir_line(text),
-        None if fold_exists => with_fold_dir_line(Vec::new()),
-        None => with_fold_dir_line(GITIGNORE_COMMENT.as_bytes().to_vec()),
-    };
-    plan.create.push((gitignore, text));
-    if !fold_exists {
-        plan.create.push((foldignore, Vec::new()));
-    }
-    Ok(plan)
+    write_atomic(&foldignore, b"").map_err(|error| io_error(&error))?;
+    Ok(Some(foldignore))
 }
 
-/// Writes what [`plan_ignore_files`] decided, each file through [`write_atomic`]. Blocking.
-fn write_ignore_files(plan: IgnorePlan) -> Result<(), ProjectError> {
-    for (path, text) in plan.create {
-        write_atomic(&path, &text).map_err(|error| io_error(&error))?;
+/// What turning Git on does to the folder's `.gitignore`.
+pub(crate) struct GitignorePlan {
+    pub(crate) path: PathBuf,
+    /// The bytes it holds now; `None` when there is none.
+    pub(crate) old: Option<Vec<u8>>,
+    pub(crate) new: Vec<u8>,
+}
+
+/// Decides the `.gitignore` that turning Git on writes, so Git ignores `.fold/` and leaves out what fold leaves out. A folder without one gets a regular file that copies `.foldignore` (empty when there is none) and ends with a `.fold/` line; the copy happens once, and later `.foldignore` only adds rules on top of `.gitignore` or brings back a path it ignores. An existing `.gitignore` gets the `.fold/` line only when it lacks one. `None` when nothing changes, and for a `.gitignore` that is not a regular file, which is left alone. Blocking.
+pub(crate) fn plan_gitignore(root: &Path) -> Result<Option<GitignorePlan>, ProjectError> {
+    let path = root.join(GITIGNORE);
+    let (exists, current) = read_regular(&path)?;
+    if exists {
+        let Some(old) = current else {
+            return Ok(None);
+        };
+        let new = with_fold_dir_line(old.clone());
+        return Ok((new != old).then_some(GitignorePlan {
+            path,
+            old: Some(old),
+            new,
+        }));
     }
-    if let Some((path, _, new)) = plan.change {
-        write_atomic(&path, &new).map_err(|error| io_error(&error))?;
-    }
-    Ok(())
+    let (_, foldignore) = read_regular(&root.join(FOLDIGNORE))?;
+    Ok(Some(GitignorePlan {
+        path,
+        old: None,
+        new: with_fold_dir_line(foldignore.unwrap_or_default()),
+    }))
 }
 
 /// [`crate::support::blocking`] for work that fails with a [`ProjectError`]: a panic on the blocking pool is an `internal_error`, never a layout failure.
@@ -1100,6 +1387,23 @@ fn io_error(error: &io::Error) -> ProjectError {
         codes::WORKSPACE_IO,
         format!("cannot set up the project layout: {}", error.kind()),
     ))
+}
+
+/// Refuses a Git command while the project's Git sync is off: a plain folder has no Git repository until a human turns Git on.
+pub(crate) async fn require_git_sync(store: &Store, command: &str) -> Result<(), ProjectError> {
+    if fold_store::workspaces::git_sync(store.read())
+        .await?
+        .is_some()
+    {
+        return Ok(());
+    }
+    Err(FoldError::new(
+        codes::INVALID_REQUEST,
+        format!("Git sync is off in this project, so {command} has no Git repository to use"),
+    )
+    .with_hint("run fld init --with-git in the project folder to turn Git on")
+    .with_details([("reason", serde_json::json!("git_sync_off"))])
+    .into())
 }
 
 /// A registry row and whether the daemon has the project open.

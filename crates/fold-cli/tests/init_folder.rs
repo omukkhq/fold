@@ -160,7 +160,7 @@ fn folder(sandbox: &Sandbox) -> PathBuf {
 }
 
 #[test]
-fn init_makes_the_folder_files_r1_and_its_first_commit() {
+fn a_plain_init_makes_the_folder_files_r1_on_the_empty_genesis_and_no_git_data() {
     let sandbox = Sandbox::new();
     let project = folder(&sandbox);
     let before = snapshot(&project);
@@ -178,50 +178,45 @@ fn init_makes_the_folder_files_r1_and_its_first_commit() {
     );
     let row = r1(&project);
     assert_eq!(row.number.to_string(), "r1");
-    assert_eq!(row.import_source, None);
-    // The folder's files stay as they were, writable; its `.gitignore` gains the `.fold/` line.
+    assert_eq!(
+        row.parent.map(|parent| parent.to_string()).as_deref(),
+        Some("r0")
+    );
+    // The folder's files stay as they were, writable; init adds only the empty `.foldignore` and the Claude Code files.
     let after = snapshot(&project);
     for (path, entry) in &before {
-        if path.as_os_str() != ".gitignore" {
-            assert_eq!(after.get(path), Some(entry), "{path:?}");
-        }
+        assert_eq!(after.get(path), Some(entry), "{path:?}");
     }
+    assert_eq!(
+        fs::read_to_string(project.join(".gitignore")).unwrap(),
+        "*.log\n"
+    );
+    assert_eq!(fs::metadata(project.join(".foldignore")).unwrap().len(), 0);
+    assert!(!project.join(".git").exists());
+}
+
+#[test]
+fn init_with_git_records_the_gitignore_change_as_r2_and_commits_from_r1() {
+    let sandbox = Sandbox::new();
+    let project = folder(&sandbox);
+    let output = sandbox.fold_in(&project, &["init", "--with-git"]);
+    assert!(output.status.success(), "{output:?}");
+    let text = stdout(&output);
+    assert!(
+        text.contains("\nr2 records the .gitignore that keeps .fold/ out of Git\nGit sync is on: every revision gets its Git commit in .git\n"),
+        "{text}"
+    );
+    assert_eq!(r1(&project).number.to_string(), "r2");
     assert_eq!(
         fs::read_to_string(project.join(".gitignore")).unwrap(),
         "*.log\n.fold/\n"
     );
-    assert!(!project.join(".foldignore").exists());
     assert_eq!(
         git(&project, &["ls-tree", "-r", "--name-only", "HEAD"]),
-        ".claude/skills/fold/SKILL.md\n.gitignore\nAGENTS.md\nREADME.md\nlink\nrun.sh\nsrc/lib.rs\n"
+        ".claude/skills/fold/SKILL.md\n.foldignore\n.gitignore\nAGENTS.md\nREADME.md\nlink\nrun.sh\nsrc/lib.rs\n"
     );
-    assert_eq!(git(&project, &["log", "--format=%s"]), "fold r1\n");
-    // The Claude Code files init writes are part of r1, so Git sees nothing new.
-    assert_eq!(git(&project, &["status", "--porcelain"]), "");
-}
-
-#[test]
-fn init_in_a_new_dir_writes_a_regular_gitignore_that_ignores_fold_and_an_empty_foldignore() {
-    let sandbox = Sandbox::new();
-    let project = sandbox.path("app");
-    let output = sandbox.fold(&["init", project.to_str().unwrap()]);
-    assert!(output.status.success(), "{output:?}");
-    assert!(stdout(&output).ends_with(&format!(
-        "\n{}\n{}",
-        crate::common::r1_line(&project, 0, 0),
-        machine_warnings(&project)
-    )));
-    assert_eq!(r1(&project).number.to_string(), "r1");
-    assert_eq!(fs::metadata(project.join(".foldignore")).unwrap().len(), 0);
-    assert!(!project.join(".gitignore").is_symlink());
-    let gitignore = fs::read_to_string(project.join(".gitignore")).unwrap();
-    assert!(gitignore.starts_with("# "));
-    assert!(gitignore.ends_with("\n.fold/\n"));
-    assert_eq!(git(&project, &["log", "--format=%s"]), "fold r1\n");
-    assert_eq!(
-        git(&project, &["ls-tree", "--name-only", "HEAD"]),
-        ".claude\n.foldignore\n.gitignore\nAGENTS.md\n"
-    );
+    // The empty genesis gets no commit, so the history starts at r1.
+    assert_eq!(git(&project, &["rev-list", "--count", "HEAD"]).trim(), "2");
     assert_eq!(git(&project, &["status", "--porcelain"]), "");
     assert!(
         fs::read_to_string(project.join(".git/info/exclude"))
@@ -229,6 +224,25 @@ fn init_in_a_new_dir_writes_a_regular_gitignore_that_ignores_fold_and_an_empty_f
             .lines()
             .any(|line| line == "/.fold/")
     );
+}
+
+#[test]
+fn init_with_git_in_a_new_dir_writes_a_gitignore_that_copies_the_foldignore() {
+    let sandbox = Sandbox::new();
+    let project = sandbox.path("app");
+    let output = sandbox.fold(&["init", "--with-git", project.to_str().unwrap()]);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(fs::metadata(project.join(".foldignore")).unwrap().len(), 0);
+    assert!(!project.join(".gitignore").is_symlink());
+    assert_eq!(
+        fs::read_to_string(project.join(".gitignore")).unwrap(),
+        ".fold/\n"
+    );
+    assert_eq!(
+        git(&project, &["ls-tree", "--name-only", "HEAD"]),
+        ".claude\n.foldignore\n.gitignore\nAGENTS.md\n"
+    );
+    assert_eq!(git(&project, &["status", "--porcelain"]), "");
 }
 
 #[test]
@@ -248,10 +262,6 @@ fn a_file_over_the_size_limit_is_printed_as_skipped() {
         )),
         "{}",
         stdout(&output)
-    );
-    assert_eq!(
-        git(&project, &["ls-tree", "-r", "--name-only", "HEAD"]),
-        ".claude/skills/fold/SKILL.md\n.foldignore\n.gitignore\nAGENTS.md\nsmall.txt\n"
     );
 }
 

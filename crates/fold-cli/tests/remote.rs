@@ -69,9 +69,15 @@ impl Sandbox {
         self.path("empty-bin").to_str().unwrap().to_owned()
     }
 
-    /// A project `app` with its `r1`, registered in the sandbox.
+    /// A project `app` with Git sync on and its `r1`, registered in the sandbox. Its `.gitignore` ignores `.fold/` already, so turning Git on records no revision of its own.
     fn project(&self) -> PathBuf {
-        let init = self.fold(&["init", "app"]);
+        fs::create_dir(self.path("app")).unwrap();
+        fs::write(self.path("app").join(".gitignore"), ".fold/\n").unwrap();
+        let init = self
+            .command(&system_path(), &["init", "--with-git"])
+            .current_dir(self.path("app"))
+            .output()
+            .unwrap();
         assert!(init.status.success(), "{init:?}");
         self.path("app")
     }
@@ -299,7 +305,10 @@ fn push_goes_through_the_daemon_and_needs_git_on_its_path() {
         assert!(output.status.success(), "{output:?}");
         assert_eq!(stdout(&output), "pushed r1 to origin/main: 1 commit\n");
         let message = git(&remote, &["log", "-1", "--format=%B", "main"]);
-        assert_eq!(message, "fold r1\n\nFold-Revision: r1\n\n");
+        assert_eq!(
+            message,
+            "Record the changes of the project folder\n\nFold-Revision: r1\n\n"
+        );
         let again = sandbox.push(&project);
         assert_eq!(stdout(&again), "origin/main is up to date: r1 is pushed\n");
         fs::create_dir(sandbox.path("elsewhere")).unwrap();

@@ -128,6 +128,7 @@ async fn run(
     git: &Git,
     remote: Option<&str>,
 ) -> Result<PushOutcome, ProjectError> {
+    super::require_git_sync(&handle.store, "fld push").await?;
     let config = load_config(&handle.paths).await?;
     let (name, remote) = select_remote(&config, remote)?;
     let (url, branch, local) = (remote.url, remote.branch, config.git.branch);
