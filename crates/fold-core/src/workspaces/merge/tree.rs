@@ -111,6 +111,46 @@ pub fn merge_trees(
     Ok(result)
 }
 
+/// A change carried onto another tree: see [`carry_change`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Carried {
+    pub tree: FlatTree,
+    /// Each line-merged file of `tree`, which the store may not hold.
+    pub new_blobs: Vec<(ObjectHash, Vec<u8>)>,
+    /// The top paths where the change conflicts with the other tree, in path order.
+    pub conflicts: Vec<Vec<u8>>,
+}
+
+/// What `ours` changed against `base`, applied to `theirs` by the three-way merge. Where that change conflicts with `theirs`, the result keeps `ours`' side of the path, entries below it included, so it is a valid tree whose conflicted paths still hold `ours`' content. Comparing a later state of `ours` that moved onto `theirs` with this tree then shows only what changed after `ours`, not what `theirs` brought.
+pub fn carry_change(
+    base: &FlatTree,
+    ours: &FlatTree,
+    theirs: &FlatTree,
+    load: BlobLoader<'_>,
+) -> Result<Carried, FoldError> {
+    let merge = merge_trees(base, ours, theirs, load)?;
+    let mut tree = merge.merged;
+    let mut conflicts = Vec::with_capacity(merge.conflicts.len());
+    for conflict in merge.conflicts {
+        if let Some(entry) = conflict.ours {
+            tree.insert(conflict.path.clone(), entry);
+        }
+        let mut prefix = conflict.path.clone();
+        prefix.push(b'/');
+        for (path, entry) in entries_below(ours, &conflict.path) {
+            let mut full = prefix.clone();
+            full.extend_from_slice(&path);
+            tree.insert(full, entry);
+        }
+        conflicts.push(conflict.path);
+    }
+    Ok(Carried {
+        tree,
+        new_blobs: merge.new_blobs,
+        conflicts,
+    })
+}
+
 #[derive(Clone, Copy)]
 struct Triple {
     base: Option<FlatEntry>,
@@ -379,6 +419,17 @@ mod tests {
                     .ok_or_else(|| FoldError::new(codes::INVALID_HASH, "missing blob"))
             };
             merge_trees(base, ours, theirs, &load)
+        }
+
+        fn carry(&self, base: &FlatTree, ours: &FlatTree, theirs: &FlatTree) -> Carried {
+            let load = |hash: &ObjectHash| {
+                self.0
+                    .borrow()
+                    .get(hash)
+                    .cloned()
+                    .ok_or_else(|| FoldError::new(codes::INVALID_HASH, "missing blob"))
+            };
+            carry_change(base, ours, theirs, &load).unwrap()
         }
     }
 
@@ -865,6 +916,57 @@ mod tests {
     }
 
     #[test]
+    fn a_carried_change_keeps_its_own_side_where_it_conflicts() {
+        let blobs = Blobs::default();
+        let base = tree(&[
+            ("lib", Some(blobs.file("a\nb\nc\n"))),
+            ("same", Some(blobs.file("1\n"))),
+            ("d", Some(blobs.file("file\n"))),
+        ]);
+        let ours = tree(&[
+            ("lib", Some(blobs.file("A\nb\nc\n"))),
+            ("same", Some(blobs.file("ours\n"))),
+            ("d", Some(blobs.file("changed\n"))),
+        ]);
+        let theirs = tree(&[
+            ("lib", Some(blobs.file("a\nb\nC\n"))),
+            ("same", Some(blobs.file("theirs\n"))),
+            ("d/x", Some(blobs.file("dir\n"))),
+            ("main", Some(blobs.file("new\n"))),
+        ]);
+        let carried = blobs.carry(&base, &ours, &theirs);
+        assert_eq!(carried.conflicts, vec![b"d".to_vec(), b"same".to_vec()]);
+        let merged = blobs.file("A\nb\nC\n");
+        assert_eq!(
+            carried.tree,
+            tree(&[
+                ("lib", Some(merged)),
+                ("same", ours.get(b"same".as_slice()).copied()),
+                ("d", ours.get(b"d".as_slice()).copied()),
+                ("main", theirs.get(b"main".as_slice()).copied()),
+            ])
+        );
+        assert_eq!(
+            carried.new_blobs,
+            vec![(merged.hash, b"A\nb\nC\n".to_vec())]
+        );
+    }
+
+    #[test]
+    fn a_carried_conflict_keeps_the_directory_of_its_own_side() {
+        let blobs = Blobs::default();
+        let base = tree(&[("d", Some(blobs.file("file\n")))]);
+        let ours = tree(&[
+            ("d/x", Some(blobs.file("x\n"))),
+            ("d/y", Some(blobs.file("y\n"))),
+        ]);
+        let theirs = tree(&[("d", Some(blobs.file("edited\n")))]);
+        let carried = blobs.carry(&base, &ours, &theirs);
+        assert_eq!(carried.conflicts, vec![b"d".to_vec()]);
+        assert_eq!(carried.tree, ours);
+    }
+
+    #[test]
     fn kind_names_are_stable() {
         let names: Vec<_> = [
             ConflictKind::BothModifiedText,
@@ -1196,6 +1298,66 @@ mod tests {
             prop_assert_eq!(&forward.merged, &backward.merged);
             let paths = |m: &TreeMerge| m.conflicts.iter().map(|c| (c.path.clone(), c.kind)).collect::<Vec<_>>();
             prop_assert_eq!(paths(&forward), paths(&backward));
+        }
+
+        #[test]
+        fn carrying_onto_the_same_base_gives_the_change_and_an_unchanged_side_gives_the_other(b in spec(NAMES.len()), x in spec(NAMES.len())) {
+            let blobs = Blobs::default();
+            let base = valid(&blobs, &b);
+            let side = valid(&blobs, &x);
+            let same = blobs.carry(&base, &side, &base);
+            prop_assert_eq!(&same.tree, &side);
+            prop_assert!(same.conflicts.is_empty());
+            let unchanged = blobs.carry(&base, &base, &side);
+            prop_assert_eq!(&unchanged.tree, &side);
+            prop_assert!(unchanged.conflicts.is_empty());
+        }
+
+        #[test]
+        fn a_carried_tree_is_valid_and_keeps_its_own_side_at_each_conflict(b in spec(NAMES.len()), o in spec(NAMES.len()), t in spec(NAMES.len())) {
+            let blobs = Blobs::default();
+            let base = valid(&blobs, &b);
+            let ours = valid(&blobs, &o);
+            let theirs = valid(&blobs, &t);
+            let carried = blobs.carry(&base, &ours, &theirs);
+            for path in carried.tree.keys() {
+                prop_assert!(!has_child(&carried.tree, path), "{path:?}");
+            }
+            let merge = merged_of(&blobs, &base, &ours, &theirs);
+            let paths: Vec<Vec<u8>> = merge.conflicts.iter().map(|c| c.path.clone()).collect();
+            prop_assert_eq!(&carried.conflicts, &paths);
+            for path in &paths {
+                prop_assert_eq!(carried.tree.get(path), ours.get(path));
+                prop_assert_eq!(entries_below(&carried.tree, path), entries_below(&ours, path));
+            }
+            for (path, entry) in &merge.merged {
+                prop_assert_eq!(carried.tree.get(path), Some(entry));
+            }
+        }
+
+        /// Main changes only paths that neither version changed, and the later version is the worker's later state synced onto main: the change from the carried earlier version to it is the worker's own change, path for path.
+        #[test]
+        fn a_change_carried_past_disjoint_main_changes_differs_from_the_later_version_only_by_the_worker(b in spec(DISJOINT.len()), o in spec(DISJOINT.len()), t in spec(DISJOINT.len()), n in spec(DISJOINT.len())) {
+            let blobs = Blobs::default();
+            let main_changes: Vec<bool> = b.iter().zip(&o).zip(&t).map(|((b, o), t)| o == b && t != b).collect();
+            let pick = |side: &Spec| -> Spec {
+                side.iter().zip(&b).zip(&main_changes).map(|((side, b), main)| if *main { b.clone() } else { side.clone() }).collect()
+            };
+            let theirs_spec: Spec = b.iter().zip(&t).zip(&main_changes).map(|((b, t), main)| if *main { t.clone() } else { b.clone() }).collect();
+            let base = build(&blobs, &DISJOINT, &b);
+            let ours = build(&blobs, &DISJOINT, &o);
+            let later_own = build(&blobs, &DISJOINT, &pick(&n));
+            let theirs = build(&blobs, &DISJOINT, &theirs_spec);
+            let carried = blobs.carry(&base, &ours, &theirs);
+            prop_assert!(carried.conflicts.is_empty());
+            prop_assert!(carried.new_blobs.is_empty());
+            let later = blobs.carry(&base, &later_own, &theirs);
+            prop_assert!(later.conflicts.is_empty());
+            for name in DISJOINT {
+                let path = name.as_bytes();
+                let changed = carried.tree.get(path) != later.tree.get(path);
+                prop_assert!(changed == (ours.get(path) != later_own.get(path)), "{name}");
+            }
         }
 
         #[test]

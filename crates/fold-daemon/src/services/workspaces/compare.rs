@@ -131,6 +131,23 @@ pub struct StateComparison {
     pub warnings: Vec<Warning>,
 }
 
+/// A stored tree with its change against `base` carried onto the tree `onto` by the three-way merge, such as an earlier proposal version moved onto the base of a later one. All three are stored trees.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Carry {
+    pub base: ObjectHash,
+    pub tree: ObjectHash,
+    pub onto: ObjectHash,
+}
+
+/// See [`WorkspaceService::compare_carried`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CarriedComparison {
+    pub files: Vec<FileChange>,
+    pub totals: Totals,
+    /// Where the carried change conflicts with `onto`, in path order; each keeps the carried tree's side.
+    pub conflicts: Vec<RepoPath>,
+}
+
 /// Where a state's entries come from before any file is read.
 enum Source {
     Tree(ObjectHash),
@@ -228,6 +245,45 @@ impl WorkspaceService {
         blocking(move || {
             let objects = open_objects(&paths)?;
             vcs::file_diff(&objects, &from.state, &to.state, &path)
+        })
+        .await
+    }
+
+    /// The files that differ from the carried state `from` to the stored tree `to`, with line counts, and the paths where the carried change conflicts. A read: it writes nothing, the line-merged files stay in memory.
+    pub async fn compare_carried(
+        &self,
+        from: Carry,
+        to: ObjectHash,
+    ) -> Result<CarriedComparison, WorkspaceError> {
+        let paths = self.paths.clone();
+        blocking(move || {
+            let objects = open_objects(&paths)?;
+            let carried = vcs::carried_state(&objects, &from.base, &from.tree, &from.onto)?;
+            let to = State::recorded(vcs::load_flat(&objects, &to)?);
+            let comparison = vcs::compare(&objects, &carried.state, &to)?;
+            Ok(CarriedComparison {
+                files: comparison.files,
+                totals: comparison.totals,
+                conflicts: carried.conflicts,
+            })
+        })
+        .await
+    }
+
+    /// The hunks of one file of [`WorkspaceService::compare_carried`]. A path the comparison does not list is `path_not_in_comparison`.
+    pub async fn diff_file_carried(
+        &self,
+        from: Carry,
+        to: ObjectHash,
+        path: &str,
+    ) -> Result<FileDiff, WorkspaceError> {
+        let path = RepoPath::parse(path.as_bytes()).map_err(FoldError::from)?;
+        let paths = self.paths.clone();
+        blocking(move || {
+            let objects = open_objects(&paths)?;
+            let carried = vcs::carried_state(&objects, &from.base, &from.tree, &from.onto)?;
+            let to = State::recorded(vcs::load_flat(&objects, &to)?);
+            vcs::file_diff(&objects, &carried.state, &to, &path)
         })
         .await
     }

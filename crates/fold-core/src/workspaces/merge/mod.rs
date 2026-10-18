@@ -11,4 +11,4 @@ pub use report::{
     ConflictReport, HunkSide, ReportEntry, ReportEntryKind, ReportFile, ReportHunk, ReportKind,
     ReportTrees,
 };
-pub use tree::{BlobLoader, Conflict, ConflictKind, TreeMerge, merge_trees};
+pub use tree::{BlobLoader, Carried, Conflict, ConflictKind, TreeMerge, carry_change, merge_trees};

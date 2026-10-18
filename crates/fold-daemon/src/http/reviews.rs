@@ -1019,7 +1019,7 @@ pub async fn get_proposal(
     Ok(Json(view.into()))
 }
 
-/// The change of a proposal version, calculated on request from stored trees: against its base revision, or with `since` only what changed after an earlier version. A version side is named by its changeset. On a change since an earlier version the new side's line numbers are the version's own, so a `new` line comment taken from them lands on the version.
+/// The change of a proposal version, calculated on request from stored trees: against its base revision, or with `since` only what changed after an earlier version. When the version has a newer base than the earlier one, the earlier version is carried onto that base first, so the change leaves out what main gained. A version side is named by its changeset. On a change since an earlier version the new side's line numbers are the version's own, so a `new` line comment taken from them lands on the version.
 #[utoipa::path(
     get,
     path = "/api/v1/projects/{slug}/proposals/{id}/diff",

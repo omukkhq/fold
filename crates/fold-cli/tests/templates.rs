@@ -269,7 +269,7 @@ const INVALID_REQUEST_REASONS: [&str; 10] = [
     "human_change_superseded",
 ];
 
-const NON_TOOL_NAMES: [&str; 27] = [
+const NON_TOOL_NAMES: [&str; 30] = [
     "human_review",
     "left_out",
     "stall_minutes",
@@ -297,6 +297,9 @@ const NON_TOOL_NAMES: [&str; 27] = [
     "clear_mcp",
     "no_proposal",
     "human_change",
+    "new_files",
+    "base_moved",
+    "base_conflicts",
 ];
 
 const SECTIONS: [&str; 14] = [

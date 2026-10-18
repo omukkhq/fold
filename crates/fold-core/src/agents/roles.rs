@@ -604,6 +604,9 @@ mod tests {
             assert!(prompt.contains("Do not edit source files or tests"));
             assert!(prompt.contains("stale_version"));
             assert!(prompt.contains("left_out"));
+            assert!(prompt.contains("`Change review: the fixes and the code they touch`"));
+            assert!(prompt.contains("`Full review: <reason>`"));
+            assert!(prompt.contains("`base_conflicts`"));
         }
         let lead = Role::ReviewLead.prompt();
         assert!(lead.contains("before taking claims or creating a batch"));

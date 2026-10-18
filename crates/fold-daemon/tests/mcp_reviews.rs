@@ -336,8 +336,16 @@ async fn a_reviewer_reads_only_the_change_since_the_last_verdict() {
         since["files"],
         json!([{"path": "src/lib.rs", "change": "modified", "added": 1, "removed": 0}])
     );
+    assert_eq!(
+        since["earlier"],
+        json!({"files": 2, "added": 2, "removed": 2})
+    );
+    assert_eq!(since["new_files"], json!([]));
+    assert_eq!(since["base_moved"], false);
+    assert_eq!(since["base_conflicts"], json!([]));
     let full = ok(&review, "get_proposal_diff", json!({"id": "P-1"})).await;
     assert_eq!(full["since"], Value::Null);
+    assert_eq!(full.get("earlier"), None);
     assert_eq!(full["from"], "r1");
     assert_eq!(
         full["totals"],
@@ -426,6 +434,161 @@ async fn a_reviewer_reads_only_the_change_since_the_last_verdict() {
     )
     .await;
     assert_eq!(error["code"], "proposal_not_found");
+}
+
+/// Opens `P-2` for `T-2` with `files` written by `backend`, approves it and integrates it as `r2`, so main moves under the frontend's workspace.
+#[cfg(test)]
+async fn integrate_p2(fx: &Fixture, backend: &Client, review: &Client, files: &[(&str, &str)]) {
+    ok(backend, "create_workspace", json!({"task": "T-2"})).await;
+    for (path, content) in files {
+        fx.write(2, path, content);
+    }
+    ok(
+        backend,
+        "create_proposal",
+        json!({"task": "T-2", "title": "Export"}),
+    )
+    .await;
+    ok(
+        review,
+        "submit_review",
+        json!({"id": "P-2", "version": 1, "verdict": "approve", "body": "good"}),
+    )
+    .await;
+    let integrated = ok(review, "integrate_proposal", json!({"id": "P-2"})).await;
+    assert_eq!(integrated["revision"], "r2");
+}
+
+/// The worker syncs with a newer main between versions: the change since v1 holds only the worker's own edits, never the files main gained, and names the file the earlier version did not change.
+#[tokio::test]
+async fn a_change_since_an_earlier_version_leaves_out_what_main_gained() {
+    let fx = Fixture::new().await;
+    let frontend = connect(&fx, "frontend").await;
+    let backend = connect(&fx, "backend").await;
+    let review = review_lead(&fx).await;
+    open_p1(&fx, &frontend).await;
+    ok(
+        &review,
+        "submit_review",
+        json!({"id": "P-1", "version": 1, "verdict": "request_changes", "body": "add z"}),
+    )
+    .await;
+    integrate_p2(
+        &fx,
+        &backend,
+        &review,
+        &[
+            ("README.md", "# demo from main\n"),
+            ("docs/guide.md", "guide\n"),
+        ],
+    )
+    .await;
+    let synced = ok(&frontend, "sync_workspace", json!({"ws": "ws-1"})).await;
+    assert_eq!(synced["base"], "r2");
+    assert_eq!(synced["conflicted"], json!([]));
+    fx.write(1, "src/lib.rs", "pub fn y() {}\npub fn z() {}\n");
+    fx.write(1, "src/extra.rs", "pub fn extra() {}\n");
+    ok(&frontend, "update_proposal", json!({"id": "P-1"})).await;
+    let view = ok(&review, "get_proposal", json!({"id": "P-1"})).await;
+    assert_eq!(view["base"], "r2");
+
+    let since = ok(
+        &review,
+        "get_proposal_diff",
+        json!({"id": "P-1", "since": 1}),
+    )
+    .await;
+    assert_eq!(
+        since["files"],
+        json!([
+            {"path": "src/extra.rs", "change": "added", "added": 1, "removed": 0},
+            {"path": "src/lib.rs", "change": "modified", "added": 1, "removed": 0},
+        ])
+    );
+    assert_eq!(
+        since["totals"],
+        json!({"files": 2, "added": 2, "removed": 0})
+    );
+    assert_eq!(
+        since["earlier"],
+        json!({"files": 1, "added": 1, "removed": 1})
+    );
+    assert_eq!(since["new_files"], json!(["src/extra.rs"]));
+    assert_eq!(since["base_moved"], true);
+    assert_eq!(since["base_conflicts"], json!([]));
+    let hunks = ok(
+        &review,
+        "get_proposal_diff",
+        json!({"id": "P-1", "since": 1, "path": "src/lib.rs"}),
+    )
+    .await;
+    assert_eq!(
+        hunks["hunks"],
+        json!([{"old_start": 1, "old_lines": 1, "new_start": 1, "new_lines": 2, "lines": [
+            {"kind": "context", "old_no": 1, "new_no": 1, "text": "pub fn y() {}\n"},
+            {"kind": "added", "old_no": null, "new_no": 2, "text": "pub fn z() {}\n"},
+        ]}])
+    );
+    let error = err(
+        &review,
+        "get_proposal_diff",
+        json!({"id": "P-1", "since": 1, "path": "README.md"}),
+    )
+    .await;
+    assert_eq!(error["code"], "path_not_in_comparison");
+    let full = ok(&review, "get_proposal_diff", json!({"id": "P-1"})).await;
+    assert_eq!(full["from"], "r2");
+    assert_eq!(
+        full["totals"],
+        json!({"files": 2, "added": 3, "removed": 1})
+    );
+}
+
+/// When the earlier version and main changed the same lines, the worker merged main by hand: the change since v1 names that file, and shows it against the earlier version's own content.
+#[tokio::test]
+async fn a_change_since_an_earlier_version_names_the_files_merged_by_hand() {
+    let fx = Fixture::new().await;
+    let frontend = connect(&fx, "frontend").await;
+    let backend = connect(&fx, "backend").await;
+    let review = review_lead(&fx).await;
+    open_p1(&fx, &frontend).await;
+    ok(
+        &review,
+        "submit_review",
+        json!({"id": "P-1", "version": 1, "verdict": "request_changes", "body": "rebase"}),
+    )
+    .await;
+    integrate_p2(
+        &fx,
+        &backend,
+        &review,
+        &[("src/lib.rs", "pub fn w() {}\n"), ("README.md", "# main\n")],
+    )
+    .await;
+    let synced = ok(&frontend, "sync_workspace", json!({"ws": "ws-1"})).await;
+    assert_eq!(synced["conflicted"], json!(["src/lib.rs"]));
+    fx.write(1, "src/lib.rs", "pub fn w() {}\npub fn y() {}\n");
+    ok(
+        &frontend,
+        "record_changes",
+        json!({"ws": "ws-1", "message": "Keep both functions"}),
+    )
+    .await;
+    ok(&frontend, "update_proposal", json!({"id": "P-1"})).await;
+
+    let since = ok(
+        &review,
+        "get_proposal_diff",
+        json!({"id": "P-1", "since": 1}),
+    )
+    .await;
+    assert_eq!(
+        since["files"],
+        json!([{"path": "src/lib.rs", "change": "modified", "added": 1, "removed": 0}])
+    );
+    assert_eq!(since["new_files"], json!([]));
+    assert_eq!(since["base_moved"], true);
+    assert_eq!(since["base_conflicts"], json!(["src/lib.rs"]));
 }
 
 #[tokio::test]

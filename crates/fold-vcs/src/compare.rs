@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io;
 use std::path::{Path, PathBuf};
 
+use fold_core::merge::carry_change;
 use fold_core::object::{ObjectHash, ObjectKind, hash_object};
 pub use fold_core::tree::ChangeKind;
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree, flatten};
@@ -67,6 +68,8 @@ pub struct FileDiff {
 pub struct State {
     entries: FlatTree,
     working: Option<PathBuf>,
+    /// Content that the store may not hold, by hash: the line-merged files of a carried state.
+    blobs: BTreeMap<ObjectHash, Vec<u8>>,
 }
 
 impl State {
@@ -74,6 +77,7 @@ impl State {
         Self {
             entries,
             working: None,
+            blobs: BTreeMap::new(),
         }
     }
 
@@ -82,6 +86,7 @@ impl State {
         Self {
             entries,
             working: Some(root),
+            blobs: BTreeMap::new(),
         }
     }
 
@@ -92,6 +97,44 @@ impl State {
     pub fn is_working(&self) -> bool {
         self.working.is_some()
     }
+}
+
+/// A recorded state with its conflicted paths: see [`carried_state`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CarriedState {
+    pub state: State,
+    /// In path order.
+    pub conflicts: Vec<RepoPath>,
+}
+
+/// The stored tree `tree` with its change against `base` carried onto `onto` by the three-way merge; a conflicted path keeps `tree`'s side. It writes nothing: the line-merged files stay in the state. Blocking: call it through `spawn_blocking`.
+pub fn carried_state(
+    objects: &ObjectStore,
+    base: &ObjectHash,
+    tree: &ObjectHash,
+    onto: &ObjectHash,
+) -> Result<CarriedState, FoldError> {
+    let (base, ours, theirs) = (
+        load_flat(objects, base)?,
+        load_flat(objects, tree)?,
+        load_flat(objects, onto)?,
+    );
+    let blob = |hash: &ObjectHash| -> Result<Vec<u8>, FoldError> {
+        Ok(objects.read_expecting(hash, ObjectKind::Blob)?.payload)
+    };
+    let carried = carry_change(&base, &ours, &theirs, &blob)?;
+    Ok(CarriedState {
+        state: State {
+            entries: carried.tree,
+            working: None,
+            blobs: carried.new_blobs.into_iter().collect(),
+        },
+        conflicts: carried
+            .conflicts
+            .iter()
+            .filter_map(|path| RepoPath::parse(path).ok())
+            .collect(),
+    })
 }
 
 /// Every file and symlink of a stored tree.
@@ -577,6 +620,9 @@ fn side_len(
     let (Some(path), Some(entry)) = (path, entry) else {
         return Ok(0);
     };
+    if let Some(bytes) = state.blobs.get(&entry.hash) {
+        return Ok(bytes.len() as u64);
+    }
     if let Some(root) = &state.working
         && !objects.contains(&entry.hash).map_err(FoldError::from)?
     {
@@ -610,6 +656,9 @@ fn content(
     path: &RepoPath,
     entry: FlatEntry,
 ) -> Result<Vec<u8>, FoldError> {
+    if let Some(bytes) = state.blobs.get(&entry.hash) {
+        return Ok(bytes.clone());
+    }
     if let Some(root) = &state.working
         && !objects.contains(&entry.hash).map_err(FoldError::from)?
     {

@@ -2,10 +2,13 @@ use std::fs;
 
 use fold_core::object::{ObjectKind, hash_object};
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
-use fold_vcs::compare::{ChangeKind, FileChange, State, Totals, compare, file_diff, load_flat};
+use fold_vcs::compare::{
+    ChangeKind, FileChange, State, Totals, carried_state, compare, file_diff, load_flat,
+};
 use fold_vcs::diff::{LineKind, MAX_INLINE_BYTES};
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::paths::RepoPath;
+use fold_vcs::revision_store::write_initial_tree;
 
 use crate::common::{blob, sample, store};
 
@@ -245,6 +248,47 @@ fn a_deleted_or_renamed_file_diffs_by_its_listed_path() {
     assert!(renamed.hunks.is_empty());
     let error = file_diff(&objects, &from, &to, &path("old")).unwrap_err();
     assert_eq!(error.code(), "path_not_in_comparison");
+}
+
+/// A version recorded on `r1`, then synced onto a newer main and edited again: carried onto the new base, the earlier version differs from the later one only by the later edit, and a line-merged file is read from the state without being stored.
+#[test]
+fn a_carried_state_hides_what_the_new_base_brought() {
+    let (_dir, objects) = store();
+    let stored = |files: &[(&str, EntryKind, &[u8])]| {
+        write_initial_tree(&objects, flat(&objects, files)).unwrap()
+    };
+    let base = stored(&[("lib", FILE, b"a\nb\nc\n"), ("same", FILE, b"1\n")]);
+    let earlier = stored(&[("lib", FILE, b"A\nb\nc\n"), ("same", FILE, b"ours\n")]);
+    let onto = stored(&[
+        ("lib", FILE, b"a\nb\nC\n"),
+        ("same", FILE, b"main\n"),
+        ("main.md", FILE, b"from main\n"),
+    ]);
+    let later = flat(
+        &objects,
+        &[
+            ("lib", FILE, b"A\nb\nC\nd\n"),
+            ("same", FILE, b"resolved\n"),
+            ("main.md", FILE, b"from main\n"),
+        ],
+    );
+    let carried = carried_state(&objects, &base, &earlier, &onto).unwrap();
+    assert_eq!(carried.conflicts, [path("same")]);
+    let merged = hash_object(ObjectKind::Blob, b"A\nb\nC\n");
+    assert!(!objects.contains(&merged).unwrap());
+    let later = State::recorded(later);
+    let comparison = compare(&objects, &carried.state, &later).unwrap();
+    assert_eq!(
+        summary(&comparison.files),
+        [
+            ("lib".to_owned(), None, ChangeKind::Modified, 1, 0),
+            ("same".to_owned(), None, ChangeKind::Modified, 1, 1),
+        ]
+    );
+    let diff = file_diff(&objects, &carried.state, &later, &path("lib")).unwrap();
+    let kinds: Vec<LineKind> = diff.hunks[0].lines.iter().map(|line| line.kind).collect();
+    assert_eq!(kinds.last(), Some(&LineKind::Added));
+    assert!(!objects.contains(&merged).unwrap());
 }
 
 #[test]

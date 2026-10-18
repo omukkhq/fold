@@ -7,6 +7,7 @@ use fold_core::{
     WorkerName, codes,
 };
 use fold_store::reviews::ProposalState;
+use fold_vcs::compare::Totals;
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{JsonObject, Tool};
 use rmcp::schemars::JsonSchema;
@@ -22,6 +23,7 @@ use crate::services::reviews::{
     DirectOutcome, IntegrationOutcome, ProposalDetail, ProposalFilter, ProposalSummary,
     ProposalView, ReviewService, direct_conflicted, integration_conflicted,
 };
+use crate::services::workspaces::StateComparison;
 
 pub mod batches;
 
@@ -252,7 +254,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             GET_PROPOSAL_DIFF,
-            "Read the change of a proposal version: against its base, or with since only what changed after an earlier version, such as last_reviewed, the newest earlier version that has a verdict. Lists the changed files with line counts, or one file's hunks when you pass path. On a since change, comment with side new and the new line numbers: they are the version's own lines.",
+            "Read the change of a proposal version: against its base, or with since only what changed after an earlier version, such as last_reviewed, the newest earlier version that has a verdict. Lists the changed files with line counts, or one file's hunks when you pass path. A since change leaves out what main gained when the worker synced, and its file list adds earlier (the earlier version's own change size), new_files (files the earlier version did not change), base_moved and base_conflicts (files where the worker merged main by hand). On a since change, comment with side new and the new line numbers: they are the version's own lines.",
             schema_for_type::<GetProposalDiffInput>(),
         ),
         Tool::new(
@@ -646,25 +648,29 @@ async fn get_proposal_diff(
                 .map_err(from_review)?;
             (diff.version, diff.since, file_diff_value(&diff.change))
         }
-        None => {
-            let changes = reviews
-                .proposal_changes(proposal, range)
-                .await
-                .map_err(from_review)?;
-            let comparison = &changes.change;
-            let value = json!({
-                "id": proposal,
-                "from": comparison.from.label,
-                "to": comparison.to.label,
-                "files": comparison.files.iter().map(file_line).collect::<Vec<_>>(),
-                "totals": {
-                    "files": comparison.totals.files,
-                    "added": comparison.totals.added_lines,
-                    "removed": comparison.totals.removed_lines,
-                },
-            });
-            (changes.version, changes.since, value)
-        }
+        None => match input.since {
+            Some(since) => {
+                let changes = reviews
+                    .proposal_since_change(proposal, input.version, since)
+                    .await
+                    .map_err(from_review)?;
+                let facts = &changes.change;
+                let mut value = comparison_value(proposal, &facts.delta);
+                value["earlier"] = totals_value(&facts.earlier);
+                value["new_files"] = json!(facts.new_files);
+                value["base_moved"] = json!(facts.base_moved);
+                value["base_conflicts"] = json!(facts.base_conflicts);
+                (changes.version, changes.since, value)
+            }
+            None => {
+                let changes = reviews
+                    .proposal_changes(proposal, range)
+                    .await
+                    .map_err(from_review)?;
+                let value = comparison_value(proposal, &changes.change);
+                (changes.version, changes.since, value)
+            }
+        },
     };
     let last = reviews
         .last_reviewed(proposal, shown)
@@ -674,6 +680,24 @@ async fn get_proposal_diff(
     value["since"] = json!(since.map(version));
     value["last_reviewed"] = json!(last.map(version));
     Ok(value)
+}
+
+fn comparison_value(proposal: ProposalId, comparison: &StateComparison) -> Value {
+    json!({
+        "id": proposal,
+        "from": comparison.from.label,
+        "to": comparison.to.label,
+        "files": comparison.files.iter().map(file_line).collect::<Vec<_>>(),
+        "totals": totals_value(&comparison.totals),
+    })
+}
+
+fn totals_value(totals: &Totals) -> Value {
+    json!({
+        "files": totals.files,
+        "added": totals.added_lines,
+        "removed": totals.removed_lines,
+    })
 }
 
 async fn update_proposal(

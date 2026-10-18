@@ -47,7 +47,9 @@ pub use changes::{WorkspaceChanges, WorkspaceEntry};
 pub(crate) use changesets::ProposalSnapshot;
 pub use changesets::RecordedChanges;
 pub use checkpoints::{CheckpointView, Restored};
-pub use compare::{ResolvedState, StateComparison, StateKind, StateRef, StateSummary};
+pub use compare::{
+    CarriedComparison, Carry, ResolvedState, StateComparison, StateKind, StateRef, StateSummary,
+};
 pub use direct::OpenedMainWorkspace;
 pub(crate) use direct::{main_agent, main_agent_in_tx};
 pub(crate) use files::checkpoint_in_tx;

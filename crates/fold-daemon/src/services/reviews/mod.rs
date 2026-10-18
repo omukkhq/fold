@@ -29,7 +29,7 @@ pub use batches::{
     BatchVerdict, BatchVerdictView, LeftOut, LeftOutReason, MemberSince, ReviewBatchView,
     SubmittedBatch,
 };
-pub use changes::{ChangeRange, ProposalChange};
+pub use changes::{ChangeRange, ProposalChange, SinceChange};
 pub use checkouts::{CheckoutTarget, ListedCheckout, ReviewCheckout};
 pub use claims::ReviewClaimView;
 pub use comments::{CommentInput, CommentLocation, CommentView};
