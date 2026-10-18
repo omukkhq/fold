@@ -11,6 +11,8 @@ use std::time::{Duration, Instant};
 use fold_core::{FoldError, codes};
 use serde_json::json;
 
+use crate::git_discovery::{self, ACROSS_FILESYSTEM, CEILING_DIRECTORIES, Discovery, Enclosing};
+
 /// Variables through which a parent Git process, such as a hook that runs fold, would point every command at its own repository instead of the one `-C` names.
 const REPOSITORY_VARIABLES: &[&str] = &[
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
@@ -28,6 +30,7 @@ const REPOSITORY_VARIABLES: &[&str] = &[
 pub struct Git {
     program: PathBuf,
     network_timeout: Duration,
+    discovery: Discovery,
 }
 
 /// How long a Git command that talks to a remote may run before fold kills it.
@@ -44,7 +47,14 @@ impl Git {
         Self {
             program: program.into(),
             network_timeout: NETWORK_TIMEOUT,
+            discovery: Discovery::default(),
         }
+    }
+
+    /// The same program with the limits that `discovery` sets on how far up a folder [`Self::working_tree_top`] and [`Self::enclosing_repository`] look for a repository.
+    pub fn with_discovery(mut self, discovery: Discovery) -> Self {
+        self.discovery = discovery;
+        self
     }
 
     /// The same program with another deadline for the commands that talk to a remote.
@@ -389,17 +399,70 @@ impl Git {
         Ok(())
     }
 
-    /// The top of the working tree that holds `dir`, `dir` itself or a folder above it, or `None` when no repository's working tree holds it.
+    /// The top of the working tree that holds `dir`, `dir` itself or a folder above it, or `None` when no repository's working tree holds it, as `git` finds it within the limits of the program's [`Discovery`].
     pub fn working_tree_top(&self, dir: &Path) -> Result<Option<PathBuf>, FoldError> {
-        Ok(self
-            .query(dir, &["rev-parse", "--show-toplevel"])?
-            .map(|top| PathBuf::from(top.trim_end_matches('\n')))
-            .filter(|top| !top.as_os_str().is_empty()))
+        Ok(Self::run_query(
+            self.discovery_command(dir),
+            &["rev-parse", "--show-toplevel"],
+        )?
+        .map(|top| PathBuf::from(top.trim_end_matches('\n')))
+        .filter(|top| !top.as_os_str().is_empty()))
+    }
+
+    /// The repository that holds `dir`, as `git` finds it within the limits of the program's [`Discovery`], or, when `git` finds none or is not on `PATH`, as the folders' `.git` entries show it. `git` also exits non-zero inside a repository that it refuses to read, such as one that another user owns, and that repository still holds `dir`. A missing `git` is `git_not_found` when `needs_git`.
+    pub fn enclosing_repository(
+        &self,
+        dir: &Path,
+        needs_git: bool,
+    ) -> Result<Option<Enclosing>, FoldError> {
+        match self.git_enclosing(dir) {
+            Ok(Some(found)) => Ok(Some(found)),
+            Ok(None) => Ok(git_discovery::enclosing(dir, &self.discovery)),
+            Err(error) if !needs_git && error.code() == codes::GIT_NOT_FOUND => {
+                Ok(git_discovery::enclosing(dir, &self.discovery))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// The repository that holds `dir` as `git` alone finds it.
+    pub(crate) fn git_enclosing(&self, dir: &Path) -> Result<Option<Enclosing>, FoldError> {
+        let Some(out) = Self::run_query(
+            self.discovery_command(dir),
+            &["rev-parse", "--is-inside-git-dir", "--absolute-git-dir"],
+        )?
+        else {
+            return Ok(None);
+        };
+        let Some(("true", git_dir)) = out.split_once('\n') else {
+            return Ok(self.working_tree_top(dir)?.map(Enclosing::WorkingTree));
+        };
+        Ok(Some(Enclosing::GitDirectory(PathBuf::from(
+            git_dir.trim_end_matches('\n'),
+        ))))
+    }
+
+    /// A command that looks for the repository around `dir` within the limits of the program's [`Discovery`]; a limit the program has none of is removed from the environment.
+    fn discovery_command(&self, dir: &Path) -> Command {
+        let mut command = self.command(dir);
+        for (name, value) in [
+            (CEILING_DIRECTORIES, &self.discovery.ceiling_directories),
+            (ACROSS_FILESYSTEM, &self.discovery.across_filesystem),
+        ] {
+            match value {
+                Some(value) => command.env(name, value),
+                None => command.env_remove(name),
+            };
+        }
+        command
     }
 
     /// The UTF-8 standard output of a query, or `None` when it exits non-zero, for the questions a failure answers.
     fn query(&self, dir: &Path, args: &[&str]) -> Result<Option<String>, FoldError> {
-        let mut command = self.command(dir);
+        Self::run_query(self.command(dir), args)
+    }
+
+    fn run_query(mut command: Command, args: &[&str]) -> Result<Option<String>, FoldError> {
         command.args(args).stdout(Stdio::piped());
         let output = Self::spawn(&mut command, "rev-parse")?
             .wait_with_output()

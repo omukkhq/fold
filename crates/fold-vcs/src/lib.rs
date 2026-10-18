@@ -7,6 +7,7 @@ pub mod diff;
 pub mod edit;
 pub mod gc;
 pub mod git;
+pub mod git_discovery;
 pub mod git_export;
 pub mod git_import;
 pub mod git_remote;

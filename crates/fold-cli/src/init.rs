@@ -12,11 +12,17 @@ use fold_daemon::services::projects::{
     init_project_from_git, root_for_dir_on_host,
 };
 use fold_vcs::git::Git;
+use fold_vcs::git_discovery::Discovery;
 use hyper::Method;
 use thiserror::Error;
 
 use crate::serve::{Dirs, current_thread_runtime, socket_path};
 use crate::{git_identity, output};
+
+/// The `git` program, limited as the user's environment limits how far up Git looks for a repository, so init finds the repository around a folder that `git` in the same shell finds, also when `git` is not on `PATH`.
+fn git() -> Git {
+    Git::default().with_discovery(Discovery::from_vars(|name| std::env::var_os(name)))
+}
 
 /// How long a daemon gets to accept the connection and answer the open request.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(10);
@@ -198,7 +204,7 @@ pub(crate) fn initialise(
     let identity = (args.with_git && kind == Kind::New).then(|| {
         let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
         git_identity::decide(
-            &Git::default(),
+            &git(),
             git_identity::Plan {
                 given: &given(args),
                 env: &git_identity::Environment::from_env(),
@@ -212,13 +218,12 @@ pub(crate) fn initialise(
     });
     let project = runtime.block_on(async {
         if kind == Kind::FromGit {
-            return init_project_from_git(&host, dir, name, &human, Git::default(), &SystemClock)
-                .await;
+            return init_project_from_git(&host, dir, name, &human, git(), &SystemClock).await;
         }
         let files: FolderFiles = Box::new(|root: &Path| new_claude_files(root));
         let setup = identity.map(|identity| -> RepositorySetup {
             Box::new(move |root: &Path| {
-                git_identity::store_in(&Git::default(), root, &identity, &mut io::stderr());
+                git_identity::store_in(&git(), root, &identity, &mut io::stderr());
             })
         });
         init_new_project(
@@ -226,7 +231,7 @@ pub(crate) fn initialise(
             dir,
             name,
             &human,
-            Git::default(),
+            git(),
             Some(files),
             setup,
             &SystemClock,
@@ -321,7 +326,7 @@ fn enable_git(
     let human = human_name()?;
     let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
     let identity = git_identity::decide(
-        &Git::default(),
+        &git(),
         git_identity::Plan {
             given: &given(args),
             env: &git_identity::Environment::from_env(),

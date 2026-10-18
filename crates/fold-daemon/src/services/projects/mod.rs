@@ -29,6 +29,7 @@ use fold_store::{Store, StoreError, WriteTx};
 use fold_vcs::atomic::write_atomic;
 use fold_vcs::gc::mark;
 use fold_vcs::git::{CommitId, Git};
+use fold_vcs::git_discovery::Enclosing;
 use fold_vcs::git_import::{GitImportOptions, import_commit};
 use fold_vcs::git_remote::{
     FOLD_BRANCH_REF, FOLD_STASH_REF, STASH_REF, checked_out_branch, exclude_fold_dir, folder_clean,
@@ -150,7 +151,7 @@ struct Created {
     restore: Vec<(PathBuf, Vec<u8>)>,
 }
 
-/// Makes `root` a fold project whose folder is main: creates `.fold/`, migrates the project database, writes the commented config, writes an empty `.foldignore` when the folder has none, and in one transaction makes the genesis `r0` with the empty tree and records the folder's files, less the ignore rules, as `r1`, the change of the human `human` (an integration of kind `record` with its human change and events), then registers the project under a free slug. It needs no `git` and writes no Git data: Git sync stays off. A folder that is a Git repository, or inside another repository's working tree, is refused with a hint to use `--with-git` at the repository's top. A failure after `.fold/` exists removes `.fold/` and what init created beside it and writes back the bytes of a file that init changed, never touching another file of the folder. A `.fold/` that the registry does not know is an init that stopped part-way, or a project that fold removed while its `.fold/` was away: when its database is complete the init finishes it and registers it, and otherwise it is refused with `project_incomplete` and nothing is removed. A registered folder that holds `.fold/` is refused with `project_exists`, or with `project_incomplete` when `.fold/` holds project content without a database, or a database without `main`; a registered folder without `.fold/`, or whose `.fold/` holds only what a daemon that still had the project open wrote after it was deleted, holds no project, so the new project replaces that registration in the transaction that registers it and keeps its slug.
+/// Makes `root` a fold project whose folder is main: creates `.fold/`, migrates the project database, writes the commented config, writes an empty `.foldignore` when the folder has none, and in one transaction makes the genesis `r0` with the empty tree and records the folder's files, less the ignore rules, as `r1`, the change of the human `human` (an integration of kind `record` with its human change and events), then registers the project under a free slug. It needs no `git` and writes no Git data: Git sync stays off. A folder that is a Git repository, or inside another repository's working tree, is refused with a hint to use `--with-git` at the repository's top, and a folder in a Git directory, the `.git` of a repository or a bare repository, with a hint to choose a folder outside it. A failure after `.fold/` exists removes `.fold/` and what init created beside it and writes back the bytes of a file that init changed, never touching another file of the folder. A `.fold/` that the registry does not know is an init that stopped part-way, or a project that fold removed while its `.fold/` was away: when its database is complete the init finishes it and registers it, and otherwise it is refused with `project_incomplete` and nothing is removed. A registered folder that holds `.fold/` is refused with `project_exists`, or with `project_incomplete` when `.fold/` holds project content without a database, or a database without `main`; a registered folder without `.fold/`, or whose `.fold/` holds only what a daemon that still had the project open wrote after it was deleted, holds no project, so the new project replaces that registration in the transaction that registers it and keeps its slug.
 pub async fn init_project(
     host: &HostPaths,
     root: &Path,
@@ -168,6 +169,8 @@ enum Found {
     Repository,
     /// The folder is below the top of the working tree at this path, whose repository would hold the new one.
     Inside(PathBuf),
+    /// The folder is this Git directory or inside it, where Git keeps a repository's own data.
+    InGitDirectory(PathBuf),
 }
 
 /// The folder is below the top of another repository's working tree, where a repository of its own would be nested in that one.
@@ -185,6 +188,25 @@ fn inside_repository(root: &Path, top: &Path) -> FoldError {
         top.display()
     ))
     .with_details([("reason", serde_json::json!("inside_git_repository"))])
+}
+
+/// The folder is a Git directory or inside one, the `.git` of a repository or a bare repository, whose files Git alone writes.
+fn in_git_directory(root: &Path, git_dir: &Path) -> FoldError {
+    let message = if root == git_dir {
+        format!("{} is a Git directory", root.display())
+    } else {
+        format!(
+            "{} is inside the Git directory at {}",
+            root.display(),
+            git_dir.display()
+        )
+    };
+    FoldError::new(codes::INVALID_REQUEST, message)
+        .with_hint(format!(
+            "choose a folder outside {}, which holds a Git repository's own data",
+            git_dir.display()
+        ))
+        .with_details([("reason", serde_json::json!("inside_git_directory"))])
 }
 
 /// [`init_project`] with the given `git` program, writing `files` into the folder with `.foldignore`. With `repository`, init also turns Git on once the folder's files are `r1`: a missing `.gitignore` is written as a copy of `.foldignore` with a `.fold/` line, and an existing one gets the `.fold/` line when no line of it is `.fold`, `.fold/`, `/.fold` or `/.fold/`; the new or changed `.gitignore` is the human's next change, its own revision, in the same transaction, which also turns Git sync on with `git.sync_enabled`. The repository comes after that transaction: `git init` on the `[git]` branch, `info/exclude` as the link to `.fold/exclude`, and `repository` run in the folder; then the commits are written from `r1`, because the empty genesis gets none, and the branch is created on the newest with the index set to it. A stop before the repository exists leaves it to the init that finishes this one.
@@ -215,17 +237,15 @@ pub async fn init_new_project(
         if std::fs::symlink_metadata(paths.git_dir()).is_ok() {
             return Ok(Found::Repository);
         }
-        // A plain init needs no `git`; without one on the PATH no repository can be found around the folder either.
-        let top = match git_checked.working_tree_top(&checked) {
-            Ok(top) => top,
-            Err(error) if !needs_git && error.code() == codes::GIT_NOT_FOUND => None,
-            Err(error) => return Err(error.into()),
-        };
-        Ok(match top {
-            Some(top) if top == checked => Found::Repository,
-            Some(top) => Found::Inside(top),
-            None => Found::Nothing,
-        })
+        // A plain init needs no `git`, so without one on the PATH the repository around the folder is found from the `.git` entries above it.
+        Ok(
+            match git_checked.enclosing_repository(&checked, needs_git)? {
+                Some(Enclosing::WorkingTree(top)) if top == checked => Found::Repository,
+                Some(Enclosing::WorkingTree(top)) => Found::Inside(top),
+                Some(Enclosing::GitDirectory(git_dir)) => Found::InGitDirectory(git_dir),
+                None => Found::Nothing,
+            },
+        )
     })
     .await?;
     match found {
@@ -240,6 +260,7 @@ pub async fn init_new_project(
             .into());
         }
         Found::Inside(top) => return Err(inside_repository(&root, &top).into()),
+        Found::InGitDirectory(git_dir) => return Err(in_git_directory(&root, &git_dir).into()),
     }
     let start = Start::New { files, repository };
     init_with(host, &root, name, human, git, start, clock).await

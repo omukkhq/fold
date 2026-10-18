@@ -118,7 +118,12 @@ pub fn creates_repository(git: &Git, dir: &Path) -> bool {
     // `fld init DIR` creates DIR itself, so the nearest folder that exists tells whether a working tree would hold it.
     !dir.ancestors()
         .find(|folder| folder.is_dir())
-        .is_some_and(|folder| git.working_tree_top(folder).ok().flatten().is_some())
+        .is_some_and(|folder| {
+            git.enclosing_repository(folder, false)
+                .ok()
+                .flatten()
+                .is_some()
+        })
 }
 
 /// Reads one required line, `None` after too many bad answers or at the end of input.

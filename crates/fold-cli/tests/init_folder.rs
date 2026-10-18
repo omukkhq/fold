@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
@@ -33,6 +34,11 @@ impl Sandbox {
     }
 
     fn fold_in(&self, cwd: &Path, args: &[&str]) -> Output {
+        self.fold_with(cwd, args, &[])
+    }
+
+    /// [`Self::fold_in`] with `vars` set last, so they replace a value of the same name.
+    fn fold_with(&self, cwd: &Path, args: &[&str], vars: &[(&str, &OsStr)]) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fld"));
         command
             .args(args)
@@ -50,6 +56,7 @@ impl Sandbox {
         if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
             command.env("LLVM_PROFILE_FILE", profile);
         }
+        command.envs(vars.iter().copied());
         command.output().unwrap()
     }
 }
@@ -311,6 +318,114 @@ fn a_plain_init_refuses_a_git_repository_and_both_refuse_a_folder_inside_one() {
             .status
             .success()
     );
+}
+
+#[test]
+fn a_plain_init_finds_the_repository_around_it_without_git_and_never_above_a_ceiling() {
+    let sandbox = Sandbox::new();
+    let repo = sandbox.path("repo");
+    let nested = repo.join("sub");
+    fs::create_dir_all(&nested).unwrap();
+    git(&repo, &["init", "--quiet", "--initial-branch=main"]);
+    let top = repo.canonicalize().unwrap();
+    let no_git = sandbox.path("no-git");
+    fs::create_dir(&no_git).unwrap();
+    let output = sandbox.fold_with(&nested, &["init"], &[("PATH", no_git.as_os_str())]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(
+        stderr(&output).contains(&format!(
+            "hint: run fld init --with-git in {}",
+            top.display()
+        )),
+        "{output:?}"
+    );
+    assert!(!nested.join(".fold").exists());
+
+    // Git refuses to read a repository that another user owns, and that repository still holds the folder.
+    for args in [&["init"][..], &["init", "--with-git"][..]] {
+        let output = sandbox.fold_with(
+            &nested,
+            args,
+            &[("GIT_TEST_ASSUME_DIFFERENT_OWNER", OsStr::new("1"))],
+        );
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(
+            stderr(&output).contains(&format!(
+                "hint: run fld init --with-git in {}",
+                top.display()
+            )),
+            "{output:?}"
+        );
+        assert!(!nested.join(".fold").exists() && !nested.join(".git").exists());
+    }
+
+    // Git never goes up into a ceiling folder, so the folder below one is inside no repository.
+    let output = sandbox.fold_with(
+        &nested,
+        &["init"],
+        &[("GIT_CEILING_DIRECTORIES", repo.as_os_str())],
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert!(nested.join(".fold").is_dir() && !nested.join(".git").exists());
+}
+
+#[test]
+fn both_inits_refuse_a_folder_in_a_git_directory_with_or_without_git() {
+    let sandbox = Sandbox::new();
+    let repo = sandbox.path("repo");
+    fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "--quiet", "--initial-branch=main"]);
+    git(
+        sandbox.dir.path(),
+        &["init", "--quiet", "--bare", "bare.git"],
+    );
+    let (dot_git, bare) = (repo.join(".git"), sandbox.path("bare.git"));
+    fs::create_dir(dot_git.join("notes")).unwrap();
+    fs::create_dir(bare.join("notes")).unwrap();
+    let no_git = sandbox.path("no-git");
+    fs::create_dir(&no_git).unwrap();
+    // The folder above the sandbox is a ceiling, so a repository around it never changes an answer.
+    let above = sandbox.dir.path().canonicalize().unwrap();
+    let ceiling = above.parent().unwrap().as_os_str();
+    let with_git = [("GIT_CEILING_DIRECTORIES", ceiling)];
+    let without_git = [
+        ("GIT_CEILING_DIRECTORIES", ceiling),
+        ("PATH", no_git.as_os_str()),
+    ];
+    for (folder, git_dir) in [
+        (dot_git.join("notes"), &dot_git),
+        (dot_git.clone(), &dot_git),
+        (bare.join("notes"), &bare),
+        (bare.clone(), &bare),
+    ] {
+        let hint = format!(
+            "hint: choose a folder outside {}",
+            git_dir.canonicalize().unwrap().display()
+        );
+        for (args, vars) in [
+            (&["init"][..], &with_git[..]),
+            (&["init", "--with-git"][..], &with_git[..]),
+            (&["init"][..], &without_git[..]),
+        ] {
+            let output = sandbox.fold_with(&folder, args, vars);
+            assert_eq!(output.status.code(), Some(1), "{args:?} {output:?}");
+            assert!(stderr(&output).contains(&hint), "{args:?} {output:?}");
+            assert!(!folder.join(".fold").exists());
+        }
+    }
+    // `fld init DIR` makes DIR inside the Git directory, and takes it away again with the refusal.
+    let new = dot_git.join("new");
+    for args in [&["init"][..], &["init", "--with-git"][..]] {
+        let mut args = args.to_vec();
+        args.push(new.to_str().unwrap());
+        let output = sandbox.fold_with(sandbox.dir.path(), &args, &with_git);
+        assert_eq!(output.status.code(), Some(1), "{args:?} {output:?}");
+        assert!(
+            stderr(&output).contains("inside the Git directory"),
+            "{output:?}"
+        );
+        assert!(!new.exists());
+    }
 }
 
 #[test]

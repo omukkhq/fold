@@ -7,13 +7,14 @@ use fold_daemon::http::assets::AssetSource;
 use fold_daemon::jobs::QuietCheckpoints;
 use fold_daemon::projects::Projects;
 use fold_daemon::services::projects::{
-    self as project_service, DEFAULT_SESSION_LIFETIME, Lease, ProjectError, deleted_project_slug,
-    init_project, init_project_from_git, load_config,
+    self as project_service, DEFAULT_SESSION_LIFETIME, Lease, ProjectError, RepositorySetup,
+    deleted_project_slug, init_project, init_project_from_git, load_config,
 };
 use fold_store::projects;
 use fold_store::testing::remove_dir_eventually;
 use fold_store::{Store, StoreError};
 use fold_vcs::git::Git;
+use fold_vcs::git_discovery::Discovery;
 use tempfile::TempDir;
 
 use crate::common::acceptance::WAIT;
@@ -743,6 +744,122 @@ async fn init_refuses_a_git_repository_and_from_git_refuses_anything_else() {
         assert_eq!(error.code(), "invalid_request");
         assert!(error.hint().unwrap().contains("fld init"));
         assert!(!folder.join(".fold").exists());
+    }
+}
+
+#[tokio::test]
+async fn a_plain_init_without_git_refuses_a_folder_inside_a_repository() {
+    let host = Host::new();
+    // The folder above the test's own is a ceiling, so a repository around it never changes an answer.
+    let above = host.dir.path().canonicalize().unwrap();
+    let missing = Git::new(host.root("bin/git")).with_discovery(Discovery {
+        ceiling_directories: above.parent().map(|parent| parent.as_os_str().to_owned()),
+        across_filesystem: None,
+    });
+    let init = async |folder: &Path| {
+        fold_daemon::services::projects::init_new_project(
+            &host.paths,
+            folder,
+            None,
+            &crate::common::ana(),
+            missing.clone(),
+            None,
+            None,
+            &host.clock,
+        )
+        .await
+    };
+    let repo = host.root("repo");
+    std::fs::create_dir_all(repo.join("sub/deeper")).unwrap();
+    git(&repo, &["init", "--quiet", "--initial-branch=main"]);
+    // A working tree whose `.git` is a file naming its Git directory elsewhere.
+    let linked = host.root("linked");
+    git(
+        host.dir.path(),
+        &["init", "--quiet", "--separate-git-dir=store", "linked"],
+    );
+    std::fs::create_dir_all(linked.join("sub")).unwrap();
+    for (folder, top) in [
+        (repo.join("sub"), &repo),
+        (repo.join("sub/deeper"), &repo),
+        (linked.join("sub"), &linked),
+    ] {
+        let ProjectError::Fold(error) = init(&folder).await.unwrap_err() else {
+            panic!("a fold error");
+        };
+        assert_eq!(error.details().unwrap()["reason"], "inside_git_repository");
+        let top = top.canonicalize().unwrap();
+        assert!(
+            error
+                .hint()
+                .unwrap()
+                .contains(&format!("fld init --with-git in {}", top.display())),
+            "{error:?}"
+        );
+        assert!(!folder.join(".fold").exists());
+    }
+    for top in [&repo, &linked] {
+        let ProjectError::Fold(error) = init(top).await.unwrap_err() else {
+            panic!("a fold error");
+        };
+        assert_eq!(error.details().unwrap()["reason"], "git_repository");
+    }
+    let plain = host.root("plain");
+    init(&plain).await.unwrap();
+    assert!(plain.join(".fold").is_dir() && !plain.join(".git").exists());
+}
+
+#[tokio::test]
+async fn both_inits_refuse_a_folder_in_a_git_directory_with_or_without_git() {
+    let host = Host::new();
+    // The folder above the test's own is a ceiling, so a repository around it never changes an answer.
+    let above = host.dir.path().canonicalize().unwrap();
+    let discovery = Discovery {
+        ceiling_directories: above.parent().map(|parent| parent.as_os_str().to_owned()),
+        across_filesystem: None,
+    };
+    let present = Git::default().with_discovery(discovery.clone());
+    let missing = Git::new(host.root("bin/git")).with_discovery(discovery);
+    let repo = host.root("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "--quiet", "--initial-branch=main"]);
+    git(host.dir.path(), &["init", "--quiet", "--bare", "bare.git"]);
+    let (dot_git, bare) = (repo.join(".git"), host.root("bare.git"));
+    for (folder, git_dir) in [
+        (dot_git.join("notes"), &dot_git),
+        (dot_git.join("refs/heads"), &dot_git),
+        (dot_git.clone(), &dot_git),
+        (bare.join("notes"), &bare),
+        (bare.clone(), &bare),
+    ] {
+        let git_dir = git_dir.canonicalize().unwrap();
+        for (program, with_git) in [(&present, false), (&present, true), (&missing, false)] {
+            let setup = with_git.then(|| -> RepositorySetup { Box::new(|_: &Path| {}) });
+            let ProjectError::Fold(error) = fold_daemon::services::projects::init_new_project(
+                &host.paths,
+                &folder,
+                None,
+                &crate::common::ana(),
+                program.clone(),
+                None,
+                setup,
+                &host.clock,
+            )
+            .await
+            .unwrap_err() else {
+                panic!("a fold error");
+            };
+            assert_eq!(error.code(), "invalid_request", "{error:?}");
+            assert_eq!(error.details().unwrap()["reason"], "inside_git_directory");
+            assert!(
+                error
+                    .hint()
+                    .unwrap()
+                    .contains(&format!("choose a folder outside {}", git_dir.display())),
+                "{error:?}"
+            );
+            assert!(!folder.join(".fold").exists(), "{}", folder.display());
+        }
     }
 }
 
