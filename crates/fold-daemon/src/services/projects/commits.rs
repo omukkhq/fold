@@ -29,8 +29,6 @@ use crate::services::fired;
 pub struct Committed {
     /// The revisions it wrote commits for, oldest first.
     pub added: Vec<(RevisionId, CommitId)>,
-    /// The tip of the `[git]` branch when it holds commits fold did not write: the commits are recorded, the branch and the project folder stay. `fld pull` brings them in.
-    pub outside: Option<CommitId>,
     /// The index holds a change of the human on a path main changed, so the branch stays on the older commit until the change is recorded or undone.
     pub uncommitted: bool,
     /// The branch or `HEAD` shows a change fold did not make, so the branch stays where it is.
@@ -69,7 +67,7 @@ pub async fn commit_main(
 
 /// [`commit_main`] for a caller that holds the Git sync lock (`held`) and read `map` under it; both come back for the caller's next step.
 ///
-/// The map is the record of which revision is which commit, so [`FOLD_HEAD_REF`] is first put on the map's last commit: a ref a stopped write moved past it is written again. A commit's id depends on its revision and on the Git identity the repository's config names when the commit is written, which is its author and committer, so the same identity writes the same commits again; once the map names a commit, it is that revision's commit for good, whatever the config says later. `git fast-import` writes the new commits there, and the map gains their lines. The `[git]` branch is checked out in the project folder and moves only by fast-forward, after the map, and only to the commit of `folder_at`, the revision fold's own checkout wrote into the folder, so the branch and the index tell the human's changes from main's: [`move_branch_and_index`] moves both, or neither when the index holds a change of the human on a path main changed, which [`Committed::uncommitted`] reports. An unborn branch is created there with the index set to it. A tip with commits fold did not write is returned in [`Committed::outside`], and a branch or `HEAD` that shows a change fold did not make in [`Committed::moved`]; neither moves. A stop between the map and the move leaves a branch that the next run moves. Then one transaction adds a `revision_commits` row and a `git.committed` event for every mapped revision that has none, which also covers a map line whose row a stop cut off.
+/// The map is the record of which revision is which commit, so [`FOLD_HEAD_REF`] is first put on the map's last commit: a ref a stopped write moved past it is written again. A commit's id depends on its revision and on the Git identity the repository's config names when the commit is written, which is its author and committer, so the same identity writes the same commits again; once the map names a commit, it is that revision's commit for good, whatever the config says later. `git fast-import` writes the new commits there, and the map gains their lines. The `[git]` branch is checked out in the project folder and moves only by fast-forward, after the map, and only to the commit of `folder_at`, the revision fold's own checkout wrote into the folder, so the branch and the index tell the human's changes from main's: [`move_branch_and_index`] moves both, or neither when the index holds a change of the human on a path main changed, which [`Committed::uncommitted`] reports. An unborn branch is created there with the index set to it. A tip with commits of the human that main does not hold yet stays, and a branch or `HEAD` that shows a change fold did not make is returned in [`Committed::moved`] and stays too. A stop between the map and the move leaves a branch that the next run moves. Then one transaction adds a `revision_commits` row and a `git.committed` event for every mapped revision that has none, which also covers a map line whose row a stop cut off.
 #[expect(
     clippy::too_many_arguments,
     reason = "each argument is one input of the run, and the lock and the map move through it"
@@ -159,7 +157,8 @@ pub(crate) async fn commit_locked<H: Send + 'static>(
         let last = map.last().map(|(_, commit)| commit.clone());
         match branch_state(&git, &paths, &branch, &known, last.as_ref())? {
             BranchState::Moved(moved) => committed.moved = Some(moved),
-            BranchState::Ahead { tip, .. } => committed.outside = Some(tip),
+            // Commits of the human that wait for the main agent: the branch stays on them.
+            BranchState::Ahead { .. } => {}
             BranchState::Fold { tip } => {
                 let target = folder_at.and_then(|at| map.commit_of(at).cloned());
                 if let Some(target) = target {

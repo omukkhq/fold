@@ -1121,7 +1121,7 @@ fn folder_check(paths: &ProjectPaths, host: &Host) -> Check {
         Ok(true) => Check::warn(
             NAME,
             "the project folder has changes that are not committed; on a file main changes they hold the folder and its branch back",
-            "run fld record in the project folder to record them on main; fold brings the folder to main at the next integration or daemon start",
+            "run fld record in the project folder to record them on main, or undo what you staged with git restore --staged; fold brings the folder to main at the next integration or daemon start",
         ),
         Err(_) => Check::warn(
             NAME,

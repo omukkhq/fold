@@ -8,6 +8,7 @@ use fold_store::workspaces::{self, ConflictRow, NewHumanChange};
 use fold_vcs::checkout::overlay;
 use fold_vcs::compare::load_flat;
 use fold_vcs::git::{CommitId, Git};
+use fold_vcs::git_import::{GitImportOptions, import_commit};
 use fold_vcs::git_remote::{BranchState, Moved};
 use fold_vcs::git_sync_map::SyncMap;
 use fold_vcs::ignore::IgnoreRules;
@@ -20,7 +21,7 @@ use serde_json::json;
 
 use super::commits::commit_main;
 use super::folder::follow_folder;
-use super::pull::{PulledConflict, project_error};
+use super::pull::{PulledConflict, map_fast_forward, project_error};
 use super::remote::blocking;
 use super::{FolderFollowed, ProjectError, load_config};
 use crate::projects::ProjectHandle;
@@ -41,7 +42,7 @@ pub use crate::services::workspaces::TouchedTask;
 /// What a record did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecordOutcome {
-    /// The project folder holds no change that is not recorded.
+    /// The project folder holds no change that is not recorded. A conflicted change that waited for the main agent is closed then, because the human took it back.
     UpToDate { revision: RevisionId },
     /// The human change merged cleanly and main moved to `revision`; the folder follows main.
     Recorded {
@@ -67,7 +68,7 @@ pub enum RecordOutcome {
 
 /// Records the human's changes in the project folder on main, for the named human who runs `fld record`. Nothing else records them, so an unfinished edit never reaches a worker.
 ///
-/// The project's remote lock and folder lock are held to the end, so the folder's follow, a push and a pull never run at the same time. The folder first follows main, so the checkout record is fresh, and while Git sync is on main's missing commits are written; a branch or `HEAD` that shows a change fold did not make, or commits fold did not write, is refused with the command that undoes it. The folder is then read as an import reads it: its ignore rules and the size limit apply, and `.fold` and `.git` never count. When it differs from the checkout record, the difference is the human change, based on the record, and merges onto main under the integration mutex: a clean merge is an integration of kind `record` with no review, which records the human change and `human_change.recorded` in its transaction, and the folder then follows main; a conflict writes the human change, its conflicted paths and `human_change.conflicted` under the integration mutex and leaves main as it is, for the main agent to resolve with the human. A stop before the integration commits leaves main and the folder as they were, so the next record finds the same changes.
+/// The project's remote lock and folder lock are held to the end, so the folder's follow, a push and a pull never run at the same time. While Git sync is on, commits of the human on the branch are recorded first, as the Git job records them; while they conflict and wait for the main agent the record answers with that change. The folder then follows main, so the checkout record is fresh, and main's missing commits are written; a branch or `HEAD` that shows a change fold did not make is refused with the command that undoes it. The folder is then read as an import reads it: its ignore rules and the size limit apply, and `.fold` and `.git` never count. When it matches the checkout record, a conflicted human change that waits is closed with `human_change.withdrawn`. When it differs, the difference is the human change, based on the record, and merges onto main under the integration mutex: a clean merge is an integration of kind `record` with no review, which records the human change and `human_change.recorded` in its transaction, and the folder then follows main; a conflict writes the human change, its conflicted paths and `human_change.conflicted` under the integration mutex and leaves main as it is, for the main agent to resolve with the human. A stop before the integration commits leaves main and the folder as they were, so the next record finds the same changes.
 pub async fn record(
     handle: &Arc<ProjectHandle>,
     actor: &Actor,
@@ -102,12 +103,22 @@ async fn run(
     let config = load_config(&handle.paths).await?;
     let _remote = handle.remote_lock.clone().lock_owned().await;
     let _folder = handle.folder_lock.clone().lock_owned().await;
-    let followed = sync(handle, git).await?;
+    let (followed, from_branch) = sync(handle, git).await?;
     if let Some(BranchState::Moved(moved)) = &followed.branch {
         return Err(head_moved(&config.git.branch, moved).into());
     }
-    if let Some(BranchState::Ahead { .. }) = &followed.branch {
-        return Err(outside_commits(&config.git.branch).into());
+    if let Some(BranchState::Ahead { tip, .. }) = &followed.branch {
+        // The human's commits conflict with main and wait for the main agent, so the folder holds them on top of nothing fold knows.
+        return match from_branch {
+            Some(outcome @ RecordOutcome::Conflicted { .. }) => Ok(outcome),
+            _ => waiting_commit(handle, tip).await?.ok_or_else(|| {
+                FoldError::new(
+                    codes::INTERNAL_ERROR,
+                    "the human's Git commits were neither recorded nor waiting",
+                )
+                .into()
+            }),
+        };
     }
     let record_tree = workspaces::checkout(handle.store.read())
         .await?
@@ -123,6 +134,7 @@ async fn run(
         .await?
         .ok_or(StoreError::Corrupt("refs.main"))?;
     if human_tree == record_tree {
+        withdraw_waiting(handle, actor).await?;
         return Ok(RecordOutcome::UpToDate {
             revision: head.number,
         });
@@ -170,16 +182,61 @@ async fn run(
     })
 }
 
-/// The folder follows main, and while Git sync is on the commit writer writes main's missing commits and moves the branch to the revision the folder holds. The caller holds the folder lock.
-async fn sync(handle: &ProjectHandle, git: &Git) -> Result<FolderFollowed, ProjectError> {
-    let followed = follow_folder(
-        &handle.store,
-        &handle.paths,
-        &handle.objects,
-        git,
-        handle.clock.now(),
-    )
-    .await?;
+/// Closes the conflicted human change that waits for the main agent, when one does, as `superseded` with `human_change.withdrawn` in one transaction: the folder holds none of the human's changes, so the human took it back and nothing is left to merge. The integration mutex is held, so no integration resolves the change meanwhile.
+async fn withdraw_waiting(handle: &ProjectHandle, actor: &Actor) -> Result<(), ProjectError> {
+    let _serial = handle.integration.clone().lock_owned().await;
+    let waiting = {
+        let mut conn = handle
+            .store
+            .read()
+            .acquire()
+            .await
+            .map_err(StoreError::from)?;
+        workspaces::conflicted_human_change(&mut conn).await?
+    };
+    let Some(waiting) = waiting else {
+        return Ok(());
+    };
+    let conflicted: Vec<String> = waiting
+        .conflicts
+        .iter()
+        .map(|row| String::from_utf8_lossy(&row.path).into_owned())
+        .collect();
+    let data = json!({
+        "human": format!("human:{}", waiting.human),
+        "commit": waiting.commit,
+        "conflicted": conflicted.iter().take(LISTED_PATHS).collect::<Vec<_>>(),
+        "conflicted_count": conflicted.len(),
+        "workspace": waiting.workspace.map(|workspace| workspace.to_string()),
+    });
+    let event = NewEvent::new(types::HUMAN_CHANGE_WITHDRAWN, actor.event_actor())
+        .and_then(|event| event.data(data))
+        .map_err(|error| FoldError::new(codes::INTERNAL_ERROR, error.to_string()))?;
+    let now = handle.clock.now();
+    let buffer = handle
+        .store
+        .write(async |tx| -> Result<EventBuffer, ProjectError> {
+            let mut buffer = EventBuffer::new();
+            if workspaces::supersede_conflicted(tx, now).await? {
+                buffer.append(tx, &event, now).await?;
+            }
+            Ok(buffer)
+        })
+        .await?;
+    handle.bus.publish(buffer);
+    tracing::info!(
+        conflicted = conflicted.len(),
+        "the human took back the waiting human change"
+    );
+    Ok(())
+}
+
+/// The folder follows main, after any commits of the human on the branch are recorded, and while Git sync is on the commit writer writes main's missing commits and moves the branch to the revision the folder holds. The caller holds the folder lock. The outcome of the human's commits comes back when there were any.
+async fn sync(
+    handle: &ProjectHandle,
+    git: &Git,
+) -> Result<(FolderFollowed, Option<RecordOutcome>), ProjectError> {
+    let (followed, from_branch) = follow_with_branch_commits(handle, git).await?;
     let mut committed = commit_main(
         &handle.store,
         &handle.paths,
@@ -189,7 +246,141 @@ async fn sync(handle: &ProjectHandle, git: &Git) -> Result<FolderFollowed, Proje
     )
     .await?;
     handle.bus.publish(std::mem::take(&mut committed.events));
-    Ok(followed)
+    Ok((followed, from_branch))
+}
+
+/// [`follow_folder`], recording first the commits of the human that the `[git]` branch holds beyond where fold left it, and following again once main holds them. The caller holds the folder lock.
+pub(crate) async fn follow_with_branch_commits(
+    handle: &ProjectHandle,
+    git: &Git,
+) -> Result<(FolderFollowed, Option<RecordOutcome>), ProjectError> {
+    let follow = async || {
+        follow_folder(
+            &handle.store,
+            &handle.paths,
+            &handle.objects,
+            git,
+            handle.clock.now(),
+        )
+        .await
+    };
+    let followed = follow().await?;
+    let Some(BranchState::Ahead { tip, from }) = &followed.branch else {
+        return Ok((followed, None));
+    };
+    let Some(outcome) = record_branch_commits(handle, git, tip, from).await? else {
+        return Ok((followed, None));
+    };
+    Ok((follow().await?, Some(outcome)))
+}
+
+/// Records the commits of the human on the `[git]` branch, from `from`, where fold left the branch, to `tip`, at once and as one change of the human who turned Git sync on, as `fld record` records the folder: the change goes from `from`'s tree to `tip`'s, a clean merge integrates it with `tip` as the record's commit, and a conflict waits for the main agent with `tip` as its commit; each sends its notice to the main agent. When main did not move since `from`, the new revision is `tip` itself and its map line names it. `None` when main holds `tip` already or it waits already.
+pub(crate) async fn record_branch_commits(
+    handle: &ProjectHandle,
+    git: &Git,
+    tip: &CommitId,
+    from: &CommitId,
+) -> Result<Option<RecordOutcome>, ProjectError> {
+    if workspaces::merged_commits(handle.store.read())
+        .await?
+        .contains(tip.as_str())
+        || waiting_commit(handle, tip).await?.is_some()
+    {
+        return Ok(None);
+    }
+    let synced = workspaces::git_sync(handle.store.read())
+        .await?
+        .ok_or(StoreError::Corrupt("git_sync"))?;
+    let name = synced
+        .enabled_by
+        .strip_prefix("human:")
+        .unwrap_or(&synced.enabled_by);
+    let human = HumanName::parse(name).map_err(|_| StoreError::Corrupt("git_sync.enabled_by"))?;
+    let actor = Actor::Human {
+        name: human.clone(),
+    };
+    let config = load_config(&handle.paths).await?;
+    let fold_dir = handle.paths.fold_dir();
+    let map = {
+        let fold_dir = fold_dir.clone();
+        blocking(move || SyncMap::load(&fold_dir)).await?
+    };
+    let known_base = match map.revision_of(from) {
+        Some(revision) => Some(
+            workspaces::get_by_number(handle.store.read(), revision)
+                .await?
+                .tree_hash,
+        ),
+        None => None,
+    };
+    let objects_guard = handle.objects.clone().read_owned().await;
+    let (git_owned, repo, tip_owned, from_owned) = (
+        git.clone(),
+        handle.paths.git_dir(),
+        tip.clone(),
+        from.clone(),
+    );
+    let opts = GitImportOptions {
+        max_file_bytes: config.max_file_bytes,
+    };
+    let (base_tree, tree) = blocking(move || {
+        let _objects = objects_guard;
+        let objects = ObjectStore::open_existing(&fold_dir)?;
+        let base = match known_base {
+            Some(tree) => tree,
+            None => import_commit(&objects, &git_owned, &repo, from_owned.as_str(), &opts)?.tree,
+        };
+        let tree = import_commit(&objects, &git_owned, &repo, tip_owned.as_str(), &opts)?.tree;
+        Ok((base, tree))
+    })
+    .await?;
+    let last = map.last().cloned();
+    let change = HumanFolderChange {
+        human: &human,
+        base_tree,
+        tree,
+        commit: Some(tip.clone()),
+    };
+    let outcome = integrate_change(handle, &actor, &change).await?;
+    if let RecordOutcome::Recorded { revision, .. } = &outcome
+        && let Some((head, newest)) = last
+        && newest == *from
+    {
+        let fold_dir = handle.paths.fold_dir();
+        let (held, map) = blocking(move || SyncMap::lock(&fold_dir)).await?;
+        map_fast_forward(handle, held, map, head, *revision, tip, tree).await;
+    }
+    tracing::info!(commit = %tip, "the human's Git commits are recorded");
+    Ok(Some(outcome))
+}
+
+/// The human change of `tip` that waits for the main agent already, as the conflicted outcome of a record.
+async fn waiting_commit(
+    handle: &ProjectHandle,
+    tip: &CommitId,
+) -> Result<Option<RecordOutcome>, ProjectError> {
+    let mut conn = handle
+        .store
+        .read()
+        .acquire()
+        .await
+        .map_err(StoreError::from)?;
+    let waiting = workspaces::conflicted_human_change(&mut conn).await?;
+    drop(conn);
+    let Some(waiting) = waiting.filter(|change| change.commit.as_deref() == Some(tip.as_str()))
+    else {
+        return Ok(None);
+    };
+    let head = workspaces::head(handle.store.read())
+        .await?
+        .ok_or(StoreError::Corrupt("refs.main"))?;
+    Ok(Some(RecordOutcome::Conflicted {
+        head: head.number,
+        conflicted: waiting.conflicts.iter().map(pulled_conflict).collect(),
+        touched: Vec::new(),
+        skipped: Vec::new(),
+        created: false,
+    }))
 }
 
 /// A change of the project folder by `human`: what the folder holds against the checkout record, or a Git commit the human made, with its id.
@@ -418,19 +609,6 @@ async fn waiting_change(
     })
     .await?;
     Ok(same.then(|| waiting.conflicts.iter().map(pulled_conflict).collect()))
-}
-
-/// The branch has commits fold did not write. `fld pull` brings them in first, so one record never mixes them with the folder's changes.
-fn outside_commits(branch: &str) -> FoldError {
-    FoldError::new(
-        codes::INVALID_REQUEST,
-        format!("the project's Git branch {branch} has commits that fold did not write"),
-    )
-    .with_hint("run fld pull in the project folder to bring them in, then fld record")
-    .with_details([
-        ("reason", json!("outside_commits")),
-        ("branch", json!(branch)),
-    ])
 }
 
 /// The branch or `HEAD` shows a change fold did not make, so the folder's files are not the branch's that fold left.

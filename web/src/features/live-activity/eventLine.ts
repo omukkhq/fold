@@ -541,13 +541,14 @@ const SPECS: Record<EventType, Spec> = {
   },
   "git.outside_commits": {
     icon: TriangleAlert,
-    text: fixed("the Git branch has commits fold did not write; run fld pull"),
+    text: fixed("the Git branch has commits fold did not write"),
   },
   "git.uncommitted_changes": {
     icon: TriangleAlert,
-    text: fixed(
-      "the project folder has changes that are not recorded; run fld record",
-    ),
+    text: (e) =>
+      e.data.staged === true
+        ? "the Git index holds a staged change on a file main changed; run git restore --staged on it"
+        : "the project folder has changes that are not recorded; run fld record",
   },
   "git.sync_enabled": {
     icon: GitCommitHorizontal,
@@ -694,6 +695,12 @@ const SPECS: Record<EventType, Spec> = {
       e.revision === null
         ? "resolved the change of the project folder"
         : `resolved the change of the project folder in ${e.revision}`,
+  },
+  "human_change.withdrawn": {
+    icon: Undo2,
+    text: fixed(
+      "took back the change of the project folder that waited for the main agent",
+    ),
   },
 };
 

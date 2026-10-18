@@ -205,7 +205,9 @@ fn prepare_repository(
     exclude_fold_dir(&repo)?;
     // A stash in the new repository is the human's own; only a change of it counts as one fold did not make.
     let stash = git.ref_commit(&repo, STASH_REF)?;
-    set_ref(git, &repo, FOLD_STASH_REF, stash.as_ref())?;
+    if let Some(stash) = &stash {
+        set_ref(git, &repo, FOLD_STASH_REF, Some(stash))?;
+    }
     Ok(())
 }
 

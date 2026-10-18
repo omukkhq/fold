@@ -258,7 +258,7 @@ pub const FOLD_BRANCH_REF: &str = "refs/fold/branch";
 /// Git's ref of the newest stash.
 pub const STASH_REF: &str = "refs/stash";
 
-/// The ref that holds [`STASH_REF`] as it was when fold turned Git sync on, so a stash made since is a change fold did not make.
+/// The ref that holds [`STASH_REF`] as it was when fold turned Git sync on, so a stash made since is a change fold did not make; none is set when there was no stash.
 pub const FOLD_STASH_REF: &str = "refs/fold/stash";
 
 /// What the `[git]` branch and `HEAD` of the project folder show, against where fold left them.
@@ -279,7 +279,7 @@ pub enum Moved {
     OtherBranch(Option<String>),
     /// The tip is neither fold's commit nor one of its descendants, as after a reset, an amend or a rebase; `fold` is where fold left it.
     Rewritten { tip: CommitId, fold: CommitId },
-    /// A stash was made, or dropped, since fold turned Git sync on.
+    /// A stash was made since fold turned Git sync on, and is still there.
     Stash,
 }
 
@@ -330,7 +330,15 @@ pub fn branch_state(
         }
         return Ok(BranchState::Moved(Moved::OtherBranch(checked_out)));
     }
-    if git.ref_commit(&repo, STASH_REF)? != git.ref_commit(&repo, FOLD_STASH_REF)? {
+    // A stash list emptied, or a stash dropped, is no change of the folder's files, so only a stash made since counts.
+    if let Some(stash) = git.ref_commit(&repo, STASH_REF)?
+        && stash_made_since(
+            git,
+            &repo,
+            &stash,
+            git.ref_commit(&repo, FOLD_STASH_REF)?.as_ref(),
+        )?
+    {
         return Ok(BranchState::Moved(Moved::Stash));
     }
     let Some(tip) = git.ref_commit(&repo, &branch_ref(branch))? else {
@@ -357,6 +365,29 @@ pub fn branch_state(
         return Ok(BranchState::Fold { tip: Some(tip) });
     }
     Ok(BranchState::Ahead { tip, from: left })
+}
+
+/// Whether `stash`, the newest stash, was made after `seen`, the newest one when fold turned Git sync on, which [`FOLD_STASH_REF`] keeps. A stash commit is not built on the stash before it, so their committer times order them: once the human drops the newest stash, the one below it is older than `seen`. Blocking.
+fn stash_made_since(
+    git: &Git,
+    repo: &Path,
+    stash: &CommitId,
+    seen: Option<&CommitId>,
+) -> Result<bool, FoldError> {
+    let Some(seen) = seen else {
+        return Ok(true);
+    };
+    if stash == seen {
+        return Ok(false);
+    }
+    let time = |commit: &CommitId| -> Result<i64, FoldError> {
+        let out = git.output(repo, &["log", "-1", "--format=%ct", commit.as_str()], "log")?;
+        String::from_utf8(out)
+            .ok()
+            .and_then(|text| text.trim().parse().ok())
+            .ok_or_else(|| unexpected_output("log"))
+    };
+    Ok(time(stash)? > time(seen)?)
 }
 
 /// A cheap fingerprint of the refs [`branch_state`] reads, from their files alone with no `git` process: `HEAD`, the branch's loose ref, `packed-refs` and the stash. It changes when one of them changes, so a watch reads the state only then. Blocking.

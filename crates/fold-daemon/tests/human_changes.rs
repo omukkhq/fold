@@ -885,23 +885,146 @@ async fn a_newer_record_replaces_a_waiting_conflict_and_the_old_merge_is_refused
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_folder_with_commits_fold_did_not_write_is_refused_until_fld_pull() {
-    let h = Harness::start().await;
+async fn a_record_that_finds_the_change_taken_back_closes_the_waiting_conflict() {
+    let mut h = Harness::start().await;
     branch_born(&h).await;
+    h.connect_tagged("main", &["main"]).await;
+    let mut inbox = h.register_inbox("main").await;
+    let dir = root(&h);
+    let original = read(&h, "README.md");
+    write(&dir, "README.md", "# mine\n");
+    integrate(&h, "frontend", &[("README.md", "# fold\n")]).await;
+    assert!(matches!(
+        record_as_ana(&h).await.unwrap(),
+        RecordOutcome::Conflicted { created: true, .. }
+    ));
+    let opened = h.call("main", "open_main_workspace", json!({})).await;
+    let ws = opened["workspace"].as_str().unwrap().to_owned();
+    let main_dir = dir.join(opened["path"].as_str().unwrap());
+    std::fs::write(main_dir.join("README.md"), "# both\n").unwrap();
+    let changeset = h
+        .call(
+            "main",
+            "record_changes",
+            json!({"ws": ws, "message": "merge"}),
+        )
+        .await["changeset"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // The human restores the file: the folder holds no change of theirs, so the waiting one closes and the folder follows main.
+    write(&dir, "README.md", &original);
+    let head = h.head().await.number;
+    let outcome = record_as_ana(&h).await.unwrap();
+    assert_eq!(outcome, RecordOutcome::UpToDate { revision: head });
+    assert_eq!(human_change_states(&h).await, ["superseded"]);
+    assert_eq!(read(&h, "README.md"), "# fold\n");
+    assert_eq!(changed(&h), "");
+    let items = needs_you(&h.handle.store).await.unwrap();
+    assert!(
+        items
+            .iter()
+            .all(|item| item.kind != NeedsYouKind::HumanChange),
+        "{items:?}"
+    );
+    let withdrawn = stored(&h, types::HUMAN_CHANGE_WITHDRAWN).await;
+    assert_eq!(withdrawn.len(), 1);
+    assert_eq!(withdrawn[0].actor.as_str(), "human:ana");
+    assert_eq!(withdrawn[0].data["workspace"], ws.as_str());
+    assert_eq!(withdrawn[0].data["conflicted"], json!(["README.md"]));
+    let notice = notice_with(&mut inbox, "took back").await;
+    assert!(
+        notice.contains(&format!("human:ana took back the waiting change; nothing is left to merge; abandon {ws}, which holds its merge, and tell the user. Call abandon_workspace.")),
+        "{notice}"
+    );
+    let refused = h
+        .refused(
+            "main",
+            "submit_main_change",
+            json!({"changeset": changeset, "message": "Merge"}),
+        )
+        .await;
+    assert_eq!(
+        refused["details"]["reason"], "human_change_superseded",
+        "{refused}"
+    );
+
+    // A second record finds nothing waiting and writes nothing.
+    assert_eq!(
+        record_as_ana(&h).await.unwrap(),
+        RecordOutcome::UpToDate { revision: head }
+    );
+    assert_eq!(stored(&h, types::HUMAN_CHANGE_WITHDRAWN).await.len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_git_commit_of_the_human_is_recorded_at_once() {
+    let mut h = Harness::start().await;
+    branch_born(&h).await;
+    h.connect_tagged("main", &["main"]).await;
+    let mut inbox = h.register_inbox("main").await;
     let dir = root(&h);
     write(&dir, "committed.md", "mine\n");
     git(&dir, &["add", "committed.md"]);
     git(&dir, &["commit", "--quiet", "-m", "mine"]);
-    write(&dir, "README.md", "# edited\n");
-    let refused = record_as_ana(&h).await.unwrap_err();
-    assert_eq!(refused.code(), Some(codes::INVALID_REQUEST));
-    let ProjectError::Fold(refused) = refused else {
-        panic!("a fold error");
+    let commit = tip(&h);
+    // The Git job sees the branch move and records the commit as the human's change; main did not move since, so r2 is the commit itself.
+    eventually(WAIT, async || {
+        let head = h.head().await.number.to_string();
+        if head == "r2" { Ok(()) } else { Err(head) }
+    })
+    .await;
+    assert_eq!(
+        file_of(&h, "r2", "committed.md").await.as_deref(),
+        Some("mine\n")
+    );
+    let (kind, actor, remote): (String, String, Option<String>) = sqlx::query_as(
+        "SELECT kind, actor, remote_commit FROM integrations ORDER BY number DESC LIMIT 1",
+    )
+    .fetch_one(h.handle.store.read())
+    .await
+    .unwrap();
+    assert_eq!(
+        (kind.as_str(), actor.as_str(), remote.as_deref()),
+        ("record", "human:ana", Some(commit.as_str()))
+    );
+    assert_eq!(human_change_states(&h).await, ["recorded"]);
+    let recorded = stored(&h, types::HUMAN_CHANGE_RECORDED).await;
+    assert_eq!(recorded[0].data["commit"], commit.as_str());
+    let notice = notice_with(&mut inbox, "recorded r2").await;
+    assert!(
+        notice.contains("human:ana recorded r2 from the project folder: committed.md"),
+        "{notice}"
+    );
+    eventually(WAIT, async || {
+        let mapped: Option<String> = sqlx::query_scalar(
+            r#"SELECT c."commit" FROM revision_commits c JOIN revisions r ON r.id = c.revision_id WHERE r.number = 2"#,
+        )
+        .fetch_optional(h.handle.store.read())
+        .await
+        .unwrap();
+        if mapped.as_deref() == Some(commit.as_str()) {
+            Ok(())
+        } else {
+            Err(mapped)
+        }
+    })
+    .await;
+    assert_eq!(tip(&h), commit);
+    assert_eq!(changed(&h), "");
+
+    // fld record still records what the folder holds besides, with a Git commit of its revision.
+    write(&dir, "README.md", "# mine\n");
+    let RecordOutcome::Recorded {
+        revision, commit, ..
+    } = record_as_ana(&h).await.unwrap()
+    else {
+        panic!("a clean record");
     };
-    assert_eq!(refused.details().unwrap()["reason"], "outside_commits");
-    assert!(refused.hint().unwrap().contains("fld pull"));
-    assert_eq!(h.head().await.number.to_string(), "r1");
-    assert!(human_change_states(&h).await.is_empty());
+    assert_eq!(revision.to_string(), "r3");
+    assert_eq!(tip(&h), commit.unwrap().as_str());
+    assert_eq!(changed(&h), "");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

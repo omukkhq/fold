@@ -83,3 +83,39 @@ async fn a_crash_inside_fld_record_loses_nothing_and_records_nothing_twice() {
         stopped_at(failpoint).await;
     }
 }
+
+/// A crash inside the integration that records a Git commit of the human leaves main as it was, and the restarted Git job records the commit once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_crash_while_a_git_commit_is_recorded_records_it_once_after_the_restart() {
+    let scenario = fail::FailScenario::setup();
+    let mut h = Harness::start().await;
+    branch_born(&h).await;
+    fail::cfg("integration_in_transaction", "return").unwrap();
+    let root = std::path::PathBuf::from(h.root());
+    std::fs::write(root.join("plan.md"), "the plan\n").unwrap();
+    crate::human_changes::git(&root, &["add", "plan.md"]);
+    crate::human_changes::git(&root, &["commit", "--quiet", "-m", "plan"]);
+    // Each run of the Git job stops inside the transaction; main stays on r1.
+    let context = fold_daemon::services::projects::RemoteContext::of(&h.handle);
+    let stopped =
+        fold_daemon::services::projects::sync_folder(&context, &fold_vcs::git::Git::default())
+            .await
+            .unwrap_err();
+    assert_eq!(stopped.code(), Some("failpoint"));
+    assert_eq!(h.head().await.number.to_string(), "r1");
+    assert_eq!(rows(&h, "SELECT COUNT(*) FROM human_changes").await, 0);
+    fail::remove("integration_in_transaction");
+
+    h.restart().await;
+    fold_store::testing::eventually(crate::common::acceptance::WAIT, async || {
+        let head = h.head().await.number.to_string();
+        if head == "r2" { Ok(()) } else { Err(head) }
+    })
+    .await;
+    assert_eq!(
+        file_of(&h, "r2", "plan.md").await.as_deref(),
+        Some("the plan\n")
+    );
+    assert_eq!(rows(&h, "SELECT COUNT(*) FROM human_changes").await, 1);
+    scenario.teardown();
+}

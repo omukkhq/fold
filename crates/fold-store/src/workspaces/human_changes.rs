@@ -65,7 +65,7 @@ pub struct HumanChangeRow {
     pub conflicts: Vec<ConflictRow>,
 }
 
-/// Closes the conflicted human change, when one waits, as `superseded`: a newer human change replaces it. True when one closed.
+/// Closes the conflicted human change, when one waits, as `superseded`: a newer human change replaces it, or the human took it back and the folder holds none of it. True when one closed.
 pub async fn supersede_conflicted(tx: &mut WriteTx, now: Timestamp) -> Result<bool, StoreError> {
     let closed_at = now.as_millis();
     let closed = sqlx::query!(

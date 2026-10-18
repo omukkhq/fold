@@ -141,6 +141,7 @@ define_event_types! {
     HUMAN_CHANGE_RESOLVED = "human_change.resolved",
     GIT_SYNC_ENABLED = "git.sync_enabled",
     GIT_HEAD_MOVED = "git.head_moved",
+    HUMAN_CHANGE_WITHDRAWN = "human_change.withdrawn",
 }
 
 impl EventType {

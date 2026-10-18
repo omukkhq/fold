@@ -71,6 +71,8 @@ pub struct RemoteContext {
     pub(crate) objects: Arc<tokio::sync::RwLock<()>>,
     /// What the folder's last follow and the commit writer last found that needs a person.
     pub(crate) git_attention: Arc<GitAttention>,
+    /// The open project's handle, once it is shared, so the Git job records a commit of the human with the services the handle holds; a weak link, so the job never keeps a closed project open.
+    pub(crate) handle: Arc<std::sync::OnceLock<std::sync::Weak<ProjectHandle>>>,
 }
 
 impl RemoteContext {
@@ -92,6 +94,7 @@ impl RemoteContext {
             folder_lock: Arc::new(tokio::sync::Mutex::new(())),
             objects: Arc::new(tokio::sync::RwLock::new(())),
             git_attention: Arc::new(GitAttention::default()),
+            handle: Arc::default(),
         }
     }
 
@@ -112,6 +115,7 @@ impl RemoteContext {
             folder_lock: handle.folder_lock.clone(),
             objects: handle.objects.clone(),
             git_attention: handle.git_attention.clone(),
+            handle: handle.shared.clone(),
         }
     }
 }

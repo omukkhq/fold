@@ -50,12 +50,8 @@ impl FolderSync {
     pub fn attention(&self) -> Vec<ProjectAttention> {
         let committed = self.committed.as_ref().ok();
         let mut found = Vec::new();
-        let ahead = matches!(self.followed.branch, Some(BranchState::Ahead { .. }))
-            || committed.is_some_and(|committed| committed.outside.is_some());
-        if ahead {
-            found.push(ProjectAttention::OutsideCommits);
-        }
-        // The commits fold did not write account for what the folder holds beyond the record.
+        // Commits of the human that wait for the main agent account for what the folder holds beyond the record, and Needs you lists them as a human change.
+        let ahead = matches!(self.followed.branch, Some(BranchState::Ahead { .. }));
         let unrecorded = self.followed.unrecorded && !ahead;
         if unrecorded || committed.is_some_and(|committed| committed.uncommitted) {
             found.push(ProjectAttention::UncommittedChanges);
@@ -64,6 +60,16 @@ impl FolderSync {
             found.push(ProjectAttention::HeadMoved);
         }
         found
+    }
+
+    /// Whether the changes that no revision records are only in the Git index: a change the human staged on a path main changed, such as a staged deletion, holds the branch back while the folder holds nothing to record, so `git restore --staged` undoes it and `fld record` does not.
+    pub fn staged_only(&self) -> bool {
+        let ahead = matches!(self.followed.branch, Some(BranchState::Ahead { .. }));
+        !(self.followed.unrecorded && !ahead)
+            && self
+                .committed
+                .as_ref()
+                .is_ok_and(|committed| committed.uncommitted)
     }
 
     /// The change of the branch or `HEAD` that fold did not make, when there is one.
@@ -82,14 +88,26 @@ impl FolderSync {
 /// Brings the project folder to main and, while Git sync is on, writes the commits of the new revisions and moves the branch and the index to the revision the folder holds, under the project's folder lock. The Git job runs it after every integration, at the start and when the branch changes.
 pub async fn sync_folder(context: &RemoteContext, git: &Git) -> Result<FolderSync, ProjectError> {
     let _folder = context.folder_lock.clone().lock_owned().await;
-    let followed = follow_folder(
-        &context.store,
-        &context.paths,
-        &context.objects,
-        git,
-        context.clock.now(),
-    )
-    .await?;
+    let handle = context.handle.get().and_then(std::sync::Weak::upgrade);
+    let followed = match &handle {
+        // The commits of the human on the branch are recorded at once.
+        Some(handle) => {
+            super::record::follow_with_branch_commits(handle, git)
+                .await?
+                .0
+        }
+        None => {
+            follow_folder(
+                &context.store,
+                &context.paths,
+                &context.objects,
+                git,
+                context.clock.now(),
+            )
+            .await?
+        }
+    };
+    drop(handle);
     let committed = commit_main(
         &context.store,
         &context.paths,
@@ -298,4 +316,34 @@ fn io_error(error: &std::io::Error) -> ProjectError {
         format!("cannot probe the file system: {}", error.kind()),
     )
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sync(unrecorded: bool, uncommitted: bool) -> FolderSync {
+        FolderSync {
+            followed: FolderFollowed {
+                unrecorded,
+                ..FolderFollowed::default()
+            },
+            committed: Ok(Committed {
+                uncommitted,
+                ..Committed::default()
+            }),
+        }
+    }
+
+    #[test]
+    fn a_change_only_in_the_git_index_is_told_apart_from_one_to_record() {
+        assert!(sync(false, true).staged_only());
+        assert_eq!(
+            sync(false, true).attention(),
+            [ProjectAttention::UncommittedChanges]
+        );
+        assert!(!sync(true, true).staged_only());
+        assert!(!sync(true, false).staged_only());
+        assert!(!sync(false, false).staged_only());
+    }
 }

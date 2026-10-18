@@ -692,7 +692,9 @@ impl Init<'_> {
             // A stash the repository holds already is the human's, and only a change of it counts as one fold did not make.
             let repo = paths.git_dir();
             let stash = git.ref_commit(&repo, STASH_REF)?;
-            set_ref(&git, &repo, FOLD_STASH_REF, stash.as_ref())?;
+            if let Some(stash) = &stash {
+                set_ref(&git, &repo, FOLD_STASH_REF, Some(stash))?;
+            }
             set_ref(&git, &repo, FOLD_BRANCH_REF, Some(&commit))?;
             let opts = GitImportOptions { max_file_bytes };
             let imported = import_commit(&objects, &git, paths.root(), commit.as_str(), &opts)?;
@@ -1468,8 +1470,6 @@ pub struct ProjectOverview {
 /// Why the project, rather than one of its tasks, needs a person. The daemon decides every kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProjectAttention {
-    /// The `[git]` branch has commits fold did not write, so the project folder stops following main until a human runs `fld pull`, which brings them in.
-    OutsideCommits,
     /// The project folder has changes that no revision records, which the human records with `fld record`. While Git sync is on, such a change on a path main changed also keeps the folder and the branch where they are.
     UncommittedChanges,
     /// The `[git]` branch or `HEAD` shows a change fold did not make, such as another branch checked out, a reset or a stash, so the project folder stops following main until the human brings the branch back.
@@ -1477,8 +1477,7 @@ pub enum ProjectAttention {
 }
 
 impl ProjectAttention {
-    pub const ALL: [ProjectAttention; 3] = [
-        ProjectAttention::OutsideCommits,
+    pub const ALL: [ProjectAttention; 2] = [
         ProjectAttention::UncommittedChanges,
         ProjectAttention::HeadMoved,
     ];
@@ -1486,7 +1485,6 @@ impl ProjectAttention {
     /// The name the HTTP view and the `git.attention_cleared` event give the kind.
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::OutsideCommits => "outside_commits",
             Self::UncommittedChanges => "uncommitted_changes",
             Self::HeadMoved => "head_moved",
         }
@@ -1494,9 +1492,8 @@ impl ProjectAttention {
 
     fn index(self) -> usize {
         match self {
-            Self::OutsideCommits => 0,
-            Self::UncommittedChanges => 1,
-            Self::HeadMoved => 2,
+            Self::UncommittedChanges => 0,
+            Self::HeadMoved => 1,
         }
     }
 }
@@ -1504,7 +1501,7 @@ impl ProjectAttention {
 /// What the project folder's last follow and the commit writer's last run found that needs a person. It is derived from the folder and the repository, never stored: the first run after the project opens finds it again.
 #[derive(Debug, Default)]
 pub struct GitAttention {
-    raised: [AtomicBool; 3],
+    raised: [AtomicBool; 2],
     /// Since when the branch shows a change fold did not make, with the command that brings it back.
     moved: std::sync::Mutex<Option<(Timestamp, String)>>,
 }
@@ -1852,29 +1849,43 @@ mod tests {
             raised: raised.to_vec(),
             cleared: cleared.to_vec(),
         };
-        use ProjectAttention::{HeadMoved, OutsideCommits, UncommittedChanges};
+        use ProjectAttention::{HeadMoved, UncommittedChanges};
         assert_eq!(attention.set(&[]), change(&[], &[]));
         assert_eq!(
-            attention.set(&[UncommittedChanges, OutsideCommits]),
-            change(&[OutsideCommits, UncommittedChanges], &[])
+            attention.set(&[HeadMoved, UncommittedChanges]),
+            change(&[UncommittedChanges, HeadMoved], &[])
         );
-        assert_eq!(attention.kinds(), [OutsideCommits, UncommittedChanges]);
+        assert_eq!(attention.kinds(), [UncommittedChanges, HeadMoved]);
         assert_eq!(
-            attention.set(&[OutsideCommits, UncommittedChanges]),
+            attention.set(&[UncommittedChanges, HeadMoved]),
             change(&[], &[])
         );
         assert_eq!(
-            attention.set(&[OutsideCommits, HeadMoved]),
-            change(&[HeadMoved], &[UncommittedChanges])
+            attention.set(&[HeadMoved]),
+            change(&[], &[UncommittedChanges])
         );
-        assert_eq!(
-            attention.set(&[]),
-            change(&[], &[OutsideCommits, HeadMoved])
-        );
+        assert_eq!(attention.set(&[]), change(&[], &[HeadMoved]));
         assert!(attention.kinds().is_empty());
         assert_eq!(
             ProjectAttention::ALL.map(ProjectAttention::as_str),
-            ["outside_commits", "uncommitted_changes", "head_moved"]
+            ["uncommitted_changes", "head_moved"]
         );
+        attention.note_moved(
+            Some("run git switch main".to_owned()),
+            Timestamp::from_millis(5).unwrap(),
+        );
+        attention.note_moved(
+            Some("run git switch main".to_owned()),
+            Timestamp::from_millis(9).unwrap(),
+        );
+        assert_eq!(
+            attention.head_moved(),
+            Some((
+                Timestamp::from_millis(5).unwrap(),
+                "run git switch main".to_owned()
+            ))
+        );
+        attention.note_moved(None, Timestamp::from_millis(9).unwrap());
+        assert_eq!(attention.head_moved(), None);
     }
 }

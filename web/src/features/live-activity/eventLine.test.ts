@@ -388,10 +388,16 @@ describe("eventLine", () => {
       "wrote the Git commit of r17",
     );
     expect(eventLine(event("git.outside_commits")).text).toBe(
-      "the Git branch has commits fold did not write; run fld pull",
+      "the Git branch has commits fold did not write",
     );
     expect(eventLine(event("git.uncommitted_changes")).text).toBe(
       "the project folder has changes that are not recorded; run fld record",
+    );
+    expect(
+      eventLine(event("git.uncommitted_changes", { data: { staged: true } }))
+        .text,
+    ).toBe(
+      "the Git index holds a staged change on a file main changed; run git restore --staged on it",
     );
     expect(
       eventLine(
@@ -441,6 +447,9 @@ describe("eventLine", () => {
     expect(
       eventLine(event("human_change.resolved", { revision: null })).text,
     ).toBe("resolved the change of the project folder");
+    expect(eventLine(event("human_change.withdrawn")).text).toBe(
+      "took back the change of the project folder that waited for the main agent",
+    );
   });
 
   it("marks integrations, main moves, request approvals and recorded human changes as emphasised, review approvals by their verdict", () => {

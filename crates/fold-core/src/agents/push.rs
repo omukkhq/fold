@@ -71,6 +71,7 @@ pub fn is_pushed(event: &Event) -> bool {
         types::HUMAN_CHANGE_RECORDED,
         types::HUMAN_CHANGE_CONFLICTED,
         types::HUMAN_CHANGE_RESOLVED,
+        types::HUMAN_CHANGE_WITHDRAWN,
     ]
     .contains(&event.event_type)
 }
@@ -112,7 +113,7 @@ pub fn notice_for(event: &Event, ctx: &PushContext) -> Vec<Notice> {
 /// The longest file or task list a human-change notice spells out; a longer one is counted, so the notice stays within [`MAX_NOTICE_LEN`].
 const MAX_LISTED_LEN: usize = 48;
 
-/// A human change reaches the main agent, which tells the user about it in its own session: what was recorded as which revision, that it conflicts and main did not move, or that an integration resolved the waiting change. The leads of the tasks whose open workspaces change the same files hear of a recorded change too, and the main agent's notice says they did. The daemon writes the files, the touched tasks and workspaces, and those leads into the event, so a notice tells what the record found.
+/// A human change reaches the main agent, which tells the user about it in its own session: what was recorded as which revision, that it conflicts and main did not move, that an integration resolved the waiting change, or that the human took it back. The leads of the tasks whose open workspaces change the same files hear of a recorded change too, and the main agent's notice says they did. The daemon writes the files, the touched tasks and workspaces, and those leads into the event, so a notice tells what the record found.
 fn human_change_rules(
     event: &Event,
     ctx: &PushContext,
@@ -122,15 +123,20 @@ fn human_change_rules(
         types::HUMAN_CHANGE_RECORDED,
         types::HUMAN_CHANGE_CONFLICTED,
         types::HUMAN_CHANGE_RESOLVED,
+        types::HUMAN_CHANGE_WITHDRAWN,
     ]
     .contains(&kind)
     {
         return None;
     }
     let main: Vec<AgentName> = ctx.main_agents.iter().cloned().collect();
-    // A resolution is the act of the integration's actor, so its data names the human whose change it brings onto main.
+    // A resolution is the act of the integration's actor, and a withdrawal that of the human who ran `fld record`, so their data names the human whose change it is.
     let human = match event.data.get("human").and_then(serde_json::Value::as_str) {
-        Some(human) if kind == types::HUMAN_CHANGE_RESOLVED => human,
+        Some(human)
+            if kind == types::HUMAN_CHANGE_RESOLVED || kind == types::HUMAN_CHANGE_WITHDRAWN =>
+        {
+            human
+        }
         _ => event.actor.as_str(),
     };
     let strings = |key: &str| -> Vec<String> {
@@ -179,6 +185,27 @@ fn human_change_rules(
             .filter(|text| fits(text, tool))
             .unwrap_or_else(|| compose(false));
         return Some(vec![(main, text, tool)]);
+    }
+    if kind == types::HUMAN_CHANGE_WITHDRAWN {
+        // The folder holds none of the change any more, so a main workspace that holds its merge holds nothing to submit.
+        let text = format!("{human} took back the waiting change; nothing is left to merge");
+        let rule = match event
+            .data
+            .get("workspace")
+            .and_then(serde_json::Value::as_str)
+        {
+            Some(workspace) => (
+                main,
+                format!("{text}; abandon {workspace}, which holds its merge, and tell the user"),
+                "abandon_workspace",
+            ),
+            None => (
+                main,
+                format!("{text}; tell the user"),
+                "get_repository_state",
+            ),
+        };
+        return Some(vec![rule]);
     }
     let revision = event.revision?;
     let leads: Vec<AgentName> = strings("leads")
@@ -1439,6 +1466,37 @@ mod tests {
         let mut no_revision = untouched;
         no_revision.revision = None;
         assert!(notice_for(&no_revision, &main_ctx()).is_empty());
+    }
+
+    #[test]
+    fn a_withdrawn_human_change_tells_the_main_agent_to_drop_its_merge() {
+        let mut event = human_change(
+            types::HUMAN_CHANGE_WITHDRAWN,
+            json!({
+                "human": "human:ana", "commit": null, "conflicted": ["a.txt"], "conflicted_count": 1,
+                "workspace": "ws-9",
+            }),
+        );
+        event.revision = None;
+        event.actor = EventActor::parse("human:bo").unwrap();
+        assert!(is_pushed(&event));
+        assert_eq!(
+            sent(&notice_for(&event, &main_ctx())),
+            vec![row(
+                "main",
+                "fold: human:ana took back the waiting change; nothing is left to merge; abandon ws-9, which holds its merge, and tell the user. Call abandon_workspace.",
+                "abandon_workspace"
+            )]
+        );
+        event.data["workspace"] = json!(null);
+        assert_eq!(
+            sent(&notice_for(&event, &main_ctx())),
+            vec![row(
+                "main",
+                "fold: human:ana took back the waiting change; nothing is left to merge; tell the user. Call get_repository_state.",
+                "get_repository_state"
+            )]
+        );
     }
 
     #[test]

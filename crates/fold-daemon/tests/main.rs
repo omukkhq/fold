@@ -21,6 +21,7 @@ mod acceptance_11_main_agent;
 mod acceptance_12_main_direct_change;
 mod acceptance_13_human_edit;
 mod acceptance_14_human_changes;
+mod acceptance_15_genesis_and_git;
 mod acceptance_1_three_sessions;
 mod acceptance_2_messaging;
 mod acceptance_3_parallel_workspaces;

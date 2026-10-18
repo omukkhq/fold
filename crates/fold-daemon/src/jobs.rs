@@ -7,7 +7,7 @@ use fold_core::checkpoint_policy::quiet_checkpoint_due;
 use fold_core::events::{EventType, types};
 use fold_core::{Actor, NewEvent, Timestamp, WorkspaceId, codes};
 use fold_store::{StoreError, workspaces};
-use fold_vcs::git::{CommitId, Git};
+use fold_vcs::git::Git;
 use serde_json::json;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio::sync::{Semaphore, broadcast, watch};
@@ -699,6 +699,8 @@ async fn run_auto_commit(
     let mut watch = BranchWatch::default();
     // The files are noted before each run, so a change made while it runs starts the next one; a run that moved the branch itself costs one more run.
     watch.stamp(&context).await;
+    // The handle becomes known once the opener shares it, which can be after this first run; until then a run cannot record the human's Git commits, such as those made while the daemon was down, so the first tick that finds the handle runs again.
+    let mut without_handle = context.handle.get().is_none();
     commit_after_integration(&context, &git).await;
     let mut ticks = tokio::time::interval(GIT_WATCH_TICK);
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -710,7 +712,9 @@ async fn run_auto_commit(
             _ = ticks.tick() => None,
         };
         let Some(received) = received else {
-            if watch.changed(&context).await {
+            let shared_since = without_handle && context.handle.get().is_some();
+            without_handle &= !shared_since;
+            if shared_since || watch.changed(&context).await {
                 commit_after_integration(&context, &git).await;
             }
             continue;
@@ -779,7 +783,7 @@ impl BranchWatch {
     }
 }
 
-/// Whether every revision has its commit now. What the run found that needs a person goes to the project's Git attention, and each change of it appends an event in its own transaction: `git.outside_commits` with the branch and its tip, `git.uncommitted_changes` with the branch, `git.head_moved` with the branch and the reason, or `git.attention_cleared` with the kind that ended. The first run after the project opens compares with nothing found, so it appends the events of what it finds again.
+/// Whether every revision has its commit now. What the run found that needs a person goes to the project's Git attention, and each change of it appends an event in its own transaction: `git.uncommitted_changes` with the branch, `git.head_moved` with the branch and the reason, or `git.attention_cleared` with the kind that ended. The first run after the project opens compares with nothing found, so it appends the events of what it finds again.
 async fn commit_after_integration(context: &RemoteContext, git: &Git) -> bool {
     let synced = match projects::sync_folder(context, git).await {
         Ok(synced) => synced,
@@ -834,28 +838,17 @@ async fn record_attention(
         .map(|config| config.git.branch)
         .unwrap_or_default();
     let actor = Actor::System.event_actor();
-    let tip: Option<CommitId> = match &synced.followed.branch {
-        Some(fold_vcs::git_remote::BranchState::Ahead { tip, .. }) => Some(tip.clone()),
-        _ => synced
-            .committed
-            .as_ref()
-            .ok()
-            .and_then(|committed| committed.outside.clone()),
-    };
     for kind in &change.raised {
         let event = match kind {
-            ProjectAttention::OutsideCommits => {
-                tracing::warn!(project = %context.slug, "the Git branch of main has commits fold did not write; the project folder waits for fld pull");
-                NewEvent::new(types::GIT_OUTSIDE_COMMITS, actor.clone()).and_then(|event| {
-                    event.data(
-                        json!({"branch": branch, "commit": tip.as_ref().map(CommitId::as_str)}),
-                    )
-                })
-            }
             ProjectAttention::UncommittedChanges => {
-                tracing::info!(project = %context.slug, "the project folder has changes that no revision records; fld record records them");
+                let staged = synced.staged_only();
+                if staged {
+                    tracing::info!(project = %context.slug, "the Git index holds a staged change on a file main changed; git restore --staged undoes it");
+                } else {
+                    tracing::info!(project = %context.slug, "the project folder has changes that no revision records; fld record records them");
+                }
                 NewEvent::new(types::GIT_UNCOMMITTED_CHANGES, actor.clone())
-                    .and_then(|event| event.data(json!({"branch": branch})))
+                    .and_then(|event| event.data(json!({"branch": branch, "staged": staged})))
             }
             ProjectAttention::HeadMoved => {
                 let reason = synced

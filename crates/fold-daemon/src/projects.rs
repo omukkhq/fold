@@ -46,7 +46,9 @@ pub struct ProjectHandle {
     pub remote_lock: Arc<tokio::sync::Mutex<()>>,
     /// Held for each follow of main in the project folder and for a whole `fld record`.
     pub folder_lock: Arc<tokio::sync::Mutex<()>>,
-    /// What the folder's last follow and the commit writer last found that needs a person: changes in the project folder that no revision records, commits made outside fold, or a branch that fold did not move.
+    /// This handle once [`ProjectHandle::share`] made it an `Arc`, for the jobs that need its services but must not keep it open.
+    pub(crate) shared: Arc<std::sync::OnceLock<std::sync::Weak<ProjectHandle>>>,
+    /// What the folder's last follow and the commit writer last found that needs a person: changes in the project folder that no revision records, or a branch or `HEAD` that shows a change fold did not make.
     pub git_attention: Arc<GitAttention>,
     /// One restore, sync or record per workspace at a time, across every session of the project.
     pub workspace_locks: Arc<WorkspaceLocks>,
@@ -99,6 +101,13 @@ impl ProjectHandle {
     /// Opens the project database, which applies its pending migrations. A missing database is not created: the registry only lists projects that `fld init` set up. The live state takes its intervals from the configuration read here; an invalid configuration gives it the defaults, and the commands that read the configuration report the error.
     pub async fn open(row: &ProjectRow, clock: Arc<dyn Clock>) -> Result<Self, FoldError> {
         Self::open_with(row, clock, Launcher::default()).await
+    }
+
+    /// The handle as the `Arc` every request shares, made known to its own jobs.
+    pub fn share(self) -> Arc<Self> {
+        let handle = Arc::new(self);
+        let _ = handle.shared.set(Arc::downgrade(&handle));
+        handle
     }
 
     /// [`ProjectHandle::open`] with the programs its worker processes run.
@@ -160,6 +169,7 @@ impl ProjectHandle {
         );
         let remote_lock = Arc::new(tokio::sync::Mutex::new(()));
         let folder_lock = Arc::new(tokio::sync::Mutex::new(()));
+        let shared: Arc<std::sync::OnceLock<std::sync::Weak<ProjectHandle>>> = Arc::default();
         let git_attention = Arc::new(GitAttention::default());
         let auto_commit = jobs::auto_commit(
             RemoteContext {
@@ -172,6 +182,7 @@ impl ProjectHandle {
                 folder_lock: folder_lock.clone(),
                 objects: objects.clone(),
                 git_attention: git_attention.clone(),
+                handle: shared.clone(),
             },
             Git::default(),
         );
@@ -189,6 +200,7 @@ impl ProjectHandle {
             objects,
             remote_lock,
             folder_lock,
+            shared,
             git_attention,
             workspace_locks,
             capabilities,
@@ -485,7 +497,7 @@ impl Projects {
         self.mark_away(&row.slug, false);
         let outcome = ProjectHandle::open_with(row, clock, self.launcher.clone())
             .await
-            .map(Arc::new);
+            .map(ProjectHandle::share);
         if let Ok(handle) = &outcome {
             unpoisoned(self.removed.write()).remove(&row.slug);
             if let Some(registry) = &self.registry {

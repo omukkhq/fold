@@ -217,6 +217,12 @@ async fn a_stash_or_a_reset_fold_did_not_make_stops_the_folder_until_it_is_undon
     );
     git(&dir, &["stash", "pop", "--quiet"]);
     assert!(sync(&h).await.moved().is_none());
+    // A stash dropped instead of popped leaves no stash, which is no change of the folder either.
+    git(&dir, &["stash", "--quiet"]);
+    assert!(sync(&h).await.moved().is_some());
+    git(&dir, &["stash", "drop", "--quiet"]);
+    assert!(sync(&h).await.moved().is_none());
+    write(&dir, "README.md", "# mine\n");
 
     // The human's change is recorded; then a reset to the commit before it moves the branch where fold did not.
     let RecordOutcome::Recorded { commit, .. } = record_as_ana(&h).await.unwrap() else {
@@ -240,4 +246,165 @@ async fn a_stash_or_a_reset_fold_did_not_make_stops_the_folder_until_it_is_undon
     assert!(synced.moved().is_none());
     assert!(synced.followed.unrecorded);
     assert_eq!(read(&dir, "README.md"), "# demo\n");
+}
+
+/// `git stash` in `dir` with its commits dated `date`.
+fn stash_at(dir: &Path, date: &str) {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["-c", "core.hooksPath=/dev/null", "stash", "--quiet"])
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "Ana")
+        .env("GIT_AUTHOR_EMAIL", "ana@example.com")
+        .env("GIT_COMMITTER_NAME", "Ana")
+        .env("GIT_COMMITTER_EMAIL", "ana@example.com")
+        .env("GIT_COMMITTER_DATE", date)
+        .env("GIT_AUTHOR_DATE", date)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_dropped_stash_of_the_older_ones_is_no_change_and_a_new_one_is() {
+    let h = Harness::start().await;
+    branch_born(&h).await;
+    let dir = root(&h);
+    // Two stashes the human had when fold turned Git sync on.
+    write(&dir, "README.md", "# first\n");
+    stash_at(&dir, "2020-01-01T00:00:00Z");
+    write(&dir, "README.md", "# second\n");
+    stash_at(&dir, "2020-01-02T00:00:00Z");
+    git(&dir, &["update-ref", "refs/fold/stash", "refs/stash"]);
+    assert!(sync(&h).await.moved().is_none());
+    // Dropping the newest leaves the older one on top, which fold saw already.
+    git(&dir, &["stash", "drop", "--quiet"]);
+    assert!(sync(&h).await.moved().is_none());
+    write(&dir, "README.md", "# third\n");
+    git(&dir, &["stash", "--quiet"]);
+    assert!(
+        sync(&h)
+            .await
+            .moved()
+            .unwrap()
+            .hint("main")
+            .contains("git stash pop")
+    );
+    git(&dir, &["stash", "pop", "--quiet"]);
+    assert!(sync(&h).await.moved().is_none());
+}
+
+/// Main's head number as the project's read pool sees it.
+async fn head_of(store: &fold_store::Store) -> String {
+    fold_store::workspaces::head(store.read())
+        .await
+        .unwrap()
+        .unwrap()
+        .number
+        .to_string()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_git_commit_made_while_the_daemon_was_down_is_recorded_once_the_handle_is_shared() {
+    let mut h = Harness::start().await;
+    branch_born(&h).await;
+    let dir = root(&h);
+    h.stop().await;
+    // A lost map line, which the Git job's first run writes again, shows when that run is over.
+    let map = dir.join(".fold/git-sync.map");
+    let lines = std::fs::read_to_string(&map).unwrap();
+    std::fs::write(&map, "").unwrap();
+    write(&dir, "offline.md", "while down\n");
+    git(&dir, &["add", "offline.md"]);
+    git(&dir, &["commit", "--quiet", "-m", "offline"]);
+    let row = fold_store::projects::ProjectRow {
+        slug: "demo".to_owned(),
+        name: "Demo".to_owned(),
+        root: h.root().to_owned(),
+    };
+    let handle = fold_daemon::projects::ProjectHandle::open(
+        &row,
+        std::sync::Arc::new(h.project.clock().clone()),
+    )
+    .await
+    .unwrap();
+    eventually(WAIT, async || {
+        let now = std::fs::read_to_string(&map).unwrap();
+        if now == lines { Ok(()) } else { Err(now) }
+    })
+    .await;
+    // That run had no shared handle, so the commit waits.
+    assert_eq!(head_of(&handle.store).await, "r1");
+    let handle = handle.share();
+    eventually(WAIT, async || {
+        let head = head_of(&handle.store).await;
+        if head == "r2" { Ok(()) } else { Err(head) }
+    })
+    .await;
+    handle.bus.close();
+    handle.stop_tasks(WAIT).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_merge_commit_of_the_human_is_recorded_as_one_change_with_the_merge_as_its_commit() {
+    let mut h = Harness::start().await;
+    branch_born(&h).await;
+    let dir = root(&h);
+    h.stop().await;
+    git(&dir, &["switch", "--quiet", "-c", "side"]);
+    write(&dir, "side.md", "side\n");
+    git(&dir, &["add", "side.md"]);
+    git(&dir, &["commit", "--quiet", "-m", "side"]);
+    git(&dir, &["switch", "--quiet", "main"]);
+    write(&dir, "main.md", "main\n");
+    git(&dir, &["add", "main.md"]);
+    git(&dir, &["commit", "--quiet", "-m", "main"]);
+    git(
+        &dir,
+        &["merge", "--quiet", "--no-ff", "side", "-m", "merge side"],
+    );
+    let merge = git(&dir, &["rev-parse", "HEAD"]).trim().to_owned();
+    let parents = git(&dir, &["rev-list", "--parents", "-n", "1", "HEAD"]);
+    assert_eq!(parents.split_whitespace().count(), 3, "{parents}");
+    h.start_again().await;
+    eventually(WAIT, async || {
+        let head = h.head().await.number.to_string();
+        if head == "r2" { Ok(()) } else { Err(head) }
+    })
+    .await;
+    for (path, text) in [("side.md", "side\n"), ("main.md", "main\n")] {
+        assert_eq!(
+            crate::human_changes::file_of(&h, "r2", path)
+                .await
+                .as_deref(),
+            Some(text)
+        );
+    }
+    let (kind, remote): (String, Option<String>) =
+        sqlx::query_as("SELECT kind, remote_commit FROM integrations ORDER BY number DESC LIMIT 1")
+            .fetch_one(h.handle.store.read())
+            .await
+            .unwrap();
+    assert_eq!(
+        (kind.as_str(), remote.as_deref()),
+        ("record", Some(merge.as_str()))
+    );
+    // Main did not move, so r2's commit is the merge itself and the branch stays on it.
+    eventually(WAIT, async || {
+        let mapped: Option<String> = sqlx::query_scalar(
+            r#"SELECT c."commit" FROM revision_commits c JOIN revisions r ON r.id = c.revision_id WHERE r.number = 2"#,
+        )
+        .fetch_optional(h.handle.store.read())
+        .await
+        .unwrap();
+        if mapped.as_deref() == Some(merge.as_str()) { Ok(()) } else { Err(mapped) }
+    })
+    .await;
+    assert_eq!(git(&dir, &["rev-parse", "main"]).trim(), merge);
+    assert_eq!(git(&dir, &["status", "--porcelain"]), "");
 }
