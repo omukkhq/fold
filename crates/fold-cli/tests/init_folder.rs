@@ -266,7 +266,7 @@ fn a_file_over_the_size_limit_is_printed_as_skipped() {
 }
 
 #[test]
-fn init_and_from_git_each_refuse_the_other_kind_of_folder_with_a_hint() {
+fn a_plain_init_refuses_a_git_repository_and_both_refuse_a_folder_inside_one() {
     let sandbox = Sandbox::new();
     let repo = sandbox.path("repo");
     fs::create_dir_all(&repo).unwrap();
@@ -275,7 +275,7 @@ fn init_and_from_git_each_refuse_the_other_kind_of_folder_with_a_hint() {
     assert_eq!(output.status.code(), Some(1));
     assert!(stderr(&output).contains("invalid_request"), "{output:?}");
     assert!(
-        stderr(&output).contains("hint: run fld init --from-git"),
+        stderr(&output).contains("hint: run fld init --with-git"),
         "{output:?}"
     );
     assert!(!repo.join(".fold").exists());
@@ -284,12 +284,12 @@ fn init_and_from_git_each_refuse_the_other_kind_of_folder_with_a_hint() {
     let nested = repo.join("sub");
     fs::create_dir_all(&nested).unwrap();
     let top = repo.canonicalize().unwrap();
-    for args in [&["init"][..], &["init", "--from-git"][..]] {
+    for args in [&["init"][..], &["init", "--with-git"][..]] {
         let output = sandbox.fold_in(&nested, args);
         assert_eq!(output.status.code(), Some(1), "{args:?}");
         assert!(
             stderr(&output).contains(&format!(
-                "hint: run fld init --from-git in {}",
+                "hint: run fld init --with-git in {}",
                 top.display()
             )),
             "{output:?}"
@@ -297,28 +297,19 @@ fn init_and_from_git_each_refuse_the_other_kind_of_folder_with_a_hint() {
         assert!(!nested.join(".fold").exists() && !nested.join(".git").exists());
     }
 
-    let plain = sandbox.path("plain");
-    fs::create_dir_all(&plain).unwrap();
-    let output = sandbox.fold_in(&plain, &["init", "--from-git"]);
-    assert_eq!(output.status.code(), Some(1));
-    assert!(
-        stderr(&output).contains("hint: run fld init there"),
-        "{output:?}"
-    );
-    assert!(!plain.join(".fold").exists());
-    let output = sandbox.fold(&[
-        "init",
-        sandbox.path("absent").to_str().unwrap(),
-        "--from-git",
-    ]);
-    assert_eq!(output.status.code(), Some(1));
-    assert!(!sandbox.path("absent").exists());
     assert!(
         !sandbox
             .path("data")
             .join("fold")
             .join("registry.db")
             .exists()
+    );
+    // --from-git is gone: --with-git takes a Git repository, a fold project or a new folder.
+    assert!(
+        !sandbox
+            .fold_in(&repo, &["init", "--from-git"])
+            .status
+            .success()
     );
 }
 

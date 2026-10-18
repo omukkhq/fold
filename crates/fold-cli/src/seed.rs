@@ -130,14 +130,13 @@ fn seed(args: &SeedArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), SeedEr
     let init = InitArgs {
         dir: Some(dir.clone()),
         name: Some("Demo".to_owned()),
-        from_git: false,
         with_git: true,
         socket: Some(socket.clone()),
         refresh: false,
         git_name: Some("Demo".to_owned()),
         git_email: Some("demo@example.com".to_owned()),
     };
-    let slug = init::initialise(&dir, &init, dirs, &mut io::sink())?;
+    let slug = init::initialise(&dir, &init, init::Kind::New, dirs, &mut io::sink())?;
     let root = dir.canonicalize()?;
     // The scenario integrates each proposal at the step that needs it and keeps approved proposals open for the board.
     let config = ProjectPaths::new(&root).config();

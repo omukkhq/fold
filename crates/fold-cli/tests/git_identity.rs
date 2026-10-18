@@ -334,10 +334,10 @@ fn a_bad_flag_value_is_refused_before_anything_is_created() {
 }
 
 #[test]
-fn from_git_asks_nothing_and_warns_about_nothing() {
+fn with_git_in_a_repository_asks_nothing_and_warns_about_nothing() {
     let sandbox = Sandbox::new();
     let repo = sandbox.repository("app");
-    let output = sandbox.fold(&["init", "--from-git", repo.to_str().unwrap()], &[]);
+    let output = sandbox.fold(&["init", "--with-git", repo.to_str().unwrap()], &[]);
     assert!(output.status.success(), "{output:?}");
     assert!(!stderr(&output).contains("git config"), "{output:?}");
     assert_eq!(local(&repo, "user.name"), None);
@@ -352,13 +352,6 @@ fn a_folder_inside_a_repository_is_refused_without_the_question() {
     let text = stderr(&output);
     assert!(text.contains("inside the Git repository"), "{text}");
     assert!(!text.contains("git config"), "{text}");
-}
-
-#[test]
-fn from_git_takes_no_identity_flags() {
-    let sandbox = Sandbox::new();
-    let output = sandbox.fold(&["init", "--from-git", "--git-name", "Ana"], &[]);
-    assert!(!output.status.success());
 }
 
 #[test]

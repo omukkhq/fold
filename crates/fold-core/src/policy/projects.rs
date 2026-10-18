@@ -30,6 +30,19 @@ pub fn can_record(actor: &Actor) -> Result<(), PolicyDenied> {
     }
 }
 
+/// Turning Git on writes `.git` into the human's project folder, records the `.gitignore` as the human's own revision and stays on for good, so only a named human runs `fld init --with-git`.
+pub fn can_enable_git(actor: &Actor) -> Result<(), PolicyDenied> {
+    if actor.is_human() {
+        Ok(())
+    } else {
+        Err(PolicyDenied {
+            code: codes::HUMAN_REQUIRED,
+            message: "only a human turns Git on",
+            hint: "ask a human to run fld init --with-git in the project folder",
+        })
+    }
+}
+
 /// `.fold/exclude` holds the human's local rules of what is never recorded, imported or proposed. The human writes it directly; of the agents only the main agent, which talks with the human, adds a pattern, so no worker can hide files from review by excluding them.
 pub fn can_add_exclude_patterns(starter: &Starter) -> Result<(), PolicyDenied> {
     match starter {
@@ -80,6 +93,21 @@ mod tests {
             let denied = can_record(&actor).unwrap_err();
             assert_eq!(denied.code(), codes::HUMAN_REQUIRED);
             assert!(denied.hint().contains("fld record"));
+        }
+    }
+
+    #[test]
+    fn only_a_human_turns_git_on() {
+        assert!(can_enable_git(&Actor::human(HumanName::parse("ana").unwrap())).is_ok());
+        let agent = Actor::Agent(AgentActor {
+            agent: AgentName::parse("main").unwrap(),
+            worker: WorkerName::parse("main").unwrap(),
+            tags: Vec::new(),
+        });
+        for actor in [agent, Actor::System] {
+            let denied = can_enable_git(&actor).unwrap_err();
+            assert_eq!(denied.code(), codes::HUMAN_REQUIRED);
+            assert!(denied.hint().contains("fld init --with-git"));
         }
     }
 

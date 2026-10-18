@@ -51,6 +51,7 @@ use crate::services::events::EventBuffer;
 use crate::services::fired;
 
 mod commits;
+mod enable_git;
 mod folder;
 mod gc;
 mod git_status;
@@ -61,6 +62,7 @@ mod web_auth;
 
 pub(crate) use commits::error_code;
 pub use commits::{Committed, commit_main, commit_message};
+pub use enable_git::{GitEnabled, GitIdentity, enable_git};
 pub use folder::{FolderFollowed, FolderSync, sync_folder};
 pub use gc::{GcReport, gc};
 pub use git_status::{GitStatus, PushFailed, Pushed, RemoteStatus, git_status, public_location};
@@ -147,7 +149,7 @@ struct Created {
     restore: Vec<(PathBuf, Vec<u8>)>,
 }
 
-/// Makes `root` a fold project whose folder is main: creates `.fold/`, migrates the project database, writes the commented config, writes an empty `.foldignore` when the folder has none, and in one transaction makes the genesis `r0` with the empty tree and records the folder's files, less the ignore rules, as `r1`, the change of the human `human` (an integration of kind `record` with its human change and events), then registers the project under a free slug. It needs no `git` and writes no Git data: Git sync stays off. A folder that is a Git repository, or inside another repository's working tree, is refused with a hint to use `--from-git` at the repository's top. A failure after `.fold/` exists removes `.fold/` and what init created beside it and writes back the bytes of a file that init changed, never touching another file of the folder. A `.fold/` that the registry does not know is an init that stopped part-way, or a project that fold removed while its `.fold/` was away: when its database is complete the init finishes it and registers it, and otherwise it is refused with `project_incomplete` and nothing is removed. A registered folder that holds `.fold/` is refused with `project_exists`, or with `project_incomplete` when `.fold/` holds project content without a database, or a database without `main`; a registered folder without `.fold/`, or whose `.fold/` holds only what a daemon that still had the project open wrote after it was deleted, holds no project, so the new project replaces that registration in the transaction that registers it and keeps its slug.
+/// Makes `root` a fold project whose folder is main: creates `.fold/`, migrates the project database, writes the commented config, writes an empty `.foldignore` when the folder has none, and in one transaction makes the genesis `r0` with the empty tree and records the folder's files, less the ignore rules, as `r1`, the change of the human `human` (an integration of kind `record` with its human change and events), then registers the project under a free slug. It needs no `git` and writes no Git data: Git sync stays off. A folder that is a Git repository, or inside another repository's working tree, is refused with a hint to use `--with-git` at the repository's top. A failure after `.fold/` exists removes `.fold/` and what init created beside it and writes back the bytes of a file that init changed, never touching another file of the folder. A `.fold/` that the registry does not know is an init that stopped part-way, or a project that fold removed while its `.fold/` was away: when its database is complete the init finishes it and registers it, and otherwise it is refused with `project_incomplete` and nothing is removed. A registered folder that holds `.fold/` is refused with `project_exists`, or with `project_incomplete` when `.fold/` holds project content without a database, or a database without `main`; a registered folder without `.fold/`, or whose `.fold/` holds only what a daemon that still had the project open wrote after it was deleted, holds no project, so the new project replaces that registration in the transaction that registers it and keeps its slug.
 pub async fn init_project(
     host: &HostPaths,
     root: &Path,
@@ -178,7 +180,7 @@ fn inside_repository(root: &Path, top: &Path) -> FoldError {
         ),
     )
     .with_hint(format!(
-        "run fld init --from-git in {} to make the whole repository the project, or move the folder out of it",
+        "run fld init --with-git in {} to make the whole repository the project, or move the folder out of it",
         top.display()
     ))
     .with_details([("reason", serde_json::json!("inside_git_repository"))])
@@ -232,7 +234,7 @@ pub async fn init_new_project(
                 codes::INVALID_REQUEST,
                 format!("{} is a Git repository", root.display()),
             )
-            .with_hint("run fld init --from-git there, so the repository keeps its history")
+            .with_hint("run fld init --with-git there, so the repository keeps its history")
             .with_details([("reason", serde_json::json!("git_repository"))])
             .into());
         }
@@ -281,7 +283,7 @@ pub async fn init_project_from_git(
     init_with(host, &root, name, human, git, start, clock).await
 }
 
-/// The start of a `--from-git` init in `root`, or `None` when `root` is not the top of a repository. Blocking.
+/// The start of a `--with-git` init in `root`, or `None` when `root` is not the top of a repository. Blocking.
 fn git_start(git: &Git, root: &Path) -> Result<Option<Start>, ProjectError> {
     if git.repository(root)?.is_none() {
         return Ok(None);
@@ -296,28 +298,28 @@ fn git_start(git: &Git, root: &Path) -> Result<Option<Start>, ProjectError> {
     if !std::fs::symlink_metadata(paths.git_dir()).is_ok_and(|meta| meta.is_dir()) {
         return Err(refused(
             "the repository keeps its Git data elsewhere, as a linked worktree or a submodule does",
-            "run fld init --from-git in a repository whose .git is a directory",
+            "run fld init --with-git in a repository whose .git is a directory",
             "git_dir_elsewhere",
         ));
     }
     let Some(branch) = checked_out_branch(git, &paths.git_dir())? else {
         return Err(refused(
             "the repository has no branch checked out",
-            "check out a branch, then run fld init --from-git again",
+            "check out a branch, then run fld init --with-git again",
             "detached_head",
         ));
     };
     let Ok(head) = git.resolve_commit(root, "HEAD") else {
         return Err(refused(
             "the checked-out branch has no commit yet",
-            "commit the files, then run fld init --from-git again",
+            "commit the files, then run fld init --with-git again",
             "no_commit",
         ));
     };
     if !folder_clean(git, &paths, &head)? {
         return Err(refused(
             "the repository has changes that are not committed",
-            "commit or stash them, then run fld init --from-git again",
+            "commit or stash them, then run fld init --with-git again",
             "uncommitted_changes",
         ));
     }

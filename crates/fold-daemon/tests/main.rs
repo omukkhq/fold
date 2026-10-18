@@ -63,6 +63,7 @@ mod deleted_projects;
 mod dependencies_service;
 mod diff_routes;
 mod direct_changes;
+mod enable_git;
 mod event_bus;
 mod events_service;
 mod exclude_file;

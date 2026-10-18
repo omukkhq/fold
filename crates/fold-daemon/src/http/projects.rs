@@ -18,7 +18,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(list, open))
         .routes(routes!(list_humans))
         .routes(routes!(show))
-        .routes(routes!(show_git))
+        .routes(routes!(show_git, enable_git))
         .routes(routes!(collect_garbage))
         .routes(routes!(push))
         .routes(routes!(pull))
@@ -787,4 +787,67 @@ pub async fn record(
 ) -> Result<Json<RecordResult>, ApiError> {
     let outcome = projects::record(&handle, &human.actor(), &Git::default()).await?;
     Ok(Json(outcome.into()))
+}
+
+/// The Git identity for the project's own Git config, as `fld init --with-git` settled it; a value left out is not written.
+#[derive(Debug, Default, Deserialize, ToSchema)]
+pub struct EnableGit {
+    /// `user.name` for the repository's own config; no control character, `<` or `>`.
+    #[schema(required = false, example = "Ana Lima")]
+    pub git_name: Option<String>,
+    /// `user.email` for the repository's own config; no control character, `<` or `>`.
+    #[schema(required = false, example = "ana@example.com")]
+    pub git_email: Option<String>,
+}
+
+/// What turning Git on did.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct GitEnabledView {
+    /// Main's head.
+    #[schema(example = "r4")]
+    pub revision: String,
+    /// The revision that records the `.gitignore` fold wrote or changed; null when it changed none.
+    #[schema(required = true, example = "r4")]
+    pub gitignore: Option<String>,
+    /// The commit the Git branch points to; null while main holds only the empty genesis.
+    #[schema(required = true)]
+    pub commit: Option<String>,
+    /// The configured remotes, by name.
+    pub remotes: Vec<String>,
+}
+
+/// Turns Git on in a project whose Git sync is off, as `fld init --with-git` asks in its folder: fold creates `.git` when it is missing, writes the identity into its config, records the `.gitignore` copy rule as the human's revision, turns Git sync on with `git.sync_enabled` and writes the commit of every revision after the empty genesis, with the branch and the index on the newest. Git sync never goes off again. Socket only; the human comes from `x-fold-human`.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/git",
+    operation_id = "enable_project_git",
+    params(("slug" = String, Path, description = "The project slug")),
+    request_body = EnableGit,
+    responses(
+        (status = 200, description = "Git sync is on", body = GitEnabledView),
+        (status = 400, description = "Git sync is on already (`reason` `git_sync_on`), the folder holds a `.git` with commits of its own (`reason` `git_history`) or a `.git` that is no directory (`reason` `git_dir_elsewhere`), or `git_name` or `git_email` cannot go into an author line", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
+        (status = 404, description = "Not on the socket, or the slug is not registered", body = ErrorEnvelope),
+        (status = 502, description = "A Git command failed", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open, or git is not on PATH", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn enable_git(
+    _socket: SocketOnly,
+    human: Human,
+    Project(handle): Project,
+    ApiJson(body): ApiJson<EnableGit>,
+) -> Result<Json<GitEnabledView>, ApiError> {
+    let identity = projects::GitIdentity {
+        name: body.git_name,
+        email: body.git_email,
+    };
+    let enabled = projects::enable_git(&handle, &human.actor(), &Git::default(), identity).await?;
+    Ok(Json(GitEnabledView {
+        revision: enabled.head.to_string(),
+        gitignore: enabled.gitignore.map(|revision| revision.to_string()),
+        commit: enabled.commit.map(|commit| commit.to_string()),
+        remotes: enabled.remotes,
+    }))
 }

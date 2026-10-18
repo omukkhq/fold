@@ -106,16 +106,16 @@ fn repo(sandbox: &Sandbox) -> (PathBuf, String) {
 }
 
 #[test]
-fn init_from_git_prints_the_genesis_and_its_commit() {
+fn init_with_git_in_a_repository_prints_the_genesis_and_its_commit() {
     let sandbox = Sandbox::new();
     let (repo, head) = repo(&sandbox);
-    let output = sandbox.fold_in(&repo, &system_path(), &["init", "--from-git"]);
+    let output = sandbox.fold_in(&repo, &system_path(), &["init", "--with-git"]);
     assert!(output.status.success(), "{output:?}");
     let canonical = repo.canonicalize().unwrap();
     assert_eq!(
         stdout(&output),
         format!(
-            "initialised project repo at {}\nr0: 2 files, 70 bytes\nr0 is Git commit {head}\nGit sync is on: every revision gets its Git commit in .git\n{}",
+            "initialised project repo at {}\nr0: 2 files, 70 bytes\nr0 is Git commit {head}\nGit sync is on: every revision gets its Git commit in .git\nno Git remote yet: add one with fld remote add <name> <url> [<branch>]\n{}",
             canonical.display(),
             machine_warnings(&repo)
         )
@@ -123,17 +123,17 @@ fn init_from_git_prints_the_genesis_and_its_commit() {
     let map = fs::read_to_string(repo.join(".fold/git-sync.map")).unwrap();
     assert_eq!(map, format!("r0 {head}\n"));
     assert_eq!(git(&repo, &["rev-parse", "HEAD"]).trim(), head);
-    let both = sandbox.fold(&["init", "x", "--from-git", "b"]);
+    let both = sandbox.fold(&["init", "x", "--with-git", "b"]);
     assert!(!both.status.success());
 }
 
 #[test]
-fn init_from_git_without_git_on_path_is_git_not_found() {
+fn init_with_git_without_git_on_path_is_git_not_found() {
     let sandbox = Sandbox::new();
     let (repo, _) = repo(&sandbox);
     fs::create_dir_all(sandbox.path("empty-bin")).unwrap();
     let empty_path = sandbox.path("empty-bin");
-    let output = sandbox.fold_in(&repo, empty_path.to_str().unwrap(), &["init", "--from-git"]);
+    let output = sandbox.fold_in(&repo, empty_path.to_str().unwrap(), &["init", "--with-git"]);
     assert!(!output.status.success());
     assert!(stderr(&output).contains("git_not_found"), "{output:?}");
     assert!(!repo.join(".fold").exists());

@@ -274,6 +274,12 @@ impl Git {
         .transpose()
     }
 
+    /// Whether a ref of `repo` names a commit.
+    pub fn has_commits(&self, repo: &Path) -> Result<bool, FoldError> {
+        let out = self.output(repo, &["rev-list", "-n", "1", "--all"], "rev-list")?;
+        Ok(!out.is_empty())
+    }
+
     /// Whether `repo` holds `commit` as a commit object.
     pub fn has_commit(&self, repo: &Path, commit: &CommitId) -> Result<bool, FoldError> {
         let spec = format!("{commit}^{{commit}}");

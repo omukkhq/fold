@@ -706,7 +706,7 @@ async fn init_refuses_a_git_repository_and_from_git_refuses_anything_else() {
     let ProjectError::Fold(error) = error else {
         panic!("a fold error");
     };
-    assert!(error.hint().unwrap().contains("fld init --from-git"));
+    assert!(error.hint().unwrap().contains("fld init --with-git"));
     assert!(!repo.join(".fold").exists());
 
     // A `.git` that is no repository is refused too, and kept.

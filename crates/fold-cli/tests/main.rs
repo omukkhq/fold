@@ -41,3 +41,4 @@ mod seed_dev;
 mod service_install;
 mod templates;
 mod token;
+mod with_git;

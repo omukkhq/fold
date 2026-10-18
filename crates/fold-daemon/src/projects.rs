@@ -88,7 +88,7 @@ async fn refuse_old_layout(slug: &str, paths: &ProjectPaths) -> Result<(), FoldE
                 codes::PROJECT_UNAVAILABLE,
                 format!("project {slug} has the old layout with main/ and ws/, which this fold cannot open"),
             )
-            .with_hint("re-create it with fld init in a new folder, or with fld init --from-git in a Git repository of its code")
+            .with_hint("re-create it with fld init in a new folder, or with fld init --with-git in a Git repository of its code")
             .with_details([("reason", serde_json::json!("old_layout"))]));
         }
     }

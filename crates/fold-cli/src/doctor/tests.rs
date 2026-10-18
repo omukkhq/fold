@@ -1111,7 +1111,7 @@ fn a_project_folder_without_its_fold_data_fails_alone_with_the_init_that_replace
     let quoted = output::shell_quote(&root);
     assert_eq!(
         check.fix.as_deref(),
-        Some(format!("cd {quoted} && fld init --from-git").as_str())
+        Some(format!("cd {quoted} && fld init --with-git").as_str())
     );
     std::fs::remove_dir_all(root.join(".git")).unwrap();
     let checks = project_report(&host, &root, at(0));

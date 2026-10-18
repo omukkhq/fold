@@ -271,7 +271,8 @@ export interface paths {
         /** The Git repository of one open project, its branch and its remotes with the last push of each. */
         get: operations["show_project_git"];
         put?: never;
-        post?: never;
+        /** Turns Git on in a project whose Git sync is off, as `fld init --with-git` asks in its folder: fold creates `.git` when it is missing, writes the identity into its config, records the `.gitignore` copy rule as the human's revision, turns Git sync on with `git.sync_enabled` and writes the commit of every revision after the empty genesis, with the branch and the index on the newest. Git sync never goes off again. Socket only; the human comes from `x-fold-human`. */
+        post: operations["enable_project_git"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1881,6 +1882,19 @@ export interface components {
              */
             version: number;
         };
+        /** @description The Git identity for the project's own Git config, as `fld init --with-git` settled it; a value left out is not written. */
+        EnableGit: {
+            /**
+             * @description `user.email` for the repository's own config; no control character, `<` or `>`.
+             * @example ana@example.com
+             */
+            git_email?: string | null;
+            /**
+             * @description `user.name` for the repository's own config; no control character, `<` or `>`.
+             * @example Ana Lima
+             */
+            git_name?: string | null;
+        };
         ErrorBody: {
             /** @description A stable code; branch on it, never on the message. */
             code: string;
@@ -2021,6 +2035,23 @@ export interface components {
         GcRequest: {
             /** @description Count what a run would remove and change nothing. */
             dry_run?: boolean;
+        };
+        /** @description What turning Git on did. */
+        GitEnabledView: {
+            /** @description The commit the Git branch points to; null while main holds only the empty genesis. */
+            commit: string | null;
+            /**
+             * @description The revision that records the `.gitignore` fold wrote or changed; null when it changed none.
+             * @example r4
+             */
+            gitignore: string | null;
+            /** @description The configured remotes, by name. */
+            remotes: string[];
+            /**
+             * @description Main's head.
+             * @example r4
+             */
+            revision: string;
         };
         GitPushFailed: {
             /**
@@ -2721,7 +2752,7 @@ export interface components {
              * @example r17
              */
             head: string | null;
-            /** @description The project folder, whose files follow main through its own Git repository. */
+            /** @description The project folder, whose files follow main through fold's checkout of it. */
             main_path: string;
             /** @description The newest 10 revisions, newest first. */
             recent: components["schemas"]["RevisionView"][];
@@ -5223,6 +5254,96 @@ export interface operations {
                 };
             };
             /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    enable_project_git: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnableGit"];
+            };
+        };
+        responses: {
+            /** @description Git sync is on */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitEnabledView"];
+                };
+            };
+            /** @description Git sync is on already (`reason` `git_sync_on`), the folder holds a `.git` with commits of its own (`reason` `git_history`) or a `.git` that is no directory (`reason` `git_dir_elsewhere`), or `git_name` or `git_email` cannot go into an author line */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not on the socket, or the slug is not registered */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description A Git command failed */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open, or git is not on PATH */
             503: {
                 headers: {
                     [name: string]: unknown;

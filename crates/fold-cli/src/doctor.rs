@@ -825,10 +825,10 @@ fn project_checks(
     checks
 }
 
-/// A project folder without `.fold/` holds no project, and `fld init` there makes a new one in place of the registration. A folder that keeps its Git repository takes `--from-git`, as init refuses a plain init of a repository.
+/// A project folder without `.fold/` holds no project, and `fld init` there makes a new one in place of the registration. A folder that keeps its Git repository takes `--with-git`, as init refuses a plain init of a repository.
 fn fold_data_check(paths: &ProjectPaths) -> Check {
     let init = if paths.git_dir().is_dir() {
-        "fld init --from-git"
+        "fld init --with-git"
     } else {
         "fld init"
     };
