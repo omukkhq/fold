@@ -34,7 +34,7 @@ impl CheckpointKind {
     }
 }
 
-/// Why a checkpoint was taken. An agent's own request and a human edit are explicit checkpoints; every other reason belongs to an automatic checkpoint.
+/// Why a checkpoint was taken. An agent's own request, a human edit and a reviewer's fix are explicit checkpoints; every other reason belongs to an automatic checkpoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckpointReason {
     Explicit,
@@ -47,10 +47,12 @@ pub enum CheckpointReason {
     Quiet,
     /// The tree of a human's edit of a proposal version, which the task worker's next sync or restore writes into the workspace.
     HumanEdit,
+    /// The tree of a reviewer's fix of a proposal version, made in its review checkout, which the task worker's next sync or restore writes into the workspace.
+    ReviewFix,
 }
 
 impl CheckpointReason {
-    pub const ALL: [CheckpointReason; 8] = [
+    pub const ALL: [CheckpointReason; 9] = [
         CheckpointReason::Explicit,
         CheckpointReason::BeforeSync,
         CheckpointReason::BeforeRecord,
@@ -59,6 +61,7 @@ impl CheckpointReason {
         CheckpointReason::BeforeRestore,
         CheckpointReason::Quiet,
         CheckpointReason::HumanEdit,
+        CheckpointReason::ReviewFix,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -71,7 +74,16 @@ impl CheckpointReason {
             CheckpointReason::BeforeRestore => "before_restore",
             CheckpointReason::Quiet => "quiet",
             CheckpointReason::HumanEdit => "human_edit",
+            CheckpointReason::ReviewFix => "review_fix",
         }
+    }
+
+    /// A version a human or a reviewer made without the task worker: its tree waits as the workspace's pending write until the worker's next sync or restore writes it into the files.
+    pub fn is_version_write(self) -> bool {
+        matches!(
+            self,
+            CheckpointReason::HumanEdit | CheckpointReason::ReviewFix
+        )
     }
 
     pub fn parse(text: &str) -> Option<Self> {
@@ -81,7 +93,9 @@ impl CheckpointReason {
     /// The only kind a checkpoint with this reason can have.
     pub fn kind(self) -> CheckpointKind {
         match self {
-            CheckpointReason::Explicit | CheckpointReason::HumanEdit => CheckpointKind::Explicit,
+            CheckpointReason::Explicit
+            | CheckpointReason::HumanEdit
+            | CheckpointReason::ReviewFix => CheckpointKind::Explicit,
             _ => CheckpointKind::Auto,
         }
     }

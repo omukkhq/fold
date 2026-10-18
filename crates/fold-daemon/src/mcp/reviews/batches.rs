@@ -113,7 +113,7 @@ pub fn tools() -> Vec<Tool> {
     vec![
         Tool::new(
             CREATE_REVIEW_BATCH,
-            "Review related open proposals together: fold takes the review claim of each and orders them by their task dependencies. Then call create_batch_checkout and submit_batch_review.",
+            "Review roles only: review related open proposals together. fold takes the review claim of each and orders them by their task dependencies. Then call create_batch_checkout and submit_batch_review.",
             schema_for_type::<CreateReviewBatchInput>(),
         ),
         Tool::new(

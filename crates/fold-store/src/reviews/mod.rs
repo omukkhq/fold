@@ -113,6 +113,8 @@ pub struct VersionRow {
     pub created_at: Timestamp,
     /// A human sent this version for review again, so the approvals it kept from an earlier version no longer count.
     pub review_again: bool,
+    /// The review checkout whose files the reviewer fixed to make this version; `None` for the author's versions and human edits.
+    pub fixed_in_checkout: Option<WorkspaceId>,
 }
 
 #[derive(Debug, Clone)]
@@ -131,6 +133,8 @@ pub struct NewVersion<'a> {
     pub head_changeset: ChangesetId,
     pub evidence: Option<&'a str>,
     pub created_by: &'a str,
+    /// The review checkout a reviewer's fix came from; it must be a review checkout of the same proposal.
+    pub fixed_in_checkout: Option<WorkspaceId>,
 }
 
 /// Inserts an open proposal and its version 1 in the caller's write. A second open proposal for the task fails on `proposals.task_id`, so the partial unique index decides a race. A task, base revision or changeset that does not exist is refused.
@@ -196,12 +200,16 @@ async fn insert_version(
         now.as_millis(),
     );
     let tree = new.tree.to_string();
+    let checkout = new.fixed_in_checkout.map(WorkspaceId::to_db);
     let inserted = sqlx::query!(
         "INSERT INTO proposal_versions (proposal_id, version, base_revision_id, tree_hash,
-                                        head_changeset_id, evidence, created_by, created_at)
-         SELECT p.id, ?2, r.id, ?4, c.id, ?6, ?7, ?8
+                                        head_changeset_id, evidence, created_by, created_at,
+                                        fixed_in_checkout_id)
+         SELECT p.id, ?2, r.id, ?4, c.id, ?6, ?7, ?8,
+                (SELECT w.id FROM workspaces w WHERE w.number = ?9)
          FROM proposals p, revisions r, changesets c
-         WHERE p.number = ?1 AND r.number = ?3 AND c.number = ?5",
+         WHERE p.number = ?1 AND r.number = ?3 AND c.number = ?5
+           AND (?9 IS NULL OR EXISTS (SELECT 1 FROM workspaces w WHERE w.number = ?9))",
         proposal,
         version,
         base,
@@ -209,7 +217,8 @@ async fn insert_version(
         changeset,
         new.evidence,
         new.created_by,
-        now
+        now,
+        checkout
     )
     .execute(tx.conn())
     .await?
@@ -218,7 +227,7 @@ async fn insert_version(
         Ok(())
     } else {
         Err(StoreError::Invalid(
-            "the proposal, base revision or changeset does not exist",
+            "the proposal, base revision, changeset or checkout does not exist",
         ))
     }
 }
@@ -516,11 +525,13 @@ pub async fn list_versions(
     let rows = sqlx::query!(
         r#"SELECT v.version, r.number AS "base!: i64", v.tree_hash,
                   c.number AS "changeset!: i64", c.stats, v.evidence, v.created_by, v.created_at,
-                  EXISTS (SELECT 1 FROM review_again_requests q WHERE q.version_id = v.id) AS "review_again!: bool"
+                  EXISTS (SELECT 1 FROM review_again_requests q WHERE q.version_id = v.id) AS "review_again!: bool",
+                  f.number AS "fixed_in?: i64"
            FROM proposal_versions v
            JOIN proposals p ON p.id = v.proposal_id
            JOIN revisions r ON r.id = v.base_revision_id
            JOIN changesets c ON c.id = v.head_changeset_id
+           LEFT JOIN workspaces f ON f.id = v.fixed_in_checkout_id
            WHERE p.number = ?
            ORDER BY v.version"#,
         number
@@ -545,6 +556,13 @@ pub async fn list_versions(
                 created_by: row.created_by,
                 created_at: time(row.created_at, "proposal_versions.created_at")?,
                 review_again: row.review_again,
+                fixed_in_checkout: row
+                    .fixed_in
+                    .map(|value| {
+                        WorkspaceId::try_from_db(value)
+                            .ok_or(StoreError::Corrupt("workspaces.number"))
+                    })
+                    .transpose()?,
             })
         })
         .collect()

@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+    "/api/v1/hooks/edit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** The Claude Code edit guard of an agent, for a file in a review checkout: an agent edits only in an active review checkout of one proposal that its own worker owns, while its agent holds the proposal's review claim. Socket only. A process under a worker names only that worker's own agent. */
+        post: operations["hook_edit"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/hooks/session-start": {
         parameters: {
             query?: never;
@@ -1852,7 +1869,7 @@ export interface components {
             workspace: string | null;
         };
         /** @enum {string} */
-        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved" | "git.sync_enabled" | "git.head_moved" | "human_change.withdrawn";
+        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved" | "git.sync_enabled" | "git.head_moved" | "human_change.withdrawn" | "proposal.reviewer_fixed";
         /**
          * @description `needs`: this task needs the other task. `needed_by`: the other task needs this one.
          * @enum {string}
@@ -1863,6 +1880,12 @@ export interface components {
          * @enum {string}
          */
         EdgeOrigin: "direct" | "checklist";
+        EditDecision: {
+            /** @description The agent may edit files in the directory. */
+            allowed: boolean;
+            /** @description Why the edit is refused and what to do instead; `null` when it is allowed. */
+            reason: string | null;
+        };
         EditDraftBody: {
             /** @description 1 to 20 cards. */
             cards: components["schemas"]["DraftCardView"][];
@@ -1881,6 +1904,14 @@ export interface components {
              * @description The version the human read and edited. When the current version is another one, nothing is written and the answer is `stale_version`.
              */
             version: number;
+        };
+        EditHook: {
+            /** @description `FOLD_AGENT` of the session. */
+            agent: string;
+            /** @description The session's canonical working directory. */
+            cwd: string;
+            /** @description The review checkout directory that holds the file to edit, relative to the project root, such as `.fold/ws/review-p-3`. */
+            workspace: string;
         };
         /** @description The Git identity for the project's own Git config, as `fld init --with-git` settled it; a value left out is not written. */
         EnableGit: {
@@ -2604,7 +2635,7 @@ export interface components {
              * @description UTC milliseconds.
              */
             created_at: number;
-            /** @description The worker, or `human:<name>` for a human edit. */
+            /** @description The worker, the reviewer's worker for a reviewer's fix, or `human:<name>` for a human edit. */
             created_by: string;
             /** @description The author's evidence that the work is done. */
             evidence: string | null;
@@ -2618,6 +2649,8 @@ export interface components {
             human_edit: boolean;
             /** @description A human sent this version for review again, so the approvals it kept no longer count. */
             review_again: boolean;
+            /** @description The reviewer that holds the review claim made this version by fixing the one before it in its review checkout. It starts without approvals like every version. */
+            reviewer_fix: boolean;
             /** @description The proposed tree's hash. */
             tree: string;
             /** Format: int32 */
@@ -3866,6 +3899,84 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    hook_edit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EditHook"];
+            };
+        };
+        responses: {
+            /** @description Whether the agent may edit files in the directory */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EditDecision"];
+                };
+            };
+            /** @description The body or the agent name is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `worker_peer_refused`: a process under a worker names another agent; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not on the socket, or no registered project holds `cwd` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     hook_session_start: {
         parameters: {
             query?: never;

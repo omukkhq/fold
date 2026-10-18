@@ -34,6 +34,7 @@ mod integration;
 mod lifecycle;
 mod reconcile;
 mod repository;
+mod review_fix;
 mod stalls;
 mod sync;
 mod sync_task;

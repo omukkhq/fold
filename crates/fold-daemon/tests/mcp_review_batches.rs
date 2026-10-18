@@ -356,6 +356,7 @@ async fn the_batch_tools_explain_their_refusals() {
     let fx = Fixture::new().await;
     two_proposals(&fx).await;
     let review = connect(&fx, "review").await;
+    give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
 
     let id = err(&review, "get_review_batch", json!({"id": "P-1"})).await;
     assert_eq!(id["code"], "invalid_id");

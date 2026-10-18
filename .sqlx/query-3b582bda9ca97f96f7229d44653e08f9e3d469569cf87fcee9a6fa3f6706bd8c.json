@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT v.version, r.number AS \"base!: i64\", v.tree_hash,\n                  c.number AS \"changeset!: i64\", c.stats, v.evidence, v.created_by, v.created_at,\n                  EXISTS (SELECT 1 FROM review_again_requests q WHERE q.version_id = v.id) AS \"review_again!: bool\"\n           FROM proposal_versions v\n           JOIN proposals p ON p.id = v.proposal_id\n           JOIN revisions r ON r.id = v.base_revision_id\n           JOIN changesets c ON c.id = v.head_changeset_id\n           WHERE p.number = ?\n           ORDER BY v.version",
+  "query": "SELECT v.version, r.number AS \"base!: i64\", v.tree_hash,\n                  c.number AS \"changeset!: i64\", c.stats, v.evidence, v.created_by, v.created_at,\n                  EXISTS (SELECT 1 FROM review_again_requests q WHERE q.version_id = v.id) AS \"review_again!: bool\",\n                  f.number AS \"fixed_in?: i64\"\n           FROM proposal_versions v\n           JOIN proposals p ON p.id = v.proposal_id\n           JOIN revisions r ON r.id = v.base_revision_id\n           JOIN changesets c ON c.id = v.head_changeset_id\n           LEFT JOIN workspaces f ON f.id = v.fixed_in_checkout_id\n           WHERE p.number = ?\n           ORDER BY v.version",
   "describe": {
     "columns": [
       {
@@ -96,6 +96,17 @@
         "ordinal": 8,
         "type_info": "Integer",
         "origin": "Expression"
+      },
+      {
+        "name": "fixed_in?: i64",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "workspaces",
+            "name": "number"
+          }
+        }
       }
     ],
     "parameters": {
@@ -110,8 +121,9 @@
       true,
       false,
       false,
-      false
+      false,
+      true
     ]
   },
-  "hash": "863a7172eead0e0347a8aca9dd18d3a1a9582d1c0f83a772e1635565d85ffee8"
+  "hash": "3b582bda9ca97f96f7229d44653e08f9e3d469569cf87fcee9a6fa3f6706bd8c"
 }

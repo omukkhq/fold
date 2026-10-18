@@ -142,6 +142,7 @@ define_event_types! {
     GIT_SYNC_ENABLED = "git.sync_enabled",
     GIT_HEAD_MOVED = "git.head_moved",
     HUMAN_CHANGE_WITHDRAWN = "human_change.withdrawn",
+    PROPOSAL_REVIEWER_FIXED = "proposal.reviewer_fixed",
 }
 
 impl EventType {

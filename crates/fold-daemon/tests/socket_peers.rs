@@ -352,8 +352,14 @@ async fn a_human_name_from_a_workers_process_tree_is_refused_over_the_socket() {
 async fn a_hook_from_a_workers_process_tree_names_only_the_workers_own_agent() {
     let host = Host::start().await;
     host.record_worker("web-worker", std::process::id()).await;
-    let body = |agent: &str| json!({"cwd": host.root, "agent": agent}).to_string();
-    for hook in ["/api/v1/hooks/stop", "/api/v1/hooks/session-start"] {
+    let body = |agent: &str| {
+        json!({"cwd": host.root, "agent": agent, "workspace": ".fold/ws/review-p-1"}).to_string()
+    };
+    for hook in [
+        "/api/v1/hooks/stop",
+        "/api/v1/hooks/session-start",
+        "/api/v1/hooks/edit",
+    ] {
         let (status, code) = socket_http(&host, "POST", hook, "x", &body("main")).await;
         assert_eq!(
             (status, code.as_str()),

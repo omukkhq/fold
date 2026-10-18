@@ -37,9 +37,9 @@ pub use lifecycle::{
     ReviewCheckoutRow, WorkspaceKind, WorkspaceRow, WorkspaceState, active_review_checkout, close,
     get_workspace, insert_main_workspace, insert_review_checkout, insert_task_workspace,
     latest_task_workspace, list_active_review_checkouts, list_live_task_workspaces,
-    live_main_workspace, live_task_workspace, main_workspace_paths, review_checkout_paths,
-    set_base, set_directory_present, set_sync_checkpoint, set_worker, sync_checkpoint,
-    task_workspace_paths, touch,
+    live_main_workspace, live_task_workspace, main_workspace_paths, move_review_checkout,
+    review_checkout_paths, set_base, set_directory_present, set_sync_checkpoint, set_worker,
+    sync_checkpoint, task_workspace_paths, touch,
 };
 pub use refs::{advance_main, create_main, main_head};
 pub use remotes::{

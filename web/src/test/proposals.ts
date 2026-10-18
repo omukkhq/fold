@@ -54,6 +54,7 @@ export function proposalVersion(
     created_at: T0 + version * 60_000,
     human_edit: false,
     review_again: false,
+    reviewer_fix: false,
     ...fields,
   };
 }

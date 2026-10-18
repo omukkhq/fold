@@ -316,9 +316,10 @@ pub fn can_submit_verdict<'a>(
     }
 }
 
-/// A review is a second agent's look at the work, so the author's agent never claims its own proposal through any of its workers. Only an agent's worker holds a claim. It returns the admitted agent, which becomes the reviewer.
+/// A review is a second agent's look at the work, so the author's agent never claims its own proposal through any of its workers. A claim lets its holder check out, fix and verdict the proposal for the user, so only an agent that [decides reviews](AgentStanding::decides_reviews) claims one: the main agent, the review lead and its batch reviewers. An area lead or a task worker asks the review lead instead. Only an agent's worker holds a claim. `standing` is the acting agent's. It returns the admitted agent, which becomes the reviewer.
 pub fn can_claim_review<'a>(
     actor: &'a Actor,
+    standing: AgentStanding,
     author: &WorkerName,
 ) -> Result<&'a AgentActor, PolicyDenied> {
     match actor {
@@ -327,7 +328,12 @@ pub fn can_claim_review<'a>(
             message: "an agent cannot review its own proposal",
             hint: "ask another agent to call claim_review",
         }),
-        Actor::Agent(agent) => Ok(agent),
+        Actor::Agent(agent) if standing.decides_reviews() => Ok(agent),
+        Actor::Agent(_) => Err(PolicyDenied {
+            code: codes::INTEGRATOR_REQUIRED,
+            message: "only the main agent, the review lead or a batch reviewer can claim a review",
+            hint: "send_message to the review lead about the proposal",
+        }),
         Actor::Human { .. } | Actor::System => Err(PolicyDenied {
             code: codes::ACTOR_CANNOT_CLAIM,
             message: "only an agent's worker can claim a review",
@@ -364,6 +370,29 @@ pub fn can_create_review_checkout<'a>(
             code: codes::REVIEW_CLAIM_REQUIRED,
             message: "only the agent that holds the review claim can check out the proposal",
             hint: "call claim_review, then create_review_checkout",
+        }),
+    }
+}
+
+/// A reviewer fixes what it finds inside the task's agreed scope itself, in its own review checkout, and the fix becomes the next version under the reviewer's name. Only the agent that holds the review claim makes it, through any of its workers, because the fix is part of the review the claim holds; the author's agent never does, since its change goes through `update_proposal`. A human changes a proposal only through a human edit, and the system never. `holder` is the claim's worker and `author` the proposal's author. It returns the admitted reviewer, which becomes the new version's author.
+pub fn can_fix_in_review<'a>(
+    actor: &'a Actor,
+    holder: Option<&WorkerName>,
+    author: &WorkerName,
+) -> Result<&'a AgentActor, PolicyDenied> {
+    match actor {
+        Actor::Agent(agent) if author.belongs_to(&agent.agent) => Err(PolicyDenied {
+            code: codes::AUTHOR_CANNOT_REVIEW,
+            message: "the author's agent cannot fix its own proposal as a reviewer",
+            hint: "change the task workspace, then call update_proposal",
+        }),
+        Actor::Agent(agent) if holder.is_some_and(|holder| holder.belongs_to(&agent.agent)) => {
+            Ok(agent)
+        }
+        Actor::Agent(_) | Actor::Human { .. } | Actor::System => Err(PolicyDenied {
+            code: codes::REVIEW_CLAIM_REQUIRED,
+            message: "only the agent that holds the review claim can fix the proposal",
+            hint: "call claim_review and create_review_checkout, fix the files there, then call submit_review_fix",
         }),
     }
 }
@@ -650,23 +679,45 @@ mod tests {
     }
 
     #[test]
-    fn the_author_agent_never_claims_its_own_review() {
+    fn only_a_review_role_claims_a_review_and_never_the_author() {
         let author = worker("backend/api");
         let expected = [
             Some(codes::AUTHOR_CANNOT_REVIEW),
             Some(codes::AUTHOR_CANNOT_REVIEW),
-            None,
+            Some(codes::INTEGRATOR_REQUIRED),
             None,
             Some(codes::ACTOR_CANNOT_CLAIM),
             Some(codes::ACTOR_CANNOT_CLAIM),
         ];
         for ((case, actor), expected) in actors().into_iter().zip(expected) {
-            let result = can_claim_review(&actor, &author);
+            let result = can_claim_review(&actor, standing_of(case), &author);
             assert_eq!(outcome(result), expected, "{case}");
         }
         let reviewer = agent("frontend", &[]);
-        let admitted = can_claim_review(&reviewer, &author).unwrap();
+        for (standing, expected) in [
+            (MAIN, None),
+            (supervised(Role::ReviewLead), None),
+            (supervised(Role::BatchReviewer), None),
+            (supervised(Role::AreaLead), Some(codes::INTEGRATOR_REQUIRED)),
+            (
+                supervised(Role::TaskWorker),
+                Some(codes::INTEGRATOR_REQUIRED),
+            ),
+            (UNSUPERVISED, Some(codes::INTEGRATOR_REQUIRED)),
+        ] {
+            let result = can_claim_review(&reviewer, standing, &author);
+            assert_eq!(outcome(result), expected, "{standing:?}");
+        }
+        let admitted = can_claim_review(&reviewer, MAIN, &author).unwrap();
         assert_eq!(admitted.worker, worker("frontend"));
+        let denied = can_claim_review(&reviewer, supervised(Role::AreaLead), &author).unwrap_err();
+        assert!(denied.hint().contains("review lead"));
+        // The author's agent is refused first, whatever its role.
+        let author_agent = agent("backend", &[]);
+        let result = can_claim_review(&author_agent, supervised(Role::ReviewLead), &author);
+        assert_eq!(outcome(result), Some(codes::AUTHOR_CANNOT_REVIEW));
+        let result = can_claim_review(&author_agent, MAIN, &author);
+        assert_eq!(outcome(result), Some(codes::AUTHOR_CANNOT_REVIEW));
     }
 
     #[test]
@@ -709,5 +760,29 @@ mod tests {
                 "{case} on an unclaimed proposal"
             );
         }
+    }
+
+    #[test]
+    fn only_the_holder_agent_fixes_a_proposal_and_never_the_author() {
+        let author = worker("backend/api");
+        let holder = worker("frontend/r1");
+        let expected = [
+            Some(codes::AUTHOR_CANNOT_REVIEW),
+            Some(codes::AUTHOR_CANNOT_REVIEW),
+            None,
+            Some(codes::REVIEW_CLAIM_REQUIRED),
+            Some(codes::REVIEW_CLAIM_REQUIRED),
+            Some(codes::REVIEW_CLAIM_REQUIRED),
+        ];
+        for ((case, actor), expected) in actors().into_iter().zip(expected) {
+            let result = can_fix_in_review(&actor, Some(&holder), &author);
+            assert_eq!(outcome(result), expected, "{case}");
+        }
+        // A claim that names the author's agent still never lets it fix as a reviewer.
+        let actors = actors();
+        let result = can_fix_in_review(&actors[1].1, Some(&author), &author);
+        assert_eq!(outcome(result), Some(codes::AUTHOR_CANNOT_REVIEW));
+        let result = can_fix_in_review(&actors[2].1, None, &author);
+        assert_eq!(outcome(result), Some(codes::REVIEW_CLAIM_REQUIRED));
     }
 }

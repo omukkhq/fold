@@ -125,6 +125,7 @@ impl ReviewService {
                     head_changeset: changeset.id,
                     evidence: current.evidence.as_deref(),
                     created_by: by.as_str(),
+                    fixed_in_checkout: None,
                 };
                 reviews::add_version(tx, proposal, next, &new, now).await?;
                 let kept =
@@ -232,7 +233,7 @@ fn edit_gate<'a>(actor: &'a Actor, row: &ProposalRow) -> Result<&'a HumanName, R
     })
 }
 
-async fn current_version(
+pub(super) async fn current_version(
     conn: &mut SqliteConnection,
     proposal: ProposalId,
 ) -> Result<VersionRow, ReviewError> {
@@ -242,8 +243,8 @@ async fn current_version(
         .ok_or(StoreError::Corrupt("proposal_versions.version"))?)
 }
 
-/// The refusals that keep a human edit away from a task workspace its worker may be changing: the worker process of the author's agent is starting, working or stopping, the workspace waits for a sync or restore to finish, or it holds work that `current` does not. A pending write that is the human edit which made `current` does not refuse: fold has not written it into the files yet, so a further edit replaces it, and a task worker that fold stopped after its proposal does not hold back a second edit.
-async fn idle_checks(
+/// The refusals that keep a human edit or a reviewer's fix away from a task workspace its worker may be changing: the worker process of the author's agent is starting, working or stopping, the workspace waits for a sync or restore to finish, or it holds work that `current` does not. A pending write that is the human edit or the reviewer's fix which made `current` does not refuse: fold has not written it into the files yet, so a further version replaces it, and a task worker that fold stopped after its proposal does not hold back a second one.
+pub(super) async fn idle_checks(
     conn: &mut SqliteConnection,
     row: &ProposalRow,
     workspace: &WorkspaceRow,
@@ -260,7 +261,7 @@ async fn idle_checks(
     if let Some(mark) = workspaces::sync_checkpoint(&mut *conn, workspace.id).await? {
         let pending = workspaces::get_checkpoint(&mut *conn, mark).await?;
         let earlier_edit = pending.is_some_and(|checkpoint| {
-            checkpoint.reason == CheckpointReason::HumanEdit && checkpoint.tree == current.tree
+            checkpoint.reason.is_version_write() && checkpoint.tree == current.tree
         });
         if !earlier_edit {
             return Err(busy(workspace, "unfinished_write"));
@@ -275,9 +276,9 @@ async fn idle_checks(
     Ok(())
 }
 
-fn busy(workspace: &WorkspaceRow, reason: &str) -> ReviewError {
+pub(super) fn busy(workspace: &WorkspaceRow, reason: &str) -> ReviewError {
     let message = match reason {
-        "working" => "the task worker is working, so a human edit waits",
+        "working" => "the task worker is working, so a change of its proposal waits",
         "unfinished_write" => "the task workspace waits for a sync or restore to finish",
         _ => "the task workspace holds work that the current version does not",
     };

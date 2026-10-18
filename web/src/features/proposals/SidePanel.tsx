@@ -46,8 +46,10 @@ import { gateText, shownGates, waitingSummary } from "./gates";
 import type { IntegrationView } from "./integration";
 import {
   evidenceLines,
+  evidenceSource,
   listedReviews,
   reviewText,
+  versionAuthor,
   versionRef,
 } from "./present";
 import type { DetailView } from "./view";
@@ -389,6 +391,7 @@ function VersionFacts({
     ["base", version.base],
     ["tree", version.tree.slice(0, 12)],
     ["changeset", version.changeset],
+    ["by", versionAuthor(version)],
     ["sent", formatAsOfMinute(now, version.created_at)],
   ];
   return (
@@ -557,10 +560,10 @@ export function SidePanel({
       {shown ? <VersionFacts version={shown} now={now} /> : null}
 
       <section
-        aria-label="Evidence from the author"
+        aria-label={`Evidence from ${evidenceSource(shown)}`}
         className="flex flex-col gap-8"
       >
-        <h2 className={OVERLINE}>Evidence from the author</h2>
+        <h2 className={OVERLINE}>Evidence from {evidenceSource(shown)}</h2>
         {shown?.evidence ? (
           <pre className="flex flex-col gap-2 overflow-x-auto rounded-m bg-sunken px-12 py-10 font-mono text-label">
             {evidenceLines(shown.evidence).map((line, index) => (

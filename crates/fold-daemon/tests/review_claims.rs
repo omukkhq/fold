@@ -10,7 +10,7 @@ use serde_json::json;
 
 #[tokio::test]
 async fn claim_review_is_atomic_and_the_loser_gets_already_claimed() {
-    let fx = Fixture::new().await;
+    let fx = Fixture::with_reviewers().await;
     fx.proposal().await;
     let before = fx.last_seq().await;
     let (backend, review) = (by(&fx.backend.worker), by(&fx.review.worker));
@@ -72,7 +72,7 @@ async fn claim_review_is_atomic_and_the_loser_gets_already_claimed() {
 
 #[tokio::test]
 async fn review_claim_leaves_the_implementation_claim_and_status_alone() {
-    let fx = Fixture::new().await;
+    let fx = Fixture::with_reviewers().await;
     fx.proposal().await;
     let read = fx.project.store().read();
     let implementation = claims::unreleased_for_task(read, t(1)).await.unwrap();
@@ -115,7 +115,7 @@ async fn review_claim_leaves_the_implementation_claim_and_status_alone() {
 
 #[tokio::test]
 async fn author_agent_cannot_claim_its_own_review() {
-    let fx = Fixture::new().await;
+    let fx = Fixture::with_reviewers().await;
     fx.proposal().await;
     let sub = fx.subagent(&fx.frontend, "checker").await;
 
@@ -140,7 +140,7 @@ async fn author_agent_cannot_claim_its_own_review() {
 
 #[tokio::test]
 async fn stale_review_claim_is_taken_over_by_the_next_claim() {
-    let fx = Fixture::new().await;
+    let fx = Fixture::with_reviewers().await;
     fx.proposal().await;
     let first = fx
         .reviews
@@ -199,7 +199,7 @@ async fn stale_review_claim_is_taken_over_by_the_next_claim() {
 
 #[tokio::test]
 async fn any_tool_call_renews_a_review_claim() {
-    let fx = Fixture::new().await;
+    let fx = Fixture::with_reviewers().await;
     fx.proposal().await;
     let sub = fx.subagent(&fx.backend, "r1").await;
     fx.reviews.claim_review(&by(&sub), p(1)).await.unwrap();
@@ -229,7 +229,7 @@ async fn any_tool_call_renews_a_review_claim() {
 
 #[tokio::test]
 async fn closing_the_proposal_releases_the_review_claim() {
-    let fx = Fixture::new().await;
+    let fx = Fixture::with_reviewers().await;
     fx.proposal().await;
     fx.reviews
         .claim_review(&by(&fx.backend.worker), p(1))
@@ -261,7 +261,7 @@ async fn closing_the_proposal_releases_the_review_claim() {
 
 #[tokio::test]
 async fn release_review_is_for_the_holder_agent_and_frees_the_proposal() {
-    let fx = Fixture::new().await;
+    let fx = Fixture::with_reviewers().await;
     fx.proposal().await;
     let sub = fx.subagent(&fx.backend, "r1").await;
     fx.reviews.claim_review(&by(&sub), p(1)).await.unwrap();
@@ -340,7 +340,7 @@ async fn release_review_is_for_the_holder_agent_and_frees_the_proposal() {
 
 #[tokio::test]
 async fn the_lease_is_read_from_the_project_configuration() {
-    let fx = Fixture::new().await;
+    let fx = Fixture::with_reviewers().await;
     fx.proposal().await;
     let config = fx.project.paths().config();
     std::fs::write(&config, "lease_minutes = 2\n").unwrap();

@@ -191,6 +191,7 @@ fn version(changeset: u32, created_by: &str) -> NewVersion<'_> {
         head_changeset: ChangesetId::from_number(changeset).unwrap(),
         evidence: Some("tests pass"),
         created_by,
+        fixed_in_checkout: None,
     }
 }
 
@@ -406,5 +407,88 @@ async fn live_review_workspaces_lists_only_live_review_checkouts_of_the_proposal
             WorkspaceId::from_number(3).unwrap(),
             WorkspaceId::from_number(5).unwrap()
         ]
+    );
+}
+
+#[tokio::test]
+async fn a_reviewer_fix_names_a_review_checkout_of_its_proposal_and_the_checkout_follows_it() {
+    let (_dir, store) = seeded().await;
+    open_proposal(&store, 1, 1, 1).await;
+    open_proposal(&store, 2, 2, 2).await;
+    exec(
+        &store,
+        "INSERT INTO workspaces (number, task_id, worker_id, kind, path, base_revision_id, proposal_id, version_id, state, created_at) VALUES
+         (3, 1, 2, 'review', 'ws/r-1', 1, 1, 1, 'active', 0),
+         (4, 2, 2, 'review', 'ws/r-2', 1, 2, 2, 'active', 0)",
+    )
+    .await
+    .unwrap();
+    let fix = |checkout: u32| NewVersion {
+        fixed_in_checkout: Some(WorkspaceId::from_number(checkout).unwrap()),
+        ..version(1, "review")
+    };
+    let at = Timestamp::from_millis(9).unwrap();
+    for (checkout, reason) in [(1, "a task workspace"), (4, "a checkout of P-2")] {
+        let error = store
+            .write(async |tx| reviews::add_version(tx, p(1), 2, &fix(checkout), at).await)
+            .await
+            .unwrap_err();
+        assert!(
+            trigger(&error).contains("proposal_versions_fixed_in_checkout"),
+            "{reason}: {error}"
+        );
+    }
+    let missing = store
+        .write(async |tx| reviews::add_version(tx, p(1), 2, &fix(99), at).await)
+        .await
+        .unwrap_err();
+    assert!(matches!(missing, StoreError::Invalid(_)));
+
+    store
+        .write(async |tx| reviews::add_version(tx, p(1), 2, &fix(3), at).await)
+        .await
+        .unwrap();
+    let versions = reviews::list_versions(store.read(), p(1)).await.unwrap();
+    assert_eq!(versions[0].fixed_in_checkout, None);
+    assert_eq!(
+        versions[1].fixed_in_checkout,
+        Some(WorkspaceId::from_number(3).unwrap())
+    );
+
+    let checkout = WorkspaceId::from_number(3).unwrap();
+    let moved = |workspace: WorkspaceId, proposal: u32, version: u32| {
+        let store = store.clone();
+        async move {
+            store
+                .write(async |tx| {
+                    fold_store::workspaces::move_review_checkout(
+                        tx,
+                        workspace,
+                        p(proposal),
+                        version,
+                    )
+                    .await
+                })
+                .await
+                .unwrap()
+        }
+    };
+    assert!(!moved(checkout, 1, 7).await, "no such version");
+    assert!(
+        !moved(checkout, 2, 1).await,
+        "a checkout of another proposal"
+    );
+    assert!(
+        !moved(WorkspaceId::from_number(1).unwrap(), 1, 2).await,
+        "a task workspace"
+    );
+    assert!(moved(checkout, 1, 2).await);
+    assert_eq!(
+        count(
+            &store,
+            "SELECT COUNT(*) FROM workspaces w JOIN proposal_versions v ON v.id = w.version_id WHERE w.number = 3 AND v.version = 2"
+        )
+        .await,
+        1
     );
 }

@@ -250,6 +250,14 @@ async fn a_batch_verdict_that_decides_follows_the_role() {
                     assert_eq!(review_code(batch.unwrap_err()), codes::AUTHOR_CANNOT_REVIEW);
                     continue;
                 }
+                Who::AreaLead | Who::TaskWorker => {
+                    assert_eq!(
+                        review_code(batch.unwrap_err()),
+                        codes::INTEGRATOR_REQUIRED,
+                        "only a review role claims the members"
+                    );
+                    continue;
+                }
                 _ => batch.unwrap().id,
             };
             let verdicts = [p(1), p(2)]
@@ -263,15 +271,51 @@ async fn a_batch_verdict_that_decides_follows_the_role() {
                 .reviews()
                 .submit_batch_review(&acting, batch, verdicts, Vec::new())
                 .await;
-            if who.decides() {
-                assert_eq!(result.unwrap().reviewed.len(), 2, "{who:?} {verdict}");
-            } else {
+            assert_eq!(result.unwrap().reviewed.len(), 2, "{who:?} {verdict}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn only_a_review_role_claims_a_review_and_the_author_is_refused_first() {
+    for who in EVERYONE {
+        let fx = scene().await;
+        let acting = actor(&fx, who).await;
+        let claimed = fx.reviews().claim_review(&acting, p(1)).await;
+        match who {
+            Who::MainAgent | Who::ReviewLead | Who::BatchReviewer => {
                 assert_eq!(
-                    review_code(result.unwrap_err()),
-                    codes::INTEGRATOR_REQUIRED,
-                    "{who:?} {verdict}"
+                    claimed.unwrap().holder.as_str(),
+                    who.agent().unwrap(),
+                    "{who:?}"
                 );
-                assert_eq!(reviews_of_p1(&fx).await, 0, "the batch wrote nothing");
+                fx.reviews()
+                    .create_review_checkout(&acting, p(1))
+                    .await
+                    .unwrap();
+            }
+            Who::Human => {
+                assert_eq!(review_code(claimed.unwrap_err()), codes::ACTOR_CANNOT_CLAIM);
+            }
+            Who::Author => {
+                assert_eq!(
+                    review_code(claimed.unwrap_err()),
+                    codes::AUTHOR_CANNOT_REVIEW,
+                    "the author is a batch reviewer, and its authorship refuses it first"
+                );
+            }
+            Who::AreaLead | Who::TaskWorker => {
+                let ReviewError::Fold(error) = claimed.unwrap_err() else {
+                    panic!("expected a refusal");
+                };
+                assert_eq!(error.code(), codes::INTEGRATOR_REQUIRED, "{who:?}");
+                assert!(error.hint().unwrap().contains("review lead"), "{who:?}");
+                let checkout = fx.reviews().create_review_checkout(&acting, p(1)).await;
+                assert_eq!(
+                    review_code(checkout.unwrap_err()),
+                    codes::REVIEW_CLAIM_REQUIRED,
+                    "{who:?}"
+                );
             }
         }
     }

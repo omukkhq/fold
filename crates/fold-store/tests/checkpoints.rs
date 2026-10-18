@@ -347,13 +347,18 @@ async fn reasons_round_trip_and_fix_the_kind() {
         assert_eq!(CheckpointReason::parse(reason.as_str()), Some(reason));
         let expected = if matches!(
             reason,
-            CheckpointReason::Explicit | CheckpointReason::HumanEdit
+            CheckpointReason::Explicit | CheckpointReason::HumanEdit | CheckpointReason::ReviewFix
         ) {
             CheckpointKind::Explicit
         } else {
             CheckpointKind::Auto
         };
         assert_eq!(reason.kind(), expected);
+        let version_write = matches!(
+            reason,
+            CheckpointReason::HumanEdit | CheckpointReason::ReviewFix
+        );
+        assert_eq!(reason.is_version_write(), version_write, "{reason:?}");
     }
     assert_eq!(CheckpointReason::parse("manual"), None);
     for reason in AutoReason::ALL {

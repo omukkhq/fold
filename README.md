@@ -16,7 +16,7 @@ We use fold to build and maintain our own projects.
 ## Why fold
 
 - **Build in parallel.** Agents work in separate task workspaces. Task dependencies keep related work in order, and worker limits let you control concurrency.
-- **Review the work as it happens.** Reviewers inspect proposals, run checks, and request changes. Review related proposals together, with diffs and inline comments. Each approval belongs to the version reviewed.
+- **Review the work as it happens.** Reviewers inspect proposals, run checks, fix what the task's scope settles as a new version of their own, and request changes for the rest. Review related proposals together, with diffs and inline comments. Each approval belongs to the version reviewed.
 - **Bring approved changes together.** fold integrates ready proposals in dependency order. Changes that conflict return to their author for resolution.
 - **Keep decisions with people.** Approve the plan before work starts, require human review where needed, and answer questions and tool permission requests in **Needs you**.
 - **See the actual state.** The live board calculates task status from the work. Inspect running agents, their output, proposals, and activity from the same application.
@@ -84,7 +84,7 @@ flowchart LR
 
 1. **Plan.** Your main agent turns the goal into tasks, dependencies, and review requirements. You approve the scope before execution.
 2. **Build.** Lead agents coordinate workers, each with a task and its own workspace. Workers submit their changes as proposals.
-3. **Review.** Reviewer agents inspect and test the proposals. Requested changes go back to the author. Tasks marked for human review also need your approval.
+3. **Review.** Reviewer agents inspect and test the proposals and fix what the task's scope settles themselves. Product questions and larger changes go back to the author. Tasks marked for human review also need your approval.
 4. **Integrate.** By default, fold integrates approved proposals when their prerequisites are complete. The project folder follows integrated main. When Git is on, each integration also creates a Git commit.
 
 fold keeps its project data in `.fold/`. Agents build in workspaces under `.fold/ws/`; the project folder holds the integrated result. Checkpoints and persistent messages help agents continue work across sessions.

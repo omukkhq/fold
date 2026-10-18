@@ -6,7 +6,7 @@ import type {
   Review,
   Verdict,
 } from "@/api/proposals";
-import { reviewerActor } from "@/people/names";
+import { bareName, reviewerActor } from "@/people/names";
 import {
   actorSegment,
   reviewerSegment,
@@ -229,6 +229,16 @@ export function currentVersion(p: ProposalDetail): ProposalVersion | null {
   return (
     p.versions.find((v) => v.version === p.summary.current_version) ?? null
   );
+}
+
+/** Who made a version: the author's worker, the reviewer's worker for a fix the reviewer made in its review checkout, or the human of a human edit. */
+export function versionAuthor(v: ProposalVersion): string {
+  return bareName(v.created_by);
+}
+
+/** Who wrote a version's evidence: a reviewer's fix carries the reviewer's list of fixes and its checks. */
+export function evidenceSource(v: ProposalVersion | undefined): string {
+  return v?.reviewer_fix === true ? "the reviewer" : "the author";
 }
 
 /** The evidence as lines; a line that starts with `$` is a command, the rest its output. */

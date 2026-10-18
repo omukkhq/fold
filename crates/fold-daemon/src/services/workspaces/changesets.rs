@@ -167,17 +167,22 @@ impl WorkspaceService {
         .await
     }
 
-    /// The files of `row` once nothing stops a record of them: no sync or restore left them half written, no human edit waits to be written into them, and every conflicted path is resolved. The caller holds the workspace lock.
+    /// The files of `row` once nothing stops a record of them: no sync or restore left them half written, no human edit or reviewer's fix waits to be written into them, and every conflicted path is resolved. The caller holds the workspace lock.
     async fn ready_to_record(&self, row: &WorkspaceRow) -> Result<Arc<Files>, WorkspaceError> {
         let workspace = row.id;
         if let Some(mark) = workspaces::sync_checkpoint(self.store.read(), workspace).await? {
-            let human_edit = workspaces::get_checkpoint(self.store.read(), mark)
+            let pending = workspaces::get_checkpoint(self.store.read(), mark)
                 .await?
-                .is_some_and(|checkpoint| checkpoint.reason == CheckpointReason::HumanEdit);
-            let (message, hint) = if human_edit {
+                .map(|checkpoint| checkpoint.reason);
+            let (message, hint) = if pending == Some(CheckpointReason::HumanEdit) {
                 (
                     format!("{workspace} has a human edit that its files do not hold yet"),
                     "call sync_workspace to write the human edit into the files",
+                )
+            } else if pending == Some(CheckpointReason::ReviewFix) {
+                (
+                    format!("{workspace} has a reviewer's fix that its files do not hold yet"),
+                    "call sync_workspace to write the reviewer's version into the files",
                 )
             } else {
                 (

@@ -712,6 +712,13 @@ async fn batch_commands_refuse_what_the_rules_forbid() {
     );
     assert_eq!(twice.code(), codes::ALREADY_IN_BATCH);
     assert_eq!(details(&twice)["batch"], "rb-1");
+    let no_role = refusal(
+        reviews
+            .create_review_batch(&scene.authors[3], vec![p(2), p(3)])
+            .await,
+    );
+    assert_eq!(no_role.code(), codes::INTEGRATOR_REQUIRED);
+    give_role(&scene.fx.handle.store, "extra", Role::BatchReviewer, None).await;
     let other = refusal(
         reviews
             .create_review_batch(&scene.authors[3], vec![p(1), p(3)])

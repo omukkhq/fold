@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 /// The fixed count always puts the unread part on the footer line; real counts can add to it.
 const FOOTER: &str = "fold: ";
 
-const REVIEW_TOOLS: [&str; 14] = [
+const REVIEW_TOOLS: [&str; 15] = [
     "create_proposal",
     "list_proposals",
     "get_proposal",
@@ -34,6 +34,7 @@ const REVIEW_TOOLS: [&str; 14] = [
     "integrate_proposal",
     "require_human_review",
     "submit_main_change",
+    "submit_review_fix",
 ];
 
 #[cfg(test)]
@@ -190,7 +191,7 @@ async fn create_proposal_opens_v1_and_moves_the_task_to_review() {
 async fn list_proposals_shows_turn_claim_and_mark() {
     let fx = Fixture::new().await;
     let frontend = connect(&fx, "frontend").await;
-    let review = connect(&fx, "review").await;
+    let review = review_lead(&fx).await;
     open_p1(&fx, &frontend).await;
     ok(&review, "claim_review", json!({"id": "P-1"})).await;
     ok(
@@ -638,7 +639,7 @@ async fn close_proposal_closes_it() {
 async fn claim_review_names_the_holder_and_release_review_gives_it_up() {
     let fx = Fixture::new().await;
     let frontend = connect(&fx, "frontend").await;
-    let review = connect(&fx, "review").await;
+    let review = review_lead(&fx).await;
     open_p1(&fx, &frontend).await;
     let error = err(&frontend, "claim_review", json!({"id": "P-1"})).await;
     assert_eq!(error["code"], "author_cannot_review");
@@ -663,7 +664,7 @@ async fn claim_review_names_the_holder_and_release_review_gives_it_up() {
 async fn create_review_checkout_gives_the_path_and_version() {
     let fx = Fixture::new().await;
     let frontend = connect(&fx, "frontend").await;
-    let review = connect(&fx, "review").await;
+    let review = review_lead(&fx).await;
     open_p1(&fx, &frontend).await;
     let error = err(&review, "create_review_checkout", json!({"id": "P-1"})).await;
     assert_eq!(error["code"], "review_claim_required");
@@ -678,6 +679,58 @@ async fn create_review_checkout_gives_the_path_and_version() {
         .root()
         .join(".fold/ws/review-p-1/src/lib.rs");
     assert_eq!(std::fs::read_to_string(copied).unwrap(), "pub fn y() {}\n");
+}
+
+#[tokio::test]
+async fn submit_review_fix_makes_the_reviewers_version_and_the_reviewer_approves_it() {
+    let fx = Fixture::new().await;
+    let frontend = connect(&fx, "frontend").await;
+    let review = review_lead(&fx).await;
+    open_p1(&fx, &frontend).await;
+    ok(&review, "claim_review", json!({"id": "P-1"})).await;
+    ok(&review, "create_review_checkout", json!({"id": "P-1"})).await;
+    let file = fx
+        .project
+        .paths()
+        .root()
+        .join(".fold/ws/review-p-1/src/lib.rs");
+    std::fs::write(file, "pub fn y() -> u8 { 1 }\n").unwrap();
+    let arguments = json!({
+        "id": "P-1",
+        "version": 1,
+        "fixes": [{"path": "src/lib.rs", "reason": "y returns 1 as the task asks"}],
+        "checks": "cargo test: 1 passed",
+    });
+    let error = err(&frontend, "submit_review_fix", arguments.clone()).await;
+    assert_eq!(error["code"], "author_cannot_review");
+    assert!(error["hint"].as_str().unwrap().contains("update_proposal"));
+
+    let fixed = ok(&review, "submit_review_fix", arguments.clone()).await;
+    assert_eq!(fixed["id"], "P-1");
+    assert_eq!(fixed["version"], "v2");
+    assert_eq!(fixed["from_version"], "v1");
+    assert_eq!(fixed["checkout"], "ws-2");
+    assert_eq!(fixed["status"], "review");
+    assert!(fixed["changeset"].as_str().unwrap().starts_with("C-"));
+    let view = ok(&review, "get_proposal", json!({"id": "P-1"})).await;
+    assert_eq!(view["versions"][1]["created_by"], "review");
+    assert_eq!(view["versions"][1]["reviewer_fix"], true);
+    assert_eq!(view["versions"][0].get("reviewer_fix"), None);
+    assert!(
+        view["evidence"]
+            .as_str()
+            .unwrap()
+            .starts_with("Review fixes by review on v1:")
+    );
+    let error = err(&review, "submit_review_fix", arguments).await;
+    assert_eq!(error["code"], "stale_version");
+
+    ok(
+        &review,
+        "submit_review",
+        json!({"id": "P-1", "version": 2, "verdict": "approve", "body": "Fix: src/lib.rs (y returns 1). cargo test: 1 passed"}),
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -904,6 +957,12 @@ async fn every_result_ends_with_the_footer() {
             "list_proposals" => json!({}),
             "close_proposal" => json!({"id": "P-1", "reason": "done"}),
             "submit_main_change" => json!({"changeset": "C-1", "message": "m"}),
+            "submit_review_fix" => json!({
+                "id": "P-1",
+                "version": 1,
+                "fixes": [{"path": "src/lib.rs", "reason": "r"}],
+                "checks": "ok",
+            }),
             _ => json!({"id": "P-1"}),
         };
         let result = call_raw(&frontend, tool, arguments).await;
@@ -961,7 +1020,7 @@ async fn errors_carry_code_message_and_hint() {
 async fn as_acts_for_a_subagent_worker() {
     let fx = Fixture::new().await;
     let frontend = connect(&fx, "frontend").await;
-    let review = connect(&fx, "review").await;
+    let review = review_lead(&fx).await;
     open_p1(&fx, &frontend).await;
     ok(&review, "register_worker", json!({"name": "checker"})).await;
     let claim = ok(

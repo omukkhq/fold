@@ -392,7 +392,7 @@ impl WorkspaceService {
         self.place_named(name, taken, tree, false).await
     }
 
-    /// Materialises `tree` read-only into the proposal's next review checkout directory, by the naming rules of a task workspace's create, and returns the directory relative to the project root with its full path. Nothing scans a checkout, so its stat index is not kept.
+    /// Materialises `tree` writable into the proposal's next review checkout directory, by the naming rules of a task workspace's create, and returns the directory relative to the project root with its full path. The reviewer fixes what it finds there, and `submit_review_fix` records the files; no stat index is kept until that record makes one.
     pub(crate) async fn place_review_checkout(
         &self,
         proposal: ProposalId,
@@ -400,11 +400,11 @@ impl WorkspaceService {
         tree: ObjectHash,
     ) -> Result<(String, PathBuf), WorkspaceError> {
         let name = move |earlier| review_checkout_path(proposal, earlier);
-        let placed = self.place_named(name, taken, tree, true).await?;
+        let placed = self.place_named(name, taken, tree, false).await?;
         Ok((placed.path, placed.dir))
     }
 
-    /// Materialises `tree` read-only into the batch's next checkout directory, by the naming rules of a proposal's checkout, and returns the directory relative to the project root with its full path.
+    /// Materialises `tree` read-only into the batch's next checkout directory, by the naming rules of a proposal's checkout, and returns the directory relative to the project root with its full path. Its files mix every member's work, so no fix is made there.
     pub(crate) async fn place_review_batch_checkout(
         &self,
         batch: ReviewBatchId,

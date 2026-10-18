@@ -706,6 +706,32 @@ pub async fn active_review_checkout(
         .transpose()
 }
 
+/// Points the active review checkout `workspace` of the proposal at its `version`, whose tree its files hold once the reviewer's fix in it became that version. False, with nothing changed, when the checkout is not an active checkout of the proposal or the version does not exist.
+pub async fn move_review_checkout(
+    tx: &mut WriteTx,
+    workspace: WorkspaceId,
+    proposal: ProposalId,
+    version: u32,
+) -> Result<bool, StoreError> {
+    let (workspace, proposal, version) = (workspace.to_db(), proposal.to_db(), i64::from(version));
+    let moved = sqlx::query!(
+        "UPDATE workspaces
+         SET version_id = (SELECT v.id FROM proposal_versions v JOIN proposals p ON p.id = v.proposal_id
+                           WHERE p.number = ?2 AND v.version = ?3)
+         WHERE number = ?1 AND kind = 'review' AND state = 'active'
+           AND proposal_id = (SELECT id FROM proposals WHERE number = ?2)
+           AND EXISTS (SELECT 1 FROM proposal_versions v JOIN proposals p ON p.id = v.proposal_id
+                       WHERE p.number = ?2 AND v.version = ?3)",
+        workspace,
+        proposal,
+        version
+    )
+    .execute(tx.conn())
+    .await?
+    .rows_affected();
+    Ok(moved == 1)
+}
+
 /// The directories of every review checkout the proposal has had, in any state. Their count gives the next checkout's directory name, and a create skips each of them, so a name is never handed out twice.
 pub async fn review_checkout_paths(
     executor: impl SqliteExecutor<'_>,

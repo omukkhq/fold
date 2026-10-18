@@ -601,16 +601,43 @@ mod tests {
         for role in [Role::ReviewLead, Role::BatchReviewer] {
             let prompt = role.prompt();
             assert!(prompt.contains("acceptance criteria"));
-            assert!(prompt.contains("Do not edit source files or tests"));
+            assert!(prompt.contains("`submit_review_fix`"));
+            assert!(prompt.contains("The kind of fix decides, not its size."));
+            assert!(prompt.contains("never resolve it yourself"));
+            assert!(prompt.contains("Never edit a batch checkout."));
+            assert!(prompt.contains("still waits for the human after your approval"));
             assert!(prompt.contains("stale_version"));
             assert!(prompt.contains("left_out"));
             assert!(prompt.contains("`Change review: the fixes and the code they touch`"));
             assert!(prompt.contains("`Full review: <reason>`"));
+            assert!(prompt.contains("`Change review: my fixes and the code they touch`"));
             assert!(prompt.contains("`base_conflicts`"));
         }
         let lead = Role::ReviewLead.prompt();
         assert!(lead.contains("before taking claims or creating a batch"));
         assert!(lead.contains("that reviewer creates its own batch"));
+    }
+
+    #[test]
+    fn an_area_lead_and_a_task_worker_leave_reviews_to_the_review_lead() {
+        for role in [Role::AreaLead, Role::TaskWorker] {
+            let prompt = role.prompt();
+            assert!(
+                prompt.contains("Do not claim or review proposals"),
+                "{role:?}"
+            );
+            assert!(
+                prompt.contains("tell the review lead with `send_message`"),
+                "{role:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_task_worker_syncs_to_continue_from_a_reviewer_version() {
+        let prompt = Role::TaskWorker.prompt();
+        assert!(prompt.contains("A reviewer may fix your proposal itself"));
+        assert!(prompt.contains("call `sync_workspace`: it writes that version into your files"));
     }
 
     #[test]

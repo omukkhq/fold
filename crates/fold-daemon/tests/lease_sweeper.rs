@@ -4,10 +4,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::common::roles::give_role;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use fold_core::events::types;
 use fold_core::object::ObjectKind;
+use fold_core::roles::Role;
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
 use fold_core::{
     Actor, AgentActor, AgentName, Event, EventActor, EventFilter, ProposalId, TaskDescription,
@@ -316,6 +318,7 @@ impl Fixture {
             .unwrap()
             .summary
             .id;
+        give_role(&self.handle.store, "backend", Role::BatchReviewer, None).await;
         reviews
             .claim_review(&by(&self.backend.worker), proposal)
             .await

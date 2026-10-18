@@ -139,6 +139,18 @@ impl Fixture {
         }
     }
 
+    /// [`Fixture::new`] with `review` as the review lead and `backend` as a batch reviewer, since only a review role claims a review.
+    pub async fn with_reviewers() -> Self {
+        let fx = Self::new().await;
+        for (name, role) in [
+            ("review", fold_core::roles::Role::ReviewLead),
+            ("backend", fold_core::roles::Role::BatchReviewer),
+        ] {
+            crate::common::roles::give_role(fx.project.store(), name, role, None).await;
+        }
+        fx
+    }
+
     /// Drops every service without a graceful shutdown and opens the project again, as a daemon that was killed and started again does. The agents keep their sessions, which live in the database; the locks are new, as in a new process.
     pub async fn restart(&mut self) {
         self.project.reopen_after_crash().await;

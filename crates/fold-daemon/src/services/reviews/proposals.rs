@@ -9,7 +9,7 @@ use fold_core::status::ProposalFact;
 use fold_core::tree::ChangeCounts;
 use fold_core::{
     Actor, AgentActor, ChangesetId, EventActor, FoldError, IdKind, NewEvent, ProposalId,
-    RevisionId, TaskId, TaskStatus, Timestamp, WorkerName, codes, policy,
+    RevisionId, TaskId, TaskStatus, Timestamp, WorkerName, WorkspaceId, codes, policy,
 };
 use fold_store::reviews::{
     self, NewProposal, NewVersion, ProposalRow, ProposalState, RetiredState, VersionRow,
@@ -127,6 +127,8 @@ pub struct VersionView {
     pub human_edit: bool,
     /// A human sent this version for review again, so the approvals it kept from the version before no longer count.
     pub review_again: bool,
+    /// The review checkout in which the reviewer that holds the review claim fixed the version before; `created_by` is that reviewer. `None` for the author's versions and human edits.
+    pub fixed_in_checkout: Option<WorkspaceId>,
 }
 
 impl From<VersionRow> for VersionView {
@@ -142,6 +144,7 @@ impl From<VersionRow> for VersionView {
             created_by: row.created_by,
             created_at: row.created_at,
             review_again: row.review_again,
+            fixed_in_checkout: row.fixed_in_checkout,
         }
     }
 }
@@ -275,6 +278,7 @@ impl ReviewService {
                     head_changeset: head,
                     evidence: evidence.as_deref(),
                     created_by: worker.name.as_str(),
+                    fixed_in_checkout: None,
                 };
                 match reviews::open_proposal(tx, &new, &first, now).await {
                     Ok(()) => {}
@@ -375,6 +379,7 @@ impl ReviewService {
                     head_changeset: head,
                     evidence: evidence.as_deref(),
                     created_by: author.as_str(),
+                    fixed_in_checkout: None,
                 };
                 reviews::add_version(tx, proposal, version, &new, now).await?;
                 let event =

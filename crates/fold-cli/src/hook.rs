@@ -34,8 +34,8 @@ enum HookCommand {
     SessionStart(HookOptions),
     /// Claude Code Stop hook: keep the turn going once while the agent has unread fold messages
     Stop(HookOptions),
-    /// Claude Code PreToolUse hook for the file tools: refuse an edit of the project folder outside the workspaces in .fold/ws/
-    PreToolUse,
+    /// Claude Code PreToolUse hook for the file tools: refuse an edit of the project folder outside the workspaces in .fold/ws/, and an edit of a review checkout other than the session's own
+    PreToolUse(HookOptions),
 }
 
 #[derive(Args, Debug)]
@@ -56,7 +56,7 @@ pub fn run(args: &HookArgs, out: &mut impl Write) {
     let (name, outcome) = match &args.command {
         HookCommand::SessionStart(options) => ("session-start", session_start(options, &agent)),
         HookCommand::Stop(options) => ("stop", stop(options, &agent)),
-        HookCommand::PreToolUse => ("pre-tool-use", pre_tool_use()),
+        HookCommand::PreToolUse(options) => ("pre-tool-use", pre_tool_use(options, &agent)),
     };
     let written = match outcome {
         Ok(Some(answer)) => output::line(out, &answer.to_string()),
@@ -163,8 +163,27 @@ fn stop(options: &HookOptions, agent: &str) -> Result<Option<Value>, String> {
 }
 
 /// Claude Code reads a deny decision from this hook even where no permission rule could express it: its path rules cannot deny a folder but one folder below it, and they would bind the human's own sessions too, while this hook runs for agents only.
-fn pre_tool_use() -> Result<Option<Value>, String> {
-    edit_decision(io::stdin().lock(), MAX_EDIT_INPUT)
+fn pre_tool_use(options: &HookOptions, agent: &str) -> Result<Option<Value>, String> {
+    let ask = |root: &Path, workspace: &str| -> Result<Option<String>, String> {
+        let body = json!({
+            "cwd": root.to_str().ok_or(codes::INVALID_REQUEST)?,
+            "agent": agent,
+            "workspace": workspace,
+        });
+        let config = ClientConfig::running(socket(options, &Dirs::from_env())?);
+        let answer = exchange(config, ANSWER_TIMEOUT, "/api/v1/hooks/edit", &body)?;
+        match answer["allowed"].as_bool() {
+            Some(true) => Ok(None),
+            Some(false) => Ok(Some(
+                answer["reason"]
+                    .as_str()
+                    .unwrap_or("fold refused the edit")
+                    .to_owned(),
+            )),
+            None => Err(codes::INTERNAL_ERROR.to_owned()),
+        }
+    };
+    edit_decision(io::stdin().lock(), MAX_EDIT_INPUT, ask)
 }
 
 /// What the edit guard needs from the tool input. The content of a large `Write` is skipped while reading, so the input's size never hides the path from the guard.
@@ -237,8 +256,12 @@ impl<'de> serde::Deserialize<'de> for ToolInput {
     }
 }
 
-/// The guard's answer for one tool input. Input past `limit` bytes cannot be read to its end, so it is denied rather than left without a decision.
-fn edit_decision(input: impl Read, limit: u64) -> Result<Option<Value>, String> {
+/// The guard's answer for one tool input. Input past `limit` bytes cannot be read to its end, so it is denied rather than left without a decision. `ask` gives the daemon's answer for a review checkout: `None` when the session may edit there, else the reason it may not. A daemon that cannot answer denies the edit too, since an error here would leave the decision to Claude Code's own rules.
+fn edit_decision(
+    input: impl Read,
+    limit: u64,
+    ask: impl FnOnce(&Path, &str) -> Result<Option<String>, String>,
+) -> Result<Option<Value>, String> {
     let mut input = input.take(limit);
     let target = match serde_json::from_reader::<_, EditTarget>(&mut input) {
         Ok(target) => target,
@@ -253,7 +276,18 @@ fn edit_decision(input: impl Read, limit: u64) -> Result<Option<Value>, String> 
     let Some(file) = target.file else {
         return Ok(None);
     };
-    Ok(edit_refusal(Path::new(&cwd), Path::new(&file)).map(|reason| deny(&reason)))
+    let reason = match edit_guard(Path::new(&cwd), Path::new(&file)) {
+        EditGuard::Allow => return Ok(None),
+        EditGuard::Deny(reason) => reason,
+        EditGuard::AskDaemon { root, workspace } => match ask(&root, &workspace) {
+            Ok(None) => return Ok(None),
+            Ok(Some(reason)) => reason,
+            Err(code) => format!(
+                "fold could not check that this review checkout is yours ({code}); try the edit again once the fold daemon runs"
+            ),
+        },
+    };
+    Ok(Some(deny(&reason)))
 }
 
 fn deny(reason: &str) -> Value {
@@ -266,18 +300,55 @@ fn deny(reason: &str) -> Value {
     })
 }
 
-/// Why an agent may not change `file`, or `None` when it may. Inside the fold project that holds `cwd`, an agent changes files only inside one workspace below `.fold/ws/`: the project folder is main, which changes only through integration, and the rest of `.fold/` is fold's data. A path outside the project is left to Claude Code's own rules. `..` and the symlinks of the folders that exist are resolved first, so neither leads into or out of a workspace unseen.
-fn edit_refusal(cwd: &Path, file: &Path) -> Option<String> {
-    let cwd = std::fs::canonicalize(cwd).ok()?;
-    let root = project_root_at_or_above(&cwd)?;
-    let target = resolve(&cwd.join(file));
-    let inside = target.strip_prefix(&root).ok()?;
-    let in_workspace = inside
+/// What the edit guard decides for one file before it asks the daemon anything.
+#[derive(Debug, PartialEq, Eq)]
+enum EditGuard {
+    Allow,
+    Deny(String),
+    /// The file is in the review checkout `workspace`, a path relative to the project folder `root`; only the daemon knows whose it is.
+    AskDaemon {
+        root: PathBuf,
+        workspace: String,
+    },
+}
+
+/// The batch checkouts' directories start with this below `.fold/ws/`; every other `review-` directory is the checkout of one proposal.
+const BATCH_CHECKOUT_PREFIX: &str = "review-rb-";
+
+/// What the guard decides for `file`. Inside the fold project that holds `cwd`, an agent changes files only inside one workspace below `.fold/ws/`: the project folder is main, which changes only through integration, and the rest of `.fold/` is fold's data. A review checkout of one proposal is edited only by the reviewer it belongs to, which the daemon decides, and a batch checkout never, because its files mix every member's work and never become a version. A path outside the project is left to Claude Code's own rules. `..` and the symlinks of the folders that exist are resolved first, so neither leads into or out of a workspace unseen.
+fn edit_guard(cwd: &Path, file: &Path) -> EditGuard {
+    let Some((root, inside)) = std::fs::canonicalize(cwd).ok().and_then(|cwd| {
+        let root = project_root_at_or_above(&cwd)?;
+        let target = resolve(&cwd.join(file));
+        let inside = target.strip_prefix(&root).ok()?.to_path_buf();
+        Some((root, inside))
+    }) else {
+        return EditGuard::Allow;
+    };
+    let below = inside
         .strip_prefix(fold_core::layout::WS_DIR)
-        .is_ok_and(|below| below.components().count() >= 2);
-    (!in_workspace).then(|| {
-        "the project folder is fold main and changes only through integration; edit the file in your own workspace under .fold/ws/".to_owned()
-    })
+        .ok()
+        .filter(|below| below.components().count() >= 2);
+    let Some(dir) = below
+        .and_then(|below| below.components().next())
+        .and_then(|first| first.as_os_str().to_str())
+    else {
+        return EditGuard::Deny(
+            "the project folder is fold main and changes only through integration; edit the file in your own workspace under .fold/ws/".to_owned(),
+        );
+    };
+    if dir.starts_with(BATCH_CHECKOUT_PREFIX) {
+        return EditGuard::Deny(
+            "a batch checkout mixes every member and never becomes a version; call create_review_checkout for the member you fix and edit there".to_owned(),
+        );
+    }
+    if dir.starts_with("review-") {
+        return EditGuard::AskDaemon {
+            root,
+            workspace: format!("{}/{dir}", fold_core::layout::WS_DIR),
+        };
+    }
+    EditGuard::Allow
 }
 
 /// `path` with `.` and `..` removed and its longest existing ancestor replaced by its canonical form. A `..` follows the symlinks before it, as the operating system does, so `link/..` is the parent of the link's target.
@@ -386,6 +457,18 @@ mod tests {
 
     use super::*;
 
+    /// The local refusal alone: a review checkout that the daemon would decide counts as not refused here.
+    fn edit_refusal(cwd: &Path, file: &Path) -> Option<String> {
+        match edit_guard(cwd, file) {
+            EditGuard::Deny(reason) => Some(reason),
+            EditGuard::Allow | EditGuard::AskDaemon { .. } => None,
+        }
+    }
+
+    fn no_daemon(_: &Path, _: &str) -> Result<Option<String>, String> {
+        Err(codes::DAEMON_UNREACHABLE.to_owned())
+    }
+
     #[test]
     fn an_agent_edits_only_inside_a_workspace_of_the_project() {
         let dir = tempfile::tempdir().unwrap();
@@ -482,30 +565,131 @@ mod tests {
     fn a_large_write_is_judged_by_its_path() {
         let (_dir, into_main) = project_with_input(2 << 20, "README.md");
         assert!(into_main.len() > MAX_INPUT as usize);
-        assert!(denied(edit_decision(into_main.as_bytes(), MAX_EDIT_INPUT)));
+        assert!(denied(edit_decision(
+            into_main.as_bytes(),
+            MAX_EDIT_INPUT,
+            no_daemon
+        )));
 
         let (_dir, into_workspace) = project_with_input(2 << 20, ".fold/ws/t-1/big.txt");
         assert!(!denied(edit_decision(
             into_workspace.as_bytes(),
-            MAX_EDIT_INPUT
+            MAX_EDIT_INPUT,
+            no_daemon
         )));
     }
 
     #[test]
     fn input_past_the_limit_is_denied_and_bad_input_is_an_error() {
         let (_dir, input) = project_with_input(1000, ".fold/ws/t-1/a.txt");
-        assert!(denied(edit_decision(input.as_bytes(), 100)));
-        assert!(edit_decision(&b"not json"[..], MAX_EDIT_INPUT).is_err());
-        assert!(edit_decision(&br#"{"tool_input":{}}"#[..], MAX_EDIT_INPUT).is_err());
+        assert!(denied(edit_decision(input.as_bytes(), 100, no_daemon)));
+        assert!(edit_decision(&b"not json"[..], MAX_EDIT_INPUT, no_daemon).is_err());
+        assert!(edit_decision(&br#"{"tool_input":{}}"#[..], MAX_EDIT_INPUT, no_daemon).is_err());
         assert!(
-            edit_decision(&br#"{"cwd":"/","tool_input":{}}"#[..], MAX_EDIT_INPUT)
-                .unwrap()
-                .is_none()
+            edit_decision(
+                &br#"{"cwd":"/","tool_input":{}}"#[..],
+                MAX_EDIT_INPUT,
+                no_daemon
+            )
+            .unwrap()
+            .is_none()
         );
         assert!(
-            edit_decision(&br#"{"cwd":"/","tool_input":null}"#[..], MAX_EDIT_INPUT)
+            edit_decision(
+                &br#"{"cwd":"/","tool_input":null}"#[..],
+                MAX_EDIT_INPUT,
+                no_daemon
+            )
+            .unwrap()
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn a_review_checkout_is_the_daemons_to_decide_and_a_batch_checkout_is_never_edited() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("app");
+        for ws in ["review-p-1", "review-p-1-2", "review-rb-2", "t-1"] {
+            std::fs::create_dir_all(root.join(".fold/ws").join(ws)).unwrap();
+        }
+        std::fs::write(root.join(".fold/fold.db"), "").unwrap();
+        let root = std::fs::canonicalize(&root).unwrap();
+        let checkout = root.join(".fold/ws/review-p-1");
+
+        for (cwd, file, workspace) in [
+            (
+                &root,
+                ".fold/ws/review-p-1/src/lib.rs",
+                ".fold/ws/review-p-1",
+            ),
+            (
+                &root,
+                ".fold/ws/review-p-1-2/new/file.rs",
+                ".fold/ws/review-p-1-2",
+            ),
+            (&checkout, "src/lib.rs", ".fold/ws/review-p-1"),
+        ] {
+            assert_eq!(
+                edit_guard(cwd, Path::new(file)),
+                EditGuard::AskDaemon {
+                    root: root.clone(),
+                    workspace: workspace.to_owned()
+                },
+                "{file}"
+            );
+        }
+        assert!(matches!(
+            edit_guard(&root, Path::new(".fold/ws/review-rb-2/src/lib.rs")),
+            EditGuard::Deny(reason) if reason.contains("create_review_checkout")
+        ));
+        assert_eq!(
+            edit_guard(&root, Path::new(".fold/ws/t-1/src/lib.rs")),
+            EditGuard::Allow
+        );
+        assert!(matches!(
+            edit_guard(&checkout, Path::new("../../../src/lib.rs")),
+            EditGuard::Deny(_)
+        ));
+
+        let input = json!({
+            "tool_input": {"file_path": ".fold/ws/review-p-1/src/lib.rs"},
+            "cwd": root.to_str().unwrap(),
+        })
+        .to_string();
+        let mut asked = None;
+        let answer = edit_decision(input.as_bytes(), MAX_EDIT_INPUT, |root, workspace| {
+            asked = Some((root.to_path_buf(), workspace.to_owned()));
+            Ok(None)
+        });
+        assert!(!denied(answer));
+        assert_eq!(
+            asked,
+            Some((root.clone(), ".fold/ws/review-p-1".to_owned()))
+        );
+        let refused = edit_decision(input.as_bytes(), MAX_EDIT_INPUT, |_, _| {
+            Ok(Some(
+                "this review checkout belongs to another reviewer".to_owned(),
+            ))
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            refused["hookSpecificOutput"]["permissionDecisionReason"],
+            "this review checkout belongs to another reviewer"
+        );
+        // A daemon that cannot answer denies the edit; an error would leave it to Claude Code.
+        let unreachable = edit_decision(input.as_bytes(), MAX_EDIT_INPUT, no_daemon)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            unreachable["hookSpecificOutput"]["permissionDecision"],
+            "deny"
+        );
+        assert!(
+            unreachable["hookSpecificOutput"]["permissionDecisionReason"]
+                .as_str()
                 .unwrap()
-                .is_none()
+                .contains(codes::DAEMON_UNREACHABLE)
         );
     }
 }

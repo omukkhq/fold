@@ -21,6 +21,7 @@ mod human_review;
 mod integrate;
 mod notify;
 mod proposals;
+mod review_fixes;
 mod verdicts;
 mod views;
 
@@ -44,6 +45,7 @@ pub use proposals::{
     DEFAULT_PROPOSAL_LIST, MAX_PROPOSAL_LIST, ProposalDetail, ProposalFilter, ProposalSummary,
     Retirement, Turn, VersionView, retire_proposal,
 };
+pub use review_fixes::{FixedVersion, MAX_CHECKS_CHARS, MAX_FIXES, ReviewFix};
 pub use verdicts::SubmittedReview;
 pub use views::{
     CommentCounts, ProposalView, ReviewView, TaskRequirements, direct_conflicted,

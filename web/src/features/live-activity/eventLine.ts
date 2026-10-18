@@ -452,6 +452,15 @@ const SPECS: Record<EventType, Spec> = {
         : `edited ${proposalOf(e)} as v${String(version)}`;
     },
   },
+  "proposal.reviewer_fixed": {
+    icon: Pencil,
+    text: (e) => {
+      const version = count(e.data.version);
+      return version === null
+        ? `fixed ${proposalOf(e)} in review`
+        : `fixed ${proposalOf(e)} in review as v${String(version)}`;
+    },
+  },
   "proposal.review_again_requested": {
     icon: RotateCcw,
     text: (e) => {

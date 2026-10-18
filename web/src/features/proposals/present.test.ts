@@ -13,11 +13,13 @@ import {
   claimText,
   currentVersion,
   evidenceLines,
+  evidenceSource,
   fileCount,
   filesText,
   listedReviews,
   reviewPill,
   reviewText,
+  versionAuthor,
   versionRef,
   versionText,
   versionVerdict,
@@ -242,5 +244,29 @@ describe("reviews and evidence", () => {
       { text: "$ cargo test", command: true },
       { text: "  ok", command: false },
     ]);
+  });
+});
+
+describe("who made a version", () => {
+  it("names the author's worker, the reviewer of a fix or the human of an edit", () => {
+    expect(versionAuthor(proposalVersion(1))).toBe("backend/db");
+    expect(
+      versionAuthor(
+        proposalVersion(2, { created_by: "review", reviewer_fix: true }),
+      ),
+    ).toBe("review");
+    expect(
+      versionAuthor(
+        proposalVersion(3, { created_by: "human:tanim", human_edit: true }),
+      ),
+    ).toBe("tanim");
+  });
+
+  it("gives a reviewer's fix the reviewer's evidence", () => {
+    expect(evidenceSource(proposalVersion(1))).toBe("the author");
+    expect(evidenceSource(proposalVersion(2, { reviewer_fix: true }))).toBe(
+      "the reviewer",
+    );
+    expect(evidenceSource(undefined)).toBe("the author");
   });
 });

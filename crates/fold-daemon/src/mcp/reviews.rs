@@ -21,7 +21,7 @@ use super::workspaces::{file_diff_value, file_line};
 use crate::services::reviews::{
     ChangeRange, CommentInput, CommentLocation, CommentView, DEFAULT_PROPOSAL_LIST, DirectChange,
     DirectOutcome, IntegrationOutcome, ProposalDetail, ProposalFilter, ProposalSummary,
-    ProposalView, ReviewService, direct_conflicted, integration_conflicted,
+    ProposalView, ReviewFix, ReviewService, direct_conflicted, integration_conflicted,
 };
 use crate::services::workspaces::StateComparison;
 
@@ -41,6 +41,7 @@ pub const GET_REVIEW_COMMENTS: &str = "get_review_comments";
 pub const INTEGRATE_PROPOSAL: &str = "integrate_proposal";
 pub const REQUIRE_HUMAN_REVIEW: &str = "require_human_review";
 pub const SUBMIT_MAIN_CHANGE: &str = "submit_main_change";
+pub const SUBMIT_REVIEW_FIX: &str = "submit_review_fix";
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -235,6 +236,31 @@ pub struct SubmitMainChangeInput {
     pub as_worker: Option<String>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct ReviewFixInput {
+    /// A file you changed in your review checkout, relative to the checkout root, such as src/lib.rs.
+    pub path: String,
+    /// Why the file changed, in one line of at most 500 characters: what was wrong, and the regression test or check that shows the fix.
+    pub reason: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct SubmitReviewFixInput {
+    /// The proposal, such as P-3. You must hold its review claim.
+    pub id: String,
+    /// The version your review checkout holds and you fixed, such as 2 for v2. When the current version is another one, nothing is written and the error is stale_version.
+    pub version: u32,
+    /// Every file that differs from that version in your checkout, each once with its reason, and no other file: 1 to 50 entries.
+    pub fixes: Vec<ReviewFixInput>,
+    /// The commands you ran on the fixed files, such as the narrow tests of each fix, the build and the required checks, with their results.
+    pub checks: String,
+    /// The worker that makes this call, such as review/r1. Leave it out to act as the main worker.
+    #[serde(rename = "as", default)]
+    pub as_worker: Option<String>,
+}
+
 pub fn tools() -> Vec<Tool> {
     let mut tools = vec![
         Tool::new(
@@ -269,7 +295,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             CLAIM_REVIEW,
-            "Claim the review of an open proposal before you review it. The author's agent cannot claim it. A repeat call renews the claim.",
+            "Review roles only: the main agent, the review lead and its batch reviewers claim the review of an open proposal before they review it; any other agent gets integrator_required and messages the review lead. The author's agent cannot claim it. A repeat call renews the claim.",
             schema_for_type::<ProposalIdInput>(),
         ),
         Tool::new(
@@ -279,7 +305,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             CREATE_REVIEW_CHECKOUT,
-            "Get a read-only copy of the current version of a proposal you hold the review claim of, to read, build and test it.",
+            "Get a copy of the current version of a proposal you hold the review claim of, to read, build and test it, and to fix what you find in the task's scope; submit_review_fix makes the fix the next version.",
             schema_for_type::<ProposalIdInput>(),
         ),
         Tool::new(
@@ -308,6 +334,11 @@ pub fn tools() -> Vec<Tool> {
         SUBMIT_MAIN_CHANGE,
         "Main agent only, and only after the user's explicit OK to the diff and summary you showed. Integrate the newest changeset of your main workspace onto main as one revision and one Git commit with your message, with no task, proposal or review; the main workspace then closes. integration_conflicted means main moved: details list the files; call sync_workspace, resolve them, call record_changes, show the user the new diff and submit again.",
         schema_for_type::<SubmitMainChangeInput>(),
+    ));
+    tools.push(Tool::new(
+        SUBMIT_REVIEW_FIX,
+        "Reviewer only: send the fixes you made in your review checkout as the next version of the proposal, under your name, with each changed file and its reason and the checks you ran. Fix only what the task's agreed scope settles; request changes for a product question or feature-size work. The version starts without approvals and your checkout then holds it: build it, run the required checks, then approve it with submit_review. The author's agent gets a push to sync its workspace. A batch checkout never becomes a version: fix a member in its own create_review_checkout. Refusals: review_claim_required, author_cannot_review, stale_version, version_unchanged, worker_busy, workspace_not_found (no checkout of that version) and invalid_request with reason fixes_mismatch (details list the unlisted and unchanged files).",
+        schema_for_type::<SubmitReviewFixInput>(),
     ));
     tools
 }
@@ -338,6 +369,7 @@ pub async fn call(
         INTEGRATE_PROPOSAL => integrate_proposal(reviews, &actor, arguments).await?,
         REQUIRE_HUMAN_REVIEW => require_human_review(reviews, &actor, arguments).await?,
         SUBMIT_MAIN_CHANGE => submit_main_change(reviews, &actor, arguments).await?,
+        SUBMIT_REVIEW_FIX => submit_review_fix(reviews, &actor, arguments).await?,
         _ => match batches::run(reviews, tool, &actor, arguments).await? {
             Some(value) => value,
             None => return Ok(None),
@@ -436,13 +468,18 @@ fn view_json(view: &ProposalView) -> Value {
         .versions
         .iter()
         .map(|entry| {
-            json!({
+            let mut line = json!({
                 "version": version(entry.version),
                 "base": entry.base,
                 "changeset": entry.changeset,
                 "created_by": entry.created_by,
                 "created_at": entry.created_at.as_millis(),
-            })
+            });
+            // The reviewer that holds the review claim made this version in its review checkout, so `created_by` is not the author.
+            if entry.fixed_in_checkout.is_some() {
+                line["reviewer_fix"] = json!(true);
+            }
+            line
         })
         .collect();
     let reviews: Vec<Value> = view
@@ -774,6 +811,37 @@ async fn create_review_checkout(
         "path": checkout.workspace.path,
         "version": version(checkout.version),
     }))
+}
+
+async fn submit_review_fix(
+    reviews: &ReviewService,
+    actor: &Actor,
+    arguments: &JsonObject,
+) -> Result<Value, FoldError> {
+    let input: SubmitReviewFixInput = parse(arguments)?;
+    let fixes: Vec<ReviewFix> = input
+        .fixes
+        .into_iter()
+        .map(|fix| ReviewFix {
+            path: fix.path,
+            reason: fix.reason,
+        })
+        .collect();
+    let fixed = reviews
+        .submit_review_fix(
+            actor,
+            proposal_id(&input.id)?,
+            input.version,
+            &fixes,
+            &input.checks,
+        )
+        .await
+        .map_err(from_review)?;
+    let mut value = changed_json(&fixed.detail);
+    value["from_version"] = json!(version(fixed.from_version));
+    value["changeset"] = json!(fixed.changeset);
+    value["checkout"] = json!(fixed.checkout);
+    Ok(value)
 }
 
 async fn submit_review(

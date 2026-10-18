@@ -72,6 +72,7 @@ pub fn is_pushed(event: &Event) -> bool {
         types::HUMAN_CHANGE_CONFLICTED,
         types::HUMAN_CHANGE_RESOLVED,
         types::HUMAN_CHANGE_WITHDRAWN,
+        types::PROPOSAL_REVIEWER_FIXED,
     ]
     .contains(&event.event_type)
 }
@@ -318,6 +319,17 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
             ctx.author.iter().cloned().collect(),
             format!(
                 "a human edited {proposal} as version {version}; sync your workspace before you work in it"
+            ),
+            "sync_workspace",
+        ));
+    }
+    if kind == types::PROPOSAL_REVIEWER_FIXED {
+        let proposal = event.proposal?;
+        let version = event.data.get("version")?.as_u64()?;
+        return Some((
+            ctx.author.iter().cloned().collect(),
+            format!(
+                "the reviewer fixed {proposal} as version {version}; sync your workspace before you work in it"
             ),
             "sync_workspace",
         ));
@@ -1050,6 +1062,7 @@ mod tests {
             types::REQUEST_APPROVED,
             types::PROPOSAL_HUMAN_EDITED,
             types::PROPOSAL_REVIEW_AGAIN_REQUESTED,
+            types::PROPOSAL_REVIEWER_FIXED,
         ] {
             let long = AreaName::parse(&"a".repeat(32)).unwrap();
             let unled = PushContext {
@@ -1142,6 +1155,24 @@ mod tests {
             assert!(is_pushed(&event(kind, "human:tanim")));
             assert!(notice_for(&event(kind, "human:tanim"), &ctx()).is_empty());
         }
+    }
+
+    #[test]
+    fn a_reviewer_fix_reaches_only_the_author() {
+        let fixed = with_data(
+            event(types::PROPOSAL_REVIEWER_FIXED, "review"),
+            json!({"version": 3, "from_version": 2}),
+        );
+        assert!(is_pushed(&fixed));
+        assert_eq!(
+            sent(&notice_for(&fixed, &ctx())),
+            vec![row(
+                "frontend",
+                "fold: the reviewer fixed P-3 as version 3; sync your workspace before you work in it. Call sync_workspace.",
+                "sync_workspace"
+            )]
+        );
+        assert!(notice_for(&with_data(fixed, json!({})), &ctx()).is_empty());
     }
 
     #[test]

@@ -52,6 +52,7 @@ describe("proposal keys and the event stream", () => {
     "proposal.opened",
     "proposal.version_added",
     "proposal.human_edited",
+    "proposal.reviewer_fixed",
     "proposal.review_again_requested",
     "proposal.author_changed",
     "proposal.closed",

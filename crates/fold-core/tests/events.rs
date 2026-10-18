@@ -113,6 +113,7 @@ fn all_equals_the_plans_event_types() {
         "git.sync_enabled",
         "git.head_moved",
         "human_change.withdrawn",
+        "proposal.reviewer_fixed",
     ]);
     assert_eq!(declared, expected);
 }

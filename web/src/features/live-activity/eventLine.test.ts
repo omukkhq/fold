@@ -189,6 +189,10 @@ describe("eventLine", () => {
       "edited P-4 as v3",
     );
     expect(line("proposal.human_edited")).toBe("edited P-4");
+    expect(line("proposal.reviewer_fixed", { version: 3 })).toBe(
+      "fixed P-4 in review as v3",
+    );
+    expect(line("proposal.reviewer_fixed")).toBe("fixed P-4 in review");
     expect(line("proposal.review_again_requested", { version: 3 })).toBe(
       "sent v3 of P-4 for review again",
     );

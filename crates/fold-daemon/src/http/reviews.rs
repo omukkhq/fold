@@ -326,7 +326,7 @@ pub struct ProposalVersion {
     /// The author's evidence that the work is done.
     #[schema(required = true)]
     pub evidence: Option<String>,
-    /// The worker, or `human:<name>` for a human edit.
+    /// The worker, the reviewer's worker for a reviewer's fix, or `human:<name>` for a human edit.
     pub created_by: String,
     /// UTC milliseconds.
     pub created_at: i64,
@@ -334,6 +334,8 @@ pub struct ProposalVersion {
     pub human_edit: bool,
     /// A human sent this version for review again, so the approvals it kept no longer count.
     pub review_again: bool,
+    /// The reviewer that holds the review claim made this version by fixing the one before it in its review checkout. It starts without approvals like every version.
+    pub reviewer_fix: bool,
 }
 
 impl From<service::VersionView> for ProposalVersion {
@@ -351,6 +353,7 @@ impl From<service::VersionView> for ProposalVersion {
             created_by: version.created_by,
             created_at: version.created_at.as_millis(),
             review_again: version.review_again,
+            reviewer_fix: version.fixed_in_checkout.is_some(),
         }
     }
 }

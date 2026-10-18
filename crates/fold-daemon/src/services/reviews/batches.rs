@@ -202,7 +202,7 @@ enum Inserted {
 
 /// Review batches: related open proposals one reviewer reviews together, with one checkout of all of them merged onto main and one verdict per member.
 impl ReviewService {
-    /// Makes a batch of two or more open proposals for the actor's worker and takes the review claim of each, all in one transaction, by the rules of `claim_review`: the author's agent is refused, a claim another worker holds refuses the whole batch, and a stale one is taken over. Members are placed in dependency order of their tasks, ties by task number. A proposal in another open batch is `already_in_batch`; the partial unique index on open members decides a race.
+    /// Makes a batch of two or more open proposals for the actor's worker and takes the review claim of each, all in one transaction, by the rules of `claim_review`: the author's agent and every agent that does not decide reviews are refused, a claim another worker holds refuses the whole batch, and a stale one is taken over. Members are placed in dependency order of their tasks, ties by task number. A proposal in another open batch is `already_in_batch`; the partial unique index on open members decides a race.
     pub async fn create_review_batch(
         &self,
         actor: &Actor,
@@ -217,15 +217,18 @@ impl ReviewService {
             .write(async |tx| {
                 let mut rows = Vec::with_capacity(proposals.len());
                 let mut reviewer = None;
+                let standing = agents::standing_of(tx.conn(), actor).await?;
                 for &proposal in &proposals {
                     let row =
                         require_open(reviews::get_proposal(tx.conn(), proposal).await?, proposal)?;
-                    let agent = policy::can_claim_review(actor, &row.author).map_err(|denied| {
-                        FoldError::from(denied).with_details([
-                            ("proposal", json!(proposal.to_string())),
-                            ("author", json!(row.author.as_str())),
-                        ])
-                    })?;
+                    let agent = policy::can_claim_review(actor, standing, &row.author).map_err(
+                        |denied| {
+                            FoldError::from(denied).with_details([
+                                ("proposal", json!(proposal.to_string())),
+                                ("author", json!(row.author.as_str())),
+                            ])
+                        },
+                    )?;
                     reviewer = Some(agent);
                     rows.push(row);
                 }

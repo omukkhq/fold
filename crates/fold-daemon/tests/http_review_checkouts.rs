@@ -1,7 +1,9 @@
 #![cfg(test)]
 
+use crate::common::roles::give_role;
 use crate::daemon_support::{Opened, agent, t};
 use axum::http::StatusCode;
+use fold_core::roles::Role;
 use fold_core::{AgentName, ProposalId};
 use fold_daemon::services::agents::AgentService;
 use fold_daemon::services::reviews::ReviewService;
@@ -39,6 +41,7 @@ fn reviews(opened: &Opened) -> ReviewService {
 async fn proposed() -> Opened {
     let opened = Opened::new().await;
     register(&opened, "review").await;
+    give_role(&opened.handle.store, "review", Role::ReviewLead, None).await;
     let (_, dir) = opened.create(1).await;
     std::fs::write(dir.join("src/lib.rs"), "pub fn y() {}\n").unwrap();
     let reviews = reviews(&opened);

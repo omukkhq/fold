@@ -5,7 +5,7 @@ use fold_core::{
     Actor, EventActor, FoldError, NewEvent, ProposalId, Timestamp, WorkerName, codes, policy,
 };
 use fold_store::WriteTx;
-use fold_store::agents::WorkerRow;
+use fold_store::agents::{self, WorkerRow};
 use fold_store::reviews::{self, ProposalRow, ReviewClaimRow};
 use serde_json::json;
 
@@ -32,7 +32,7 @@ pub struct ReviewClaimView {
 
 /// Review claims. A review claim lives in its own row beside the task's implementation claim and never changes it, so neither command writes a status. Leases are renewed by the same session touch as implementation claims.
 impl ReviewService {
-    /// Takes the review claim on an open proposal for the actor's worker; `policy::can_claim_review` refuses the author's agent. The insert runs before any read of the holder, so the partial unique index on unreleased review claims decides a race: the loser gets `already_claimed` naming the holder. A repeat call by the holder renews the claim without a second `claim.acquired`. A holder whose lease has run out is taken over in the same transaction: its claim is released as `taken_over` with `claim.taken_over`, and the new claim follows with `claim.acquired`.
+    /// Takes the review claim on an open proposal for the actor's worker; `policy::can_claim_review` refuses the author's agent and every agent that does not decide reviews. The insert runs before any read of the holder, so the partial unique index on unreleased review claims decides a race: the loser gets `already_claimed` naming the holder. A repeat call by the holder renews the claim without a second `claim.acquired`. A holder whose lease has run out is taken over in the same transaction: its claim is released as `taken_over` with `claim.taken_over`, and the new claim follows with `claim.acquired`.
     pub async fn claim_review(
         &self,
         actor: &Actor,
@@ -46,12 +46,14 @@ impl ReviewService {
             .write(async |tx| {
                 let row =
                     require_open(reviews::get_proposal(tx.conn(), proposal).await?, proposal)?;
-                let reviewer = policy::can_claim_review(actor, &row.author).map_err(|denied| {
-                    FoldError::from(denied).with_details([
-                        ("proposal", json!(proposal.to_string())),
-                        ("author", json!(row.author.as_str())),
-                    ])
-                })?;
+                let standing = agents::standing_of(tx.conn(), actor).await?;
+                let reviewer =
+                    policy::can_claim_review(actor, standing, &row.author).map_err(|denied| {
+                        FoldError::from(denied).with_details([
+                            ("proposal", json!(proposal.to_string())),
+                            ("author", json!(row.author.as_str())),
+                        ])
+                    })?;
                 let worker = worker_row(tx, reviewer).await?;
                 take_review_claim(tx, &mut buffer, &row, &worker, lease_minutes, now).await
             })
