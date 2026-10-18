@@ -17,7 +17,7 @@
 # The project's Git history: every integration becomes a commit on this branch of the project folder's repository .git, which the folder has checked out.
 # [git]
 # branch = "main"
-# The remote Git repositories that `fld push` and `fld pull` use have one `[remotes.<name>]` section each, with the keys `url`, `branch` and `push_on_integrate`. `fld remote set <name> <url> [<branch>]` writes it, and no remote exists by default.
+# The remote Git repositories that `fld push` and `fld pull` use have one `[remotes.<name>]` section each, with the keys `url`, `branch` and `push_on_integrate`. `fld remote add <name> <url> [<branch>]` writes it, `fld remote remove <name>` deletes it, and no remote exists by default.
 # What fold does with a proposal that is ready to integrate.
 # [integration]
 # Whether fold integrates a ready proposal by itself: the review lead, a batch reviewer, the main agent or a human approved it, nothing asks for changes, a human approved it when the task is marked for human review, and every prerequisite task is Done. With false, one of those agents or a human integrates it.

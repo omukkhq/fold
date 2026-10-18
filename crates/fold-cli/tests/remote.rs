@@ -118,14 +118,35 @@ impl Sandbox {
     }
 
     fn push(&self, project: &Path) -> Output {
+        self.sync("push", project, None)
+    }
+
+    /// `fld push` or `fld pull` of `project` on the sandbox socket, naming `remote` when given.
+    fn sync(&self, action: &str, project: &Path, remote: Option<&str>) -> Output {
         let socket = self.socket();
-        self.fold(&[
-            "push",
+        let mut args = vec![
+            action,
             "--socket",
             socket.to_str().unwrap(),
             "--project",
             project.to_str().unwrap(),
-        ])
+        ];
+        args.extend(remote);
+        self.fold(&args)
+    }
+
+    /// `fld remote add <name> <url> [<branch>]` in `project`.
+    fn add_remote(&self, project: &Path, name: &str, url: &Path, branch: Option<&str>) -> Output {
+        let mut args = vec![
+            "remote",
+            "add",
+            name,
+            url.to_str().unwrap(),
+            "--project",
+            project.to_str().unwrap(),
+        ];
+        args.extend(branch);
+        self.fold(&args)
     }
 }
 
@@ -172,7 +193,7 @@ fn git(dir: &Path, args: &[&str]) -> String {
 }
 
 #[test]
-fn remote_set_writes_a_named_section_keeps_the_rest_and_configures_the_mirror() {
+fn remote_add_writes_a_named_section_keeps_the_rest_and_configures_the_mirror() {
     let sandbox = Sandbox::new();
     let project = sandbox.project();
     let config_path = project.join(".fold/config.toml");
@@ -184,7 +205,7 @@ fn remote_set_writes_a_named_section_keeps_the_rest_and_configures_the_mirror() 
     let output = sandbox
         .command(
             &system_path(),
-            &["remote", "set", "origin", "../../first.git", "main"],
+            &["remote", "add", "origin", "../../first.git", "main"],
         )
         .current_dir(project.join("sub"))
         .output()
@@ -192,7 +213,7 @@ fn remote_set_writes_a_named_section_keeps_the_rest_and_configures_the_mirror() 
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
         stdout(&output),
-        "remote origin set: fold syncs main with its branch main\n"
+        "remote origin added: fold syncs main with its branch main\n"
     );
     let text = fs::read_to_string(&config_path).unwrap();
     assert!(text.starts_with(&template), "{text}");
@@ -215,7 +236,7 @@ fn remote_set_writes_a_named_section_keeps_the_rest_and_configures_the_mirror() 
     let project_arg = project.to_str().unwrap();
     let output = sandbox.fold(&[
         "remote",
-        "set",
+        "add",
         "backup",
         second.to_str().unwrap(),
         "trunk",
@@ -248,7 +269,7 @@ fn remote_set_writes_a_named_section_keeps_the_rest_and_configures_the_mirror() 
         &sandbox.empty_path(),
         &[
             "remote",
-            "set",
+            "add",
             "x",
             "/srv/x.git",
             "main",
@@ -262,7 +283,7 @@ fn remote_set_writes_a_named_section_keeps_the_rest_and_configures_the_mirror() 
 
     let bad = sandbox.fold(&[
         "remote",
-        "set",
+        "add",
         "x",
         "/srv/x.git",
         "a..b",
@@ -270,7 +291,7 @@ fn remote_set_writes_a_named_section_keeps_the_rest_and_configures_the_mirror() 
         project_arg,
     ]);
     assert!(stderr(&bad).contains("invalid_request"), "{bad:?}");
-    let outside = sandbox.fold(&["remote", "set", "x", "/srv/x.git", "main"]);
+    let outside = sandbox.fold(&["remote", "add", "x", "/srv/x.git", "main"]);
     assert!(
         stderr(&outside).contains("project_not_found"),
         "{outside:?}"
@@ -287,17 +308,17 @@ fn push_goes_through_the_daemon_and_needs_git_on_its_path() {
         sandbox.push(&project)
     };
     assert!(stderr(&unset).contains("remote_not_set"), "{unset:?}");
-    assert!(stderr(&unset).contains("fld remote set"), "{unset:?}");
-    let set = sandbox.fold(&[
+    assert!(stderr(&unset).contains("fld remote add"), "{unset:?}");
+    let added = sandbox.fold(&[
         "remote",
-        "set",
+        "add",
         "origin",
         remote.to_str().unwrap(),
         "main",
         "--project",
         project.to_str().unwrap(),
     ]);
-    assert!(set.status.success(), "{set:?}");
+    assert!(added.status.success(), "{added:?}");
 
     {
         let _daemon = sandbox.serve(&system_path());
@@ -324,6 +345,188 @@ fn push_goes_through_the_daemon_and_needs_git_on_its_path() {
     let output = sandbox.push(&project);
     assert!(!output.status.success());
     assert!(stderr(&output).contains("git_not_found"), "{output:?}");
+}
+
+#[test]
+fn remote_add_without_a_branch_takes_the_remote_default_branch_or_main() {
+    let sandbox = Sandbox::new();
+    let project = sandbox.project();
+    let config_path = project.join(".fold/config.toml");
+    // A bare repository whose HEAD names `trunk`, with one commit on it.
+    let trunk = sandbox.path("trunk.git");
+    fs::create_dir(&trunk).unwrap();
+    git(
+        &trunk,
+        &["init", "--quiet", "--bare", "--initial-branch=trunk"],
+    );
+    let scratch = sandbox.path("scratch");
+    fs::create_dir(&scratch).unwrap();
+    git(&scratch, &["init", "--quiet", "--initial-branch=trunk"]);
+    fs::write(scratch.join("a.txt"), "a").unwrap();
+    git(&scratch, &["add", "a.txt"]);
+    git(
+        &scratch,
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "--quiet",
+            "-m",
+            "a",
+        ],
+    );
+    git(
+        &scratch,
+        &["push", "--quiet", trunk.to_str().unwrap(), "trunk"],
+    );
+
+    let output = sandbox.add_remote(&project, "origin", &trunk, None);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        stdout(&output),
+        "remote origin added: fold syncs main with its branch trunk\n"
+    );
+    // A new empty repository and a path that does not exist yet have no default branch.
+    let empty = sandbox.remote("empty.git");
+    let output = sandbox.add_remote(&project, "empty", &empty, None);
+    assert_eq!(
+        stdout(&output),
+        "remote empty added: fold syncs main with its branch main\n"
+    );
+    let absent = sandbox.path("absent.git");
+    let output = sandbox.add_remote(&project, "absent", &absent, None);
+    assert_eq!(
+        stdout(&output),
+        "remote absent added: fold syncs main with its branch main\n"
+    );
+    // Adding a name twice is refused, as Git does, and the first remote stays as it was.
+    let config_before = fs::read_to_string(&config_path).unwrap();
+    let output = sandbox.add_remote(&project, "origin", &empty, Some("release"));
+    assert!(!output.status.success(), "{output:?}");
+    let refusal = stderr(&output);
+    assert!(
+        refusal.contains("invalid_request: the project has a Git remote named origin already"),
+        "{refusal}"
+    );
+    assert!(
+        refusal
+            .contains("hint: run fld remote remove origin, then fld remote add origin <url> again"),
+        "{refusal}"
+    );
+    assert_eq!(fs::read_to_string(&config_path).unwrap(), config_before);
+    assert_eq!(
+        git(&project.join(".git"), &["remote", "get-url", "origin"]),
+        format!("{}\n", trunk.canonicalize().unwrap().display())
+    );
+    let config = ProjectConfig::from_toml(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    let branches: Vec<_> = config
+        .remotes
+        .iter()
+        .map(|(name, remote)| (name.as_str(), remote.branch.as_str()))
+        .collect();
+    assert_eq!(
+        branches,
+        [("absent", "main"), ("empty", "main"), ("origin", "trunk")]
+    );
+
+    let removed = sandbox.fold(&[
+        "remote",
+        "remove",
+        "empty",
+        "--project",
+        project.to_str().unwrap(),
+    ]);
+    assert_eq!(stdout(&removed), "remote empty removed\n");
+    let mirror = project.join(".git");
+    assert_eq!(git(&mirror, &["remote"]), "absent\norigin\n");
+    let again = sandbox.fold(&[
+        "remote",
+        "remove",
+        "empty",
+        "--project",
+        project.to_str().unwrap(),
+    ]);
+    assert!(stderr(&again).contains("remote_not_set"), "{again:?}");
+    let old = sandbox.fold(&[
+        "remote",
+        "set",
+        "x",
+        "/srv/x.git",
+        "--project",
+        project.to_str().unwrap(),
+    ]);
+    assert!(!old.status.success(), "{old:?}");
+}
+
+#[test]
+fn push_and_pull_leave_out_the_name_of_the_only_remote_and_need_it_among_several() {
+    let sandbox = Sandbox::new();
+    let project = sandbox.project();
+    let plain = sandbox.path("plain");
+    let init = sandbox.fold(&["init", plain.to_str().unwrap()]);
+    assert!(init.status.success(), "{init:?}");
+    let _daemon = sandbox.serve(&system_path());
+    for action in ["push", "pull"] {
+        // Git sync being off comes before the missing remote.
+        let off = sandbox.sync(action, &plain, None);
+        assert!(stderr(&off).contains("Git sync is off"), "{off:?}");
+        assert!(!stderr(&off).contains("remote_not_set"), "{off:?}");
+        let none = sandbox.sync(action, &project, None);
+        assert!(!none.status.success(), "{none:?}");
+        assert!(stderr(&none).contains("remote_not_set"), "{none:?}");
+        assert!(stderr(&none).contains("fld remote add"), "{none:?}");
+        let named = sandbox.sync(action, &project, Some("origin"));
+        assert!(stderr(&named).contains("remote_not_set"), "{named:?}");
+    }
+
+    let origin = sandbox.remote("origin.git");
+    assert!(
+        sandbox
+            .add_remote(&project, "origin", &origin, None)
+            .status
+            .success()
+    );
+    let pushed = sandbox.sync("push", &project, None);
+    assert_eq!(stdout(&pushed), "pushed r1 to origin/main: 1 commit\n");
+    let head = git(&origin, &["rev-parse", "--short=7", "main"]);
+    let pulled = sandbox.sync("pull", &project, None);
+    assert_eq!(
+        stdout(&pulled),
+        format!("main is up to date with origin/main: it holds {head}")
+    );
+
+    let backup = sandbox.remote("backup.git");
+    assert!(
+        sandbox
+            .add_remote(&project, "backup", &backup, None)
+            .status
+            .success()
+    );
+    for action in ["push", "pull"] {
+        let several = sandbox.sync(action, &project, None);
+        assert!(!several.status.success(), "{several:?}");
+        assert!(
+            stderr(&several)
+                .contains("name one of the remotes backup, origin; fld remote list shows them"),
+            "{several:?}"
+        );
+        let unknown = sandbox.sync(action, &project, Some("elsewhere"));
+        assert!(stderr(&unknown).contains("remote_not_set"), "{unknown:?}");
+    }
+    let pulled = sandbox.sync("pull", &project, Some("backup"));
+    assert_eq!(
+        stdout(&pulled),
+        "the remote has no branch backup/main; nothing to pull\n"
+    );
+    let pushed = sandbox.sync("push", &project, Some("backup"));
+    assert_eq!(stdout(&pushed), "pushed r1 to backup/main: 1 commit\n");
+    let pulled = sandbox.sync("pull", &project, Some("origin"));
+    assert_eq!(
+        stdout(&pulled),
+        format!("main is up to date with origin/main: it holds {head}")
+    );
 }
 
 #[test]

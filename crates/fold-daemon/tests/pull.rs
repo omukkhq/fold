@@ -106,7 +106,7 @@ struct Project {
 }
 
 impl Project {
-    /// Adds `remote` as the remote `origin`, as `fld remote set` does.
+    /// Adds `remote` as the remote `origin`, as `fld remote add` does.
     fn set_remote(&self, remote: &Path, push_on_integrate: bool) {
         let config = self.paths.config();
         let mut text = fs::read_to_string(&config).unwrap();

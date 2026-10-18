@@ -96,7 +96,7 @@ impl Project {
         }
     }
 
-    /// Adds `remote` as the remote `origin`, as `fld remote set` does.
+    /// Adds `remote` as the remote `origin`, as `fld remote add` does.
     fn set_remote(&self, remote: &Path) {
         let config = self.paths.config();
         let mut text = fs::read_to_string(&config).unwrap();
@@ -728,7 +728,7 @@ async fn the_push_route_is_socket_only_and_names_the_human() {
         body["error"]["details"]["hint"]
             .as_str()
             .unwrap()
-            .contains("fld remote set")
+            .contains("fld remote add")
     );
     daemon.shutdown().await;
 }

@@ -215,7 +215,7 @@ fn sync_title(remote: &str, branch: &str, commit: &str) -> Result<TaskTitle, Fol
             codes::INVALID_CONFIG,
             "the branch name does not make a task title",
         )
-        .with_hint("set a branch name without control characters with fld remote set")
+        .with_hint("set a branch name without control characters with fld remote add")
     })
 }
 

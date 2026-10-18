@@ -50,14 +50,14 @@ enum Command {
     Subscribe(news::SubscribeArgs),
     /// Manage the tokens that sign humans in to the web interface off localhost
     Token(token::TokenArgs),
-    /// Link the project to a remote Git repository
+    /// Add, remove and list the remote Git repositories that fld push and fld pull sync main with
     Remote(commands::remote::RemoteArgs),
-    /// Push main's Git history, one commit per revision, to the Git remote, without force
+    /// Push main's Git history, one commit per revision, to a Git remote, without force; the remote's name can be left out when the project has only one
     Push(commands::remote::PushArgs),
     /// Run a Claude Code hook; the settings that fld setup and fold's sessions get call these
     #[command(hide = true)]
     Hook(hook::HookArgs),
-    /// Bring the commits of the Git remote into main; a conflict becomes a sync task
+    /// Bring the commits of a Git remote into main; a conflict becomes a sync task. The remote's name can be left out when the project has only one
     Pull(commands::remote::PullArgs),
     /// Pause every agent of the project: fold stops each worker, keeps its session and starts none until fld resume
     Pause(commands::pause::PauseArgs),

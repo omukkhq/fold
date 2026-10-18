@@ -18,6 +18,9 @@ use toml_edit::{DocumentMut, Item, Table, value};
 use crate::serve::{self, Dirs};
 use crate::{init, output};
 
+/// The branch a remote without a default branch is synced on.
+const DEFAULT_BRANCH: &str = "main";
+
 #[derive(Args, Debug)]
 pub struct RemoteArgs {
     #[command(subcommand)]
@@ -29,8 +32,8 @@ pub struct RemoteArgs {
 
 #[derive(Subcommand, Debug)]
 enum RemoteCommand {
-    /// Add or change a remote Git repository that fld push and fld pull sync main with
-    Set(SetArgs),
+    /// Add a remote Git repository that fld push and fld pull sync main with; a name that exists already is refused
+    Add(AddArgs),
     /// Delete a remote and the refs fetched from it
     Remove(RemoveArgs),
     /// List the remotes: name, branch and URL; also what `fld remote` with no subcommand prints
@@ -38,12 +41,12 @@ enum RemoteCommand {
 }
 
 #[derive(Args, Debug)]
-struct SetArgs {
+struct AddArgs {
     /// The remote's name, such as origin
     name: String,
     /// The URL or path of the remote Git repository; your own Git credentials and configuration apply
     url: String,
-    /// The remote branch fold syncs main with; defaults to the branch the remote's HEAD names
+    /// The remote branch fold syncs main with; defaults to the branch the remote's HEAD names, or main when the remote has none, as a new empty repository does
     branch: Option<String>,
 }
 
@@ -55,7 +58,7 @@ struct RemoveArgs {
 
 #[derive(Args, Debug)]
 pub struct PushArgs {
-    /// The remote's name; defaults to the only remote
+    /// The remote's name; it can be left out when the project has exactly one remote
     remote: Option<String>,
     /// Unix socket of the daemon; overrides daemon.toml (default $XDG_RUNTIME_DIR/fold/fold.sock)
     #[arg(long)]
@@ -124,7 +127,7 @@ impl RemoteError {
 pub fn run_remote(args: &RemoteArgs, out: &mut impl Write) -> Result<(), RemoteError> {
     let paths = project_paths(args.project.as_deref())?;
     match &args.command {
-        Some(RemoteCommand::Set(set_args)) => set(&paths, set_args, &Git::default(), out),
+        Some(RemoteCommand::Add(add_args)) => add(&paths, add_args, &Git::default(), out),
         Some(RemoteCommand::Remove(remove_args)) => remove(&paths, &remove_args.name, out),
         Some(RemoteCommand::List) | None => list(&paths, out),
     }
@@ -148,16 +151,23 @@ fn project_paths(project: Option<&Path>) -> Result<ProjectPaths, FoldError> {
     Ok(paths)
 }
 
-/// Writes `[remotes.<name>]` of `.fold/config.toml`, keeping every other line and comment and the remote's `push_on_integrate`, after the project's Git repository points its remote `<name>` at the URL. Without a branch, the branch the remote's `HEAD` names is used. It changes no database row, so it needs no daemon.
-fn set(
+/// Writes a new `[remotes.<name>]` into `.fold/config.toml`, keeping every other line and comment, after the project's Git repository points its remote `<name>` at the URL. Without a branch, the branch the remote's `HEAD` names is used; a remote without one, such as a new empty repository or a local path that a push creates, gets [`DEFAULT_BRANCH`]. A name the config holds already is refused before the config or the repository changes. It changes no database row, so it needs no daemon.
+fn add(
     paths: &ProjectPaths,
-    args: &SetArgs,
+    args: &AddArgs,
     git: &Git,
     out: &mut impl Write,
 ) -> Result<(), RemoteError> {
     check_remote_name(&args.name)?;
     check_remote(&args.url)?;
+    // Checked again under the lock below; this first check spares the remote's default branch lookup.
+    refuse_existing(&read_config(&paths.config())?, &args.name)?;
     let url = absolute_if_local(&args.url)?;
+    if std::fs::symlink_metadata(paths.git_dir())
+        .is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
+    {
+        return Err(git_sync_off().into());
+    }
     let mirror = project_repository(paths)?;
     let branch = match &args.branch {
         Some(branch) => {
@@ -171,17 +181,7 @@ fn set(
             } else {
                 default_branch(git, &mirror, &url)?
             };
-            head.ok_or_else(|| {
-                FoldError::new(
-                    codes::INVALID_REQUEST,
-                    "the remote has no default branch to sync with",
-                )
-                .with_hint(format!(
-                    "name the branch: fld remote set {} <url> <branch>",
-                    args.name
-                ))
-                .with_details([("reason", serde_json::json!("no_default_branch"))])
-            })?
+            head.unwrap_or_else(|| DEFAULT_BRANCH.to_owned())
         }
     };
     let _lock = lock_config(&paths.config())?;
@@ -192,11 +192,38 @@ fn set(
     output::line(
         out,
         &format!(
-            "remote {} set: fold syncs main with its branch {branch}",
+            "remote {} added: fold syncs main with its branch {branch}",
             args.name
         ),
     )?;
     Ok(())
+}
+
+/// A project without `.git` is a plain folder whose Git sync is off, and a remote needs Git.
+fn git_sync_off() -> FoldError {
+    FoldError::new(
+        codes::INVALID_REQUEST,
+        "Git sync is off in this project, so it has no Git repository for a remote",
+    )
+    .with_hint(
+        "run fld init --with-git in the project folder to turn Git on, then fld remote add again",
+    )
+    .with_details([("reason", serde_json::json!("git_sync_off"))])
+}
+
+/// Refuses a remote `name` that the config `text` names already, as `git remote add` does, so an add never changes a remote; an invalid config is refused too.
+fn refuse_existing(text: &str, name: &str) -> Result<(), FoldError> {
+    if !ProjectConfig::from_toml(text)?.remotes.contains_key(name) {
+        return Ok(());
+    }
+    Err(FoldError::new(
+        codes::INVALID_REQUEST,
+        format!("the project has a Git remote named {name} already"),
+    )
+    .with_hint(format!(
+        "run fld remote remove {name}, then fld remote add {name} <url> again"
+    ))
+    .with_details([("reason", serde_json::json!("remote_exists"))]))
 }
 
 /// Deletes `[remotes.<name>]` from the config and the remote with its fetched refs from the project's Git repository.
@@ -215,7 +242,7 @@ fn remove(paths: &ProjectPaths, name: &str, out: &mut impl Write) -> Result<(), 
 fn list(paths: &ProjectPaths, out: &mut impl Write) -> Result<(), RemoteError> {
     let config = ProjectConfig::from_toml(&read_config(&paths.config())?)?;
     if config.remotes.is_empty() {
-        output::line(out, "no remotes: run fld remote set <name> <url>")?;
+        output::line(out, "no remotes: run fld remote add <name> <url>")?;
         return Ok(());
     }
     let only = config.remotes.len() == 1;
@@ -308,31 +335,22 @@ fn remotes_table(doc: &mut DocumentMut) -> Result<&mut Table, FoldError> {
     })
 }
 
-/// `text` with `[remotes.<name>]` holding `url` and `branch`, its `push_on_integrate` kept, or `false` when absent. The input and the result must both be valid configs, so a file that fold-core refuses, such as one that names the origin twice, is refused before anything is written.
+/// `text` with a new `[remotes.<name>]` holding `url` and `branch`, and `push_on_integrate` off; a name the config holds already is `remote_exists`. The input and the result must both be valid configs, so a file that fold-core refuses, such as one that names the origin twice, is refused before anything is written.
 fn with_remote(text: &str, name: &str, url: &str, branch: &str) -> Result<String, FoldError> {
-    ProjectConfig::from_toml(text)?;
+    refuse_existing(text, name)?;
     let mut doc = parse_config(text)?;
     lift_unnamed_remote(&mut doc)?;
-    let section = |push_on_integrate: bool| {
-        let mut section = Table::new();
-        section.insert("url", value(url));
-        section.insert("branch", value(branch));
-        section.insert("push_on_integrate", value(push_on_integrate));
-        Item::Table(section)
-    };
+    let mut section = Table::new();
+    section.insert("url", value(url));
+    section.insert("branch", value(branch));
+    section.insert("push_on_integrate", value(false));
     let edited = if doc.contains_key(REMOTES_SECTION) {
-        let remotes = remotes_table(&mut doc)?;
-        let push_on_integrate = remotes
-            .get(name)
-            .and_then(|section| section.get("push_on_integrate"))
-            .and_then(Item::as_bool)
-            .unwrap_or(false);
-        remotes.insert(name, section(push_on_integrate));
+        remotes_table(&mut doc)?.insert(name, Item::Table(section));
         doc.to_string()
     } else {
         // A new section goes after the whole file, so the comments at its end stay where they are.
         let mut added = DocumentMut::new();
-        remotes_table(&mut added)?.insert(name, section(false));
+        remotes_table(&mut added)?.insert(name, Item::Table(section));
         let separator = if text.is_empty() || text.ends_with('\n') {
             ""
         } else {
@@ -396,7 +414,7 @@ pub fn run_pull(args: &PullArgs, out: &mut impl Write) -> Result<(), RemoteError
     Ok(())
 }
 
-/// Sends `POST /api/v1/projects/<slug>/<action>[?remote=<name>]` over the socket as the human in the environment.
+/// Sends `POST /api/v1/projects/<slug>/<action>[?remote=<name>]` over the socket as the human in the environment. Without a name the daemon takes the only remote, after it checks that Git sync is on.
 fn post_project(args: &PushArgs, action: &str) -> Result<Response, RemoteError> {
     let query = match &args.remote {
         Some(name) => {
@@ -548,17 +566,17 @@ mod tests {
 
     #[test]
     fn remote_commands_parse_the_name_the_url_and_the_branch() {
-        let parsed = Remote::try_parse_from(["fld", "set", "origin", "../app.git"]).unwrap();
-        let Some(RemoteCommand::Set(set)) = parsed.args.command else {
-            panic!("expected set");
+        let parsed = Remote::try_parse_from(["fld", "add", "origin", "../app.git"]).unwrap();
+        let Some(RemoteCommand::Add(add)) = parsed.args.command else {
+            panic!("expected add");
         };
         assert_eq!(
-            (set.name.as_str(), set.url.as_str(), set.branch),
+            (add.name.as_str(), add.url.as_str(), add.branch),
             ("origin", "../app.git", None)
         );
         let parsed = Remote::try_parse_from([
             "fld",
-            "set",
+            "add",
             "backup",
             "git@x:a.git",
             "trunk",
@@ -567,10 +585,10 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(parsed.args.project.as_deref(), Some(Path::new("app")));
-        let Some(RemoteCommand::Set(set)) = parsed.args.command else {
-            panic!("expected set");
+        let Some(RemoteCommand::Add(add)) = parsed.args.command else {
+            panic!("expected add");
         };
-        assert_eq!(set.branch.as_deref(), Some("trunk"));
+        assert_eq!(add.branch.as_deref(), Some("trunk"));
         let parsed = Remote::try_parse_from(["fld", "remove", "origin"]).unwrap();
         assert!(
             matches!(parsed.args.command, Some(RemoteCommand::Remove(ref remove)) if remove.name == "origin")
@@ -589,7 +607,8 @@ mod tests {
                 .command
                 .is_none()
         );
-        assert!(Remote::try_parse_from(["fld", "set", "origin"]).is_err());
+        assert!(Remote::try_parse_from(["fld", "add", "origin"]).is_err());
+        assert!(Remote::try_parse_from(["fld", "set", "origin", "/r.git"]).is_err());
         let push = Push::try_parse_from(["fld", "backup", "--project", "app"]).unwrap();
         assert_eq!(push.args.remote.as_deref(), Some("backup"));
         assert!(Push::try_parse_from(["fld"]).unwrap().args.remote.is_none());
@@ -604,14 +623,18 @@ mod tests {
         assert_eq!(config.lease_minutes, 7);
         assert_eq!(config.remotes["origin"].url, "/srv/app.git");
         assert!(!config.remotes["origin"].push_on_integrate);
-        let switched =
+        let held =
             "[remotes.origin]\nurl = \"/old\"\nbranch = \"main\"\npush_on_integrate = true\n";
-        let edited = with_remote(switched, "origin", "/new", "trunk").unwrap();
-        let config = ProjectConfig::from_toml(&edited).unwrap();
-        assert_eq!(config.remotes["origin"].url, "/new");
-        assert_eq!(config.remotes["origin"].branch, "trunk");
-        assert!(config.remotes["origin"].push_on_integrate);
-        let two = with_remote(&edited, "backup", "/b", "main").unwrap();
+        let exists = with_remote(held, "origin", "/new", "trunk").unwrap_err();
+        assert_eq!(exists.code(), codes::INVALID_REQUEST);
+        assert_eq!(exists.details().unwrap()["reason"], "remote_exists");
+        assert_eq!(
+            exists.hint(),
+            Some("run fld remote remove origin, then fld remote add origin <url> again")
+        );
+        let edited = held;
+        let config = ProjectConfig::from_toml(edited).unwrap();
+        let two = with_remote(edited, "backup", "/b", "main").unwrap();
         assert_eq!(ProjectConfig::from_toml(&two).unwrap().remotes.len(), 2);
         let one = without_remote(&two, "backup").unwrap();
         assert_eq!(ProjectConfig::from_toml(&one).unwrap(), config);
@@ -649,15 +672,12 @@ mod tests {
         assert_eq!(config.remotes["origin"], kept["origin"]);
         assert!(config.remotes["origin"].push_on_integrate);
         assert_eq!(config.remotes["backup"].url, "/b.git");
-        let changed = with_remote(unnamed, "origin", "/new.git", "main").unwrap();
-        let origin = &ProjectConfig::from_toml(&changed).unwrap().remotes["origin"];
         assert_eq!(
-            (
-                origin.url.as_str(),
-                origin.branch.as_str(),
-                origin.push_on_integrate
-            ),
-            ("/new.git", "main", true)
+            with_remote(unnamed, "origin", "/new.git", "main")
+                .unwrap_err()
+                .details()
+                .unwrap()["reason"],
+            "remote_exists"
         );
         let removed = without_remote("[git]\nremote = \"/old.git\"\n", "origin").unwrap();
         let config = ProjectConfig::from_toml(&removed).unwrap();
@@ -724,16 +744,29 @@ mod tests {
                 .code(),
             codes::INVALID_CONFIG
         );
+        let (_plain_dir, plain_paths) = project_with_config("");
+        let plain = AddArgs {
+            name: "backup".to_owned(),
+            url: "/c.git".to_owned(),
+            branch: None,
+        };
+        let RemoteError::Fold(off) =
+            add(&plain_paths, &plain, &Git::default(), &mut Vec::new()).unwrap_err()
+        else {
+            panic!("a fold error");
+        };
+        assert_eq!(off.details().unwrap()["reason"], "git_sync_off");
+        assert!(off.hint().unwrap().contains("fld init --with-git"));
         let (dir, paths) = project_with_config(twice);
         git(dir.path(), &["init", "--quiet"]);
         let mut out = Vec::new();
-        let args = SetArgs {
+        let args = AddArgs {
             name: "backup".to_owned(),
             url: "/c.git".to_owned(),
             branch: Some("main".to_owned()),
         };
         assert_eq!(
-            set(&paths, &args, &Git::default(), &mut out)
+            add(&paths, &args, &Git::default(), &mut out)
                 .unwrap_err()
                 .code(),
             Some(codes::INVALID_CONFIG)
@@ -937,7 +970,7 @@ mod tests {
     }
 
     #[test]
-    fn set_list_and_remove_change_the_config_and_the_mirror_of_a_project() {
+    fn add_list_and_remove_change_the_config_and_the_mirror_of_a_project() {
         let dir = tempfile::TempDir::new().unwrap();
         let host = fold_core::HostPaths::new(dir.path().join("data").to_str(), None).unwrap();
         let root = dir.path().join("app");
@@ -964,7 +997,7 @@ mod tests {
         std::fs::write(source.join("a.txt"), "a").unwrap();
         git(&source, &["add", "a.txt"]);
         git(&source, &["commit", "--quiet", "-m", "a"]);
-        let args = |name: &str, url: &str, branch: Option<&str>| SetArgs {
+        let args = |name: &str, url: &str, branch: Option<&str>| AddArgs {
             name: name.to_owned(),
             url: url.to_owned(),
             branch: branch.map(str::to_owned),
@@ -972,9 +1005,9 @@ mod tests {
         let gitbin = Git::default();
         let mut out = Vec::new();
         list(&paths, &mut out).unwrap();
-        assert_eq!(text(out), "no remotes: run fld remote set <name> <url>\n");
+        assert_eq!(text(out), "no remotes: run fld remote add <name> <url>\n");
         let mut out = Vec::new();
-        set(
+        add(
             &paths,
             &args("origin", source.to_str().unwrap(), None),
             &gitbin,
@@ -983,7 +1016,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             text(out),
-            "remote origin set: fold syncs main with its branch trunk\n"
+            "remote origin added: fold syncs main with its branch trunk\n"
         );
         let mut out = Vec::new();
         list(&paths, &mut out).unwrap();
@@ -993,7 +1026,7 @@ mod tests {
             format!("origin\ttrunk\t{} (the only remote)\n", canonical.display())
         );
         let url = "https://user:token@example.com/a.git";
-        set(
+        add(
             &paths,
             &args("backup", url, Some("main")),
             &gitbin,
@@ -1010,28 +1043,62 @@ mod tests {
         assert!(!listed.contains("token") && !listed.contains("only"));
         assert!(root.join(".git/HEAD").is_file());
 
-        // A missing local path or an empty repository has no default branch.
-        for missing in [dir.path().join("absent"), {
-            let empty = dir.path().join("empty.git");
-            std::fs::create_dir(&empty).unwrap();
-            git(&empty, &["init", "--quiet", "--bare"]);
-            empty
-        }] {
-            let error = set(
+        // A missing local path or an empty repository has no default branch, so main is synced on `main`.
+        for (name, missing) in [
+            ("absent", dir.path().join("absent")),
+            ("empty", {
+                let empty = dir.path().join("empty.git");
+                std::fs::create_dir(&empty).unwrap();
+                git(
+                    &empty,
+                    &["init", "--quiet", "--bare", "--initial-branch=trunk"],
+                );
+                empty
+            }),
+        ] {
+            let mut out = Vec::new();
+            add(
                 &paths,
-                &args("x", missing.to_str().unwrap(), None),
+                &args(name, missing.to_str().unwrap(), None),
                 &gitbin,
-                &mut Vec::new(),
+                &mut out,
             )
-            .unwrap_err();
-            assert_eq!(error.code(), Some(codes::INVALID_REQUEST));
+            .unwrap();
+            assert_eq!(
+                text(out),
+                format!("remote {name} added: fold syncs main with its branch main\n")
+            );
+            remove(&paths, name, &mut Vec::new()).unwrap();
         }
+        // A second add of a name changes neither the config nor the repository.
+        let config_before = std::fs::read_to_string(paths.config()).unwrap();
+        let git_before = std::fs::read_to_string(root.join(".git/config")).unwrap();
+        let error = add(
+            &paths,
+            &args("backup", "/elsewhere.git", Some("release")),
+            &gitbin,
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), Some(codes::INVALID_REQUEST));
+        assert_eq!(
+            error.hint(),
+            Some("run fld remote remove backup, then fld remote add backup <url> again")
+        );
+        assert_eq!(
+            std::fs::read_to_string(paths.config()).unwrap(),
+            config_before
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join(".git/config")).unwrap(),
+            git_before
+        );
         for (name, url, branch) in [
             ("-x", "/r", "main"),
             ("o", "-x", "main"),
             ("o", "/r", "a b"),
         ] {
-            let error = set(
+            let error = add(
                 &paths,
                 &args(name, url, Some(branch)),
                 &gitbin,
@@ -1059,7 +1126,7 @@ mod tests {
         );
 
         std::fs::write(paths.config(), "remotes = 1\n").unwrap();
-        let error = set(
+        let error = add(
             &paths,
             &args("o", "/r", Some("main")),
             &gitbin,
@@ -1072,7 +1139,7 @@ mod tests {
             Some(codes::INVALID_CONFIG)
         );
         std::fs::remove_file(paths.config()).unwrap();
-        set(
+        add(
             &paths,
             &args("o", "/r", Some("main")),
             &gitbin,
@@ -1094,7 +1161,7 @@ mod tests {
         let fold_dir = root.join(".fold");
         let mode = |bits| std::fs::Permissions::from_mode(bits);
         std::fs::set_permissions(&fold_dir, mode(0o555)).unwrap();
-        let error = set(
+        let error = add(
             &paths,
             &args("s", "/s", Some("main")),
             &gitbin,

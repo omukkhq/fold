@@ -3,7 +3,7 @@ import type { GitRemote, ProjectGit } from "../api/git";
 const SHORT_COMMIT_LENGTH = 7;
 
 /** What a project without a remote shows to add one. */
-export const ADD_REMOTE_COMMAND = "fld remote set <name> <url>";
+export const ADD_REMOTE_COMMAND = "fld remote add <name> <url>";
 
 /** The first seven characters of a Git commit id. */
 export function shortCommit(commit: string): string {
