@@ -30,6 +30,7 @@ export function proposalSummary(
     review_claim: null,
     human_review: null,
     close_reason: null,
+    integration_queued: false,
     created_at: T0,
     updated_at: T0,
     closed_at: null,

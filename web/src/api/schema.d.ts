@@ -1599,7 +1599,7 @@ export interface components {
          * @description Why a run failed or stopped.
          * @enum {string}
          */
-        CheckRunReason: "check_failed" | "setup_failed" | "checks_file_invalid" | "files_changed" | "workspace_changed" | "refused" | "daemon_stopped" | "superseded";
+        CheckRunReason: "check_failed" | "setup_failed" | "checks_file_invalid" | "files_changed" | "workspace_changed" | "refused" | "daemon_stopped" | "superseded" | "fold_failed";
         /**
          * @description Where a run stands.
          * @enum {string}
@@ -1998,7 +1998,7 @@ export interface components {
             workspace: string | null;
         };
         /** @enum {string} */
-        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved" | "git.sync_enabled" | "git.head_moved" | "human_change.withdrawn" | "proposal.reviewer_fixed" | "stash.pushed" | "stash.applied" | "stash.conflicted" | "stash.dropped" | "checks.started" | "checks.finished";
+        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved" | "git.sync_enabled" | "git.head_moved" | "human_change.withdrawn" | "proposal.reviewer_fixed" | "stash.pushed" | "stash.applied" | "stash.conflicted" | "stash.dropped" | "checks.started" | "checks.finished" | "integration.queued" | "integration.unqueued";
         /**
          * @description `needs`: this task needs the other task. `needed_by`: the other task needs this one.
          * @enum {string}
@@ -2314,13 +2314,18 @@ export interface components {
             proposal: string;
             result: components["schemas"]["IntegrationResultKind"];
             /**
-             * @description The new head of main.
+             * @description The new head of main, once the proposal integrated.
              * @example r18
              */
-            revision: string;
+            revision: string | null;
+            /**
+             * @description The check run of failed integration checks.
+             * @example cr-9
+             */
+            run: string | null;
         };
         /** @enum {string} */
-        IntegrationResultKind: "succeeded";
+        IntegrationResultKind: "succeeded" | "checks_failed" | "queued";
         Label: {
             /**
              * @description One of sage, slate, teal, ink, gold, moss, plum, stone.
@@ -2721,6 +2726,8 @@ export interface components {
             human_review: components["schemas"]["HumanReviewMark"] | null;
             /** @example P-3 */
             id: string;
+            /** @description A request to integrate the current version waits in the integration queue; it ends when fold integrates, refuses or sends the proposal back. */
+            integration_queued: boolean;
             latest_verdict: components["schemas"]["ReviewVerdict"] | null;
             /** @description The worker that holds the review claim. */
             review_claim: string | null;
@@ -6786,7 +6793,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Integrated */
+            /** @description Integrated, failed its integration checks, or queued behind other integrations when the project has integration checks */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -6795,7 +6802,7 @@ export interface operations {
                     "application/json": components["schemas"]["IntegrationResult"];
                 };
             };
-            /** @description `invalid_request`, `invalid_id` or `invalid_name` */
+            /** @description `invalid_request` (`details.reason` is `checks_failed` while the integration checks of the version failed, or `integration_queued` while an integration of the version waits in the queue), `invalid_id` or `invalid_name` */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -6840,7 +6847,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Internal error */
+            /** @description Internal error, or `workspace_io` with `details.reason` `fold_failed` when fold itself could not run the integration checks: the version is not sent back, so integrate again once the fault is fixed */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -6979,7 +6986,7 @@ export interface operations {
                     "application/json": components["schemas"]["SubmittedReview"];
                 };
             };
-            /** @description `invalid_request` (`details.field` names the field), `invalid_path`, `invalid_id` or `invalid_name` */
+            /** @description `invalid_request` (`details.field` names the field, or `details.reason` is `checks_failed` for an approve of a version whose integration checks failed), `invalid_path`, `invalid_id` or `invalid_name` */
             400: {
                 headers: {
                     [name: string]: unknown;

@@ -186,6 +186,7 @@ fn succeeded(outcome: IntegrationOutcome) -> RevisionId {
     match outcome {
         IntegrationOutcome::Succeeded { revision } => revision,
         IntegrationOutcome::Conflicted(conflicts) => panic!("conflicted: {conflicts:?}"),
+        other => panic!("expected an integration, got {other:?}"),
     }
 }
 

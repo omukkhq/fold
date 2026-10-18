@@ -426,3 +426,157 @@ pub async fn list_results(
         })
         .collect()
 }
+
+/// One integration that waits in a project's queue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IntegrationRequestRow {
+    /// The row id: the queue serves requests in this order.
+    pub id: i64,
+    pub proposal: ProposalId,
+    /// The proposal's current version when the request was made.
+    pub version: u32,
+    pub expected_version: Option<u32>,
+    /// The event actor label of the caller.
+    pub actor: String,
+}
+
+/// Writes a queued integration of `version`, the proposal's current version, in the caller's write and returns its row id. The unique index refuses a second waiting request for the same version.
+pub async fn insert_integration_request(
+    tx: &mut WriteTx,
+    proposal: ProposalId,
+    version: u32,
+    expected_version: Option<u32>,
+    actor: &str,
+    now: Timestamp,
+) -> Result<i64, StoreError> {
+    let (number, now) = (proposal.to_db(), now.as_millis());
+    let (version, expected) = (i64::from(version), expected_version.map(i64::from));
+    let id = sqlx::query_scalar!(
+        r#"INSERT INTO integration_requests (proposal_id, version, expected_version, actor, created_at)
+           SELECT p.id, ?2, ?3, ?4, ?5 FROM proposals p WHERE p.number = ?1
+           RETURNING id AS "id!: i64""#,
+        number,
+        version,
+        expected,
+        actor,
+        now
+    )
+    .fetch_optional(tx.conn())
+    .await?;
+    id.ok_or(StoreError::Invalid("the proposal does not exist"))
+}
+
+/// Whether a request to integrate `version` of `proposal` waits in the queue.
+pub async fn integration_queued(
+    executor: impl SqliteExecutor<'_>,
+    proposal: ProposalId,
+    version: u32,
+) -> Result<bool, StoreError> {
+    let (number, version) = (proposal.to_db(), i64::from(version));
+    Ok(sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+               SELECT 1 FROM integration_requests q JOIN proposals p ON p.id = q.proposal_id
+               WHERE p.number = ?1 AND q.version = ?2 AND q.ended_at IS NULL
+           ) AS "queued!: bool""#,
+        number,
+        version
+    )
+    .fetch_one(executor)
+    .await?)
+}
+
+/// Ends a queued integration. False when it had ended already.
+pub async fn end_integration_request(
+    tx: &mut WriteTx,
+    id: i64,
+    now: Timestamp,
+) -> Result<bool, StoreError> {
+    let now = now.as_millis();
+    let updated = sqlx::query!(
+        "UPDATE integration_requests SET ended_at = ?2 WHERE id = ?1 AND ended_at IS NULL",
+        id,
+        now
+    )
+    .execute(tx.conn())
+    .await?
+    .rows_affected();
+    Ok(updated == 1)
+}
+
+/// Every queued integration without an end, in queue order.
+pub async fn waiting_integration_requests(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Vec<IntegrationRequestRow>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT q.id AS "id!: i64", p.number AS "proposal!: i64", q.version, q.expected_version, q.actor
+           FROM integration_requests q JOIN proposals p ON p.id = q.proposal_id
+           WHERE q.ended_at IS NULL
+           ORDER BY q.id"#
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(IntegrationRequestRow {
+                id: row.id,
+                proposal: ProposalId::try_from_db(row.proposal)
+                    .ok_or(StoreError::Corrupt("proposals.number"))?,
+                version: count(row.version, "integration_requests.version")?,
+                expected_version: row
+                    .expected_version
+                    .map(|version| count(version, "integration_requests.expected_version"))
+                    .transpose()?,
+                actor: row.actor,
+            })
+        })
+        .collect()
+}
+
+/// A failed or stopped run of a proposal command that no start of its task worker has served yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwedGateRun {
+    pub agent: fold_core::AgentName,
+    pub run: CheckRunId,
+}
+
+/// The runs of `create_proposal` and `update_proposal` that did not pass and that no start of their task worker, in one of `states`, has served: each start moves the row's `started_at`, so a run that ended later is still owed. Only the newest ended run of a workspace counts, so a later run owes nothing for an earlier one.
+pub async fn owed_gate_runs(
+    executor: impl SqliteExecutor<'_>,
+    states: &[fold_core::WorkerState],
+) -> Result<Vec<OwedGateRun>, StoreError> {
+    let states = serde_json::Value::from(
+        states
+            .iter()
+            .map(|state| state.as_str())
+            .collect::<Vec<_>>(),
+    )
+    .to_string();
+    let rows = sqlx::query!(
+        r#"SELECT g.name AS "agent!: String", c.number AS "run!: i64"
+           FROM check_runs c
+           JOIN workers k ON k.id = c.worker_id
+           JOIN worker_processes w ON w.agent_id = k.agent_id
+           JOIN agents g ON g.id = w.agent_id
+           WHERE c.stage = 'proposal' AND c.purpose IN ('create_proposal', 'update_proposal')
+             AND c.state IN ('failed', 'stopped') AND c.finished_at > w.started_at
+             AND w.role = 'task_worker' AND w.state IN (SELECT value FROM json_each(?1))
+             AND c.id = (
+                 SELECT MAX(x.id) FROM check_runs x
+                 WHERE x.workspace_id = c.workspace_id AND x.state <> 'running'
+             )
+           ORDER BY w.id, c.id"#,
+        states
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(OwedGateRun {
+                agent: fold_core::AgentName::parse(&row.agent)
+                    .map_err(|_| StoreError::Corrupt("agents.name"))?,
+                run: CheckRunId::try_from_db(row.run)
+                    .ok_or(StoreError::Corrupt("check_runs.number"))?,
+            })
+        })
+        .collect()
+}

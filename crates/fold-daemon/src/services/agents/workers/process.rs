@@ -15,6 +15,7 @@ use crate::support::lock;
 use questions::Waiter;
 use watch::watch_done;
 
+mod gate;
 mod launch;
 mod lines;
 mod questions;

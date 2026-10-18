@@ -32,6 +32,7 @@ describe("integrationOf", () => {
       proposal: "P-3",
       result: "succeeded" as const,
       revision: "r9",
+      run: null,
     };
     expect(integrationOf(integrated, [], answer)).toEqual({
       revision: "r9",
@@ -47,6 +48,13 @@ describe("integrationOf", () => {
       integrationOf(integrated, [], { ...answer, proposal: "P-4" }),
     ).toBeNull();
     expect(integrationOf(integrated, [])).toBeNull();
+    expect(
+      integrationOf(integrated, [], {
+        ...answer,
+        result: "queued",
+        revision: null,
+      }),
+    ).toBeNull();
   });
 
   it("is null for a proposal that is not integrated", () => {

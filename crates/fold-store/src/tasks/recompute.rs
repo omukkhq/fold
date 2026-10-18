@@ -90,7 +90,7 @@ pub async fn load_facts(
                   EXISTS (
                       SELECT 1 FROM workspaces w WHERE w.task_id = t.id AND w.kind = 'task'
                   ) AS "ever_had_workspace!: bool",
-                  p.conflicted AS "conflicted?: bool",
+                  (p.conflicted OR p.checks_failed) AS "conflicted?: bool",
                   (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) AS "verdict?: String"
            FROM tasks t
            LEFT JOIN proposals p ON p.task_id = t.id AND p.state = 'open'

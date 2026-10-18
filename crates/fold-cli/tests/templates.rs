@@ -262,7 +262,7 @@ const FOLD_ERROR_CODES: [&str; 156] = [
 const PENDING_ERROR_CODES: [&str; 1] = ["too_large"];
 
 /// The `invalid_request` reasons that have a name.
-const INVALID_REQUEST_REASONS: [&str; 10] = [
+const INVALID_REQUEST_REASONS: [&str; 12] = [
     "self_dependency",
     "checklist_origin",
     "linked_item",
@@ -273,10 +273,13 @@ const INVALID_REQUEST_REASONS: [&str; 10] = [
     "too_many_attachments",
     "attachment_too_large",
     "human_change_superseded",
+    "checks_failed",
+    "integration_queued",
 ];
 
-const NON_TOOL_NAMES: [&str; 30] = [
+const NON_TOOL_NAMES: [&str; 31] = [
     "human_review",
+    "fold_failed",
     "left_out",
     "stall_minutes",
     "lease_minutes",

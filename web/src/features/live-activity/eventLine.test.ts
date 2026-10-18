@@ -310,6 +310,21 @@ describe("eventLine", () => {
     ).toBe("restarted web-worker in a new session for the conflict on P-4");
     expect(
       line("worker.resumed", {
+        agent: "web-worker",
+        reason: "checks",
+        resumed: true,
+      }),
+    ).toBe("resumed web-worker for the failed integration checks of P-4");
+    expect(
+      line("worker.resumed", {
+        agent: "web-worker",
+        reason: "checks",
+        stage: "proposal",
+        resumed: true,
+      }),
+    ).toBe("resumed web-worker for the failed checks of T-12");
+    expect(
+      line("worker.resumed", {
         agent: "web-lead",
         reason: "session_lost",
         resumed: false,
@@ -519,6 +534,15 @@ describe("eventLine", () => {
     ).toBe("ended the checks of T-12: failed");
     expect(eventLine(event("checks.finished", { task: null })).text).toBe(
       "ended the checks of a task",
+    );
+  });
+
+  it("names the proposal of a queued integration and of its end", () => {
+    expect(eventLine(event("integration.queued")).text).toBe(
+      "queued the integration of P-4",
+    );
+    expect(eventLine(event("integration.unqueued")).text).toBe(
+      "took the integration of P-4 out of the queue",
     );
   });
 

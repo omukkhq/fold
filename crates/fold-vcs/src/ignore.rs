@@ -26,17 +26,20 @@ type MatcherKey = (Vec<u8>, &'static str);
 pub struct IgnoreRules {
     /// `None` for rules that ignore nothing.
     root: Option<PathBuf>,
-    /// The project's `.fold/exclude`: in the root's own `.fold/` for the project folder, in the `.fold/` that holds it for a workspace.
+    /// The project's `.fold/exclude`: in the root's own `.fold/` for the project folder, in the `.fold/` that holds it for a workspace and for fold's check directory.
     exclude: Option<PathBuf>,
     cache: Mutex<HashMap<MatcherKey, Option<Arc<Gitignore>>>>,
 }
 
 impl IgnoreRules {
     pub fn new(root: &Path) -> Self {
-        // Any root that is not a workspace is a project folder, also one that lies below a folder named `.fold`.
+        // Any root that is neither a workspace nor fold's check directory is a project folder, also one that lies below a folder named `.fold`.
         let fold_dir = root
             .parent()
-            .filter(|parent| parent.ends_with(fold_core::layout::WS_DIR))
+            .filter(|parent| {
+                parent.ends_with(fold_core::layout::WS_DIR)
+                    || parent.ends_with(fold_core::layout::CHECKS_DIR)
+            })
             .and_then(Path::parent)
             .map_or_else(|| root.join(FOLD_DIR), Path::to_path_buf);
         Self {

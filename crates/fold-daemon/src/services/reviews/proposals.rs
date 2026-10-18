@@ -57,7 +57,7 @@ impl Turn {
             return None;
         }
         Some(
-            match ProposalFact::open(row.changes_requested, row.conflicted) {
+            match ProposalFact::open(row.changes_requested, row.conflicted || row.checks_failed) {
                 ProposalFact::WithAuthor => Turn::WithAuthor,
                 ProposalFact::WithReviewer | ProposalFact::None => Turn::WithReviewer,
             },
@@ -74,6 +74,10 @@ pub struct ProposalSummary {
     pub author: WorkerName,
     pub state: ProposalState,
     pub conflicted: bool,
+    /// The integration checks of the current version failed, so the proposal is with its author until a new version.
+    pub checks_failed: bool,
+    /// A request to integrate the current version waits in the integration queue; it ends when fold integrates, refuses or sends the proposal back.
+    pub integration_queued: bool,
     pub current_version: u32,
     pub review_claim: Option<WorkerName>,
     /// The task's human review mark as it stands now.
@@ -103,6 +107,8 @@ impl ProposalSummary {
             author: row.author,
             state: row.state,
             conflicted: row.conflicted,
+            checks_failed: row.checks_failed,
+            integration_queued: row.integration_queued,
             current_version: row.current_version,
             review_claim: row.review_claim,
             human_review: row.human_review,

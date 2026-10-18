@@ -955,3 +955,49 @@ async fn a_daemon_start_resumes_a_working_task_worker_once_its_socket_is_bound()
     );
     daemon.shutdown().await;
 }
+
+#[tokio::test]
+async fn red_proposal_checks_resume_a_stopped_task_worker_with_the_failed_check() {
+    let fake = FakeClaude::new("result");
+    let harness = task_worker_for(&fake, &["Draw the page"], WorkerState::Idle).await;
+    let work = harness.start_work(TASK_WORKER, "T-1").await;
+    let outside = tempfile::tempdir().unwrap();
+    let gate = outside.path().join("go");
+    work.write(&[
+        ("page.html", "<p>page</p>\n"),
+        (
+            "fold-checks.toml",
+            &format!(
+                "[[check]]\nname = \"render\"\nrun = \"until [ -e '{}' ]; do sleep 0.05; done; exit 1\"\n",
+                gate.display()
+            ),
+        ),
+    ]);
+    let created = harness
+        .call(
+            TASK_WORKER,
+            "create_proposal",
+            json!({"task": "T-1", "title": "Draw the page"}),
+        )
+        .await;
+    assert_eq!(created["checks"], "running", "{created}");
+    harness
+        .call("web-lead", "stop_worker", json!({"name": TASK_WORKER}))
+        .await;
+    until_state(&harness, TASK_WORKER, WorkerState::Stopped).await;
+    std::fs::write(&gate, "").unwrap();
+
+    let runs = until_runs(&fake, TASK_WORKER, 2).await;
+    assert!(runs[1].has("--resume"));
+    let turn = &runs[1].stdin[1];
+    for wanted in [
+        "The checks of T-1 (cr-1) did not pass, so fold made no proposal: render failed.",
+        "call create_proposal again",
+    ] {
+        assert!(turn.contains(wanted), "{wanted} in {turn}");
+    }
+    let resumed = until_resumed(&harness, 1).await;
+    assert_eq!(resumed[0].1["reason"], "checks");
+    assert_eq!(resumed[0].1["stage"], "proposal");
+    assert_eq!(resumed[0].1["run"], "cr-1");
+}

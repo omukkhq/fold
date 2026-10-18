@@ -69,6 +69,18 @@ fn a_workspace_reads_the_exclude_file_of_the_project_that_holds_it() {
 }
 
 #[test]
+fn the_check_directory_reads_the_exclude_file_of_its_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path();
+    let checks = project.join(".fold/checks/main");
+    fs::create_dir_all(&checks).unwrap();
+    write(project, ".fold/exclude", "node_modules/\n");
+    let rules = IgnoreRules::new(&checks);
+    assert!(ignored(&rules, "node_modules/x/index.js", false));
+    assert!(!ignored(&rules, "src/lib.rs", false));
+}
+
+#[test]
 fn an_import_of_the_project_folder_leaves_excluded_paths_out() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("project");

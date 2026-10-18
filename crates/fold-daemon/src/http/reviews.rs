@@ -263,6 +263,8 @@ pub struct ProposalSummary {
     pub latest_verdict: Option<ReviewVerdict>,
     /// The task's human review mark is met on the current version: a human it accepts approved it and no later `request_changes` withdrew that. True without a mark, so an approved proposal with this false is an agent's approval that waits for a human.
     pub human_approved: bool,
+    /// A request to integrate the current version waits in the integration queue; it ends when fold integrates, refuses or sends the proposal back.
+    pub integration_queued: bool,
     /// The worker that holds the review claim.
     #[schema(required = true)]
     pub review_claim: Option<String>,
@@ -294,6 +296,7 @@ impl From<service::ProposalSummary> for ProposalSummary {
             turn: summary.turn.map(ProposalTurn::from),
             latest_verdict: summary.latest_verdict.map(ReviewVerdict::from),
             human_approved: summary.human_approved,
+            integration_queued: summary.integration_queued,
             review_claim: summary.review_claim.map(|worker| worker.to_string()),
             human_review: summary.human_review.map(HumanReviewMark::from),
             close_reason: summary.close_reason,
@@ -916,6 +919,10 @@ pub struct IntegrateBody {
 #[serde(rename_all = "snake_case")]
 pub enum IntegrationResultKind {
     Succeeded,
+    /// The integration checks of the merged tree failed; the proposal went back to its author.
+    ChecksFailed,
+    /// The project has integration checks, so the integration waits its turn and runs in the background; its result comes as events.
+    Queued,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
@@ -923,9 +930,12 @@ pub struct IntegrationResult {
     #[schema(example = "P-3")]
     pub proposal: String,
     pub result: IntegrationResultKind,
-    /// The new head of main.
-    #[schema(example = "r18")]
-    pub revision: String,
+    /// The new head of main, once the proposal integrated.
+    #[schema(example = "r18", required = true)]
+    pub revision: Option<String>,
+    /// The check run of failed integration checks.
+    #[schema(example = "cr-9", required = true)]
+    pub run: Option<String>,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -1157,7 +1167,7 @@ pub async fn add_review_comment(
     request_body = ReviewBody,
     responses(
         (status = 201, description = "The review", body = SubmittedReview),
-        (status = 400, description = "`invalid_request` (`details.field` names the field), `invalid_path`, `invalid_id` or `invalid_name`", body = ErrorEnvelope),
+        (status = 400, description = "`invalid_request` (`details.field` names the field, or `details.reason` is `checks_failed` for an approve of a version whose integration checks failed), `invalid_path`, `invalid_id` or `invalid_name`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 404, description = "`proposal_not_found` or `project_not_found`", body = ErrorEnvelope),
         (status = 409, description = "`stale_version` (`details.expected_version`, `details.current_version`), `agent_approval_required` (a human's approve on a task with the human review mark before a reviewer agent approved the version), `proposal_not_open` or `task_closed`", body = ErrorEnvelope),
@@ -1204,14 +1214,14 @@ pub async fn submit_review(
     ),
     request_body = IntegrateBody,
     responses(
-        (status = 200, description = "Integrated", body = IntegrationResult),
-        (status = 400, description = "`invalid_request`, `invalid_id` or `invalid_name`", body = ErrorEnvelope),
+        (status = 200, description = "Integrated, failed its integration checks, or queued behind other integrations when the project has integration checks", body = IntegrationResult),
+        (status = 400, description = "`invalid_request` (`details.reason` is `checks_failed` while the integration checks of the version failed, or `integration_queued` while an integration of the version waits in the queue), `invalid_id` or `invalid_name`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 403, description = "`author_cannot_integrate`: the caller's agent wrote the proposal", body = ErrorEnvelope),
         (status = 404, description = "`proposal_not_found` or `project_not_found`", body = ErrorEnvelope),
         (status = 409, description = "A gate refusal: `stale_version` (`details.expected_version`, `details.current_version`), `changes_requested`, `not_approved`, `human_approval_missing` (`details.reviewer`), `agent_approval_required` (a marked task whose version no reviewer agent approved), `prerequisites_not_done` (`details.prerequisites`); or `proposal_not_open`, `integration_conflicted` (`details.files`: path and kind), `head_moved`", body = ErrorEnvelope),
         (status = 503, description = "`project_unavailable`, or `integration_failed` (`details.cause`)", body = ErrorEnvelope),
-        (status = 500, description = "Internal error", body = ErrorEnvelope),
+        (status = 500, description = "Internal error, or `workspace_io` with `details.reason` `fold_failed` when fold itself could not run the integration checks: the version is not sent back, so integrate again once the fault is fixed", body = ErrorEnvelope),
     )
 )]
 pub async fn integrate_proposal(
@@ -1229,11 +1239,24 @@ pub async fn integrate_proposal(
         IntegrationOutcome::Succeeded { revision } => Ok(Json(IntegrationResult {
             proposal: proposal.to_string(),
             result: IntegrationResultKind::Succeeded,
-            revision: revision.to_string(),
+            revision: Some(revision.to_string()),
+            run: None,
         })),
         IntegrationOutcome::Conflicted(conflicts) => {
             Err(integration_conflicted(proposal, &conflicts).into())
         }
+        IntegrationOutcome::ChecksFailed { run } => Ok(Json(IntegrationResult {
+            proposal: proposal.to_string(),
+            result: IntegrationResultKind::ChecksFailed,
+            revision: None,
+            run: Some(run.to_string()),
+        })),
+        IntegrationOutcome::Queued => Ok(Json(IntegrationResult {
+            proposal: proposal.to_string(),
+            result: IntegrationResultKind::Queued,
+            revision: None,
+            run: None,
+        })),
     }
 }
 

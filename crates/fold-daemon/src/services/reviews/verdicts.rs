@@ -10,6 +10,7 @@ use fold_store::{StoreError, WriteTx, counters, workspaces};
 use serde_json::json;
 
 use super::comments::{CommentInput, MAX_BODY_CHARS, check_ranges, check_shape};
+use super::integrate::checks_failed_refusal;
 use super::proposals::{ProposalSummary, Retirement, require_open, retire_proposal};
 use super::{ReviewError, ReviewService};
 use crate::services::events::EventBuffer;
@@ -331,13 +332,16 @@ async fn human_approval_gate(
     )
 }
 
-/// `standing` is the acting agent's, read by the caller.
+/// `standing` is the acting agent's, read by the caller. An approval of a version whose integration checks failed is refused, as its integration is, until the author sends a new version.
 pub(super) fn verdict_gate<'a>(
     actor: &'a Actor,
     standing: AgentStanding,
     verdict: Verdict,
     row: &ProposalRow,
 ) -> Result<Reviewer<'a>, ReviewError> {
+    if verdict == Verdict::Approve && row.checks_failed {
+        return Err(checks_failed_refusal(row.id, row.current_version).into());
+    }
     policy::can_submit_verdict(actor, standing, verdict, &row.author).map_err(|denied| {
         FoldError::from(denied)
             .with_details([

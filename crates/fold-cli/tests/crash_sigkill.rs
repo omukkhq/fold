@@ -232,7 +232,7 @@ async fn a_daemon_killed_inside_the_integration_transaction_shows_none_of_it() {
     assert_eq!(answer.status, 200, "{}", answer.body);
     assert_eq!(
         answer.body,
-        json!({"proposal": "P-1", "result": "succeeded", "revision": "r2"})
+        json!({"proposal": "P-1", "result": "succeeded", "revision": "r2", "run": null})
     );
     assert_eq!(
         count(

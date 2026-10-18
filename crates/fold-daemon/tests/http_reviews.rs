@@ -705,7 +705,7 @@ async fn human_integrates_through_the_route_with_the_fold_human_cookie() {
     assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
     assert_eq!(
         answer.body,
-        json!({"proposal": "P-1", "result": "succeeded", "revision": "r2"})
+        json!({"proposal": "P-1", "result": "succeeded", "revision": "r2", "run": null})
     );
     let detail = send(&fx, Method::GET, "/proposals/P-1", None, &[TANIM]).await;
     assert_eq!(detail.body["summary"]["state"], "integrated");

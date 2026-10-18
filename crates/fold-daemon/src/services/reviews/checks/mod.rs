@@ -21,8 +21,10 @@ use crate::services::messages::send_from_fold_in_tx;
 use crate::services::tasks::{TaskError, closed_refusal, proposal_kind_refusal, task_not_found};
 use crate::services::workspaces::ProposalSnapshot;
 
+mod integration;
 mod runner;
 
+pub(crate) use integration::{Integrating, IntegrationChecks, PassedRun, fold_failed_refusal};
 pub use runner::{
     CheckPermits, CheckRunner, CommandResult, CommandSpec, LOG_LIMIT, RunLimits, commands,
     run_commands, run_commands_for,
@@ -63,7 +65,7 @@ pub(super) struct Verdict {
 }
 
 impl Verdict {
-    fn passed() -> Self {
+    pub(super) fn passed() -> Self {
         Self {
             state: RunState::Passed,
             reason: None,
@@ -931,6 +933,7 @@ mod tests {
             duration_ms: 5,
             log: b"line 1\nline 2\nboom\n".to_vec(),
             log_bytes: 19,
+            fault: false,
         }
     }
 

@@ -24,6 +24,7 @@ mod acceptance_14_human_changes;
 mod acceptance_15_genesis_and_git;
 mod acceptance_16_reviewer_fix;
 mod acceptance_17_stash;
+mod acceptance_18_project_checks;
 mod acceptance_1_three_sessions;
 mod acceptance_2_messaging;
 mod acceptance_3_parallel_workspaces;
@@ -45,6 +46,7 @@ mod checks;
 #[cfg(feature = "failpoints")]
 mod checks_failpoints;
 mod checks_gate;
+mod checks_integration;
 mod claims_service;
 mod claude_probe;
 mod conflicts;

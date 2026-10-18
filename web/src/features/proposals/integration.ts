@@ -16,7 +16,7 @@ export interface IntegrationView {
 }
 
 /**
- * The revision of main that names the proposal; the revisions are newest first, as the route sends them. Until the revisions name it, the answer of the human's own integrate write gives the revision.
+ * The revision of main that names the proposal; the revisions are newest first, as the route sends them. Until the revisions name it, the answer of the human's own integrate write gives the revision; a queued answer names none.
  * Null while the proposal is not integrated or nothing names its revision yet.
  */
 export function integrationOf(
@@ -35,7 +35,7 @@ export function integrationOf(
       actor: null,
     };
   }
-  if (answered?.proposal === p.id) {
+  if (answered?.proposal === p.id && answered.revision !== null) {
     return {
       revision: answered.revision,
       commit: null,

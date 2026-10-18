@@ -153,6 +153,24 @@ pub async fn mark_conflicted(
     Ok(updated == 1)
 }
 
+/// Sends an open proposal back to its author because the integration checks of its current version failed; a new version clears the flag. False when the proposal is not open.
+pub async fn mark_checks_failed(
+    tx: &mut WriteTx,
+    proposal: ProposalId,
+    now: Timestamp,
+) -> Result<bool, StoreError> {
+    let (number, now) = (proposal.to_db(), now.as_millis());
+    let updated = sqlx::query!(
+        "UPDATE proposals SET checks_failed = 1, updated_at = ?2 WHERE number = ?1 AND state = 'open'",
+        number,
+        now
+    )
+    .execute(tx.conn())
+    .await?
+    .rows_affected();
+    Ok(updated == 1)
+}
+
 /// The report of the latest `conflicted` integration of `version` of `proposal`, as it was stored; `None` when that version never conflicted.
 pub async fn conflict_report(
     executor: impl SqliteExecutor<'_>,

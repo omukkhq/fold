@@ -95,6 +95,8 @@ pub enum CheckRunReason {
     Refused,
     DaemonStopped,
     Superseded,
+    /// fold itself could not run the checks; the integration can be asked again once the fault is fixed.
+    FoldFailed,
 }
 
 impl From<RunReason> for CheckRunReason {
@@ -108,6 +110,7 @@ impl From<RunReason> for CheckRunReason {
             RunReason::Refused => Self::Refused,
             RunReason::DaemonStopped => Self::DaemonStopped,
             RunReason::Superseded => Self::Superseded,
+            RunReason::FoldFailed => Self::FoldFailed,
         }
     }
 }

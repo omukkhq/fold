@@ -6,12 +6,15 @@ use fold_core::object::ObjectHash;
 use fold_core::policy::{
     AgentStanding, CallerFacts, GateRefusal, IntegrateInput, ProposalFacts, can_integrate,
 };
+use fold_core::reviews::checks::{RunReason, Stage};
 use fold_core::reviews::{Approver, ReviewFact, Verdict, latest_verdict};
 use fold_core::revision::{Revision, StoredRevision};
 use fold_core::{
-    Actor, ChangesetId, EventActor, EventError, FoldError, HumanName, IdKind, IntegrationId,
-    NewEvent, ProposalId, RevisionId, TaskId, Timestamp, WorkspaceId, codes, policy,
+    Actor, AddressedAs, AgentActor, ChangesetId, CheckRunId, EventActor, EventError, FoldError,
+    HumanName, IdKind, IntegrationId, MessageBody, NewEvent, ProposalId, Recipient, RevisionId,
+    Target, TaskId, Timestamp, WorkerName, WorkspaceId, codes, policy,
 };
+use fold_store::reviews::checks;
 use fold_store::reviews::{
     self, IntegrationFacts, IntegrationSubject, NewIntegration, ProposalState, ReviewerRef,
 };
@@ -22,13 +25,19 @@ use fold_store::{StoreError, WriteTx, agents, counters, tasks, workspaces};
 use fold_vcs::integrate::MergeOutcome;
 use serde_json::json;
 
+use super::checks::{
+    Integrating, IntegrationChecks, PassedRun, Verdict as RunVerdict, end_run_in_tx,
+    fold_failed_refusal,
+};
 use super::conflicts::FoundConflict;
 use super::notify;
 use super::proposals::{Retirement, proposal_not_found, retire_proposal};
+use super::views::integration_conflicted;
 use super::{ReviewError, ReviewService};
 use crate::services::events::EventBuffer;
 #[cfg(feature = "failpoints")]
 use crate::services::fired;
+use crate::services::messages::send_from_fold_in_tx;
 use crate::services::tasks::{TaskError, recompute};
 use crate::services::workspaces::{
     ArchiveReason, WorkspaceError, archive_in_tx, main_agent, main_agent_in_tx,
@@ -56,6 +65,12 @@ pub enum IntegrationOutcome {
     },
     /// In path order. Nothing was published, no revision exists and the task is not completed.
     Conflicted(Vec<Conflict>),
+    /// The integration checks of the merged tree failed: nothing was published, and the proposal went back to its author with a message from fold.
+    ChecksFailed {
+        run: CheckRunId,
+    },
+    /// The project has integration checks, so the integration waits its turn in the background, one at a time; fold sends the result as a message.
+    Queued,
 }
 
 /// A clean `fld pull`: the newest commit of the remote branch with its tree, and the tree of the sync base, the newest commit fold main and the remote share, which is the merge base. Both trees are already in the object store. The base is a Git tree rather than a fold revision, because the revision that brought a commit in holds the merge with main, not the commit's own tree.
@@ -111,6 +126,16 @@ pub enum DirectOutcome {
     Conflicted(Vec<Conflict>),
 }
 
+impl From<Integrated> for IntegrationOutcome {
+    fn from(done: Integrated) -> Self {
+        match done {
+            Integrated::Succeeded(revision) => IntegrationOutcome::Succeeded { revision },
+            Integrated::Conflicted(conflicts) => IntegrationOutcome::Conflicted(conflicts),
+            Integrated::ChecksFailed(run) => IntegrationOutcome::ChecksFailed { run },
+        }
+    }
+}
+
 /// What one automatic integration did with a ready proposal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AutomaticIntegration {
@@ -134,6 +159,7 @@ enum IntegrationRequest<'a> {
 enum Integrated {
     Succeeded(RevisionId),
     Conflicted(Vec<Conflict>),
+    ChecksFailed(CheckRunId),
 }
 
 /// Why an attempt stopped. `Retry` rolls the transaction back and starts again from reading main.
@@ -242,10 +268,225 @@ impl ReviewService {
             expected_version,
             automatic: false,
         };
-        Ok(match self.integrate(actor, request).await? {
-            Integrated::Succeeded(revision) => IntegrationOutcome::Succeeded { revision },
-            Integrated::Conflicted(conflicts) => IntegrationOutcome::Conflicted(conflicts),
-        })
+        if let Some(row) = reviews::get_proposal(self.store.read(), proposal).await?
+            && row.state == ProposalState::Open
+        {
+            if row.checks_failed {
+                return Err(checks_failed_refusal(proposal, row.current_version).into());
+            }
+            if row.integration_queued {
+                return Err(already_queued_refusal(proposal, row.current_version).into());
+            }
+        }
+        if self.integration_checks_may_run(proposal).await?
+            && self.gates_pass(actor, proposal, expected_version).await?
+        {
+            self.queue_integration(actor, proposal, expected_version)
+                .await?;
+            return Ok(IntegrationOutcome::Queued);
+        }
+        Ok(self.integrate(actor, request).await?.into())
+    }
+
+    /// Whether the gates admit `actor` to integrate the current version now, read without recording anything. A refusal is reported by the procedure itself.
+    async fn gates_pass(
+        &self,
+        actor: &Actor,
+        proposal: ProposalId,
+        expected_version: Option<u32>,
+    ) -> Result<bool, ReviewError> {
+        let mut read = self.store.read().begin().await.map_err(StoreError::from)?;
+        let standing = agents::standing_of(&mut *read, actor).await?;
+        let Ok(caller) = caller_facts(actor, standing, false) else {
+            return Ok(false);
+        };
+        let facts = reviews::integration_facts(&mut read, proposal).await?;
+        read.commit().await.map_err(StoreError::from)?;
+        Ok(facts.is_some_and(|facts| decide(&facts, &caller, expected_version).is_ok()))
+    }
+
+    /// Stores the request of the current version with `integration.queued`, then integrates in the background after the integrations ahead of it, in the order they were asked. A second request while one of the same version waits is refused at once. The stored request is what a daemon start serves again when a stop cut the queue short. A refusal or a conflict that the queue meets by then goes to the integrating agent as a message from fold, beside the conflict report the author gets; a success and failed checks send their own messages.
+    async fn queue_integration(
+        &self,
+        actor: &Actor,
+        proposal: ProposalId,
+        expected_version: Option<u32>,
+    ) -> Result<(), ReviewError> {
+        let now = self.clock.now();
+        let label = actor.event_actor();
+        let mut buffer = EventBuffer::new();
+        let (id, version) = self
+            .store
+            .write(async |tx| {
+                let row = reviews::get_proposal(tx.conn(), proposal)
+                    .await?
+                    .ok_or_else(|| proposal_not_found(proposal))?;
+                let version = row.current_version;
+                if checks::integration_queued(tx.conn(), proposal, version).await? {
+                    return Err(already_queued_refusal(proposal, version).into());
+                }
+                let id = checks::insert_integration_request(
+                    tx,
+                    proposal,
+                    version,
+                    expected_version,
+                    label.as_str(),
+                    now,
+                )
+                .await?;
+                let event = NewEvent::new(types::INTEGRATION_QUEUED, label.clone())?
+                    .task(row.task)
+                    .proposal(proposal)
+                    .data(json!({"version": version}))?;
+                buffer.append(tx, &event, now).await?;
+                Ok::<_, ReviewError>((id, version))
+            })
+            .await?;
+        self.bus.publish(buffer);
+        self.serve_queued(id, actor.clone(), proposal, version, expected_version);
+        Ok(())
+    }
+
+    /// Ends a stored request with `integration.unqueued`, so every screen that shows the queued integration lets it go.
+    async fn end_request(
+        &self,
+        id: i64,
+        proposal: ProposalId,
+        version: u32,
+    ) -> Result<(), ReviewError> {
+        let now = self.clock.now();
+        let mut buffer = EventBuffer::new();
+        self.store
+            .write(async |tx| {
+                if !checks::end_integration_request(tx, id, now).await? {
+                    return Ok(());
+                }
+                let Some(row) = reviews::get_proposal(tx.conn(), proposal).await? else {
+                    return Ok(());
+                };
+                let event = NewEvent::new(types::INTEGRATION_UNQUEUED, EventActor::fold())?
+                    .task(row.task)
+                    .proposal(proposal)
+                    .data(json!({"version": version}))?;
+                buffer.append(tx, &event, now).await?;
+                Ok::<_, ReviewError>(())
+            })
+            .await?;
+        self.bus.publish(buffer);
+        Ok(())
+    }
+
+    /// Serves one stored request in its turn and ends it.
+    fn serve_queued(
+        &self,
+        id: i64,
+        actor: Actor,
+        proposal: ProposalId,
+        version: u32,
+        expected_version: Option<u32>,
+    ) {
+        let service = self.clone();
+        let ticket = self.checks.ticket();
+        self.checks.spawn(async move {
+            ticket.turn().await;
+            let request = IntegrationRequest::Proposal {
+                proposal,
+                expected_version,
+                automatic: false,
+            };
+            let untold = match service.integrate(&actor, request).await {
+                Ok(Integrated::Conflicted(conflicts)) => {
+                    Some(ReviewError::from(integration_conflicted(proposal, &conflicts)))
+                }
+                Ok(_) => None,
+                Err(error) => {
+                    tracing::info!(proposal = %proposal, code = error.log_code(), "a queued integration was refused");
+                    Some(error)
+                }
+            };
+            if let Some(error) = untold
+                && let Err(failed) = service.tell_queued_refusal(&actor, proposal, &error).await
+            {
+                tracing::warn!(proposal = %proposal, code = failed.log_code(), "the refusal of a queued integration could not be told");
+            }
+            if let Err(error) = service.end_request(id, proposal, version).await {
+                tracing::warn!(proposal = %proposal, code = error.log_code(), "a queued integration could not end; the next daemon start serves it again");
+            }
+            drop(ticket);
+        });
+    }
+
+    /// Queues again, in their order, the integrations a stopped daemon left waiting or cut short. Each is served as a new turn: its gates are checked when the turn comes, so one whose proposal moved on meanwhile is refused and its agent told. Returns how many were queued.
+    pub async fn requeue_integrations(&self) -> Result<usize, ReviewError> {
+        let waiting = checks::waiting_integration_requests(self.store.read()).await?;
+        let mut queued = 0;
+        for request in waiting {
+            let Some(actor) = queued_actor(&request.actor) else {
+                self.end_request(request.id, request.proposal, request.version)
+                    .await?;
+                continue;
+            };
+            self.serve_queued(
+                request.id,
+                actor,
+                request.proposal,
+                request.version,
+                request.expected_version,
+            );
+            queued += 1;
+        }
+        if queued > 0 {
+            tracing::info!(
+                queued,
+                "integrations a stop left in the queue are queued again"
+            );
+        }
+        Ok(queued)
+    }
+
+    /// Tells the agent that queued an integration why it did not happen.
+    async fn tell_queued_refusal(
+        &self,
+        actor: &Actor,
+        proposal: ProposalId,
+        error: &ReviewError,
+    ) -> Result<(), ReviewError> {
+        let Actor::Agent(agent) = actor else {
+            return Ok(());
+        };
+        let ReviewError::Fold(refusal) = error else {
+            return Ok(());
+        };
+        let Some(row) = reviews::get_proposal(self.store.read(), proposal).await? else {
+            return Ok(());
+        };
+        let body = MessageBody::parse(format!(
+            "fold did not integrate {proposal}: {}. {}",
+            refusal.message(),
+            refusal.hint().unwrap_or_default()
+        ))?;
+        let to = Recipient {
+            target: Target::Worker(agent.worker.clone()),
+            addressed_as: AddressedAs::Worker,
+        };
+        let now = self.clock.now();
+        let mut buffer = EventBuffer::new();
+        self.store
+            .write(async |tx| {
+                send_from_fold_in_tx(
+                    tx,
+                    &mut buffer,
+                    vec![to],
+                    (row.task, Some(proposal)),
+                    &body,
+                    now,
+                )
+                .await
+                .map_err(ReviewError::from)
+            })
+            .await?;
+        self.bus.publish(buffer);
+        Ok(())
     }
 
     /// Integrates the newest commit of the Git remote onto main, by the named human who ran `fld pull`; an agent is refused with `human_required`. There is no proposal, task or review, so only the merge decides. A clean merge moves main and records a `pull` integration with the remote commit and `remote.pulled`; a conflicting one writes nothing and returns the conflicts to the caller.
@@ -261,11 +502,12 @@ impl ReviewService {
             {
                 Integrated::Succeeded(revision) => PullOutcome::Succeeded { revision },
                 Integrated::Conflicted(conflicts) => PullOutcome::Conflicted(conflicts),
+                Integrated::ChecksFailed(_) => return Err(not_a_proposal()),
             },
         )
     }
 
-    /// Integrates a change of the project folder by the named human whose change it is: what `fld record` read from the folder, or a Git commit the human made there. There is no proposal, task or review, so only the merge decides. A clean merge moves main and records a `record` integration with the human change and `human_change.recorded`; a conflicting one writes nothing and returns the conflicts to the caller.
+    /// Integrates a change of the project folder by the named human whose change it is: what `fld record` read from the folder, or a Git commit the human made there. There is no proposal, task or review, so only the merge decides, and no check runs: the integration checks run only when a proposal integrates. A clean merge moves main and records a `record` integration with the human change and `human_change.recorded`; a conflicting one writes nothing and returns the conflicts to the caller.
     pub async fn integrate_record(
         &self,
         actor: &Actor,
@@ -278,11 +520,12 @@ impl ReviewService {
             {
                 Integrated::Succeeded(revision) => PullOutcome::Succeeded { revision },
                 Integrated::Conflicted(conflicts) => PullOutcome::Conflicted(conflicts),
+                Integrated::ChecksFailed(_) => return Err(not_a_proposal()),
             },
         )
     }
 
-    /// Integrates a direct change of the main agent: the newest changeset of its main workspace, with the Git commit message it wrote. The user approved the change in the main agent's conversation, so no review gate runs; `policy::can_change_main_directly` admits the main agent only, and the main workspace must be active and owned by its worker. A clean merge moves main by compare-and-swap, records a `direct` integration with the changeset and the message, and archives the main workspace, in one transaction. A conflicting merge writes nothing and returns the conflicts: the main agent syncs the workspace, records again and submits the new changeset.
+    /// Integrates a direct change of the main agent: the newest changeset of its main workspace, with the Git commit message it wrote. The user approved the change in the main agent's conversation, so no review gate and no check runs (the integration checks run only when a proposal integrates); `policy::can_change_main_directly` admits the main agent only, and the main workspace must be active and owned by its worker. A clean merge moves main by compare-and-swap, records a `direct` integration with the changeset and the message, and archives the main workspace, in one transaction. A conflicting merge writes nothing and returns the conflicts: the main agent syncs the workspace, records again and submits the new changeset.
     pub async fn integrate_direct(
         &self,
         actor: &Actor,
@@ -295,6 +538,7 @@ impl ReviewService {
             {
                 Integrated::Succeeded(revision) => DirectOutcome::Succeeded { revision },
                 Integrated::Conflicted(conflicts) => DirectOutcome::Conflicted(conflicts),
+                Integrated::ChecksFailed(_) => return Err(not_a_proposal()),
             },
         )
     }
@@ -311,8 +555,7 @@ impl ReviewService {
                 automatic: true,
             };
             let outcome = match self.integrate(&Actor::System, request).await {
-                Ok(Integrated::Succeeded(revision)) => IntegrationOutcome::Succeeded { revision },
-                Ok(Integrated::Conflicted(conflicts)) => IntegrationOutcome::Conflicted(conflicts),
+                Ok(done) => done.into(),
                 Err(error) => {
                     tracing::warn!(proposal = %proposal, code = error.code().unwrap_or(codes::INTERNAL_ERROR), "the automatic integration of a proposal failed; the next trigger tries again");
                     continue;
@@ -323,19 +566,34 @@ impl ReviewService {
         Ok(done)
     }
 
-    /// The lowest-numbered open proposal outside `passed` that is not flagged with a conflict and passes every gate for the automatic caller, with its current version.
+    /// The lowest-numbered open proposal outside `passed` that is not flagged with a conflict or failed integration checks, whose integration checks fold did not fail to run on this version and main, and that passes every gate for the automatic caller, with its current version.
     async fn next_ready(
         &self,
         passed: &HashSet<ProposalId>,
     ) -> Result<Option<(ProposalId, u32)>, ReviewError> {
+        let head = workspaces::head(self.store.read())
+            .await?
+            .ok_or(StoreError::Corrupt("refs.main"))?
+            .number;
         let mut read = self.store.read().begin().await.map_err(StoreError::from)?;
         let open = reviews::list_proposals(&mut *read, Some(ProposalState::Open), None).await?;
         let mut ready = None;
         for row in open {
             // No version passes the automatic gates without an approval as its latest verdict, so only those proposals read their gate facts.
             if row.conflicted
+                || row.checks_failed
                 || passed.contains(&row.id)
                 || row.latest_verdict != Some(Verdict::Approve)
+            {
+                continue;
+            }
+            // fold's own failure to run the integration checks is not retried on the same version and main: only a caller's integrate, or an automatic run after main moved, tries again.
+            let newest = checks::runs_of_version(&mut *read, row.task, row.id, row.current_version)
+                .await?
+                .into_iter()
+                .find(|run| run.stage == Stage::Integration);
+            if newest
+                .is_some_and(|run| run.reason == Some(RunReason::FoldFailed) && run.base == head)
             {
                 continue;
             }
@@ -358,13 +616,19 @@ impl ReviewService {
         request: IntegrationRequest<'_>,
     ) -> Result<Integrated, ReviewError> {
         let _serial = self.integration.lock().await;
+        let mut carried = None;
         for _ in 0..ATTEMPTS {
-            match self.attempt(actor, request).await {
+            let attempt = self.attempt(actor, request, &mut carried).await;
+            if !matches!(attempt, Err(Step::Retry)) {
+                self.end_carried(&mut carried).await?;
+            }
+            match attempt {
                 Ok(done) => return Ok(done),
                 Err(Step::Retry) => continue,
                 Err(Step::Failed(error)) => return Err(error),
             }
         }
+        self.end_carried(&mut carried).await?;
         Err(FoldError::new(
             codes::HEAD_MOVED,
             format!("main moved during each of {ATTEMPTS} integration attempts"),
@@ -377,6 +641,7 @@ impl ReviewService {
         &self,
         actor: &Actor,
         request: IntegrationRequest<'_>,
+        carried: &mut Option<PassedRun>,
     ) -> Result<Integrated, Step> {
         let head = workspaces::head(self.store.read())
             .await?
@@ -435,6 +700,30 @@ impl ReviewService {
                 return Ok(Integrated::Conflicted(conflicts));
             }
         };
+        if let Subject::Proposal {
+            proposal,
+            task,
+            version,
+            ..
+        } = plan.subject
+        {
+            let at = Integrating {
+                proposal,
+                task,
+                version,
+                head: head.number,
+                head_tree: head.tree_hash,
+                merged: tree,
+            };
+            match self.integration_checks(actor, at, carried).await? {
+                IntegrationChecks::None => {}
+                IntegrationChecks::Passed => {}
+                IntegrationChecks::Failed(run) => return Ok(Integrated::ChecksFailed(run)),
+                IntegrationChecks::FoldFailed(run) => {
+                    return Err(Step::Failed(fold_failed_refusal(at, run).into()));
+                }
+            }
+        }
         #[cfg(feature = "failpoints")]
         fail::fail_point!("integration_after_merge", |_| Err(Step::from(fired(
             "integration_after_merge"
@@ -475,6 +764,7 @@ impl ReviewService {
             integration,
             now,
             human: human.as_ref(),
+            checks: carried.as_ref(),
         };
         let archived = self
             .store
@@ -489,6 +779,7 @@ impl ReviewService {
         for workspace in archived {
             self.workspaces.detach_live(workspace).await;
         }
+        self.follow_main_in_check_dir(tree);
         match &plan.subject {
             Subject::Proposal { proposal, .. } => {
                 tracing::info!(proposal = %proposal, revision = %next, integration = %integration, "proposal integrated");
@@ -520,7 +811,13 @@ impl ReviewService {
         let facts = reviews::integration_facts(&mut read, proposal)
             .await?
             .ok_or_else(|| proposal_not_found(proposal))?;
+        let checks_failed = reviews::get_proposal(&mut *read, proposal)
+            .await?
+            .is_some_and(|row| row.checks_failed);
         read.commit().await.map_err(StoreError::from)?;
+        if checks_failed && facts.proposal.state == ProposalState::Open {
+            return Err(checks_failed_refusal(proposal, facts.target.version).into());
+        }
         if let Err(refusal) = decide(&facts, &caller, expected_version) {
             if automatic {
                 return Err(FoldError::from(refusal).into());
@@ -679,6 +976,53 @@ fn record_plan(actor: &Actor, record: &RecordIntegration) -> Result<Plan, Step> 
             human: record.human.clone(),
         },
     })
+}
+
+/// The caller of a stored queue request: a named human or an agent's worker. Its rights are read again from the database when its turn comes, so no tag is carried.
+fn queued_actor(label: &str) -> Option<Actor> {
+    let actor = EventActor::parse(label).ok()?;
+    if let Some(name) = actor.human_name() {
+        return HumanName::parse(name).ok().map(Actor::human);
+    }
+    let worker = WorkerName::parse(actor.as_str()).ok()?;
+    Some(Actor::Agent(AgentActor {
+        agent: worker.agent(),
+        worker,
+        tags: Vec::new(),
+    }))
+}
+
+/// The refusal of an approval or an integration of a version whose integration checks failed: only a new version from its author can be approved and integrated.
+pub(super) fn checks_failed_refusal(proposal: ProposalId, version: u32) -> FoldError {
+    FoldError::new(
+        codes::INVALID_REQUEST,
+        format!("the integration checks of {proposal} v{version} failed"),
+    )
+    .with_details([
+        ("reason", json!("checks_failed")),
+        ("proposal", json!(proposal.to_string())),
+        ("version", json!(version)),
+    ])
+    .with_hint("the author sends a new version with update_proposal; call get_proposal to read the failed check run")
+}
+
+/// The refusal of a second request to integrate a version whose integration waits in the queue already.
+fn already_queued_refusal(proposal: ProposalId, version: u32) -> FoldError {
+    FoldError::new(
+        codes::INVALID_REQUEST,
+        format!("an integration of {proposal} v{version} is already queued"),
+    )
+    .with_details([
+        ("reason", json!("integration_queued")),
+        ("proposal", json!(proposal.to_string())),
+        ("version", json!(version)),
+    ])
+    .with_hint("fold integrates it in its turn and sends the result as a message; get_proposal shows integration_queued until then")
+}
+
+/// Only a proposal's integration runs checks, so a pull, a record or a direct change never ends with failed checks.
+fn not_a_proposal() -> ReviewError {
+    StoreError::Invalid("only the integration of a proposal runs checks").into()
 }
 
 /// A full Git object id in lower-case hex, SHA-1 or SHA-256.
@@ -923,6 +1267,8 @@ struct Commit<'a> {
     now: Timestamp,
     /// The conflicted human change the integration brings onto main.
     human: Option<&'a HumanResolution>,
+    /// The passed integration checks of the merged tree, ended in this transaction.
+    checks: Option<&'a PassedRun>,
 }
 
 /// A conflicted human change that an integration brings onto main, with the data of its `human_change.resolved` event: the human, and the files, open workspaces and leads it touches.
@@ -956,6 +1302,19 @@ impl Commit<'_> {
                 let facts = self
                     .recheck(tx, *proposal, *version_id, *expected_version, *automatic)
                     .await?;
+                if let Some(passed) = self.checks
+                    && !end_run_in_tx(
+                        tx,
+                        buffer,
+                        &passed.run,
+                        &passed.results,
+                        RunVerdict::passed(),
+                        self.now,
+                    )
+                    .await?
+                {
+                    return Err(Step::Retry);
+                }
                 // A sync task's integration marks the remote commit it resolves as merged, for the sync base walk and the Git writers.
                 let remote_commit = tasks::remote_commit(tx.conn(), *task).await?;
                 let subject = IntegrationSubject::Proposal {

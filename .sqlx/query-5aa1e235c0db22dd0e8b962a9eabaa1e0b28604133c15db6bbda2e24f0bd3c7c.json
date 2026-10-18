@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE proposals SET checks_failed = 1, updated_at = ?2 WHERE number = ?1 AND state = 'open'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "5aa1e235c0db22dd0e8b962a9eabaa1e0b28604133c15db6bbda2e24f0bd3c7c"
+}

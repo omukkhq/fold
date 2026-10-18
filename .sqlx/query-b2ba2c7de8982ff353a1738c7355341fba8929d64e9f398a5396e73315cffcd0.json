@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT g.name AS \"agent!: String\", c.number AS \"run!: i64\"\n           FROM check_runs c\n           JOIN workers k ON k.id = c.worker_id\n           JOIN worker_processes w ON w.agent_id = k.agent_id\n           JOIN agents g ON g.id = w.agent_id\n           WHERE c.stage = 'proposal' AND c.purpose IN ('create_proposal', 'update_proposal')\n             AND c.state IN ('failed', 'stopped') AND c.finished_at > w.started_at\n             AND w.role = 'task_worker' AND w.state IN (SELECT value FROM json_each(?1))\n             AND c.id = (\n                 SELECT MAX(x.id) FROM check_runs x\n                 WHERE x.workspace_id = c.workspace_id AND x.state <> 'running'\n             )\n           ORDER BY w.id, c.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "agent!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "run!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "check_runs",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "b2ba2c7de8982ff353a1738c7355341fba8929d64e9f398a5396e73315cffcd0"
+}

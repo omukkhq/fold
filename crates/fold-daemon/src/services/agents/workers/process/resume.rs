@@ -3,12 +3,14 @@ use std::fmt::Write as _;
 
 use fold_core::events::types;
 use fold_core::reviews::Verdict;
+use fold_core::reviews::checks::{RunReason, RunState, Stage};
 use fold_core::roles::{StartFacts, first_turn};
 use fold_core::{
     AgentName, AreaName, Event, EventActor, FoldError, NewEvent, ProposalId, Role, TaskId,
     WorkerState, WorkspaceId, codes,
 };
 use fold_store::agents;
+use fold_store::reviews::checks;
 use fold_store::reviews::{self, CommentRow, ProposalState, ReviewRow};
 use fold_store::{StoreError, workspaces};
 use serde_json::{Value, json};
@@ -24,11 +26,12 @@ use crate::services::agents::workers::{
 use crate::services::events::EventBuffer;
 use crate::services::projects::load_config;
 
-/// Why fold resumes a task worker: a review asked for changes, or the proposal conflicts with main at integration.
+/// Why fold resumes a task worker: a review asked for changes, the proposal conflicts with main at integration, or its integration checks failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Reason {
     Changes,
     Conflict,
+    Checks,
 }
 
 impl Reason {
@@ -36,6 +39,7 @@ impl Reason {
         match self {
             Reason::Changes => "changes",
             Reason::Conflict => "conflict",
+            Reason::Checks => "checks",
         }
     }
 }
@@ -151,6 +155,25 @@ pub(super) fn resume_items(event: &Event) -> Vec<ResumeItem> {
             })
             .collect();
     }
+    if kind == types::CHECKS_FINISHED {
+        let data = &event.data;
+        let failed_at_integration = data.get("stage").and_then(Value::as_str)
+            == Some("integration")
+            && data.get("state").and_then(Value::as_str) == Some("failed");
+        if !failed_at_integration {
+            return Vec::new();
+        }
+        return event
+            .proposal
+            .zip(version(data))
+            .map(|(proposal, version)| ResumeItem {
+                proposal,
+                version,
+                reason: Reason::Checks,
+            })
+            .into_iter()
+            .collect();
+    }
     if kind == types::INTEGRATION_CONFLICTED {
         return event
             .proposal
@@ -183,6 +206,8 @@ enum Section {
     },
     /// The author message of the stored conflict report.
     Conflict(Option<String>),
+    /// What failed in the latest failed integration run of the version.
+    Checks(Option<String>),
 }
 
 impl Supervisor {
@@ -282,6 +307,7 @@ impl Supervisor {
             for (reason, due) in [
                 (Reason::Changes, owed.changes),
                 (Reason::Conflict, owed.conflict),
+                (Reason::Checks, owed.checks),
             ] {
                 if due {
                     items.push(ResumeItem {
@@ -329,6 +355,7 @@ impl Supervisor {
             for (reason, due) in [
                 (Reason::Changes, owed.changes),
                 (Reason::Conflict, owed.conflict),
+                (Reason::Checks, owed.checks),
             ] {
                 if due {
                     by_author
@@ -382,6 +409,7 @@ impl Supervisor {
             for (reason, due) in [
                 (Reason::Changes, proposal.changes_requested),
                 (Reason::Conflict, proposal.conflicted),
+                (Reason::Checks, proposal.checks_failed),
             ] {
                 if due {
                     found.push(
@@ -550,6 +578,34 @@ impl Supervisor {
                     .await?
                     .map(|report| report.author_message()),
             ),
+            Reason::Checks => {
+                let runs =
+                    checks::runs_of_version(read, row.task, item.proposal, item.version).await?;
+                let failed = runs
+                    .into_iter()
+                    .find(|run| run.stage == Stage::Integration && run.state == RunState::Failed);
+                let text = match failed {
+                    Some(run) => {
+                        let names: Vec<String> = checks::list_results(read, run.id, false)
+                            .await?
+                            .into_iter()
+                            .filter(|result| result.required && result.outcome.is_failure())
+                            .map(|result| result.check.unwrap_or_else(|| "setup".to_owned()))
+                            .collect();
+                        let what = if names.is_empty() {
+                            run.reason.map_or("failed", RunReason::as_str).to_owned()
+                        } else {
+                            format!("{} failed", names.join(", "))
+                        };
+                        Some(format!(
+                            "The integration checks ({}) ran on its merge with main {}: {what}. Call get_check_run with {} for the logs.",
+                            run.id, run.base, run.id
+                        ))
+                    }
+                    None => None,
+                };
+                Section::Checks(text)
+            }
         };
         Ok(Found {
             item,
@@ -759,6 +815,16 @@ fn section_text(found: &Found) -> String {
                 "\nMake the changes, record them, then call update_proposal for {proposal} to send v{next}. get_review_comments shows the comments again."
             );
             text
+        }
+        Section::Checks(message) => {
+            let next = version.saturating_add(1);
+            let detail = message.clone().unwrap_or_else(|| {
+                "Call get_proposal to read its check runs, and get_check_run for the logs."
+                    .to_owned()
+            });
+            format!(
+                "{proposal} v{version} for {task}: its integration checks failed, so fold did not integrate it. {place}\n{detail}\nFix the work, run_checks if the project has proposal checks, then call update_proposal for {proposal} to send v{next}."
+            )
         }
         Section::Conflict(message) => {
             let detail = message.clone().unwrap_or_else(|| {
@@ -977,5 +1043,53 @@ mod tests {
         let fresh = fresh_instructions(&found_turn_parts(&[changes]));
         assert!(fresh.starts_with("Your earlier session is gone"), "{fresh}");
         assert!(fresh.contains("P-3 v1 for T-1"), "{fresh}");
+        let checks = Found {
+            item: ResumeItem {
+                proposal: proposal(5),
+                version: 1,
+                reason: Reason::Checks,
+            },
+            task,
+            workspace: None,
+            section: Section::Checks(Some("The integration checks (cr-2) ran.".to_owned())),
+        };
+        let text = section_text(&checks);
+        assert!(
+            text.contains("P-5 v1 for T-1: its integration checks failed"),
+            "{text}"
+        );
+        assert!(
+            text.contains("The integration checks (cr-2) ran."),
+            "{text}"
+        );
+        assert!(
+            text.contains("update_proposal for P-5 to send v2"),
+            "{text}"
+        );
+        let unknown = Found {
+            section: Section::Checks(None),
+            ..checks
+        };
+        assert!(section_text(&unknown).contains("get_check_run"));
+    }
+
+    #[test]
+    fn failed_integration_checks_resume_and_other_check_ends_do_not() {
+        let failed = event(
+            types::CHECKS_FINISHED,
+            Some(6),
+            json!({"stage": "integration", "state": "failed", "version": 3}),
+        );
+        let items = resume_items(&failed);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].reason, Reason::Checks);
+        assert_eq!((items[0].proposal, items[0].version), (proposal(6), 3));
+        assert_eq!(Reason::Checks.as_str(), "checks");
+        for data in [
+            json!({"stage": "integration", "state": "passed", "version": 3}),
+            json!({"stage": "proposal", "state": "failed", "version": null}),
+        ] {
+            assert!(resume_items(&event(types::CHECKS_FINISHED, Some(6), data)).is_empty());
+        }
     }
 }

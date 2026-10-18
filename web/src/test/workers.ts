@@ -154,6 +154,7 @@ export function proposalSummary(
     closed_at: null,
     created_at: 1_760_000_000_000,
     updated_at: 1_760_000_000_000,
+    integration_queued: false,
     ...fields,
   };
 }

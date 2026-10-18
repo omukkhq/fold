@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT p.number AS \"proposal!: i64\",\n                  t.number AS \"task!: i64\",\n                  t.human_reviewer,\n                  t.human_review_reason,\n                  t.human_review_set_by,\n                  p.conflicted AS \"conflicted: bool\",\n                  v.version,\n                  v.created_at AS version_at,\n                  (\n                      SELECT MAX(e.created_at) FROM events e\n                      WHERE e.task_id = t.number AND e.type = ?1\n                  ) AS \"marked_at?: i64\"\n           FROM proposals p\n           JOIN tasks t ON t.id = p.task_id\n           JOIN proposal_versions v ON v.proposal_id = p.id\n           WHERE p.state = 'open'\n             AND t.human_review = 1\n             AND v.version = (\n                     SELECT MAX(c.version) FROM proposal_versions c WHERE c.proposal_id = p.id\n                 )\n           ORDER BY p.number",
+  "query": "SELECT p.number AS \"proposal!: i64\",\n                  t.number AS \"task!: i64\",\n                  t.human_reviewer,\n                  t.human_review_reason,\n                  t.human_review_set_by,\n                  (p.conflicted OR p.checks_failed) AS \"conflicted: bool\",\n                  v.version,\n                  v.created_at AS version_at,\n                  (\n                      SELECT MAX(e.created_at) FROM events e\n                      WHERE e.task_id = t.number AND e.type = ?1\n                  ) AS \"marked_at?: i64\"\n           FROM proposals p\n           JOIN tasks t ON t.id = p.task_id\n           JOIN proposal_versions v ON v.proposal_id = p.id\n           WHERE p.state = 'open'\n             AND t.human_review = 1\n             AND v.version = (\n                     SELECT MAX(c.version) FROM proposal_versions c WHERE c.proposal_id = p.id\n                 )\n           ORDER BY p.number",
   "describe": {
     "columns": [
       {
@@ -62,12 +62,7 @@
         "name": "conflicted: bool",
         "ordinal": 5,
         "type_info": "Integer",
-        "origin": {
-          "Table": {
-            "table": "proposals",
-            "name": "conflicted"
-          }
-        }
+        "origin": "Expression"
       },
       {
         "name": "version",
@@ -113,5 +108,5 @@
       true
     ]
   },
-  "hash": "3091a42ebcdddaf745e463b43a00ae77649911e16be7f94481d0a91d70d2f4f6"
+  "hash": "8b529fb4fc1d46680cd4220908ec00f4b6242f370af7997c02b161b293766629"
 }

@@ -120,6 +120,8 @@ fn all_equals_the_plans_event_types() {
         "stash.dropped",
         "checks.started",
         "checks.finished",
+        "integration.queued",
+        "integration.unqueued",
     ]);
     assert_eq!(declared, expected);
 }

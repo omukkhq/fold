@@ -527,6 +527,20 @@ impl Projects {
             {
                 tracing::error!(project = %row.slug, code = error.log_code(), "could not end the check runs a stop cut short");
             }
+            let reviews = match &self.registry {
+                Some(registry) => handle.reviews(registry),
+                None => ReviewService::new(
+                    handle.store.clone(),
+                    handle.bus.clone(),
+                    handle.clock.clone(),
+                    WorkspaceService::for_project(handle),
+                    handle.integration.clone(),
+                )
+                .with_checks(handle.checks.clone()),
+            };
+            if let Err(error) = reviews.requeue_integrations().await {
+                tracing::error!(project = %row.slug, code = error.log_code(), "could not queue again the integrations a stop left waiting");
+            }
             if let Err(error) = handle.agents().close_orphan_sessions().await {
                 tracing::error!(project = %row.slug, code = code_of(&error), "could not end orphan sessions");
             }

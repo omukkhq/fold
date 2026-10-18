@@ -190,7 +190,11 @@ function resumedText(event: DurableEvent): string {
   const why =
     event.data.reason === "conflict"
       ? `the conflict on ${proposal}`
-      : `changes to ${proposal}`;
+      : event.data.reason === "checks"
+        ? event.data.stage === "proposal"
+          ? `the failed checks of ${taskOf(event)}`
+          : `the failed integration checks of ${proposal}`
+        : `changes to ${proposal}`;
   return event.data.resumed === false
     ? `restarted ${worker} in a new session for ${why}`
     : `resumed ${worker} for ${why}`;
@@ -780,6 +784,14 @@ const SPECS: Record<EventType, Spec> = {
         ? `ended the checks of ${taskOf(e)}`
         : `ended the checks of ${taskOf(e)}: ${state.replaceAll("_", " ")}`;
     },
+  },
+  "integration.queued": {
+    icon: ListChecks,
+    text: (e) => `queued the integration of ${proposalOf(e)}`,
+  },
+  "integration.unqueued": {
+    icon: ListChecks,
+    text: (e) => `took the integration of ${proposalOf(e)} out of the queue`,
   },
 };
 

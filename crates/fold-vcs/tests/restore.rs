@@ -11,7 +11,7 @@ use fold_vcs::index::StatIndex;
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::platform::Capabilities;
 use fold_vcs::restore::{
-    RestoreOptions, Restored, differs_from_latest, record_checkpoint_tree, restore_tree,
+    RestoreOptions, Restored, differs_from_latest, record_checkpoint_tree, reset_tree, restore_tree,
 };
 use fold_vcs::scan::{DEFAULT_MAX_FILE_BYTES, ScanOptions, scan};
 
@@ -417,4 +417,54 @@ fn empty_directories_where_the_target_has_files_are_cleared() {
     assert_eq!(read(&fx.root, "flat"), "a file");
     assert_eq!(read(&fx.root, "deep"), "another file");
     assert_eq!(fx.fresh_scan(), fx.flat(&target));
+}
+
+#[test]
+fn a_reset_writes_the_target_over_unrecorded_files_and_keeps_ignored_ones() {
+    let mut fx = fixture(HOST);
+    write(&fx.root, "keep.txt", b"same");
+    write(&fx.root, "src/lib.rs", b"v1");
+    write(&fx.root, ".gitignore", b"node_modules/\n");
+    let target = fx.checkpoint(None);
+    write(&fx.root, "src/lib.rs", b"never recorded");
+    write(&fx.root, "generated.txt", b"a check wrote this");
+    write(&fx.root, "node_modules/dep.js", b"installed");
+    let refused = fx.restore(&target);
+    assert!(refused.is_err(), "a restore keeps unrecorded work");
+
+    let rules = IgnoreRules::new(&fx.root);
+    let opts = RestoreOptions {
+        scan: ScanOptions {
+            rules: &rules,
+            max_file_bytes: fx.max,
+            caps: fx.caps,
+            recorded: None,
+        },
+        write: opts(fx.caps, false),
+    };
+    reset_tree(
+        &fx.store,
+        &fx.root,
+        &mut fx.index,
+        &fx.index_path,
+        &target,
+        &opts,
+    )
+    .unwrap();
+    assert_eq!(read(&fx.root, "src/lib.rs"), "v1");
+    assert!(!fx.root.join("generated.txt").exists());
+    assert_eq!(read(&fx.root, "node_modules/dep.js"), "installed");
+    assert_eq!(fx.fresh_scan(), fx.flat(&target));
+
+    let empty = fx.dir.path().join("checks/main");
+    reset_tree(
+        &fx.store,
+        &empty,
+        &mut StatIndex::empty(fx.caps),
+        &fx.dir.path().join("checks/main.index"),
+        &target,
+        &opts,
+    )
+    .unwrap();
+    assert_eq!(read(&empty, "keep.txt"), "same");
 }

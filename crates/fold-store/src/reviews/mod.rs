@@ -27,7 +27,7 @@ pub use claims::{
 pub use human_edits::{keep_approvals, request_review_again};
 pub use integrations::{
     IntegrationFacts, IntegrationSubject, NewIntegration, conflict_report, insert_conflicted,
-    insert_refused, insert_succeeded, integration_facts, mark_conflicted,
+    insert_refused, insert_succeeded, integration_facts, mark_checks_failed, mark_conflicted,
 };
 pub use summaries::{
     IntegrationRecord, ProposalSummary, ReviewEntry, proposal_summaries, review_entries,
@@ -85,6 +85,10 @@ pub struct ProposalRow {
     pub title: String,
     pub state: ProposalState,
     pub conflicted: bool,
+    /// The integration checks of the current version failed, so the proposal is with its author until a new version.
+    pub checks_failed: bool,
+    /// A request to integrate the current version waits in the integration queue.
+    pub integration_queued: bool,
     pub close_reason: Option<String>,
     /// The highest version number.
     pub current_version: u32,
@@ -164,7 +168,7 @@ pub async fn open_proposal(
     insert_version(tx, new.id, 1, first, now).await
 }
 
-/// Adds version `version` to an open proposal and clears its conflict flag, in the caller's write: a new version answers the conflict report it was made for. Earlier versions are never touched; the unique `(proposal, version)` index refuses a number that exists.
+/// Adds version `version` to an open proposal and clears its conflict and failed-checks flags, in the caller's write: a new version answers the conflict report or the failed integration checks it was made for. Earlier versions are never touched; the unique `(proposal, version)` index refuses a number that exists.
 pub async fn add_version(
     tx: &mut WriteTx,
     proposal: ProposalId,
@@ -174,7 +178,7 @@ pub async fn add_version(
 ) -> Result<(), StoreError> {
     let (number, now_ms) = (proposal.to_db(), now.as_millis());
     let updated = sqlx::query!(
-        "UPDATE proposals SET conflicted = 0, updated_at = ?2 WHERE number = ?1 AND state = 'open'",
+        "UPDATE proposals SET conflicted = 0, checks_failed = 0, updated_at = ?2 WHERE number = ?1 AND state = 'open'",
         number,
         now_ms
     )
@@ -393,6 +397,8 @@ struct RawProposal {
     title: String,
     state: String,
     conflicted: bool,
+    checks_failed: bool,
+    integration_queued: bool,
     close_reason: Option<String>,
     current_version: Option<i64>,
     verdict: Option<String>,
@@ -425,6 +431,8 @@ impl RawProposal {
             state: ProposalState::parse(&row.state)
                 .ok_or(StoreError::Corrupt("proposals.state"))?,
             conflicted: row.conflicted,
+            checks_failed: row.checks_failed,
+            integration_queued: row.integration_queued,
             close_reason: row.close_reason,
             current_version,
             changes_requested: row.verdict.as_deref() == Some("request_changes"),
@@ -458,6 +466,12 @@ macro_rules! select_proposals {
                       p.title,
                       p.state,
                       p.conflicted AS "conflicted: bool",
+                      p.checks_failed AS "checks_failed: bool",
+                      EXISTS (
+                          SELECT 1 FROM integration_requests q
+                          WHERE q.proposal_id = p.id AND q.ended_at IS NULL
+                            AND q.version = (SELECT MAX(v.version) FROM proposal_versions v WHERE v.proposal_id = p.id)
+                      ) AS "integration_queued!: bool",
                       p.close_reason,
                       (SELECT MAX(v.version) FROM proposal_versions v WHERE v.proposal_id = p.id) AS "current_version?: i64",
                       (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) AS "verdict?: String",

@@ -78,6 +78,8 @@ define_names!(
         DaemonStopped = "daemon_stopped",
         /// The integration started again on a newer state, with a run of its own.
         Superseded = "superseded",
+        /// fold itself could not run the checks, such as when its check directory could not take the tree or a command could not start: the run says nothing of the change, and the integration can be asked again once the fault is fixed.
+        FoldFailed = "fold_failed",
     }
 );
 

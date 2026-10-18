@@ -311,7 +311,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             SUBMIT_REVIEW,
-            "Review the version of a proposal you read, the version of your review checkout, with a verdict, a text and line comments. request_changes gives the turn to the author; reject closes the proposal. A version that is no longer current is refused with stale_version.",
+            "Review the version of a proposal you read, the version of your review checkout, with a verdict, a text and line comments. request_changes gives the turn to the author; reject closes the proposal. A version that is no longer current is refused with stale_version; an approve of a version whose integration checks failed is refused with invalid_request and the reason checks_failed until the author sends a new version.",
             schema_for_type::<SubmitReviewInput>(),
         ),
         Tool::new(
@@ -321,7 +321,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             INTEGRATE_PROPOSAL,
-            "Integrate the current version of a proposal onto main; only the main agent, the review lead and its batch reviewers may. Refusals: stale_version, changes_requested, not_approved, human_approval_missing, prerequisites_not_done (the gates are not met), author_cannot_integrate (your agent wrote it), integrator_required, and integration_conflicted (the version conflicts with main; details list the files and kinds).",
+            "Integrate the current version of a proposal onto main; only the main agent, the review lead and its batch reviewers may. Refusals: stale_version, changes_requested, not_approved, human_approval_missing, prerequisites_not_done (the gates are not met), author_cannot_integrate (your agent wrote it), integrator_required, and integration_conflicted (the version conflicts with main; details list the files and kinds). When fold-checks.toml has integration checks, the result is queued: fold integrates the queued proposals one at a time in the order asked, after the integration checks pass on the merge with main; failed checks (result checks_failed when it ran at once) send the proposal back to its author, and until a new version the call is refused with invalid_request and the reason checks_failed. A second call while the version waits in the queue is refused with invalid_request and the reason integration_queued; get_proposal shows integration_queued. When fold itself cannot run the checks, it answers workspace_io with the reason fold_failed: nothing is sent back, and you integrate again once the fault is fixed. fold sends each result as a message.",
             schema_for_type::<IntegrateProposalInput>(),
         ),
         Tool::new(
@@ -562,6 +562,8 @@ fn view_json(view: &ProposalView) -> Value {
         "human_review": mark_json(summary.human_review.as_ref()),
         "conflict": detail.conflict,
         "checks": view.checks.iter().map(checks::run_json).collect::<Vec<_>>(),
+        "checks_failed": summary.checks_failed,
+        "integration_queued": summary.integration_queued,
         "files": view.files.iter().map(file_line).collect::<Vec<_>>(),
         "totals": {
             "files": view.totals.files,
@@ -956,6 +958,15 @@ async fn integrate_proposal(
         IntegrationOutcome::Conflicted(conflicts) => {
             Err(integration_conflicted(proposal, &conflicts))
         }
+        IntegrationOutcome::ChecksFailed { run } => Ok(json!({
+            "id": proposal,
+            "result": "checks_failed",
+            "run": run,
+        })),
+        IntegrationOutcome::Queued => Ok(json!({
+            "id": proposal,
+            "result": "queued",
+        })),
     }
 }
 

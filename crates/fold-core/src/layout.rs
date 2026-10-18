@@ -119,6 +119,16 @@ impl ProjectPaths {
         self.index().join(format!("{workspace}.idx"))
     }
 
+    /// fold's own directory where the integration checks of a project run: a copy of main, or of the merge an integration is about to publish, which keeps the files the checks' setup installs between runs. It is no workspace: no agent works in it.
+    pub fn checks_dir(&self) -> PathBuf {
+        self.root.join(CHECKS_DIR).join("main")
+    }
+
+    /// The stat index of [`ProjectPaths::checks_dir`].
+    pub fn checks_index(&self) -> PathBuf {
+        self.index().join("checks.idx")
+    }
+
     /// The stat index of the project folder, which tells the folder's unchanged files from those a human changed without reading them all.
     pub fn folder_index(&self) -> PathBuf {
         self.index().join("folder.idx")
@@ -179,6 +189,9 @@ pub fn session_settings() -> serde_json::Value {
 
 /// The parent of every workspace directory relative to the project root.
 pub const WS_DIR: &str = ".fold/ws";
+
+/// The parent of fold's own check directory relative to the project root.
+pub const CHECKS_DIR: &str = ".fold/checks";
 
 /// The directory of a task workspace relative to the project root, as `workspaces.path` stores it. `earlier` counts the task workspaces the task had before this one: none gives `.fold/ws/t-12`, one gives `.fold/ws/t-12-2`. The name carries no worker, so it never changes when the workspace changes hands.
 pub fn task_workspace_path(task: TaskId, earlier: u32) -> String {

@@ -196,7 +196,7 @@ async fn acceptance_5_named_human_integrates_without_an_agent_approval_over_an_e
     assert_eq!(code, StatusCode::OK, "{answer}");
     assert_eq!(
         answer,
-        json!({"proposal": proposal, "result": "succeeded", "revision": "r2"})
+        json!({"proposal": proposal, "result": "succeeded", "revision": "r2", "run": null})
     );
 
     let after = harness.head().await;

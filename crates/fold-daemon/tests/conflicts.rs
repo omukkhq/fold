@@ -104,6 +104,7 @@ async fn integrate_conflicted(fx: &Fixture, review: &Actor) -> Vec<Conflict> {
     {
         IntegrationOutcome::Conflicted(conflicts) => conflicts,
         IntegrationOutcome::Succeeded { revision } => panic!("integrated as {revision}"),
+        other => panic!("expected a conflict, got {other:?}"),
     }
 }
 

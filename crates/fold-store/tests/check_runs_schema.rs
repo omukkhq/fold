@@ -260,3 +260,81 @@ async fn the_columns_match_the_stage_and_purpose() {
         .await;
     assert!(missing.is_err(), "a run never ends as running");
 }
+
+#[tokio::test]
+async fn a_queued_integration_waits_until_it_ends_once() {
+    let (_dir, store) = seeded().await;
+    let proposal = ProposalId::from_number(1).unwrap();
+    let id = store
+        .write(async |tx| {
+            checks::insert_integration_request(tx, proposal, 1, Some(1), "human:ana", at(1)).await
+        })
+        .await
+        .unwrap();
+    assert!(
+        checks::integration_queued(store.read(), proposal, 1)
+            .await
+            .unwrap()
+    );
+    let second = store
+        .write(async |tx| {
+            checks::insert_integration_request(tx, proposal, 1, None, "human:bo", at(1)).await
+        })
+        .await;
+    assert!(second.is_err(), "one waiting request per version");
+    let waiting = checks::waiting_integration_requests(store.read())
+        .await
+        .unwrap();
+    assert_eq!(waiting.len(), 1);
+    assert_eq!(waiting[0].proposal, proposal);
+    assert_eq!(waiting[0].version, 1);
+    assert_eq!(waiting[0].expected_version, Some(1));
+    assert_eq!(waiting[0].actor, "human:ana");
+    let ended = store
+        .write(async |tx| checks::end_integration_request(tx, id, at(2)).await)
+        .await
+        .unwrap();
+    assert!(ended);
+    let again = store
+        .write(async |tx| checks::end_integration_request(tx, id, at(3)).await)
+        .await
+        .unwrap();
+    assert!(!again, "a request ends once");
+    assert!(
+        !checks::integration_queued(store.read(), proposal, 1)
+            .await
+            .unwrap()
+    );
+    assert!(
+        checks::waiting_integration_requests(store.read())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let deleted = exec(&store, "DELETE FROM integration_requests")
+        .await
+        .unwrap_err();
+    assert!(deleted.to_string().contains("append-only"));
+    let changed = exec(&store, "UPDATE integration_requests SET actor = 'x'")
+        .await
+        .unwrap_err();
+    assert!(
+        changed
+            .to_string()
+            .contains("integration_requests_end_once")
+    );
+    let missing = store
+        .write(async |tx| {
+            checks::insert_integration_request(
+                tx,
+                ProposalId::from_number(9).unwrap(),
+                1,
+                None,
+                "human:ana",
+                at(1),
+            )
+            .await
+        })
+        .await;
+    assert!(missing.is_err());
+}

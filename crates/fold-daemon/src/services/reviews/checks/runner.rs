@@ -79,6 +79,54 @@ pub struct CheckRunner {
     permits: CheckPermits,
     limits: RunLimits,
     tasks: Arc<Mutex<JoinSet<()>>>,
+    /// Held while fold's check directory is brought to a tree and while checks run in it.
+    check_dir: Arc<tokio::sync::Mutex<()>>,
+    queue: Arc<Queue>,
+}
+
+/// The queued integrations of a project in the order they were asked for: each takes a ticket when it is queued and runs when the queue serves that ticket.
+#[derive(Debug)]
+struct Queue {
+    next: std::sync::atomic::AtomicU64,
+    serving: tokio::sync::watch::Sender<u64>,
+}
+
+impl Default for Queue {
+    fn default() -> Self {
+        Self {
+            next: std::sync::atomic::AtomicU64::new(0),
+            serving: tokio::sync::watch::Sender::new(0),
+        }
+    }
+}
+
+/// A place in a project's integration queue. Dropping it, whether its integration ended or was aborted, serves the next ticket.
+#[derive(Debug)]
+pub(crate) struct Ticket {
+    number: u64,
+    queue: Arc<Queue>,
+}
+
+impl Ticket {
+    /// Waits until every integration queued before this one has ended.
+    pub(crate) async fn turn(&self) {
+        let mut serving = self.queue.serving.subscribe();
+        let _ = serving.wait_for(|now| *now >= self.number).await;
+    }
+}
+
+impl Drop for Ticket {
+    fn drop(&mut self) {
+        let next = self.number.saturating_add(1);
+        self.queue.serving.send_if_modified(|now| {
+            if *now < next {
+                *now = next;
+                true
+            } else {
+                false
+            }
+        });
+    }
 }
 
 impl CheckRunner {
@@ -88,6 +136,8 @@ impl CheckRunner {
             permits,
             limits: RunLimits::default(),
             tasks: Arc::default(),
+            check_dir: Arc::default(),
+            queue: Arc::default(),
         }
     }
 
@@ -119,6 +169,23 @@ impl CheckRunner {
 
     pub(crate) fn permits(&self) -> &CheckPermits {
         &self.permits
+    }
+
+    /// A place at the end of the project's integration queue, taken at once so the order is the order of the calls.
+    pub(crate) fn ticket(&self) -> Ticket {
+        let number = self
+            .queue
+            .next
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ticket {
+            number,
+            queue: Arc::clone(&self.queue),
+        }
+    }
+
+    /// The lock of the project's check directory.
+    pub(crate) fn check_dir(&self) -> Arc<tokio::sync::Mutex<()>> {
+        Arc::clone(&self.check_dir)
     }
 
     /// Runs `work` in the background. Finished runs are dropped from the set here, so it holds only those still going.
@@ -171,6 +238,8 @@ pub struct CommandResult {
     pub log: Vec<u8>,
     /// The size of the whole output.
     pub log_bytes: u64,
+    /// fold could not start the command or wait for it, so its failure is fold's and says nothing of the tree.
+    pub fault: bool,
 }
 
 impl CommandResult {
@@ -232,6 +301,7 @@ pub async fn run_commands_for(
             duration_ms: 0,
             log: Vec::new(),
             log_bytes: 0,
+            fault: false,
         };
         if setup_failed {
             results.push(skipped(Outcome::NotRun));
@@ -261,6 +331,7 @@ pub async fn run_commands_for(
             duration_ms,
             log: ran.log,
             log_bytes: ran.log_bytes,
+            fault: ran.fault,
         };
         setup_failed = spec.check.is_none() && result.outcome.is_failure();
         results.push(result);
@@ -273,6 +344,7 @@ struct Ran {
     exit_code: Option<i32>,
     log: Vec<u8>,
     log_bytes: u64,
+    fault: bool,
 }
 
 /// The end of a stream of output, at most `limit` bytes, and the size of the whole.
@@ -337,6 +409,7 @@ async fn run_command(dir: PathBuf, run: &str, limits: RunLimits, owner: &PeerWor
                 exit_code: None,
                 log,
                 log_bytes,
+                fault: true,
             };
         }
     };
@@ -355,21 +428,22 @@ async fn run_command(dir: PathBuf, run: &str, limits: RunLimits, owner: &PeerWor
     if let Some(stderr) = child.stderr.take() {
         readers.spawn(read_into(stderr, Arc::clone(&tail)));
     }
-    let (outcome, exit_code) = match tokio::time::timeout(limits.timeout, child.wait()).await {
+    let (outcome, exit_code, fault) = match tokio::time::timeout(limits.timeout, child.wait()).await
+    {
         Ok(Ok(status)) => {
             let outcome = if status.success() {
                 Outcome::Passed
             } else {
                 Outcome::Failed
             };
-            (outcome, status.code())
+            (outcome, status.code(), false)
         }
         Ok(Err(error)) => {
             note(
                 &tail,
                 &format!("\nfold could not wait for the command: {}\n", error.kind()),
             );
-            (Outcome::Failed, None)
+            (Outcome::Failed, None, true)
         }
         Err(_) => {
             signal(group, rustix::process::Signal::TERM);
@@ -387,7 +461,7 @@ async fn run_command(dir: PathBuf, run: &str, limits: RunLimits, owner: &PeerWor
                     limits.timeout.as_secs()
                 ),
             );
-            (Outcome::TimedOut, None)
+            (Outcome::TimedOut, None, false)
         }
     };
     drop(guard);
@@ -404,6 +478,7 @@ async fn run_command(dir: PathBuf, run: &str, limits: RunLimits, owner: &PeerWor
         exit_code,
         log,
         log_bytes,
+        fault,
     }
 }
 
@@ -521,6 +596,18 @@ mod tests {
                 .iter()
                 .any(|gone| gone == "CLAUDE_CODE_MESSAGING_TOKEN")
         );
+    }
+
+    #[tokio::test]
+    async fn a_command_that_cannot_start_is_a_fault_of_folds_and_a_red_one_is_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let gone = dir.path().join("gone");
+        let results = run_commands(&gone, vec![spec("ok", "true")], quick(), &clock()).await;
+        assert_eq!(results[0].outcome, Outcome::Failed);
+        assert!(results[0].fault);
+        let results =
+            run_commands(dir.path(), vec![spec("bad", "exit 1")], quick(), &clock()).await;
+        assert!(!results[0].fault);
     }
 
     #[tokio::test]
@@ -652,6 +739,20 @@ mod tests {
         assert_eq!(specs[0].check, None);
         assert_eq!(specs[1].check.as_deref(), Some("t"));
         assert!(!specs[1].runs);
+    }
+
+    #[tokio::test]
+    async fn queued_tickets_take_their_turn_in_order() {
+        let runner = CheckRunner::default();
+        let first = runner.ticket();
+        let second = runner.ticket();
+        first.turn().await;
+        let waiting = tokio::time::timeout(Duration::from_millis(50), second.turn()).await;
+        assert!(waiting.is_err(), "the second waits for the first");
+        drop(first);
+        tokio::time::timeout(Duration::from_secs(5), second.turn())
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

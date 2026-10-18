@@ -149,6 +149,8 @@ define_event_types! {
     STASH_DROPPED = "stash.dropped",
     CHECKS_STARTED = "checks.started",
     CHECKS_FINISHED = "checks.finished",
+    INTEGRATION_QUEUED = "integration.queued",
+    INTEGRATION_UNQUEUED = "integration.unqueued",
 }
 
 impl EventType {

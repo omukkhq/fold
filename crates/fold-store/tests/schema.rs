@@ -108,6 +108,7 @@ async fn baseline_creates_every_table_of_the_data_model() {
         "handoffs",
         "human_change_conflicts",
         "human_changes",
+        "integration_requests",
         "integrations",
         "labels",
         "message_choices",
