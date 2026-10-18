@@ -75,7 +75,7 @@ fn warnings_alone_exit_0_and_every_project_in_the_registry_is_checked() {
     let sandbox = Sandbox::new().unwrap();
     let alpha = sandbox.init("alpha").unwrap();
     sandbox.init("beta").unwrap();
-    std::fs::remove_file(alpha.join(".mcp.json")).unwrap();
+    std::fs::remove_file(alpha.join(".claude/skills/fold/SKILL.md")).unwrap();
     let socket = sandbox.path("absent.sock");
     let output = sandbox
         .fold(&["doctor", "--socket", socket.to_str().unwrap()])
@@ -91,7 +91,9 @@ fn warnings_alone_exit_0_and_every_project_in_the_registry_is_checked() {
     assert!(text.contains("warn claude: claude is not on PATH"));
     assert!(text.contains("fix: install Claude Code"));
     assert!(text.contains("ok   database: quick_check is ok and journal_mode is wal"));
-    assert!(text.contains("warn claude files: .mcp.json is missing"));
+    assert!(text.contains("warn claude files: .claude/skills/fold/SKILL.md is missing"));
+    assert!(text.contains("warn claude setup: "));
+    assert!(text.contains("fix: fld setup --claude"));
     assert_eq!(text.matches("fix: fld init --refresh").count(), 1);
 }
 

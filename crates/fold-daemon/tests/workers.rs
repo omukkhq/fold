@@ -212,6 +212,18 @@ async fn an_area_lead_starts_task_workers_only_for_tasks_of_its_own_area() {
         config,
         json!({"mcpServers": {"fold": {"command": "/usr/local/bin/fld", "args": ["mcp"], "env": {"FOLD_AGENT": "web-worker"}}}})
     );
+    for run in [&lead_run, &task_worker_run] {
+        let own: Value = serde_json::from_str(
+            &std::fs::read_to_string(run.flag("--settings").unwrap()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(own, fold_core::layout::session_settings());
+        assert_eq!(own["permissions"]["allow"], json!(["mcp__fold"]));
+        assert_eq!(
+            own["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+            "fld hook pre-tool-use"
+        );
+    }
     let listed = harness.call(MAIN, "list_workers", json!({})).await;
     assert_eq!(listed["areas"][1]["lead"], "web-lead");
     let names: Vec<&str> = listed["workers"]

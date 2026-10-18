@@ -103,6 +103,7 @@ impl Host {
             .env("XDG_CONFIG_HOME", self.config_home())
             .env("XDG_DATA_HOME", self.data_home())
             .env("XDG_RUNTIME_DIR", self.runtime_base())
+            .env_remove("CLAUDE_CONFIG_DIR")
             .env_remove("FOLD_AGENT")
             .env_remove("FOLD_HUMAN")
             .stdin(Stdio::piped())
@@ -200,9 +201,7 @@ fn terminate(pids: &[i32]) {
 /// The files `fld init` writes into a new project's folder that are there now, and their bytes as `r1` counts them. The `.gitignore` always counts, with the bytes it holds after init, so the folder's own `.gitignore` is not part of the folder's file count. An empty `.foldignore` counts as a file of no bytes.
 pub fn init_files(project: &Path) -> (usize, u64) {
     let written = [
-        ".mcp.json",
         "AGENTS.md",
-        ".claude/settings.json",
         ".claude/skills/fold/SKILL.md",
         ".foldignore",
         ".gitignore",

@@ -34,7 +34,7 @@ pub struct InitArgs {
     /// Unix socket of the running daemon; overrides daemon.toml (default $XDG_RUNTIME_DIR/fold/fold.sock)
     #[arg(long)]
     pub(crate) socket: Option<PathBuf>,
-    /// Rewrite the Claude Code files of an existing project, keeping every entry fold does not own, instead of creating a project
+    /// Rewrite fold's Claude Code files of an existing project, and remove the entries an earlier fold wrote into .mcp.json and .claude/settings.json, keeping every entry fold does not own, instead of creating a project
     #[arg(long, conflicts_with_all = ["name", "from_git", "socket"])]
     pub(crate) refresh: bool,
     /// The name for the project's own Git config, instead of asking for it; only a new Git repository gets one
@@ -275,13 +275,10 @@ fn refresh(dir: Option<&Path>, dirs: &Dirs, out: &mut impl Write) -> Result<(), 
 /// Writes the Claude Code files into a new project's folder before init records it, so they are part of `r1`, and returns the files and folders that did not exist before.
 fn new_claude_files(root: &Path) -> Result<Vec<PathBuf>, FoldError> {
     // A folder comes before the files below it, so only the topmost new path is recorded.
-    let written = [
-        claude_files::MCP_FILE,
-        claude_files::instructions_file(root),
-    ]
-    .into_iter()
-    .chain(claude_files::FOLDERS)
-    .chain([claude_files::SETTINGS_FILE, claude_files::SKILL_FILE]);
+    let written = [claude_files::instructions_file(root)]
+        .into_iter()
+        .chain(claude_files::FOLDERS)
+        .chain([claude_files::SKILL_FILE]);
     let mut created: Vec<PathBuf> = Vec::new();
     for path in written.map(|relative| root.join(relative)) {
         if std::fs::symlink_metadata(&path).is_err()

@@ -5,7 +5,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use fold_core::config::RoleSettings;
 use fold_core::events::types;
-use fold_core::layout::{AGENT_ENV, AGENT_TAGS_ENV, MCP_COMMAND, MCP_SERVER_NAME, MCP_SERVERS_KEY};
+use fold_core::layout::{
+    AGENT_ENV, AGENT_TAGS_ENV, MCP_COMMAND, MCP_SERVER_NAME, MCP_SERVERS_KEY, session_settings,
+};
 use fold_core::roles::area_prompt;
 use fold_core::{AgentName, AreaName, EventActor, NewEvent, ProjectPaths, WorkerState, codes};
 use fold_store::StoreError;
@@ -72,7 +74,7 @@ impl Supervisor {
             area_instructions,
         )
         .await;
-        let (mcp, prompt) = match files {
+        let (mcp, own_settings, prompt) = match files {
             Ok(files) => files,
             Err(_) => {
                 tracing::warn!(agent = %row.agent, "could not write the worker's files");
@@ -105,7 +107,9 @@ impl Supervisor {
                 "stdio",
             ])
             .arg("--mcp-config")
-            .arg(&mcp);
+            .arg(&mcp)
+            .arg("--settings")
+            .arg(&own_settings);
         if settings.mcp.is_some() {
             command.arg("--strict-mcp-config");
         }
@@ -313,14 +317,14 @@ async fn drain(mut stderr: ChildStderr) {
     }
 }
 
-/// Writes the worker's MCP configuration and its prompt under the worker's folder. The prompt is the role's text, shipped or the project's override, then the shared rules, then the area's instructions when there are any; the override file itself is never passed, because it lacks the shared rules. Returns the two paths Claude Code reads.
+/// Writes the worker's MCP configuration, its settings and its prompt under the worker's folder. The settings allow the fold tools and run fold's hooks, so a worker never depends on the user's own Claude Code settings. The prompt is the role's text, shipped or the project's override, then the shared rules, then the area's instructions when there are any; the override file itself is never passed, because it lacks the shared rules. Returns the three paths Claude Code reads.
 async fn write_files(
     paths: &ProjectPaths,
     launcher: &Launcher,
     row: &WorkerProcessRow,
     settings: &RoleSettings,
     area_instructions: Option<(AreaName, String)>,
-) -> std::io::Result<(PathBuf, PathBuf)> {
+) -> std::io::Result<(PathBuf, PathBuf, PathBuf)> {
     let dir = paths.worker_dir(&row.agent);
     let fold_dir = paths.fold_dir();
     let override_prompt = paths.role_prompt(row.role);
@@ -337,6 +341,8 @@ async fn write_files(
         let config = mcp_config(&fold, &agent, limit.as_deref(), &project_mcp);
         let mcp = dir.join("mcp.json");
         std::fs::write(&mcp, config.to_string())?;
+        let own_settings = dir.join("settings.json");
+        std::fs::write(&own_settings, session_settings().to_string())?;
         let role_prompt = if override_prompt.is_file() {
             fold_core::with_shared_rules(&std::fs::read_to_string(&override_prompt)?)
         } else {
@@ -354,7 +360,7 @@ async fn write_files(
                 prompt
             }
         };
-        Ok((mcp, prompt))
+        Ok((mcp, own_settings, prompt))
     })
     .await
     .map_err(std::io::Error::other)?

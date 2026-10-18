@@ -369,6 +369,34 @@ fn as_worker(arguments: &JsonObject) -> Result<Option<WorkerName>, FoldError> {
     }
 }
 
+/// The `initialize` instructions of [`OutsideProject`].
+pub const OUTSIDE_INSTRUCTIONS: &str = "This folder is in no fold project, so fold offers no tools here. Run fld init in a folder to make it a fold project, then start Claude Code there.";
+
+/// The MCP server of a session outside every fold project, which the user's Claude Code configuration starts in any folder: it answers `initialize` with no capabilities, so the session lists no fold tools and shows no error.
+pub struct OutsideProject;
+
+impl ServerHandler for OutsideProject {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::default())
+            .with_server_info(Implementation::new("fold", env!("CARGO_PKG_VERSION")))
+            .with_instructions(OUTSIDE_INSTRUCTIONS)
+    }
+}
+
+impl OutsideProject {
+    /// Serves the session on the two streams until the client closes its side.
+    pub async fn serve<R, W>(read: R, write: W)
+    where
+        R: tokio::io::AsyncRead + Send + Unpin + 'static,
+        W: tokio::io::AsyncWrite + Send + Unpin + 'static,
+    {
+        use rmcp::ServiceExt;
+        if let Ok(running) = Self.serve((read, write)).await {
+            let _ = running.waiting().await;
+        }
+    }
+}
+
 impl ServerHandler for FoldServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())

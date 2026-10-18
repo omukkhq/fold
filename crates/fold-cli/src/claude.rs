@@ -6,13 +6,16 @@ use std::process::Command;
 
 use clap::{Args, ValueEnum};
 use fold_cli::claude_files;
+use fold_cli::claude_user::{self, UserFiles};
 use fold_cli::daemon_client::{self, ClientError, DaemonClient, Response};
+use fold_core::layout::{MCP_COMMAND, session_settings};
 use fold_core::{AgentName, FoldError, MAIN_TAG, ProjectPaths, codes};
 use fold_daemon::services::agents::new_session_id;
 use fold_daemon::services::projects::{ProjectError, root_for_dir_on_host, slug_for_dir_on_host};
 use hyper::Method;
 use thiserror::Error;
 
+use crate::claude_setup::Offer;
 use crate::init::host_paths;
 use crate::serve::{self, Dirs};
 
@@ -134,7 +137,7 @@ pub fn run_new(args: &NewArgs, dirs: &Dirs) -> Result<(), ClaudeError> {
     }
 }
 
-/// Starts the daemon when it is not running, then replaces this process with the user's own `claude`, an interactive session in the project root that is the main agent. `FOLD_AGENT` and `--name` give the session its agent name and its messaging socket, and `FOLD_AGENT_TAGS` makes `fld mcp` register it with the `main` tag. The main agent prompt is appended to the session's system prompt on every start and resume, because a system prompt flag holds only for the `claude` run that gets it. fold chooses the id of every new session and records it, so that [`Session::Continue`] resumes the session `fld` started and never one the user started without it, which `claude --continue` could pick. It writes no Claude Code settings. It returns only when it could not start `claude`.
+/// Starts the daemon when it is not running, then replaces this process with the user's own `claude`, an interactive session in the project root that is the main agent. `FOLD_AGENT` and `--name` give the session its agent name and its messaging socket, and `FOLD_AGENT_TAGS` makes `fld mcp` register it with the `main` tag. The main agent prompt is appended to the session's system prompt on every start and resume, because a system prompt flag holds only for the `claude` run that gets it. fold chooses the id of every new session and records it, so that [`Session::Continue`] resumes the session `fld` started and never one the user started without it, which `claude --continue` could pick. It offers once to add fold to the user's Claude Code configuration, and a session of a user without that setup gets fold's server, permission and hooks as flags; it writes no project settings. It returns only when it could not start `claude`.
 pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), ClaudeError> {
     let agent = AgentName::parse(&args.name).map_err(FoldError::from)?;
     let host = host_paths(dirs)?;
@@ -175,7 +178,19 @@ pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), Claud
             || Ok(new_session_id()?),
         )?)
     };
+    let files = UserFiles::from_env();
+    let set_up = crate::claude_setup::offer_on_terminal(
+        dirs,
+        files.as_ref(),
+        Offer::Start,
+        &mut io::stdout(),
+    );
     crate::news::ask_once_on_terminal(dirs);
+    let own = if set_up {
+        None
+    } else {
+        OwnSetup::new(&agent, files.as_ref())
+    };
     let error = command(
         Path::new("claude"),
         &root,
@@ -184,6 +199,7 @@ pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), Claud
         prompt.as_deref(),
         &args.claude_args,
         socket.as_deref(),
+        own.as_ref(),
     )
     .exec();
     Err(ClaudeError::Exec(error))
@@ -323,6 +339,10 @@ fn transcript_exists(config_dir: &Path, root: &Path, id: &str) -> bool {
 }
 
 /// The `claude` run of `fld claude`: its own arguments come after `--name`, the session and the main agent prompt, each `None` when they choose it themselves. `socket` is the socket the user chose with `--socket` or `FOLD_SOCKET`; the session's `fld mcp` and hooks read it from `FOLD_SOCKET`, as they have no flag of their own to carry it.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is one part of the claude command line"
+)]
 fn command(
     claude: &Path,
     root: &Path,
@@ -331,8 +351,18 @@ fn command(
     prompt: Option<&Path>,
     extra: &[OsString],
     socket: Option<&Path>,
+    own: Option<&OwnSetup>,
 ) -> Command {
     let mut command = Command::new(claude);
+    // Before `--name`, which ends the list of `--mcp-config`, so that it never takes a word of the user's own arguments.
+    if let Some(own) = own {
+        if let Some(mcp) = &own.mcp {
+            command.arg("--mcp-config").arg(mcp);
+        }
+        if let Some(settings) = &own.settings {
+            command.arg("--settings").arg(settings);
+        }
+    }
     command.arg("--name").arg(agent.as_str());
     match start {
         Some(Start::New(id)) => command.arg("--session-id").arg(id),
@@ -351,6 +381,46 @@ fn command(
         command.env(serve::SOCKET_ENV, socket);
     }
     command
+}
+
+/// The fold server, the fold tools' permission and fold's hooks as `claude` flags, for a session of a user whose own Claude Code configuration lacks a part of fold's setup, so that the main agent has its tools all the same. The values are JSON text, which Claude Code takes in place of a file. A part the user's configuration holds is not passed again: Claude Code defines no order between a `--mcp-config` server and a configured one of the same name, and settings add nothing to a user's settings that already allow the fold tools and run fold's hooks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OwnSetup {
+    mcp: Option<String>,
+    settings: Option<String>,
+}
+
+impl OwnSetup {
+    fn new(agent: &AgentName, files: Option<&UserFiles>) -> Option<Self> {
+        let fold = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("fld"));
+        Self::for_binary(
+            &fold,
+            agent,
+            files.is_some_and(claude_user::holds_server),
+            files.is_some_and(claude_user::holds_settings),
+        )
+    }
+
+    /// `None` when the user's configuration holds both the server and the settings.
+    fn for_binary(
+        fold: &Path,
+        agent: &AgentName,
+        holds_server: bool,
+        holds_settings: bool,
+    ) -> Option<Self> {
+        let mcp = (!holds_server).then(|| {
+            let server = serde_json::json!({
+                "command": fold,
+                "args": [MCP_COMMAND],
+                "env": {(claude_files::AGENT_ENV): agent.as_str()},
+            });
+            let mut servers = serde_json::Map::new();
+            servers.insert(claude_files::MCP_SERVER_NAME.to_owned(), server);
+            serde_json::json!({ claude_files::MCP_SERVERS_KEY: servers }).to_string()
+        });
+        let settings = (!holds_settings).then(|| session_settings().to_string());
+        (mcp.is_some() || settings.is_some()).then_some(Self { mcp, settings })
+    }
 }
 
 /// Refuses before `claude` starts when another agent already has the `main` tag, which the session's adapter would get at its handshake.
@@ -720,6 +790,75 @@ mod tests {
     }
 
     #[test]
+    fn a_session_without_the_user_setup_gets_fold_by_flags_before_the_name() {
+        let agent = AgentName::parse("main").unwrap();
+        let own = OwnSetup::for_binary(Path::new("/bin/fld"), &agent, false, false).unwrap();
+        let (own_mcp, own_settings) = (own.mcp.clone().unwrap(), own.settings.clone().unwrap());
+        let mcp: serde_json::Value = serde_json::from_str(&own_mcp).unwrap();
+        assert_eq!(
+            mcp,
+            serde_json::json!({"mcpServers": {"fold": {"command": "/bin/fld", "args": ["mcp"], "env": {"FOLD_AGENT": "main"}}}})
+        );
+        let settings: serde_json::Value = serde_json::from_str(&own_settings).unwrap();
+        assert_eq!(
+            settings["permissions"]["allow"],
+            serde_json::json!(["mcp__fold"])
+        );
+        assert_eq!(
+            settings["hooks"]["Stop"][0]["hooks"][0]["command"],
+            "fld hook stop"
+        );
+        let command = command(
+            Path::new("claude"),
+            Path::new("/src/app"),
+            &agent,
+            None,
+            None,
+            &[OsString::from("hello")],
+            None,
+            Some(&own),
+        );
+        let args: Vec<_> = command.get_args().collect();
+        assert_eq!(
+            args,
+            [
+                "--mcp-config",
+                own_mcp.as_str(),
+                "--settings",
+                own_settings.as_str(),
+                "--name",
+                "main",
+                "hello"
+            ]
+        );
+        let server_held = OwnSetup::for_binary(Path::new("/bin/fld"), &agent, true, false).unwrap();
+        assert_eq!(server_held.mcp, None);
+        assert_eq!(server_held.settings.as_deref(), Some(own_settings.as_str()));
+        let settings_held =
+            OwnSetup::for_binary(Path::new("/bin/fld"), &agent, false, true).unwrap();
+        assert_eq!(settings_held.mcp.as_deref(), Some(own_mcp.as_str()));
+        assert_eq!(settings_held.settings, None);
+        let args: Vec<_> = super::command(
+            Path::new("claude"),
+            Path::new("/src/app"),
+            &agent,
+            None,
+            None,
+            &[],
+            None,
+            Some(&settings_held),
+        )
+        .get_args()
+        .map(ToOwned::to_owned)
+        .collect();
+        assert_eq!(args, ["--mcp-config", own_mcp.as_str(), "--name", "main"]);
+        assert_eq!(
+            OwnSetup::for_binary(Path::new("/bin/fld"), &agent, true, true),
+            None
+        );
+    }
+
+    #[test]
     fn the_name_defaults_to_main_and_the_rest_goes_to_claude() {
         let parsed = parse(&[]).unwrap().args;
         assert_eq!(parsed.name, "main");
@@ -744,6 +883,7 @@ mod tests {
             Some(Path::new("/src/app/.fold/sessions/prompt.md")),
             &extra,
             None,
+            None,
         );
         let args: Vec<_> = resumed.get_args().collect();
         assert_eq!(
@@ -767,6 +907,7 @@ mod tests {
             None,
             &[OsString::from("-c")],
             None,
+            None,
         );
         let args: Vec<_> = own.get_args().collect();
         assert_eq!(args, ["--name", "main", "-c"]);
@@ -778,6 +919,7 @@ mod tests {
             Some(Path::new("/src/app/.fold/roles/main.md")),
             &extra,
             Some(Path::new("/run/by-hand.sock")),
+            None,
         );
         assert_eq!(command.get_program(), "claude");
         let args: Vec<_> = command.get_args().collect();

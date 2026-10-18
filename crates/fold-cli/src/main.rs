@@ -1,4 +1,5 @@
 mod claude;
+mod claude_setup;
 mod commands;
 mod doctor;
 mod fold_name;
@@ -37,7 +38,7 @@ enum Command {
     Mcp(mcp::McpArgs),
     /// Check the host, the daemon and each project, and name the fix for every problem
     Doctor(doctor::DoctorArgs),
-    /// Install the service that starts the daemon at login, then start it: a systemd user unit on Linux, a launchd agent on macOS
+    /// Install the service that starts the daemon at login, then start it: a systemd user unit on Linux, a launchd agent on macOS. Then offer to add fold to Claude Code for your user
     Setup(service::SetupArgs),
     /// Delete unreferenced objects, prune checkpoints and remove closed workspace directories
     Gc(commands::gc::GcArgs),
@@ -53,7 +54,7 @@ enum Command {
     Remote(commands::remote::RemoteArgs),
     /// Push main's Git history, one commit per revision, to the Git remote, without force
     Push(commands::remote::PushArgs),
-    /// Run a Claude Code hook; the generated .claude/settings.json calls these
+    /// Run a Claude Code hook; the settings that fld setup and fold's sessions get call these
     #[command(hide = true)]
     Hook(hook::HookArgs),
     /// Bring the commits of the Git remote into main; a conflict becomes a sync task

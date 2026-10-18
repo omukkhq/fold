@@ -21,11 +21,13 @@ use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection, Row, SqliteConnection};
 use thiserror::Error;
 
+use crate::claude_setup;
 use crate::init::host_paths;
 use crate::output;
 use crate::platform::{Host, Platform, on_path};
 use crate::serve::{self, DEFAULT_LISTEN, Dirs, FileConfig, read_file_config};
 use fold_cli::claude_files::{self, shadowing_files};
+use fold_cli::claude_user::{self, UserSetup};
 use fold_daemon::config::{LOCK_FILE, SOCKET_FILE};
 
 const NOT_APPLICABLE: &str = "not applicable on this platform";
@@ -278,6 +280,7 @@ fn host_checks(socket_flag: Option<&Path>, file: &FileConfig, host: &Host) -> Ve
             .as_ref(),
         ),
         claude_check(host),
+        claude_setup_check(host),
         service_manager_check(host),
         linger_check(host),
         inotify_limit_check(host),
@@ -486,6 +489,33 @@ pub(crate) fn claude_verdict(facts: ClaudeFacts) -> Check {
             "claude auth login",
         ),
     }
+}
+
+/// Whether the user's Claude Code configuration holds fold's server, permission and hooks. A user who declined them gets no warning: `fld claude` gives its sessions the same entries by flags.
+pub(crate) fn claude_setup_verdict(setup: Option<UserSetup>, declined: bool) -> Check {
+    const NAME: &str = "claude setup";
+    match setup {
+        None => Check::not_applicable(NAME),
+        Some(UserSetup::Complete) => Check::ok(NAME, "fold is in your Claude Code config"),
+        Some(UserSetup::Incomplete(_)) if declined => Check::ok(
+            NAME,
+            format!(
+                "you chose to keep fold out of your Claude Code config; {} adds it",
+                claude_setup::ADD_COMMAND
+            ),
+        ),
+        Some(UserSetup::Incomplete(problems)) => {
+            Check::warn(NAME, problems.join("; "), claude_setup::ADD_COMMAND)
+        }
+    }
+}
+
+/// Doctor reads only the two files that hold the user-scope MCP servers and the user settings.
+fn claude_setup_check(host: &Host) -> Check {
+    claude_setup_verdict(
+        host.claude.as_ref().map(claude_user::state),
+        claude_setup::declined(&host.dirs),
+    )
 }
 
 /// Doctor asks Claude Code itself; it never reads Claude Code's credential files.
@@ -987,37 +1017,14 @@ fn objects_check(path: &Path) -> Check {
     objects_verdict(path, inspect_objects(path))
 }
 
-/// The problems with the Claude Code files the project root should hold: the fold MCP server, the allowed fold tools, the fold hooks and the marked section of the instructions file, which `instructions` names with its text.
+/// The problems with fold's Claude Code files in the project root: the marked section of the instructions file, which `instructions` names with its text, the fold skill, and the project files in `old` that still hold entries an earlier fold wrote there.
 pub(crate) fn claude_file_problems(
-    mcp: Option<&str>,
-    settings: Option<&str>,
     instructions: (&str, Option<&str>),
+    skill: bool,
+    old: &[&str],
 ) -> Vec<String> {
-    use claude_files::{AGENTS_BEGIN, AGENTS_END, MCP_FILE, SETTINGS_FILE};
-    let json = |text: &str| serde_json::from_str::<serde_json::Value>(text).unwrap_or_default();
+    use claude_files::{AGENTS_BEGIN, AGENTS_END, SKILL_FILE};
     let mut problems = Vec::new();
-    match mcp.map(json) {
-        None => problems.push(format!("{MCP_FILE} is missing")),
-        Some(value) => {
-            if !value[claude_files::MCP_SERVERS_KEY][claude_files::MCP_SERVER_NAME].is_object() {
-                problems.push(format!("{MCP_FILE} lacks the fold server"));
-            }
-        }
-    }
-    match settings.map(json) {
-        None => problems.push(format!("{SETTINGS_FILE} is missing")),
-        Some(value) => {
-            if !allows_fold_tools(&value) {
-                problems.push(format!("{SETTINGS_FILE} does not allow the fold tools"));
-            }
-            if !claude_files::HOOKS
-                .iter()
-                .all(|(event, command)| runs_hook(&value, event, command))
-            {
-                problems.push(format!("{SETTINGS_FILE} lacks the fold hooks"));
-            }
-        }
-    }
     let (name, text) = instructions;
     match text {
         None => problems.push(format!("{name} is missing")),
@@ -1026,29 +1033,15 @@ pub(crate) fn claude_file_problems(
         }
         Some(_) => {}
     }
+    if !skill {
+        problems.push(format!("{SKILL_FILE} is missing"));
+    }
+    for file in old {
+        problems.push(format!(
+            "{file} holds fold entries, which belong in your Claude Code config"
+        ));
+    }
     problems
-}
-
-fn allows_fold_tools(settings: &serde_json::Value) -> bool {
-    let all = claude_files::ALLOW_FOLD_TOOLS;
-    let wildcard = format!("{all}__*");
-    settings["permissions"]["allow"]
-        .as_array()
-        .is_some_and(|rules| {
-            rules
-                .iter()
-                .filter_map(serde_json::Value::as_str)
-                .any(|rule| rule == all || rule == wildcard)
-        })
-}
-
-/// A hook command may name the binary by its full path, so only its end is compared.
-fn runs_hook(settings: &serde_json::Value, event: &str, command: &str) -> bool {
-    let groups = settings["hooks"][event].as_array().into_iter().flatten();
-    groups
-        .flat_map(|group| group["hooks"].as_array().into_iter().flatten())
-        .filter_map(|hook| hook["command"].as_str())
-        .any(|run| run.trim().ends_with(command))
 }
 
 /// Every integration continues the commit `.fold/git-sync.map` names last, so a project repository without that commit leaves each new revision without its Git commit.
@@ -1145,9 +1138,9 @@ fn claude_files_check(root: &Path) -> Check {
     let read = |relative: &str| std::fs::read_to_string(root.join(relative)).ok();
     let instructions = claude_files::instructions_file(root);
     let mut problems = claude_file_problems(
-        read(claude_files::MCP_FILE).as_deref(),
-        read(claude_files::SETTINGS_FILE).as_deref(),
         (instructions, read(instructions).as_deref()),
+        root.join(claude_files::SKILL_FILE).is_file(),
+        &claude_files::old_entries(root),
     );
     if let Some(stale) = claude_files::stale_section(root) {
         problems.push(format!(

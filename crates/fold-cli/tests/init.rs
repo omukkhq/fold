@@ -486,7 +486,7 @@ fn an_init_the_registry_does_not_know_is_finished_with_its_claude_files() {
     assert!(first.status.success(), "{first:?}");
     // A registry that lost the row leaves `.fold/` as an init stopped before the registry insert does.
     std::fs::remove_dir_all(sandbox.path("data")).unwrap();
-    std::fs::remove_file(project.join(claude_files::MCP_FILE)).unwrap();
+    std::fs::remove_file(project.join(claude_files::SKILL_FILE)).unwrap();
 
     std::fs::write(project.join("new.txt"), "not read\n").unwrap();
 
@@ -501,7 +501,8 @@ fn an_init_the_registry_does_not_know_is_finished_with_its_claude_files() {
             machine_warnings(&project)
         )
     );
-    assert!(project.join(claude_files::MCP_FILE).is_file());
+    assert!(project.join(claude_files::SKILL_FILE).is_file());
+    assert!(!project.join(claude_files::MCP_FILE).exists());
     assert!(sandbox.registry_path().is_file());
 }
 

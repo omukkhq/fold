@@ -75,6 +75,8 @@ pub(crate) struct Host {
     pub(crate) probe: Probe,
     /// The variables that decide the human's fold name.
     pub(crate) names: crate::fold_name::Environment,
+    /// Claude Code's own files of the user, which `fld setup` adds fold to.
+    pub(crate) claude: Option<fold_cli::claude_user::UserFiles>,
 }
 
 impl Host {
@@ -92,6 +94,7 @@ impl Host {
             platform: Platform::current(),
             probe: Probe::new("/"),
             names: crate::fold_name::Environment::from_env(),
+            claude: fold_cli::claude_user::UserFiles::from_env(),
         }
     }
 
@@ -210,6 +213,7 @@ mod tests {
             },
             probe: Probe::new("/nonexistent-root"),
             names: crate::fold_name::Environment::default(),
+            claude: None,
         }
     }
 

@@ -129,11 +129,48 @@ pub const AGENT_TAGS_ENV: &str = "FOLD_AGENT_TAGS";
 /// The key of the servers object in an MCP configuration such as `.mcp.json`.
 pub const MCP_SERVERS_KEY: &str = "mcpServers";
 
-/// The key of fold's own server below `mcpServers`, in the project's `.mcp.json`, in a worker's MCP configuration and in a role's `mcp` list.
+/// The key of fold's own server below `mcpServers`, in the user's Claude Code configuration, in a worker's MCP configuration and in a role's `mcp` list.
 pub const MCP_SERVER_NAME: &str = "fold";
 
 /// The `fld` subcommand that fold's MCP server entry runs: the stdio adapter to the daemon.
 pub const MCP_COMMAND: &str = "mcp";
+
+/// The `permissions.allow` entry that allows every fold MCP tool; `mcp__fold__*` does the same.
+pub const ALLOW_FOLD_TOOLS: &str = "mcp__fold";
+
+/// The Claude Code hook events and the fold command each one runs. A session that runs fold's commands from two settings sources, such as a worker's `--settings` file and the user's own settings, runs each once, because Claude Code runs identical hook commands once.
+pub const HOOKS: [(&str, &str); 3] = [
+    ("SessionStart", "fld hook session-start"),
+    ("Stop", "fld hook stop"),
+    ("PreToolUse", "fld hook pre-tool-use"),
+];
+
+/// The tools whose calls the `PreToolUse` hook sees: those that change a file named by its path.
+pub const FILE_TOOLS: &str = "Edit|Write|MultiEdit|NotebookEdit";
+
+/// The hook group of one event in [`HOOKS`] as Claude Code settings hold it.
+pub fn hook_group(event: &str, command: &str) -> serde_json::Value {
+    let hooks = serde_json::json!([{"type": "command", "command": command}]);
+    match event {
+        "PreToolUse" => serde_json::json!({"matcher": FILE_TOOLS, "hooks": hooks}),
+        _ => serde_json::json!({"hooks": hooks}),
+    }
+}
+
+/// The Claude Code settings a fold session needs: the fold tools allowed and fold's hooks. fold passes them with `--settings` to the sessions it starts, so they never depend on the user's own settings.
+pub fn session_settings() -> serde_json::Value {
+    let mut hooks = serde_json::Map::new();
+    for (event, command) in HOOKS {
+        hooks.insert(
+            event.to_owned(),
+            serde_json::json!([hook_group(event, command)]),
+        );
+    }
+    serde_json::json!({
+        "permissions": {"allow": [ALLOW_FOLD_TOOLS]},
+        "hooks": hooks,
+    })
+}
 
 /// The parent of every workspace directory relative to the project root.
 pub const WS_DIR: &str = ".fold/ws";
@@ -176,6 +213,22 @@ pub fn review_batch_checkout_path(batch: ReviewBatchId, earlier: u32) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_session_settings_allow_the_fold_tools_and_run_each_hook_once() {
+        let settings = session_settings();
+        assert_eq!(
+            settings["permissions"]["allow"],
+            serde_json::json!(["mcp__fold"])
+        );
+        for (event, command) in HOOKS {
+            let groups = settings["hooks"][event].as_array().unwrap();
+            assert_eq!(groups.len(), 1);
+            assert_eq!(groups[0]["hooks"][0]["command"], command);
+        }
+        assert_eq!(settings["hooks"]["PreToolUse"][0]["matcher"], FILE_TOOLS);
+        assert!(settings["hooks"]["Stop"][0].get("matcher").is_none());
+    }
 
     #[test]
     fn host_paths_fall_back_to_home() {

@@ -4,6 +4,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
+use fold_cli::claude_user::{self, UserFiles};
 use fold_core::{AgentName, ProjectPaths};
 
 use crate::common::{DaemonGuard, Host, adapter, daemons, list_agents};
@@ -86,16 +87,28 @@ fn prompt_arg(output: &Output) -> Option<&str> {
     args.get(at + 1).copied()
 }
 
-/// The arguments the fake `claude` got other than the main agent prompt, which [`prompt_arg`] reads.
+/// The arguments the fake `claude` got other than the main agent prompt, which [`prompt_arg`] reads, and the flags that give a user without the user setup its server, permission and hooks.
 fn claude_args(output: &Output) -> Vec<&str> {
     let mut args = all_args(output);
-    if let Some(at) = args
-        .iter()
-        .position(|arg| *arg == "--append-system-prompt-file")
-    {
-        args.drain(at..at + 2);
+    for flag in ["--append-system-prompt-file", "--mcp-config", "--settings"] {
+        if let Some(at) = args.iter().position(|arg| *arg == flag) {
+            args.drain(at..at + 2);
+        }
     }
     args
+}
+
+/// The value the fake `claude` got for `flag`.
+fn flag_arg<'a>(output: &'a Output, flag: &str) -> Option<&'a str> {
+    let args = all_args(output);
+    let at = args.iter().position(|arg| *arg == flag)?;
+    args.get(at + 1).copied()
+}
+
+/// Claude Code's user files below the host's `HOME`.
+fn user_files(host: &Host) -> UserFiles {
+    UserFiles::from_vars(|name| (name == "HOME").then(|| host.dir.path().as_os_str().to_owned()))
+        .unwrap()
 }
 
 /// The main session id that fold recorded for the agent `main` of the project.
@@ -142,6 +155,7 @@ async fn fld_claude_starts_the_daemon_and_runs_claude_as_the_main_agent_in_the_p
     std::fs::create_dir_all(&below).unwrap();
     assert!(daemons(&host.default_socket()).is_empty());
 
+    claude_user::add(&user_files(&host)).unwrap();
     let output = fld_claude(&host, &["--", "--model", "opus"], &below).await;
     let guard = DaemonGuard(daemons(&host.default_socket()));
     assert!(output.status.success(), "{}", text(&output.stderr));
@@ -195,12 +209,62 @@ async fn fld_claude_starts_the_daemon_and_runs_claude_as_the_main_agent_in_the_p
 }
 
 #[tokio::test]
+async fn without_the_user_setup_fld_claude_names_the_command_and_gives_fold_by_flags() {
+    let host = Host::new().await;
+    let output = fld_claude(&host, &["--", "hello"], &host.root).await;
+    let guard = DaemonGuard(daemons(&host.default_socket()));
+    assert!(
+        text(&output.stdout).starts_with(
+            "fold is not in your Claude Code config; run fld setup --claude to add it\n"
+        ),
+        "{}",
+        text(&output.stdout)
+    );
+    let files = user_files(&host);
+    assert!(!files.config.exists() && !files.settings.exists());
+    let mcp: serde_json::Value =
+        serde_json::from_str(flag_arg(&output, "--mcp-config").unwrap()).unwrap();
+    assert_eq!(
+        mcp["mcpServers"]["fold"]["args"],
+        serde_json::json!(["mcp"])
+    );
+    assert_eq!(mcp["mcpServers"]["fold"]["env"]["FOLD_AGENT"], "main");
+    let settings: serde_json::Value =
+        serde_json::from_str(flag_arg(&output, "--settings").unwrap()).unwrap();
+    assert_eq!(settings, fold_core::layout::session_settings());
+    let args = all_args(&output);
+    assert_eq!(args[0], "--mcp-config");
+    assert_eq!(args.last(), Some(&"hello"));
+
+    // A user-scope fold server is not passed again; the settings the user lacks still are.
+    std::fs::write(
+        &files.config,
+        r#"{"mcpServers": {"fold": {"type": "stdio", "command": "fld", "args": ["mcp"]}}}"#,
+    )
+    .unwrap();
+    let server_only = fld_claude(&host, &[], &host.root).await;
+    assert!(flag_arg(&server_only, "--mcp-config").is_none());
+    assert_eq!(
+        flag_arg(&server_only, "--settings"),
+        Some(fold_core::layout::session_settings().to_string().as_str())
+    );
+
+    claude_user::add(&files).unwrap();
+    let set_up = fld_claude(&host, &[], &host.root).await;
+    assert!(flag_arg(&set_up, "--mcp-config").is_none());
+    assert!(flag_arg(&set_up, "--settings").is_none());
+    assert!(!text(&set_up.stdout).contains("fld setup --claude"));
+    guard.stop().await;
+}
+
+#[tokio::test]
 async fn fld_claude_resumes_the_main_session_fld_started_last_and_fld_new_starts_another() {
     let host = Host::new().await;
     // The user's own session, started without fld, is the newest of the folder but never resumed.
     let outside = std::process::Command::new(fake_claude_bin(&host).join("claude"))
         .current_dir(&host.root)
         .env("HOME", host.dir.path())
+        .env_remove("CLAUDE_CONFIG_DIR")
         .output()
         .unwrap();
     assert!(outside.status.success());

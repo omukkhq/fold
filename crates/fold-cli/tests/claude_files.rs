@@ -9,62 +9,11 @@ use fold_cli::claude_files::{
 };
 use tempfile::TempDir;
 
-const MCP_GOLDEN: &str = r#"{
-  "mcpServers": {
-    "fold": {
-      "command": "fld",
-      "args": [
-        "mcp"
-      ],
-      "env": {
-        "FOLD_AGENT": "${FOLD_AGENT:-}"
-      }
-    }
-  }
-}
-"#;
+/// What `.mcp.json` held when fold wrote its server into the project.
+const OLD_MCP: &str = r#"{"mcpServers": {"fold": {"command": "fld", "args": ["mcp"], "env": {"FOLD_AGENT": "${FOLD_AGENT:-}"}}}}"#;
 
-const SETTINGS_GOLDEN: &str = r#"{
-  "permissions": {
-    "allow": [
-      "mcp__fold"
-    ]
-  },
-  "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "fld hook session-start"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "fld hook stop"
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "fld hook pre-tool-use"
-          }
-        ]
-      }
-    ]
-  }
-}
-"#;
+/// What `.claude/settings.json` held when fold wrote its permission and hooks into the project.
+const OLD_SETTINGS: &str = r#"{"permissions": {"allow": ["mcp__fold"]}, "hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "fld hook session-start"}]}], "Stop": [{"hooks": [{"type": "command", "command": "fld hook stop"}]}], "PreToolUse": [{"matcher": "Edit|Write|MultiEdit|NotebookEdit", "hooks": [{"type": "command", "command": "fld hook pre-tool-use"}]}]}}"#;
 
 const STUB: &str = "## fold\n\nStub section.\n";
 
@@ -73,10 +22,10 @@ fn read(root: &Path, relative: &str) -> String {
     std::fs::read_to_string(root.join(relative)).unwrap()
 }
 
-/// The modification time of each of the four files.
+/// The modification time of each of fold's files.
 #[cfg(test)]
 fn mtimes(root: &Path) -> Vec<std::time::SystemTime> {
-    [MCP_FILE, SETTINGS_FILE, AGENTS_FILE, SKILL_FILE]
+    [AGENTS_FILE, SKILL_FILE]
         .map(|relative| {
             std::fs::metadata(root.join(relative))
                 .unwrap()
@@ -95,12 +44,12 @@ fn malformed(error: ClaudeFileError) -> fold_core::FoldError {
 }
 
 #[test]
-fn a_fresh_write_gives_the_golden_files_and_a_refresh_changes_no_byte() {
+fn a_fresh_write_gives_the_section_and_the_skill_and_a_refresh_changes_no_byte() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();
     claude_files::write(root).unwrap();
-    assert_eq!(read(root, MCP_FILE), MCP_GOLDEN);
-    assert_eq!(read(root, SETTINGS_FILE), SETTINGS_GOLDEN);
+    assert!(!root.join(MCP_FILE).exists());
+    assert!(!root.join(SETTINGS_FILE).exists());
     let agents = read(root, AGENTS_FILE);
     assert!(
         agents.starts_with(&format!("{AGENTS_BEGIN}\n## fold\n")),
@@ -114,12 +63,12 @@ fn a_fresh_write_gives_the_golden_files_and_a_refresh_changes_no_byte() {
     );
 
     let before = mtimes(root);
-    let bytes: Vec<String> = [MCP_FILE, SETTINGS_FILE, AGENTS_FILE, SKILL_FILE]
+    let bytes: Vec<String> = [AGENTS_FILE, SKILL_FILE]
         .map(|relative| read(root, relative))
         .to_vec();
     claude_files::write(root).unwrap();
     claude_files::write(root).unwrap();
-    let after: Vec<String> = [MCP_FILE, SETTINGS_FILE, AGENTS_FILE, SKILL_FILE]
+    let after: Vec<String> = [AGENTS_FILE, SKILL_FILE]
         .map(|relative| read(root, relative))
         .to_vec();
     assert_eq!(bytes, after);
@@ -128,14 +77,15 @@ fn a_fresh_write_gives_the_golden_files_and_a_refresh_changes_no_byte() {
 
 /// The expected texts are literals, so they prove that the user's keys keep their order and their values.
 #[test]
-fn a_refresh_keeps_foreign_entries_in_their_order_and_replaces_stale_fold_ones() {
+fn a_refresh_removes_the_old_fold_entries_and_keeps_foreign_ones_in_their_order() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();
     std::fs::create_dir_all(root.join(".claude")).unwrap();
     let mcp = r#"{"other": 1, "mcpServers": {"zeta": {"command": "z-mcp"}, "fold": {"command": "fold", "args": ["serve"]}, "alpha": {"command": "a-mcp", "env": {"Z": "1", "A": "2"}}}}"#;
     std::fs::write(root.join(MCP_FILE), mcp).unwrap();
-    let settings = r#"{"model": "opus", "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo bye"}]}, {"hooks": [{"type": "command", "command": "fold hook stop"}]}], "SessionStart": [{"hooks": [{"type": "command", "command": "fold hook old-start"}, {"type": "command", "command": "notify-send hi"}]}, {"matcher": "resume", "hooks": [{"type": "command", "command": "fld hook session-start"}]}], "PreToolUse": [{"matcher": "Bash", "hooks": [{"command": "guard", "type": "command"}]}]}, "permissions": {"deny": ["Read(.env)", "Edit(/main/**)", "Write(/main/**)"], "allow": ["Bash(ls)", "mcp__fold"]}, "env": {"B": "2", "A": "1"}}"#;
+    let settings = r#"{"model": "opus", "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo bye"}]}, {"hooks": [{"type": "command", "command": "fold hook stop"}]}], "SessionStart": [{"hooks": [{"type": "command", "command": "fold hook old-start"}, {"type": "command", "command": "notify-send hi"}]}, {"matcher": "resume", "hooks": [{"type": "command", "command": "fld hook session-start"}]}], "PreToolUse": [{"matcher": "Bash", "hooks": [{"command": "guard", "type": "command"}]}, {"matcher": "Edit|Write|MultiEdit|NotebookEdit", "hooks": [{"type": "command", "command": "fld hook pre-tool-use"}]}], "Notification": []}, "permissions": {"deny": ["Read(.env)", "Edit(/main/**)", "Write(/main/**)"], "allow": ["Bash(ls)", "mcp__fold"]}, "env": {"B": "2", "A": "1"}}"#;
     std::fs::write(root.join(SETTINGS_FILE), settings).unwrap();
+    assert_eq!(claude_files::old_entries(root), [MCP_FILE, SETTINGS_FILE]);
     claude_files::write(root).unwrap();
 
     let mcp_expected = r#"{
@@ -143,15 +93,6 @@ fn a_refresh_keeps_foreign_entries_in_their_order_and_replaces_stale_fold_ones()
   "mcpServers": {
     "zeta": {
       "command": "z-mcp"
-    },
-    "fold": {
-      "command": "fld",
-      "args": [
-        "mcp"
-      ],
-      "env": {
-        "FOLD_AGENT": "${FOLD_AGENT:-}"
-      }
     },
     "alpha": {
       "command": "a-mcp",
@@ -175,14 +116,6 @@ fn a_refresh_keeps_foreign_entries_in_their_order_and_replaces_stale_fold_ones()
             "command": "echo bye"
           }
         ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "fld hook stop"
-          }
-        ]
       }
     ],
     "SessionStart": [
@@ -191,14 +124,6 @@ fn a_refresh_keeps_foreign_entries_in_their_order_and_replaces_stale_fold_ones()
           {
             "type": "command",
             "command": "notify-send hi"
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "fld hook session-start"
           }
         ]
       }
@@ -212,25 +137,16 @@ fn a_refresh_keeps_foreign_entries_in_their_order_and_replaces_stale_fold_ones()
             "type": "command"
           }
         ]
-      },
-      {
-        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "fld hook pre-tool-use"
-          }
-        ]
       }
-    ]
+    ],
+    "Notification": []
   },
   "permissions": {
     "deny": [
       "Read(.env)"
     ],
     "allow": [
-      "Bash(ls)",
-      "mcp__fold"
+      "Bash(ls)"
     ]
   },
   "env": {
@@ -240,9 +156,38 @@ fn a_refresh_keeps_foreign_entries_in_their_order_and_replaces_stale_fold_ones()
 }
 "#;
     assert_eq!(read(root, SETTINGS_FILE), settings_expected);
+    assert!(claude_files::old_entries(root).is_empty());
+    let before = std::fs::metadata(root.join(MCP_FILE))
+        .unwrap()
+        .modified()
+        .unwrap();
     claude_files::write(root).unwrap();
     assert_eq!(read(root, MCP_FILE), mcp_expected);
     assert_eq!(read(root, SETTINGS_FILE), settings_expected);
+    let after = std::fs::metadata(root.join(MCP_FILE))
+        .unwrap()
+        .modified()
+        .unwrap();
+    assert_eq!(before, after, "a file without fold entries is not written");
+}
+
+#[test]
+fn a_project_file_that_held_only_fold_entries_goes_and_a_link_stays() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join(".claude")).unwrap();
+    std::fs::write(root.join(MCP_FILE), OLD_MCP).unwrap();
+    std::fs::write(root.join(SETTINGS_FILE), OLD_SETTINGS).unwrap();
+    claude_files::write(root).unwrap();
+    assert!(!root.join(MCP_FILE).exists());
+    assert!(!root.join(SETTINGS_FILE).exists());
+    assert!(root.join(".claude").is_dir(), "the skill keeps the folder");
+
+    std::fs::write(root.join("shared.json"), OLD_MCP).unwrap();
+    std::os::unix::fs::symlink("shared.json", root.join(MCP_FILE)).unwrap();
+    claude_files::write(root).unwrap();
+    assert!(is_link(&root.join(MCP_FILE)));
+    assert_eq!(read(root, "shared.json"), "{}\n");
 }
 
 #[test]
@@ -344,7 +289,7 @@ fn unmatched_or_repeated_markers_are_refused_and_leave_the_file_untouched() {
         assert_eq!(error.details().unwrap()["reason"], MALFORMED_REASON);
         assert!(error.message().contains(AGENTS_FILE));
         assert_eq!(read(root, AGENTS_FILE), existing);
-        assert!(!root.join(MCP_FILE).exists());
+        assert!(!root.join(SKILL_FILE).exists());
     }
 }
 
@@ -508,8 +453,8 @@ fn init_warns_for_each_shadowing_file_writes_the_files_and_exits_0() {
         sandbox.warnings(&output),
         names.map(|name| warning(parent.join(name)))
     );
-    assert_eq!(read(&project, MCP_FILE), MCP_GOLDEN);
-    assert_eq!(read(&project, SETTINGS_FILE), SETTINGS_GOLDEN);
+    assert!(!project.join(MCP_FILE).exists());
+    assert!(!project.join(SETTINGS_FILE).exists());
     assert!(project.join(AGENTS_FILE).is_file() && project.join(SKILL_FILE).is_file());
 
     std::fs::create_dir_all(project.join(".claude")).unwrap();
@@ -570,7 +515,7 @@ fn refresh_never_touches_the_workspaces() {
     let output = sandbox.fold_in(&["init", "--refresh"], &workspace);
     assert!(output.status.success(), "{output:?}");
     assert_eq!(tree(&project.join(".fold/ws")), ws);
-    assert_eq!(read(&project, MCP_FILE), MCP_GOLDEN);
+    assert!(project.join(SKILL_FILE).is_file());
 }
 
 #[test]
@@ -727,8 +672,7 @@ fn an_instructions_link_that_leads_outside_the_root_or_nowhere_is_refused() {
             )
         );
         assert!(is_link(&root.join(AGENTS_FILE)));
-        assert!(!root.join(MCP_FILE).exists(), "nothing is written");
-        assert!(!root.join(SKILL_FILE).exists());
+        assert!(!root.join(SKILL_FILE).exists(), "nothing is written");
     }
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "# shared\n");
 }

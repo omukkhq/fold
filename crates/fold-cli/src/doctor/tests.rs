@@ -8,9 +8,11 @@ use tempfile::TempDir;
 use super::*;
 use crate::platform::Probe;
 use fold_cli::claude_files::{
-    AGENTS_BEGIN, AGENTS_END, AGENTS_FILE, ALLOW_FOLD_TOOLS, CLAUDE_FILE, HOOKS, MCP_FILE,
-    MCP_SERVER_NAME, MCP_SERVERS_KEY, SETTINGS_FILE,
+    AGENTS_BEGIN, AGENTS_END, AGENTS_FILE, ALLOW_FOLD_TOOLS, CLAUDE_FILE, MCP_FILE,
+    MCP_SERVER_NAME, MCP_SERVERS_KEY, SETTINGS_FILE, SKILL_FILE,
 };
+use fold_cli::claude_user::{UserFiles, allows_fold_tools, runs_hook};
+use fold_core::layout::HOOKS;
 
 const HOUR_MS: i64 = 60 * 60 * 1000;
 
@@ -75,6 +77,10 @@ impl Fixture {
                 user: Some("ana".into()),
                 ..crate::fold_name::Environment::default()
             },
+            claude: Some(UserFiles {
+                config: self.path("home/.claude.json"),
+                settings: self.path("home/.claude/settings.json"),
+            }),
         }
     }
 
@@ -107,9 +113,8 @@ impl Fixture {
                 .unwrap();
             store.close().await.unwrap();
         });
-        std::fs::create_dir_all(root.join(".claude")).unwrap();
-        std::fs::write(root.join(MCP_FILE), good_mcp()).unwrap();
-        std::fs::write(root.join(SETTINGS_FILE), good_settings()).unwrap();
+        std::fs::create_dir_all(root.join(".claude/skills/fold")).unwrap();
+        std::fs::write(root.join(SKILL_FILE), "# fold\n").unwrap();
         std::fs::write(root.join(AGENTS_FILE), good_agents()).unwrap();
         git(&root, &["init", "--quiet"]);
         fold_vcs::git_remote::exclude_fold_dir(&root.join(".git")).unwrap();
@@ -1076,50 +1081,98 @@ fn a_project_folder_without_its_fold_data_fails_alone_with_the_init_that_replace
 #[test]
 fn the_claude_files_warn_for_each_missing_fold_entry() {
     let agents = &good_agents();
-    let mcp = &good_mcp();
-    let good = &good_settings();
     let named = (AGENTS_FILE, Some(agents.as_str()));
-    assert!(claude_file_problems(Some(mcp), Some(good), named).is_empty());
-
-    let none = claude_file_problems(None, None, (AGENTS_FILE, None));
+    assert!(claude_file_problems(named, true, &[]).is_empty());
     assert_eq!(
-        none,
+        claude_file_problems((AGENTS_FILE, None), false, &[]),
         [
-            ".mcp.json is missing",
-            ".claude/settings.json is missing",
-            "AGENTS.md is missing"
+            "AGENTS.md is missing",
+            ".claude/skills/fold/SKILL.md is missing"
         ]
     );
-    let other_server =
-        claude_file_problems(Some(r#"{"mcpServers":{"other":{}}}"#), Some(good), named);
-    assert_eq!(other_server, [".mcp.json lacks the fold server"]);
-    let broken = claude_file_problems(
-        Some("not json"),
-        Some("not json"),
-        (AGENTS_FILE, Some("no markers")),
-    );
     assert_eq!(
-        broken,
-        [
-            ".mcp.json lacks the fold server",
-            ".claude/settings.json does not allow the fold tools",
-            ".claude/settings.json lacks the fold hooks",
-            "AGENTS.md lacks the fold section",
-        ]
-    );
-    let no_stop = settings(ALLOW_FOLD_TOOLS, &HOOKS[..1]);
-    assert_eq!(
-        claude_file_problems(Some(mcp), Some(&no_stop), named),
-        [".claude/settings.json lacks the fold hooks"]
-    );
-    assert_eq!(
-        claude_file_problems(Some(mcp), Some(good), (AGENTS_FILE, Some(AGENTS_BEGIN))),
+        claude_file_problems((AGENTS_FILE, Some("no markers")), true, &[]),
         ["AGENTS.md lacks the fold section"]
     );
     assert_eq!(
-        claude_file_problems(Some(mcp), Some(good), (CLAUDE_FILE, None)),
+        claude_file_problems((AGENTS_FILE, Some(AGENTS_BEGIN)), true, &[]),
+        ["AGENTS.md lacks the fold section"]
+    );
+    assert_eq!(
+        claude_file_problems((CLAUDE_FILE, None), true, &[]),
         ["CLAUDE.md is missing"]
     );
+    assert_eq!(
+        claude_file_problems(named, true, &[MCP_FILE, SETTINGS_FILE]),
+        [
+            ".mcp.json holds fold entries, which belong in your Claude Code config",
+            ".claude/settings.json holds fold entries, which belong in your Claude Code config"
+        ]
+    );
+}
+
+#[test]
+fn fold_entries_left_in_the_project_files_name_the_refresh() {
+    let fixture = Fixture::new();
+    let root = fixture.project("demo");
+    let report = |root: &Path| project_report(&fixture.bare_host(), root, at(0));
+    std::fs::write(root.join(MCP_FILE), r#"{"mcpServers":{"pencil":{}}}"#).unwrap();
+    std::fs::write(root.join(SETTINGS_FILE), r#"{"model":"opus"}"#).unwrap();
+    assert_eq!(find(&report(&root), "claude files").status, Status::Ok);
+    std::fs::write(root.join(MCP_FILE), good_mcp()).unwrap();
+    std::fs::write(root.join(SETTINGS_FILE), good_settings()).unwrap();
+    let checks = report(&root);
+    let check = find(&checks, "claude files");
+    assert_eq!(check.status, Status::Warn);
+    assert_eq!(
+        check.message,
+        ".mcp.json holds fold entries, which belong in your Claude Code config; .claude/settings.json holds fold entries, which belong in your Claude Code config"
+    );
+    assert_eq!(check.fix.as_deref(), Some("fld init --refresh"));
+}
+
+#[test]
+fn the_claude_setup_check_reads_the_user_files_and_names_the_fix() {
+    let fixture = Fixture::new();
+    let host = fixture.bare_host();
+    let files = host.claude.clone().unwrap();
+    let check = |host: &Host| {
+        find(
+            &host_checks(None, &FileConfig::default(), host),
+            "claude setup",
+        )
+        .clone()
+    };
+    let missing = check(&host);
+    assert_eq!(missing.status, Status::Warn);
+    assert_eq!(
+        missing.message,
+        format!(
+            "{} lacks the fold server; {} does not allow the fold tools and lacks the fold hooks",
+            files.config.display(),
+            files.settings.display()
+        )
+    );
+    assert_eq!(missing.fix.as_deref(), Some("fld setup --claude"));
+    std::fs::create_dir_all(files.settings.parent().unwrap()).unwrap();
+    std::fs::write(&files.config, good_mcp()).unwrap();
+    std::fs::write(&files.settings, settings(ALLOW_FOLD_TOOLS, &HOOKS[..1])).unwrap();
+    assert_eq!(
+        check(&host).message,
+        format!("{} lacks the fold hooks", files.settings.display())
+    );
+    std::fs::write(&files.settings, good_settings()).unwrap();
+    let complete = check(&host);
+    assert_eq!(
+        (complete.status, complete.message.as_str()),
+        (Status::Ok, "fold is in your Claude Code config")
+    );
+    let declined = claude_setup_verdict(Some(UserSetup::Incomplete(vec!["x".into()])), true);
+    assert_eq!(declined.status, Status::Ok);
+    assert!(declined.message.ends_with("fld setup --claude adds it"));
+    let mut homeless = host;
+    homeless.claude = None;
+    assert_eq!(check(&homeless).message, NOT_APPLICABLE);
 }
 
 #[test]

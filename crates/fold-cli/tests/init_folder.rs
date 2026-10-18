@@ -193,7 +193,7 @@ fn init_makes_the_folder_files_r1_and_its_first_commit() {
     assert!(!project.join(".foldignore").exists());
     assert_eq!(
         git(&project, &["ls-tree", "-r", "--name-only", "HEAD"]),
-        ".claude/settings.json\n.claude/skills/fold/SKILL.md\n.gitignore\n.mcp.json\nAGENTS.md\nREADME.md\nlink\nrun.sh\nsrc/lib.rs\n"
+        ".claude/skills/fold/SKILL.md\n.gitignore\nAGENTS.md\nREADME.md\nlink\nrun.sh\nsrc/lib.rs\n"
     );
     assert_eq!(git(&project, &["log", "--format=%s"]), "fold r1\n");
     // The Claude Code files init writes are part of r1, so Git sees nothing new.
@@ -220,7 +220,7 @@ fn init_in_a_new_dir_writes_a_regular_gitignore_that_ignores_fold_and_an_empty_f
     assert_eq!(git(&project, &["log", "--format=%s"]), "fold r1\n");
     assert_eq!(
         git(&project, &["ls-tree", "--name-only", "HEAD"]),
-        ".claude\n.foldignore\n.gitignore\n.mcp.json\nAGENTS.md\n"
+        ".claude\n.foldignore\n.gitignore\nAGENTS.md\n"
     );
     assert_eq!(git(&project, &["status", "--porcelain"]), "");
     assert!(
@@ -251,7 +251,7 @@ fn a_file_over_the_size_limit_is_printed_as_skipped() {
     );
     assert_eq!(
         git(&project, &["ls-tree", "-r", "--name-only", "HEAD"]),
-        ".claude/settings.json\n.claude/skills/fold/SKILL.md\n.foldignore\n.gitignore\n.mcp.json\nAGENTS.md\nsmall.txt\n"
+        ".claude/skills/fold/SKILL.md\n.foldignore\n.gitignore\nAGENTS.md\nsmall.txt\n"
     );
 }
 
@@ -330,7 +330,7 @@ fn a_failing_import_removes_what_init_made_and_keeps_the_folder() {
     assert!(!project.join(".fold").exists());
     assert!(!project.join(".git").exists());
     // The Claude Code files init wrote for r1 go with it.
-    for made in [".claude", ".mcp.json", "AGENTS.md"] {
+    for made in [".claude", "AGENTS.md"] {
         assert!(!project.join(made).exists(), "{made}");
     }
     assert_eq!(
