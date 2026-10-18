@@ -37,6 +37,7 @@ const DOMAINS = new Set([
   "project",
   "human_change",
   "stash",
+  "checks",
 ]);
 
 export function domainOf(type: string): string | null {
@@ -397,6 +398,16 @@ function invalidationKeys(
             keys.reviewBatches(slug),
             keys.needsYou(slug),
           ];
+    case "checks": {
+      const run = typeof event.data.run === "string" ? event.data.run : null;
+      return [
+        keys.proposals(slug),
+        ...proposalKey,
+        ...taskKey,
+        board,
+        ...(run === null ? [] : [keys.checkRun(slug, run)]),
+      ];
+    }
     case "integration":
       return [
         ...(proposal === null ? [] : [keys.proposals(slug), ...proposalKey]),

@@ -148,6 +148,7 @@ export function proposalSummary(
     review_claim: null,
     turn: "with_reviewer",
     conflicted: false,
+    checks_failed: false,
     human_review: null,
     human_approved: true,
     close_reason: null,

@@ -12,9 +12,11 @@ import {
   AGENT_APPROVES_FIRST,
   APPROVE_BODY,
   approveBlock,
+  CHECKS_FAILED,
   canComment,
   humanVerdict,
   integrateBlock,
+  showsApproveLine,
   visibleActions,
 } from "./actions";
 import { resolveView } from "./view";
@@ -165,6 +167,23 @@ describe("actedVersion and humanVerdict", () => {
 describe("approveBlock", () => {
   const mark = { reviewer: null, reason: "billing", set_by: "planner" };
 
+  it("blocks Approve and Integrate once the integration checks of the current version failed", () => {
+    const failed = proposalDetail(
+      proposalSummary("P-4", { checks_failed: true, turn: "with_author" }),
+      { agent_approved: true },
+    );
+    expect(CHECKS_FAILED).toBe(
+      "The integration checks failed; the author sends a new version.",
+    );
+    expect(approveBlock(failed)).toBe(CHECKS_FAILED);
+    expect(integrateBlock(failed, "r8")).toBe(CHECKS_FAILED);
+    const marked = proposalDetail(
+      proposalSummary("P-4", { checks_failed: true, human_review: mark }),
+      { agent_approved: false },
+    );
+    expect(approveBlock(marked)).toBe(CHECKS_FAILED);
+  });
+
   it("blocks a human's Approve on a marked task until a reviewer agent approved the current version", () => {
     const waiting = proposalDetail(
       proposalSummary("P-4", { human_review: mark }),
@@ -194,5 +213,20 @@ describe("approveBlock", () => {
 
   it("never blocks Approve on a task without the mark", () => {
     expect(approveBlock(proposal())).toBeNull();
+  });
+});
+
+describe("showsApproveLine", () => {
+  it("shows the failed checks line once, under both buttons, while Integrate shows", () => {
+    expect(showsApproveLine(CHECKS_FAILED, CHECKS_FAILED, true)).toBe(false);
+    expect(showsApproveLine(CHECKS_FAILED, CHECKS_FAILED, false)).toBe(true);
+    expect(showsApproveLine(CHECKS_FAILED, null, true)).toBe(true);
+  });
+
+  it("keeps every other line under Approve", () => {
+    expect(
+      showsApproveLine(AGENT_APPROVES_FIRST, AGENT_APPROVES_FIRST, true),
+    ).toBe(true);
+    expect(showsApproveLine(null, CHECKS_FAILED, true)).toBe(false);
   });
 });

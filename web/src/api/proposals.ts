@@ -32,6 +32,12 @@ export type NewComment = Schemas["AddCommentBody"];
 export type NewReview = Schemas["ReviewBody"];
 export type SubmittedReview = Schemas["SubmittedReview"];
 export type IntegrationResult = Schemas["IntegrationResult"];
+/** One run of the project's checks by fold, with each command's result. */
+export type CheckRun = Schemas["CheckRun"];
+export type CheckResult = Schemas["CheckResult"];
+export type CheckOutcome = Schemas["CheckOutcome"];
+export type CheckRunState = Schemas["CheckRunState"];
+export type CheckRunReason = Schemas["CheckRunReason"];
 /** One file of a proposal version, as a human edit starts from it. */
 export type VersionFile = Schemas["FileContentView"];
 /** A human's new content for one text file of the version the human read. */
@@ -168,6 +174,15 @@ export async function integrateProposal(
     api.POST("/api/v1/projects/{slug}/proposals/{id}/integrate", {
       params: base(slug, id),
       body: { expected_version: expectedVersion },
+    }),
+  );
+}
+
+/** One check run with the stored end of each command's output; a proposal lists its runs without the logs. */
+export async function getCheckRun(slug: string, id: string): Promise<CheckRun> {
+  return unwrap(
+    api.GET("/api/v1/projects/{slug}/check-runs/{id}", {
+      params: base(slug, id),
     }),
   );
 }

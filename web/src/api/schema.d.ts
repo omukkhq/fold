@@ -2702,6 +2702,8 @@ export interface components {
         ProposalSummary: {
             /** @description The worker that opened the proposal, `agent` or `agent/worker`. */
             author: string;
+            /** @description The integration checks of the current version failed on its merge with main, so the proposal is with its author until a new version. */
+            checks_failed: boolean;
             /** @description Why a closed proposal closed. */
             close_reason: string | null;
             /**

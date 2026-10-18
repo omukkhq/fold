@@ -23,6 +23,7 @@ export function proposalSummary(
     author: "backend/db",
     state: "open",
     conflicted: false,
+    checks_failed: false,
     current_version: 1,
     turn: "with_reviewer",
     latest_verdict: null,

@@ -1268,3 +1268,188 @@ describe("Human edit", () => {
     expect(screen.queryByRole("button", { name: /^Edit / })).toBeNull();
   });
 });
+
+describe("Checks", () => {
+  const passed = {
+    name: "unit",
+    setup: false,
+    required: true,
+    outcome: "passed" as const,
+    exit_code: 0,
+    duration_ms: 1200,
+    log_bytes: 8,
+    log: "",
+    truncated: false,
+  };
+  function checkRun(
+    id: string,
+    fields: Partial<ProposalDetail["checks"][number]> = {},
+  ) {
+    return {
+      id,
+      stage: "proposal" as const,
+      purpose: "create_proposal" as const,
+      task: "T-3",
+      version: null,
+      base: "r8",
+      state: "passed" as const,
+      reason: null,
+      created_at: 1,
+      finished_at: 2,
+      results: [passed],
+      ...fields,
+    };
+  }
+
+  it("lists the check runs of the version and reads a failed check's log end", async () => {
+    update("P-4", (p) => ({
+      ...p,
+      summary: { ...p.summary, checks_failed: true, turn: "with_author" },
+      checks: [
+        checkRun("cr-9", {
+          stage: "integration",
+          purpose: "integrate",
+          version: 2,
+          state: "failed",
+          reason: "check_failed",
+          results: [
+            {
+              ...passed,
+              name: "e2e",
+              outcome: "failed",
+              exit_code: 1,
+              log_bytes: 20,
+            },
+          ],
+        }),
+        checkRun("cr-7"),
+      ],
+    }));
+    daemon.on("GET /api/v1/projects/:slug/check-runs/:id", (call) =>
+      ok(
+        checkRun(call.params.id ?? "", {
+          results: [
+            {
+              ...passed,
+              name: "e2e",
+              outcome: "failed",
+              exit_code: 1,
+              log: "step one\nassertion failed\n",
+            },
+          ],
+        }),
+      ),
+    );
+    const user = userEvent.setup();
+    renderAt("/p/demo/proposals/P-4");
+    const checks = await screen.findByRole("region", { name: "Checks" });
+    expect(
+      within(checks).getByText("Integration checks of v2 on r8"),
+    ).toBeTruthy();
+    expect(within(checks).getByText("Proposal checks on r8")).toBeTruthy();
+    expect(within(checks).getByText("a required check failed")).toBeTruthy();
+    expect(within(checks).getByText("failed · exit 1 · 1.2 s")).toBeTruthy();
+    expect(await within(checks).findByText(/assertion failed/)).toBeTruthy();
+    expect(
+      daemon.made("GET /api/v1/projects/demo/check-runs/cr-9"),
+    ).toHaveLength(1);
+    await user.click(within(checks).getByRole("button", { name: "Hide log" }));
+    expect(within(checks).queryByText(/assertion failed/)).toBeNull();
+    const panel = await integration();
+    expect(
+      within(panel).getByText(
+        "The integration checks of v2 failed on the merge with main. The author sends a new version.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(panel).getByRole("button", { name: "Approve v2" }),
+    ).toHaveProperty("disabled", true);
+    expect(
+      within(panel).getByRole("button", { name: "Integrate" }),
+    ).toHaveProperty("disabled", true);
+    expect(
+      within(panel).getAllByText(
+        "The integration checks failed; the author sends a new version.",
+      ),
+    ).toHaveLength(1);
+    expect(
+      within(panel).getByRole("button", { name: "Request changes" }),
+    ).toHaveProperty("disabled", false);
+  });
+
+  it("says when fold ran no check on the version", async () => {
+    renderAt("/p/demo/proposals/P-3");
+    const checks = await screen.findByRole("region", { name: "Checks" });
+    expect(
+      within(checks).getByText("fold ran no check on this version."),
+    ).toBeTruthy();
+  });
+
+  it("shows a queued integration as waiting for its checks until the stream brings the result", async () => {
+    daemon.on("POST /api/v1/projects/:slug/proposals/:id/integrate", (call) => {
+      update("P-4", (p) => ({
+        ...p,
+        summary: { ...p.summary, integration_queued: true },
+      }));
+      return ok({
+        proposal: call.params.id,
+        result: "queued",
+        revision: null,
+        run: null,
+      });
+    });
+    const user = userEvent.setup();
+    const { queryClient } = renderAt("/p/demo/proposals/P-4");
+    const panel = await integration();
+    await user.click(within(panel).getByRole("button", { name: "Integrate" }));
+    expect(
+      await within(panel).findByText(
+        "Queued: fold runs the integration checks on the merge with main, then integrates when they pass.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(panel).getByText("This integration is already queued."),
+    ).toBeTruthy();
+    expect(
+      within(panel).getByRole("button", { name: "Integrate" }),
+    ).toHaveProperty("disabled", true);
+    integrate("P-4", 9);
+    deliver(queryClient, "proposal.integrated", {
+      proposal: "P-4",
+      task: "T-3",
+      revision: "r9",
+      data: { version: 2 },
+    });
+    expect(await within(panel).findByRole("link", { name: "r9" })).toBeTruthy();
+    expect(within(panel).queryByText(/^Queued:/)).toBeNull();
+  });
+
+  it("shows an integration someone else queued after a reload, and lets it go when fold takes it out of the queue", async () => {
+    update("P-4", (p) => ({
+      ...p,
+      summary: { ...p.summary, integration_queued: true },
+    }));
+    const { queryClient } = renderAt("/p/demo/proposals/P-4");
+    const panel = await integration();
+    expect(await within(panel).findByText(/^Queued:/)).toBeTruthy();
+    expect(
+      within(panel).getByRole("button", { name: "Integrate" }),
+    ).toHaveProperty("disabled", true);
+    update("P-4", (p) => ({
+      ...p,
+      summary: { ...p.summary, integration_queued: false },
+    }));
+    deliver(queryClient, "integration.unqueued", {
+      proposal: "P-4",
+      task: "T-3",
+      actor: "fold",
+      data: { version: 2 },
+    });
+    await waitFor(() => {
+      expect(within(panel).queryByText(/^Queued:/)).toBeNull();
+    });
+    expect(
+      within(panel).getByRole("button", { name: "Integrate" }),
+    ).toHaveProperty("disabled", false);
+  });
+});

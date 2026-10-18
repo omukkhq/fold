@@ -58,6 +58,24 @@ export function canComment(
   );
 }
 
+/** The line under a disabled Approve and Integrate once the integration checks of the current version failed: the daemon refuses that version until its author sends a new one. */
+export const CHECKS_FAILED =
+  "The integration checks failed; the author sends a new version.";
+
+/** Whether the line under Approve shows. After failed integration checks Approve and Integrate share one line, which shows once under both buttons. */
+export function showsApproveLine(
+  approveBlock: string | null,
+  integrateBlock: string | null,
+  integrateShown: boolean,
+): boolean {
+  if (approveBlock === null) return false;
+  return !(
+    integrateShown &&
+    approveBlock === CHECKS_FAILED &&
+    integrateBlock === CHECKS_FAILED
+  );
+}
+
 /** The line under a disabled Approve on a task with the human review mark: the human reviews after a reviewer agent. */
 export const AGENT_APPROVES_FIRST = "A reviewer agent approves first.";
 
@@ -66,6 +84,7 @@ export const AGENT_APPROVES_FIRST = "A reviewer agent approves first.";
  * On a task with the human review mark the daemon takes a human's approval only after an agent with review rights approved the current version, which it reports as `agent_approved`.
  */
 export function approveBlock(proposal: ProposalDetail): string | null {
+  if (proposal.summary.checks_failed) return CHECKS_FAILED;
   return proposal.summary.human_review !== null && !proposal.agent_approved
     ? AGENT_APPROVES_FIRST
     : null;

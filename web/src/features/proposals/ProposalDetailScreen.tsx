@@ -50,6 +50,7 @@ import {
 import { canEdit, editableFile } from "./edit";
 import { describeFailure, reloadsProposal } from "./errors";
 import { FileEditor } from "./FileEditor";
+import { QUEUED_BLOCK, queuedNote } from "./checkRuns";
 import { integrationOf, mainHead } from "./integration";
 import { ProposalHeader } from "./ProposalHeader";
 import { SidePanel } from "./SidePanel";
@@ -356,6 +357,7 @@ export function ProposalDetailScreen({
   const revisionList = revisions.data?.items ?? [];
   const main = mainHead(revisionList);
   const integration = integrationOf(summary, revisionList, integrate.data);
+  const queued = queuedNote(summary);
   const pending: HumanAction | null = review.isPending
     ? review.variables.verdict === "approve"
       ? "approve"
@@ -414,11 +416,13 @@ export function ProposalDetailScreen({
           now={now}
           main={main}
           integration={integration}
+          queued={queued}
           actions={{
             visible: visibleActions(data, human),
             pending,
             failure: shown?.place === "inline" ? shown.text : null,
-            integrateBlock: integrateBlock(data, main),
+            integrateBlock:
+              queued === null ? integrateBlock(data, main) : QUEUED_BLOCK,
             approveBlock: approveBlock(data),
             onApprove: () => {
               review.mutate(humanVerdict(view, "approve", APPROVE_BODY));

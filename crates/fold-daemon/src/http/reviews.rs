@@ -253,6 +253,8 @@ pub struct ProposalSummary {
     pub state: ProposalStateView,
     /// The latest integration of the current version conflicted with main.
     pub conflicted: bool,
+    /// The integration checks of the current version failed on its merge with main, so the proposal is with its author until a new version.
+    pub checks_failed: bool,
     /// The highest version number.
     pub current_version: u32,
     /// Null once the proposal is no longer open.
@@ -292,6 +294,7 @@ impl From<service::ProposalSummary> for ProposalSummary {
             author: summary.author.to_string(),
             state: summary.state.into(),
             conflicted: summary.conflicted,
+            checks_failed: summary.checks_failed,
             current_version: summary.current_version,
             turn: summary.turn.map(ProposalTurn::from),
             latest_verdict: summary.latest_verdict.map(ReviewVerdict::from),

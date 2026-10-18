@@ -21,6 +21,8 @@ export const keys = {
     path: string,
   ) => [slug, "file-diff", from ?? null, to, path] as const,
   proposals: (slug: string) => [slug, "proposals"] as const,
+  /** A run's logs change only when the run ends, which `checks.finished` names. */
+  checkRun: (slug: string, run: string) => [slug, "check-run", run] as const,
   proposal: (slug: string, proposal: string) =>
     [slug, "proposal", proposal] as const,
   /** Under the proposal prefix, so every event and write that refreshes the proposal also refreshes its comments. */

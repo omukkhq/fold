@@ -13,6 +13,7 @@ import {
   listComments,
   listProposals,
   type ChangeRange,
+  getCheckRun,
 } from "./proposals";
 import { getRequest, getThread, listRequests } from "./requests";
 import { getReviewBatch, listReviewBatches } from "./reviews";
@@ -103,6 +104,14 @@ export const proposalQuery = (slug: string, id: string) =>
   queryOptions({
     queryKey: keys.proposal(slug, id),
     queryFn: () => getProposal(slug, id),
+    staleTime: Infinity,
+  });
+
+/** A check run with its logs; the event stream refreshes it when the run ends. */
+export const checkRunQuery = (slug: string, run: string) =>
+  queryOptions({
+    queryKey: keys.checkRun(slug, run),
+    queryFn: () => getCheckRun(slug, run),
     staleTime: Infinity,
   });
 

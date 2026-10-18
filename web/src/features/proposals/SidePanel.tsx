@@ -10,6 +10,7 @@ import {
   CircleX,
   GitMerge,
   Hourglass,
+  ListChecks,
   MessageSquare,
   RotateCcw,
   Undo2,
@@ -32,7 +33,9 @@ import { MentionTextarea } from "@/mentions/MentionTextarea";
 import { formatAsOfMinute } from "@/format/time";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
-import type { HumanAction } from "./actions";
+import { showsApproveLine, type HumanAction } from "./actions";
+import { ChecksSection } from "./Checks";
+import { checksFailedNote } from "./checkRuns";
 import { requestChangesSchema, type RequestChangesValues } from "./compose";
 import {
   conflictKindText,
@@ -283,6 +286,13 @@ function HumanActions({
   }
   const shows = (action: HumanAction) => actions.visible.includes(action);
   const kept = keptApprovalsNote(proposal, proposal.summary.current_version);
+  const approveLine =
+    shows("approve") &&
+    showsApproveLine(
+      actions.approveBlock,
+      actions.integrateBlock,
+      shows("integrate"),
+    );
   return (
     <div className="flex flex-col gap-8 border-t border-border-subtle pt-10">
       <p className="text-code text-text-muted">You are reviewing as {human}</p>
@@ -306,7 +316,11 @@ function HumanActions({
               pendingLabel={`Approving ${v}…`}
               disabled={busy || actions.approveBlock !== null}
               aria-describedby={
-                actions.approveBlock === null ? undefined : approveBlockId
+                actions.approveBlock === null
+                  ? undefined
+                  : approveLine
+                    ? approveBlockId
+                    : blockId
               }
               icon={<Check aria-hidden="true" size={15} />}
               className="w-full justify-center"
@@ -315,7 +329,7 @@ function HumanActions({
               Approve {v}
             </Button>
           ) : null}
-          {shows("approve") && actions.approveBlock !== null ? (
+          {approveLine ? (
             <p id={approveBlockId} className="text-meta text-text-muted">
               {actions.approveBlock}
             </p>
@@ -420,6 +434,7 @@ export function SidePanel({
   now,
   main,
   integration,
+  queued,
   actions,
 }: {
   slug: string;
@@ -431,12 +446,15 @@ export function SidePanel({
   main: string | null;
   /** Null until a revision of main names the proposal. */
   integration: IntegrationView | null;
+  /** What the screen says while the human's queued integration waits for its checks. */
+  queued: string | null;
   actions: ActionHandlers;
 }) {
   const summary = waitingSummary(proposal);
   const reviews = listedReviews(proposal.reviews);
   const shown = proposal.versions.find((v) => v.version === view.version);
   const clock = (at: number) => formatAsOfMinute(now, at);
+  const checksNote = queued ?? checksFailedNote(proposal.summary);
   return (
     <aside className="flex w-review-panel shrink-0 flex-col gap-18">
       <section
@@ -476,6 +494,20 @@ export function SidePanel({
           <p className="flex items-center gap-8 rounded-m bg-sunken px-10 py-8 text-code leading-snug text-text-muted">
             <Hourglass aria-hidden="true" size={14} className="shrink-0" />
             <ActorText segments={summary} slot="waitingLine" />
+          </p>
+        ) : null}
+        {checksNote ? (
+          <p
+            data-checks-failed={proposal.summary.checks_failed}
+            className={cn(
+              "flex items-center gap-8 rounded-m px-10 py-8 text-code leading-snug",
+              proposal.summary.checks_failed
+                ? "bg-danger-soft text-danger"
+                : "bg-sunken text-text-muted",
+            )}
+          >
+            <ListChecks aria-hidden="true" size={14} className="shrink-0" />
+            {checksNote}
           </p>
         ) : null}
         {integration ? (
@@ -556,6 +588,8 @@ export function SidePanel({
           </ul>
         )}
       </section>
+
+      <ChecksSection slug={slug} runs={proposal.checks} />
 
       {shown ? <VersionFacts version={shown} now={now} /> : null}
 
