@@ -1,17 +1,17 @@
 import { useEffect, useEffectEvent, useState } from "react";
 import { highlightSegments, type SyntaxLine } from "./highlight";
-import type { Language } from "./languages";
+import type { LanguageSource } from "./languages";
 
 /** Code to highlight. `key` names the language and text, so a new object with the same code starts no second highlight. */
 export interface HighlightRequest {
   key: string;
-  language: Language | null;
+  language: LanguageSource | null;
   segments: readonly (readonly string[])[];
 }
 
 /** A request whose key is built from its language and text. */
 export function highlightRequest(
-  language: Language | null,
+  language: LanguageSource | null,
   segments: readonly (readonly string[])[],
 ): HighlightRequest {
   const text = segments.map((s) => s.join("\n")).join("\u0000");

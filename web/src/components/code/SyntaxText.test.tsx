@@ -20,7 +20,7 @@ function code(
 describe("SyntaxText", () => {
   it("shows the code as plain text at once and coloured once it is tokenized, with the same text", async () => {
     const text = "fn main() {\n    let x = 1;\n}";
-    const pre = code(text, "rust");
+    const pre = code(text, "fence:rust");
     expect(pre.textContent).toBe(text);
     await waitFor(() => {
       expect(pre.querySelector("span")).not.toBeNull();

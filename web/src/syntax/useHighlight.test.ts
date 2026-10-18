@@ -13,12 +13,14 @@ afterEach(cleanup);
 
 describe("highlightRequest", () => {
   it("keys the request by its language and text", () => {
-    const a = highlightRequest("rust", [["fn a()"], ["fn b()"]]);
-    expect(highlightRequest("rust", [["fn a()"], ["fn b()"]]).key).toBe(a.key);
-    expect(highlightRequest("go", [["fn a()"], ["fn b()"]]).key).not.toBe(
+    const a = highlightRequest("fence:rust", [["fn a()"], ["fn b()"]]);
+    expect(highlightRequest("fence:rust", [["fn a()"], ["fn b()"]]).key).toBe(
       a.key,
     );
-    expect(highlightRequest("rust", [["fn a()", "fn b()"]]).key).not.toBe(
+    expect(highlightRequest("fence:go", [["fn a()"], ["fn b()"]]).key).not.toBe(
+      a.key,
+    );
+    expect(highlightRequest("fence:rust", [["fn a()", "fn b()"]]).key).not.toBe(
       a.key,
     );
   });
@@ -27,7 +29,7 @@ describe("highlightRequest", () => {
 describe("useHighlight", () => {
   it("is null until the tokens are ready", async () => {
     const { result } = renderHook(() =>
-      useHighlight(highlightRequest("typescript", [["let x = 1"]])),
+      useHighlight(highlightRequest("fence:typescript", [["let x = 1"]])),
     );
     expect(result.current).toBeNull();
     await waitFor(() => {
@@ -44,13 +46,15 @@ describe("useHighlight", () => {
       { request: HighlightRequest | null }
     >(({ request }) => useHighlight(request), {
       initialProps: {
-        request: highlightRequest("typescript", [["let x = 1"]]),
+        request: highlightRequest("fence:typescript", [["let x = 1"]]),
       },
     });
     await waitFor(() => {
       expect(result.current).not.toBeNull();
     });
-    rerender({ request: highlightRequest("typescript", [["const y = 2"]]) });
+    rerender({
+      request: highlightRequest("fence:typescript", [["const y = 2"]]),
+    });
     expect(result.current).toBeNull();
     await waitFor(() => {
       expect(result.current?.[0]?.[0]?.[0]?.content).toBe("const");

@@ -51,6 +51,7 @@ impl Fixture {
         std::fs::write(web.path().join("index.html"), "<html>fold</html>").unwrap();
         std::fs::create_dir_all(web.path().join("assets")).unwrap();
         std::fs::write(web.path().join("assets").join("app.js"), "1").unwrap();
+        std::fs::write(web.path().join("assets").join("onig-1a2b.wasm"), "\0asm").unwrap();
         for icon in ["favicon.svg", "favicon-32.png", "apple-touch-icon.png"] {
             std::fs::write(web.path().join(icon), icon).unwrap();
         }
@@ -553,14 +554,15 @@ async fn off_loopback_the_web_files_load_without_a_cookie() {
         let answer = send(fixture.http(), Method::GET, path, None, None).await;
         assert_eq!(answer.status, StatusCode::OK, "{path}");
     }
-    for (icon, mime) in [
+    for (file, mime) in [
         ("favicon.svg", "image/svg+xml"),
         ("favicon-32.png", "image/png"),
         ("apple-touch-icon.png", "image/png"),
+        ("assets/onig-1a2b.wasm", "application/wasm"),
     ] {
-        let answer = send(fixture.http(), Method::GET, &format!("/{icon}"), None, None).await;
-        assert_eq!(answer.status, StatusCode::OK, "{icon}");
-        assert_eq!(answer.headers[header::CONTENT_TYPE], mime, "{icon}");
+        let answer = send(fixture.http(), Method::GET, &format!("/{file}"), None, None).await;
+        assert_eq!(answer.status, StatusCode::OK, "{file}");
+        assert_eq!(answer.headers[header::CONTENT_TYPE], mime, "{file}");
     }
     let answer = send(fixture.http(), Method::GET, "/api/v1/projects", None, None).await;
     assert_eq!(answer.code(), "auth_required");

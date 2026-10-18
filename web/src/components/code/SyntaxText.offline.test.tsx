@@ -15,10 +15,12 @@ describe("SyntaxText without Shiki", () => {
     const error = vi.spyOn(console, "error");
     render(
       <pre data-testid="code">
-        <SyntaxText code="let x = 1;" language="typescript" />
+        <SyntaxText code="let x = 1;" language="fence:typescript" />
       </pre>,
     );
-    expect(await highlightSegments("typescript", [["let x = 1;"]])).toBeNull();
+    expect(
+      await highlightSegments("fence:typescript", [["let x = 1;"]]),
+    ).toBeNull();
     await new Promise((resolve) => setTimeout(resolve, 0));
     const pre = screen.getByTestId("code");
     expect(pre.textContent).toBe("let x = 1;");

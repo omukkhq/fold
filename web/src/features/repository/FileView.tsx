@@ -14,7 +14,7 @@ interface FileViewProps {
   path: string;
 }
 
-/** A read-only view of one file, highlighted when fold carries a grammar for its name. A binary or too-large file shows its size and hash and no content; a symlink shows its target text and is never followed. */
+/** A read-only view of one file, highlighted when Shiki has a grammar for its name. A binary or too-large file shows its size and hash and no content; a symlink shows its target text and is never followed. */
 export function FileView({ slug, revision, path }: FileViewProps) {
   const file = useQuery(fileQuery(slug, revision, path));
   const shown = file.data ? fileState(file.data) : null;

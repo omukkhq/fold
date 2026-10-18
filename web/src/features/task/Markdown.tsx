@@ -10,7 +10,7 @@ import { remarkMentions } from "@/mentions/remark";
 import { usePeople } from "@/mentions/usePeople";
 import { languageForFence } from "@/syntax/languages";
 
-/** A fenced block's text, highlighted when its fence names a language fold carries; inline code and other fences stay plain. */
+/** A fenced block's text, highlighted when its fence names a language Shiki has a grammar for; inline code and a bare fence stay plain. */
 function FencedCode({
   code,
   className,
@@ -20,7 +20,7 @@ function FencedCode({
 }) {
   const language = languageForFence(className);
   if (language === null) return code;
-  return <SyntaxText code={code.replace(/\n$/, "")} language={language} />;
+  return <SyntaxText code={code} language={language} />;
 }
 
 // Every element takes token classes; the description is 14 / 400 body text with 600 subheads.

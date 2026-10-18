@@ -1,5 +1,6 @@
 import type { GrammarState, HighlighterCore } from "shiki/core";
-import type { Language } from "./languages";
+import type { BundledLanguage } from "shiki/langs";
+import type { LanguageSource } from "./languages";
 
 /** A run of a line in one colour; `color` is null where the text takes the line's own colour. */
 export interface SyntaxToken {
@@ -20,14 +21,27 @@ export const CHUNK_LINES = 100;
 export const YIELD_AFTER_MS = 8;
 
 type Shiki = typeof import("./shiki");
+type Catalog = typeof import("./catalog");
 
+let catalog: Promise<Catalog> | null = null;
 let shiki: Promise<{ module: Shiki; highlighter: HighlighterCore }> | null =
   null;
-const languages = new Map<Language, Promise<void>>();
+const languages = new Map<BundledLanguage, Promise<void>>();
+
+/** The catalog loads alone first, so code in a language without a grammar never fetches Shiki or its engine. */
+async function resolve(
+  source: LanguageSource,
+): Promise<BundledLanguage | null> {
+  catalog ??= import("./catalog").catch((error: unknown) => {
+    catalog = null;
+    throw error;
+  });
+  return (await catalog).resolveLanguage(source);
+}
 
 /** Shiki, its engine, fold's theme and the grammar load on first use; a failed load is forgotten so the next code tries again. */
 async function ready(
-  language: Language,
+  language: BundledLanguage,
 ): Promise<{ module: Shiki; highlighter: HighlighterCore }> {
   shiki ??= import("./shiki")
     .then(async (module) => ({
@@ -83,11 +97,11 @@ export interface HighlightOptions {
 /**
  * Tokenizes each segment from a fresh grammar state, so a segment such as one hunk of a diff never inherits a comment
  * opened in another; within a segment the state carries across chunks. The result has a line of tokens for every
- * input line. Null when there is no language, the code is past the limits, the work was stopped, or the grammar failed
- * to load: the caller then shows plain text.
+ * input line. Null when there is no language, Shiki has no grammar for it, the code is past the limits, the work was
+ * stopped, or a part failed to load: the caller then shows plain text.
  */
 export async function highlightSegments(
-  language: Language | null,
+  source: LanguageSource | null,
   segments: readonly (readonly string[])[],
   {
     signal,
@@ -95,9 +109,12 @@ export async function highlightSegments(
     yieldAfterMs = YIELD_AFTER_MS,
   }: HighlightOptions = {},
 ): Promise<SyntaxLine[][] | null> {
-  if (language === null || !withinLimits(segments)) return null;
+  if (source === null || !withinLimits(segments)) return null;
+  let language: BundledLanguage | null;
   let loaded: { module: Shiki; highlighter: HighlighterCore };
   try {
+    language = await resolve(source);
+    if (language === null) return null;
     loaded = await ready(language);
   } catch {
     return null;

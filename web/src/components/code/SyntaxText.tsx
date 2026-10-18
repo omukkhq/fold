@@ -1,6 +1,6 @@
 import { Fragment, useMemo } from "react";
 import type { SyntaxLine } from "@/syntax/highlight";
-import type { Language } from "@/syntax/languages";
+import type { LanguageSource } from "@/syntax/languages";
 import { highlightRequest, useHighlight } from "@/syntax/useHighlight";
 
 /** One line's tokens; a token in the line's own colour is plain text. */
@@ -22,7 +22,7 @@ export function SyntaxText({
   language,
 }: {
   code: string;
-  language: Language | null;
+  language: LanguageSource | null;
 }) {
   const lines = useMemo(() => code.split(/\r?\n/), [code]);
   const request = useMemo(

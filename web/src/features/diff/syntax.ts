@@ -1,5 +1,5 @@
 import type { SyntaxLine } from "@/syntax/highlight";
-import type { Language } from "@/syntax/languages";
+import type { LanguageSource } from "@/syntax/languages";
 import { highlightRequest, type HighlightRequest } from "@/syntax/useHighlight";
 import type { DiffRow } from "./layout";
 
@@ -17,7 +17,7 @@ export interface DiffSyntax {
  */
 export function diffSyntax(
   rows: readonly DiffRow[],
-  language: Language | null,
+  language: LanguageSource | null,
 ): DiffSyntax {
   const segments: string[][] = [];
   const at = new Map<string, readonly [number, number]>();

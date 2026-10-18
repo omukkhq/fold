@@ -11,8 +11,8 @@ const ROWS: DiffRow[] = hunkRows([
 
 describe("diffSyntax", () => {
   it("splits each hunk into its old side and its new side", () => {
-    const { request } = diffSyntax(ROWS, "typescript");
-    expect(request.language).toBe("typescript");
+    const { request } = diffSyntax(ROWS, "file:a.ts");
+    expect(request.language).toBe("file:a.ts");
     expect(request.segments).toEqual([
       ["a", "b", "c"],
       ["a", "B", "c"],
@@ -22,7 +22,7 @@ describe("diffSyntax", () => {
   });
 
   it("places a removed line on the old side and every other line on the new side", () => {
-    const { at } = diffSyntax(ROWS, "typescript");
+    const { at } = diffSyntax(ROWS, "file:a.ts");
     expect(Object.fromEntries(at)).toEqual({
       "h0-0": [1, 0],
       "h0-1": [0, 1],
@@ -38,7 +38,7 @@ describe("diffSyntax", () => {
       hunkRows([hunk(1, 1, [add("new"), ...lines.map(ctx)])]),
       new Set(),
     );
-    const { request } = diffSyntax(rows, "rust");
+    const { request } = diffSyntax(rows, "file:main.rs");
     expect(request.segments[1]).toEqual(["new", "1", "2", "3"]);
   });
 
@@ -48,14 +48,14 @@ describe("diffSyntax", () => {
       hunk(10, 10, [add("x")]),
     ]);
     const other = hunkRows([hunk(1, 1, [ctx("a")])]);
-    const key = diffSyntax(ROWS, "go").request.key;
-    expect(diffSyntax(again, "go").request.key).toBe(key);
-    expect(diffSyntax(other, "go").request.key).not.toBe(key);
+    const key = diffSyntax(ROWS, "file:main.go").request.key;
+    expect(diffSyntax(again, "file:main.go").request.key).toBe(key);
+    expect(diffSyntax(other, "file:main.go").request.key).not.toBe(key);
   });
 });
 
 describe("rowTokens", () => {
-  const syntax = diffSyntax(ROWS, "typescript");
+  const syntax = diffSyntax(ROWS, "file:a.ts");
   const line = (content: string): SyntaxLine => [{ content, color: null }];
   const tokens = [
     [line("a"), line("b"), line("c")],

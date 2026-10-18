@@ -6,15 +6,16 @@ import { Markdown } from "./Markdown";
 afterEach(cleanup);
 
 describe("Markdown code", () => {
-  it("colours a fenced block whose fence names a language fold carries", async () => {
+  it("colours a fenced block whose fence names a language Shiki has, and keeps its text with the final newline", async () => {
     const { container } = render(
       <Markdown>{"```ts\nconst x = 1;\n```"}</Markdown>,
     );
     const code = container.querySelector("pre code");
+    expect(code?.textContent).toBe("const x = 1;\n");
     await waitFor(() => {
       expect(code?.querySelector("span")).not.toBeNull();
     });
-    expect(code?.textContent).toBe("const x = 1;");
+    expect(code?.textContent).toBe("const x = 1;\n");
     const keyword = [...(code?.querySelectorAll("span") ?? [])].find(
       (span) => span.textContent === "const",
     );

@@ -1,57 +1,29 @@
 import { describe, expect, it } from "vitest";
 import {
-  LANGUAGES,
-  type Language,
+  type LanguageSource,
   languageForFence,
   languageForPath,
 } from "./languages";
-import { GRAMMARS } from "./shiki";
 
 describe("languageForPath", () => {
-  it.each<[string, Language | null]>([
-    ["src/main.rs", "rust"],
-    ["web/src/App.tsx", "tsx"],
-    ["a/b/c.ts", "typescript"],
-    ["lib.MJS", "javascript"],
-    ["config.yml", "yaml"],
-    ["include/x.hpp", "cpp"],
-    ["Makefile", "make"],
-    ["deploy/Dockerfile", "docker"],
-    ["Gemfile", "ruby"],
-    ["home/.zshrc", "shellscript"],
-    ["Cargo.toml", "toml"],
-    ["README.md", "markdown"],
-    ["notes.txt", null],
-    ["LICENSE", null],
-    [".gitignore", null],
-    ["trailing.", null],
-  ])("%s is %s", (path, language) => {
-    expect(languageForPath(path)).toBe(language);
+  it.each<[string, LanguageSource]>([
+    ["src/main.rs", "file:main.rs"],
+    ["deploy/Dockerfile", "file:dockerfile"],
+    ["lib.MJS", "file:lib.mjs"],
+    ["", "file:"],
+  ])("%j is %s", (path, source) => {
+    expect(languageForPath(path)).toBe(source);
   });
 });
 
 describe("languageForFence", () => {
-  it.each<[string | undefined, Language | null]>([
-    ["language-ts", "typescript"],
-    ["language-TypeScript", "typescript"],
-    ["language-sh", "shellscript"],
-    ["language-rust", "rust"],
-    ["language-c++", "cpp"],
-    ["hljs language-py", "python"],
-    ["language-brainfuck", null],
+  it.each<[string | undefined, LanguageSource | null]>([
+    ["language-ts", "fence:ts"],
+    ["language-TypeScript", "fence:typescript"],
+    ["hljs language-c++", "fence:c++"],
     ["", null],
     [undefined, null],
-  ])("%j is %s", (className, language) => {
-    expect(languageForFence(className)).toBe(language);
-  });
-});
-
-describe("GRAMMARS", () => {
-  it("loads, for every language, the grammar Shiki knows by that name", async () => {
-    expect(Object.keys(GRAMMARS)).toEqual([...LANGUAGES]);
-    for (const language of LANGUAGES) {
-      const { default: registrations } = await GRAMMARS[language]();
-      expect(registrations.at(-1)?.name, language).toBe(language);
-    }
+  ])("%j is %s", (className, source) => {
+    expect(languageForFence(className)).toBe(source);
   });
 });

@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help setup build fmt dev dev-daemon dev-web seed-dev fmt-check-rust fmt-check-web fmt-check web-install web-build check-web-sources check-inner-allow clippy test test-fast test-default-features test-web coverage check-rust check-web check acceptance clean clean-keep-cargo gen-api check-api release release-tools bench bench-smoke
+.PHONY: help setup build fmt dev dev-daemon dev-web seed-dev fmt-check-rust fmt-check-web fmt-check web-install web-build check-web-sources check-inner-allow clippy test test-fast test-default-features test-web coverage check-rust check-web check acceptance clean clean-keep-cargo gen-api check-api gen-languages release release-tools bench bench-smoke
 
 help: ## List the targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-18s %s\n", $$1, $$2}'
@@ -148,6 +148,9 @@ gen-api: ## Regenerate web/src/api/schema.d.ts from the daemon's OpenAPI documen
 	mkdir -p $(GEN_DIR)
 	cargo run -q -p fold-daemon --example openapi > $(GEN_DIR)/openapi.json
 	cd web && bunx openapi-typescript ../$(GEN_DIR)/openapi.json -o src/api/schema.d.ts
+
+gen-languages: web-install ## Regenerate web/src/syntax/catalog.gen.ts, the language names and file types, from the installed Shiki
+	cd web && bun scripts/gen-languages.ts && bunx biome format --write src/syntax/catalog.gen.ts
 
 check-api: ## Fail when web/src/api/schema.d.ts differs from the daemon's OpenAPI document
 	mkdir -p $(GEN_DIR)
