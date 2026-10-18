@@ -41,7 +41,7 @@ pub(super) async fn integration_messages(
             addressed_as: AddressedAs::Agent,
         })
         .collect();
-    send_from_fold_in_tx(tx, buffer, recipients, (task, proposal), &body, now).await?;
+    send_from_fold_in_tx(tx, buffer, recipients, (task, Some(proposal)), &body, now).await?;
     Ok(())
 }
 

@@ -8,6 +8,7 @@ pub mod seed;
 
 mod agents_schema;
 mod changesets;
+mod check_runs_schema;
 mod checklists;
 mod checkpoints;
 mod claims;

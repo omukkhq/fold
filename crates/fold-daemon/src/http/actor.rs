@@ -17,7 +17,7 @@ pub const HUMAN_HEADER: &str = "x-fold-human";
 /// The loopback cookie that `POST /api/v1/session` sets. The web application never reads it in script.
 pub const HUMAN_COOKIE: &str = "fold_human";
 
-/// The named human behind a request, registered in the host registry on first use. Over the socket the name comes only from `x-fold-human`, and never from a process under a worker that fold started. Over HTTP off loopback it comes only from the session that `fold_session` names, and on loopback only from the `fold_human` cookie, so a browser page cannot claim a name with a header and a signed-in human cannot claim another name with a cookie. The loopback cookie is trusted because every `/api` route of the TCP listener refuses a `Host`, or a write's `Origin`, that names another host, and a write without `x-fold-client`, so neither a page under a foreign domain nor a page on another local port can act through it.
+/// The named human behind a request, registered in the host registry on first use. Over the socket the name comes only from `x-fold-human`, and never from a process under a worker that fold started or under a check command that fold runs. Over HTTP off loopback it comes only from the session that `fold_session` names, and on loopback only from the `fold_human` cookie, so a browser page cannot claim a name with a header and a signed-in human cannot claim another name with a cookie. The loopback cookie is trusted because every `/api` route of the TCP listener refuses a `Host`, or a write's `Origin`, that names another host, and a write without `x-fold-client`, so neither a page under a foreign domain nor a page on another local port can act through it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Human(pub HumanName);
 
@@ -58,7 +58,7 @@ impl FromRequestParts<AppState> for Human {
     }
 }
 
-/// A worker's Bash runs as the host's user and can set `FOLD_HUMAN`, so the kernel's peer pid decides instead.
+/// A worker's Bash and a check command run as the host's user and can set `FOLD_HUMAN`, so the kernel's peer pid decides instead.
 async fn refuse_worker_peer(parts: &Parts, state: &AppState) -> Result<(), ApiError> {
     let pid = parts
         .extensions
@@ -68,8 +68,8 @@ async fn refuse_worker_peer(parts: &Parts, state: &AppState) -> Result<(), ApiEr
     if let Some(worker) = &worker {
         tracing::warn!(
             project = worker.project,
-            worker = %worker.agent,
-            "refused x-fold-human from a worker's process tree"
+            worker = worker.agent.as_ref().map(fold_core::AgentName::as_str),
+            "refused x-fold-human from a worker's or a check's process tree"
         );
     }
     policy::can_name_human(worker.is_some()).map_err(FoldError::from)?;

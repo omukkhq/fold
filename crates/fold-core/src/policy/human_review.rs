@@ -1,6 +1,7 @@
 use crate::actor::Actor;
 use crate::agents::{AgentName, HumanName};
 use crate::error::codes;
+use crate::events::EventActor;
 use crate::reviews::{HumanReviewMark, ReviewFact, deciding_approval};
 
 use super::PolicyDenied;
@@ -14,7 +15,7 @@ pub enum MarkChange {
     Unchanged,
 }
 
-/// Any agent or human may ask for a human's eyes on a task, but once the mark is on only a human changes what it says: an agent repeating the same reviewer and reason changes nothing, and an agent asking for something else is refused. The system never sets the mark.
+/// Any agent or human may ask for a human's eyes on a task, but once the mark is on only a human changes what it says: an agent repeating the same reviewer and reason changes nothing, and an agent asking for something else is refused. The system sets the mark only through [`checks_file_mark`].
 pub fn can_set_human_review(
     actor: &Actor,
     current: Option<&HumanReviewMark>,
@@ -41,6 +42,25 @@ pub fn can_set_human_review(
         code: codes::HUMAN_REVIEW_ALREADY_SET,
         message: "the task already has a human review mark that says something else",
         hint: "call get_task to see the mark; only a human changes or clears it",
+    })
+}
+
+/// The reason of the mark fold sets on a task whose proposal changes the checks file.
+pub const CHECKS_FILE_REASON: &str =
+    "the proposal changes fold-checks.toml, so a human approves the change of the checks";
+
+/// A proposal version that adds, changes or removes the checks file needs a human's approval, so no agent removes or weakens a check without the user. Returns the mark fold sets on the task in the transaction that makes the version: any human may approve, and `set_by` is fold. A task that already has a mark keeps it, because every mark already holds integration for a human, and a version that leaves the file as it is needs none.
+pub fn checks_file_mark(
+    current: Option<&HumanReviewMark>,
+    checks_changed: bool,
+) -> Option<HumanReviewMark> {
+    if !checks_changed || current.is_some() {
+        return None;
+    }
+    Some(HumanReviewMark {
+        reviewer: None,
+        reason: CHECKS_FILE_REASON.to_owned(),
+        set_by: EventActor::fold(),
     })
 }
 
@@ -104,7 +124,6 @@ mod tests {
     use super::*;
     use crate::actor::AgentActor;
     use crate::agents::{Tag, WorkerName};
-    use crate::events::EventActor;
 
     fn agent(worker: &str, tags: &[&str]) -> Actor {
         let worker = WorkerName::parse(worker).unwrap();
@@ -282,5 +301,20 @@ mod tests {
             let denied = can_clear_human_review(&actor).unwrap_err();
             assert_eq!(denied.code(), codes::HUMAN_REQUIRED, "{actor:?}");
         }
+    }
+
+    #[test]
+    fn a_changed_checks_file_marks_an_unmarked_task_for_any_human() {
+        let mark = checks_file_mark(None, true).unwrap();
+        assert_eq!(mark.reviewer, None);
+        assert_eq!(mark.reason, CHECKS_FILE_REASON);
+        assert_eq!(mark.set_by, EventActor::fold());
+        assert_eq!(checks_file_mark(None, false), None);
+        let held = HumanReviewMark {
+            reviewer: Some(HumanName::parse("tanim").unwrap()),
+            reason: "look".to_owned(),
+            set_by: EventActor::fold(),
+        };
+        assert_eq!(checks_file_mark(Some(&held), true), None);
     }
 }

@@ -2,6 +2,15 @@ use std::sync::{LockResult, Mutex, MutexGuard, PoisonError};
 
 use fold_core::{FoldError, codes};
 
+/// Session-specific variables of a Claude Code session that started the daemon. A worker is a session of its own and a check command is no session, so neither gets them.
+pub(crate) const SESSION_ENV: [&str; 5] = [
+    "CLAUDECODE",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_SSE_PORT",
+];
+
 /// What a lock call gives, also when an earlier holder panicked. The state behind every lock of the daemon stays valid after a panic, so the next holder continues instead of the daemon failing for good.
 pub(crate) fn unpoisoned<T>(result: LockResult<T>) -> T {
     result.unwrap_or_else(PoisonError::into_inner)

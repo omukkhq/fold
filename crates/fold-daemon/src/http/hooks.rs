@@ -64,7 +64,7 @@ pub struct StopUnread {
     responses(
         (status = 200, description = "The session's context", body = SessionStartContext),
         (status = 400, description = "The body, the agent name or the push target is not valid", body = ErrorEnvelope),
-        (status = 403, description = "`worker_peer_refused`: a process under a worker names another agent", body = ErrorEnvelope),
+        (status = 403, description = "`worker_peer_refused`: a process under a worker, or under a check that fold runs, names an agent it may not act as", body = ErrorEnvelope),
         (status = 404, description = "Not on the socket, or no registered project holds `cwd`", body = ErrorEnvelope),
         (status = 503, description = "The project failed to open", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
@@ -99,7 +99,7 @@ pub async fn session_start(
     responses(
         (status = 200, description = "The agent's unread count", body = StopUnread),
         (status = 400, description = "The body or the agent name is not valid", body = ErrorEnvelope),
-        (status = 403, description = "`worker_peer_refused`: a process under a worker names another agent", body = ErrorEnvelope),
+        (status = 403, description = "`worker_peer_refused`: a process under a worker, or under a check that fold runs, names an agent it may not act as", body = ErrorEnvelope),
         (status = 404, description = "Not on the socket, no registered project holds `cwd`, or the agent is not registered (`agent_not_registered`)", body = ErrorEnvelope),
         (status = 503, description = "The project failed to open", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
@@ -146,7 +146,7 @@ pub struct EditDecision {
     responses(
         (status = 200, description = "Whether the agent may edit files in the directory", body = EditDecision),
         (status = 400, description = "The body or the agent name is not valid", body = ErrorEnvelope),
-        (status = 403, description = "`worker_peer_refused`: a process under a worker names another agent", body = ErrorEnvelope),
+        (status = 403, description = "`worker_peer_refused`: a process under a worker, or under a check that fold runs, names an agent it may not act as", body = ErrorEnvelope),
         (status = 404, description = "Not on the socket, or no registered project holds `cwd`", body = ErrorEnvelope),
         (status = 503, description = "The project failed to open", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),

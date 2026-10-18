@@ -637,13 +637,7 @@ pub(super) fn usable_workspace(
     worker: &WorkerName,
 ) -> Result<WorkspaceRow, ReviewError> {
     let Some(live) = live else {
-        return Err(FoldError::new(
-            codes::WORKSPACE_NOT_ACTIVE,
-            format!("{task} has no active task workspace"),
-        )
-        .with_details([("task", json!(task.to_string()))])
-        .with_hint("call create_workspace, do the work there, then try again")
-        .into());
+        return Err(no_task_workspace(task));
     };
     if live.state != WorkspaceState::Active {
         return Err(FoldError::new(
@@ -670,6 +664,17 @@ pub(super) fn usable_workspace(
         .into());
     }
     Ok(live)
+}
+
+/// The refusal of a task without an active task workspace.
+pub(super) fn no_task_workspace(task: TaskId) -> ReviewError {
+    FoldError::new(
+        codes::WORKSPACE_NOT_ACTIVE,
+        format!("{task} has no active task workspace"),
+    )
+    .with_details([("task", json!(task.to_string()))])
+    .with_hint("call create_workspace, do the work there, then try again")
+    .into()
 }
 
 /// The snapshot was taken of `snapped`; the transaction refuses to record it when the task's workspace was replaced or synced to another base meanwhile.

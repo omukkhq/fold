@@ -9,10 +9,12 @@ use super::messages::MessageError;
 use super::projects::ProjectError;
 use super::tasks::TaskError;
 use super::workspaces::{WorkspaceError, WorkspaceService};
+use checks::CheckRunner;
 
 mod batches;
 mod changes;
 mod checkouts;
+pub mod checks;
 mod claims;
 mod comments;
 mod conflicts;
@@ -125,6 +127,8 @@ pub struct ReviewService {
     workspaces: WorkspaceService,
     registry: Option<Store>,
     integration: Arc<tokio::sync::Mutex<()>>,
+    /// The project's background check runs and the machine-wide permits they take.
+    checks: CheckRunner,
 }
 
 impl std::fmt::Debug for ReviewService {
@@ -153,7 +157,15 @@ impl ReviewService {
             workspaces,
             registry: None,
             integration,
+            checks: CheckRunner::default(),
         }
+    }
+
+    /// Runs the project's checks through `checks` (`ProjectHandle::checks`), so every review service of the project shares its runs and the machine-wide permits.
+    #[must_use]
+    pub fn with_checks(mut self, checks: CheckRunner) -> Self {
+        self.checks = checks;
+        self
     }
 
     /// The review claim follows the same lease as the implementation claims of `workspaces`, which in the daemon reads the project's `config.toml` on each use.

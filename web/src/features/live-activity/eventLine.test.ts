@@ -510,6 +510,18 @@ describe("eventLine", () => {
     ).toBe("recorded the conflict of the unstash on main; T-9 fixes it");
   });
 
+  it("names the task of a check run and how it ended", () => {
+    expect(eventLine(event("checks.started")).text).toBe(
+      "started the checks of T-12",
+    );
+    expect(
+      eventLine(event("checks.finished", { data: { state: "failed" } })).text,
+    ).toBe("ended the checks of T-12: failed");
+    expect(eventLine(event("checks.finished", { task: null })).text).toBe(
+      "ended the checks of a task",
+    );
+  });
+
   it("marks integrations, main moves, request approvals and recorded human changes as emphasised, review approvals by their verdict", () => {
     const emphasised = EVENT_TYPES.filter(
       (type) => eventLine(event(type)).emphasis,

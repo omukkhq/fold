@@ -50,10 +50,11 @@ pub enum IdKind {
     Request,
     ReviewBatch,
     PermissionQuestion,
+    CheckRun,
 }
 
 impl IdKind {
-    pub const ALL: [IdKind; 13] = [
+    pub const ALL: [IdKind; 14] = [
         IdKind::Task,
         IdKind::Proposal,
         IdKind::Changeset,
@@ -67,6 +68,7 @@ impl IdKind {
         IdKind::Request,
         IdKind::ReviewBatch,
         IdKind::PermissionQuestion,
+        IdKind::CheckRun,
     ];
 
     pub const fn prefix(self) -> &'static str {
@@ -84,6 +86,7 @@ impl IdKind {
             IdKind::Request => "RQ-",
             IdKind::ReviewBatch => "rb-",
             IdKind::PermissionQuestion => "pq-",
+            IdKind::CheckRun => "cr-",
         }
     }
 
@@ -102,6 +105,7 @@ impl IdKind {
             IdKind::Request => "request",
             IdKind::ReviewBatch => "review_batch",
             IdKind::PermissionQuestion => "permission_question",
+            IdKind::CheckRun => "check_run",
         }
     }
 }
@@ -298,6 +302,11 @@ define_id!(
     IdKind::PermissionQuestion
 );
 define_id!(
+    /// The public id of one run of a project's checks by fold; the `check_run` counter numbers them.
+    CheckRunId,
+    IdKind::CheckRun
+);
+define_id!(
     @prefixed
     /// The public id of a web sign-in token: `web_tokens.number`, unique across the host registry rather than one project. A revoked token keeps its row and its number, so a number is never handed out twice.
     WebTokenId,
@@ -338,6 +347,7 @@ mod tests {
             round_trip!(RequestId, n);
             round_trip!(ReviewBatchId, n);
             round_trip!(PermissionQuestionId, n);
+            round_trip!(CheckRunId, n);
         }
     }
 

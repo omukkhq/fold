@@ -18,7 +18,8 @@ mod workers;
 
 pub use batches::can_review_batch;
 pub use human_review::{
-    MarkChange, can_clear_human_review, can_edit_as_human, can_human_approve, can_set_human_review,
+    CHECKS_FILE_REASON, MarkChange, can_clear_human_review, can_edit_as_human, can_human_approve,
+    can_set_human_review, checks_file_mark,
 };
 pub use integrate::{
     CallerFacts, Gate, GateRefusal, GateState, GateStatus, IntegrateInput, ProposalFacts,
@@ -180,6 +181,15 @@ pub fn can_change_workspace(actor: &Actor, owner: Option<&WorkerName>) -> Result
         actor,
         owner,
         "only the owning worker can change a workspace",
+    )
+}
+
+/// The checks run in a task workspace and their commands write into it, so only the worker that owns the workspace asks fold to run them there.
+pub fn can_run_checks(actor: &Actor, owner: Option<&WorkerName>) -> Result<(), PolicyDenied> {
+    owning_worker(
+        actor,
+        owner,
+        "only the owning worker can run the checks in a workspace",
     )
 }
 

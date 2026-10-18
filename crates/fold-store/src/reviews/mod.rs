@@ -15,6 +15,7 @@ use crate::store::WriteTx;
 use crate::workspaces::parse_stats;
 
 pub mod batches;
+pub mod checks;
 mod claims;
 mod human_edits;
 mod integrations;

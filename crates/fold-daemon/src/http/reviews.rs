@@ -31,10 +31,12 @@ use crate::services::reviews::{
 };
 
 pub mod batches;
+pub mod checks;
 
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .merge(batches::routes())
+        .merge(checks::routes())
         .routes(routes!(set_human_review, clear_human_review))
         .routes(routes!(list_proposals))
         .routes(routes!(get_proposal))
@@ -662,6 +664,8 @@ pub struct ProposalDetail {
     /// The files the selected version changes against its base, in path order.
     pub files: Vec<ComparedFile>,
     pub totals: ComparisonTotals,
+    /// The check runs of the selected version, newest first, without their logs: the proposal-stage runs of exactly its files, then its integration runs.
+    pub checks: Vec<checks::CheckRun>,
 }
 
 impl From<service::ProposalView> for ProposalDetail {
@@ -710,6 +714,11 @@ impl From<service::ProposalView> for ProposalDetail {
             conflict: detail.conflict.map(ConflictReportView::from),
             files: view.files.into_iter().map(ComparedFile::from).collect(),
             totals: view.totals.into(),
+            checks: view
+                .checks
+                .into_iter()
+                .map(checks::CheckRun::from)
+                .collect(),
         }
     }
 }

@@ -24,6 +24,7 @@ mod auto;
 mod changes;
 mod changesets;
 mod checkpoints;
+mod checks;
 mod compare;
 mod direct;
 mod exclude;

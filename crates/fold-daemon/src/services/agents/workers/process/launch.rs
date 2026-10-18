@@ -23,15 +23,7 @@ use crate::services::agents::AgentError;
 use crate::services::agents::claude::{ClaudeInput, OutgoingRequest};
 use crate::services::events::EventBuffer;
 use crate::services::projects::load_config;
-
-/// Session-specific variables of a Claude Code session that started the daemon; a worker is a session of its own.
-const SESSION_ENV: [&str; 5] = [
-    "CLAUDECODE",
-    "CLAUDE_CODE_ENTRYPOINT",
-    "CLAUDE_CODE_MESSAGING_SOCKET",
-    "CLAUDE_CODE_MESSAGING_TOKEN",
-    "CLAUDE_CODE_SSE_PORT",
-];
+use crate::support::SESSION_ENV;
 
 impl Supervisor {
     /// Runs Claude Code for the row, which a committed command left in state `starting`: a new session, or `--resume` of the row's session. `turn` is the first user turn; without one a resumed worker waits idle for its next notice. A process that cannot start, for an unreadable configuration, files that cannot be written, a failed spawn or a process that cannot be recorded, leaves the row `failed` with `worker.failed` and gives no [`StartWatch`], so no `starting` row holds a place under the limits.

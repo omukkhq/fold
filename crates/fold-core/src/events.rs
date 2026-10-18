@@ -147,6 +147,8 @@ define_event_types! {
     STASH_APPLIED = "stash.applied",
     STASH_CONFLICTED = "stash.conflicted",
     STASH_DROPPED = "stash.dropped",
+    CHECKS_STARTED = "checks.started",
+    CHECKS_FINISHED = "checks.finished",
 }
 
 impl EventType {

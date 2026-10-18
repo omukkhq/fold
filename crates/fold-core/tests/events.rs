@@ -118,6 +118,8 @@ fn all_equals_the_plans_event_types() {
         "stash.applied",
         "stash.conflicted",
         "stash.dropped",
+        "checks.started",
+        "checks.finished",
     ]);
     assert_eq!(declared, expected);
 }

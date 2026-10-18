@@ -156,3 +156,6 @@ checklist_ambiguous
 human_edit_denied
 worker_busy
 file_not_editable
+checks_file_invalid
+checks_running
+check_run_not_found

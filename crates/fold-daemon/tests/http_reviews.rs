@@ -994,3 +994,61 @@ fn the_openapi_document_declares_every_route_and_error_schema() {
         assert!(schemas[name].is_object(), "{name} is missing");
     }
 }
+
+#[tokio::test]
+async fn a_check_run_is_read_with_its_logs_and_listed_on_its_proposal() {
+    let fx = Fixture::new().await;
+    let author = fx.agent("frontend").await;
+    fx.workspaces()
+        .create_workspace(&author, t(1))
+        .await
+        .unwrap();
+    fx.write(1, "src/lib.rs", "pub fn y() {}\n");
+    fx.write(
+        1,
+        "fold-checks.toml",
+        "[[check]]\nname = \"unit\"\nrun = \"echo fine\"\n",
+    );
+    let reviews = fx.reviews();
+    let started = reviews.run_checks(&author, t(1)).await.unwrap();
+    let fold_daemon::services::reviews::checks::Started::Running { run, .. } = started else {
+        panic!("expected a run");
+    };
+    let answer = fold_store::testing::eventually(std::time::Duration::from_secs(30), async || {
+        let answer = send(&fx, Method::GET, &format!("/check-runs/{run}"), None, &[]).await;
+        if answer.body["state"] == "running" {
+            Err(answer.body)
+        } else {
+            Ok(answer)
+        }
+    })
+    .await;
+    assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
+    assert_eq!(answer.body["id"], "cr-1");
+    assert_eq!(answer.body["state"], "passed");
+    assert_eq!(answer.body["purpose"], "check");
+    let result = &answer.body["results"][0];
+    assert_eq!(result["name"], "unit");
+    assert_eq!(result["setup"], false);
+    assert_eq!(result["outcome"], "passed");
+    assert_eq!(result["log"], "fine\n");
+    assert_eq!(result["truncated"], false);
+    let missing = send(&fx, Method::GET, "/check-runs/cr-7", None, &[]).await;
+    assert_eq!(
+        (missing.status, missing.code()),
+        (StatusCode::NOT_FOUND, "check_run_not_found")
+    );
+
+    reviews
+        .create_proposal(&author, t(1), "Add checks", None)
+        .await
+        .unwrap();
+    let proposal = send(&fx, Method::GET, "/proposals/P-1", None, &[TANIM]).await;
+    let checks = &proposal.body["checks"];
+    assert_eq!(checks.as_array().unwrap().len(), 1, "{checks}");
+    assert_eq!(checks[0]["id"], "cr-1");
+    assert_eq!(
+        checks[0]["results"][0]["log"], "",
+        "a proposal leaves the logs out"
+    );
+}

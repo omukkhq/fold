@@ -91,6 +91,8 @@ async fn baseline_creates_every_table_of_the_data_model() {
         "area_mcp_servers",
         "areas",
         "changesets",
+        "check_results",
+        "check_runs",
         "checklist_items",
         "checklists",
         "checkout",

@@ -14,6 +14,7 @@ use serde_json::json;
 
 pub use fold_store::reviews::ReviewRow as ReviewView;
 
+use super::checks::CheckRunView;
 use super::claims::ReviewClaimView;
 use super::integrate::caller_facts;
 use super::proposals::{ProposalDetail, proposal_detail, proposal_not_found};
@@ -59,6 +60,8 @@ pub struct ProposalView {
     /// The files the selected version changes against its base, in path order.
     pub files: Vec<FileChange>,
     pub totals: Totals,
+    /// The check runs of the selected version, newest first, without logs: the proposal-stage runs of its exact files and its integration runs.
+    pub checks: Vec<CheckRunView>,
 }
 
 impl ReviewService {
@@ -84,6 +87,13 @@ impl ReviewService {
         let needs: Vec<TaskId> = facts.prerequisites.iter().map(|(id, _)| *id).collect();
         let prerequisites = tasks::task_refs(&mut read, &needs).await?;
         let holder = reviews::unreleased_review_claim(&mut *read, proposal).await?;
+        let checks = ReviewService::version_checks(
+            &mut read,
+            facts.proposal.task,
+            proposal,
+            detail.selected.version,
+        )
+        .await?;
         read.commit().await.map_err(StoreError::from)?;
         let claim = match holder {
             Some(row) => Some(ReviewClaimView {
@@ -148,6 +158,7 @@ impl ReviewService {
             agent_approved,
             files: comparison.files,
             totals: comparison.totals,
+            checks,
         })
     }
 }

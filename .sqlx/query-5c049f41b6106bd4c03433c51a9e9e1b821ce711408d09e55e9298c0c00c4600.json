@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE check_runs SET state = ?2, reason = ?3, finished_at = ?4\n         WHERE number = ?1 AND state = 'running'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "5c049f41b6106bd4c03433c51a9e9e1b821ce711408d09e55e9298c0c00c4600"
+}

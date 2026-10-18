@@ -26,6 +26,7 @@ use crate::services::reviews::{
 use crate::services::workspaces::StateComparison;
 
 pub mod batches;
+pub mod checks;
 
 pub const CREATE_PROPOSAL: &str = "create_proposal";
 pub const LIST_PROPOSALS: &str = "list_proposals";
@@ -275,7 +276,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             GET_PROPOSAL,
-            "Read one proposal: versions, evidence, the task and its prerequisites, the review claim, reviews, comment counts, last_reviewed (the newest earlier version that has a verdict, by any reviewer), the gate report for integrating, the human review mark, the conflict report and the changed files.",
+            "Read one proposal: versions, evidence, the task and its prerequisites, the review claim, reviews, comment counts, last_reviewed (the newest earlier version that has a verdict, by any reviewer), the gate report for integrating, the human review mark, the conflict report, the check runs of the version (read their results instead of running the same checks again) and the changed files.",
             schema_for_type::<ProposalVersionInput>(),
         ),
         Tool::new(
@@ -340,6 +341,7 @@ pub fn tools() -> Vec<Tool> {
         "Reviewer only: send the fixes you made in your review checkout as the next version of the proposal, under your name, with each changed file and its reason and the checks you ran. Fix only what the task's agreed scope settles; request changes for a product question or feature-size work. The version starts without approvals and your checkout then holds it: build it, run the required checks, then approve it with submit_review. The author's agent gets a push to sync its workspace. A batch checkout never becomes a version: fix a member in its own create_review_checkout. Refusals: review_claim_required, author_cannot_review, stale_version, version_unchanged, worker_busy, workspace_not_found (no checkout of that version) and invalid_request with reason fixes_mismatch (details list the unlisted and unchanged files).",
         schema_for_type::<SubmitReviewFixInput>(),
     ));
+    tools.extend(checks::tools());
     tools
 }
 
@@ -372,7 +374,10 @@ pub async fn call(
         SUBMIT_REVIEW_FIX => submit_review_fix(reviews, &actor, arguments).await?,
         _ => match batches::run(reviews, tool, &actor, arguments).await? {
             Some(value) => value,
-            None => return Ok(None),
+            None => match checks::run(reviews, tool, &actor, arguments).await? {
+                Some(value) => value,
+                None => return Ok(None),
+            },
         },
     };
     Ok(Some(value))
@@ -539,6 +544,7 @@ fn view_json(view: &ProposalView) -> Value {
         "gates": view.gates.iter().map(gate_json).collect::<Vec<_>>(),
         "human_review": mark_json(summary.human_review.as_ref()),
         "conflict": detail.conflict,
+        "checks": view.checks.iter().map(checks::run_json).collect::<Vec<_>>(),
         "files": view.files.iter().map(file_line).collect::<Vec<_>>(),
         "totals": {
             "files": view.totals.files,

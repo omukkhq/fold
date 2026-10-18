@@ -139,6 +139,7 @@ export function proposalDetail(
     conflict: null,
     files: [],
     totals: { files: 2, added_lines: 10, removed_lines: 2 },
+    checks: [],
     ...fields,
   };
 }

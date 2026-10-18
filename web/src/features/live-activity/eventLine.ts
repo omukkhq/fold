@@ -768,6 +768,19 @@ const SPECS: Record<EventType, Spec> = {
         : `recorded the conflict of the unstash on main; ${task} fixes it`;
     },
   },
+  "checks.started": {
+    icon: ListChecks,
+    text: (e) => `started the checks of ${taskOf(e)}`,
+  },
+  "checks.finished": {
+    icon: ListChecks,
+    text: (e) => {
+      const state = text(e.data.state);
+      return state === null
+        ? `ended the checks of ${taskOf(e)}`
+        : `ended the checks of ${taskOf(e)}: ${state.replaceAll("_", " ")}`;
+    },
+  },
 };
 
 /** Every stored event type this build writes a line for. */

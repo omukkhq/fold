@@ -3,16 +3,25 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::body::Body;
+use axum::http::{Method, Request};
 use fold_core::events::types;
+use fold_core::reviews::checks::Outcome;
 use fold_core::{AgentName, Clock, EventFilter, ManualClock, Role, WorkerState};
+use fold_daemon::http::socket_router;
 use fold_daemon::mcp::handshake::{self, Answer, PROTOCOL_VERSION};
 use fold_daemon::projects::{ProjectHandle, Slot};
+use fold_daemon::services::agents::peers::{self, PeerWorker};
+use fold_daemon::services::reviews::checks::{
+    CheckRunner, CommandResult, CommandSpec, RunLimits, run_commands, run_commands_for,
+};
 use fold_daemon::socket::SocketPeer;
 use fold_daemon::{Daemon, DaemonConfig, RunningDaemon};
 use fold_store::agents::{self, NewWorkerProcess};
 use fold_store::projects::{self, ProjectRow};
 use fold_store::testing::TestProject;
 use fold_store::{Store, StoreError};
+use http_body_util::BodyExt;
 use rmcp::model::CallToolRequestParams;
 use rmcp::service::RunningService;
 use rmcp::{RoleClient, ServiceExt};
@@ -21,6 +30,7 @@ use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::process::{Child, Command};
+use tower::ServiceExt as _;
 
 #[cfg(test)]
 const WAIT: Duration = Duration::from_secs(10);
@@ -369,5 +379,182 @@ async fn a_hook_from_a_workers_process_tree_names_only_the_workers_own_agent() {
         let (status, _) = socket_http(&host, "POST", hook, "x", &body("web-worker")).await;
         assert_eq!(status, 200, "{hook}");
     }
+    host.daemon.shutdown().await;
+}
+
+/// A check command running under fold's runner for `owner`: the pids of its shell and of a `sleep` the shell started, which stands for a `fld` command in the check. The command ends when `go` exists.
+#[cfg(test)]
+struct RunningCheck {
+    shell: u32,
+    descendant: u32,
+    go: PathBuf,
+    run: tokio::task::JoinHandle<Vec<CommandResult>>,
+    _dir: TempDir,
+}
+
+#[cfg(test)]
+impl RunningCheck {
+    async fn start(owner: Option<PeerWorker>) -> Self {
+        let dir = TempDir::new().unwrap();
+        let pids = dir.path().join("pids");
+        let go = dir.path().join("go");
+        let run = format!(
+            "sleep 60 & echo \"$$ $!\" > '{}'; until [ -e '{}' ]; do sleep 0.05; done",
+            pids.display(),
+            go.display()
+        );
+        let spec = CommandSpec {
+            check: Some("fld".to_owned()),
+            run,
+            required: true,
+            runs: true,
+            timeout: None,
+        };
+        let work = dir.path().to_path_buf();
+        let run = tokio::spawn(async move {
+            let clock = ManualClock::new();
+            match owner {
+                Some(owner) => {
+                    run_commands_for(&owner, &work, vec![spec], RunLimits::default(), &clock).await
+                }
+                None => run_commands(&work, vec![spec], RunLimits::default(), &clock).await,
+            }
+        });
+        let line =
+            fold_store::testing::eventually(WAIT, async || match std::fs::read_to_string(&pids) {
+                Ok(line) if line.ends_with('\n') => Ok(line),
+                other => Err(format!("{other:?}")),
+            })
+            .await;
+        let mut pids = line.split_whitespace().map(|pid| pid.parse().unwrap());
+        Self {
+            shell: pids.next().unwrap(),
+            descendant: pids.next().unwrap(),
+            go,
+            run,
+            _dir: dir,
+        }
+    }
+
+    fn peer(&self) -> SocketPeer {
+        SocketPeer {
+            pid: Some(self.descendant),
+        }
+    }
+
+    async fn stop(self) {
+        std::fs::write(&self.go, "").unwrap();
+        let results = tokio::time::timeout(WAIT, self.run).await.unwrap().unwrap();
+        assert_eq!(results[0].outcome, Outcome::Passed);
+        assert_eq!(
+            peers::check_peer(&[self.shell, std::process::id()]),
+            None,
+            "an ended check leaves the registry"
+        );
+    }
+}
+
+/// A request through the socket's router from `peer`, as the CLI sends it: status and error code of the answer.
+#[cfg(test)]
+async fn peer_http(
+    host: &Host,
+    peer: SocketPeer,
+    path: &str,
+    human: &str,
+    body: String,
+) -> (u16, String) {
+    let mut request = Request::builder()
+        .method(Method::POST)
+        .uri(path)
+        .header("host", "fold")
+        .header("x-fold-human", human)
+        .header("content-type", "application/json")
+        .body(Body::from(body))
+        .unwrap();
+    request.extensions_mut().insert(peer);
+    let response = socket_router(host.daemon.state().clone())
+        .oneshot(request)
+        .await
+        .unwrap();
+    let status = response.status().as_u16();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    (
+        status,
+        body["error"]["code"].as_str().unwrap_or("").to_owned(),
+    )
+}
+
+#[tokio::test]
+async fn a_check_acts_as_the_worker_that_asked_for_it_and_never_as_a_human() {
+    let host = Host::start().await;
+    let owner = CheckRunner::default()
+        .with_project("app")
+        .owner(Some(AgentName::parse("web-worker").unwrap()));
+    let check = RunningCheck::start(Some(owner)).await;
+    let feedback = "/api/v1/projects/app/feedback";
+
+    let (status, code) = peer_http(&host, check.peer(), feedback, "x", "{}".to_owned()).await;
+    assert_eq!((status, code.as_str()), (403, "worker_peer_refused"));
+    let (answer, _, _) = handshake_as(&host, check.peer(), Some("main")).await;
+    assert_eq!(answer.error.unwrap().code, "worker_peer_refused");
+    assert_eq!(
+        host.refusals().await,
+        [json!({"agent": "main", "worker": "web-worker", "pid": check.descendant})]
+    );
+    let (answer, _, _) = handshake_as(&host, check.peer(), Some("web-worker")).await;
+    assert_eq!(
+        answer,
+        Answer::accepted("app"),
+        "a check acts as the worker that asked for its run"
+    );
+
+    let terminal = SocketPeer {
+        pid: Some(std::process::id()),
+    };
+    let (status, code) = peer_http(&host, terminal, feedback, "x", "{}".to_owned()).await;
+    assert_eq!(
+        (status, code.as_str()),
+        (400, "invalid_request"),
+        "the user's terminal still names a human while a check runs"
+    );
+    let (answer, _, _) = handshake_as(&host, terminal, Some("main")).await;
+    assert_eq!(answer, Answer::accepted("app"));
+    check.stop().await;
+    host.daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_check_that_no_worker_asked_for_acts_as_no_agent_and_no_human() {
+    let host = Host::start().await;
+    let check = RunningCheck::start(None).await;
+    let (status, code) = peer_http(
+        &host,
+        check.peer(),
+        "/api/v1/projects/app/feedback",
+        "x",
+        "{}".to_owned(),
+    )
+    .await;
+    assert_eq!((status, code.as_str()), (403, "worker_peer_refused"));
+    for agent in ["main", "web-worker"] {
+        let (answer, _, _) = handshake_as(&host, check.peer(), Some(agent)).await;
+        assert_eq!(answer.error.unwrap().code, "worker_peer_refused", "{agent}");
+        let body = json!({"cwd": host.root, "agent": agent, "workspace": ".fold/ws/review-p-1"});
+        let (status, code) = peer_http(
+            &host,
+            check.peer(),
+            "/api/v1/hooks/stop",
+            "x",
+            body.to_string(),
+        )
+        .await;
+        assert_eq!(
+            (status, code.as_str()),
+            (403, "worker_peer_refused"),
+            "{agent}"
+        );
+    }
+    check.stop().await;
     host.daemon.shutdown().await;
 }

@@ -153,6 +153,9 @@ fn status_of(code: &str) -> Option<StatusCode> {
         | codes::PROJECT_PAUSED
         | codes::TASK_ON_HOLD
         | codes::TASK_NEEDS_HUMAN => Some(StatusCode::CONFLICT),
+        codes::CHECK_RUN_NOT_FOUND => Some(StatusCode::NOT_FOUND),
+        codes::CHECKS_FILE_INVALID => Some(StatusCode::UNPROCESSABLE_ENTITY),
+        codes::CHECKS_RUNNING => Some(StatusCode::CONFLICT),
         _ => None,
     }
 }
@@ -291,6 +294,9 @@ mod tests {
     fn mapped_codes_keep_their_code_and_unmapped_codes_become_internal() {
         for (code, status) in [
             (codes::NOT_FOUND, StatusCode::NOT_FOUND),
+            (codes::CHECK_RUN_NOT_FOUND, StatusCode::NOT_FOUND),
+            (codes::CHECKS_FILE_INVALID, StatusCode::UNPROCESSABLE_ENTITY),
+            (codes::CHECKS_RUNNING, StatusCode::CONFLICT),
             (codes::INVALID_TASK_KIND, StatusCode::BAD_REQUEST),
             (codes::TASK_CHECK_DENIED, StatusCode::FORBIDDEN),
             (codes::TASK_KIND_DENIED, StatusCode::FORBIDDEN),

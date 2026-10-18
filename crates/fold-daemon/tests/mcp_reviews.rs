@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 /// The fixed count always puts the unread part on the footer line; real counts can add to it.
 const FOOTER: &str = "fold: ";
 
-const REVIEW_TOOLS: [&str; 15] = [
+const REVIEW_TOOLS: [&str; 17] = [
     "create_proposal",
     "list_proposals",
     "get_proposal",
@@ -35,6 +35,8 @@ const REVIEW_TOOLS: [&str; 15] = [
     "require_human_review",
     "submit_main_change",
     "submit_review_fix",
+    "run_checks",
+    "get_check_run",
 ];
 
 #[cfg(test)]
@@ -1142,4 +1144,77 @@ async fn proposal_tools_need_a_review_service() {
         .call_tool(CallToolRequestParams::new("list_proposals").with_arguments(arguments))
         .await;
     assert!(refused.is_err());
+}
+
+/// The result of `get_check_run` once the run has ended.
+#[cfg(test)]
+async fn ended_run(client: &Client, run: &Value) -> Value {
+    fold_store::testing::eventually(std::time::Duration::from_secs(30), async || {
+        let value = ok(client, "get_check_run", json!({"run": run})).await;
+        if value["state"] == "running" {
+            Err(value)
+        } else {
+            Ok(value)
+        }
+    })
+    .await
+}
+
+#[tokio::test]
+async fn run_checks_answers_at_once_and_get_check_run_reads_the_result() {
+    let fx = Fixture::new().await;
+    let frontend = connect(&fx, "frontend").await;
+    ok(&frontend, "create_workspace", json!({"task": "T-1"})).await;
+    let none = ok(&frontend, "run_checks", json!({"task": "T-1"})).await;
+    assert_eq!(none, json!({"task": "T-1", "checks": "none"}));
+    fx.write(
+        1,
+        "fold-checks.toml",
+        "[[check]]\nname = \"unit\"\nrun = \"echo nope; exit 2\"\n",
+    );
+    let started = ok(&frontend, "run_checks", json!({"task": "T-1"})).await;
+    assert_eq!(started["checks"], "running");
+    assert_eq!(started["run"], "cr-1");
+    assert_eq!(started["workspace"], "ws-1");
+    let run = ended_run(&frontend, &started["run"]).await;
+    assert_eq!(run["state"], "failed");
+    assert_eq!(run["reason"], "check_failed");
+    assert_eq!(run["stage"], "proposal");
+    assert_eq!(run["failed"], json!(["unit"]));
+    assert_eq!(run["results"][0]["exit_code"], 2);
+    assert_eq!(run["results"][0]["log_tail"], "nope");
+    let missing = err(&frontend, "get_check_run", json!({"run": "cr-9"})).await;
+    assert_eq!(missing["code"], "check_run_not_found");
+    let bad = err(&frontend, "get_check_run", json!({"run": "P-1"})).await;
+    assert_eq!(bad["code"], "invalid_id");
+    let review = connect(&fx, "review").await;
+    let other = err(&review, "run_checks", json!({"task": "T-1"})).await;
+    assert_eq!(other["code"], "not_workspace_owner");
+}
+
+#[tokio::test]
+async fn get_proposal_lists_the_check_runs_of_the_version() {
+    let fx = Fixture::new().await;
+    let frontend = connect(&fx, "frontend").await;
+    ok(&frontend, "create_workspace", json!({"task": "T-1"})).await;
+    fx.write(1, "src/lib.rs", "pub fn y() {}\n");
+    fx.write(
+        1,
+        "fold-checks.toml",
+        "[[check]]\nname = \"unit\"\nrun = \"true\"\n",
+    );
+    let started = ok(&frontend, "run_checks", json!({"task": "T-1"})).await;
+    ended_run(&frontend, &started["run"]).await;
+    ok(
+        &frontend,
+        "create_proposal",
+        json!({"task": "T-1", "title": "Add checks"}),
+    )
+    .await;
+    let review = connect(&fx, "review").await;
+    let proposal = ok(&review, "get_proposal", json!({"id": "P-1"})).await;
+    assert_eq!(
+        proposal["checks"],
+        json!([{"run": "cr-1", "stage": "proposal", "state": "passed", "reason": null, "failed": []}])
+    );
 }

@@ -157,6 +157,23 @@ fn only_the_owning_worker_changes_a_workspace() {
 }
 
 #[test]
+fn only_the_owning_worker_runs_the_checks_of_a_workspace() {
+    use fold_core::policy::can_run_checks;
+    let owner = WorkerName::parse("frontend/ui").unwrap();
+    assert!(can_run_checks(&agent("frontend/ui", &[]), Some(&owner)).is_ok());
+    for actor in [
+        agent("frontend", &[]),
+        agent("review", &["main"]),
+        human("tanim"),
+        Actor::System,
+    ] {
+        let denied = can_run_checks(&actor, Some(&owner)).unwrap_err();
+        assert_eq!(denied.code(), codes::NOT_WORKSPACE_OWNER, "{actor:?}");
+    }
+    assert!(can_run_checks(&agent("frontend/ui", &[]), None).is_err());
+}
+
+#[test]
 fn the_owning_worker_or_the_daemon_takes_an_automatic_checkpoint() {
     use fold_core::policy::can_take_auto_checkpoint;
     let owner = WorkerName::parse("frontend/ui").unwrap();

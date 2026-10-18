@@ -175,6 +175,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/check-runs/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One check run with the stored end of each command's output. */
+        get: operations["get_check_run"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/checklist-items/{id}": {
         parameters: {
             query?: never;
@@ -1516,6 +1533,83 @@ export interface components {
             /** Format: int32 */
             removed_lines: number;
         };
+        /**
+         * @description What one command did.
+         * @enum {string}
+         */
+        CheckOutcome: "passed" | "failed" | "timed_out" | "skipped" | "not_run";
+        /**
+         * @description What asked for a run.
+         * @enum {string}
+         */
+        CheckPurpose: "check" | "create_proposal" | "update_proposal" | "integrate";
+        /** @description One command of a run. */
+        CheckResult: {
+            /** Format: int64 */
+            duration_ms: number;
+            /** Format: int32 */
+            exit_code: number | null;
+            /** @description The stored end of the output, as text. Empty on a proposal view, which leaves the logs out. */
+            log: string;
+            /**
+             * Format: int64
+             * @description The size of the command's whole output.
+             */
+            log_bytes: number;
+            /** @description The check's name, or `setup` for the setup command. */
+            name: string;
+            outcome: components["schemas"]["CheckOutcome"];
+            /** @description A required command that fails fails the run; one that is not required only shows. */
+            required: boolean;
+            setup: boolean;
+            /** @description The stored log is the end of a longer output. */
+            truncated: boolean;
+        };
+        /** @description One run of a project's checks by fold. */
+        CheckRun: {
+            /**
+             * @description The revision the checked tree is based on: the workspace's base, or main's head for an integration.
+             * @example r17
+             */
+            base: string;
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            created_at: number;
+            /** Format: int64 */
+            finished_at: number | null;
+            /** @example cr-4 */
+            id: string;
+            purpose: components["schemas"]["CheckPurpose"];
+            reason: components["schemas"]["CheckRunReason"] | null;
+            /** @description In run order: the setup first, then each check of the stage. */
+            results: components["schemas"]["CheckResult"][];
+            stage: components["schemas"]["CheckStage"];
+            state: components["schemas"]["CheckRunState"];
+            /** @example T-12 */
+            task: string;
+            /**
+             * Format: int32
+             * @description The version an integration run checks.
+             */
+            version: number | null;
+        };
+        /**
+         * @description Why a run failed or stopped.
+         * @enum {string}
+         */
+        CheckRunReason: "check_failed" | "setup_failed" | "checks_file_invalid" | "files_changed" | "workspace_changed" | "refused" | "daemon_stopped" | "superseded";
+        /**
+         * @description Where a run stands.
+         * @enum {string}
+         */
+        CheckRunState: "running" | "passed" | "failed" | "stopped";
+        /**
+         * @description When a check runs.
+         * @enum {string}
+         */
+        CheckStage: "proposal" | "integration";
         Checklist: {
             items: components["schemas"]["ChecklistItem"][];
             name: string;
@@ -1904,7 +1998,7 @@ export interface components {
             workspace: string | null;
         };
         /** @enum {string} */
-        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved" | "git.sync_enabled" | "git.head_moved" | "human_change.withdrawn" | "proposal.reviewer_fixed" | "stash.pushed" | "stash.applied" | "stash.conflicted" | "stash.dropped";
+        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved" | "git.sync_enabled" | "git.head_moved" | "human_change.withdrawn" | "proposal.reviewer_fixed" | "stash.pushed" | "stash.applied" | "stash.conflicted" | "stash.dropped" | "checks.started" | "checks.finished";
         /**
          * @description `needs`: this task needs the other task. `needed_by`: the other task needs this one.
          * @enum {string}
@@ -2528,6 +2622,8 @@ export interface components {
         ProposalDetail: {
             /** @description A reviewer agent (the main agent, the review lead or a batch reviewer) approved the current version and no request for changes came after it. On a task with the human review mark a human approves only then; otherwise the approval is `agent_approval_required`. */
             agent_approved: boolean;
+            /** @description The check runs of the selected version, newest first, without their logs: the proposal-stage runs of exactly its files, then its integration runs. */
+            checks: components["schemas"]["CheckRun"][];
             comments: components["schemas"]["CommentCounts"];
             conflict: components["schemas"]["ConflictReportView"] | null;
             /** @description The files the selected version changes against its base, in path order. */
@@ -4056,7 +4152,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `worker_peer_refused`: a process under a worker names another agent; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            /** @description `worker_peer_refused`: a process under a worker, or under a check that fold runs, names an agent it may not act as; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4134,7 +4230,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `worker_peer_refused`: a process under a worker names another agent; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            /** @description `worker_peer_refused`: a process under a worker, or under a check that fold runs, names an agent it may not act as; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4212,7 +4308,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `worker_peer_refused`: a process under a worker names another agent; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            /** @description `worker_peer_refused`: a process under a worker, or under a check that fold runs, names an agent it may not act as; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4622,7 +4718,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4714,7 +4810,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4820,6 +4916,85 @@ export interface operations {
             };
         };
     };
+    get_check_run: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The check run id, such as cr-4 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The run */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckRun"];
+                };
+            };
+            /** @description `invalid_id` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `check_run_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     remove_checklist_item: {
         parameters: {
             query?: never;
@@ -4859,7 +5034,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4951,7 +5126,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5296,7 +5471,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5535,7 +5710,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5693,7 +5868,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5928,7 +6103,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6092,7 +6267,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6266,7 +6441,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6453,7 +6628,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_edit_denied`: the task has no human review mark, or the mark names another human (`details.reviewer`); `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `human_edit_denied`: the task has no human review mark, or the mark names another human (`details.reviewer`); `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6638,7 +6813,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `author_cannot_integrate`: the caller's agent wrote the proposal; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `author_cannot_integrate`: the caller's agent wrote the proposal; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6730,7 +6905,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_edit_denied`; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `human_edit_denied`; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6822,7 +6997,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6920,7 +7095,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7018,7 +7193,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7113,7 +7288,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7364,7 +7539,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7533,7 +7708,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `requester_required`: the human is not the requester; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `requester_required`: the human is not the requester; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7706,7 +7881,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `requester_required`: the human is not the requester; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `requester_required`: the human is not the requester; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7798,7 +7973,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `requester_required`: the human is not the requester; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `requester_required`: the human is not the requester; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7890,7 +8065,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `requester_required`: the human is not the requester; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `requester_required`: the human is not the requester; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7967,7 +8142,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8664,7 +8839,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8831,7 +9006,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9005,7 +9180,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9088,7 +9263,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9174,7 +9349,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9266,7 +9441,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `task_hold_denied` with the detail reason `started`: the task has a claim, a task workspace or an open proposal, or is past Todo; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `task_hold_denied` with the detail reason `started`: the task has a claim, a task workspace or an open proposal, or is past Todo; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9354,7 +9529,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9446,7 +9621,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9534,7 +9709,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9624,7 +9799,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9712,7 +9887,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9795,7 +9970,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9883,7 +10058,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9973,7 +10148,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10063,7 +10238,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10155,7 +10330,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10320,7 +10495,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10419,7 +10594,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10579,7 +10754,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10737,7 +10912,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `worker_start_denied`: a human starts only leads; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `worker_start_denied`: a human starts only leads; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10825,7 +11000,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;

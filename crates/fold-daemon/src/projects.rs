@@ -19,6 +19,7 @@ use crate::services::events::EventBus;
 use crate::services::messages::MessageService;
 use crate::services::projects::{GitAttention, RemoteContext, load_config};
 use crate::services::reviews::ReviewService;
+use crate::services::reviews::checks::{CheckPermits, CheckRunner, recover_check_runs};
 use crate::services::tasks::TaskService;
 use crate::services::workspaces::{CarryCache, WorkspaceLocks, WorkspaceService};
 use crate::support::unpoisoned;
@@ -63,6 +64,8 @@ pub struct ProjectHandle {
     push_task: PushTask,
     /// The Claude Code processes of the project's worker agents.
     pub workers: Supervisor,
+    /// The project's background runs of its checks, which share the machine-wide permits of the daemon's projects.
+    pub checks: CheckRunner,
     /// Brings the project folder to main after each integration and when its Git branch changes, commits each revision to the project's repository while Git sync is on, and pushes it when the configuration asks.
     auto_commit: AutoCommit,
     /// The device and inode of the database file this handle opened. SQLite keeps reading a file that was deleted, so only this tells the handle's database from a new one at the same path.
@@ -211,6 +214,7 @@ impl ProjectHandle {
             push,
             push_task,
             workers,
+            checks: CheckRunner::default().with_project(&row.slug),
             auto_commit,
             database_file,
         })
@@ -243,6 +247,7 @@ impl ProjectHandle {
 
     /// Closes the project after its workers stopped and its bus closed: the live state of its workspaces is written and let go, its commit writer and push delivery end, every open session ends and its database is checkpointed and closed.
     pub(crate) async fn stop(&self) {
+        self.checks.shutdown().await;
         for live in self.live.all() {
             self.live.detach(live.view.workspace).await;
         }
@@ -291,6 +296,14 @@ impl ProjectHandle {
             self.integration.clone(),
         )
         .with_registry(registry.clone())
+        .with_checks(self.checks.clone())
+    }
+
+    /// The handle with its check runs taking `permits`, the ones every project of the daemon shares.
+    #[must_use]
+    pub fn with_check_permits(mut self, permits: CheckPermits) -> Self {
+        self.checks = CheckRunner::new(permits).with_project(&self.slug);
+        self
     }
 }
 
@@ -419,6 +432,8 @@ pub struct Projects {
     launcher: Launcher,
     /// The host registry, whose humans a worker's `AskUserQuestion` call reaches, and from which a project whose `.fold/` is gone is removed.
     registry: Option<Store>,
+    /// The runs of checks that may go at once across every project.
+    check_permits: CheckPermits,
     /// The root of each project removed because its `.fold/` was gone, kept until the next answer for its slug, so that answer carries the `fld init` hint also when the live job removed the project.
     removed: RwLock<HashMap<String, PathBuf>>,
     /// The projects that are unavailable because their folder is missing, which the live job opens again when the folder is back.
@@ -500,6 +515,7 @@ impl Projects {
         self.mark_away(&row.slug, false);
         let outcome = ProjectHandle::open_with(row, clock, self.launcher.clone())
             .await
+            .map(|handle| handle.with_check_permits(self.check_permits.clone()))
             .map(ProjectHandle::share);
         if let Ok(handle) = &outcome {
             unpoisoned(self.removed.write()).remove(&row.slug);
@@ -507,6 +523,10 @@ impl Projects {
                 handle.workers.set_registry(registry.clone());
             }
             jobs::reconcile_workspaces(handle).await;
+            if let Err(error) = recover_check_runs(&handle.store, &handle.bus, &*handle.clock).await
+            {
+                tracing::error!(project = %row.slug, code = error.log_code(), "could not end the check runs a stop cut short");
+            }
             if let Err(error) = handle.agents().close_orphan_sessions().await {
                 tracing::error!(project = %row.slug, code = code_of(&error), "could not end orphan sessions");
             }
