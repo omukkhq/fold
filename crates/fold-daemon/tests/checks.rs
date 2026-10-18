@@ -3,8 +3,10 @@
 use std::path::Path;
 use std::time::Duration;
 
+use fold_core::policy::SessionPeer;
 use fold_core::reviews::checks::{Outcome, RunReason, RunState};
-use fold_core::{CheckRunId, codes};
+use fold_core::{AgentName, CheckRunId, codes};
+use fold_daemon::services::agents::peers;
 use fold_daemon::services::reviews::ReviewService;
 use fold_daemon::services::reviews::checks::{
     CheckPermits, CheckRunView, CheckRunner, Started, recover_check_runs,
@@ -241,8 +243,16 @@ async fn one_run_at_a_time_goes_in_a_workspace() {
 #[tokio::test]
 async fn a_stop_during_a_run_ends_it_as_stopped_at_the_next_start() {
     let fx = Fixture::new().await;
-    let gate = tempfile::tempdir().unwrap();
-    workspace_with_checks(&fx, &waiting_check(&gate.path().join("never"))).await;
+    let outside = tempfile::tempdir().unwrap();
+    let pid_file = outside.path().join("pid");
+    workspace_with_checks(
+        &fx,
+        &format!(
+            "[[check]]\nname = \"slow\"\nrun = \"sleep 60 & echo $! > '{}'; wait\"\n",
+            pid_file.display()
+        ),
+    )
+    .await;
     let runner = CheckRunner::new(CheckPermits::new(1));
     let reviews = fx.service().with_checks(runner.clone());
     let run = running(
@@ -251,7 +261,24 @@ async fn a_stop_during_a_run_ends_it_as_stopped_at_the_next_start() {
             .await
             .unwrap(),
     );
+    let pid = eventually(WAIT, async || {
+        std::fs::read_to_string(&pid_file)
+            .ok()
+            .and_then(|text| text.trim().parse::<u32>().ok())
+            .ok_or("no pid yet")
+    })
+    .await;
     runner.shutdown().await;
+    eventually(WAIT, async || {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+        // A killed child that nobody reaped yet is a zombie, state Z.
+        if stat.is_empty() || stat.split(' ').nth(2) == Some("Z") {
+            Ok(())
+        } else {
+            Err(stat)
+        }
+    })
+    .await;
     let view = reviews.get_check_run(run, false).await.unwrap();
     assert_eq!(
         view.run.state,
@@ -287,6 +314,8 @@ async fn a_proposal_shows_the_runs_of_exactly_its_files() {
     fx.reviews
         .create_proposal(&actor, t(1), "Add the checks", None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     let proposal = fx
         .text("SELECT 'P-' || number FROM proposals")
@@ -304,5 +333,52 @@ async fn a_proposal_shows_the_runs_of_exactly_its_files() {
     assert!(
         view.checks[0].results[0].log.is_empty(),
         "a view leaves the logs out"
+    );
+}
+
+#[tokio::test]
+async fn a_process_of_a_workers_check_acts_as_that_worker() {
+    let fx = Fixture::new().await;
+    let gate = tempfile::tempdir().unwrap();
+    let (pids, go) = (gate.path().join("pids"), gate.path().join("go"));
+    workspace_with_checks(
+        &fx,
+        &format!(
+            "[[check]]\nname = \"slow\"\nrun = \"sleep 60 & echo $$ $! > '{}'; until [ -e '{}' ]; do sleep 0.05; done\"\n",
+            pids.display(),
+            go.display()
+        ),
+    )
+    .await;
+    let reviews = fx
+        .reviews
+        .clone()
+        .with_checks(CheckRunner::default().with_project("app"));
+    let run = running(
+        reviews
+            .run_checks(&by(&fx.frontend.worker), t(1))
+            .await
+            .unwrap(),
+    );
+    let line = eventually(WAIT, async || match std::fs::read_to_string(&pids) {
+        Ok(line) if line.ends_with('\n') => Ok(line),
+        other => Err(format!("{other:?}")),
+    })
+    .await;
+    let found: Vec<u32> = line
+        .split_whitespace()
+        .map(|pid| pid.parse().unwrap())
+        .collect();
+    let chain = peers::process_chain(found[1]).unwrap();
+    assert_eq!(
+        peers::session_peer(peers::check_peer(&chain), "app"),
+        SessionPeer::Worker(AgentName::parse("frontend").unwrap())
+    );
+    std::fs::write(&go, "").unwrap();
+    assert_eq!(ended(&reviews, run).await.run.state, RunState::Passed);
+    assert_eq!(
+        peers::check_peer(&[found[0], std::process::id()]),
+        None,
+        "an ended check leaves the registry"
     );
 }

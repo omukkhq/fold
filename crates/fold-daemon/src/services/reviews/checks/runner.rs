@@ -128,6 +128,17 @@ impl CheckRunner {
         tasks.spawn(work);
     }
 
+    /// Waits until every run started so far has ended, whether it ended its row or failed to.
+    pub async fn wait_idle(&self) {
+        loop {
+            let mut tasks = std::mem::take(&mut *lock(&self.tasks));
+            if tasks.is_empty() {
+                return;
+            }
+            while tasks.join_next().await.is_some() {}
+        }
+    }
+
     /// Aborts every run still going. A run cut short leaves its row running, which the next open of the project ends as stopped.
     pub async fn shutdown(&self) {
         let mut tasks = std::mem::take(&mut *lock(&self.tasks));
@@ -336,6 +347,7 @@ async fn run_command(dir: PathBuf, run: &str, limits: RunLimits, owner: &PeerWor
         .id()
         .and_then(|pid| i32::try_from(pid).ok())
         .and_then(rustix::process::Pid::from_raw);
+    let guard = GroupKill(group);
     let mut readers = JoinSet::new();
     if let Some(stdout) = child.stdout.take() {
         readers.spawn(read_into(stdout, Arc::clone(&tail)));
@@ -378,8 +390,7 @@ async fn run_command(dir: PathBuf, run: &str, limits: RunLimits, owner: &PeerWor
             (Outcome::TimedOut, None)
         }
     };
-    // What the command left running in its group, such as a server a test started, ends with it.
-    signal(group, rustix::process::Signal::KILL);
+    drop(guard);
     let drained = tokio::time::timeout(DRAIN_WAIT, async {
         while readers.join_next().await.is_some() {}
     })
@@ -393,6 +404,15 @@ async fn run_command(dir: PathBuf, run: &str, limits: RunLimits, owner: &PeerWor
         exit_code,
         log,
         log_bytes,
+    }
+}
+
+/// Kills the command's process group when it is dropped: at the command's end, so what it left running, such as a server a test started, ends with it, and when a stopping daemon aborts the run, which `kill_on_drop` alone does only for the shell.
+struct GroupKill(Option<rustix::process::Pid>);
+
+impl Drop for GroupKill {
+    fn drop(&mut self) {
+        signal(self.0, rustix::process::Signal::KILL);
     }
 }
 

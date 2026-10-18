@@ -274,6 +274,8 @@ impl Project {
             .create_proposal(&author, task, "Change files", None)
             .await
             .unwrap()
+            .detail()
+            .unwrap()
             .summary
             .id;
         integrated(
@@ -700,6 +702,8 @@ async fn a_conflict_becomes_a_sync_task_that_reaches_the_remote() {
         .reviews()
         .create_proposal(&agent, task, "Sync with the remote", None)
         .await
+        .unwrap()
+        .detail()
         .unwrap()
         .summary
         .id;

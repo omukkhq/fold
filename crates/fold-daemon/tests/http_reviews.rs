@@ -220,6 +220,8 @@ async fn the_proposal_diff_reads_the_change_since_an_earlier_version() {
     fx.reviews()
         .update_proposal(&frontend, p1, None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     let stale = send(
         &fx,
@@ -362,6 +364,8 @@ async fn the_proposal_diff_since_an_earlier_version_leaves_out_what_main_gained(
     fx.reviews()
         .create_proposal(&backend, t(2), "Add a guide", None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     let review = fx.agent("review").await;
     give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
@@ -391,6 +395,8 @@ async fn the_proposal_diff_since_an_earlier_version_leaves_out_what_main_gained(
     fx.reviews()
         .update_proposal(&frontend, p1, None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
 
     let answer = send(&fx, Method::GET, "/proposals/P-1/diff?since=1", None, &[]).await;
@@ -1042,6 +1048,8 @@ async fn a_check_run_is_read_with_its_logs_and_listed_on_its_proposal() {
     reviews
         .create_proposal(&author, t(1), "Add checks", None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     let proposal = send(&fx, Method::GET, "/proposals/P-1", None, &[TANIM]).await;
     let checks = &proposal.body["checks"];

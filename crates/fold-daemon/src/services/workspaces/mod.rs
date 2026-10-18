@@ -68,6 +68,7 @@ pub use repository::{
     DEFAULT_REVISION_PAGE, RECENT_REVISIONS, RepositoryState, RevisionDetail, RevisionOrigin,
     RevisionPage, RevisionSummary,
 };
+pub(crate) use review_fix::ReviewFixTree;
 pub use stalls::check_stalls;
 pub use sync::Synced;
 pub use sync_task::{SyncTaskCreated, SyncWorkspace, short_commit};

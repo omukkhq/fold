@@ -94,6 +94,8 @@ impl Scene {
             fx.reviews()
                 .create_proposal(&author, t(task), "Change", Some("tests pass"))
                 .await
+                .unwrap()
+                .detail()
                 .unwrap();
             authors.push(author);
         }
@@ -590,6 +592,8 @@ async fn a_member_that_gets_a_new_version_keeps_no_approval_from_the_batch() {
     reviews
         .update_proposal(&scene.authors[1], p(2), None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     let submitted = reviews
         .submit_batch_review(
@@ -634,6 +638,8 @@ async fn a_member_that_gets_a_new_version_keeps_no_approval_from_the_batch() {
     reviews
         .update_proposal(&scene.authors[0], p(1), None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     assert_eq!(scene.summary(p(1)).await.latest_verdict, None);
 }

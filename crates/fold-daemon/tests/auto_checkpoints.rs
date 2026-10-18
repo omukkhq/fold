@@ -332,6 +332,8 @@ async fn each_command_first_checkpoints_the_state_it_found() {
     let opened = reviews
         .create_proposal(&fx.actor, t(1), "A change", None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     let before_proposal = fx.with_reason(CheckpointReason::BeforeProposal).await;
     assert_eq!(before_proposal.len(), 1);
@@ -341,6 +343,8 @@ async fn each_command_first_checkpoints_the_state_it_found() {
     let updated = reviews
         .update_proposal(&fx.actor, opened.summary.id, None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     let before_update = fx.with_reason(CheckpointReason::BeforeProposalUpdate).await;
     assert_eq!(before_update.len(), 1);

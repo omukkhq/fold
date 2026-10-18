@@ -87,6 +87,8 @@ async fn two_proposals(fx: &Fixture) {
         fx.reviews()
             .create_proposal(&author, t(task), "Add a file", None)
             .await
+            .unwrap()
+            .detail()
             .unwrap();
     }
 }
@@ -154,6 +156,8 @@ async fn an_omitted_batch_version_gets_a_new_checkout_and_its_own_review() {
             Some("Checked new content"),
         )
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     let submitted = ok(
         &delegate,
@@ -284,6 +288,8 @@ async fn a_reviewer_batches_checks_out_and_reviews_two_proposals_through_the_too
             None,
         )
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     let read = ok(&review, "get_review_batch", json!({"id": "rb-1"})).await;
     assert_eq!(read["members"][0]["since"], Value::Null);
@@ -336,6 +342,8 @@ async fn a_member_synced_with_a_newer_main_counts_only_its_own_change() {
             None,
         )
         .await
+        .unwrap()
+        .detail()
         .unwrap();
 
     let since = json!({"version": "v1", "files": 1, "added": 0, "removed": 1});

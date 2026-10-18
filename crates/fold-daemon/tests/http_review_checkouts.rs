@@ -48,6 +48,8 @@ async fn proposed() -> Opened {
     reviews
         .create_proposal(&agent("frontend"), t(1), "Change x", None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     reviews.claim_review(&agent("review"), p(1)).await.unwrap();
     opened
@@ -102,6 +104,8 @@ async fn a_batch_checkout_lists_its_batch_and_its_members_in_merge_order() {
     reviews
         .create_proposal(&agent("frontend"), t(2), "Add two", None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     let batch = reviews
         .create_review_batch(&agent("review"), vec![p(1), p(2)])

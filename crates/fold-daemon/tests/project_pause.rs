@@ -281,6 +281,8 @@ async fn approved_proposals_still_integrate_while_paused() {
     fx.reviews()
         .create_proposal(&author, t(1), "Change it", None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     fx.agents().pause_project(&human("tanim")).await.unwrap();
     let job = Running::start(&fx.state);

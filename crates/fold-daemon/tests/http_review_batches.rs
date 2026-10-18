@@ -38,6 +38,8 @@ async fn batched() -> Fixture {
         fx.reviews()
             .create_proposal(&author, t(task), "Add a file", None)
             .await
+            .unwrap()
+            .detail()
             .unwrap();
     }
     let review = fx.agent("review").await;
@@ -107,6 +109,8 @@ async fn a_member_with_a_new_version_shows_the_change_since_the_reviewed_one() {
     fx.reviews()
         .update_proposal(&frontend, ProposalId::from_number(1).unwrap(), None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
 
     let (status, body) = get(&fx, "/reviews/batches/rb-1").await;

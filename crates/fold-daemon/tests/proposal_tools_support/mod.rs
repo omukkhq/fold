@@ -140,6 +140,8 @@ impl Fixture {
         self.reviews()
             .create_proposal(author, t(task), "Change the library", Some("tests pass"))
             .await
+            .unwrap()
+            .detail()
             .unwrap();
     }
 }

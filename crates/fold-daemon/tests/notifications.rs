@@ -329,6 +329,8 @@ async fn push_goes_to_the_review_lead_on_proposal_opened() {
     n.fx.reviews
         .update_proposal(&by(&n.fx.frontend.worker), p(1), None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     let version = "fold: P-1 has version 2. Call create_review_checkout.";
     assert_eq!(review.next().await, version);

@@ -1542,7 +1542,7 @@ export interface components {
          * @description What asked for a run.
          * @enum {string}
          */
-        CheckPurpose: "check" | "create_proposal" | "update_proposal" | "integrate";
+        CheckPurpose: "check" | "create_proposal" | "update_proposal" | "integrate" | "review_fix";
         /** @description One command of a run. */
         CheckResult: {
             /** Format: int64 */

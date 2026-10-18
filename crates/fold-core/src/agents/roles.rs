@@ -612,7 +612,12 @@ mod tests {
             assert!(prompt.contains("`Full review: <reason>`"));
             assert!(prompt.contains("`Change review: my fixes and the code they touch`"));
             assert!(prompt.contains("`base_conflicts`"));
+            assert!(prompt.contains("do not run the same checks again"));
+            assert!(prompt.contains("`get_check_run`"));
         }
+        let worker = Role::TaskWorker.prompt();
+        assert!(worker.contains("call `run_checks` for the task before `create_proposal`"));
+        assert!(worker.contains("Wait for `checks.finished` with `wait_for_events`"));
         let lead = Role::ReviewLead.prompt();
         assert!(lead.contains("before taking claims or creating a batch"));
         assert!(lead.contains("that reviewer creates its own batch"));

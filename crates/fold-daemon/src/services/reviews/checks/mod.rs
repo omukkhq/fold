@@ -1,7 +1,7 @@
 use fold_core::events::types;
 use fold_core::object::ObjectHash;
 use fold_core::reviews::checks::{
-    ChecksFile, Outcome, Purpose, RunReason, RunState, Stage, runs_any,
+    ChecksFile, Outcome, Purpose, RunReason, RunState, Stage, checks_file_changed, runs_any,
 };
 use fold_core::{
     Actor, AddressedAs, CheckRunId, Clock, EventActor, FoldError, IdKind, MessageBody, NewEvent,
@@ -12,11 +12,13 @@ use fold_store::workspaces::{self, WorkspaceRow, WorkspaceState};
 use fold_store::{SqliteConnection, Store, StoreError, WriteTx, counters, tasks};
 use serde_json::json;
 
-use super::proposals::{no_task_workspace, usable_workspace};
+use super::proposals::{
+    Proposed, VersionInput, add_version_in_tx, no_task_workspace, open_in_tx, usable_workspace,
+};
 use super::{ReviewError, ReviewService};
 use crate::services::events::{EventBuffer, EventBus};
 use crate::services::messages::send_from_fold_in_tx;
-use crate::services::tasks::{closed_refusal, proposal_kind_refusal, task_not_found};
+use crate::services::tasks::{TaskError, closed_refusal, proposal_kind_refusal, task_not_found};
 use crate::services::workspaces::ProposalSnapshot;
 
 mod runner;
@@ -68,7 +70,7 @@ impl Verdict {
         }
     }
 
-    fn failed(reason: RunReason) -> Self {
+    pub(super) fn failed(reason: RunReason) -> Self {
         Self {
             state: RunState::Failed,
             reason: Some(reason),
@@ -90,9 +92,32 @@ impl Verdict {
     }
 }
 
-/// The commands a proposal-stage run of `tree` would run, read from the tree's checks file against the change from `base`.
-pub(super) struct ProposalChecks {
+/// What a run carries to its end: the commands, whether the checked tree changes the checks file, and the actor whose command waits.
+#[derive(Debug, Clone)]
+pub(super) struct GateJob {
     pub specs: Vec<CommandSpec>,
+    pub checks_changed: bool,
+    /// The reviewer's fix a `review_fix` run waits to make.
+    pub fix: Option<FixJob>,
+}
+
+/// What a reviewer's fix needs at the end of its run, beyond the stored run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct FixJob {
+    /// The version the reviewer fixed, which its checkout holds.
+    pub version: u32,
+    pub checkout: WorkspaceId,
+    /// How many files the fix names.
+    pub files: usize,
+}
+
+/// What the proposal checks decide for a version about to be made.
+#[derive(Debug, Clone)]
+pub(super) enum GateDecision {
+    /// Make the version now: the tree has no proposal check to run, or a passed run of the same files on the same base stands.
+    Ready { checks_changed: bool },
+    /// Run the checks first.
+    Run(GateJob),
 }
 
 impl ReviewService {
@@ -102,7 +127,8 @@ impl ReviewService {
         let snapshot = self.workspaces.snapshot_for_proposal(&workspace).await?;
         let tree = snapshot.tree;
         drop(snapshot);
-        let Some(checks) = self.proposal_checks(workspace.base, tree).await? else {
+        let (job, _) = self.proposal_checks(workspace.base, tree).await?;
+        let Some(job) = job else {
             return Ok(Started::NoChecks);
         };
         let run = self
@@ -113,7 +139,7 @@ impl ReviewService {
             task,
             workspace: workspace.id,
         };
-        self.spawn_proposal_run(run, checks.specs);
+        self.spawn_proposal_run(run, job, actor.clone());
         Ok(started)
     }
 
@@ -160,27 +186,86 @@ impl ReviewService {
         usable_workspace(live, task, &owner)
     }
 
-    /// The commands of a proposal-stage run of `tree` on `base`, or `None` when the tree has no checks file or no proposal check runs for the change.
-    pub(super) async fn proposal_checks(
+    /// The commands of a proposal-stage run of `tree` on `base`, or `None` when the tree has no checks file or no proposal check runs for the change, and whether the change adds, changes or removes the checks file.
+    async fn proposal_checks(
         &self,
         base: fold_core::RevisionId,
         tree: ObjectHash,
-    ) -> Result<Option<ProposalChecks>, ReviewError> {
+    ) -> Result<(Option<GateJob>, bool), ReviewError> {
         let base_tree = workspaces::get_by_number(self.store.read(), base)
             .await?
             .tree_hash;
         let input = self.workspaces.checks_input(base_tree, tree).await?;
+        let checks_changed =
+            checks_file_changed(input.base_entry.as_ref(), input.tree_entry.as_ref());
         let Some(text) = input.file else {
-            return Ok(None);
+            return Ok((None, checks_changed));
         };
         let file = ChecksFile::parse(&text)?;
         let plan = file.plan(Stage::Proposal, &input.changed);
         if !runs_any(&plan) {
-            return Ok(None);
+            return Ok((None, checks_changed));
         }
-        Ok(Some(ProposalChecks {
+        let job = GateJob {
             specs: runner::commands(&file, &plan),
-        }))
+            checks_changed,
+            fix: None,
+        };
+        Ok((Some(job), checks_changed))
+    }
+
+    /// The proposal checks of a version about to be made from `snapped` with `tree`. The tracker is the workspace's newest ended run: when its checks passed on the workspace's base and this tree, the same files were checked already and nothing runs again. That holds also for a run that passed but whose command was refused by then, such as one whose claim was lost meanwhile.
+    pub(super) async fn proposal_gate(
+        &self,
+        snapped: &WorkspaceRow,
+        tree: ObjectHash,
+    ) -> Result<GateDecision, ReviewError> {
+        self.gate_in(snapped.id, snapped.base, tree).await
+    }
+
+    /// [`ReviewService::proposal_gate`] of `tree` on `base`, with the tracker of the directory `workspace` the checks run in.
+    pub(super) async fn gate_in(
+        &self,
+        workspace: WorkspaceId,
+        base: fold_core::RevisionId,
+        tree: ObjectHash,
+    ) -> Result<GateDecision, ReviewError> {
+        let (job, checks_changed) = self.proposal_checks(base, tree).await?;
+        let Some(job) = job else {
+            return Ok(GateDecision::Ready { checks_changed });
+        };
+        let last = checks::last_finished_proposal_run(self.store.read(), workspace).await?;
+        let reused = last.is_some_and(|last| {
+            let green = last.state == RunState::Passed
+                || (last.state == RunState::Stopped && last.reason == Some(RunReason::Refused));
+            green && last.base == base && last.tree == tree
+        });
+        if reused {
+            return Ok(GateDecision::Ready { checks_changed });
+        }
+        Ok(GateDecision::Run(job))
+    }
+
+    /// Starts the run a proposal command waits on and answers at once.
+    pub(super) async fn start_gate(
+        &self,
+        actor: &Actor,
+        snapped: &WorkspaceRow,
+        tree: ObjectHash,
+        purpose: Purpose,
+        waiting: Waiting<'_>,
+        job: GateJob,
+    ) -> Result<Proposed, ReviewError> {
+        let run = self
+            .start_proposal_run(actor, snapped, tree, purpose, waiting)
+            .await?;
+        let checking = Proposed::Checking {
+            run: run.id,
+            task: run.task,
+            workspace: snapped.id,
+        };
+        self.spawn_proposal_run(run, job, actor.clone());
+        Ok(checking)
     }
 
     /// Writes the running run of `tree` in `snapped`, with `checks.started`, after the same refusals again on the writer: the task's active workspace is still `snapped` on the same base and owned by the actor's worker.
@@ -208,45 +293,17 @@ impl ReviewService {
                 if live.id != snapped.id || live.base != snapped.base {
                     return Err(changed_meanwhile(snapped.id));
                 }
-                if let Some(going) = checks::running_in_workspace(tx.conn(), live.id).await? {
-                    return Err(checks_running(going.id, live.id));
-                }
-                let number = counters::allocate(tx, IdKind::CheckRun).await?;
-                let id =
-                    CheckRunId::from_number(number).ok_or(StoreError::Corrupt("counters.next"))?;
-                let new = NewCheckRun {
-                    id,
-                    stage: Stage::Proposal,
+                let new = NewProposalRun {
                     purpose,
                     task,
-                    workspace: Some(live.id),
+                    workspace: live.id,
                     worker_id: live.worker_id,
-                    proposal: waiting.proposal,
-                    version: None,
                     base: live.base,
                     tree,
-                    actor: label.as_str(),
-                    title: waiting.title,
-                    evidence: waiting.evidence,
+                    actor: &label,
+                    waiting,
                 };
-                checks::insert_run(tx, &new, now).await?;
-                let mut event = NewEvent::new(types::CHECKS_STARTED, label.clone())?
-                    .task(task)
-                    .workspace(live.id)
-                    .revision(live.base);
-                if let Some(proposal) = waiting.proposal {
-                    event = event.proposal(proposal);
-                }
-                let event = event.data(json!({
-                    "run": id.to_string(),
-                    "stage": Stage::Proposal.as_str(),
-                    "purpose": purpose.as_str(),
-                }))?;
-                buffer.append(tx, &event, now).await?;
-                checks::get_run(tx.conn(), id)
-                    .await?
-                    .ok_or(StoreError::Corrupt("check_runs.number"))
-                    .map_err(ReviewError::from)
+                insert_proposal_run(tx, &mut buffer, &new, now).await
             })
             .await?;
         self.bus.publish(buffer);
@@ -255,22 +312,26 @@ impl ReviewService {
     }
 
     /// Runs the commands of `run` in the background and ends it.
-    pub(super) fn spawn_proposal_run(&self, run: CheckRunRow, specs: Vec<CommandSpec>) {
+    pub(super) fn spawn_proposal_run(&self, run: CheckRunRow, job: GateJob, actor: Actor) {
         let service = self.clone();
         self.checks.spawn(async move {
             let id = run.id;
-            if let Err(error) = service.complete_proposal_run(run, specs).await {
+            if let Err(error) = service.complete_proposal_run(run, job, actor).await {
                 tracing::warn!(run = %id, code = error.log_code(), "a check run could not end; the next start of the daemon ends it as stopped");
             }
         });
     }
 
-    /// Takes a machine-wide permit, runs the commands in the workspace and snapshots it again. The run fails when the snapshot differs from the checked tree, or when the workspace was replaced, synced or restored meanwhile.
+    /// Takes a machine-wide permit, runs the commands in the workspace and snapshots it again. The run fails when the snapshot differs from the checked tree, or when the workspace was replaced, synced or restored meanwhile. A passed run of a proposal command then makes its version; a run whose command is refused by then, such as a claim that was taken over, ends as stopped with the refusal in its message.
     async fn complete_proposal_run(
         &self,
         run: CheckRunRow,
-        specs: Vec<CommandSpec>,
+        job: GateJob,
+        actor: Actor,
     ) -> Result<(), ReviewError> {
+        if run.purpose == Purpose::ReviewFix {
+            return self.complete_fix_run(run, job, actor).await;
+        }
         let workspace = run
             .workspace
             .ok_or(StoreError::Corrupt("check_runs.workspace_id"))?;
@@ -279,19 +340,56 @@ impl ReviewService {
             .ok_or(StoreError::Corrupt("check_runs.workspace_id"))?;
         let permit = self.checks.permits().acquire().await;
         let dir = self.workspaces.workspace_dir(&row);
-        let results = run_commands(&dir, specs, self.checks.limits(), &*self.clock).await;
+        let owner = self
+            .checks
+            .owner(run.worker.as_ref().map(WorkerName::agent));
+        let results = run_commands_for(
+            &owner,
+            &dir,
+            job.specs.clone(),
+            self.checks.limits(),
+            &*self.clock,
+        )
+        .await;
         drop(permit);
-        let (verdict, snapshot) = self.recheck_workspace(&run, &results).await?;
-        self.end_proposal_run(&run, &results, verdict, snapshot)
+        let (mut verdict, checked) = self.recheck_workspace(&run, &results).await?;
+        let mut refused = None;
+        if verdict.state == RunState::Passed
+            && matches!(
+                run.purpose,
+                Purpose::CreateProposal | Purpose::UpdateProposal
+            )
+            && let Some((live, snapshot)) = checked
+        {
+            let gated = Gated {
+                run: &run,
+                results: &results,
+                job: &job,
+                actor: &actor,
+                snapped: &live,
+            };
+            match self.make_version(gated, snapshot).await {
+                Ok(()) => return Ok(()),
+                Err(error) if is_refusal(&error) => {
+                    verdict = Verdict {
+                        state: RunState::Stopped,
+                        reason: Some(RunReason::Refused),
+                    };
+                    refused = Some(error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        self.end_proposal_run(&run, &results, verdict, refused.as_ref())
             .await
     }
 
-    /// The verdict of a finished run once the workspace is snapshotted again, with that snapshot when it equals the checked tree.
+    /// The verdict of a finished run once the workspace is snapshotted again, with that workspace and snapshot when the snapshot equals the checked tree.
     async fn recheck_workspace(
         &self,
         run: &CheckRunRow,
         results: &[CommandResult],
-    ) -> Result<(Verdict, Option<ProposalSnapshot>), ReviewError> {
+    ) -> Result<(Verdict, Option<(WorkspaceRow, ProposalSnapshot)>), ReviewError> {
         let live = workspaces::live_task_workspace(self.store.read(), run.task).await?;
         let Some(live) = live.filter(|live| {
             Some(live.id) == run.workspace
@@ -310,16 +408,85 @@ impl ReviewService {
         if snapshot.tree != run.tree {
             return Ok((Verdict::failed(RunReason::FilesChanged), None));
         }
-        Ok((Verdict::of(results), Some(snapshot)))
+        Ok((Verdict::of(results), Some((live, snapshot))))
     }
 
-    /// One write transaction: the results, the run's end, `checks.finished` and the result message to the requesting worker. `snapshot` is held until the commit.
-    async fn end_proposal_run(
+    /// One write transaction: the passed run's results and end, the proposal or version it waited for exactly as the command makes it at once, and a message to the author. The snapshot is held until the commit, as a proposal command holds it.
+    async fn make_version(
+        &self,
+        gated: Gated<'_>,
+        snapshot: ProposalSnapshot,
+    ) -> Result<(), ReviewError> {
+        let Gated {
+            run,
+            results,
+            job,
+            actor,
+            snapped,
+        } = gated;
+        let input = VersionInput {
+            actor,
+            snapped,
+            recorded: &snapshot,
+            evidence: run.evidence.as_deref(),
+            checks_changed: job.checks_changed,
+            now: snapshot.taken_at,
+        };
+        let now = input.now;
+        let mut buffer = EventBuffer::new();
+        let made = self
+            .store
+            .write(async |tx| {
+                if !end_run_in_tx(tx, &mut buffer, run, results, Verdict::passed(), now).await? {
+                    return Ok(None);
+                }
+                #[cfg(feature = "failpoints")]
+                fail::fail_point!("checks_before_version", |_| Err(ReviewError::from(
+                    crate::services::fired("checks_before_version")
+                )));
+                let (proposal, version) = match (run.purpose, run.proposal) {
+                    (Purpose::UpdateProposal, Some(proposal)) => (
+                        proposal,
+                        add_version_in_tx(tx, &mut buffer, proposal, &input).await?,
+                    ),
+                    _ => {
+                        let title = run
+                            .title
+                            .as_deref()
+                            .ok_or(StoreError::Corrupt("check_runs.title"))?;
+                        (
+                            open_in_tx(tx, &mut buffer, run.task, title, &input).await?,
+                            1,
+                        )
+                    }
+                };
+                let body = format!(
+                    "fold made {proposal} v{version} for {}: its checks passed ({}).",
+                    run.task, run.id
+                );
+                tell_requester(tx, &mut buffer, run, &body, now).await?;
+                Ok::<_, ReviewError>(Some(proposal))
+            })
+            .await?;
+        drop(snapshot);
+        let Some(proposal) = made else {
+            return Ok(());
+        };
+        self.bus.publish(buffer);
+        self.workspaces
+            .proposal_changed(snapped.id, Some(proposal))
+            .await;
+        tracing::info!(run = %run.id, proposal = %proposal, "check run passed and made its version");
+        Ok(())
+    }
+
+    /// One write transaction: the results, the run's end, `checks.finished` and the result message to the requesting worker. `refused` is the refusal of the command a passed run waited for.
+    pub(super) async fn end_proposal_run(
         &self,
         run: &CheckRunRow,
         results: &[CommandResult],
         verdict: Verdict,
-        snapshot: Option<ProposalSnapshot>,
+        refused: Option<&ReviewError>,
     ) -> Result<(), ReviewError> {
         let now = self.clock.now();
         let mut buffer = EventBuffer::new();
@@ -329,12 +496,14 @@ impl ReviewService {
                 if !end_run_in_tx(tx, &mut buffer, run, results, verdict, now).await? {
                     return Ok(false);
                 }
-                let body = result_message(run, results, verdict);
+                let body = match refused {
+                    Some(error) => refused_message(run, error),
+                    None => result_message(run, results, verdict),
+                };
                 tell_requester(tx, &mut buffer, run, &body, now).await?;
                 Ok::<_, ReviewError>(true)
             })
             .await?;
-        drop(snapshot);
         if ended {
             self.bus.publish(buffer);
             tracing::info!(run = %run.id, state = verdict.state.as_str(), reason = verdict.reason.map(RunReason::as_str), "check run ended");
@@ -357,6 +526,118 @@ impl ReviewService {
         }
         Ok(views)
     }
+}
+
+/// A proposal-stage run to write as running.
+pub(super) struct NewProposalRun<'a> {
+    pub purpose: Purpose,
+    pub task: TaskId,
+    /// Where the commands run: the task workspace, or a reviewer's review checkout.
+    pub workspace: WorkspaceId,
+    pub worker_id: Option<i64>,
+    pub base: fold_core::RevisionId,
+    pub tree: ObjectHash,
+    pub actor: &'a EventActor,
+    pub waiting: Waiting<'a>,
+}
+
+/// Writes a running proposal-stage run with `checks.started` in the caller's write, and refuses a second one of the same workspace with `checks_running`, which the run's unique index also decides.
+pub(super) async fn insert_proposal_run(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    new: &NewProposalRun<'_>,
+    now: Timestamp,
+) -> Result<CheckRunRow, ReviewError> {
+    let workspace = new.workspace;
+    if let Some(going) = checks::running_in_workspace(tx.conn(), workspace).await? {
+        return Err(checks_running(going.id, workspace));
+    }
+    let number = counters::allocate(tx, IdKind::CheckRun).await?;
+    let id = CheckRunId::from_number(number).ok_or(StoreError::Corrupt("counters.next"))?;
+    let row = NewCheckRun {
+        id,
+        stage: Stage::Proposal,
+        purpose: new.purpose,
+        task: new.task,
+        workspace: Some(workspace),
+        worker_id: new.worker_id,
+        proposal: new.waiting.proposal,
+        version: None,
+        base: new.base,
+        tree: new.tree,
+        actor: new.actor.as_str(),
+        title: new.waiting.title,
+        evidence: new.waiting.evidence,
+    };
+    match checks::insert_run(tx, &row, now).await {
+        Ok(()) => {}
+        Err(error) if error.unique_violation() => {
+            return match checks::running_in_workspace(tx.conn(), workspace).await? {
+                Some(going) => Err(checks_running(going.id, workspace)),
+                None => Err(error.into()),
+            };
+        }
+        Err(error) => return Err(error.into()),
+    }
+    let mut event = NewEvent::new(types::CHECKS_STARTED, new.actor.clone())?
+        .task(new.task)
+        .workspace(workspace)
+        .revision(new.base);
+    if let Some(proposal) = new.waiting.proposal {
+        event = event.proposal(proposal);
+    }
+    let event = event.data(json!({
+        "run": id.to_string(),
+        "stage": Stage::Proposal.as_str(),
+        "purpose": new.purpose.as_str(),
+    }))?;
+    buffer.append(tx, &event, now).await?;
+    Ok(checks::get_run(tx.conn(), id)
+        .await?
+        .ok_or(StoreError::Corrupt("check_runs.number"))?)
+}
+
+/// A passed run of a proposal command with what its version needs.
+struct Gated<'a> {
+    run: &'a CheckRunRow,
+    results: &'a [CommandResult],
+    job: &'a GateJob,
+    actor: &'a Actor,
+    /// The workspace as the second snapshot found it: the checked one, on the checked base.
+    snapped: &'a WorkspaceRow,
+}
+
+/// A refusal of the command a passed run waited for, which ends the run as stopped, as opposed to a failure that leaves it for the next daemon start.
+pub(super) fn is_refusal(error: &ReviewError) -> bool {
+    match error {
+        ReviewError::Fold(error) | ReviewError::Task(TaskError::Fold(error)) => {
+            error.code() != codes::FAILPOINT
+        }
+        _ => false,
+    }
+}
+
+/// The message of a passed run whose command was refused when its version was to be made.
+fn refused_message(run: &CheckRunRow, error: &ReviewError) -> String {
+    let (message, hint) = match error {
+        ReviewError::Fold(error) | ReviewError::Task(TaskError::Fold(error)) => (
+            error.message().to_owned(),
+            error.hint().unwrap_or_default().to_owned(),
+        ),
+        _ => (String::new(), String::new()),
+    };
+    let what = match run.proposal {
+        Some(proposal) => format!("fold added no version to {proposal}"),
+        None => "fold made no proposal".to_owned(),
+    };
+    let mut text = format!(
+        "The checks of {} ({}) passed, but {what}: {message}.",
+        run.task, run.id
+    );
+    if !hint.is_empty() {
+        text.push_str(&format!(" Next: {hint}."));
+    }
+    text
 }
 
 /// What a proposal-stage run carries for the proposal or version it waits to make.
@@ -476,6 +757,10 @@ pub(super) fn result_message(
                 failed.join(", ")
             };
             let mut text = format!("{subject} failed: {what}.");
+            if let Some(gate) = gate_sentence(run) {
+                text.push(' ');
+                text.push_str(&gate);
+            }
             if let Some(first) = results.iter().find(|result| result.blocks()) {
                 let name = first.check.as_deref().unwrap_or("setup");
                 text.push_str(&format!(
@@ -492,11 +777,29 @@ pub(super) fn result_message(
     }
 }
 
+/// What a failed run of a proposal command did not make, and how to ask again.
+fn gate_sentence(run: &CheckRunRow) -> Option<String> {
+    match (run.purpose, run.proposal) {
+        (Purpose::CreateProposal, _) => Some(
+            "fold made no proposal; fix the work in the workspace and call create_proposal again."
+                .to_owned(),
+        ),
+        (Purpose::UpdateProposal, Some(proposal)) => Some(format!(
+            "fold added no version to {proposal}; fix the work in the workspace and call update_proposal again."
+        )),
+        (Purpose::ReviewFix, Some(proposal)) => Some(format!(
+            "fold added no fix version to {proposal}; fix the files in your review checkout and call submit_review_fix again."
+        )),
+        _ => None,
+    }
+}
+
 /// The tool that asks for the same run again.
 fn again_tool(purpose: Purpose) -> &'static str {
     match purpose {
         Purpose::CreateProposal => "create_proposal",
         Purpose::UpdateProposal => "update_proposal",
+        Purpose::ReviewFix => "submit_review_fix",
         Purpose::Check | Purpose::Integrate => "run_checks",
     }
 }

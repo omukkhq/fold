@@ -160,6 +160,8 @@ impl Fixture {
         reviews
             .create_proposal(&author, t(1), "Add auth", Some("tests pass"))
             .await
+            .unwrap()
+            .detail()
             .unwrap();
         Self {
             project,

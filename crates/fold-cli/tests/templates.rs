@@ -96,7 +96,7 @@ const FOLD_TOOLS: [&str; 89] = [
 ];
 
 /// The tools of `FOLD_TOOLS` that the MCP server lists and the skill does not teach yet. A tool leaves this list in the change that teaches it.
-const PENDING_TOOLS: [&str; 2] = ["run_checks", "get_check_run"];
+const PENDING_TOOLS: [&str; 0] = [];
 
 /// Every code of the error table and the named `invalid_request` reasons.
 const FOLD_ERROR_CODES: [&str; 156] = [

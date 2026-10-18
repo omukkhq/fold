@@ -155,6 +155,8 @@ impl Fixture {
         reviews
             .create_proposal(&author, t(1), "Add auth", None)
             .await
+            .unwrap()
+            .detail()
             .unwrap();
         Self {
             project,

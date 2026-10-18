@@ -1218,3 +1218,38 @@ async fn get_proposal_lists_the_check_runs_of_the_version() {
         json!([{"run": "cr-1", "stage": "proposal", "state": "passed", "reason": null, "failed": []}])
     );
 }
+
+#[tokio::test]
+async fn create_proposal_answers_with_the_run_and_wait_for_events_wakes_on_its_end() {
+    let fx = Fixture::new().await;
+    let frontend = connect(&fx, "frontend").await;
+    ok(&frontend, "create_workspace", json!({"task": "T-1"})).await;
+    fx.write(1, "src/lib.rs", "pub fn y() {}\n");
+    fx.write(
+        1,
+        "fold-checks.toml",
+        "[[check]]\nname = \"unit\"\nrun = \"true\"\n",
+    );
+    let created = ok(
+        &frontend,
+        "create_proposal",
+        json!({"task": "T-1", "title": "Add checks"}),
+    )
+    .await;
+    assert_eq!(
+        created,
+        json!({"task": "T-1", "workspace": "ws-1", "checks": "running", "run": "cr-1"})
+    );
+    let woke = ok(
+        &frontend,
+        "wait_for_events",
+        json!({"types": ["checks.finished"], "task": "T-1", "timeout_s": 60}),
+    )
+    .await;
+    let events = woke["events"].as_array().unwrap();
+    assert_eq!(events[0]["type"], "checks.finished", "{woke}");
+    assert_eq!(events[0]["data"]["state"], "passed");
+    let proposal = ok(&frontend, "get_proposal", json!({"id": "P-1"})).await;
+    assert_eq!(proposal["version"], "v1");
+    assert_eq!(proposal["human_review"]["set_by"], "fold");
+}

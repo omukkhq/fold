@@ -177,6 +177,8 @@ async fn second_proposal(fx: &Fixture) {
     fx.reviews
         .create_proposal(&author, t(2), "Add the second page", None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
 }
 

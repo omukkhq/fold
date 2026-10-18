@@ -45,9 +45,9 @@ pub use integrate::{
 pub(crate) use proposals::proposal_missing;
 pub use proposals::{
     DEFAULT_PROPOSAL_LIST, MAX_PROPOSAL_LIST, ProposalDetail, ProposalFilter, ProposalSummary,
-    Retirement, Turn, VersionView, retire_proposal,
+    Proposed, Retirement, Turn, VersionView, retire_proposal,
 };
-pub use review_fixes::{FixedVersion, MAX_CHECKS_CHARS, MAX_FIXES, ReviewFix};
+pub use review_fixes::{FixOutcome, FixedVersion, MAX_CHECKS_CHARS, MAX_FIXES, ReviewFix};
 pub use verdicts::SubmittedReview;
 pub use views::{
     CommentCounts, ProposalView, ReviewView, TaskRequirements, direct_conflicted,

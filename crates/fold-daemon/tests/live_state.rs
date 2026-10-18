@@ -987,6 +987,8 @@ async fn proposal_commands_update_the_proposal_and_checkpoints_of_the_state() {
     let opened = reviews
         .create_proposal(&actor, t(1), "Change the readme", None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     let proposal = opened.summary.id;
     let state = fx.live.get(id).unwrap();
@@ -998,6 +1000,8 @@ async fn proposal_commands_update_the_proposal_and_checkpoints_of_the_state() {
     reviews
         .update_proposal(&actor, proposal, Some("tests pass"))
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     let state = fx.live.get(id).unwrap();
     assert_eq!(state.view.proposal, Some(proposal));
@@ -1025,6 +1029,8 @@ async fn a_reject_clears_the_proposal_of_the_state() {
     let opened = reviews
         .create_proposal(&by(&fx.frontend), t(1), "Change the readme", None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     let proposal = opened.summary.id;
     assert_eq!(fx.live.get(id).unwrap().view.proposal, Some(proposal));

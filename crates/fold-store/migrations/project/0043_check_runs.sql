@@ -1,9 +1,9 @@
--- One run of a project's checks by fold: the setup and the checks of one tree's fold-checks.toml. A proposal-stage run checks a task workspace's recorded files (`tree_hash` on the workspace's base `base_revision_id`) for the worker `worker_id`; an integration run checks the merged tree of the version `version_id` on main's head `base_revision_id` in fold's check directory. `title` and `evidence` are what the waiting proposal or version takes when the run passes. The row is written when the run starts and ends once, in the transaction that writes its results, so a run without an end is one that is still going or that a stopped daemon cut short.
+-- One run of a project's checks by fold: the setup and the checks of one tree's fold-checks.toml. A proposal-stage run checks a task workspace's recorded files, or a reviewer's fix in its review checkout (`tree_hash` on the base `base_revision_id`), for the worker `worker_id`; an integration run checks the merged tree of the version `version_id` on main's head `base_revision_id` in fold's check directory. `title` and `evidence` are what the waiting proposal or version takes when the run passes. The row is written when the run starts and ends once, in the transaction that writes its results, so a run without an end is one that is still going or that a stopped daemon cut short.
 CREATE TABLE check_runs (
     id INTEGER PRIMARY KEY,
     number INTEGER NOT NULL UNIQUE,
     stage TEXT NOT NULL CONSTRAINT check_runs_stage_values CHECK (stage IN ('proposal', 'integration')),
-    purpose TEXT NOT NULL CONSTRAINT check_runs_purpose_values CHECK (purpose IN ('check', 'create_proposal', 'update_proposal', 'integrate')),
+    purpose TEXT NOT NULL CONSTRAINT check_runs_purpose_values CHECK (purpose IN ('check', 'create_proposal', 'update_proposal', 'integrate', 'review_fix')),
     task_id INTEGER NOT NULL REFERENCES tasks (id),
     workspace_id INTEGER REFERENCES workspaces (id),
     worker_id INTEGER REFERENCES workers (id),
@@ -25,7 +25,7 @@ CREATE TABLE check_runs (
         OR (stage = 'integration' AND workspace_id IS NULL AND proposal_id IS NOT NULL AND version_id IS NOT NULL)
     ),
     CONSTRAINT check_runs_create_has_title CHECK ((purpose = 'create_proposal') = (title IS NOT NULL)),
-    CONSTRAINT check_runs_update_names_proposal CHECK (purpose <> 'update_proposal' OR proposal_id IS NOT NULL)
+    CONSTRAINT check_runs_version_names_proposal CHECK (purpose NOT IN ('update_proposal', 'review_fix') OR proposal_id IS NOT NULL)
 );
 
 -- One run at a time in a task workspace, and one integration run at a time in the project.

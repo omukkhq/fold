@@ -20,8 +20,8 @@ use super::parse;
 use super::workspaces::{file_diff_value, file_line};
 use crate::services::reviews::{
     ChangeRange, CommentInput, CommentLocation, CommentView, DEFAULT_PROPOSAL_LIST, DirectChange,
-    DirectOutcome, IntegrationOutcome, ProposalDetail, ProposalFilter, ProposalSummary,
-    ProposalView, ReviewFix, ReviewService, direct_conflicted, integration_conflicted,
+    DirectOutcome, FixOutcome, IntegrationOutcome, ProposalDetail, ProposalFilter, ProposalSummary,
+    ProposalView, Proposed, ReviewFix, ReviewService, direct_conflicted, integration_conflicted,
 };
 use crate::services::workspaces::StateComparison;
 
@@ -266,7 +266,7 @@ pub fn tools() -> Vec<Tool> {
     let mut tools = vec![
         Tool::new(
             CREATE_PROPOSAL,
-            "Send the work in your task workspace for review as a new proposal (v1). You must hold the task's claim. The task moves to Review.",
+            "Send the work in your task workspace for review as a new proposal (v1). You must hold the task's claim. The task moves to Review. When fold-checks.toml has proposal checks for your change and no passed run_checks of the same files stands, it returns at once with checks running and a run id: fold runs the checks and opens the proposal only when they pass; the result comes as a message from fold. Wait for checks.finished with wait_for_events. A change of fold-checks.toml puts the human review mark on the task.",
             schema_for_type::<CreateProposalInput>(),
         ),
         Tool::new(
@@ -286,7 +286,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             UPDATE_PROPOSAL,
-            "Send the current state of your task workspace as the next version of your open proposal, after a change request or a conflict.",
+            "Send the current state of your task workspace as the next version of your open proposal, after a change request or a conflict. The proposal checks gate the version as for create_proposal: checks running means fold adds the version only when they pass.",
             schema_for_type::<UpdateProposalInput>(),
         ),
         Tool::new(
@@ -338,7 +338,7 @@ pub fn tools() -> Vec<Tool> {
     ));
     tools.push(Tool::new(
         SUBMIT_REVIEW_FIX,
-        "Reviewer only: send the fixes you made in your review checkout as the next version of the proposal, under your name, with each changed file and its reason and the checks you ran. Fix only what the task's agreed scope settles; request changes for a product question or feature-size work. The version starts without approvals and your checkout then holds it: build it, run the required checks, then approve it with submit_review. The author's agent gets a push to sync its workspace. A batch checkout never becomes a version: fix a member in its own create_review_checkout. Refusals: review_claim_required, author_cannot_review, stale_version, version_unchanged, worker_busy, workspace_not_found (no checkout of that version) and invalid_request with reason fixes_mismatch (details list the unlisted and unchanged files).",
+        "Reviewer only: send the fixes you made in your review checkout as the next version of the proposal, under your name, with each changed file and its reason and the checks you ran. Fix only what the task's agreed scope settles; request changes for a product question or feature-size work. When fold-checks.toml has proposal checks for the fixed files, it returns at once with checks running and a run id: fold runs them in your checkout and makes the version only when they pass; the result comes as a message from fold. The version starts without approvals and your checkout then holds it: build it, run the required checks, then approve it with submit_review. The author's agent gets a push to sync its workspace. A batch checkout never becomes a version: fix a member in its own create_review_checkout. Refusals: review_claim_required, author_cannot_review, stale_version, version_unchanged, worker_busy, workspace_not_found (no checkout of that version) and invalid_request with reason fixes_mismatch (details list the unlisted and unchanged files).",
         schema_for_type::<SubmitReviewFixInput>(),
     ));
     tools.extend(checks::tools());
@@ -442,6 +442,23 @@ fn changed_json(detail: &ProposalDetail) -> Value {
         "task": detail.summary.task,
         "status": detail.task_status.as_str(),
     })
+}
+
+/// The result of `create_proposal` or `update_proposal`: the proposal when its version was made, or the check run fold makes it after.
+fn proposed_json(proposed: Proposed) -> Value {
+    match proposed {
+        Proposed::Made(detail) => changed_json(&detail),
+        Proposed::Checking {
+            run,
+            task,
+            workspace,
+        } => json!({
+            "task": task,
+            "workspace": workspace,
+            "checks": "running",
+            "run": run,
+        }),
+    }
 }
 
 fn gate_json(state: &GateState) -> Value {
@@ -627,7 +644,7 @@ async fn create_proposal(
         )
         .await
         .map_err(from_review)?;
-    Ok(changed_json(&detail))
+    Ok(proposed_json(detail))
 }
 
 async fn list_proposals(
@@ -753,7 +770,7 @@ async fn update_proposal(
         .update_proposal(actor, proposal_id(&input.id)?, input.evidence.as_deref())
         .await
         .map_err(from_review)?;
-    Ok(changed_json(&detail))
+    Ok(proposed_json(detail))
 }
 
 async fn close_proposal(
@@ -843,6 +860,21 @@ async fn submit_review_fix(
         )
         .await
         .map_err(from_review)?;
+    let fixed = match fixed {
+        FixOutcome::Fixed(fixed) => fixed,
+        FixOutcome::Checking {
+            run,
+            task,
+            checkout,
+        } => {
+            return Ok(json!({
+                "task": task,
+                "checkout": checkout,
+                "checks": "running",
+                "run": run,
+            }));
+        }
+    };
     let mut value = changed_json(&fixed.detail);
     value["from_version"] = json!(version(fixed.from_version));
     value["changeset"] = json!(fixed.changeset);

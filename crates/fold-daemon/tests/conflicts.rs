@@ -120,6 +120,8 @@ async fn resolve_and_update(fx: &Fixture) -> ProposalDetail {
         .update_proposal(&author, p(1), None)
         .await
         .unwrap()
+        .detail()
+        .unwrap()
 }
 
 #[tokio::test]
@@ -378,6 +380,8 @@ async fn binary_and_delete_versus_edit_conflicts_are_reported_by_kind() {
     fx.reviews
         .create_proposal(&author, t(1), "Change every file", None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     let review = review_lead(&fx).await;
     approve(&fx, &review).await;

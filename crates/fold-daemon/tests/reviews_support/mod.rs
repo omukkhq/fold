@@ -213,6 +213,8 @@ impl Fixture {
         self.reviews
             .create_proposal(&author, t(1), "Add the report", Some("tests pass"))
             .await
+            .unwrap()
+            .detail()
             .unwrap();
     }
 

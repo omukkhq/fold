@@ -99,6 +99,8 @@ async fn checkout_materialises_the_current_version_tree() {
     fx.reviews
         .update_proposal(&by(&fx.frontend.worker), p(1), None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     let second = fx.checkout_by(&fx.backend.worker).await;
     assert_eq!(second.version, 2);

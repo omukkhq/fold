@@ -42,6 +42,9 @@ mod auto_integrate;
 mod auto_integrate_failpoints;
 mod checklists_service;
 mod checks;
+#[cfg(feature = "failpoints")]
+mod checks_failpoints;
+mod checks_gate;
 mod claims_service;
 mod claude_probe;
 mod conflicts;

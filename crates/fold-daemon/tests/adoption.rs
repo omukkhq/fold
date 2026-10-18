@@ -55,6 +55,8 @@ async fn the_next_claimant_takes_over_the_open_proposal_with_the_workspace() {
         .create_proposal(&by(&fx.frontend), t(1), "Edit the lib", None)
         .await
         .unwrap()
+        .detail()
+        .unwrap()
         .summary
         .id;
     fx.tasks
@@ -82,6 +84,8 @@ async fn the_next_claimant_takes_over_the_open_proposal_with_the_workspace() {
     let updated = reviews
         .update_proposal(&by(&fx.backend), proposal, None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     assert_eq!(updated.summary.current_version, 2);
     assert_eq!(updated.summary.author, fx.backend.name);

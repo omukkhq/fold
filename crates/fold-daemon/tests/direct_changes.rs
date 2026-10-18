@@ -55,6 +55,8 @@ async fn integrate_task(fx: &Fixture, author: &Actor) {
     fx.reviews
         .create_proposal(author, t(1), "Readme", Some("tests pass"))
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
     let review = fx.agents.actor(&fx.review.ctx, None).await.unwrap();

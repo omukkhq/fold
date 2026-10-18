@@ -45,6 +45,7 @@ pub enum CheckPurpose {
     CreateProposal,
     UpdateProposal,
     Integrate,
+    ReviewFix,
 }
 
 impl From<Purpose> for CheckPurpose {
@@ -54,6 +55,7 @@ impl From<Purpose> for CheckPurpose {
             Purpose::CreateProposal => Self::CreateProposal,
             Purpose::UpdateProposal => Self::UpdateProposal,
             Purpose::Integrate => Self::Integrate,
+            Purpose::ReviewFix => Self::ReviewFix,
         }
     }
 }

@@ -4,12 +4,13 @@ use fold_core::events::types;
 use fold_core::merge::ConflictReport;
 use fold_core::object::ObjectHash;
 use fold_core::reviews::MAX_REASON_CHARS;
+use fold_core::reviews::checks::Purpose;
 use fold_core::reviews::{HumanReviewMark, ReviewFact, Verdict, human_approval_standing};
 use fold_core::status::ProposalFact;
 use fold_core::tree::ChangeCounts;
 use fold_core::{
-    Actor, AgentActor, ChangesetId, EventActor, FoldError, IdKind, NewEvent, ProposalId,
-    RevisionId, TaskId, TaskStatus, Timestamp, WorkerName, WorkspaceId, codes, policy,
+    Actor, AgentActor, ChangesetId, CheckRunId, EventActor, FoldError, IdKind, NewEvent,
+    ProposalId, RevisionId, TaskId, TaskStatus, Timestamp, WorkerName, WorkspaceId, codes, policy,
 };
 use fold_store::reviews::{
     self, NewProposal, NewVersion, ProposalRow, ProposalState, RetiredState, VersionRow,
@@ -21,6 +22,7 @@ use fold_vcs::restore::differs_from_latest;
 use serde_json::json;
 
 use super::batches::close_batch_of;
+use super::checks::{GateDecision, Waiting};
 use super::{ReviewError, ReviewService};
 use crate::services::events::EventBuffer;
 use crate::services::page_limit;
@@ -218,15 +220,49 @@ impl<'a> Retirement<'a> {
     }
 }
 
+/// What `create_proposal` and `update_proposal` did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Proposed {
+    /// The version exists: the tree had no proposal check to run, or a passed run of the same files on the same base stands.
+    Made(Box<ProposalDetail>),
+    /// fold runs the proposal checks in the background and makes the version only when they pass; the result comes as a message from fold.
+    Checking {
+        run: CheckRunId,
+        task: TaskId,
+        workspace: WorkspaceId,
+    },
+}
+
+impl Proposed {
+    /// The proposal, when the version was made at once.
+    pub fn detail(self) -> Option<ProposalDetail> {
+        match self {
+            Proposed::Made(detail) => Some(*detail),
+            Proposed::Checking { .. } => None,
+        }
+    }
+}
+
+/// The inputs of the version a proposal command makes once its checks allow it.
+pub(super) struct VersionInput<'a> {
+    pub actor: &'a Actor,
+    pub snapped: &'a WorkspaceRow,
+    pub recorded: &'a ProposalSnapshot,
+    pub evidence: Option<&'a str>,
+    /// The version adds, changes or removes the checks file, so it needs a human.
+    pub checks_changed: bool,
+    pub now: Timestamp,
+}
+
 impl ReviewService {
-    /// Opens a proposal for `task` with version 1, by the worker that holds the task's implementation claim and owns its active task workspace. The workspace is snapshotted first, outside the transaction, so every object exists before a row names it; the snapshot follows the rules of `record_changes`, so a workspace with an unresolved conflict or a sync or restore that stopped part-way is refused, and a resolved conflict list is cleared with the proposal. The first step of the transaction is an automatic `before_proposal` checkpoint of the snapshot, unless the latest checkpoint already holds it on the same base, so a checkpoint that cannot be taken refuses the proposal. When the snapshot differs from the workspace's latest changeset, a changeset with the title as its message is recorded with it. The task moves to Review.
+    /// Opens a proposal for `task` with version 1, by the worker that holds the task's implementation claim and owns its active task workspace. The workspace is snapshotted first, outside the transaction, so every object exists before a row names it; the snapshot follows the rules of `record_changes`, so a workspace with an unresolved conflict or a sync or restore that stopped part-way is refused, and a resolved conflict list is cleared with the proposal. When the snapshot's `fold-checks.toml` has a proposal check that runs for the change and no passed run of the same files on the same base stands, nothing more is written now: fold runs the checks in the background (`Proposed::Checking`) and makes the proposal only when they pass. Otherwise the first step of the transaction is an automatic `before_proposal` checkpoint of the snapshot, unless the latest checkpoint already holds it on the same base, so a checkpoint that cannot be taken refuses the proposal. When the snapshot differs from the workspace's latest changeset, a changeset with the title as its message is recorded with it. The task moves to Review. A version that adds, changes or removes the checks file gives the task the human review mark when it has none.
     pub async fn create_proposal(
         &self,
         actor: &Actor,
         task: TaskId,
         title: &str,
         evidence: Option<&str>,
-    ) -> Result<ProposalDetail, ReviewError> {
+    ) -> Result<Proposed, ReviewError> {
         let title = check_title(title)?;
         let evidence = check_evidence(evidence);
         let read = self.store.read();
@@ -238,89 +274,57 @@ impl ReviewService {
         };
         let workspace = open_checks(actor, task, facts)?.1;
         let recorded = self.workspaces.snapshot_for_proposal(&workspace).await?;
-        let now = recorded.taken_at;
+        let gate = self.proposal_gate(&workspace, recorded.tree).await?;
+        let checks_changed = match gate {
+            GateDecision::Ready { checks_changed } => checks_changed,
+            GateDecision::Run(job) => {
+                let tree = recorded.tree;
+                drop(recorded);
+                let waiting = Waiting {
+                    proposal: None,
+                    title: Some(title),
+                    evidence: evidence.as_deref(),
+                };
+                return self
+                    .start_gate(
+                        actor,
+                        &workspace,
+                        tree,
+                        Purpose::CreateProposal,
+                        waiting,
+                        job,
+                    )
+                    .await;
+            }
+        };
+        let input = VersionInput {
+            actor,
+            snapped: &workspace,
+            recorded: &recorded,
+            evidence: evidence.as_deref(),
+            checks_changed,
+            now: recorded.taken_at,
+        };
         let mut buffer = EventBuffer::new();
         let id = self
             .store
-            .write(async |tx| {
-                let facts = OpenFacts {
-                    task: tasks::fetch(tx.conn(), task).await?,
-                    holder: claims::unreleased_for_task(tx.conn(), task).await?,
-                    open: reviews::open_for_task(tx.conn(), task).await?,
-                    live: workspaces::live_task_workspace(tx.conn(), task).await?,
-                };
-                let (author, live) = open_checks(actor, task, facts)?;
-                same_workspace(&workspace, &live)?;
-                let worker = worker_row(tx, author).await?;
-                let head = record_in_tx(
-                    tx,
-                    &mut buffer,
-                    actor,
-                    &live,
-                    &recorded,
-                    AutoReason::BeforeProposal,
-                    title,
-                    now,
-                )
-                .await?;
-                let number = counters::allocate(tx, IdKind::Proposal).await?;
-                let id =
-                    ProposalId::from_number(number).ok_or(StoreError::Corrupt("counters.next"))?;
-                let new = NewProposal {
-                    id,
-                    task,
-                    author_worker_id: worker.id,
-                    title,
-                };
-                let first = NewVersion {
-                    base: live.base,
-                    tree: recorded.tree,
-                    head_changeset: head,
-                    evidence: evidence.as_deref(),
-                    created_by: worker.name.as_str(),
-                    fixed_in_checkout: None,
-                };
-                match reviews::open_proposal(tx, &new, &first, now).await {
-                    Ok(()) => {}
-                    Err(error) if error.unique_violation() => {
-                        return match reviews::open_for_task(tx.conn(), task).await? {
-                            Some(open) => Err(proposal_exists(task, open)),
-                            None => Err(error.into()),
-                        };
-                    }
-                    Err(error) => return Err(error.into()),
-                }
-                let event =
-                    NewEvent::new(types::PROPOSAL_OPENED, EventActor::worker(&worker.name))?
-                        .task(task)
-                        .proposal(id)
-                        .workspace(live.id)
-                        .revision(live.base)
-                        .data(json!({
-                            "version": 1,
-                            "changeset": head.to_string(),
-                            "author": worker.name.as_str(),
-                        }))?;
-                buffer.append(tx, &event, now).await?;
-                buffer.extend(recompute(tx, &[task], now).await?.events);
-                Ok::<_, ReviewError>(id)
-            })
+            .write(async |tx| open_in_tx(tx, &mut buffer, task, title, &input).await)
             .await?;
         drop(recorded);
         self.bus.publish(buffer);
         self.workspaces
             .proposal_changed(workspace.id, Some(id))
             .await;
-        self.get_proposal(id, None).await
+        Ok(Proposed::Made(Box::new(self.get_proposal(id, None).await?)))
     }
 
-    /// Adds the next version to an open proposal, by the author's worker: the task workspace is snapshotted as `create_proposal` does, and the version takes the workspace's current base; its automatic checkpoint has the reason `before_proposal_update`. `evidence` replaces the current version's evidence; `None` keeps it. A version whose base, tree and evidence all equal the current one is refused with `version_unchanged`. The conflict flag is cleared and the task returns to Review; earlier versions, their reviews and their approvals stay as they are.
+    /// Adds the next version to an open proposal, by the author's worker: the task workspace is snapshotted as `create_proposal` does, and the version takes the workspace's current base; its automatic checkpoint has the reason `before_proposal_update`. `evidence` replaces the current version's evidence; `None` keeps it. A version whose base, tree and evidence all equal the current one is refused with `version_unchanged`. The proposal checks gate the version as they gate `create_proposal`. The conflict flag is cleared and the task returns to Review; earlier versions, their reviews and their approvals stay as they are.
     pub async fn update_proposal(
         &self,
         actor: &Actor,
         proposal: ProposalId,
         evidence: Option<&str>,
-    ) -> Result<ProposalDetail, ReviewError> {
+    ) -> Result<Proposed, ReviewError> {
         let evidence = check_evidence(evidence);
         let read = self.store.read();
         let row = update_checks(
@@ -331,75 +335,60 @@ impl ReviewService {
         let live = workspaces::live_task_workspace(read, row.task).await?;
         let workspace = usable_workspace(live, row.task, &row.author)?;
         let recorded = self.workspaces.snapshot_for_proposal(&workspace).await?;
-        let now = recorded.taken_at;
+        let current = reviews::list_versions(read, proposal)
+            .await?
+            .pop()
+            .ok_or(StoreError::Corrupt("proposal_versions.version"))?;
+        unchanged_refusal(
+            proposal,
+            &current,
+            workspace.base,
+            recorded.tree,
+            evidence.clone().or(current.evidence.clone()).as_deref(),
+        )?;
+        let gate = self.proposal_gate(&workspace, recorded.tree).await?;
+        let checks_changed = match gate {
+            GateDecision::Ready { checks_changed } => checks_changed,
+            GateDecision::Run(job) => {
+                let tree = recorded.tree;
+                drop(recorded);
+                let waiting = Waiting {
+                    proposal: Some(proposal),
+                    title: None,
+                    evidence: evidence.as_deref(),
+                };
+                return self
+                    .start_gate(
+                        actor,
+                        &workspace,
+                        tree,
+                        Purpose::UpdateProposal,
+                        waiting,
+                        job,
+                    )
+                    .await;
+            }
+        };
+        let input = VersionInput {
+            actor,
+            snapped: &workspace,
+            recorded: &recorded,
+            evidence: evidence.as_deref(),
+            checks_changed,
+            now: recorded.taken_at,
+        };
         let mut buffer = EventBuffer::new();
         self.store
-            .write(async |tx| {
-                let found = reviews::get_proposal(tx.conn(), proposal).await?;
-                let row = update_checks(actor, proposal, found)?;
-                let live = workspaces::live_task_workspace(tx.conn(), row.task).await?;
-                let live = usable_workspace(live, row.task, &row.author)?;
-                let current = reviews::list_versions(tx.conn(), proposal)
-                    .await?
-                    .pop()
-                    .ok_or(StoreError::Corrupt("proposal_versions.version"))?;
-                same_workspace(&workspace, &live)?;
-                let evidence = evidence.clone().or(current.evidence.clone());
-                if current.base == live.base
-                    && current.tree == recorded.tree
-                    && current.evidence == evidence
-                {
-                    return Err(FoldError::new(
-                        codes::VERSION_UNCHANGED,
-                        format!("v{} of {proposal} already holds this work", current.version),
-                    )
-                    .with_details([
-                        ("proposal", json!(proposal.to_string())),
-                        ("version", json!(current.version)),
-                    ])
-                    .with_hint("change the workspace or the evidence, then call update_proposal")
-                    .into());
-                }
-                let author = row.author.clone();
-                let head = record_in_tx(
-                    tx,
-                    &mut buffer,
-                    actor,
-                    &live,
-                    &recorded,
-                    AutoReason::BeforeProposalUpdate,
-                    &row.title,
-                    now,
-                )
-                .await?;
-                let version = current.version.saturating_add(1);
-                let new = NewVersion {
-                    base: live.base,
-                    tree: recorded.tree,
-                    head_changeset: head,
-                    evidence: evidence.as_deref(),
-                    created_by: author.as_str(),
-                    fixed_in_checkout: None,
-                };
-                reviews::add_version(tx, proposal, version, &new, now).await?;
-                let event =
-                    NewEvent::new(types::PROPOSAL_VERSION_ADDED, EventActor::worker(&author))?
-                        .task(row.task)
-                        .proposal(proposal)
-                        .workspace(live.id)
-                        .revision(live.base)
-                        .data(json!({"version": version, "changeset": head.to_string()}))?;
-                buffer.append(tx, &event, now).await?;
-                buffer.extend(recompute(tx, &[row.task], now).await?.events);
-                Ok::<_, ReviewError>(())
-            })
+            .write(async |tx| add_version_in_tx(tx, &mut buffer, proposal, &input).await)
             .await?;
         drop(recorded);
         self.bus.publish(buffer);
         self.workspaces
             .proposal_changed(workspace.id, Some(proposal))
             .await;
-        self.get_proposal(proposal, None).await
+        Ok(Proposed::Made(Box::new(
+            self.get_proposal(proposal, None).await?,
+        )))
     }
 
     /// Closes an open proposal, by the author's agent, an agent that decides reviews (the main agent, the review lead or a batch reviewer) or a human. Its review claim is released and its review checkouts are archived; the task returns to In Progress because its workspace stays active. Closing is what allows `abandon_workspace` afterwards. `reason` is the closer's short explanation, which `proposal.closed` carries.
@@ -501,6 +490,189 @@ impl ReviewService {
         read.commit().await.map_err(StoreError::from)?;
         Ok(detail)
     }
+}
+
+/// The writes of a new proposal in the caller's transaction: the refusals of `create_proposal` again, the automatic checkpoint and changeset, the proposal with version 1, `proposal.opened`, the mark of a changed checks file and the recalculated status.
+pub(super) async fn open_in_tx(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    task: TaskId,
+    title: &str,
+    input: &VersionInput<'_>,
+) -> Result<ProposalId, ReviewError> {
+    let (actor, recorded, now) = (input.actor, input.recorded, input.now);
+    let facts = OpenFacts {
+        task: tasks::fetch(tx.conn(), task).await?,
+        holder: claims::unreleased_for_task(tx.conn(), task).await?,
+        open: reviews::open_for_task(tx.conn(), task).await?,
+        live: workspaces::live_task_workspace(tx.conn(), task).await?,
+    };
+    let (author, live) = open_checks(actor, task, facts)?;
+    same_workspace(input.snapped, &live)?;
+    let worker = worker_row(tx, author).await?;
+    let head = record_in_tx(
+        tx,
+        buffer,
+        actor,
+        &live,
+        recorded,
+        AutoReason::BeforeProposal,
+        title,
+        now,
+    )
+    .await?;
+    let number = counters::allocate(tx, IdKind::Proposal).await?;
+    let id = ProposalId::from_number(number).ok_or(StoreError::Corrupt("counters.next"))?;
+    let new = NewProposal {
+        id,
+        task,
+        author_worker_id: worker.id,
+        title,
+    };
+    let first = NewVersion {
+        base: live.base,
+        tree: recorded.tree,
+        head_changeset: head,
+        evidence: input.evidence,
+        created_by: worker.name.as_str(),
+        fixed_in_checkout: None,
+    };
+    match reviews::open_proposal(tx, &new, &first, now).await {
+        Ok(()) => {}
+        Err(error) if error.unique_violation() => {
+            return match reviews::open_for_task(tx.conn(), task).await? {
+                Some(open) => Err(proposal_exists(task, open)),
+                None => Err(error.into()),
+            };
+        }
+        Err(error) => return Err(error.into()),
+    }
+    let event = NewEvent::new(types::PROPOSAL_OPENED, EventActor::worker(&worker.name))?
+        .task(task)
+        .proposal(id)
+        .workspace(live.id)
+        .revision(live.base)
+        .data(json!({
+            "version": 1,
+            "changeset": head.to_string(),
+            "author": worker.name.as_str(),
+        }))?;
+    buffer.append(tx, &event, now).await?;
+    mark_checks_change(tx, buffer, task, input.checks_changed, now).await?;
+    buffer.extend(recompute(tx, &[task], now).await?.events);
+    Ok(id)
+}
+
+/// The writes of a new version in the caller's transaction: the refusals of `update_proposal` again, `version_unchanged` against the current version, the automatic checkpoint and changeset, the version, `proposal.version_added`, the mark of a changed checks file and the recalculated status. Returns the new version's number.
+pub(super) async fn add_version_in_tx(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    proposal: ProposalId,
+    input: &VersionInput<'_>,
+) -> Result<u32, ReviewError> {
+    let (actor, recorded, now) = (input.actor, input.recorded, input.now);
+    let found = reviews::get_proposal(tx.conn(), proposal).await?;
+    let row = update_checks(actor, proposal, found)?;
+    let live = workspaces::live_task_workspace(tx.conn(), row.task).await?;
+    let live = usable_workspace(live, row.task, &row.author)?;
+    let current = reviews::list_versions(tx.conn(), proposal)
+        .await?
+        .pop()
+        .ok_or(StoreError::Corrupt("proposal_versions.version"))?;
+    same_workspace(input.snapped, &live)?;
+    let evidence = input
+        .evidence
+        .map(str::to_owned)
+        .or(current.evidence.clone());
+    unchanged_refusal(
+        proposal,
+        &current,
+        live.base,
+        recorded.tree,
+        evidence.as_deref(),
+    )?;
+    let author = row.author.clone();
+    let head = record_in_tx(
+        tx,
+        buffer,
+        actor,
+        &live,
+        recorded,
+        AutoReason::BeforeProposalUpdate,
+        &row.title,
+        now,
+    )
+    .await?;
+    let version = current.version.saturating_add(1);
+    let new = NewVersion {
+        base: live.base,
+        tree: recorded.tree,
+        head_changeset: head,
+        evidence: evidence.as_deref(),
+        created_by: author.as_str(),
+        fixed_in_checkout: None,
+    };
+    reviews::add_version(tx, proposal, version, &new, now).await?;
+    let event = NewEvent::new(types::PROPOSAL_VERSION_ADDED, EventActor::worker(&author))?
+        .task(row.task)
+        .proposal(proposal)
+        .workspace(live.id)
+        .revision(live.base)
+        .data(json!({"version": version, "changeset": head.to_string()}))?;
+    buffer.append(tx, &event, now).await?;
+    mark_checks_change(tx, buffer, row.task, input.checks_changed, now).await?;
+    buffer.extend(recompute(tx, &[row.task], now).await?.events);
+    Ok(version)
+}
+
+/// `version_unchanged` when a new version would hold the current one's base, tree and evidence.
+fn unchanged_refusal(
+    proposal: ProposalId,
+    current: &VersionRow,
+    base: RevisionId,
+    tree: ObjectHash,
+    evidence: Option<&str>,
+) -> Result<(), ReviewError> {
+    if current.base != base || current.tree != tree || current.evidence.as_deref() != evidence {
+        return Ok(());
+    }
+    Err(FoldError::new(
+        codes::VERSION_UNCHANGED,
+        format!("v{} of {proposal} already holds this work", current.version),
+    )
+    .with_details([
+        ("proposal", json!(proposal.to_string())),
+        ("version", json!(current.version)),
+    ])
+    .with_hint("change the workspace or the evidence, then call update_proposal")
+    .into())
+}
+
+/// Gives the task the human review mark fold sets for a change of the checks file, with `task.human_review_set`, when the version changes the file and the task has no mark.
+pub(super) async fn mark_checks_change(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    task: TaskId,
+    checks_changed: bool,
+    now: Timestamp,
+) -> Result<(), ReviewError> {
+    let current = tasks::fetch(tx.conn(), task)
+        .await?
+        .ok_or_else(|| task_not_found(task))?
+        .human_review;
+    let Some(mark) = policy::checks_file_mark(current.as_ref(), checks_changed) else {
+        return Ok(());
+    };
+    tasks::set_human_review(tx, task, &mark, now).await?;
+    let event = NewEvent::new(types::TASK_HUMAN_REVIEW_SET, mark.set_by.clone())?
+        .task(task)
+        .data(json!({
+            "reviewer": null,
+            "reason": mark.reason,
+            "set_by": mark.set_by.as_str(),
+        }))?;
+    buffer.append(tx, &event, now).await?;
+    Ok(())
 }
 
 /// A version a human wrote is a human edit: only a human edit names a human as its author.

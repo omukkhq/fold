@@ -26,7 +26,7 @@ pub struct HumanEdit {
 }
 
 impl ReviewService {
-    /// A human's change of one text file of the current version of an open proposal, in a human review only (`policy::can_edit_as_human`). `version` is the version the human read; another current version is `stale_version`. `content` replaces the whole file.
+    /// A human's change of one text file of the current version of an open proposal, in a human review only (`policy::can_edit_as_human`). `version` is the version the human read; another current version is `stale_version`. `content` replaces the whole file. A human made the change, so no proposal check runs on the new version; its integration checks run when it integrates.
     ///
     /// The edit is a new version authored by `human:<name>` on the same base, with the version's evidence; versions never change. It keeps the agent approvals that stood on the version it was made from, the one exception to a new version starting without approvals, until the human sends it for review again. No human approval is kept, so a human approves the edit again and it never integrates on a human's earlier approval. It is recorded in the task workspace as a changeset and as a `human_edit` checkpoint marked as the workspace's pending write, without touching the files: fold writes into a workspace only on create, sync and restore. The worker's next sync writes the edit into the files first, and until then `record_changes` and `update_proposal` refuse with `workspace_write_unfinished`; the worker gets a push notice to sync.
     ///

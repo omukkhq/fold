@@ -73,6 +73,8 @@ async fn project(host: &Host) -> ProjectPaths {
     )
     .create_proposal(&author, task, "Add the page", None)
     .await
+    .unwrap()
+    .detail()
     .unwrap();
     store.close().await.unwrap();
     paths

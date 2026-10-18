@@ -139,6 +139,8 @@ impl Fixture {
         fx.reviews
             .create_proposal(&fx.author(), t(1), "Add the report", None)
             .await
+            .unwrap()
+            .detail()
             .unwrap();
         fx
     }
@@ -163,6 +165,8 @@ impl Fixture {
         self.reviews
             .update_proposal(&self.author(), p(1), None)
             .await
+            .unwrap()
+            .detail()
             .unwrap();
     }
 

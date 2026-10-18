@@ -316,6 +316,8 @@ impl Fixture {
             .create_proposal(&by(&self.frontend.worker), t(1), "Change the readme", None)
             .await
             .unwrap()
+            .detail()
+            .unwrap()
             .summary
             .id;
         give_role(&self.handle.store, "backend", Role::BatchReviewer, None).await;

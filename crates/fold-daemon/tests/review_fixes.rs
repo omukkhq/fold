@@ -129,6 +129,7 @@ impl Scene {
                 "cargo test: 2 passed\nmake check: ok",
             )
             .await
+            .map(|outcome| outcome.fixed().unwrap())
     }
 
     async fn last_seq(&self) -> u64 {
@@ -646,4 +647,134 @@ async fn the_edit_hook_admits_only_the_claim_holders_own_checkout_of_one_proposa
     let (status, answer) = post(socket, &ask("Not A Name", ".fold/ws/review-p-1")).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(answer["error"]["code"], codes::INVALID_NAME);
+}
+
+/// `frontend` proposes `P-1` with a `fold-checks.toml` whose check needs `fn y` in `src/lib.rs`, through its green checks; `review`, the review lead, claims and checks it out.
+#[cfg(test)]
+async fn scene_with_checks() -> Scene {
+    let fx = Fixture::new().await;
+    let frontend = fx.agent("frontend").await;
+    let review = fx.agent("review").await;
+    give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
+    fx.workspaces()
+        .create_workspace(&frontend, t(1))
+        .await
+        .unwrap();
+    fx.write(1, "src/lib.rs", "pub fn y() {}\n");
+    fx.write(
+        1,
+        "fold-checks.toml",
+        "[[check]]\nname = \"lib\"\nrun = \"grep -q 'fn y' src/lib.rs\"\n",
+    );
+    let reviews = fx.reviews();
+    let proposed = reviews
+        .create_proposal(&frontend, t(1), "Add y", None)
+        .await
+        .unwrap();
+    assert!(matches!(
+        proposed,
+        fold_daemon::services::reviews::Proposed::Checking { .. }
+    ));
+    fold_store::testing::eventually(std::time::Duration::from_secs(30), async || {
+        reviews
+            .get_proposal(p(1), None)
+            .await
+            .map(|_| ())
+            .map_err(|_| "no proposal")
+    })
+    .await;
+    reviews.claim_review(&review, p(1)).await.unwrap();
+    let checkout = reviews.create_review_checkout(&review, p(1)).await.unwrap();
+    let checkout = fx.project.paths().root().join(&checkout.workspace.path);
+    Scene {
+        fx,
+        frontend,
+        review,
+        checkout,
+    }
+}
+
+#[cfg(test)]
+async fn checked_fix(scene: &Scene, fixes: &[ReviewFix]) -> fold_core::CheckRunId {
+    let outcome = scene
+        .fx
+        .reviews()
+        .submit_review_fix(&scene.review, p(1), 1, fixes, "grep: ok")
+        .await
+        .unwrap();
+    let fold_daemon::services::reviews::FixOutcome::Checking { run, checkout, .. } = outcome else {
+        panic!("expected a check run of the fix");
+    };
+    assert_eq!(checkout, ws(2));
+    fold_store::testing::eventually(std::time::Duration::from_secs(30), async || {
+        let view = scene.fx.reviews().get_check_run(run, false).await.unwrap();
+        if view.run.state == fold_core::reviews::checks::RunState::Running {
+            Err(view.run.state)
+        } else {
+            Ok(())
+        }
+    })
+    .await;
+    run
+}
+
+#[cfg(test)]
+async fn last_message_to_review(scene: &Scene) -> String {
+    sqlx::query_scalar(
+        "SELECT m.body FROM messages m
+         JOIN message_recipients r ON r.message_id = m.id
+         JOIN workers w ON w.id = r.worker_id
+         WHERE m.sender_kind = 'fold' AND w.name = 'review'
+         ORDER BY m.number DESC LIMIT 1",
+    )
+    .fetch_one(scene.fx.handle.store.read())
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_fix_becomes_a_version_only_after_its_proposal_checks_pass() {
+    let scene = scene_with_checks().await;
+    scene.edit("src/lib.rs", "pub fn y() -> u8 { 1 }\n");
+    let run = checked_fix(
+        &scene,
+        &[fix("src/lib.rs", "y returned nothing; it returns 1")],
+    )
+    .await;
+    let view = scene.fx.reviews().get_check_run(run, false).await.unwrap();
+    assert_eq!(view.run.state, fold_core::reviews::checks::RunState::Passed);
+    let detail = fold_store::testing::eventually(std::time::Duration::from_secs(30), async || {
+        let detail = scene.fx.reviews().get_proposal(p(1), None).await.unwrap();
+        if detail.summary.current_version == 2 {
+            Ok(detail)
+        } else {
+            Err(detail.summary.current_version)
+        }
+    })
+    .await;
+    assert_eq!(detail.versions[1].created_by, "review");
+    assert_eq!(detail.versions[1].fixed_in_checkout, Some(ws(2)));
+    assert!(
+        last_message_to_review(&scene)
+            .await
+            .starts_with("fold made P-1 v2 for T-1: the checks of your fix passed")
+    );
+}
+
+#[tokio::test]
+async fn a_red_fix_adds_no_version_and_tells_the_reviewer() {
+    let scene = scene_with_checks().await;
+    scene.edit("src/lib.rs", "pub fn z() {}\n");
+    let run = checked_fix(&scene, &[fix("src/lib.rs", "rename")]).await;
+    let view = scene.fx.reviews().get_check_run(run, false).await.unwrap();
+    assert_eq!(view.run.state, fold_core::reviews::checks::RunState::Failed);
+    let detail = scene.fx.reviews().get_proposal(p(1), None).await.unwrap();
+    assert_eq!(detail.summary.current_version, 1);
+    let message = last_message_to_review(&scene).await;
+    assert!(message.contains("lib failed (exit 1)"), "{message}");
+    assert!(
+        message.contains("fold added no fix version to P-1"),
+        "{message}"
+    );
+    assert!(message.contains("submit_review_fix again"), "{message}");
 }

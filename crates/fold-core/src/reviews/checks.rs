@@ -36,13 +36,14 @@ define_names!(
 );
 
 define_names!(
-    /// What asked for a run: a worker's `run_checks`, the gate of `create_proposal` or `update_proposal`, or an integration.
+    /// What asked for a run: a worker's `run_checks`, the gate of `create_proposal`, `update_proposal` or a reviewer's `submit_review_fix`, or an integration.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub enum Purpose {
         Check = "check",
         CreateProposal = "create_proposal",
         UpdateProposal = "update_proposal",
         Integrate = "integrate",
+        ReviewFix = "review_fix",
     }
 );
 

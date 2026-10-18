@@ -1,24 +1,31 @@
 use std::collections::BTreeSet;
 
 use fold_core::events::types;
+use fold_core::object::ObjectHash;
 use fold_core::reviews::MAX_REASON_CHARS;
+use fold_core::reviews::checks::{Purpose, RunReason, RunState};
 use fold_core::{
-    Actor, AgentActor, ChangesetId, CheckpointId, FoldError, NewEvent, ProposalId, WorkspaceId,
-    codes, policy,
+    Actor, AgentActor, ChangesetId, CheckRunId, CheckpointId, FoldError, NewEvent, ProposalId,
+    RevisionId, TaskId, WorkspaceId, codes, policy,
 };
-use fold_store::StoreError;
+use fold_store::reviews::checks::CheckRunRow;
 use fold_store::reviews::{self, NewVersion, ProposalRow, ReviewClaimRow};
-use fold_store::workspaces::{self, CheckpointReason};
+use fold_store::workspaces::{self, CheckpointReason, WorkspaceRow};
+use fold_store::{StoreError, WriteTx};
 use serde_json::json;
 
+use super::checks::{
+    FixJob, GateDecision, GateJob, NewProposalRun, Verdict, Waiting, end_run_in_tx,
+    insert_proposal_run, is_refusal, run_commands_for, tell_requester,
+};
 use super::human_edits::{busy, current_version, idle_checks};
-use super::proposals::{ProposalDetail, require_open, usable_workspace};
+use super::proposals::{ProposalDetail, mark_checks_change, require_open, usable_workspace};
 use super::verdicts::require_version;
 use super::{ReviewError, ReviewService};
 use crate::services::agents::{actor_worker, worker_not_found};
 use crate::services::events::EventBuffer;
 use crate::services::tasks::{recompute, worker_row};
-use crate::services::workspaces::{checkpoint_in_tx, file_path};
+use crate::services::workspaces::{ReviewFixTree, checkpoint_in_tx, file_path};
 
 /// The most files one fix names.
 pub const MAX_FIXES: usize = 50;
@@ -60,7 +67,7 @@ impl ReviewService {
         version: u32,
         fixes: &[ReviewFix],
         checks: &str,
-    ) -> Result<FixedVersion, ReviewError> {
+    ) -> Result<FixOutcome, ReviewError> {
         let fixes = check_fixes(fixes)?;
         let checks = check_checks(checks)?;
         let mut conn = self
@@ -112,98 +119,35 @@ impl ReviewService {
         }
         match_fixes(&fixes, &fixed.changed)?;
         let evidence = evidence(&worker.name, current.version, &fixes, &checks);
-        let now = fixed.taken_at;
+        let fix = FixJob {
+            version,
+            checkout: checkout_id,
+            files: fixes.len(),
+        };
+        let checks_changed = match self.gate_in(checkout_id, current.base, fixed.tree).await? {
+            GateDecision::Ready { checks_changed } => checks_changed,
+            GateDecision::Run(mut job) => {
+                let tree = fixed.tree;
+                drop(fixed);
+                job.fix = Some(fix);
+                return self
+                    .start_fix_run(actor, &row, &checkout, current.base, tree, &evidence, job)
+                    .await;
+            }
+        };
+        let input = FixInput {
+            actor,
+            proposal,
+            workspace: workspace.id,
+            fixed: &fixed,
+            evidence: &evidence,
+            fix,
+            checks_changed,
+        };
         let mut buffer = EventBuffer::new();
-        let (made, changeset, checkpoint) = self
+        let made = self
             .store
-            .write(async |tx| {
-                let row =
-                    require_open(reviews::get_proposal(tx.conn(), proposal).await?, proposal)?;
-                let holder = reviews::unreleased_review_claim(tx.conn(), proposal).await?;
-                let reviewer = fix_gate(actor, &row, holder.as_ref())?;
-                let current = current_version(tx.conn(), proposal).await?;
-                require_version(proposal, version, current.version)?;
-                let worker = worker_row(tx, reviewer).await?;
-                let found =
-                    workspaces::active_review_checkout(tx.conn(), proposal, version, worker.id)
-                        .await?;
-                if found != Some(checkout_id) {
-                    return Err(no_checkout(proposal, version));
-                }
-                let live = workspaces::live_task_workspace(tx.conn(), row.task).await?;
-                let live = usable_workspace(live, row.task, &row.author)?;
-                if live.id != workspace.id {
-                    return Err(busy(&live, "newer_work"));
-                }
-                idle_checks(tx.conn(), &row, &live, &current).await?;
-                let by = actor.event_actor();
-                let message = format!("Review fix of v{} by {by}", current.version);
-                let changeset = workspaces::insert_changeset(
-                    tx,
-                    live.id,
-                    live.task,
-                    live.base,
-                    fixed.tree,
-                    &message,
-                    fixed.stats,
-                    by.as_str(),
-                    now,
-                )
-                .await?;
-                let stats = fixed.stats;
-                let files = stats
-                    .files_added
-                    .saturating_add(stats.files_modified)
-                    .saturating_add(stats.files_deleted);
-                let recorded = NewEvent::new(types::CHANGESET_RECORDED, by.clone())?
-                    .task(live.task)
-                    .workspace(live.id)
-                    .revision(live.base)
-                    .data(json!({"changeset": changeset.id.to_string(), "files": files}))?;
-                buffer.append(tx, &recorded, now).await?;
-                let next = current.version.saturating_add(1);
-                let label = format!("v{next} of {proposal} by {by}");
-                let checkpoint = checkpoint_in_tx(
-                    tx,
-                    &mut buffer,
-                    actor,
-                    &live,
-                    fixed.tree,
-                    CheckpointReason::ReviewFix,
-                    Some(&label),
-                    now,
-                )
-                .await?;
-                workspaces::set_sync_checkpoint(tx, live.id, Some(checkpoint.id)).await?;
-                let new = NewVersion {
-                    base: current.base,
-                    tree: fixed.tree,
-                    head_changeset: changeset.id,
-                    evidence: Some(&evidence),
-                    created_by: worker.name.as_str(),
-                    fixed_in_checkout: Some(checkout_id),
-                };
-                reviews::add_version(tx, proposal, next, &new, now).await?;
-                if !workspaces::move_review_checkout(tx, checkout_id, proposal, next).await? {
-                    return Err(StoreError::Corrupt("workspaces.version_id").into());
-                }
-                let event = NewEvent::new(types::PROPOSAL_REVIEWER_FIXED, by)?
-                    .task(row.task)
-                    .proposal(proposal)
-                    .workspace(live.id)
-                    .revision(current.base)
-                    .data(json!({
-                        "version": next,
-                        "from_version": current.version,
-                        "changeset": changeset.id.to_string(),
-                        "checkpoint": checkpoint.id.to_string(),
-                        "checkout": checkout_id.to_string(),
-                        "files": fixes.len(),
-                    }))?;
-                buffer.append(tx, &event, now).await?;
-                buffer.extend(recompute(tx, &[row.task], now).await?.events);
-                Ok::<_, ReviewError>(((current.version, next), changeset.id, checkpoint.id))
-            })
+            .write(async |tx| fix_in_tx(tx, &mut buffer, &input).await)
             .await?;
         drop(fixed);
         self.bus.publish(buffer);
@@ -211,15 +155,340 @@ impl ReviewService {
             .proposal_changed(workspace.id, Some(proposal))
             .await;
         let detail = self.get_proposal(proposal, None).await?;
-        Ok(FixedVersion {
-            version: made.1,
-            from_version: made.0,
-            changeset,
-            checkpoint,
+        Ok(FixOutcome::Fixed(Box::new(FixedVersion {
+            version: made.version,
+            from_version: made.from_version,
+            changeset: made.changeset,
+            checkpoint: made.checkpoint,
             checkout: checkout_id,
             detail,
-        })
+        })))
     }
+
+    /// Writes the running `review_fix` run of the fixed `tree` in the reviewer's checkout and runs it in the background; the call answers at once.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the step of a command, with the inputs its earlier steps produced"
+    )]
+    async fn start_fix_run(
+        &self,
+        actor: &Actor,
+        row: &ProposalRow,
+        checkout: &WorkspaceRow,
+        base: RevisionId,
+        tree: ObjectHash,
+        evidence: &str,
+        job: GateJob,
+    ) -> Result<FixOutcome, ReviewError> {
+        let fix = job.fix.ok_or(StoreError::Corrupt("check_runs.purpose"))?;
+        let proposal = row.id;
+        let now = self.clock.now();
+        let label = actor.event_actor();
+        let mut buffer = EventBuffer::new();
+        let run = self
+            .store
+            .write(async |tx| {
+                let row =
+                    require_open(reviews::get_proposal(tx.conn(), proposal).await?, proposal)?;
+                let holder = reviews::unreleased_review_claim(tx.conn(), proposal).await?;
+                let reviewer = fix_gate(actor, &row, holder.as_ref())?;
+                let current = current_version(tx.conn(), proposal).await?;
+                require_version(proposal, fix.version, current.version)?;
+                let worker = worker_row(tx, reviewer).await?;
+                let found =
+                    workspaces::active_review_checkout(tx.conn(), proposal, fix.version, worker.id)
+                        .await?;
+                if found != Some(checkout.id) {
+                    return Err(no_checkout(proposal, fix.version));
+                }
+                let new = NewProposalRun {
+                    purpose: Purpose::ReviewFix,
+                    task: row.task,
+                    workspace: checkout.id,
+                    worker_id: Some(worker.id),
+                    base,
+                    tree,
+                    actor: &label,
+                    waiting: Waiting {
+                        proposal: Some(proposal),
+                        title: None,
+                        evidence: Some(evidence),
+                    },
+                };
+                insert_proposal_run(tx, &mut buffer, &new, now).await
+            })
+            .await?;
+        self.bus.publish(buffer);
+        tracing::info!(run = %run.id, proposal = %proposal, checkout = %checkout.id, "check run of a review fix started");
+        let checking = FixOutcome::Checking {
+            run: run.id,
+            task: run.task,
+            checkout: checkout.id,
+        };
+        self.spawn_proposal_run(run, job, actor.clone());
+        Ok(checking)
+    }
+
+    /// The end of a `review_fix` run: the commands run in the reviewer's checkout, the checkout is recorded again, and a passed run whose checkout still holds the checked tree makes the fix version in the transaction that stores the result. A refusal by then, such as a review claim that was released, ends the run as stopped.
+    pub(super) async fn complete_fix_run(
+        &self,
+        run: CheckRunRow,
+        job: GateJob,
+        actor: Actor,
+    ) -> Result<(), ReviewError> {
+        let fix = job.fix.ok_or(StoreError::Corrupt("check_runs.purpose"))?;
+        let proposal = run
+            .proposal
+            .ok_or(StoreError::Corrupt("check_runs.proposal_id"))?;
+        let checkout = workspaces::get_workspace(self.store.read(), fix.checkout)
+            .await?
+            .ok_or(StoreError::Corrupt("check_runs.workspace_id"))?;
+        let permit = self.checks.permits().acquire().await;
+        let dir = self.workspaces.workspace_dir(&checkout);
+        let owner = self
+            .checks
+            .owner(run.worker.as_ref().map(fold_core::WorkerName::agent));
+        let results = run_commands_for(
+            &owner,
+            &dir,
+            job.specs.clone(),
+            self.checks.limits(),
+            &*self.clock,
+        )
+        .await;
+        drop(permit);
+        let mut verdict = Verdict::of(&results);
+        let live = workspaces::live_task_workspace(self.store.read(), run.task).await?;
+        let snapshot = match live {
+            Some(live) => {
+                let current = current_version(
+                    &mut *self
+                        .store
+                        .read()
+                        .acquire()
+                        .await
+                        .map_err(StoreError::from)?,
+                    proposal,
+                )
+                .await?;
+                match self
+                    .workspaces
+                    .snapshot_review_fix(live.id, &checkout, run.base, current.tree)
+                    .await
+                {
+                    Ok(snapshot) => Some((live, snapshot)),
+                    Err(error) => {
+                        tracing::debug!(run = %run.id, code = error.log_code(), "the review checkout could not be recorded after its checks");
+                        None
+                    }
+                }
+            }
+            None => None,
+        };
+        let Some((live, snapshot)) = snapshot else {
+            verdict = Verdict::failed(RunReason::WorkspaceChanged);
+            return self.end_proposal_run(&run, &results, verdict, None).await;
+        };
+        if snapshot.tree != run.tree {
+            drop(snapshot);
+            verdict = Verdict::failed(RunReason::FilesChanged);
+            return self.end_proposal_run(&run, &results, verdict, None).await;
+        }
+        if verdict.state != RunState::Passed {
+            drop(snapshot);
+            return self.end_proposal_run(&run, &results, verdict, None).await;
+        }
+        let evidence = run.evidence.clone().unwrap_or_default();
+        let input = FixInput {
+            actor: &actor,
+            proposal,
+            workspace: live.id,
+            fixed: &snapshot,
+            evidence: &evidence,
+            fix,
+            checks_changed: job.checks_changed,
+        };
+        let now = snapshot.taken_at;
+        let mut buffer = EventBuffer::new();
+        let made = self
+            .store
+            .write(async |tx| {
+                if !end_run_in_tx(tx, &mut buffer, &run, &results, verdict, now).await? {
+                    return Ok(None);
+                }
+                let made = fix_in_tx(tx, &mut buffer, &input).await?;
+                let body = format!(
+                    "fold made {proposal} v{} for {}: the checks of your fix passed ({}).",
+                    made.version, run.task, run.id
+                );
+                tell_requester(tx, &mut buffer, &run, &body, now).await?;
+                Ok::<_, ReviewError>(Some(made))
+            })
+            .await;
+        drop(snapshot);
+        match made {
+            Ok(Some(_)) => {
+                self.bus.publish(buffer);
+                self.workspaces
+                    .proposal_changed(live.id, Some(proposal))
+                    .await;
+                tracing::info!(run = %run.id, proposal = %proposal, "check run passed and made the review fix version");
+                Ok(())
+            }
+            Ok(None) => Ok(()),
+            Err(error) if is_refusal(&error) => {
+                verdict = Verdict {
+                    state: RunState::Stopped,
+                    reason: Some(RunReason::Refused),
+                };
+                self.end_proposal_run(&run, &results, verdict, Some(&error))
+                    .await
+            }
+            Err(error) => Err(error),
+        }
+    }
+}
+
+/// What the result of a reviewer's fix is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FixOutcome {
+    /// The fix version exists.
+    Fixed(Box<FixedVersion>),
+    /// fold runs the proposal checks on the fix in the reviewer's checkout and makes the version only when they pass; the result comes as a message from fold.
+    Checking {
+        run: CheckRunId,
+        task: TaskId,
+        checkout: WorkspaceId,
+    },
+}
+
+impl FixOutcome {
+    /// The fix version, when it was made at once.
+    pub fn fixed(self) -> Option<FixedVersion> {
+        match self {
+            FixOutcome::Fixed(fixed) => Some(*fixed),
+            FixOutcome::Checking { .. } => None,
+        }
+    }
+}
+
+/// The inputs of the transaction that makes a reviewer's fix version.
+struct FixInput<'a> {
+    actor: &'a Actor,
+    proposal: ProposalId,
+    /// The task workspace the snapshot was taken against.
+    workspace: WorkspaceId,
+    fixed: &'a ReviewFixTree,
+    evidence: &'a str,
+    fix: FixJob,
+    checks_changed: bool,
+}
+
+/// What a fix version wrote.
+struct MadeFix {
+    from_version: u32,
+    version: u32,
+    changeset: ChangesetId,
+    checkpoint: CheckpointId,
+}
+
+/// The writes of a fix version in the caller's transaction: the refusals again, the changeset and the pending `review_fix` checkpoint in the task workspace, the version under the reviewer's name, the moved checkout, `proposal.reviewer_fixed`, the mark of a changed checks file and the recalculated status.
+async fn fix_in_tx(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    input: &FixInput<'_>,
+) -> Result<MadeFix, ReviewError> {
+    let (actor, proposal, version) = (input.actor, input.proposal, input.fix.version);
+    let (fixed, checkout_id, now) = (input.fixed, input.fix.checkout, input.fixed.taken_at);
+    let row = require_open(reviews::get_proposal(tx.conn(), proposal).await?, proposal)?;
+    let holder = reviews::unreleased_review_claim(tx.conn(), proposal).await?;
+    let reviewer = fix_gate(actor, &row, holder.as_ref())?;
+    let current = current_version(tx.conn(), proposal).await?;
+    require_version(proposal, version, current.version)?;
+    let worker = worker_row(tx, reviewer).await?;
+    let found = workspaces::active_review_checkout(tx.conn(), proposal, version, worker.id).await?;
+    if found != Some(checkout_id) {
+        return Err(no_checkout(proposal, version));
+    }
+    let live = workspaces::live_task_workspace(tx.conn(), row.task).await?;
+    let live = usable_workspace(live, row.task, &row.author)?;
+    if live.id != input.workspace {
+        return Err(busy(&live, "newer_work"));
+    }
+    idle_checks(tx.conn(), &row, &live, &current).await?;
+    let by = actor.event_actor();
+    let message = format!("Review fix of v{} by {by}", current.version);
+    let changeset = workspaces::insert_changeset(
+        tx,
+        live.id,
+        live.task,
+        live.base,
+        fixed.tree,
+        &message,
+        fixed.stats,
+        by.as_str(),
+        now,
+    )
+    .await?;
+    let stats = fixed.stats;
+    let files = stats
+        .files_added
+        .saturating_add(stats.files_modified)
+        .saturating_add(stats.files_deleted);
+    let recorded = NewEvent::new(types::CHANGESET_RECORDED, by.clone())?
+        .task(live.task)
+        .workspace(live.id)
+        .revision(live.base)
+        .data(json!({"changeset": changeset.id.to_string(), "files": files}))?;
+    buffer.append(tx, &recorded, now).await?;
+    let next = current.version.saturating_add(1);
+    let label = format!("v{next} of {proposal} by {by}");
+    let checkpoint = checkpoint_in_tx(
+        tx,
+        buffer,
+        actor,
+        &live,
+        fixed.tree,
+        CheckpointReason::ReviewFix,
+        Some(&label),
+        now,
+    )
+    .await?;
+    workspaces::set_sync_checkpoint(tx, live.id, Some(checkpoint.id)).await?;
+    let new = NewVersion {
+        base: current.base,
+        tree: fixed.tree,
+        head_changeset: changeset.id,
+        evidence: Some(input.evidence),
+        created_by: worker.name.as_str(),
+        fixed_in_checkout: Some(checkout_id),
+    };
+    reviews::add_version(tx, proposal, next, &new, now).await?;
+    if !workspaces::move_review_checkout(tx, checkout_id, proposal, next).await? {
+        return Err(StoreError::Corrupt("workspaces.version_id").into());
+    }
+    let event = NewEvent::new(types::PROPOSAL_REVIEWER_FIXED, by)?
+        .task(row.task)
+        .proposal(proposal)
+        .workspace(live.id)
+        .revision(current.base)
+        .data(json!({
+            "version": next,
+            "from_version": current.version,
+            "changeset": changeset.id.to_string(),
+            "checkpoint": checkpoint.id.to_string(),
+            "checkout": checkout_id.to_string(),
+            "files": input.fix.files,
+        }))?;
+    buffer.append(tx, &event, now).await?;
+    mark_checks_change(tx, buffer, row.task, input.checks_changed, now).await?;
+    buffer.extend(recompute(tx, &[row.task], now).await?.events);
+    Ok(MadeFix {
+        from_version: current.version,
+        version: next,
+        changeset: changeset.id,
+        checkpoint: checkpoint.id,
+    })
 }
 
 fn fix_gate<'a>(
