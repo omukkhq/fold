@@ -19,7 +19,7 @@ use fold_store::events;
 use fold_store::workspaces;
 use tokio::sync::watch;
 
-use crate::common::roles::give_role;
+use crate::common::roles::{give_batch, give_role};
 use crate::proposal_tools_support::{Fixture, human, t};
 
 const WAIT: Duration = Duration::from_secs(20);
@@ -449,7 +449,7 @@ async fn with_automatic_off_nothing_integrates_on_its_own() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_batch_reviewers_batch_integrates_its_approved_members_in_dependency_order() {
+async fn a_reviewers_batch_integrates_its_approved_members_in_dependency_order() {
     let fx = Fixture::new().await;
     fx.handle
         .tasks
@@ -458,14 +458,14 @@ async fn a_batch_reviewers_batch_integrates_its_approved_members_in_dependency_o
             CreateTask {
                 title: TaskTitle::parse("docs").unwrap(),
                 description: TaskDescription::new("what to build"),
-                labels: Vec::new(),
+                labels: crate::common::roles::work_labels(),
             },
         )
         .await
         .unwrap();
     let author = fx.agent("backend").await;
-    // A batch reviewer that the review lead started decides by its role.
-    let review = with_role(&fx, "reviewer-1", Role::BatchReviewer).await;
+    // A reviewer that the review lead started decides by its role.
+    let review = with_role(&fx, "reviewer-1", Role::Reviewer).await;
     fx.reviews()
         .require_human_review(&review, t(3), None, "touches the public API")
         .await
@@ -481,12 +481,14 @@ async fn a_batch_reviewers_batch_integrates_its_approved_members_in_dependency_o
     let job = Running::start(&fx.state);
     job.runs(1).await;
 
-    let batch = fx
-        .reviews()
-        .create_review_batch(&review, vec![p(1), p(2), p(3)])
-        .await
-        .unwrap()
-        .id;
+    // The review lead's start of the reviewer made the batch, in dependency order: T-1 needs T-2.
+    let batch = give_batch(
+        &fx.handle.store,
+        "reviewer-1",
+        &[p(2), p(1), p(3)],
+        fx.handle.clock.now(),
+    )
+    .await;
     let approve_all = [1, 2, 3]
         .map(|number| BatchVerdict {
             proposal: p(number),

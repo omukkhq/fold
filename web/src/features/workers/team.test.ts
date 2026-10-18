@@ -88,7 +88,7 @@ describe("pills", () => {
     expect(roleName("area_lead")).toBe("Area lead");
     expect(roleName("review_lead")).toBe("Review lead");
     expect(roleName("task_worker")).toBe("Task worker");
-    expect(roleName("batch_reviewer")).toBe("Batch reviewer");
+    expect(roleName("reviewer")).toBe("Reviewer");
   });
 
   it("takes the agent of a worker actor", () => {
@@ -339,7 +339,7 @@ describe("teamGroups", () => {
             }),
             workerProcess("review", { role: "review_lead", area: null }),
             workerProcess("review-b3", {
-              role: "batch_reviewer",
+              role: "reviewer",
               area: null,
               started_by: "review",
             }),
@@ -409,11 +409,11 @@ describe("teamGroups", () => {
             workerProcess("lost-worker", { role: "task_worker", area: null }),
             workerProcess("review", { role: "review_lead", area: null }),
             workerProcess("review-b9", {
-              role: "batch_reviewer",
+              role: "reviewer",
               area: null,
               proposals: ["P-7"],
             }),
-            workerProcess("review-b8", { role: "batch_reviewer", area: null }),
+            workerProcess("review-b8", { role: "reviewer", area: null }),
           ],
         }),
       }),

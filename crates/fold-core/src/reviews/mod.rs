@@ -227,7 +227,7 @@ pub fn counted_approval(reviews: &[ReviewFact], author: &AgentName) -> bool {
         })
 }
 
-/// The newest version before `version` that has a verdict, a comment not counted, so a reviewer of `version` can read only what changed since it. Anyone's verdict counts, an agent's or a human's: the next version is often reviewed by another agent than the earlier one, because each batch reviewer fold starts is an agent of its own.
+/// The newest version before `version` that has a verdict, a comment not counted, so a reviewer of `version` can read only what changed since it. Anyone's verdict counts, an agent's or a human's: the next version is often reviewed by another agent than the earlier one, because each reviewer fold starts is an agent of its own.
 pub fn last_verdict_version(
     reviews: impl IntoIterator<Item = (u32, Verdict)>,
     version: u32,

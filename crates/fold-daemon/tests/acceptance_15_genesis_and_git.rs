@@ -44,6 +44,7 @@ async fn acceptance_15_a_plain_folder_starts_from_the_genesis_and_turns_git_on()
         None,
     )
     .await;
+    h.lead_the_work_area().await;
     let root = PathBuf::from(h.root());
     h.connect_tagged(MAIN, &["main"]).await;
     let mut inbox = h.register_inbox(MAIN).await;

@@ -12,6 +12,7 @@ use fold_core::roles::area_prompt;
 use fold_core::{AgentName, AreaName, EventActor, NewEvent, ProjectPaths, WorkerState, codes};
 use fold_store::StoreError;
 use fold_store::agents::{self, WorkerProcessRow};
+use fold_store::tasks::claims::{self, ClaimTarget, ReleaseReason};
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{ChildStderr, ChildStdin, Command};
@@ -251,14 +252,19 @@ impl Supervisor {
             .store
             .write(async |tx| {
                 let current = agents::find_worker_process(tx.conn(), agent).await?;
-                if !current.is_some_and(|current| current.id == id && current.state.is_running()) {
+                let Some(current) =
+                    current.filter(|current| current.id == id && current.state.is_running())
+                else {
                     return Ok(());
-                }
+                };
                 agents::record_exit(tx, id, WorkerState::Failed, None, now).await?;
                 agents::close_open_questions(tx, id, now).await?;
                 let event = NewEvent::new(types::WORKER_FAILED, EventActor::fold())?
                     .data(json!({"agent": agent.as_str(), "reason": reason}))?;
                 buffer.append(tx, &event, now).await?;
+                if current.turns == 0 {
+                    give_back_claims(tx, &mut buffer, &current, now).await?;
+                }
                 Ok::<_, AgentError>(())
             })
             .await?;
@@ -392,6 +398,54 @@ fn mcp_config(
         }
     }
     json!({ MCP_SERVERS_KEY: servers })
+}
+
+/// Releases every claim of a worker that failed before its first turn, which its lead gave it at its start, and closes its open batches inside the caller's write, so the lead can give the work to another worker at once.
+async fn give_back_claims(
+    tx: &mut fold_store::WriteTx,
+    buffer: &mut EventBuffer,
+    row: &WorkerProcessRow,
+    now: fold_core::Timestamp,
+) -> Result<(), AgentError> {
+    let by = EventActor::fold();
+    let reason = ReleaseReason::WorkerFailed;
+    crate::services::reviews::close_batches_of(tx, buffer, &by, &row.agent, now).await?;
+    let mut tasks = Vec::new();
+    for held in claims::unreleased_of_agent(tx.conn(), row.agent_id).await? {
+        let event = match held.target {
+            ClaimTarget::Task(task) => {
+                claims::release(tx, task, held.worker_id, reason, now).await?;
+                tasks.push(task);
+                NewEvent::new(types::CLAIM_RELEASED, by.clone())?
+                    .task(task)
+                    .data(json!({
+                        "kind": "implementation",
+                        "worker": held.worker.as_str(),
+                        "reason": reason.as_str(),
+                    }))?
+            }
+            ClaimTarget::Review { proposal, task } => {
+                fold_store::reviews::release_review_claim(tx, proposal, reason.as_str(), now)
+                    .await?;
+                NewEvent::new(types::CLAIM_RELEASED, by.clone())?
+                    .task(task)
+                    .proposal(proposal)
+                    .data(json!({
+                        "kind": "review",
+                        "proposal": proposal.to_string(),
+                        "worker": held.worker.as_str(),
+                        "reason": reason.as_str(),
+                    }))?
+            }
+        };
+        buffer.append(tx, &event, now).await?;
+    }
+    buffer.extend(
+        crate::services::tasks::recompute(tx, &tasks, now)
+            .await?
+            .events,
+    );
+    Ok(())
 }
 
 #[cfg(test)]

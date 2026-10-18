@@ -68,7 +68,7 @@ pub struct RemoveFromBatchInput {
 pub struct BatchVerdictInput {
     /// The member, such as P-3.
     pub proposal: String,
-    /// comment, request_changes, approve or reject. Only the main agent, the review lead and the batch reviewers it starts can approve or reject; reject closes the proposal.
+    /// comment, request_changes, approve or reject. Only the main agent, the review lead and the reviewers it starts can approve or reject; reject closes the proposal.
     pub verdict: String,
     /// The review text for this member. An approval may leave it out; request_changes and comment need it or a comment on the member; reject needs it. In the text `#` names a fold item (#T-12) and `@` names a file (@web/src/board.ts); the daemon parses nothing.
     #[serde(default)]
@@ -113,7 +113,7 @@ pub fn tools() -> Vec<Tool> {
     vec![
         Tool::new(
             CREATE_REVIEW_BATCH,
-            "Review roles only: review related open proposals together. fold takes the review claim of each and orders them by their task dependencies. Then call create_batch_checkout and submit_batch_review.",
+            "For a review of your own by the main agent or the review lead: review related open proposals together. fold takes the review claim of each and orders them by their task dependencies. A proposal whose task has the human review mark is refused with invalid_request: review it on its own. Then call create_batch_checkout and submit_batch_review. A reviewer gets its batch from the review lead's start_worker and gets worker_claim_denied here.",
             schema_for_type::<CreateReviewBatchInput>(),
         ),
         Tool::new(

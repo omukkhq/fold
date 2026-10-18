@@ -27,7 +27,7 @@ pub fn human(name: &str) -> Actor {
     Actor::human(HumanName::parse(name).unwrap())
 }
 
-/// An open project the way the daemon holds it: `r1` with `src/lib.rs` and `README.md`, the tasks `T-1` and `T-2`, and the human `tanim` in the registry. Every service comes from the project handle, as the transports build them.
+/// An open project the way the daemon holds it: `r1` with `src/lib.rs` and `README.md`, the tasks `T-1` and `T-2` in the areas that `frontend` and `backend` lead, and the human `tanim` in the registry. Every service comes from the project handle, as the transports build them.
 pub struct Fixture {
     pub project: TestProject,
     pub state: AppState,
@@ -63,6 +63,20 @@ impl Fixture {
         )
         .await
         .unwrap();
+        let fixture = Self {
+            project,
+            state,
+            handle,
+        };
+        for (agent, _) in crate::common::roles::WORK_AREAS {
+            fixture.agent(agent).await;
+        }
+        crate::common::roles::lead_work_areas(&fixture.handle.store).await;
+        let Self {
+            project,
+            state,
+            handle,
+        } = fixture;
         for title in ["report", "export"] {
             handle
                 .tasks
@@ -71,7 +85,7 @@ impl Fixture {
                     CreateTask {
                         title: TaskTitle::parse(title).unwrap(),
                         description: TaskDescription::new("what to build"),
-                        labels: Vec::new(),
+                        labels: crate::common::roles::work_labels(),
                     },
                 )
                 .await

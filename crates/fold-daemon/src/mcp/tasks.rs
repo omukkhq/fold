@@ -382,7 +382,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             CLAIM_TASK,
-            "Claim a task before you change files for it. A repeat call by the holder renews the claim. A workspace left by a worker that released the task becomes yours; the result names it. A human task (task_needs_human) and a task with a blocker (task_on_hold) are refused.",
+            "Claim a task before you change files for it. Only the lead of the task's area and the main agent, when the user tells it to, claim; a worker that fold started gets its claims from its lead's start_worker and gets worker_claim_denied here, and any other agent gets orchestrator_required. A repeat call by the holder renews the claim. A workspace left by a worker that released the task becomes yours; the result names it. A human task (task_needs_human) and a task with a blocker (task_on_hold) are refused.",
             schema_for_type::<TaskIdInput>(),
         ),
         Tool::new(
@@ -392,7 +392,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             TAKEOVER_CLAIM,
-            "Take over a claim whose lease has run out, when its holder has stopped working. The task's workspace moves to you with its files as they are; the result names it.",
+            "Take over a claim whose lease has run out, when its holder has stopped working. The task's workspace moves to you with its files as they are; the result names it. Only the lead of the task's area and the main agent take a claim over; a worker that fold started gets worker_claim_denied, and its lead starts a new task worker for the task, which takes the stale claim over.",
             schema_for_type::<TaskIdInput>(),
         ),
         Tool::new(

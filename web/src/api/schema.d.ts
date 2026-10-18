@@ -2342,16 +2342,16 @@ export interface components {
         LimitsEntry: {
             /**
              * Format: int64
-             * @description The most batch reviewers that run at once.
-             * @example 3
-             */
-            batch_reviewer: number;
-            /**
-             * Format: int64
              * @description The most task workers that run at once in one area; null when an area has no limit of its own.
              * @example 2
              */
             max_per_area: number | null;
+            /**
+             * Format: int64
+             * @description The most reviewers that run at once.
+             * @example 3
+             */
+            reviewer: number;
             /**
              * Format: int64
              * @description The most task workers that run at once.
@@ -2625,7 +2625,7 @@ export interface components {
         };
         /** @description A proposal as the requesting human sees it. */
         ProposalDetail: {
-            /** @description A reviewer agent (the main agent, the review lead or a batch reviewer) approved the current version and no request for changes came after it. On a task with the human review mark a human approves only then; otherwise the approval is `agent_approval_required`. */
+            /** @description A reviewer agent (the main agent, the review lead or a reviewer) approved the current version and no request for changes came after it. On a task with the human review mark a human approves only then; otherwise the approval is `agent_approval_required`. */
             agent_approved: boolean;
             /** @description The check runs of the selected version, newest first, without their logs: the proposal-stage runs of exactly its files, then its integration runs. */
             checks: components["schemas"]["CheckRun"][];
@@ -3375,11 +3375,6 @@ export interface components {
         };
         /** @description A change of the worker limits; a limit left out stays as it is. */
         SetWorkerLimitsBody: {
-            /**
-             * Format: int64
-             * @description The most batch reviewers that run at once, a whole number with no upper bound; 0 lets none start.
-             */
-            batch_reviewer?: number | null;
             /** @description True removes the limit of one area. */
             clear_max_per_area?: boolean;
             /**
@@ -3387,6 +3382,11 @@ export interface components {
              * @description The most task workers that run at once in one area, a whole number with no upper bound; 0 lets none start.
              */
             max_per_area?: number | null;
+            /**
+             * Format: int64
+             * @description The most reviewers that run at once, a whole number with no upper bound; 0 lets none start.
+             */
+            reviewer?: number | null;
             /**
              * Format: int64
              * @description The most task workers that run at once, a whole number with no upper bound; 0 lets none start.
@@ -3903,7 +3903,7 @@ export interface components {
          */
         WorkerProcessEntry: {
             /**
-             * @description Null for the review lead and batch reviewers.
+             * @description Null for the review lead and reviewers.
              * @example web
              */
             area: string | null;
@@ -3938,7 +3938,7 @@ export interface components {
              * @example web-worker
              */
             name: string;
-            /** @description The proposals a batch reviewer is bound to. */
+            /** @description The proposals a reviewer is bound to. */
             proposals: string[];
             role: components["schemas"]["WorkerRole"];
             /**
@@ -3995,7 +3995,7 @@ export interface components {
          * @description The kinds of worker fold runs.
          * @enum {string}
          */
-        WorkerRole: "area_lead" | "review_lead" | "task_worker" | "batch_reviewer";
+        WorkerRole: "area_lead" | "review_lead" | "task_worker" | "reviewer";
         WorkerWorkspace: {
             /**
              * @description The revision the workspace is based on.

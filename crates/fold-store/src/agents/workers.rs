@@ -288,7 +288,7 @@ pub async fn bind_task(
     .await?)
 }
 
-/// Binds a batch reviewer to `proposal`. A proposal bound already stays bound and counts as bound, so a list that names a proposal twice binds it once; an unknown proposal binds nothing and returns false.
+/// Binds a reviewer to `proposal`. A proposal bound already stays bound and counts as bound, so a list that names a proposal twice binds it once; an unknown proposal binds nothing and returns false.
 pub async fn bind_proposal(
     tx: &mut WriteTx,
     worker_process_id: i64,
@@ -663,7 +663,7 @@ pub async fn task_workers_of_task(
         .collect()
 }
 
-/// The running batch reviewers bound to `proposal`. A `stopping` reviewer is left out with the ended ones: it takes no more work, so nothing waits for it.
+/// The running reviewers bound to `proposal`. A `stopping` reviewer is left out with the ended ones: it takes no more work, so nothing waits for it.
 pub async fn reviewers_of_proposal(
     executor: impl SqliteExecutor<'_>,
     proposal: ProposalId,
@@ -719,6 +719,30 @@ pub async fn tasks_awaiting_proposal(
         worker_process_ids,
         rows.into_iter().map(|row| (row.worker, row.count)),
         "worker_tasks",
+    )
+}
+
+/// How many unreleased claims, of either kind, the workers of each worker process's agent in `worker_process_ids` hold; every id has an entry.
+pub async fn claims_held(
+    executor: impl SqliteExecutor<'_>,
+    worker_process_ids: &[i64],
+) -> Result<HashMap<i64, u64>, StoreError> {
+    let ids = id_list(worker_process_ids);
+    let rows = sqlx::query!(
+        r#"SELECT w.id AS "worker!: i64", COUNT(*) AS "count!: i64"
+           FROM worker_processes w
+           JOIN workers k ON k.agent_id = w.agent_id
+           JOIN claims c ON c.worker_id = k.id AND c.released_at IS NULL
+           WHERE w.id IN (SELECT value FROM json_each(?1))
+           GROUP BY w.id"#,
+        ids
+    )
+    .fetch_all(executor)
+    .await?;
+    counts_by_worker(
+        worker_process_ids,
+        rows.into_iter().map(|row| (row.worker, row.count)),
+        "claims",
     )
 }
 

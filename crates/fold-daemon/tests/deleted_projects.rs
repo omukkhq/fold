@@ -88,6 +88,7 @@ impl Running {
 
     /// Creates a task and the workspace of `frontend` for it.
     async fn claim(handle: &ProjectHandle) -> Result<WorkspaceId, String> {
+        crate::common::roles::lead_work_areas(&handle.store).await;
         let task = handle
             .tasks
             .create_task(
@@ -95,7 +96,7 @@ impl Running {
                 CreateTask {
                     title: TaskTitle::parse("task").unwrap(),
                     description: TaskDescription::new("body"),
-                    labels: Vec::new(),
+                    labels: crate::common::roles::work_labels(),
                 },
             )
             .await

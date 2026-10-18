@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use crate::common::roles::give_role;
+use crate::common::roles::{give_review_claim, give_role};
 use crate::proposal_tools_support::{Fixture, human, t};
 use fold_core::reviews::{Side, Verdict};
 use fold_core::roles::Role;
@@ -52,7 +52,9 @@ struct Scene {
 impl Scene {
     async fn new() -> Self {
         let fx = Fixture::new().await;
+        // Each author leads the area of its own task, as only a lead claims a task.
         for title in ["docs", "extra"] {
+            give_role(&fx.handle.store, title, Role::AreaLead, Some(title)).await;
             fx.handle
                 .tasks
                 .create_task(
@@ -60,7 +62,7 @@ impl Scene {
                     CreateTask {
                         title: TaskTitle::parse(title).unwrap(),
                         description: TaskDescription::new("what to build"),
-                        labels: Vec::new(),
+                        labels: vec![fold_core::LabelName::parse(title).unwrap()],
                     },
                 )
                 .await
@@ -724,15 +726,29 @@ async fn batch_commands_refuse_what_the_rules_forbid() {
             .await,
     );
     assert_eq!(no_role.code(), codes::INTEGRATOR_REQUIRED);
-    give_role(&scene.fx.handle.store, "extra", Role::BatchReviewer, None).await;
+    give_role(&scene.fx.handle.store, "checker", Role::Reviewer, None).await;
+    let checker = scene.fx.agent("checker").await;
+    let worker = refusal(
+        reviews
+            .create_review_batch(&checker, vec![p(1), p(3)])
+            .await,
+    );
+    assert_eq!(worker.code(), codes::WORKER_CLAIM_DENIED);
+    give_review_claim(
+        &scene.fx.handle.store,
+        "checker",
+        p(3),
+        scene.fx.handle.clock.now(),
+    )
+    .await;
     let other = refusal(
         reviews
-            .create_review_batch(&scene.authors[3], vec![p(1), p(3)])
+            .create_review_batch(&scene.review, vec![p(3), p(4)])
             .await,
     );
     assert_eq!(other.code(), codes::ALREADY_CLAIMED);
     assert_eq!(
-        scene.summary(p(3)).await.review_claim,
+        scene.summary(p(4)).await.review_claim,
         None,
         "a refused batch takes no claim"
     );

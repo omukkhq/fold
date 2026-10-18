@@ -2,7 +2,7 @@
 
 This directory is a fold project. Its files are fold main, the integrated code, and while Git sync is on its own Git repository gets one commit for each revision. fold keeps its data in `.fold/`, and each task workspace is under `.fold/ws/`.
 
-The user starts the main agent here with `fld claude`, which starts fold when needed and continues the last main session, or with `fld new` for a new session. The main agent talks with the user, plans the work as areas and tasks, and has fold start a lead for each area and a review lead. Every other agent is a worker that fold starts and supervises: the area leads start task workers, which build one task each in a workspace and send a proposal, and the review lead reviews the proposals or starts batch reviewers. fold integrates each approved proposal.
+The user starts the main agent here with `fld claude`, which starts fold when needed and continues the last main session, or with `fld new` for a new session. The main agent talks with the user, plans the work as areas and tasks, and has fold start a lead for each area and a review lead. Every other agent is a worker that fold starts and supervises: the area leads start task workers, which build one task each in a workspace and send a proposal, and the review lead reviews the proposals or starts reviewers. fold integrates each approved proposal.
 
 The `fold` skill holds the full workflow for the main agent, orchestrators, workers and reviewers, for the worker agents fold runs, and for requests. Load it before you start.
 

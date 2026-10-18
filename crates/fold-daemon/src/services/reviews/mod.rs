@@ -32,9 +32,11 @@ pub use batches::{
     BatchVerdict, BatchVerdictView, LeftOut, LeftOutReason, MemberSince, ReviewBatchView,
     SubmittedBatch,
 };
+pub(crate) use batches::{close_batches_of, free_reviews_for_start};
 pub use changes::{ChangeRange, ProposalChange, SinceChange};
 pub use checkouts::{CheckoutTarget, ListedCheckout, ReviewCheckout};
 pub use claims::ReviewClaimView;
+pub(crate) use claims::assign_reviews_in_tx;
 pub use comments::{CommentInput, CommentLocation, CommentView};
 pub use human_edits::HumanEdit;
 pub use human_review::{AwaitingHumanReview, awaiting_human_review, awaiting_human_review_in};

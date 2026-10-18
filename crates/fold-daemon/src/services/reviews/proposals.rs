@@ -397,7 +397,7 @@ impl ReviewService {
         )))
     }
 
-    /// Closes an open proposal, by the author's agent, an agent that decides reviews (the main agent, the review lead or a batch reviewer) or a human. Its review claim is released and its review checkouts are archived; the task returns to In Progress because its workspace stays active. Closing is what allows `abandon_workspace` afterwards. `reason` is the closer's short explanation, which `proposal.closed` carries.
+    /// Closes an open proposal, by the author's agent, an agent that decides reviews (the main agent, the review lead or a reviewer) or a human. Its review claim is released and its review checkouts are archived; the task returns to In Progress because its workspace stays active. Closing is what allows `abandon_workspace` afterwards. `reason` is the closer's short explanation, which `proposal.closed` carries.
     pub async fn close_proposal(
         &self,
         actor: &Actor,

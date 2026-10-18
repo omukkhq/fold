@@ -16,7 +16,7 @@ use fold_store::{StoreError, workspaces};
 use serde_json::{Value, json};
 use tokio::sync::watch;
 
-use super::{Input, Supervisor, lock};
+use super::{Input, Supervisor, lock, reviewer_batch};
 use crate::services::agents::AgentError;
 use crate::services::agents::claude::{ClaudeMessage, SystemMessage};
 use crate::services::agents::workers::limits::check_running;
@@ -519,7 +519,7 @@ impl Supervisor {
         }
     }
 
-    /// What a worker whose session is gone is told in its new session: a task worker to check its claims and proposals, a batch reviewer to check its verdicts, a lead to read its latest hand-off note, then the starter's instructions.
+    /// What a worker whose session is gone is told in its new session: a task worker to check its claims and proposals, a reviewer to check its verdicts, a lead to read its latest hand-off note, then the starter's instructions.
     async fn lost_instructions(
         &self,
         agent: &AgentName,
@@ -537,7 +537,7 @@ impl Supervisor {
             .ok_or_else(|| not_supervised(agent))?;
         let mut text = match row.role {
             Role::TaskWorker => RESTART_LOST.to_owned(),
-            Role::BatchReviewer => REVIEWER_LOST.to_owned(),
+            Role::Reviewer => REVIEWER_LOST.to_owned(),
             Role::AreaLead | Role::ReviewLead => {
                 match agents::latest_handoff(&mut *conn, row.agent_id).await? {
                     Some(note) => format!(
@@ -703,6 +703,7 @@ impl Supervisor {
             area: row.area.as_ref().zip(label.as_ref()),
             tasks: &row.tasks,
             proposals: &row.proposals,
+            batch: reviewer_batch(&self.inner.store, &row).await?,
             instructions: Some(instructions),
         });
         self.launch(&row, false, Some(turn)).await?;
@@ -771,7 +772,7 @@ const RESTART_LOST: &str = "fold restarted and your earlier session is gone, so 
 /// What a lead whose session could not be resumed is told before its note.
 const LEAD_LOST: &str = "Your earlier session is gone, so fold started you in a new one. Read your area with get_task_graph and your workers with list_workers before you go on.";
 
-/// What a batch reviewer whose session could not be resumed is told.
+/// What a reviewer whose session could not be resumed is told.
 const REVIEWER_LOST: &str = "Your earlier session is gone, so fold started you in a new one. Read each of your proposals with get_proposal and give a verdict only to those that have none from you.";
 
 fn section_text(found: &Found) -> String {

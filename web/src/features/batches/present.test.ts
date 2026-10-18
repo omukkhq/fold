@@ -151,11 +151,11 @@ describe("batch texts", () => {
 
   it("names the reviewer's role and the model it has", () => {
     const reviewer = workerProcess("r", {
-      role: "batch_reviewer",
+      role: "reviewer",
       model: "sonnet",
     });
-    expect(reviewerLine(reviewer)).toBe("Batch reviewer · sonnet");
-    expect(reviewerLine({ ...reviewer, model: null })).toBe("Batch reviewer");
+    expect(reviewerLine(reviewer)).toBe("Reviewer · sonnet");
+    expect(reviewerLine({ ...reviewer, model: null })).toBe("Reviewer");
   });
 });
 

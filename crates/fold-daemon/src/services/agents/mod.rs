@@ -16,7 +16,9 @@ use crate::live::LiveState;
 use crate::push::PushTargets;
 use crate::services::events::{EventBuffer, EventBus};
 use crate::services::projects::{Lease, ProjectError};
+use crate::services::reviews::ReviewError;
 use crate::services::tasks::{TaskError, renew_leases};
+use crate::services::workspaces::WorkspaceLocks;
 
 /// Claude Code's headless stream-json protocol as fold reads and writes it, the oldest Claude Code fold drives, and the sign-in answer of `claude auth status`. It is public because `fld doctor` checks the installed Claude Code with the same version and sign-in types.
 pub mod claude;
@@ -61,6 +63,17 @@ impl From<TaskError> for AgentError {
             TaskError::Fold(error) => Self::Fold(error),
             TaskError::Store(error) => Self::Store(error),
             TaskError::Event(error) => Self::Event(error),
+        }
+    }
+}
+
+impl From<ReviewError> for AgentError {
+    fn from(error: ReviewError) -> Self {
+        match error {
+            ReviewError::Fold(error) => Self::Fold(error),
+            ReviewError::Store(error) => Self::Store(error),
+            ReviewError::Task(error) => error.into(),
+            ReviewError::Event(error) => Self::Event(error),
         }
     }
 }
@@ -121,6 +134,8 @@ pub struct AgentService {
     push: PushTargets,
     live: Option<LiveState>,
     workers: Option<Supervisor>,
+    /// The project's workspace locks (`ProjectHandle::workspace_locks`): a start that gives a task worker a released workspace waits for a sync, restore or record there to finish.
+    ops: Arc<WorkspaceLocks>,
 }
 
 impl std::fmt::Debug for AgentService {
@@ -141,7 +156,14 @@ impl AgentService {
             push: PushTargets::new(),
             live: None,
             workers: None,
+            ops: Arc::new(WorkspaceLocks::default()),
         }
+    }
+
+    #[must_use]
+    pub fn with_workspace_locks(mut self, ops: Arc<WorkspaceLocks>) -> Self {
+        self.ops = ops;
+        self
     }
 
     #[must_use]

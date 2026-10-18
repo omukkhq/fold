@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use fold_core::events::types;
-use fold_core::roles::Role;
 use fold_core::{Actor, EventFilter, HumanName, codes};
 use fold_daemon::services::agents::{NeedsYouKind, needs_you};
 use fold_daemon::services::projects::{ProjectError, PullOutcome, RecordOutcome, pull, record};
@@ -13,7 +12,6 @@ use fold_vcs::git::Git;
 use serde_json::{Value, json};
 
 use crate::common::acceptance::{Harness, WAIT};
-use crate::common::roles::give_role;
 
 /// `git` in `dir` as a person runs it there, without the user's configuration or hooks.
 pub fn git(dir: &Path, args: &[&str]) -> String {
@@ -307,7 +305,6 @@ async fn a_record_after_main_moved_merges_three_way_and_tells_the_leads_of_touch
     h.connect_tagged("main", &["main"]).await;
     let mut main_inbox = h.register_inbox("main").await;
     let mut lead_inbox = h.register_inbox("backend").await;
-    give_role(&h.handle.store, "backend", Role::AreaLead, Some("work")).await;
     let dir = root(&h);
     git(&dir, &["config", "user.name", "Ana Lima"]);
     git(&dir, &["config", "user.email", "ana@example.com"]);
@@ -328,7 +325,7 @@ async fn a_record_after_main_moved_merges_three_way_and_tells_the_leads_of_touch
         .call(
             "backend",
             "create_task",
-            json!({"title": "Readme work", "labels": ["work"]}),
+            json!({"title": "Readme work", "labels": ["backend-work"]}),
         )
         .await;
     let task = created["id"].as_str().unwrap().to_owned();
@@ -549,7 +546,6 @@ async fn the_leads_of_touched_tasks_hear_when_the_main_agent_resolves_a_human_ch
     branch_born(&h).await;
     h.connect_tagged("main", &["main"]).await;
     let mut lead_inbox = h.register_inbox("backend").await;
-    give_role(&h.handle.store, "backend", Role::AreaLead, Some("work")).await;
     let dir = root(&h);
     write(&dir, "README.md", "# mine\n");
     integrate(&h, "frontend", &[("README.md", "# fold\n")]).await;
@@ -561,7 +557,7 @@ async fn the_leads_of_touched_tasks_hear_when_the_main_agent_resolves_a_human_ch
         .call(
             "backend",
             "create_task",
-            json!({"title": "Readme work", "labels": ["work"]}),
+            json!({"title": "Readme work", "labels": ["backend-work"]}),
         )
         .await;
     let task = created["id"].as_str().unwrap().to_owned();

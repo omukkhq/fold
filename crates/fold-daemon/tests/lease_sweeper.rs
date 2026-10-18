@@ -120,6 +120,9 @@ impl Fixture {
         let agents = handle.agents();
         let frontend = register(&agents, "frontend").await;
         let backend = register(&agents, "backend").await;
+        // `frontend` leads the area of the tasks; `backend` stays free to be the review lead.
+        let (lead, area) = crate::common::roles::WORK_AREAS[0];
+        give_role(&handle.store, lead, Role::AreaLead, Some(area)).await;
         for _ in 0..2 {
             handle
                 .tasks
@@ -128,7 +131,7 @@ impl Fixture {
                     CreateTask {
                         title: TaskTitle::parse("task").unwrap(),
                         description: TaskDescription::new("body"),
-                        labels: Vec::new(),
+                        labels: vec![fold_core::LabelName::parse(area).unwrap()],
                     },
                 )
                 .await
@@ -302,7 +305,7 @@ impl Fixture {
         (status, column.status.as_str().to_owned())
     }
 
-    /// Opens a proposal of `T-1` from its workspace and lets `backend` claim its review.
+    /// Opens a proposal of `T-1` from its workspace and lets `backend`, as the review lead, claim its review.
     async fn review_claim(&self, dir: &std::path::Path) -> ProposalId {
         let reviews = ReviewService::new(
             self.handle.store.clone(),
@@ -320,7 +323,7 @@ impl Fixture {
             .unwrap()
             .summary
             .id;
-        give_role(&self.handle.store, "backend", Role::BatchReviewer, None).await;
+        give_role(&self.handle.store, "backend", Role::ReviewLead, None).await;
         reviews
             .claim_review(&by(&self.backend.worker), proposal)
             .await
@@ -661,7 +664,7 @@ async fn a_stalled_worker_that_keeps_calling_keeps_a_fresh_lease() {
 async fn a_released_claim_or_a_missing_directory_never_stalls() {
     let fx = Fixture::new().await;
     let (released, _) = fx.create(&fx.frontend, 1).await;
-    let (missing, missing_dir) = fx.create(&fx.backend, 2).await;
+    let (missing, missing_dir) = fx.create(&fx.frontend, 2).await;
     fx.advance(STALL);
     assert_eq!(fx.check().await, 2);
 

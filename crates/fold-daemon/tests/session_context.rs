@@ -103,6 +103,7 @@ impl Fixture {
             .await
             .unwrap();
         for number in 1..=8 {
+            crate::common::roles::lead_work_areas(&handle.store).await;
             handle
                 .tasks
                 .create_task(
@@ -110,7 +111,7 @@ impl Fixture {
                     CreateTask {
                         title: TaskTitle::parse(&format!("Task {number}")).unwrap(),
                         description: TaskDescription::new(""),
-                        labels: Vec::new(),
+                        labels: crate::common::roles::work_labels(),
                     },
                 )
                 .await

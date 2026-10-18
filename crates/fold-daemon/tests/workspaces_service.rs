@@ -91,13 +91,14 @@ impl Fixture {
         );
         let creator = agent("frontend");
         for _ in 0..3 {
+            crate::common::roles::lead_work_areas(project.store()).await;
             tasks
                 .create_task(
                     &creator,
                     CreateTask {
                         title: TaskTitle::parse("task").unwrap(),
                         description: TaskDescription::new("body"),
-                        labels: Vec::new(),
+                        labels: crate::common::roles::work_labels(),
                     },
                 )
                 .await
@@ -740,13 +741,14 @@ async fn a_project_without_a_revision_cannot_create() {
         project.paths().clone(),
         5,
     );
+    crate::common::roles::lead_work_areas(project.store()).await;
     tasks
         .create_task(
             &agent("frontend"),
             CreateTask {
                 title: TaskTitle::parse("task").unwrap(),
                 description: TaskDescription::new("body"),
-                labels: Vec::new(),
+                labels: crate::common::roles::work_labels(),
             },
         )
         .await

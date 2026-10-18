@@ -29,7 +29,7 @@ const WAIT: Duration = Duration::from_secs(20);
 const SLUG: &str = "crash";
 const HUMAN: &str = "tanim";
 
-/// `fld init` in a folder `crash` with one file, which becomes `r1`, then, in this process, the agent `frontend` takes `T-1`, adds `src/new.rs` in its workspace and opens `P-1`.
+/// `fld init` in a folder `crash` with one file, which becomes `r1`, then, in this process, the main agent `frontend` takes `T-1` on the user's word, adds `src/new.rs` in its workspace and opens `P-1`.
 async fn project(host: &Host) -> ProjectPaths {
     let root = host.dir.path().join(SLUG);
     std::fs::create_dir_all(root.join("src")).unwrap();
@@ -44,7 +44,11 @@ async fn project(host: &Host) -> ProjectPaths {
     let agents = AgentService::new(store.clone(), bus.clone(), clock.clone());
     let mut ctx = agents.start_session(std::process::id()).await.unwrap();
     agents
-        .register_agent(&mut ctx, &AgentName::parse("frontend").unwrap(), &[])
+        .register_agent(
+            &mut ctx,
+            &AgentName::parse("frontend").unwrap(),
+            &[fold_core::Tag::parse(fold_core::MAIN_TAG).unwrap()],
+        )
         .await
         .unwrap();
     let author = agents.actor(&ctx, None).await.unwrap();

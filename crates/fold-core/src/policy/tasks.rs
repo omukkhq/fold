@@ -5,7 +5,7 @@ use crate::tasks::status::TaskStatus;
 
 use super::PolicyDenied;
 
-/// The worker that holds a task's implementation claim and the agents that lead it: the area lead of a task worker's area, or the review lead of a batch reviewer. Any other holder has no lead.
+/// The worker that holds a task's implementation claim and the agents that lead it: the area lead of a task worker's area, or the review lead of a reviewer. Any other holder has no lead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskHolder {
     pub worker: WorkerName,

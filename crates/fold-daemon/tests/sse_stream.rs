@@ -539,6 +539,7 @@ async fn a_workspace_state_queued_before_the_snapshot_is_left_to_the_snapshot() 
 async fn the_snapshot_and_the_live_frames_carry_the_real_workspace_state() {
     let fx = Fixture::new().await;
     let creator = agent("frontend");
+    crate::common::roles::lead_work_areas(&fx.handle.store).await;
     fx.handle
         .tasks
         .create_task(
@@ -546,7 +547,7 @@ async fn the_snapshot_and_the_live_frames_carry_the_real_workspace_state() {
             CreateTask {
                 title: TaskTitle::parse("task").unwrap(),
                 description: TaskDescription::new("body"),
-                labels: Vec::new(),
+                labels: crate::common::roles::work_labels(),
             },
         )
         .await

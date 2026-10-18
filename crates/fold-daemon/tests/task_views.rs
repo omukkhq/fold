@@ -45,7 +45,7 @@ fn task(title: &str) -> CreateTask {
     CreateTask {
         title: TaskTitle::parse(title).unwrap(),
         description: TaskDescription::new(""),
-        labels: Vec::new(),
+        labels: crate::common::roles::work_labels(),
     }
 }
 
@@ -78,7 +78,7 @@ struct Fixture {
 
 #[cfg(test)]
 impl Fixture {
-    /// `count` tasks titled `task 1` to `task <count>`, and the agents `frontend` and `backend`.
+    /// `count` tasks titled `task 1` to `task <count>`, and the agents `frontend` and `backend`, which lead the areas of the tasks.
     async fn new(count: u32) -> Self {
         let project = TestProject::new().await;
         let clock = Arc::new(project.clock().clone());
@@ -91,6 +91,7 @@ impl Fixture {
                 .await
                 .unwrap();
         }
+        crate::common::roles::lead_work_areas(project.store()).await;
         let tasks = TaskService::new(project.store().clone(), bus, clock, LEASE);
         for n in 1..=count {
             tasks

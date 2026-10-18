@@ -69,9 +69,9 @@ pub struct LimitsEntry {
     /// The most task workers that run at once.
     #[schema(example = 4)]
     pub task_worker: u64,
-    /// The most batch reviewers that run at once.
+    /// The most reviewers that run at once.
     #[schema(example = 3)]
-    pub batch_reviewer: u64,
+    pub reviewer: u64,
     /// The most task workers that run at once in one area; null when an area has no limit of its own.
     #[schema(required = true, example = 2)]
     pub max_per_area: Option<u64>,
@@ -81,7 +81,7 @@ impl From<WorkerLimits> for LimitsEntry {
     fn from(limits: WorkerLimits) -> Self {
         Self {
             task_worker: limits.task_worker,
-            batch_reviewer: limits.batch_reviewer,
+            reviewer: limits.reviewer,
             max_per_area: limits.max_per_area,
         }
     }
@@ -93,9 +93,9 @@ pub struct SetWorkerLimitsBody {
     /// The most task workers that run at once, a whole number with no upper bound; 0 lets none start.
     #[serde(default)]
     pub task_worker: Option<u64>,
-    /// The most batch reviewers that run at once, a whole number with no upper bound; 0 lets none start.
+    /// The most reviewers that run at once, a whole number with no upper bound; 0 lets none start.
     #[serde(default)]
-    pub batch_reviewer: Option<u64>,
+    pub reviewer: Option<u64>,
     /// The most task workers that run at once in one area, a whole number with no upper bound; 0 lets none start.
     #[serde(default)]
     pub max_per_area: Option<u64>,
@@ -144,7 +144,7 @@ pub enum WorkerRole {
     AreaLead,
     ReviewLead,
     TaskWorker,
-    BatchReviewer,
+    Reviewer,
 }
 
 impl From<Role> for WorkerRole {
@@ -153,7 +153,7 @@ impl From<Role> for WorkerRole {
             Role::AreaLead => Self::AreaLead,
             Role::ReviewLead => Self::ReviewLead,
             Role::TaskWorker => Self::TaskWorker,
-            Role::BatchReviewer => Self::BatchReviewer,
+            Role::Reviewer => Self::Reviewer,
         }
     }
 }
@@ -164,7 +164,7 @@ impl From<WorkerRole> for Role {
             WorkerRole::AreaLead => Self::AreaLead,
             WorkerRole::ReviewLead => Self::ReviewLead,
             WorkerRole::TaskWorker => Self::TaskWorker,
-            WorkerRole::BatchReviewer => Self::BatchReviewer,
+            WorkerRole::Reviewer => Self::Reviewer,
         }
     }
 }
@@ -205,7 +205,7 @@ pub struct WorkerEntry {
     #[schema(example = "web-worker")]
     pub name: String,
     pub role: WorkerRole,
-    /// Null for the review lead and batch reviewers.
+    /// Null for the review lead and reviewers.
     #[schema(required = true, example = "web")]
     pub area: Option<String>,
     pub state: WorkerProcessState,
@@ -214,7 +214,7 @@ pub struct WorkerEntry {
     pub model: Option<String>,
     /// The tasks a task worker is bound to.
     pub tasks: Vec<String>,
-    /// The proposals a batch reviewer is bound to.
+    /// The proposals a reviewer is bound to.
     pub proposals: Vec<String>,
     /// The actor that started the worker, such as `human:tanim` or `main`.
     pub started_by: String,
@@ -560,7 +560,7 @@ pub async fn set_worker_limits(
 ) -> Result<Json<LimitsEntry>, ApiError> {
     let change = fold(WorkerLimitsChange::from_request(
         body.task_worker,
-        body.batch_reviewer,
+        body.reviewer,
         body.max_per_area,
         body.clear_max_per_area,
     ))?;

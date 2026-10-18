@@ -99,7 +99,7 @@ const FOLD_TOOLS: [&str; 89] = [
 const PENDING_TOOLS: [&str; 0] = [];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 156] = [
+const FOLD_ERROR_CODES: [&str; 157] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -256,6 +256,7 @@ const FOLD_ERROR_CODES: [&str; 156] = [
     "checks_file_invalid",
     "checks_running",
     "check_run_not_found",
+    "worker_claim_denied",
 ];
 
 /// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.
@@ -295,7 +296,7 @@ const NON_TOOL_NAMES: [&str; 31] = [
     "area_lead",
     "review_lead",
     "task_worker",
-    "batch_reviewer",
+    "reviewer",
     "idle_minutes",
     "handoff_at",
     "clear_max_per_area",

@@ -9,7 +9,7 @@ use fold_daemon::services::reviews::{BatchVerdict, ReviewError};
 use fold_daemon::services::tasks::{CreateTask, TaskError};
 use fold_store::{StoreError, events};
 
-use crate::common::roles::give_role;
+use crate::common::roles::{give_batch, give_claim, give_review_claim, give_role};
 use crate::proposal_tools_support::{Fixture, human, t};
 
 #[cfg(test)]
@@ -25,15 +25,15 @@ enum Who {
     MainAgent,
     /// `review-lead`.
     ReviewLead,
-    /// `reviewer-1`, a batch reviewer the review lead started.
-    BatchReviewer,
+    /// `reviewer-1`, a reviewer the review lead started.
+    Reviewer,
     /// The human `tanim`.
     Human,
     /// `web-lead`, the lead of area `web`.
     AreaLead,
     /// `web-worker`, a task worker of area `web`.
     TaskWorker,
-    /// `backend`, which wrote `P-1`; it is a batch reviewer, so only its authorship refuses it.
+    /// `backend`, which wrote `P-1` and leads its area, so its authorship refuses it first.
     Author,
 }
 
@@ -41,7 +41,7 @@ enum Who {
 const EVERYONE: [Who; 7] = [
     Who::MainAgent,
     Who::ReviewLead,
-    Who::BatchReviewer,
+    Who::Reviewer,
     Who::Human,
     Who::AreaLead,
     Who::TaskWorker,
@@ -54,7 +54,7 @@ impl Who {
         match self {
             Who::MainAgent => Some("main"),
             Who::ReviewLead => Some("review-lead"),
-            Who::BatchReviewer => Some("reviewer-1"),
+            Who::Reviewer => Some("reviewer-1"),
             Who::Human => None,
             Who::AreaLead => Some("web-lead"),
             Who::TaskWorker => Some("web-worker"),
@@ -65,7 +65,7 @@ impl Who {
     fn decides(self) -> bool {
         matches!(
             self,
-            Who::MainAgent | Who::ReviewLead | Who::BatchReviewer | Who::Human
+            Who::MainAgent | Who::ReviewLead | Who::Reviewer | Who::Human
         )
     }
 }
@@ -84,7 +84,7 @@ async fn register(fx: &Fixture, name: &str, tags: &[&str]) -> Actor {
 }
 
 #[cfg(test)]
-/// The main agent, the area `web` over label `ui` with its lead, two task workers of the area, the review lead, a batch reviewer and the author `backend`, whose `P-1` on `T-1` is open.
+/// The main agent, the area `web` over label `ui` with its lead, two task workers of the area, the review lead, a reviewer and the author `backend`, whose `P-1` on `T-1` is open.
 async fn scene() -> Fixture {
     let fx = Fixture::new().await;
     register(&fx, "main", &["main"]).await;
@@ -112,8 +112,7 @@ async fn scene() -> Fixture {
         ("web-worker", Role::TaskWorker, Some("web")),
         ("web-worker-2", Role::TaskWorker, Some("web")),
         ("review-lead", Role::ReviewLead, None),
-        ("reviewer-1", Role::BatchReviewer, None),
-        ("backend", Role::BatchReviewer, None),
+        ("reviewer-1", Role::Reviewer, None),
     ] {
         register(&fx, name, &[]).await;
         give_role(store, name, role, area).await;
@@ -258,6 +257,20 @@ async fn a_batch_verdict_that_decides_follows_the_role() {
                     );
                     continue;
                 }
+                Who::Reviewer => {
+                    assert_eq!(
+                        review_code(batch.unwrap_err()),
+                        codes::WORKER_CLAIM_DENIED,
+                        "a reviewer gets its batch from the review lead"
+                    );
+                    give_batch(
+                        &fx.handle.store,
+                        "reviewer-1",
+                        &[p(1), p(2)],
+                        fx.handle.clock.now(),
+                    )
+                    .await
+                }
                 _ => batch.unwrap().id,
             };
             let verdicts = [p(1), p(2)]
@@ -277,18 +290,31 @@ async fn a_batch_verdict_that_decides_follows_the_role() {
 }
 
 #[tokio::test]
-async fn only_a_review_role_claims_a_review_and_the_author_is_refused_first() {
+async fn only_the_main_agent_or_the_review_lead_claims_a_review_and_the_author_is_refused_first() {
     for who in EVERYONE {
         let fx = scene().await;
         let acting = actor(&fx, who).await;
         let claimed = fx.reviews().claim_review(&acting, p(1)).await;
         match who {
-            Who::MainAgent | Who::ReviewLead | Who::BatchReviewer => {
+            Who::MainAgent | Who::ReviewLead => {
                 assert_eq!(
                     claimed.unwrap().holder.as_str(),
                     who.agent().unwrap(),
                     "{who:?}"
                 );
+                fx.reviews()
+                    .create_review_checkout(&acting, p(1))
+                    .await
+                    .unwrap();
+            }
+            Who::Reviewer => {
+                let ReviewError::Fold(error) = claimed.unwrap_err() else {
+                    panic!("expected a refusal");
+                };
+                assert_eq!(error.code(), codes::WORKER_CLAIM_DENIED);
+                assert!(error.hint().unwrap().contains("lead"));
+                give_review_claim(&fx.handle.store, "reviewer-1", p(1), fx.handle.clock.now())
+                    .await;
                 fx.reviews()
                     .create_review_checkout(&acting, p(1))
                     .await
@@ -301,7 +327,7 @@ async fn only_a_review_role_claims_a_review_and_the_author_is_refused_first() {
                 assert_eq!(
                     review_code(claimed.unwrap_err()),
                     codes::AUTHOR_CANNOT_REVIEW,
-                    "the author is a batch reviewer, and its authorship refuses it first"
+                    "the author is a reviewer, and its authorship refuses it first"
                 );
             }
             Who::AreaLead | Who::TaskWorker => {
@@ -331,7 +357,7 @@ async fn second_proposal(fx: &Fixture) {
             CreateTask {
                 title: TaskTitle::parse("import").unwrap(),
                 description: TaskDescription::new("what to build"),
-                labels: Vec::new(),
+                labels: crate::common::roles::work_labels(),
             },
         )
         .await
@@ -414,10 +440,16 @@ async fn remover(fx: &Fixture, name: &str) -> Actor {
 }
 
 #[cfg(test)]
-/// `holder` claims `T-2`.
+/// `holder` holds the claim on `T-2`: given by its lead when fold started it as a task worker or reviewer, else claimed by itself.
 async fn held_by(fx: &Fixture, holder: &str) {
-    let holder = agent_actor(fx, holder).await;
-    fx.handle.tasks.claim_task(&holder, t(2)).await.unwrap();
+    let actor = agent_actor(fx, holder).await;
+    match fx.handle.tasks.claim_task(&actor, t(2)).await {
+        Ok(_) => {}
+        Err(TaskError::Fold(error)) if error.code() == codes::WORKER_CLAIM_DENIED => {
+            give_claim(&fx.handle.store, holder, t(2), fx.handle.clock.now()).await;
+        }
+        Err(error) => panic!("{holder} cannot hold T-2: {error:?}"),
+    }
 }
 
 #[tokio::test]
@@ -465,7 +497,7 @@ async fn a_held_task_is_deleted_only_by_its_holder_its_lead_or_a_human() {
 }
 
 #[tokio::test]
-async fn the_review_lead_removes_a_task_its_batch_reviewer_holds() {
+async fn the_review_lead_removes_a_task_its_reviewer_holds() {
     let fx = scene().await;
     held_by(&fx, "reviewer-1").await;
     let area_lead = agent_actor(&fx, "web-lead").await;

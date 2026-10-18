@@ -105,13 +105,14 @@ impl Fixture {
             workspaces.clone(),
             Arc::default(),
         );
+        crate::common::roles::lead_work_areas(project.store()).await;
         tasks
             .create_task(
                 &agent("frontend", &[]),
                 CreateTask {
                     title: TaskTitle::parse("task").unwrap(),
                     description: TaskDescription::new("body"),
-                    labels: Vec::new(),
+                    labels: crate::common::roles::work_labels(),
                 },
             )
             .await
@@ -119,8 +120,7 @@ impl Fixture {
         let frontend = register(&agents, "frontend").await;
         let backend = register(&agents, "backend").await;
         register(&agents, "review").await;
-        // `backend` reviews without the right to decide; `review` decides as the review lead.
-        give_role(project.store(), "backend", Role::TaskWorker, None).await;
+        // `backend` leads its area and reviews without the right to decide; `review` decides as the review lead.
         give_role(project.store(), "review", Role::ReviewLead, None).await;
         workspaces
             .create_workspace(&agent("frontend", &[]), t(1))

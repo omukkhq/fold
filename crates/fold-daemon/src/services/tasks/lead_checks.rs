@@ -91,7 +91,9 @@ impl TaskService {
                         "holder",
                         json!(holder.as_ref().map(|claim| claim.worker.as_str())),
                     )])
-                    .with_hint("only the claim holder reports a task; call claim_task first")
+                    .with_hint(
+                        "only the claim holder reports a task; call get_task to see the holder",
+                    )
                     .into());
                 }
                 match reports::insert(tx, task, worker.id, &note, now).await {

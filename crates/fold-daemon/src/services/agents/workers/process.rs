@@ -229,3 +229,21 @@ impl Supervisor {
         )
     }
 }
+
+/// The open batch that the reviewer of `row` holds, which fold made of its two or more proposals at its start, for a first turn built again. It is found by its holder, not by a member, because the reviewer may have taken any member out of it.
+pub(super) async fn reviewer_batch(
+    store: &Store,
+    row: &fold_store::agents::WorkerProcessRow,
+) -> Result<Option<fold_core::ReviewBatchId>, fold_store::StoreError> {
+    if row.role != fold_core::Role::Reviewer {
+        return Ok(None);
+    }
+    Ok(
+        fold_store::reviews::batches::list_batches(store.read(), true)
+            .await?
+            .into_iter()
+            .rev()
+            .find(|batch| batch.holder.belongs_to(&row.agent))
+            .map(|batch| batch.id),
+    )
+}

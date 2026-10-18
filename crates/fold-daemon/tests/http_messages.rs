@@ -95,13 +95,14 @@ impl Fixture {
             5,
         );
         for _ in 0..2 {
+            crate::common::roles::lead_work_areas(&handle.store).await;
             tasks
                 .create_task(
                     &agent("frontend"),
                     CreateTask {
                         title: TaskTitle::parse("task").unwrap(),
                         description: TaskDescription::new(""),
-                        labels: Vec::new(),
+                        labels: crate::common::roles::work_labels(),
                     },
                 )
                 .await

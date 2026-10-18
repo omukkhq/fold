@@ -776,14 +776,14 @@ async fn a_start_of_a_stopped_lead_whose_session_is_gone_starts_it_fresh() {
 }
 
 #[tokio::test]
-async fn a_daemon_start_that_finds_a_batch_reviewers_session_gone_starts_it_fresh() {
+async fn a_daemon_start_that_finds_a_reviewers_session_gone_starts_it_fresh() {
     let fake = FakeClaude::new("init").lost_sessions();
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
     harness.make_main(MAIN).await;
     let task = harness.create_task(MAIN, "Draw the page").await;
-    let work = harness.start_work("backend", &task).await;
+    let work = harness.start_work(MAIN, &task).await;
     work.write(&[("page.html", "<p>page</p>\n")]);
-    let proposal = harness.propose("backend", &work, "Draw the page").await;
+    let proposal = harness.propose(MAIN, &work, "Draw the page").await;
     harness
         .call(MAIN, "start_worker", json!({"role": "review_lead"}))
         .await;
@@ -792,10 +792,10 @@ async fn a_daemon_start_that_finds_a_batch_reviewers_session_gone_starts_it_fres
         .call(
             "review-lead",
             "start_worker",
-            json!({"role": "batch_reviewer", "proposals": [proposal]}),
+            json!({"role": "reviewer", "proposals": [proposal]}),
         )
         .await;
-    let reviewer = "batch-reviewer";
+    let reviewer = "reviewer";
     until_runs(&fake, reviewer, 1).await;
     let working = until_state(&harness, reviewer, WorkerState::Working).await;
     harness.stop().await;
@@ -809,7 +809,7 @@ async fn a_daemon_start_that_finds_a_batch_reviewers_session_gone_starts_it_fres
     assert_ne!(session, working.session_id);
     let turn = &fresh.stdin[1];
     for wanted in [
-        "batch reviewer for P-1",
+        "reviewer for P-1",
         "Your earlier session is gone",
         "give a verdict only to those that have none from you",
     ] {

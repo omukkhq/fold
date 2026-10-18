@@ -298,7 +298,7 @@ async fn get_proposal_shows_versions_gates_and_files() {
     assert_eq!(error["code"], "invalid_id");
 }
 
-/// After `request_changes` on v1 the reviewer reads only what v2 changed, and a `new` comment on those lines lands on v2. Another agent, such as a new batch reviewer, reads the same earlier verdict.
+/// After `request_changes` on v1 the reviewer reads only what v2 changed, and a `new` comment on those lines lands on v2. Another agent, such as a new reviewer, reads the same earlier verdict.
 #[tokio::test]
 async fn a_reviewer_reads_only_the_change_since_the_last_verdict() {
     let fx = Fixture::new().await;
@@ -391,7 +391,7 @@ async fn a_reviewer_reads_only_the_change_since_the_last_verdict() {
     );
     assert_eq!(comment["outdated"], false);
 
-    let next = connect(&fx, "batch-reviewer-2").await;
+    let next = connect(&fx, "reviewer-2").await;
     let view = ok(&next, "get_proposal", json!({"id": "P-1"})).await;
     assert_eq!(view["last_reviewed"], "v1");
     let stale = err(
@@ -857,7 +857,6 @@ async fn integrate_proposal_publishes_the_next_revision() {
         json!({"id": "P-1", "version": 1, "verdict": "approve", "body": "good"}),
     )
     .await;
-    grant_role(&fx, "frontend", Role::BatchReviewer).await;
     let error = err(&frontend, "integrate_proposal", json!({"id": "P-1"})).await;
     assert_eq!(error["code"], "author_cannot_integrate");
     let error = err(

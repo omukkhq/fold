@@ -136,7 +136,7 @@ mod tests {
             (tagged("backend", "review"), None),
             (agent("review-lead"), Some(Role::ReviewLead)),
             (agent("web-worker"), Some(Role::TaskWorker)),
-            (agent("reviewer-1"), Some(Role::BatchReviewer)),
+            (agent("reviewer-1"), Some(Role::Reviewer)),
         ] {
             let denied = can_claim_request(&other, role).unwrap_err();
             assert_eq!(denied.code(), codes::ORCHESTRATOR_REQUIRED, "{other:?}");

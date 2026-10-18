@@ -108,13 +108,14 @@ impl Fixture {
         );
         let creator = agent("frontend");
         for _ in 0..2 {
+            crate::common::roles::lead_work_areas(project.store()).await;
             tasks
                 .create_task(
                     &creator,
                     CreateTask {
                         title: TaskTitle::parse("task").unwrap(),
                         description: TaskDescription::new("body"),
-                        labels: Vec::new(),
+                        labels: crate::common::roles::work_labels(),
                     },
                 )
                 .await
@@ -123,8 +124,7 @@ impl Fixture {
         let frontend = register(&agents, "frontend").await;
         let backend = register(&agents, "backend").await;
         register(&agents, "review").await;
-        // `backend` may not decide on a proposal; `review` does as the review lead.
-        give_role(project.store(), "backend", Role::TaskWorker, None).await;
+        // `backend` leads its area and may not decide on a proposal; `review` does as the review lead.
         give_role(project.store(), "review", Role::ReviewLead, None).await;
         Self {
             project,

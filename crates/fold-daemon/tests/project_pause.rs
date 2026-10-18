@@ -3,7 +3,6 @@
 use std::time::Duration;
 
 use axum::http::{Method, StatusCode};
-use fold_core::roles::Role;
 use fold_core::{AgentName, HumanName, WorkerState, codes};
 use fold_daemon::services::agents::PAUSE_TURN;
 use fold_daemon::services::tasks::sweep_leases;
@@ -13,7 +12,6 @@ use serde_json::{Value, json};
 
 use crate::auto_integrate::{Running, approve, head, review_lead, state_of};
 use crate::common::acceptance::{HUMAN, Harness, WAIT};
-use crate::common::roles::give_role;
 use crate::proposal_tools_support::{Fixture, human, t};
 use crate::worker_resume::{
     MAIN, TASK_WORKER, proposed_by_a_task_worker, request_changes, task_worker_for, until_runs,
@@ -169,7 +167,8 @@ async fn a_resume_the_pause_held_back_runs_at_the_resume() {
 
 #[tokio::test]
 async fn a_claim_held_through_a_long_pause_stays_fresh_and_gets_a_full_lease_at_the_resume() {
-    let harness = Harness::start().await;
+    let mut harness = Harness::start_without_leads().await;
+    harness.lead_area("backend").await;
     harness.make_main(MAIN).await;
     let task = harness.create_task(MAIN, "Draw the page").await;
     let work = harness.start_work("backend", &task).await;
@@ -305,14 +304,8 @@ async fn approved_proposals_still_integrate_while_paused() {
 
 #[tokio::test]
 async fn only_a_human_or_the_main_agent_pauses_or_resumes() {
-    let harness = Harness::start().await;
-    give_role(
-        &harness.handle.store,
-        "backend",
-        Role::AreaLead,
-        Some("web"),
-    )
-    .await;
+    let mut harness = Harness::start_without_leads().await;
+    harness.lead_area("backend").await;
     let lead = harness.refused("backend", "pause_project", json!({})).await;
     assert_eq!(lead["code"], codes::MAIN_AGENT_REQUIRED);
     let reviewer = harness.refused("review", "resume_project", json!({})).await;

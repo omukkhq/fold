@@ -86,7 +86,11 @@ async fn design_area(h: &mut Harness, profile: Value) -> Value {
         .unwrap()
         .extend(profile.as_object().unwrap().clone());
     let defined = h.call(MAIN, "define_area", define).await;
-    for title in ["Draw the sign-in screen", "Draw the board screen"] {
+    for title in [
+        "Draw the sign-in screen",
+        "Draw the board screen",
+        "Draw the settings screen",
+    ] {
         h.call(
             MAIN,
             "create_task",
@@ -216,7 +220,7 @@ async fn a_changed_profile_reaches_the_next_start_and_never_a_running_worker() {
         .await;
     assert_eq!(cleared["area"]["model"], Value::Null);
     assert_eq!(cleared["area"]["mcp"], Value::Null);
-    let third = start_task_worker(&h, "T-1", json!({})).await;
+    let third = start_task_worker(&h, "T-3", json!({})).await;
     let run = first_run(&fake, &third).await;
     assert_eq!(run.flag("--model"), Some("haiku"));
     assert_eq!(servers(&run), ["fold"]);
@@ -347,7 +351,7 @@ async fn only_the_main_agent_or_a_human_changes_a_profile_and_bad_values_are_ref
 
 #[tokio::test]
 async fn an_agent_outside_the_team_leaves_profiles_and_task_kinds_to_the_main_agent() {
-    let h = Harness::start().await;
+    let h = Harness::start_without_leads().await;
     h.make_main(MAIN).await;
     h.call(
         MAIN,

@@ -452,24 +452,41 @@ async fn a_fold_notice_reaches_a_worker_once_as_a_user_turn() {
 }
 
 #[tokio::test]
-async fn the_fifth_task_worker_and_the_fourth_batch_reviewer_are_refused_and_a_lead_never_is() {
+async fn the_fifth_task_worker_and_the_fourth_reviewer_are_refused_and_a_lead_never_is() {
     let fake = FakeClaude::new("result");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
     harness.make_main(MAIN).await;
     areas(&harness).await;
-    let task = harness.create_task(MAIN, "Write the docs").await;
-    let work = harness.start_work("backend", &task).await;
-    std::fs::write(work.dir.join("docs.txt"), "docs\n").unwrap();
-    let proposal = harness.propose("backend", &work, "Write the docs").await;
-    let lead = start_lead(&mut harness, "web").await;
-    let task_worker = json!({"role": "task_worker", "tasks": ["T-1"]});
-    for _ in 0..4 {
-        harness
-            .call(&lead, "start_worker", task_worker.clone())
+    let mut proposals = Vec::new();
+    for title in ["Write the docs", "Write the guide", "Write the notes"] {
+        let task = harness.create_task(MAIN, title).await;
+        let work = harness.start_work(MAIN, &task).await;
+        std::fs::write(work.dir.join("docs.txt"), format!("{title}\n")).unwrap();
+        proposals.push(harness.propose(MAIN, &work, title).await);
+    }
+    let mut pages = vec!["T-1".to_owned()];
+    for title in [
+        "Draw the menu",
+        "Draw the footer",
+        "Draw the form",
+        "Draw the list",
+    ] {
+        let created = harness
+            .call(
+                MAIN,
+                "create_task",
+                json!({"title": title, "labels": ["ui"]}),
+            )
             .await;
+        pages.push(created["id"].as_str().unwrap().to_owned());
+    }
+    let lead = start_lead(&mut harness, "web").await;
+    let task_worker = |task: &str| json!({"role": "task_worker", "tasks": [task]});
+    for task in &pages[..4] {
+        harness.call(&lead, "start_worker", task_worker(task)).await;
     }
     let refused = harness
-        .refused(&lead, "start_worker", task_worker.clone())
+        .refused(&lead, "start_worker", task_worker(&pages[4]))
         .await;
     assert_eq!(refused["code"], codes::WORKER_LIMIT_REACHED);
     assert_eq!(refused["details"], json!({"role": "task_worker", "max": 4}));
@@ -495,29 +512,32 @@ async fn the_fifth_task_worker_and_the_fourth_batch_reviewer_are_refused_and_a_l
         .await;
     assert_eq!(review["worker"]["name"], "review-lead");
     harness.connect("review-lead").await;
-    let reviewer = json!({"role": "batch_reviewer", "proposals": [proposal]});
-    for _ in 0..3 {
+    let reviewer = |proposal: &str| json!({"role": "reviewer", "proposals": [proposal]});
+    for proposal in &proposals {
         harness
-            .call("review-lead", "start_worker", reviewer.clone())
+            .call("review-lead", "start_worker", reviewer(proposal))
             .await;
     }
+    // The limit is checked before the claims, so a held proposal is refused for the limit.
     let full = harness
-        .refused("review-lead", "start_worker", reviewer)
+        .refused("review-lead", "start_worker", reviewer(&proposals[0]))
         .await;
     assert_eq!(full["code"], codes::WORKER_LIMIT_REACHED);
-    assert_eq!(full["details"], json!({"role": "batch_reviewer", "max": 3}));
+    assert_eq!(full["details"], json!({"role": "reviewer", "max": 3}));
     assert!(
         full["hint"]
             .as_str()
             .unwrap()
-            .contains("batch_reviewer limit is 3"),
+            .contains("reviewer limit is 3"),
         "{full}"
     );
 
     harness
         .call(&lead, "stop_worker", json!({"name": "web-worker"}))
         .await;
-    let fifth = harness.call(&lead, "start_worker", task_worker).await;
+    let fifth = harness
+        .call(&lead, "start_worker", task_worker(&pages[4]))
+        .await;
     assert_eq!(fifth["worker"]["name"], "web-worker-5");
 }
 
@@ -896,7 +916,7 @@ async fn a_human_defines_areas_and_starts_and_stops_leads_over_http() {
             {"role": "area_lead", "cache_ttl": "1h", "model": null},
             {"role": "review_lead", "cache_ttl": "1h", "model": null},
             {"role": "task_worker", "cache_ttl": "5m", "model": null},
-            {"role": "batch_reviewer", "cache_ttl": "1h", "model": null},
+            {"role": "reviewer", "cache_ttl": "1h", "model": null},
         ])
     );
     let config = std::path::Path::new(harness.root()).join(".fold/config.toml");
@@ -956,16 +976,16 @@ async fn a_human_defines_areas_and_starts_and_stops_leads_over_http() {
 }
 
 #[tokio::test]
-async fn a_batch_reviewer_stops_once_its_batch_review_gives_every_proposal_a_verdict() {
+async fn a_reviewer_stops_once_its_batch_review_gives_every_proposal_a_verdict() {
     let fake = FakeClaude::new("result");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
     harness.make_main(MAIN).await;
     for (number, title) in [(1, "Draw the page"), (2, "Serve the page")] {
         let task = harness.create_task(MAIN, title).await;
         assert_eq!(task, format!("T-{number}"));
-        let work = harness.start_work("backend", &task).await;
+        let work = harness.start_work(MAIN, &task).await;
         std::fs::write(work.dir.join(format!("part{number}.txt")), "part\n").unwrap();
-        harness.propose("backend", &work, title).await;
+        harness.propose(MAIN, &work, title).await;
     }
     harness
         .call(MAIN, "start_worker", json!({"role": "review_lead"}))
@@ -975,14 +995,15 @@ async fn a_batch_reviewer_stops_once_its_batch_review_gives_every_proposal_a_ver
         .call(
             "review-lead",
             "start_worker",
-            json!({"role": "batch_reviewer", "proposals": ["P-1", "P-2"]}),
+            json!({"role": "reviewer", "proposals": ["P-1", "P-2"]}),
         )
         .await;
-    assert_eq!(started["worker"]["name"], "batch-reviewer");
+    assert_eq!(started["worker"]["name"], "reviewer");
     assert_eq!(started["worker"]["proposals"], json!(["P-1", "P-2"]));
-    let run = until_runs(&fake, "batch-reviewer", 1, 2).await.remove(0);
+    let run = until_runs(&fake, "reviewer", 1, 2).await.remove(0);
     assert_eq!(run.env["CLAUDE_CODE_PROMPT_CACHE_TTL"], "1h");
-    assert!(run.stdin[1].contains("batch reviewer for P-1, P-2"));
+    assert!(run.stdin[1].contains("reviewer for P-1, P-2"));
+    assert!(run.stdin[1].contains("in batch rb-1"), "{}", run.stdin[1]);
     let by_lead = harness
         .refused(
             "review-lead",
@@ -991,19 +1012,24 @@ async fn a_batch_reviewer_stops_once_its_batch_review_gives_every_proposal_a_ver
         )
         .await;
     assert_eq!(by_lead["code"], codes::WORKER_START_DENIED);
-    until_state(&harness, "batch-reviewer", WorkerState::Idle).await;
-    harness.connect("batch-reviewer").await;
-    let batch = harness
-        .call(
-            "batch-reviewer",
+    until_state(&harness, "reviewer", WorkerState::Idle).await;
+    harness.connect("reviewer").await;
+    let refused = harness
+        .refused(
+            "reviewer",
             "create_review_batch",
             json!({"proposals": ["P-1", "P-2"]}),
         )
         .await;
+    assert_eq!(refused["code"], codes::WORKER_CLAIM_DENIED);
+    let batch = harness
+        .call("reviewer", "get_review_batch", json!({"id": "rb-1"}))
+        .await;
+    assert_eq!(batch["holder"], "reviewer", "{batch}");
     let id = batch["id"].as_str().unwrap().to_owned();
     harness
         .call(
-            "batch-reviewer",
+            "reviewer",
             "submit_batch_review",
             json!({
                 "id": id,
@@ -1014,7 +1040,7 @@ async fn a_batch_reviewer_stops_once_its_batch_review_gives_every_proposal_a_ver
             }),
         )
         .await;
-    let stopped = until_state(&harness, "batch-reviewer", WorkerState::Stopped).await;
+    let stopped = until_state(&harness, "reviewer", WorkerState::Stopped).await;
     assert_eq!(stopped.exit_code, Some(0));
     assert_eq!(
         worker(&harness, "review-lead").await.state,
@@ -1037,8 +1063,16 @@ async fn an_archived_task_stops_its_task_worker_at_once() {
         )
         .await;
     until_state(&harness, "web-worker", WorkerState::Idle).await;
+    let held = harness
+        .refused(MAIN, "archive_task", json!({"id": "T-1"}))
+        .await;
+    assert_eq!(
+        held["code"],
+        codes::NOT_CLAIM_HOLDER,
+        "the task worker holds T-1"
+    );
     harness
-        .call(MAIN, "archive_task", json!({"id": "T-1"}))
+        .call(&lead, "archive_task", json!({"id": "T-1"}))
         .await;
     let stopped = until_state(&harness, "web-worker", WorkerState::Stopped).await;
     assert_eq!(stopped.exit_code, Some(0));
@@ -1081,4 +1115,622 @@ async fn a_restart_that_cannot_read_the_configuration_fails_each_worker_and_goes
         assert_eq!(data["agent"], lead.as_str());
         assert_eq!(data["reason"], "config");
     }
+}
+
+#[tokio::test]
+async fn a_start_gives_the_task_worker_its_claims_or_starts_nothing() {
+    let fake = FakeClaude::new("result");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    harness
+        .call(
+            MAIN,
+            "create_task",
+            json!({"title": "Style the page", "labels": ["ui"]}),
+        )
+        .await;
+    let lead = start_lead(&mut harness, "web").await;
+    harness
+        .call(
+            &lead,
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-1"]}),
+        )
+        .await;
+    let view = harness.call(MAIN, "get_task", json!({"id": "T-1"})).await;
+    assert_eq!(view["claim"]["holder"], "web-worker", "{view}");
+    let events = stored_events(&harness).await;
+    let started = events
+        .iter()
+        .position(|(kind, data)| kind == "worker.started" && data["agent"] == "web-worker")
+        .unwrap();
+    let claimed = events
+        .iter()
+        .position(|(kind, data)| kind == "claim.acquired" && data["worker"] == "web-worker")
+        .unwrap();
+    assert!(
+        started < claimed,
+        "the claim follows the start in one write"
+    );
+
+    let before = stored_events(&harness).await.len();
+    let refused = harness
+        .refused(
+            &lead,
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-3", "T-1"]}),
+        )
+        .await;
+    assert_eq!(refused["code"], codes::ALREADY_CLAIMED, "{refused}");
+    assert_eq!(refused["details"]["holder"], "web-worker");
+    assert!(
+        harness
+            .handle
+            .agents()
+            .get_worker(&name("web-worker-2"))
+            .await
+            .is_err(),
+        "a refused claim starts no worker"
+    );
+    let unclaimed = harness.call(MAIN, "get_task", json!({"id": "T-3"})).await;
+    assert_eq!(unclaimed["claim"], Value::Null, "{unclaimed}");
+    let agents = harness.call(MAIN, "list_agents", json!({})).await;
+    assert!(
+        agents["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|agent| agent["name"] != "web-worker-2"),
+        "{agents}"
+    );
+    assert_eq!(stored_events(&harness).await.len(), before);
+    assert_eq!(fake.runs_of("web-worker-2").len(), 0);
+    let outside = harness
+        .refused(&lead, "claim_task", json!({"id": "T-2"}))
+        .await;
+    assert_eq!(outside["code"], codes::TASK_OUTSIDE_AREA, "{outside}");
+
+    // A workspace create takes the claim on its way, so it is refused for a task the worker was not given.
+    until_state(&harness, "web-worker", WorkerState::Idle).await;
+    harness.connect("web-worker").await;
+    let other = harness
+        .refused("web-worker", "create_workspace", json!({"task": "T-3"}))
+        .await;
+    assert_eq!(other["code"], codes::WORKER_CLAIM_DENIED, "{other}");
+    let unclaimed = harness.call(MAIN, "get_task", json!({"id": "T-3"})).await;
+    assert_eq!(unclaimed["claim"], Value::Null, "{unclaimed}");
+    let own = harness
+        .call("web-worker", "create_workspace", json!({"task": "T-1"}))
+        .await;
+    assert!(own["workspace"].is_string(), "{own}");
+}
+
+#[tokio::test]
+async fn a_start_takes_over_a_stale_claim_and_adopts_a_released_workspace() {
+    let fake = FakeClaude::new("result");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    harness
+        .call(
+            MAIN,
+            "create_task",
+            json!({"title": "Style the page", "labels": ["ui"]}),
+        )
+        .await;
+    let released = harness.start_work(MAIN, "T-1").await;
+    harness
+        .call(MAIN, "release_task", json!({"id": "T-1"}))
+        .await;
+    let stale = harness.start_work(MAIN, "T-3").await;
+    let lead = start_lead(&mut harness, "web").await;
+    let early = harness
+        .refused(
+            &lead,
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-3"]}),
+        )
+        .await;
+    assert_eq!(early["code"], codes::ALREADY_CLAIMED);
+    harness
+        .project
+        .clock()
+        .advance(Duration::from_secs(31 * 60))
+        .unwrap();
+    harness
+        .call(
+            &lead,
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-1", "T-3"]}),
+        )
+        .await;
+    for (task, work) in [("T-1", &released), ("T-3", &stale)] {
+        let view = harness.call(MAIN, "get_task", json!({"id": task})).await;
+        assert_eq!(view["claim"]["holder"], "web-worker", "{view}");
+        let workspace = harness
+            .call(MAIN, "get_workspace", json!({"ws": work.workspace}))
+            .await;
+        assert_eq!(workspace["worker"], "web-worker", "{workspace}");
+    }
+    let events = stored_events(&harness).await;
+    assert!(events.iter().any(|(kind, data)| kind == "claim.taken_over"
+        && data["from"] == MAIN
+        && data["to"] == "web-worker"));
+    let adopted: Vec<&Value> = events
+        .iter()
+        .filter(|(kind, _)| kind == "workspace.adopted")
+        .map(|(_, data)| data)
+        .collect();
+    assert_eq!(adopted.len(), 2, "{adopted:?}");
+}
+
+#[tokio::test]
+async fn a_start_that_names_a_task_twice_is_refused_and_holds_no_workspace() {
+    let fake = FakeClaude::new("result");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    let work = harness.start_work(MAIN, "T-1").await;
+    let lead = start_lead(&mut harness, "web").await;
+    let refused = tokio::time::timeout(
+        WAIT,
+        harness.refused(
+            &lead,
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-1", "T-1"]}),
+        ),
+    )
+    .await
+    .expect("the start answers");
+    assert_eq!(refused["code"], codes::INVALID_REQUEST, "{refused}");
+    assert_eq!(refused["details"]["field"], "tasks");
+    // The holder still records in its workspace: the refused start holds no workspace lock.
+    std::fs::write(work.dir.join("page.html"), "x\n").unwrap();
+    tokio::time::timeout(
+        WAIT,
+        harness.call(
+            MAIN,
+            "record_checkpoint",
+            json!({"ws": work.workspace, "label": "page"}),
+        ),
+    )
+    .await
+    .expect("the checkpoint answers");
+    assert!(
+        harness
+            .handle
+            .agents()
+            .get_worker(&name("web-worker"))
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn of_two_starts_for_the_same_tasks_one_gets_them_and_the_other_is_refused() {
+    let fake = FakeClaude::new("result");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    harness
+        .call(
+            MAIN,
+            "create_task",
+            json!({"title": "Style the page", "labels": ["ui"]}),
+        )
+        .await;
+    for task in ["T-1", "T-3"] {
+        harness.start_work(MAIN, task).await;
+        harness
+            .call(MAIN, "release_task", json!({"id": task}))
+            .await;
+    }
+    let lead = start_lead(&mut harness, "web").await;
+    let start = |tasks: [&str; 2]| {
+        harness.call_raw(
+            &lead,
+            "start_worker",
+            json!({"role": "task_worker", "tasks": tasks}),
+        )
+    };
+    let (first, second) = tokio::time::timeout(WAIT, async {
+        tokio::join!(start(["T-1", "T-3"]), start(["T-3", "T-1"]))
+    })
+    .await
+    .expect("both starts answer");
+    let mut results = [first, second];
+    results.sort_by_key(|result| result.is_error);
+    assert_eq!(results[0].is_error, Some(false), "{:?}", results[0]);
+    assert_eq!(results[1].is_error, Some(true), "{:?}", results[1]);
+    let refused = crate::common::acceptance::body(&results[1]);
+    assert_eq!(
+        refused["error"]["code"],
+        codes::ALREADY_CLAIMED,
+        "{refused}"
+    );
+    let started = crate::common::acceptance::body(&results[0]);
+    let holder = started["worker"]["name"].as_str().unwrap().to_owned();
+    for task in ["T-1", "T-3"] {
+        let view = harness.call(MAIN, "get_task", json!({"id": task})).await;
+        assert_eq!(view["claim"]["holder"], holder.as_str(), "{view}");
+    }
+}
+
+#[tokio::test]
+async fn a_worker_claims_through_no_path_of_its_own() {
+    let fake = FakeClaude::new("result");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    harness
+        .call(
+            MAIN,
+            "create_task",
+            json!({"title": "Style the page", "labels": ["ui"]}),
+        )
+        .await;
+    let lead = start_lead(&mut harness, "web").await;
+    harness
+        .call(
+            &lead,
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-1"]}),
+        )
+        .await;
+    until_state(&harness, "web-worker", WorkerState::Idle).await;
+    harness.connect("web-worker").await;
+    give_role(&harness.handle.store, "backend", Role::Reviewer, None).await;
+    let denied = |refused: &Value| {
+        assert_eq!(refused["code"], codes::WORKER_CLAIM_DENIED, "{refused}");
+    };
+
+    denied(
+        &harness
+            .refused("backend", "claim_task", json!({"id": "T-3"}))
+            .await,
+    );
+    harness
+        .call("web-worker", "register_worker", json!({"name": "tests"}))
+        .await;
+    denied(
+        &harness
+            .refused(
+                "web-worker",
+                "claim_task",
+                json!({"id": "T-3", "as": "web-worker/tests"}),
+            )
+            .await,
+    );
+
+    // A workspace left by a released claim is adopted only by an agent that may claim the task.
+    let left = harness.start_work(MAIN, "T-3").await;
+    harness
+        .call(MAIN, "release_task", json!({"id": "T-3"}))
+        .await;
+    denied(
+        &harness
+            .refused("web-worker", "create_workspace", json!({"task": "T-3"}))
+            .await,
+    );
+    let unclaimed = harness.call(MAIN, "get_task", json!({"id": "T-3"})).await;
+    assert_eq!(unclaimed["claim"], Value::Null, "{unclaimed}");
+    let orphan = harness
+        .call(MAIN, "get_workspace", json!({"ws": left.workspace}))
+        .await;
+    assert_ne!(orphan["worker"], "web-worker", "{orphan}");
+
+    // A stale claim is taken over only by the lead of the task's area or the main agent.
+    harness.call(MAIN, "claim_task", json!({"id": "T-3"})).await;
+    harness
+        .project
+        .clock()
+        .advance(Duration::from_secs(31 * 60))
+        .unwrap();
+    denied(
+        &harness
+            .refused("web-worker", "takeover_claim", json!({"id": "T-3"}))
+            .await,
+    );
+    let view = harness.call(MAIN, "get_task", json!({"id": "T-3"})).await;
+    assert_eq!(view["claim"]["holder"], MAIN, "{view}");
+}
+
+#[tokio::test]
+async fn a_start_moves_the_leads_own_claim_and_an_ended_workers_claim_but_never_a_running_one() {
+    let fake = FakeClaude::new("result");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    harness
+        .call(
+            MAIN,
+            "create_task",
+            json!({"title": "Style the page", "labels": ["ui"]}),
+        )
+        .await;
+    let lead = start_lead(&mut harness, "web").await;
+    let own = harness.start_work(&lead, "T-1").await;
+    let taken_over = |events: &[(String, Value)], from: &str, to: &str| {
+        events.iter().any(|(kind, data)| {
+            kind == "claim.taken_over" && data["from"] == from && data["to"] == to
+        })
+    };
+
+    harness
+        .call(
+            &lead,
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-1"]}),
+        )
+        .await;
+    let view = harness.call(MAIN, "get_task", json!({"id": "T-1"})).await;
+    assert_eq!(view["claim"]["holder"], "web-worker", "{view}");
+    let workspace = harness
+        .call(MAIN, "get_workspace", json!({"ws": own.workspace}))
+        .await;
+    assert_eq!(workspace["worker"], "web-worker", "{workspace}");
+    assert!(taken_over(
+        &stored_events(&harness).await,
+        &lead,
+        "web-worker"
+    ));
+
+    until_state(&harness, "web-worker", WorkerState::Idle).await;
+    harness
+        .call(&lead, "stop_worker", json!({"name": "web-worker"}))
+        .await;
+    until_state(&harness, "web-worker", WorkerState::Stopped).await;
+    harness
+        .call(
+            &lead,
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-1"]}),
+        )
+        .await;
+    let view = harness.call(MAIN, "get_task", json!({"id": "T-1"})).await;
+    assert_eq!(view["claim"]["holder"], "web-worker-2", "{view}");
+    assert!(taken_over(
+        &stored_events(&harness).await,
+        "web-worker",
+        "web-worker-2"
+    ));
+
+    let refused = harness
+        .refused(
+            &lead,
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-1"]}),
+        )
+        .await;
+    assert_eq!(refused["code"], codes::ALREADY_CLAIMED, "{refused}");
+    assert_eq!(refused["details"]["holder"], "web-worker-2");
+    assert!(
+        refused["hint"].as_str().unwrap().contains("once it ends"),
+        "{refused}"
+    );
+    harness.start_work(MAIN, "T-3").await;
+    let held = harness
+        .refused(
+            &lead,
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-3"]}),
+        )
+        .await;
+    assert_eq!(held["code"], codes::ALREADY_CLAIMED, "{held}");
+    assert_eq!(held["details"]["holder"], MAIN);
+}
+
+#[tokio::test]
+async fn a_review_lead_gives_an_ended_reviewers_review_again_and_a_marked_proposal_only_alone() {
+    let fake = FakeClaude::new("result");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    for (number, title) in [(1, "Draw the page"), (2, "Serve the page"), (3, "Sign in")] {
+        let task = harness.create_task(MAIN, title).await;
+        assert_eq!(task, format!("T-{number}"));
+    }
+    let (status, marked) = harness
+        .http(
+            Method::PUT,
+            &format!("/api/v1/projects/{SLUG}/tasks/T-3/human-review"),
+            Some(&json!({"reviewer": null, "reason": "touches sign-in"})),
+            "ana",
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{marked}");
+    for number in 1..=3 {
+        let task = format!("T-{number}");
+        let work = harness.start_work(MAIN, &task).await;
+        std::fs::write(work.dir.join(format!("part{number}.txt")), "part\n").unwrap();
+        harness.propose(MAIN, &work, &task).await;
+    }
+    harness
+        .call(MAIN, "start_worker", json!({"role": "review_lead"}))
+        .await;
+    harness.connect("review-lead").await;
+
+    let group = harness
+        .refused(
+            "review-lead",
+            "start_worker",
+            json!({"role": "reviewer", "proposals": ["P-2", "P-3"]}),
+        )
+        .await;
+    assert_eq!(group["code"], codes::INVALID_REQUEST, "{group}");
+    assert_eq!(group["details"]["proposal"], "P-3");
+    assert!(group["hint"].as_str().unwrap().contains("alone"), "{group}");
+    let own = harness
+        .refused(
+            "review-lead",
+            "create_review_batch",
+            json!({"proposals": ["P-3", "P-2"]}),
+        )
+        .await;
+    assert_eq!(own["code"], codes::INVALID_REQUEST, "{own}");
+    let unclaimed = harness
+        .call(MAIN, "get_proposal", json!({"id": "P-2"}))
+        .await;
+    assert_eq!(unclaimed["claim"], Value::Null, "{unclaimed}");
+
+    harness
+        .call(
+            "review-lead",
+            "start_worker",
+            json!({"role": "reviewer", "proposals": ["P-1", "P-2"]}),
+        )
+        .await;
+    harness
+        .call(
+            "review-lead",
+            "start_worker",
+            json!({"role": "reviewer", "proposals": ["P-3"]}),
+        )
+        .await;
+    let running = harness
+        .refused(
+            "review-lead",
+            "start_worker",
+            json!({"role": "reviewer", "proposals": ["P-3"]}),
+        )
+        .await;
+    assert_eq!(running["code"], codes::ALREADY_CLAIMED, "{running}");
+    assert_eq!(running["details"]["holder"], "reviewer-2");
+
+    until_state(&harness, "reviewer", WorkerState::Idle).await;
+    harness
+        .call("review-lead", "stop_worker", json!({"name": "reviewer"}))
+        .await;
+    until_state(&harness, "reviewer", WorkerState::Stopped).await;
+    let again = harness
+        .call(
+            "review-lead",
+            "start_worker",
+            json!({"role": "reviewer", "proposals": ["P-1", "P-2"]}),
+        )
+        .await;
+    assert_eq!(again["worker"]["name"], "reviewer-3", "{again}");
+    for proposal in ["P-1", "P-2"] {
+        let view = harness
+            .call(MAIN, "get_proposal", json!({"id": proposal}))
+            .await;
+        assert_eq!(view["claim"]["holder"], "reviewer-3", "{view}");
+    }
+    let old = harness
+        .call("review-lead", "get_review_batch", json!({"id": "rb-1"}))
+        .await;
+    assert_eq!(old["state"], "closed", "{old}");
+    let new = harness
+        .call("review-lead", "get_review_batch", json!({"id": "rb-2"}))
+        .await;
+    assert_eq!(new["holder"], "reviewer-3", "{new}");
+}
+
+#[tokio::test]
+async fn a_worker_that_fails_to_launch_gives_its_claims_back() {
+    let mut harness = Harness::start_without_roles().await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    let lead = start_lead(&mut harness, "web").await;
+    let started = harness
+        .call(
+            &lead,
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-1"]}),
+        )
+        .await;
+    assert_eq!(started["worker"]["state"], "failed", "{started}");
+    let view = harness.call(MAIN, "get_task", json!({"id": "T-1"})).await;
+    assert_eq!(view["claim"], Value::Null, "{view}");
+    let events = stored_events(&harness).await;
+    assert!(events.iter().any(|(kind, data)| kind == "claim.released"
+        && data["worker"] == "web-worker"
+        && data["reason"] == "worker_failed"));
+    let again = harness
+        .call(
+            &lead,
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-1"]}),
+        )
+        .await;
+    assert_eq!(again["worker"]["name"], "web-worker-2", "{again}");
+}
+
+#[tokio::test]
+async fn a_task_worker_stops_when_its_task_is_done_unless_it_holds_another_claim() {
+    let fake = FakeClaude::new("result");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    give_role(&harness.handle.store, "review", Role::ReviewLead, None).await;
+    areas(&harness).await;
+    for title in ["Style the page", "Print the page"] {
+        harness
+            .call(
+                MAIN,
+                "create_task",
+                json!({"title": title, "labels": ["ui"]}),
+            )
+            .await;
+    }
+    let lead = start_lead(&mut harness, "web").await;
+    let human = Actor::human(HumanName::parse("ana").unwrap());
+    let mut proposals = Vec::new();
+    for (agent, tasks) in [
+        ("web-worker", vec!["T-1"]),
+        ("web-worker-2", vec!["T-3", "T-4"]),
+    ] {
+        harness
+            .call(
+                &lead,
+                "start_worker",
+                json!({"role": "task_worker", "tasks": tasks}),
+            )
+            .await;
+        until_state(&harness, agent, WorkerState::Idle).await;
+        harness.connect(agent).await;
+        for task in tasks {
+            let work = harness.start_work(agent, task).await;
+            std::fs::write(work.dir.join(format!("{task}.html")), "x\n").unwrap();
+            proposals.push(harness.propose(agent, &work, "Draw").await);
+        }
+        until_state(&harness, agent, WorkerState::Stopped).await;
+        // A resumed worker runs while its proposals are reviewed.
+        harness
+            .handle
+            .agents()
+            .resume_worker(&human, &name(agent), "Wait for the review.".to_owned())
+            .await
+            .unwrap();
+        until_state(&harness, agent, WorkerState::Idle).await;
+    }
+    let session = worker(&harness, "web-worker").await.session_id;
+    let before = stored_events(&harness).await.len();
+    // T-3 first: fold handles the events in order, so once the integration of T-1 has stopped web-worker, the one of T-3 has been handled too.
+    for proposal in proposals[..2].iter().rev() {
+        harness.approve(proposal).await;
+        harness
+            .call("review", "integrate_proposal", json!({"id": proposal}))
+            .await;
+    }
+    for task in ["T-1", "T-3"] {
+        assert_eq!(harness.completions(task).await, 1, "{task} is Done");
+    }
+    let stopped = until_state(&harness, "web-worker", WorkerState::Stopped).await;
+    assert_eq!(stopped.exit_code, Some(0));
+    assert_eq!(
+        stopped.session_id, session,
+        "the session stays for its history"
+    );
+    let kept = worker(&harness, "web-worker-2").await;
+    assert_eq!(
+        kept.state,
+        WorkerState::Idle,
+        "a worker that holds the claim on T-4 keeps running"
+    );
+    let stops: Vec<Value> = stored_events(&harness).await[before..]
+        .iter()
+        .filter(|(kind, _)| kind == "worker.stopped")
+        .map(|(_, data)| data["agent"].clone())
+        .collect();
+    assert_eq!(stops, [json!("web-worker")]);
 }

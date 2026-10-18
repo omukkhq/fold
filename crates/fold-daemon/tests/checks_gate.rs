@@ -340,7 +340,7 @@ async fn new_task(fx: &Fixture) -> u32 {
             CreateTask {
                 title: TaskTitle::parse("more").unwrap(),
                 description: TaskDescription::new("body"),
-                labels: Vec::new(),
+                labels: crate::common::roles::work_labels(),
             },
         )
         .await

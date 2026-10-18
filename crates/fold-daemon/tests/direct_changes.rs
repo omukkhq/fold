@@ -91,7 +91,7 @@ async fn submit(
 
 #[tokio::test]
 async fn the_main_agent_opens_one_main_workspace_without_a_task_and_reuses_it() {
-    let fx = Fixture::new().await;
+    let fx = Fixture::with_main_frontend().await;
     let main = main_actor(&fx.frontend.worker);
     let opened = fx.workspaces.open_main_workspace(&main).await.unwrap();
     let view = &opened.workspace;
@@ -148,15 +148,15 @@ async fn the_main_agent_opens_one_main_workspace_without_a_task_and_reuses_it() 
 
 #[tokio::test]
 async fn a_new_main_session_takes_over_the_main_workspace_with_its_files() {
-    let fx = Fixture::new().await;
+    let fx = Fixture::with_main_frontend().await;
     let before = main_actor(&fx.frontend.worker);
     let (dir, _) = recorded(&fx, &before, &[("AGENTS.md", "rules\n")]).await;
-    let after = main_actor(&fx.backend.worker);
+    let after = main_actor(&fx.review.worker);
     let taken = fx.workspaces.open_main_workspace(&after).await.unwrap();
     assert!(taken.reused);
     assert_eq!(
         taken.workspace.worker.as_ref(),
-        Some(&fx.backend.worker.name)
+        Some(&fx.review.worker.name)
     );
     assert_eq!(
         std::fs::read_to_string(dir.join("AGENTS.md")).unwrap(),
@@ -169,7 +169,7 @@ async fn a_new_main_session_takes_over_the_main_workspace_with_its_files() {
         .unwrap();
     assert_eq!(adopted.data["reason"], "main_agent");
     assert_eq!(adopted.data["from"], "frontend");
-    assert_eq!(adopted.data["to"], "backend");
+    assert_eq!(adopted.data["to"], "review");
     // The earlier session no longer owns it.
     let refused = fx
         .workspaces
@@ -183,11 +183,10 @@ async fn a_new_main_session_takes_over_the_main_workspace_with_its_files() {
 
 #[tokio::test]
 async fn only_the_main_agent_opens_the_main_workspace_or_submits_to_it() {
-    let fx = Fixture::new().await;
+    let fx = Fixture::with_main_frontend().await;
     let main = main_actor(&fx.frontend.worker);
     let (_, changeset) = recorded(&fx, &main, &[("AGENTS.md", "rules\n")]).await;
 
-    give_role(fx.project.store(), "backend", Role::AreaLead, None).await;
     give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
     let lead = main_actor(&fx.backend.worker);
     let review = main_actor(&fx.review.worker);
@@ -215,16 +214,16 @@ async fn only_the_main_agent_opens_the_main_workspace_or_submits_to_it() {
 
 #[tokio::test]
 async fn a_task_worker_with_the_main_tag_is_still_refused() {
-    let fx = Fixture::new().await;
-    give_role(fx.project.store(), "backend", Role::TaskWorker, None).await;
-    let worker = main_actor(&fx.backend.worker);
+    let fx = Fixture::with_main_frontend().await;
+    give_role(fx.project.store(), "review", Role::TaskWorker, None).await;
+    let worker = main_actor(&fx.review.worker);
     let opened = fx.workspaces.open_main_workspace(&worker).await;
     assert_eq!(workspace_refusal(opened).code(), codes::MAIN_AGENT_REQUIRED);
 }
 
 #[tokio::test]
 async fn a_direct_change_becomes_one_revision_and_closes_the_main_workspace() {
-    let fx = Fixture::new().await;
+    let fx = Fixture::with_main_frontend().await;
     let main = main_actor(&fx.frontend.worker);
     let (_, changeset) = recorded(&fx, &main, &[("AGENTS.md", "rules\n")]).await;
     let seq = fx.last_seq().await;
@@ -291,7 +290,7 @@ async fn a_direct_change_becomes_one_revision_and_closes_the_main_workspace() {
 
 #[tokio::test]
 async fn a_conflicting_direct_change_writes_nothing_and_goes_in_after_a_sync() {
-    let fx = Fixture::new().await;
+    let fx = Fixture::with_main_frontend().await;
     let main = main_actor(&fx.frontend.worker);
     let (dir, first) = recorded(&fx, &main, &[("README.md", "# main's\n")]).await;
     // A task's proposal changes the same line and reaches main first.
@@ -375,7 +374,7 @@ async fn a_conflicting_direct_change_writes_nothing_and_goes_in_after_a_sync() {
 
 #[tokio::test]
 async fn a_direct_change_needs_a_message_and_a_change() {
-    let fx = Fixture::new().await;
+    let fx = Fixture::with_main_frontend().await;
     let main = main_actor(&fx.frontend.worker);
     let (_, changeset) = recorded(&fx, &main, &[]).await;
     let empty = refusal(
@@ -400,7 +399,7 @@ async fn a_direct_change_needs_a_message_and_a_change() {
 
 #[tokio::test]
 async fn abandoning_the_main_workspace_closes_it_without_a_task() {
-    let fx = Fixture::new().await;
+    let fx = Fixture::with_main_frontend().await;
     let main = main_actor(&fx.frontend.worker);
     let opened = fx.workspaces.open_main_workspace(&main).await.unwrap();
     let abandoned = fx
@@ -418,7 +417,7 @@ async fn abandoning_the_main_workspace_closes_it_without_a_task() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_live_state_names_the_session_that_took_the_main_workspace_over() {
-    let h = crate::common::acceptance::Harness::start().await;
+    let h = crate::common::acceptance::Harness::start_without_leads().await;
     let workspaces = fold_daemon::services::workspaces::WorkspaceService::for_project(&h.handle);
     let as_main = |agent: &str| {
         let worker = fold_core::WorkerName::parse(agent).unwrap();

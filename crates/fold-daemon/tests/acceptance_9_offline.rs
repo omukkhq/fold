@@ -215,7 +215,8 @@ async fn flow() {
         std::fs::create_dir_all(target.parent().unwrap()).unwrap();
         std::fs::write(target, content).unwrap();
     }
-    let (harness, initialized) = Harness::start_initialized(&source).await;
+    let (mut harness, initialized) = Harness::start_initialized(&source).await;
+    harness.lead_the_work_area().await;
 
     // No remote and no push on integrate, so no integration starts a `git` process.
     let config = std::fs::read_to_string(harness.project.paths().config()).unwrap();

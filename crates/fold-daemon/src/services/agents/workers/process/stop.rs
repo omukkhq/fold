@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -198,7 +199,7 @@ impl Supervisor {
         while stops.join_next().await.is_some() {}
     }
 
-    /// The short-lived workers whose work `event` finished: a task worker once no bound task awaits its work (see [`agents::tasks_awaiting_proposal`]), checked when it opens a proposal, sends a new version or reports a task without a proposal and when a bound task is archived; a batch reviewer once every bound proposal has a verdict or is closed or integrated.
+    /// The short-lived workers whose work `event` finished: a task worker once no bound task awaits its work (see [`agents::tasks_awaiting_proposal`]), checked when it opens a proposal, sends a new version or reports a task without a proposal and when a bound task is archived; a task worker whose bound task is Done, by an integration or a completion, once it holds no other claim; a reviewer once every bound proposal has a verdict or is closed or integrated.
     pub(super) async fn done_workers(
         &self,
         event: &fold_core::Event,
@@ -225,6 +226,21 @@ impl Supervisor {
                     .map(|task_worker| task_worker.agent),
             );
         }
+        if (kind == types::PROPOSAL_INTEGRATED || kind == types::TASK_COMPLETED)
+            && let Some(task) = event.task
+        {
+            let task_workers = agents::task_workers_of_task(read, task).await?;
+            let ids: Vec<i64> = task_workers
+                .iter()
+                .map(|task_worker| task_worker.id)
+                .collect();
+            let held = agents::claims_held(read, &ids).await?;
+            for task_worker in task_workers {
+                if held.get(&task_worker.id) == Some(&0) && !done.contains(&task_worker.agent) {
+                    done.push(task_worker.agent);
+                }
+            }
+        }
         let reviewers = if (kind == types::REVIEW_SUBMITTED
             || kind == types::PROPOSAL_CLOSED
             || kind == types::PROPOSAL_INTEGRATED)
@@ -232,13 +248,13 @@ impl Supervisor {
         {
             agents::reviewers_of_proposal(read, proposal).await?
         } else if kind == types::REVIEW_BATCH_SUBMITTED {
-            // A batch review names its batch, not each member, so every running batch reviewer is checked.
+            // A batch review names its batch, not each member, so every running reviewer is checked.
             let mut conn = read.acquire().await.map_err(StoreError::from)?;
             agents::list_worker_processes(&mut conn)
                 .await?
                 .into_iter()
                 .filter(|row| {
-                    row.role == fold_core::Role::BatchReviewer
+                    row.role == fold_core::Role::Reviewer
                         && row.state.is_running()
                         && row.state != WorkerState::Stopping
                 })
@@ -320,6 +336,20 @@ impl Supervisor {
                 .into_iter()
                 .filter(|row| matches!(row.state, WorkerState::Working | WorkerState::Idle))
                 .collect();
+            let mut with_done_task = HashSet::new();
+            for row in rows
+                .iter()
+                .filter(|row| row.role == fold_core::Role::TaskWorker)
+            {
+                for task in &row.tasks {
+                    let done = fold_store::tasks::fetch(&mut conn, *task)
+                        .await?
+                        .is_some_and(|task| task.status == fold_core::TaskStatus::Done);
+                    if done {
+                        with_done_task.insert(row.id);
+                    }
+                }
+            }
             drop(conn);
             let of_role = |role| -> Vec<i64> {
                 rows.iter()
@@ -327,18 +357,22 @@ impl Supervisor {
                     .map(|row| row.id)
                     .collect()
             };
-            let waiting =
-                agents::tasks_awaiting_proposal(read, &of_role(fold_core::Role::TaskWorker))
-                    .await?;
+            let task_workers = of_role(fold_core::Role::TaskWorker);
+            let waiting = agents::tasks_awaiting_proposal(read, &task_workers).await?;
+            let held = agents::claims_held(read, &task_workers).await?;
             let missing =
-                agents::proposals_without_verdict(read, &of_role(fold_core::Role::BatchReviewer))
+                agents::proposals_without_verdict(read, &of_role(fold_core::Role::Reviewer))
                     .await?;
             Ok::<_, StoreError>(
                 rows.into_iter()
                     .filter(|row| {
                         let open = match row.role {
+                            // As the events decide it: a task worker whose task is Done stops once it holds no claim, and one without a Done task once no bound task awaits its work.
+                            fold_core::Role::TaskWorker if with_done_task.contains(&row.id) => {
+                                held.get(&row.id)
+                            }
                             fold_core::Role::TaskWorker => waiting.get(&row.id),
-                            fold_core::Role::BatchReviewer => missing.get(&row.id),
+                            fold_core::Role::Reviewer => missing.get(&row.id),
                             fold_core::Role::AreaLead | fold_core::Role::ReviewLead => None,
                         };
                         open == Some(&0)

@@ -114,7 +114,7 @@ impl Host {
                     tx,
                     &NewWorkerProcess {
                         agent_id: agent.id,
-                        role: Role::BatchReviewer,
+                        role: Role::Reviewer,
                         area_id: None,
                         model: None,
                         session_id: &session_id,

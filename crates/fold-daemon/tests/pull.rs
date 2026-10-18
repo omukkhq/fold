@@ -246,6 +246,7 @@ impl Project {
     /// `frontend` creates a task, writes `files` into its workspace and opens a proposal, which `ana` integrates.
     async fn integrate_task(&self, files: &[(&str, &str)]) -> RevisionId {
         let author = self.agent("frontend").await;
+        crate::common::roles::lead_work_areas(&self.handle.store).await;
         let task = self
             .handle
             .tasks
@@ -254,7 +255,7 @@ impl Project {
                 CreateTask {
                     title: TaskTitle::parse("Change files").unwrap(),
                     description: TaskDescription::new(""),
-                    labels: Vec::new(),
+                    labels: crate::common::roles::work_labels(),
                 },
             )
             .await
@@ -675,8 +676,18 @@ async fn a_conflict_becomes_a_sync_task_that_reaches_the_remote() {
     assert_eq!(project.count("SELECT COUNT(*) FROM tasks").await, 1);
     assert_eq!(project.count("SELECT COUNT(*) FROM workspaces").await, 1);
 
-    // An agent adopts the workspace with the claim, resolves the markers and integrates.
-    let agent = project.agent("frontend").await;
+    // The main agent, on the user's word, adopts the workspace with the claim of the task, which has no area, resolves the markers and integrates.
+    let agents = project.handle.agents();
+    let mut ctx = agents.start_session(1).await.unwrap();
+    agents
+        .register_agent(
+            &mut ctx,
+            &AgentName::parse("main").unwrap(),
+            &[fold_core::Tag::parse("main").unwrap()],
+        )
+        .await
+        .unwrap();
+    let agent = agents.actor(&ctx, None).await.unwrap();
     let claimed = project.handle.tasks.claim_task(&agent, task).await.unwrap();
     assert!(claimed.adopted);
     let id = workspace.unwrap();

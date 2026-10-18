@@ -7,6 +7,7 @@ use fold_core::{
     Actor, AgentActor, CommentId, EventActor, FoldError, IdKind, NewEvent, ProposalId,
     ReviewBatchId, TaskId, Timestamp, WorkerName, WorkspaceId, codes, policy,
 };
+use fold_store::agents::WorkerRow;
 use fold_store::reviews::batches::{
     self, BatchRow, BatchState, MemberRelease, MemberRow, NewBatchCheckout, NewLineOrigin,
 };
@@ -19,7 +20,7 @@ use serde_json::{Value, json};
 
 use super::changes::ChangeRange;
 use super::checkouts::remove_unnamed_dir;
-use super::claims::take_review_claim;
+use super::claims::{TAKEN_OVER, already_claimed, take_review_claim};
 use super::comments::{CommentInput, CommentLocation, MAX_BODY_CHARS, check_ranges, check_shape};
 use super::proposals::require_open;
 use super::verdicts::{BatchCommentLink, ReviewRecord, record_review, verdict_gate};
@@ -29,6 +30,188 @@ use crate::services::tasks::{recompute, worker_row};
 use crate::services::workspaces::{
     ArchiveReason, CARRY_CACHE_ENTRIES, WorkspaceError, WorkspaceRef, WorkspaceView, archive_in_tx,
 };
+
+/// Makes a batch of the open proposals `rows` for `worker` inside the caller's write and takes the review claim of each, by the rules of `create_review_batch` after its policy check: a proposal whose task has the human review mark is refused, members are in dependency order, a claim another worker holds refuses the batch, a stale one is taken over, and a proposal in another open batch is `already_in_batch`.
+pub(crate) async fn batch_in_tx(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    worker: &WorkerRow,
+    rows: Vec<ProposalRow>,
+    lease_minutes: u64,
+    now: Timestamp,
+) -> Result<ReviewBatchId, ReviewError> {
+    for row in &rows {
+        refuse_marked_member(tx, row).await?;
+    }
+    let rows = dependency_order(tx, rows).await?;
+    let number = counters::allocate(tx, IdKind::ReviewBatch).await?;
+    let batch = ReviewBatchId::from_number(number).ok_or(StoreError::Corrupt("counters.next"))?;
+    batches::insert_batch(tx, batch, worker.id, now).await?;
+    let mut members = Vec::with_capacity(rows.len());
+    for (position, row) in (1u32..).zip(&rows) {
+        take_review_claim(tx, buffer, row, worker, lease_minutes, now).await?;
+        match batches::insert_member(tx, batch, row.id, row.current_version, position).await {
+            Ok(()) => {}
+            Err(error) if error.unique_violation() => {
+                let other = batches::open_batch_of(tx.conn(), row.id).await?;
+                return Err(already_in_batch(row.id, other));
+            }
+            Err(error) => return Err(error.into()),
+        }
+        members.push(json!({
+            "proposal": row.id.to_string(),
+            "version": row.current_version,
+            "position": position,
+        }));
+    }
+    let event = NewEvent::new(
+        types::REVIEW_BATCH_CREATED,
+        EventActor::worker(&worker.name),
+    )?
+    .data(json!({
+        "batch": batch.to_string(),
+        "holder": worker.name.as_str(),
+        "members": members,
+    }))?;
+    buffer.append(tx, &event, now).await?;
+    Ok(batch)
+}
+
+/// A proposal whose task has the human review mark waits for a human after its agent approval, so it is reviewed on its own and never holds back the other proposals of a batch.
+async fn refuse_marked_member(tx: &mut WriteTx, row: &ProposalRow) -> Result<(), ReviewError> {
+    let marked = tasks::fetch(tx.conn(), row.task)
+        .await?
+        .is_some_and(|task| task.human_review.is_some());
+    if !marked {
+        return Ok(());
+    }
+    Err(FoldError::new(
+        codes::INVALID_REQUEST,
+        format!(
+            "{} has the human review mark on its task, so it is reviewed on its own, never in a batch",
+            row.id
+        ),
+    )
+    .with_details([
+        ("field", json!("proposals")),
+        ("proposal", json!(row.id.to_string())),
+        ("task", json!(row.task.to_string())),
+    ])
+    .with_hint("leave the proposal out of the group, and give it to a reviewer alone with start_worker or review it with claim_review")
+    .into())
+}
+
+/// Closes every open batch that a worker of `agent` holds inside the caller's write, with its checkout archived and `review.batch_closed`, so its members can be reviewed again: for a reviewer that ended before its first turn.
+pub(crate) async fn close_batches_of(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    by: &EventActor,
+    agent: &fold_core::AgentName,
+    now: Timestamp,
+) -> Result<(), ReviewError> {
+    let held: Vec<ReviewBatchId> = batches::list_batches(tx.conn(), true)
+        .await?
+        .into_iter()
+        .filter(|batch| batch.holder.belongs_to(agent))
+        .map(|batch| batch.id)
+        .collect();
+    for batch in held {
+        if !batches::close_batch(tx, batch, now).await? {
+            continue;
+        }
+        archive_checkout(tx, buffer, by, batch, ArchiveReason::BatchClosed, now).await?;
+        let event = NewEvent::new(types::REVIEW_BATCH_CLOSED, by.clone())?
+            .data(json!({"batch": batch.to_string()}))?;
+        buffer.append(tx, &event, now).await?;
+    }
+    Ok(())
+}
+
+/// Takes `proposal` out of the open batch of the ended reviewer worker `holder_id`, inside the caller's write, as `remove_from_batch` does, so a new reviewer can take it: the batch's checkout is archived, and a batch with no member left to review closes.
+pub(crate) async fn take_out_of_ended_batch(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    by: &EventActor,
+    proposal: ProposalId,
+    holder_id: i64,
+    now: Timestamp,
+) -> Result<(), ReviewError> {
+    let Some(batch) = batches::open_batch_of(tx.conn(), proposal).await? else {
+        return Ok(());
+    };
+    let held = batches::get_batch(tx.conn(), batch)
+        .await?
+        .is_some_and(|row| row.holder_worker_id == holder_id);
+    if !held || !batches::remove_member(tx, batch, proposal, now).await? {
+        return Ok(());
+    }
+    if !close_when_done(tx, buffer, by, batch, now).await? {
+        archive_checkout(tx, buffer, by, batch, ArchiveReason::BatchChanged, now).await?;
+    }
+    Ok(())
+}
+
+/// Readies the review claims of `proposals` for the new reviewer `worker` that the review lead `starter` starts, inside the caller's write, before the start takes them: a claim whose holder is a worker that has ended is taken over with `claim.taken_over`, and the proposal leaves that worker's open batch; a claim whose lease ran out is left for the take-over of `claim_review`. A claim that the starter's own agent holds, or that a running holder holds with a valid lease, refuses the start with `already_claimed`.
+pub(crate) async fn free_reviews_for_start(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    worker: &WorkerRow,
+    proposals: &[ProposalId],
+    starter: Option<&fold_core::AgentName>,
+    lease_minutes: u64,
+    now: Timestamp,
+) -> Result<(), ReviewError> {
+    for &proposal in proposals {
+        let Some(holder) = reviews::unreleased_review_claim(tx.conn(), proposal).await? else {
+            continue;
+        };
+        if starter.is_some_and(|agent| holder.worker.belongs_to(agent)) {
+            return Err(start_refusal(
+                &holder,
+                "you hold this review: release it with release_review, or take it out of your batch with remove_from_batch, then start the reviewer again",
+            ));
+        }
+        if crate::services::tasks::holder_has_ended(tx.conn(), &holder.worker).await? {
+            let by = EventActor::worker(&worker.name);
+            take_out_of_ended_batch(tx, buffer, &by, proposal, holder.worker_id, now).await?;
+            reviews::release_review_claim(tx, proposal, TAKEN_OVER, now).await?;
+            let task = reviews::get_proposal(tx.conn(), proposal)
+                .await?
+                .map(|row| row.task);
+            let mut event = NewEvent::new(types::CLAIM_TAKEN_OVER, by)?.proposal(proposal);
+            if let Some(task) = task {
+                event = event.task(task);
+            }
+            buffer
+                .append(
+                    tx,
+                    &event.data(json!({
+                        "kind": "review",
+                        "proposal": proposal.to_string(),
+                        "from": holder.worker.as_str(),
+                        "to": worker.name.as_str(),
+                    }))?,
+                    now,
+                )
+                .await?;
+            continue;
+        }
+        if !fold_core::claims::is_stale(holder.renewed_at, now, lease_minutes) {
+            return Err(start_refusal(
+                &holder,
+                "the holder is running with a valid lease: send_message to the holder, or start the reviewer again once it ends or its lease runs out",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn start_refusal(holder: &reviews::ReviewClaimRow, hint: &'static str) -> ReviewError {
+    match already_claimed(holder) {
+        ReviewError::Fold(error) => error.with_hint(hint).into(),
+        other => other,
+    }
+}
 
 /// The earlier version whose change a member shows: only an open proposal that has a version after the newest one with a verdict, or after the one it joined at, has one.
 async fn since_version(
@@ -234,40 +417,7 @@ impl ReviewService {
                 }
                 let reviewer = reviewer.ok_or(StoreError::Invalid("a batch has members"))?;
                 let worker = worker_row(tx, reviewer).await?;
-                let rows = dependency_order(tx, rows).await?;
-                let number = counters::allocate(tx, IdKind::ReviewBatch).await?;
-                let batch = ReviewBatchId::from_number(number)
-                    .ok_or(StoreError::Corrupt("counters.next"))?;
-                batches::insert_batch(tx, batch, worker.id, now).await?;
-                let mut members = Vec::with_capacity(rows.len());
-                for (position, row) in (1u32..).zip(&rows) {
-                    take_review_claim(tx, &mut buffer, row, &worker, lease_minutes, now).await?;
-                    match batches::insert_member(tx, batch, row.id, row.current_version, position)
-                        .await
-                    {
-                        Ok(()) => {}
-                        Err(error) if error.unique_violation() => {
-                            let other = batches::open_batch_of(tx.conn(), row.id).await?;
-                            return Err(already_in_batch(row.id, other));
-                        }
-                        Err(error) => return Err(error.into()),
-                    }
-                    members.push(json!({
-                        "proposal": row.id.to_string(),
-                        "version": row.current_version,
-                        "position": position,
-                    }));
-                }
-                let event = NewEvent::new(
-                    types::REVIEW_BATCH_CREATED,
-                    EventActor::worker(&worker.name),
-                )?
-                .data(json!({
-                    "batch": batch.to_string(),
-                    "holder": worker.name.as_str(),
-                    "members": members,
-                }))?;
-                buffer.append(tx, &event, now).await?;
+                let batch = batch_in_tx(tx, &mut buffer, &worker, rows, lease_minutes, now).await?;
                 Ok::<_, ReviewError>(batch)
             })
             .await?;
@@ -853,7 +1003,7 @@ impl ReviewService {
 }
 
 /// A batch names two or more distinct proposals, at most `MAX_MEMBERS`.
-fn check_members(proposals: &[ProposalId]) -> Result<(), ReviewError> {
+pub(super) fn check_members(proposals: &[ProposalId]) -> Result<(), ReviewError> {
     let distinct: BTreeSet<ProposalId> = proposals.iter().copied().collect();
     if distinct.len() != proposals.len() {
         return Err(

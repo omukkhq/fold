@@ -155,7 +155,9 @@ async fn acceptance_5_backend_proposal_is_reviewed_and_integrated_with_no_card_m
 #[tokio::test]
 async fn acceptance_5_named_human_integrates_without_an_agent_approval_over_an_earlier_request_changes()
  {
-    let harness = Harness::start_without_roles().await;
+    let mut harness = Harness::start_without_roles().await;
+    // `backend` claims its task as the lead of its area; no agent may decide.
+    harness.lead_the_work_area().await;
     let agents = harness.call("review", "list_agents", json!({})).await;
     assert!(
         agents["agents"]

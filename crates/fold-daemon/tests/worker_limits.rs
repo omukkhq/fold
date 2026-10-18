@@ -8,9 +8,15 @@ use crate::common::acceptance::{Harness, SLUG};
 use crate::workers_support::FakeClaude;
 
 const MAIN: &str = "frontend";
-const BEFORE: &str = "# the project\n[git]\nbranch = \"trunk\" # kept\n\n[workers]\ntask_worker = 4 # four at once\nbatch_reviewer = 3\n\n[integration]\nautomatic = true\n";
-const AFTER: &str = "# the project\n[git]\nbranch = \"trunk\" # kept\n\n[workers]\ntask_worker = 10 # four at once\nbatch_reviewer = 3\n\n[integration]\nautomatic = true\n";
+const BEFORE: &str = "# the project\n[git]\nbranch = \"trunk\" # kept\n\n[workers]\ntask_worker = 4 # four at once\nreviewer = 3\n\n[integration]\nautomatic = true\n";
+const AFTER: &str = "# the project\n[git]\nbranch = \"trunk\" # kept\n\n[workers]\ntask_worker = 10 # four at once\nreviewer = 3\n\n[integration]\nautomatic = true\n";
 
+/// The start of a task worker for `T-<number>`: each start claims its task, so each worker gets a task of its own.
+fn task_worker(number: u32) -> Value {
+    json!({"role": "task_worker", "tasks": [format!("T-{number}")]})
+}
+
+/// Defines area `web` with eleven tasks, `T-1` to `T-11`, and starts its lead.
 async fn lead(harness: &mut Harness) -> String {
     harness
         .call(MAIN, "create_label", json!({"name": "ui", "color": "sage"}))
@@ -18,13 +24,15 @@ async fn lead(harness: &mut Harness) -> String {
     harness
         .call(MAIN, "define_area", json!({"name": "web", "label": "ui"}))
         .await;
-    harness
-        .call(
-            MAIN,
-            "create_task",
-            json!({"title": "Draw the page", "labels": ["ui"]}),
-        )
-        .await;
+    for page in 1..=11 {
+        harness
+            .call(
+                MAIN,
+                "create_task",
+                json!({"title": format!("Draw page {page}"), "labels": ["ui"]}),
+            )
+            .await;
+    }
     harness
         .call(
             MAIN,
@@ -54,31 +62,30 @@ async fn the_main_agent_raises_the_task_worker_limit_and_the_next_start_follows_
     let config = std::path::Path::new(harness.root()).join(".fold/config.toml");
     std::fs::write(&config, BEFORE).unwrap();
     let lead = lead(&mut harness).await;
-    let task_worker = json!({"role": "task_worker", "tasks": ["T-1"]});
-    for _ in 0..4 {
+    for number in 1..=4 {
         harness
-            .call(&lead, "start_worker", task_worker.clone())
+            .call(&lead, "start_worker", task_worker(number))
             .await;
     }
-    let full = harness
-        .refused(&lead, "start_worker", task_worker.clone())
-        .await;
+    let full = harness.refused(&lead, "start_worker", task_worker(5)).await;
     assert_eq!(full["code"], codes::WORKER_LIMIT_REACHED);
 
     let set = harness
         .call(MAIN, "set_worker_limits", json!({"task_worker": 10}))
         .await;
     assert_eq!(set["limits"]["task_worker"], 10);
-    assert_eq!(set["limits"]["batch_reviewer"], 3);
+    assert_eq!(set["limits"]["reviewer"], 3);
     assert_eq!(set["previous"]["task_worker"], 4);
     assert_eq!(std::fs::read_to_string(&config).unwrap(), AFTER);
     assert!(!config.with_extension("toml.new").exists());
-    for _ in 0..6 {
+    for number in 5..=10 {
         harness
-            .call(&lead, "start_worker", task_worker.clone())
+            .call(&lead, "start_worker", task_worker(number))
             .await;
     }
-    let eleventh = harness.refused(&lead, "start_worker", task_worker).await;
+    let eleventh = harness
+        .refused(&lead, "start_worker", task_worker(11))
+        .await;
     assert_eq!(eleventh["code"], codes::WORKER_LIMIT_REACHED);
     assert_eq!(
         eleventh["details"],
@@ -89,8 +96,8 @@ async fn the_main_agent_raises_the_task_worker_limit_and_the_next_start_follows_
     assert_eq!(
         events,
         [json!({
-            "old": {"task_worker": 4, "batch_reviewer": 3, "max_per_area": null},
-            "new": {"task_worker": 10, "batch_reviewer": 3, "max_per_area": null},
+            "old": {"task_worker": 4, "reviewer": 3, "max_per_area": null},
+            "new": {"task_worker": 10, "reviewer": 3, "max_per_area": null},
         })]
     );
     let listed = harness.call(MAIN, "list_workers", json!({})).await;
@@ -144,14 +151,14 @@ async fn a_lead_and_an_empty_change_are_refused_and_a_human_sets_a_limit_over_ht
         .http(
             Method::PATCH,
             &path,
-            Some(&json!({"max_per_area": 2, "batch_reviewer": 5})),
+            Some(&json!({"max_per_area": 2, "reviewer": 5})),
             "tanim",
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{limits}");
     assert_eq!(
         limits,
-        json!({"task_worker": 4, "batch_reviewer": 5, "max_per_area": 2})
+        json!({"task_worker": 4, "reviewer": 5, "max_per_area": 2})
     );
     let text = std::fs::read_to_string(&config).unwrap();
     assert!(text.contains("[workers]"), "{text}");
@@ -186,7 +193,7 @@ async fn a_lead_and_an_empty_change_are_refused_and_a_human_sets_a_limit_over_ht
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         listed["limits"],
-        json!({"task_worker": 0, "batch_reviewer": 5, "max_per_area": null})
+        json!({"task_worker": 0, "reviewer": 5, "max_per_area": null})
     );
     assert_eq!(limit_events(&harness).await.len(), 3);
 }
@@ -202,20 +209,17 @@ async fn a_limit_of_zero_starts_no_worker_and_a_limit_has_no_upper_bound() {
         .call(
             MAIN,
             "set_worker_limits",
-            json!({"task_worker": 0, "batch_reviewer": 50, "max_per_area": 0}),
+            json!({"task_worker": 0, "reviewer": 50, "max_per_area": 0}),
         )
         .await;
     assert_eq!(
         set["limits"],
-        json!({"task_worker": 0, "batch_reviewer": 50, "max_per_area": 0})
+        json!({"task_worker": 0, "reviewer": 50, "max_per_area": 0})
     );
     let text = std::fs::read_to_string(&config).unwrap();
     assert!(text.contains("task_worker = 0"), "{text}");
-    assert!(text.contains("batch_reviewer = 50"), "{text}");
-    let task_worker = json!({"role": "task_worker", "tasks": ["T-1"]});
-    let refused = harness
-        .refused(&lead, "start_worker", task_worker.clone())
-        .await;
+    assert!(text.contains("reviewer = 50"), "{text}");
+    let refused = harness.refused(&lead, "start_worker", task_worker(1)).await;
     assert_eq!(refused["code"], codes::WORKER_LIMIT_REACHED);
     assert_eq!(refused["details"], json!({"role": "task_worker", "max": 0}));
     assert_eq!(
@@ -232,9 +236,9 @@ async fn a_limit_of_zero_starts_no_worker_and_a_limit_has_no_upper_bound() {
         .await;
     assert_eq!(set["limits"]["task_worker"], 50);
     assert_eq!(set["limits"]["max_per_area"], Value::Null);
-    for _ in 0..5 {
+    for number in 1..=5 {
         harness
-            .call(&lead, "start_worker", task_worker.clone())
+            .call(&lead, "start_worker", task_worker(number))
             .await;
     }
     let listed = harness.call(MAIN, "list_workers", json!({})).await;

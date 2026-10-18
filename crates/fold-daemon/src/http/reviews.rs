@@ -662,7 +662,7 @@ pub struct ProposalDetail {
     pub last_reviewed_version: Option<u32>,
     /// What stands between the requesting human and integrating the selected version.
     pub gates: Vec<ProposalGate>,
-    /// A reviewer agent (the main agent, the review lead or a batch reviewer) approved the current version and no request for changes came after it. On a task with the human review mark a human approves only then; otherwise the approval is `agent_approval_required`.
+    /// A reviewer agent (the main agent, the review lead or a reviewer) approved the current version and no request for changes came after it. On a task with the human review mark a human approves only then; otherwise the approval is `agent_approval_required`.
     pub agent_approved: bool,
     /// The latest conflict report of the selected version.
     #[schema(required = true)]

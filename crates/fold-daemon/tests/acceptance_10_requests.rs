@@ -34,7 +34,7 @@ async fn linked_tasks(h: &Harness, number: i64) -> i64 {
 /// Acceptance 10, a human's request: a human creates a request with an attachment through HTTP, the main agent `frontend` claims it from the push, asks in the request thread, drafts two cards with one edge, revises after the human asks for changes, and the human's approval of v2 creates two linked tasks whose columns fold calculates.
 #[tokio::test]
 async fn acceptance_10_a_human_request_becomes_two_tasks_through_a_drafted_and_revised_plan() {
-    let h = Harness::start().await;
+    let h = Harness::start_without_leads().await;
     h.make_main("frontend").await;
     let board = h.create_task("backend", "Board layout").await;
     assert_eq!(board, "T-1");

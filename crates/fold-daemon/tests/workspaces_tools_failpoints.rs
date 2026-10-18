@@ -94,13 +94,14 @@ impl Project {
             .await
             .unwrap();
         let actor = self.agents.actor(&session, None).await.unwrap();
+        crate::common::roles::lead_work_areas(&self.store).await;
         self.tasks
             .create_task(
                 &actor,
                 CreateTask {
                     title: TaskTitle::parse("task").unwrap(),
                     description: TaskDescription::new("body"),
-                    labels: Vec::new(),
+                    labels: crate::common::roles::work_labels(),
                 },
             )
             .await

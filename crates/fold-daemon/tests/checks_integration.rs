@@ -272,7 +272,7 @@ async fn queued_integrations_run_one_at_a_time_in_the_order_asked() {
             CreateTask {
                 title: TaskTitle::parse("third").unwrap(),
                 description: TaskDescription::new("body"),
-                labels: Vec::new(),
+                labels: crate::common::roles::work_labels(),
             },
         )
         .await
@@ -333,7 +333,7 @@ async fn a_queued_integration_that_conflicts_is_told_to_the_integrating_agent() 
             CreateTask {
                 title: TaskTitle::parse("third").unwrap(),
                 description: TaskDescription::new("body"),
-                labels: Vec::new(),
+                labels: crate::common::roles::work_labels(),
             },
         )
         .await
@@ -699,7 +699,8 @@ async fn held_items(fx: &Fixture) -> Vec<fold_daemon::services::agents::NeedsYou
 
 #[tokio::test]
 async fn an_invalid_checks_file_on_main_holds_the_integrations_until_main_fixes_it() {
-    let fx = Fixture::new().await;
+    // `backend` is the main agent, which writes onto main directly.
+    let fx = Fixture::with_reviewers().await;
     give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
     let proposal = approved(&fx, 1, |dir| {
         std::fs::write(dir.join("one.txt"), "1\n").unwrap();

@@ -37,7 +37,7 @@ pub(super) async fn check_running(
 fn limits_json(limits: WorkerLimits) -> Value {
     json!({
         "task_worker": limits.task_worker,
-        "batch_reviewer": limits.batch_reviewer,
+        "reviewer": limits.reviewer,
         "max_per_area": limits.max_per_area,
     })
 }
@@ -95,8 +95,8 @@ fn edit(path: &Path, change: &WorkerLimitsChange) -> Result<Planned, FoldError> 
     if let Some(limit) = change.task_worker {
         set_number(section, "task_worker", limit)?;
     }
-    if let Some(limit) = change.batch_reviewer {
-        set_number(section, "batch_reviewer", limit)?;
+    if let Some(limit) = change.reviewer {
+        set_number(section, "reviewer", limit)?;
     }
     match change.max_per_area {
         AreaLimitChange::Keep => {}
@@ -263,7 +263,7 @@ mod tests {
             changed.old,
             WorkerLimits {
                 task_worker: 4,
-                batch_reviewer: 3,
+                reviewer: 3,
                 max_per_area: None
             }
         );

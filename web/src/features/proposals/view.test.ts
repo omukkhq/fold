@@ -128,7 +128,7 @@ describe("defaultSince", () => {
   it("is the newest earlier version anyone gave a verdict on, a comment not counted", () => {
     const p = p3({
       reviews: [
-        review(1, "batch-reviewer", "request_changes"),
+        review(1, "reviewer", "request_changes"),
         review(2, "review", "comment"),
         review(3, "review", "approve"),
       ],

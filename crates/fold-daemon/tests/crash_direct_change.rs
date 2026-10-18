@@ -68,7 +68,7 @@ async fn submit_stopped_at(
 /// A crash inside the submit before its commit leaves main, the integration table, the events and the open main workspace as they were; a submit after the restart integrates the same changeset.
 async fn stopped_before_commit(failpoint: &str) {
     let scenario = fail::FailScenario::setup();
-    let mut fx = Fixture::new().await;
+    let mut fx = Fixture::with_main_frontend().await;
     let main = main_actor(&fx);
     let changeset = recorded(&fx, &main).await;
     let seq = fx.last_seq().await;
@@ -123,7 +123,7 @@ async fn a_crash_inside_the_transaction_of_a_direct_change_rolls_all_of_it_back(
 #[tokio::test]
 async fn a_crash_after_the_commit_of_a_direct_change_keeps_all_of_it() {
     let scenario = fail::FailScenario::setup();
-    let mut fx = Fixture::new().await;
+    let mut fx = Fixture::with_main_frontend().await;
     let main = main_actor(&fx);
     let changeset = recorded(&fx, &main).await;
     let seq = fx.last_seq().await;

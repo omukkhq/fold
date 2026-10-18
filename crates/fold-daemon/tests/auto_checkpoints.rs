@@ -84,6 +84,7 @@ impl Fixture {
             .await
             .unwrap();
         let actor = agents.actor(&session, None).await.unwrap();
+        crate::common::roles::lead_work_areas(&handle.store).await;
         handle
             .tasks
             .create_task(
@@ -91,7 +92,7 @@ impl Fixture {
                 CreateTask {
                     title: TaskTitle::parse("task").unwrap(),
                     description: TaskDescription::new("body"),
-                    labels: Vec::new(),
+                    labels: crate::common::roles::work_labels(),
                 },
             )
             .await

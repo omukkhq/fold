@@ -3,7 +3,7 @@ use fold_core::{AgentName, WorkerState};
 use fold_store::StoreError;
 use fold_store::agents::{self, WorkerProcessRow};
 
-use super::{Supervisor, lock, resume};
+use super::{Supervisor, lock, resume, reviewer_batch};
 use crate::services::agents::AgentError;
 use crate::services::agents::workers::code_of;
 
@@ -184,6 +184,7 @@ impl Supervisor {
             area: row.area.as_ref().zip(label.as_ref()),
             tasks: &row.tasks,
             proposals: &row.proposals,
+            batch: reviewer_batch(&self.inner.store, row).await?,
             instructions: None,
         }))
     }

@@ -274,6 +274,7 @@ impl ProjectHandle {
             .with_push_targets(self.push.clone())
             .with_live(self.live.clone())
             .with_workers(self.workers.clone())
+            .with_workspace_locks(self.workspace_locks.clone())
     }
 
     /// The message service of this project, which reaches the humans of `registry`.

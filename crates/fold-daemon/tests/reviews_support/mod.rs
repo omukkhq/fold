@@ -60,8 +60,26 @@ pub struct Fixture {
     pub review: Agent,
 }
 
+/// Who the fixture's agents are: [`Fixture::new`], [`Fixture::with_reviewers`] or [`Fixture::with_main_frontend`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Cast {
+    Leads,
+    Reviewers,
+    MainFrontend,
+}
+
 impl Fixture {
     pub async fn new() -> Self {
+        Self::build(Cast::Leads).await
+    }
+
+    /// [`Fixture::new`] where `frontend` has no fold role, so it acts as the main agent when a call carries the `main` tag, as the session `fld claude` starts does; `backend` leads the area of the tasks.
+    pub async fn with_main_frontend() -> Self {
+        Self::build(Cast::MainFrontend).await
+    }
+
+    async fn build(cast: Cast) -> Self {
+        let reviewers = cast == Cast::Reviewers;
         let project = TestProject::new().await;
         let bus = EventBus::new();
         let clock = Arc::new(project.clock().clone());
@@ -106,6 +124,36 @@ impl Fixture {
             workspaces.clone(),
             Arc::clone(&integration),
         );
+        let frontend = register(&agents, "frontend", &[]).await;
+        let backend = if reviewers {
+            register(&agents, "backend", &["main"]).await
+        } else {
+            register(&agents, "backend", &[]).await
+        };
+        let review = register(&agents, "review", &[]).await;
+        let leads = match cast {
+            Cast::Leads => &crate::common::roles::WORK_AREAS[..],
+            Cast::Reviewers => &crate::common::roles::WORK_AREAS[..1],
+            Cast::MainFrontend => &crate::common::roles::WORK_AREAS[1..],
+        };
+        for (agent, area) in leads {
+            crate::common::roles::give_role(
+                project.store(),
+                agent,
+                fold_core::roles::Role::AreaLead,
+                Some(area),
+            )
+            .await;
+        }
+        if reviewers {
+            crate::common::roles::give_role(
+                project.store(),
+                "review",
+                fold_core::roles::Role::ReviewLead,
+                None,
+            )
+            .await;
+        }
         let creator = agent("frontend");
         for _ in 0..2 {
             tasks
@@ -114,15 +162,15 @@ impl Fixture {
                     CreateTask {
                         title: TaskTitle::parse("task").unwrap(),
                         description: TaskDescription::new("body"),
-                        labels: Vec::new(),
+                        labels: leads
+                            .iter()
+                            .map(|(_, label)| fold_core::LabelName::parse(label).unwrap())
+                            .collect(),
                     },
                 )
                 .await
                 .unwrap();
         }
-        let frontend = register(&agents, "frontend").await;
-        let backend = register(&agents, "backend").await;
-        let review = register(&agents, "review").await;
         Self {
             project,
             bus,
@@ -139,16 +187,9 @@ impl Fixture {
         }
     }
 
-    /// [`Fixture::new`] with `review` as the review lead and `backend` as a batch reviewer, since only a review role claims a review.
+    /// [`Fixture::new`] with `review` as the review lead and `backend` as the main agent, since only they claim a review.
     pub async fn with_reviewers() -> Self {
-        let fx = Self::new().await;
-        for (name, role) in [
-            ("review", fold_core::roles::Role::ReviewLead),
-            ("backend", fold_core::roles::Role::BatchReviewer),
-        ] {
-            crate::common::roles::give_role(fx.project.store(), name, role, None).await;
-        }
-        fx
+        Self::build(Cast::Reviewers).await
     }
 
     /// Drops every service without a graceful shutdown and opens the project again, as a daemon that was killed and started again does. The agents keep their sessions, which live in the database; the locks are new, as in a new process.
@@ -324,10 +365,14 @@ fn workspace_service(
     .with_locks(Arc::clone(objects), Arc::clone(locks))
 }
 
-async fn register(agents: &AgentService, name: &str) -> Agent {
+async fn register(agents: &AgentService, name: &str, tags: &[&str]) -> Agent {
     let mut ctx = agents.start_session(1).await.unwrap();
+    let tags: Vec<fold_core::Tag> = tags
+        .iter()
+        .map(|tag| fold_core::Tag::parse(tag).unwrap())
+        .collect();
     agents
-        .register_agent(&mut ctx, &AgentName::parse(name).unwrap(), &[])
+        .register_agent(&mut ctx, &AgentName::parse(name).unwrap(), &tags)
         .await
         .unwrap();
     let worker = agents.resolve_worker(&ctx, None).await.unwrap();

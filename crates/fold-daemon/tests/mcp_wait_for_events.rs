@@ -147,13 +147,14 @@ impl Fixture {
     }
 
     async fn create_task(&self) {
+        crate::common::roles::lead_work_areas(self.store()).await;
         self.tasks
             .create_task(
                 &Actor::human(HumanName::parse("ana").unwrap()),
                 CreateTask {
                     title: TaskTitle::parse("task").unwrap(),
                     description: TaskDescription::new(""),
-                    labels: Vec::new(),
+                    labels: crate::common::roles::work_labels(),
                 },
             )
             .await

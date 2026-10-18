@@ -1,9 +1,10 @@
+use fold_core::Clock as _;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::common::roles::give_role;
+use crate::common::roles::{give_claim, give_role};
 use fold_core::events::types;
 use fold_core::tasks::{PlanRef, PlannedReview, PlannedTask};
 use fold_core::{Actor, AgentName, HumanName, Role, Tag, TaskId, TaskStatus};
@@ -402,7 +403,14 @@ async fn two_clients_racing_for_a_claim_get_one_claim_and_one_already_claimed() 
     let fx = Fixture::new().await;
     let frontend = fx.connect("frontend").await;
     let backend = fx.connect("backend").await;
-    ok(&frontend, "create_task", json!({"title": "Contested"})).await;
+    crate::common::roles::lead_work_areas(fx.project.store()).await;
+    let labels = crate::common::roles::WORK_AREAS.map(|(_, label)| label);
+    ok(
+        &frontend,
+        "create_task",
+        json!({"title": "Contested", "labels": labels}),
+    )
+    .await;
 
     let args = json!({"id": "T-1"});
     let (a, b) = tokio::join!(
@@ -443,7 +451,14 @@ async fn takeover_claim_waits_for_a_stale_lease() {
     let fx = Fixture::new().await;
     let frontend = fx.connect("frontend").await;
     let backend = fx.connect("backend").await;
-    ok(&frontend, "create_task", json!({"title": "Abandoned"})).await;
+    crate::common::roles::lead_work_areas(fx.project.store()).await;
+    let labels = crate::common::roles::WORK_AREAS.map(|(_, label)| label);
+    ok(
+        &frontend,
+        "create_task",
+        json!({"title": "Abandoned", "labels": labels}),
+    )
+    .await;
     ok(&frontend, "claim_task", json!({"id": "T-1"})).await;
 
     let early = err(&backend, "takeover_claim", json!({"id": "T-1"})).await;
@@ -1093,9 +1108,23 @@ async fn a_checklist_is_changed_by_its_holder_its_lead_the_main_agent_or_a_human
             .contains("lead of its area")
     );
 
-    ok(&task_worker, "claim_task", json!({"id": "T-1"})).await;
+    let denied = err(&task_worker, "claim_task", json!({"id": "T-1"})).await;
+    assert_eq!(denied["code"], "worker_claim_denied");
+    give_claim(
+        fx.project.store(),
+        "task-worker",
+        "T-1".parse().unwrap(),
+        fx.project.clock().now(),
+    )
+    .await;
     ok(&other, "create_task", json!({"title": "Other work"})).await;
-    ok(&other, "claim_task", json!({"id": "T-2"})).await;
+    give_claim(
+        fx.project.store(),
+        "other",
+        "T-2".parse().unwrap(),
+        fx.project.clock().now(),
+    )
+    .await;
     assert_eq!(
         ok(&task_worker, "update_checklist_item", tick("ci-1")).await,
         json!({"item": "ci-1"})
@@ -1163,7 +1192,7 @@ async fn reviewers_other_leads_and_the_system_change_no_checklist_and_a_parent_n
     let review_lead = fx.connect("review-lead").await;
     give_role(fx.project.store(), "review-lead", Role::ReviewLead, None).await;
     let batch = fx.connect("batch").await;
-    give_role(fx.project.store(), "batch", Role::BatchReviewer, None).await;
+    give_role(fx.project.store(), "batch", Role::Reviewer, None).await;
     let stranger = fx.connect("stranger").await;
     ok(
         &lead,
@@ -1182,7 +1211,7 @@ async fn reviewers_other_leads_and_the_system_change_no_checklist_and_a_parent_n
         for (case, client) in [
             ("area lead of another area", &api_lead),
             ("review lead", &review_lead),
-            ("batch reviewer", &batch),
+            ("reviewer", &batch),
         ] {
             let denied = err(client, "update_checklist_item", tick.clone()).await;
             assert_eq!(denied["code"], "checklist_denied", "{held}: {case}");
@@ -1223,7 +1252,13 @@ async fn reviewers_other_leads_and_the_system_change_no_checklist_and_a_parent_n
     );
     assert_eq!(fx.tasks.graph(true).await.unwrap().len(), 1);
 
-    ok(&task_worker, "claim_task", json!({"id": "T-1"})).await;
+    give_claim(
+        fx.project.store(),
+        "task-worker",
+        "T-1".parse().unwrap(),
+        fx.project.clock().now(),
+    )
+    .await;
     refused("held").await;
     ok(
         &task_worker,

@@ -422,7 +422,6 @@ async fn human_integration_is_refused_by_a_stale_expected_version() {
 async fn agent_cannot_integrate_its_own_proposal() {
     let fx = Fixture::new().await;
     fx.proposal().await;
-    give_role(fx.project.store(), "frontend", Role::ReviewLead, None).await;
     let author = fx.agents.actor(&fx.frontend.ctx, None).await.unwrap();
     let before = untouched(&fx).await;
 
@@ -568,10 +567,7 @@ async fn gate_case(fx: &Fixture, code: &str) -> (Actor, Option<u32>) {
             approve(fx, &review, 1).await;
             (review, Some(3))
         }
-        codes::INTEGRATOR_REQUIRED => {
-            give_role(fx.project.store(), "backend", Role::TaskWorker, None).await;
-            (by(&fx.backend.worker), None)
-        }
+        codes::INTEGRATOR_REQUIRED => (by(&fx.backend.worker), None),
         codes::AUTHOR_CANNOT_INTEGRATE => (by(&fx.frontend.worker), None),
         other => panic!("no case for {other}"),
     }

@@ -185,7 +185,7 @@ pub struct SubmitReviewInput {
     pub id: String,
     /// The version you reviewed, such as 2 for v2: the version of your review checkout. When the current version is another one, nothing is written and the error is stale_version.
     pub version: u32,
-    /// comment, request_changes, approve or reject. Only the main agent, the review lead and the batch reviewers it starts can approve or reject; reject closes the proposal.
+    /// comment, request_changes, approve or reject. Only the main agent, the review lead and the reviewers it starts can approve or reject; reject closes the proposal.
     pub verdict: String,
     /// The review text. It may be empty only when the review carries a comment; a reject needs it. In the text `#` names a fold item (#T-12) and `@` names a file (@web/src/board.ts); the daemon parses nothing.
     pub body: String,
@@ -296,7 +296,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             CLAIM_REVIEW,
-            "Review roles only: the main agent, the review lead and its batch reviewers claim the review of an open proposal before they review it; any other agent gets integrator_required and messages the review lead. The author's agent cannot claim it. A repeat call renews the claim.",
+            "For a review of your own: the main agent and the review lead claim the review of an open proposal before they review it. A reviewer gets its claims from the review lead's start_worker and gets worker_claim_denied here; any other agent gets integrator_required and messages the review lead. The author's agent cannot claim it. A repeat call renews the claim.",
             schema_for_type::<ProposalIdInput>(),
         ),
         Tool::new(
@@ -321,7 +321,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             INTEGRATE_PROPOSAL,
-            "Integrate the current version of a proposal onto main; only the main agent, the review lead and its batch reviewers may. Refusals: stale_version, changes_requested, not_approved, human_approval_missing, prerequisites_not_done (the gates are not met), author_cannot_integrate (your agent wrote it), integrator_required, and integration_conflicted (the version conflicts with main; details list the files and kinds). When fold-checks.toml has integration checks, the result is queued: fold integrates the queued proposals one at a time in the order asked, after the integration checks pass on the merge with main; failed checks (result checks_failed when it ran at once) send the proposal back to its author, and until a new version the call is refused with invalid_request and the reason checks_failed. A second call while the version waits in the queue is refused with invalid_request and the reason integration_queued; get_proposal shows integration_queued. When fold itself cannot run the checks, it answers workspace_io with the reason fold_failed: nothing is sent back, and you integrate again once the fault is fixed. When fold-checks.toml on main itself is not valid, the integration stays queued until a revision of main fixes it. fold sends each result as a message.",
+            "Integrate the current version of a proposal onto main; only the main agent, the review lead and its reviewers may. Refusals: stale_version, changes_requested, not_approved, human_approval_missing, prerequisites_not_done (the gates are not met), author_cannot_integrate (your agent wrote it), integrator_required, and integration_conflicted (the version conflicts with main; details list the files and kinds). When fold-checks.toml has integration checks, the result is queued: fold integrates the queued proposals one at a time in the order asked, after the integration checks pass on the merge with main; failed checks (result checks_failed when it ran at once) send the proposal back to its author, and until a new version the call is refused with invalid_request and the reason checks_failed. A second call while the version waits in the queue is refused with invalid_request and the reason integration_queued; get_proposal shows integration_queued. When fold itself cannot run the checks, it answers workspace_io with the reason fold_failed: nothing is sent back, and you integrate again once the fault is fixed. When fold-checks.toml on main itself is not valid, the integration stays queued until a revision of main fixes it. fold sends each result as a message.",
             schema_for_type::<IntegrateProposalInput>(),
         ),
         Tool::new(

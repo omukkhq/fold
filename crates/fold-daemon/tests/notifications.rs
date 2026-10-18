@@ -171,7 +171,7 @@ impl Notified {
                 CreateTask {
                     title: TaskTitle::parse("follow-up").unwrap(),
                     description: TaskDescription::new("after T-1"),
-                    labels: Vec::new(),
+                    labels: crate::common::roles::work_labels(),
                 },
             )
             .await

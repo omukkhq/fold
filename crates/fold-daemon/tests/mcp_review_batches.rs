@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use crate::common::roles::give_role;
+use crate::common::roles::{give_batch, give_role};
 use crate::proposal_tools_support::{Fixture, t};
 use fold_core::roles::Role;
 use fold_daemon::mcp::FoldServer;
@@ -12,6 +12,10 @@ use rmcp::{RoleClient, ServiceExt};
 use serde_json::{Value, json};
 
 type Client = RunningService<RoleClient, ()>;
+
+fn p(number: u32) -> fold_core::ProposalId {
+    fold_core::ProposalId::from_number(number).unwrap()
+}
 
 /// An adapter session over an in-memory stream, registered as `name`.
 async fn connect(fx: &Fixture, name: &str) -> Client {
@@ -94,28 +98,19 @@ async fn two_proposals(fx: &Fixture) {
 }
 
 #[tokio::test]
-async fn a_delegate_creates_its_own_batch_after_the_lead_releases_its_members() {
+async fn a_reviewer_never_makes_a_batch_and_reviews_the_one_its_lead_gives_it() {
     let fx = Fixture::new().await;
     two_proposals(&fx).await;
     let lead = connect(&fx, "lead").await;
     let delegate = connect(&fx, "delegate").await;
     give_role(&fx.handle.store, "lead", Role::ReviewLead, None).await;
-    give_role(&fx.handle.store, "delegate", Role::BatchReviewer, None).await;
+    give_role(&fx.handle.store, "delegate", Role::Reviewer, None).await;
     ok(
         &lead,
         "create_review_batch",
         json!({"proposals": ["P-1", "P-2"]}),
     )
     .await;
-    assert_eq!(
-        err(
-            &delegate,
-            "create_review_batch",
-            json!({"proposals": ["P-1", "P-2"]})
-        )
-        .await["code"],
-        "already_claimed"
-    );
     for proposal in ["P-1", "P-2"] {
         ok(
             &lead,
@@ -124,14 +119,28 @@ async fn a_delegate_creates_its_own_batch_after_the_lead_releases_its_members() 
         )
         .await;
     }
-    let created = ok(
+    let refused = err(
         &delegate,
         "create_review_batch",
         json!({"proposals": ["P-1", "P-2"]}),
     )
     .await;
-    assert_eq!(created["holder"], "delegate");
-    assert_eq!(created["id"], "rb-2");
+    assert_eq!(refused["code"], "worker_claim_denied");
+    assert!(refused["hint"].as_str().unwrap().contains("lead"));
+    assert_eq!(
+        err(&delegate, "claim_review", json!({"id": "P-1"})).await["code"],
+        "worker_claim_denied"
+    );
+    let batch = give_batch(
+        &fx.handle.store,
+        "delegate",
+        &[p(1), p(2)],
+        fx.handle.clock.now(),
+    )
+    .await;
+    assert_eq!(batch.to_string(), "rb-2");
+    let view = ok(&delegate, "get_review_batch", json!({"id": "rb-2"})).await;
+    assert_eq!(view["holder"], "delegate");
     ok(&delegate, "create_batch_checkout", json!({"id": "rb-2"})).await;
 }
 
@@ -140,11 +149,12 @@ async fn an_omitted_batch_version_gets_a_new_checkout_and_its_own_review() {
     let fx = Fixture::new().await;
     two_proposals(&fx).await;
     let delegate = connect(&fx, "delegate").await;
-    give_role(&fx.handle.store, "delegate", Role::BatchReviewer, None).await;
-    ok(
-        &delegate,
-        "create_review_batch",
-        json!({"proposals": ["P-1", "P-2"]}),
+    give_role(&fx.handle.store, "delegate", Role::Reviewer, None).await;
+    give_batch(
+        &fx.handle.store,
+        "delegate",
+        &[p(1), p(2)],
+        fx.handle.clock.now(),
     )
     .await;
     ok(&delegate, "create_batch_checkout", json!({"id": "rb-1"})).await;
@@ -175,7 +185,6 @@ async fn an_omitted_batch_version_gets_a_new_checkout_and_its_own_review() {
         submitted["left_out"],
         json!([{"proposal": "P-2", "version": "v1", "reason": "new_version"}])
     );
-    ok(&delegate, "claim_review", json!({"id": "P-2"})).await;
     let checkout = ok(&delegate, "create_review_checkout", json!({"id": "P-2"})).await;
     assert_eq!(checkout["version"], "v2");
     assert_eq!(

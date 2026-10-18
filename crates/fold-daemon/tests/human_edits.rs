@@ -135,13 +135,14 @@ impl Fixture {
             Arc::default(),
         )
         .with_registry(project.registry().clone());
+        crate::common::roles::lead_work_areas(project.store()).await;
         tasks
             .create_task(
                 &agent("planner"),
                 CreateTask {
                     title: TaskTitle::parse("auth").unwrap(),
                     description: TaskDescription::new(""),
-                    labels: Vec::new(),
+                    labels: crate::common::roles::work_labels(),
                 },
             )
             .await
@@ -579,7 +580,6 @@ async fn a_human_edit_of_another_version_is_stale() {
 async fn a_human_edit_waits_while_the_task_worker_may_change_the_workspace() {
     let fx = Fixture::new().await;
     fx.mark(None).await;
-    give_role(fx.project.store(), "frontend", Role::TaskWorker, None).await;
     for state in [
         WorkerState::Starting,
         WorkerState::Working,

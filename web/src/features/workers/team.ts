@@ -95,7 +95,7 @@ const ROLE_NAMES: Record<WorkerRole, string> = {
   area_lead: "Area lead",
   review_lead: "Review lead",
   task_worker: "Task worker",
-  batch_reviewer: "Batch reviewer",
+  reviewer: "Reviewer",
 };
 
 export function roleName(role: WorkerRole): string {
@@ -301,7 +301,7 @@ export function workspaceOf(
   return null;
 }
 
-/** The batch a batch reviewer holds: its open one, else the newest it held. */
+/** The batch a reviewer holds: its open one, else the newest it held. */
 export function heldBatch(
   batches: readonly ReviewBatch[],
   holder: string,
@@ -451,7 +451,7 @@ export function roleModel(
 
 const LEADS: readonly WorkerRole[] = ["area_lead", "review_lead"];
 
-/** A lead between turns waits for the task workers or batch reviewers it started while one of them starts or works. */
+/** A lead between turns waits for the task workers or reviewers it started while one of them starts or works. */
 export function waitsForTaskWorkers(
   lead: WorkerProcess,
   workers: readonly WorkerProcess[],
@@ -468,7 +468,7 @@ export function waitsForTaskWorkers(
 }
 
 /**
- * The team: the main agents first, then one group per area with its lead and the task workers under it, then the review lead with its batch reviewers.
+ * The team: the main agents first, then one group per area with its lead and the task workers under it, then the review lead with its reviewers.
  * A main agent is an agent fold does not supervise: the user's own Claude Code session.
  */
 export function teamGroups(input: TeamInput): TeamGroup[] {
@@ -513,7 +513,7 @@ export function teamGroups(input: TeamInput): TeamGroup[] {
     });
   }
   const review = workers.filter(
-    (w) => w.role === "review_lead" || w.role === "batch_reviewer",
+    (w) => w.role === "review_lead" || w.role === "reviewer",
   );
   if (review.length > 0) {
     groups.push({

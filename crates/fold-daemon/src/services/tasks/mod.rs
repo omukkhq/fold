@@ -37,8 +37,11 @@ pub use checklists::{
     ChecklistItemPatch, ChecklistItemView, ChecklistProgress, ChecklistView, ItemContent,
     NewChecklistItem, item_content,
 };
+pub(crate) use claims::{
+    Assign, already_claimed, assign_in_tx, check_claim_right, claim_in_tx, closed_refusal,
+    holder_has_ended, worker_row,
+};
 pub use claims::{ClaimView, Claimed, renew_leases};
-pub(crate) use claims::{already_claimed, claim_in_tx, closed_refusal, worker_row};
 pub use dependencies::{Edge, add_edge_in_tx};
 pub use fold_core::reviews::HumanReviewMark;
 pub(crate) use hold::agent_refusal;

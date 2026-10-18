@@ -19,6 +19,8 @@ pub enum ReleaseReason {
     Completed,
     /// The task was deleted with its claim rows, so only the `claim.released` event carries this reason.
     TaskDeleted,
+    /// The worker that its lead gave the claim failed before its first turn.
+    WorkerFailed,
 }
 
 impl ReleaseReason {
@@ -30,6 +32,7 @@ impl ReleaseReason {
             ReleaseReason::Integrated => "integrated",
             ReleaseReason::Completed => "completed",
             ReleaseReason::TaskDeleted => "task_deleted",
+            ReleaseReason::WorkerFailed => "worker_failed",
         }
     }
 }
@@ -171,6 +174,54 @@ pub async fn release(
 pub enum ClaimTarget {
     Task(TaskId),
     Review { proposal: ProposalId, task: TaskId },
+}
+
+/// An unreleased claim of either kind with its holder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeldClaim {
+    pub target: ClaimTarget,
+    pub worker_id: i64,
+    pub worker: WorkerName,
+}
+
+/// The unreleased claims, of either kind, that the workers of the agent `agent_id` hold, in the order they were taken.
+pub async fn unreleased_of_agent(
+    executor: impl SqliteExecutor<'_>,
+    agent_id: i64,
+) -> Result<Vec<HeldClaim>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT c.kind, t.number AS "task!: i64", p.number AS "proposal?: i64",
+                  c.worker_id, w.name AS worker
+           FROM claims c
+           JOIN workers w ON w.id = c.worker_id
+           LEFT JOIN proposals p ON p.id = c.proposal_id
+           JOIN tasks t ON t.id = COALESCE(c.task_id, p.task_id)
+           WHERE w.agent_id = ? AND c.released_at IS NULL
+           ORDER BY c.id"#,
+        agent_id
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            let task = TaskId::try_from_db(row.task).ok_or(StoreError::Corrupt("tasks.number"))?;
+            let target = match (row.kind.as_str(), row.proposal) {
+                ("implementation", None) => ClaimTarget::Task(task),
+                ("review", Some(number)) => ClaimTarget::Review {
+                    proposal: ProposalId::try_from_db(number)
+                        .ok_or(StoreError::Corrupt("proposals.number"))?,
+                    task,
+                },
+                _ => return Err(StoreError::Corrupt("claims.kind")),
+            };
+            Ok(HeldClaim {
+                target,
+                worker_id: row.worker_id,
+                worker: WorkerName::parse(&row.worker)
+                    .map_err(|_| StoreError::Corrupt("workers.name"))?,
+            })
+        })
+        .collect()
 }
 
 /// An unreleased claim that [`mark_stale`] marked.

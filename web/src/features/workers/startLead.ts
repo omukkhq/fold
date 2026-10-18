@@ -55,7 +55,7 @@ export const LEAD_DESCRIPTIONS: Record<StartLeadValues["role"], string> = {
   area_lead:
     "A lead is a long-lived agent. It splits its tasks and starts short-lived task workers; fold stops each task worker when its work is done.",
   review_lead:
-    "The review lead is a long-lived agent. It groups open proposals into review batches and may start short-lived batch reviewers; fold stops each reviewer when its batch is done.",
+    "The review lead is a long-lived agent. It reviews open proposals itself or gives one proposal or a group of related ones to a short-lived reviewer it starts; fold stops each reviewer when its proposals have their verdicts.",
 };
 
 export interface Failure {

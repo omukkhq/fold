@@ -204,7 +204,7 @@ async fn archive_in_tx(
     Ok(Archive::Done(workspace.map(|live| live.id)))
 }
 
-/// The worker holding `id`'s unreleased implementation claim and the agents that lead it: the area lead of a task worker's area, or the review lead of a batch reviewer.
+/// The worker holding `id`'s unreleased implementation claim and the agents that lead it: the area lead of a task worker's area, or the review lead of a reviewer.
 pub(super) async fn holder_of(
     tx: &mut WriteTx,
     id: TaskId,
@@ -219,7 +219,7 @@ pub(super) async fn holder_of(
             .and_then(|area| area.lead)
             .into_iter()
             .collect(),
-        Some((Role::BatchReviewer, _)) => agents::list_worker_processes(tx.conn())
+        Some((Role::Reviewer, _)) => agents::list_worker_processes(tx.conn())
             .await?
             .into_iter()
             .filter(|process| process.role == Role::ReviewLead)

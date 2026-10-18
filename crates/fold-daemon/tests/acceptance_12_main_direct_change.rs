@@ -79,7 +79,7 @@ async fn acceptance_12_the_main_agent_changes_main_directly_after_the_users_ok()
     let refused = h
         .refused("frontend", "open_main_workspace", json!({}))
         .await;
-    assert_eq!(refused["code"], codes::ORCHESTRATOR_REQUIRED);
+    assert_eq!(refused["code"], codes::MAIN_AGENT_REQUIRED);
     let refused = h.refused("review", "open_main_workspace", json!({})).await;
     assert_eq!(refused["code"], codes::MAIN_AGENT_REQUIRED);
 
@@ -145,7 +145,7 @@ async fn acceptance_12_the_main_agent_changes_main_directly_after_the_users_ok()
     assert_eq!(status, StatusCode::OK, "{diff}");
 
     for (agent, code) in [
-        ("frontend", codes::ORCHESTRATOR_REQUIRED),
+        ("frontend", codes::MAIN_AGENT_REQUIRED),
         ("review", codes::MAIN_AGENT_REQUIRED),
     ] {
         let refused = h
