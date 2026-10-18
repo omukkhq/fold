@@ -63,8 +63,8 @@ pub struct ExportRevision {
     pub message: String,
     pub author: Signature,
     pub committer: Signature,
-    /// The second parent: the remote commit a pull, or the sync task that resolved one, brought into this revision. Writing it makes the remote accept the commit as a fast-forward of its branch.
-    pub merge: Option<CommitId>,
+    /// The parents after the first, in order: the remote commit a pull, or the sync task that resolved one, brought into this revision, which makes the remote accept the commit as a fast-forward of its branch, and the human's commit of a human change it brought onto main, which gives the project folder that holds the human's files a way to follow main.
+    pub merges: Vec<CommitId>,
 }
 
 /// The last exported revision: the commit the next one continues and the fold tree it holds.
@@ -158,7 +158,7 @@ pub fn write_commit(
         message: commit.message.clone(),
         author: commit.author.clone(),
         committer: commit.committer.clone(),
-        merge: None,
+        merges: Vec::new(),
     };
     write_commits(objects, git, target, Some(base), &[revision], scratch)?
         .pop()
@@ -250,7 +250,7 @@ fn write_stream(
             out.write_all(format!("from {from}\n").as_bytes())
                 .map_err(pipe)?;
         }
-        if let Some(merge) = &revision.merge {
+        for merge in &revision.merges {
             out.write_all(format!("merge {merge}\n").as_bytes())
                 .map_err(pipe)?;
         }

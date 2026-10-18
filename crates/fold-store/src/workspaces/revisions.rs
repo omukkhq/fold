@@ -41,6 +41,8 @@ pub struct IntegrationInfo {
     pub actor: String,
     /// The Git commit a pull brought in, a sync task resolved, or an integration merged as the waiting human change it resolved.
     pub remote_commit: Option<String>,
+    /// The Git commit of the human change the integration recorded or resolved; a pull that resolved one brought in another commit as well.
+    pub human_commit: Option<String>,
     pub proposal: Option<IntegratedProposal>,
     /// The changeset a direct change brought onto main.
     pub changeset: Option<ChangesetId>,
@@ -259,6 +261,7 @@ struct RawRow {
     integration_kind: Option<String>,
     integration_actor: Option<String>,
     remote_commit: Option<String>,
+    human_commit: Option<String>,
     changeset_number: Option<i64>,
     integration_message: Option<String>,
     proposal_number: Option<i64>,
@@ -299,6 +302,7 @@ where
                   i.number AS "integration_number?: i64", i.kind AS "integration_kind?",
                   i.actor AS "integration_actor?",
                   COALESCE(i.remote_commit, hc.commit_id) AS "remote_commit?: String",
+                  hc.commit_id AS "human_commit?: String",
                   cs.number AS "changeset_number?: i64", i.message AS "integration_message?",
                   pr.number AS "proposal_number?: i64", pr.title AS "proposal_title?",
                   v.version AS "version?: i64", t.number AS "task_number?: i64",
@@ -342,6 +346,7 @@ where
                   i.number AS "integration_number?: i64", i.kind AS "integration_kind?",
                   i.actor AS "integration_actor?",
                   COALESCE(i.remote_commit, hc.commit_id) AS "remote_commit?: String",
+                  hc.commit_id AS "human_commit?: String",
                   cs.number AS "changeset_number?: i64", i.message AS "integration_message?",
                   pr.number AS "proposal_number?: i64", pr.title AS "proposal_title?",
                   v.version AS "version?: i64", t.number AS "task_number?: i64",
@@ -384,6 +389,7 @@ fn row(raw: RawRow) -> Result<RevisionRow, StoreError> {
                 .integration_actor
                 .ok_or(StoreError::Corrupt("integrations.actor"))?,
             remote_commit: raw.remote_commit,
+            human_commit: raw.human_commit,
             changeset: raw
                 .changeset_number
                 .map(|number| {

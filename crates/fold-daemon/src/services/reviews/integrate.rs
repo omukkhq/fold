@@ -985,7 +985,7 @@ impl Commit<'_> {
                 archived
             }
         };
-        // The integration resolves the waiting human change it brings onto main, and the human's commit becomes the revision's second parent unless the integration merged a Git commit of its own, so the project folder follows main again.
+        // The integration resolves the waiting human change it brings onto main, and the human's commit becomes a parent of the revision's commit, after a Git commit the integration merged, so the project folder follows main again.
         if let Some(human) = self.human
             && workspaces::resolve_human_change(tx, &human.commit, self.integration, self.now)
                 .await?

@@ -90,7 +90,7 @@ impl Fixture {
             message: format!("fold r{number}\n"),
             author: fold.clone(),
             committer: fold,
-            merge: None,
+            merges: Vec::new(),
         }
     }
 
@@ -430,7 +430,7 @@ fn a_pulled_commit_is_the_second_parent_and_the_remote_takes_the_merge_without_f
         tree: fixture.revision(1, b"one\n").tree,
     };
     let merged = ExportRevision {
-        merge: Some(theirs.clone()),
+        merges: vec![theirs.clone()],
         ..fixture.revision(2, b"two\n")
     };
     let written = fixture.write(Some(&base), &[merged]);

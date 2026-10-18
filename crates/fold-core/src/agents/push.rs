@@ -112,7 +112,7 @@ pub fn notice_for(event: &Event, ctx: &PushContext) -> Vec<Notice> {
 /// The longest file or task list a human-change notice spells out; a longer one is counted, so the notice stays within [`MAX_NOTICE_LEN`].
 const MAX_LISTED_LEN: usize = 48;
 
-/// A human change reaches the main agent, which tells the user about it in its own session: what was recorded as which revision, or that it conflicts and main did not move. The leads of the tasks whose open workspaces change the same files hear of a recorded change too, and the main agent's notice says they did. The daemon writes the files, the touched tasks and workspaces, and those leads into the event, so a notice tells what the record found.
+/// A human change reaches the main agent, which tells the user about it in its own session: what was recorded as which revision, that it conflicts and main did not move, or that an integration resolved the waiting change. The leads of the tasks whose open workspaces change the same files hear of a recorded change too, and the main agent's notice says they did. The daemon writes the files, the touched tasks and workspaces, and those leads into the event, so a notice tells what the record found.
 fn human_change_rules(
     event: &Event,
     ctx: &PushContext,
@@ -201,11 +201,15 @@ fn human_change_rules(
         (leads.clone(), text, tool)
     };
     if kind == types::HUMAN_CHANGE_RESOLVED {
-        return Some(if tasks.is_empty() {
-            Vec::new()
-        } else {
-            vec![lead_rule()]
-        });
+        // An agent never hears of its own act, so the main agent hears of a resolution only when another integration brings the change onto main.
+        let text = format!(
+            "{human}'s waiting change is resolved: main holds it as {revision}; tell the user"
+        );
+        let mut rules = vec![(main, text, "compare_revisions")];
+        if !tasks.is_empty() {
+            rules.push(lead_rule());
+        }
+        return Some(rules);
     }
     let compose = |spelled: bool| {
         let listed_files = listed(&files, file_count, "file", "files", spelled);
@@ -1398,30 +1402,43 @@ mod tests {
     }
 
     #[test]
-    fn a_resolved_human_change_reaches_the_leads_of_touched_tasks_only() {
-        let mut event = human_change(
-            types::HUMAN_CHANGE_RESOLVED,
-            json!({
-                "human": "human:ana", "commit": "c1", "integration": "i-3",
-                "files": ["README.md"], "file_count": 1,
-                "tasks": ["T-4"], "workspaces": ["ws-7"], "leads": ["backend", "main"],
-            }),
-        );
+    fn a_resolved_human_change_reaches_the_main_agent_that_did_not_resolve_it_and_the_leads() {
+        let data = json!({
+            "human": "human:ana", "commit": "c1", "integration": "i-3",
+            "files": ["README.md"], "file_count": 1,
+            "tasks": ["T-4"], "workspaces": ["ws-7"], "leads": ["backend", "main"],
+        });
+        let mut event = human_change(types::HUMAN_CHANGE_RESOLVED, data.clone());
         event.actor = EventActor::parse("main").unwrap();
         assert!(is_pushed(&event));
+        let to_lead = row(
+            "backend",
+            "fold: human:ana changed README.md in main as r14, which T-4 (ws-7) also changes. Call get_task.",
+            "get_task",
+        );
         assert_eq!(
             sent(&notice_for(&event, &main_ctx())),
-            vec![row(
-                "backend",
-                "fold: human:ana changed README.md in main as r14, which T-4 (ws-7) also changes. Call get_task.",
-                "get_task"
-            )]
+            vec![to_lead.clone()]
+        );
+        let to_main = row(
+            "main",
+            "fold: human:ana's waiting change is resolved: main holds it as r14; tell the user. Call compare_revisions.",
+            "compare_revisions",
+        );
+        let mut by_review = human_change(types::HUMAN_CHANGE_RESOLVED, data);
+        by_review.actor = EventActor::parse("review").unwrap();
+        assert_eq!(
+            sent(&notice_for(&by_review, &main_ctx())),
+            vec![to_main.clone(), to_lead]
         );
         let untouched = human_change(
             types::HUMAN_CHANGE_RESOLVED,
             json!({"human": "human:ana", "files": ["a.txt"], "file_count": 1, "tasks": [], "workspaces": [], "leads": []}),
         );
-        assert!(notice_for(&untouched, &main_ctx()).is_empty());
+        assert_eq!(sent(&notice_for(&untouched, &main_ctx())), vec![to_main]);
+        let mut no_revision = untouched;
+        no_revision.revision = None;
+        assert!(notice_for(&no_revision, &main_ctx()).is_empty());
     }
 
     #[test]

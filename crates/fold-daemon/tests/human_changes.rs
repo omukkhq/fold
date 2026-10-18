@@ -7,7 +7,9 @@ use fold_core::events::types;
 use fold_core::roles::Role;
 use fold_core::{Actor, EventFilter, HumanName, codes};
 use fold_daemon::services::agents::{NeedsYouKind, needs_you};
-use fold_daemon::services::projects::{ProjectError, RecordOutcome, commit_main, record};
+use fold_daemon::services::projects::{
+    ProjectError, PullOutcome, RecordOutcome, commit_main, pull, record,
+};
 use fold_store::testing::eventually;
 use fold_vcs::git::Git;
 use serde_json::{Value, json};
@@ -558,6 +560,7 @@ async fn an_integration_that_holds_a_waiting_human_change_resolves_it() {
     let mut h = Harness::start().await;
     branch_born(&h).await;
     h.connect_tagged("main", &["main"]).await;
+    let mut inbox = h.register_inbox("main").await;
     let dir = root(&h);
     write(&dir, "README.md", "# mine\n");
     integrate(&h, "frontend", &[("README.md", "# fold\n")]).await;
@@ -592,7 +595,16 @@ async fn an_integration_that_holds_a_waiting_human_change_resolves_it() {
     let resolved = stored(&h, types::HUMAN_CHANGE_RESOLVED).await;
     assert_eq!(resolved.len(), 1);
     assert_eq!(resolved[0].data["commit"], commit.as_str());
-    assert_eq!(resolved[0].revision.map(|r| r.to_string()), Some(revision));
+    assert_eq!(
+        resolved[0].revision.map(|r| r.to_string()).as_deref(),
+        Some(revision.as_str())
+    );
+    // The review lead integrated it, so the main agent hears that the change no longer waits.
+    let notice = notice_with(&mut inbox, "waiting change is resolved").await;
+    assert!(
+        notice.contains(&format!("fold: human:ana's waiting change is resolved: main holds it as {revision}; tell the user. Call compare_revisions.")),
+        "{notice}"
+    );
     let refused = h
         .refused(
             "main",
@@ -618,6 +630,108 @@ async fn an_integration_that_holds_a_waiting_human_change_resolves_it() {
         record_as_ana(&h).await.unwrap(),
         RecordOutcome::UpToDate { .. }
     ));
+}
+
+/// A pull whose remote commit holds the waiting human change resolves it, as any integration does: the main agent hears of it, and the revision's commit merges the pulled commit and then the human's commit, so the folder follows main through the human's commit. When main moved after the remote's commit, the revision is a merge of the pull; otherwise the remote only added to main, and the revision still gets a commit of its own rather than the remote commit, which does not hold the human's commit.
+async fn a_pull_that_holds_the_waiting_human_change(main_moved: bool) {
+    let mut h = Harness::start().await;
+    branch_born(&h).await;
+    h.connect_tagged("main", &["main"]).await;
+    let mut inbox = h.register_inbox("main").await;
+    let dir = root(&h);
+    write(&dir, "README.md", "# mine\n");
+    integrate(&h, "frontend", &[("README.md", "# fold\n")]).await;
+    let RecordOutcome::Conflicted { commit, .. } = record_as_ana(&h).await.unwrap() else {
+        panic!("a conflict");
+    };
+
+    // The remote holds main's history and a commit on it that takes the human's line.
+    let outside = tempfile::TempDir::new().unwrap();
+    let remote = outside.path().join("remote.git");
+    let remote_url = remote.to_str().unwrap();
+    git(
+        outside.path(),
+        &[
+            "init",
+            "--quiet",
+            "--bare",
+            "--initial-branch=main",
+            remote_url,
+        ],
+    );
+    git(
+        &dir,
+        &[
+            "push",
+            "--quiet",
+            remote_url,
+            "refs/fold/head:refs/heads/main",
+        ],
+    );
+    let clone = outside.path().join("clone");
+    git(
+        outside.path(),
+        &["clone", "--quiet", remote_url, clone.to_str().unwrap()],
+    );
+    write(&clone, "README.md", "# mine\n");
+    git(&clone, &["commit", "--quiet", "-am", "Take Ana's readme"]);
+    git(&clone, &["push", "--quiet", "origin", "main"]);
+    let pulled = git(&clone, &["rev-parse", "HEAD"]).trim().to_owned();
+    if main_moved {
+        integrate(&h, "backend", &[("notes.md", "fold\n")]).await;
+    }
+    let config = h.handle.paths.config();
+    let mut text = std::fs::read_to_string(&config).unwrap_or_default();
+    text.push_str(&format!(
+        "\n[remotes.origin]\nurl = {remote_url:?}\nbranch = \"main\"\npush_on_integrate = false\n"
+    ));
+    std::fs::write(&config, text).unwrap();
+
+    let outcome = pull(&h.handle, &ana(), &Git::default(), Some("origin"))
+        .await
+        .unwrap();
+    let PullOutcome::Integrated { revision, .. } = outcome else {
+        panic!("a clean pull: {outcome:?}");
+    };
+    assert_eq!(human_change_states(&h).await, ["resolved"]);
+    let resolved = stored(&h, types::HUMAN_CHANGE_RESOLVED).await;
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].data["commit"], commit.as_str());
+    assert_eq!(resolved[0].revision, Some(revision));
+    let notice = notice_with(&mut inbox, "waiting change is resolved").await;
+    assert!(
+        notice.contains(&format!("fold: human:ana's waiting change is resolved: main holds it as {revision}; tell the user. Call compare_revisions.")),
+        "{notice}"
+    );
+
+    eventually(WAIT, async || {
+        let readme = read(&h, "README.md");
+        if readme == "# mine\n" && changed(&h).is_empty() {
+            Ok(())
+        } else {
+            Err((readme, changed(&h)))
+        }
+    })
+    .await;
+    assert_eq!(root(&h).join("notes.md").exists(), main_moved);
+    let parents = git(&dir, &["log", "-1", "--format=%P", "refs/heads/main"]);
+    let parents: Vec<&str> = parents.split_whitespace().collect();
+    assert_eq!(parents.len(), 3, "{parents:?}");
+    assert_eq!(parents[1..], [pulled.as_str(), commit.as_str()]);
+    assert!(matches!(
+        record_as_ana(&h).await.unwrap(),
+        RecordOutcome::UpToDate { .. }
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pull_that_holds_the_waiting_human_change_resolves_it_and_the_folder_follows() {
+    a_pull_that_holds_the_waiting_human_change(true).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pull_that_only_adds_the_waiting_human_change_still_merges_the_humans_commit() {
+    a_pull_that_holds_the_waiting_human_change(false).await;
 }
 
 /// While the folder holds more than the recorded human change, the commit writer leaves it and its index as the human left them, at every run; the next record brings the rest in and the folder follows main.

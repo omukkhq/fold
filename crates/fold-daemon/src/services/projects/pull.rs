@@ -68,7 +68,7 @@ pub(super) struct SyncBase {
 
 /// Brings the branch of the remote `remote`, or of the only remote without a name, into fold main, for the named human who runs `fld pull`. The project's remote lock and Git sync lock are held to the end, so a push or the commit of an integration never runs at the same time. Main's missing commits are written first, so the project's repository holds main's whole history. When its `[git]` branch holds commits made outside fold, the commit writer stops, and those commits are what a pull without a remote name brings in, under the repository's path as the remote name; a pull that names a remote is refused until then, so it never reports a remote it did not read. Otherwise the remote branch is fetched into the repository; the sync base is the best common ancestor of the remote tip and main's newest commit, and without one it is `r1`'s tree.
 ///
-/// A tip that is main's newest commit or one of its ancestors, or a remote with no such branch, is up to date. A tip that an open sync task already resolves names that task and creates nothing. Otherwise the remote tree is merged onto main against the sync base under the integration mutex: a clean merge goes through the pull entry of the integration procedure, so it is an integration of kind `pull` whose compare-and-swap protects main, and a conflict creates the sync task and its workspace while the mutex is still held. When the remote only added to main's newest commit, the new revision is the remote commit and the map gains `r<n> <tip>` after the commit, so no commit is written for it. The pull runs as its own task, so a caller that stops waiting never leaves an integration without its map line.
+/// A tip that is main's newest commit or one of its ancestors, or a remote with no such branch, is up to date. A tip that an open sync task already resolves names that task and creates nothing. Otherwise the remote tree is merged onto main against the sync base under the integration mutex: a clean merge goes through the pull entry of the integration procedure, so it is an integration of kind `pull` whose compare-and-swap protects main, and a conflict creates the sync task and its workspace while the mutex is still held. When the remote only added to main's newest commit, the new revision is the remote commit and the map gains `r<n> <tip>` after the commit, so no commit is written for it; a pull that also resolves a waiting human change gets a commit of its own with the remote commit and then the human's commit as its merge parents, so the project folder that holds the human's files follows main through the human's commit. The pull runs as its own task, so a caller that stops waiting never leaves an integration without its map line.
 pub async fn pull(
     handle: &Arc<ProjectHandle>,
     actor: &Actor,
@@ -350,7 +350,7 @@ async fn open_sync_task(
     }))
 }
 
-/// Appends `r<n> <tip>` to the map when `revision` is the remote commit itself: its parent is `head`, whose commit the remote tip descends from, and its tree is the remote tree. The integration has committed, so a failure here is only logged; the next commit of main then writes the revision as a merge of the tip, which the remote accepts as well.
+/// Appends `r<n> <tip>` to the map when `revision` is the remote commit itself: its parent is `head`, whose commit the remote tip descends from, its tree is the remote tree, and it brought onto main no human change other than `tip`. The integration has committed, so a failure here is only logged; the next commit of main then writes the revision as a merge of the tip, which the remote accepts as well.
 pub(super) async fn map_fast_forward<H: Send + 'static>(
     handle: &ProjectHandle,
     held: H,
@@ -367,7 +367,13 @@ pub(super) async fn map_fast_forward<H: Send + 'static>(
             return;
         }
     };
-    if row.parent != Some(head) || row.tree_hash != remote_tree {
+    // A pull that resolved a waiting human change needs a commit of its own, whose parents keep the human's commit reachable.
+    let other_human = row
+        .integration
+        .as_ref()
+        .and_then(|integration| integration.human_commit.as_deref())
+        .is_some_and(|human| human != tip.as_str());
+    if row.parent != Some(head) || row.tree_hash != remote_tree || other_human {
         return;
     }
     let added = [(revision, tip.clone())];

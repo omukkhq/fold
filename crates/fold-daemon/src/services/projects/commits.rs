@@ -70,7 +70,7 @@ pub(crate) async fn commit_locked<H: Send + 'static>(
     }
     let merges = rows
         .iter()
-        .map(merge_parent)
+        .map(merge_parents)
         .collect::<Result<Vec<_>, _>>()?;
     let via = {
         let mut conn = store.read().acquire().await.map_err(StoreError::from)?;
@@ -246,10 +246,10 @@ async fn unsynced(
     }
 }
 
-/// A revision as the commit it becomes, with `merge`, from [`merge_parent`], as its second parent and `identity` as its author and committer.
+/// A revision as the commit it becomes, with `merges`, from [`merge_parents`], as its parents after the first and `identity` as its author and committer.
 fn export_revision(
     row: &RevisionRow,
-    merge: Option<CommitId>,
+    merges: Vec<CommitId>,
     identity: &Signature,
 ) -> ExportRevision {
     ExportRevision {
@@ -259,21 +259,30 @@ fn export_revision(
         message: commit_message(row),
         author: identity.clone(),
         committer: identity.clone(),
-        merge,
+        merges,
     }
 }
 
-/// The second parent of the commit a revision becomes: the remote commit its integration brought in, a pull or the proposal of a sync task.
-fn merge_parent(row: &RevisionRow) -> Result<Option<CommitId>, StoreError> {
-    row.integration
-        .as_ref()
-        .and_then(|integration| integration.remote_commit.as_deref())
-        .map(|commit| {
-            commit
-                .parse()
-                .map_err(|_| StoreError::Corrupt("integrations.remote_commit"))
-        })
-        .transpose()
+/// The parents after the first of the commit a revision becomes: the remote commit its integration brought in, a pull or the proposal of a sync task, and then the human's commit of a human change it brought onto main when that is another commit, as when a pull resolves a waiting human change. The remote commit comes first, as in the merge of every pull, and the human's commit is there so the project folder that holds the human's files can follow main through it.
+fn merge_parents(row: &RevisionRow) -> Result<Vec<CommitId>, StoreError> {
+    let Some(integration) = &row.integration else {
+        return Ok(Vec::new());
+    };
+    let mut parents: Vec<CommitId> = Vec::new();
+    let commits = [
+        (&integration.remote_commit, "integrations.remote_commit"),
+        (&integration.human_commit, "human_changes.commit_id"),
+    ];
+    for (commit, column) in commits {
+        let Some(commit) = commit else {
+            continue;
+        };
+        let commit: CommitId = commit.parse().map_err(|_| StoreError::Corrupt(column))?;
+        if !parents.contains(&commit) {
+            parents.push(commit);
+        }
+    }
+    Ok(parents)
 }
 
 /// The message of the commit a revision becomes, ending in Git trailers that name it by public ids and never name an agent or a human: fold's names stay in fold. An integrated proposal gives its title as the subject and its task's title as the body. A direct change gives the message the main agent wrote, as it wrote it. A pull that merged a remote commit names that commit; an imported `r1` names its source; any other revision is `fold r<n>`.
@@ -368,6 +377,7 @@ mod tests {
             kind,
             actor: "human:ana".to_owned(),
             remote_commit: remote_commit.map(str::to_owned),
+            human_commit: None,
             proposal: proposal.map(|(title, task)| IntegratedProposal {
                 number: ProposalId::from_number(4).unwrap(),
                 title: title.to_owned(),
@@ -475,29 +485,65 @@ mod tests {
                 Some(&"b".repeat(40)),
             )),
         );
-        let merge = merge_parent(&integrated).unwrap();
-        let revision = export_revision(&integrated, merge, &ana);
+        let merges = merge_parents(&integrated).unwrap();
+        let revision = export_revision(&integrated, merges, &ana);
         assert_eq!((&revision.author, &revision.committer), (&ana, &ana));
         assert!(!revision.message.contains("backend") && !revision.message.contains("ana"));
         assert_eq!(
-            revision.merge.map(|commit| commit.to_string()),
-            Some("b".repeat(40))
+            revision
+                .merges
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            ["b".repeat(40)]
         );
         let plain = row(1, None, None);
-        let plain = export_revision(&plain, merge_parent(&plain).unwrap(), &Signature::fold());
+        let plain = export_revision(&plain, merge_parents(&plain).unwrap(), &Signature::fold());
         assert_eq!(
             (&plain.author, &plain.committer),
             (&Signature::fold(), &Signature::fold())
         );
-        assert_eq!(plain.merge, None);
+        assert!(plain.merges.is_empty());
         let corrupt = row(
             2,
             None,
             Some(integration(IntegrationKind::Pull, None, Some("nope"))),
         );
-        assert!(merge_parent(&corrupt).is_err());
-        let changed = export_revision(&row(3, None, Some(direct("Initial setup"))), None, &ana);
+        assert!(merge_parents(&corrupt).is_err());
+        let changed = export_revision(
+            &row(3, None, Some(direct("Initial setup"))),
+            Vec::new(),
+            &ana,
+        );
         assert_eq!((&changed.author, &changed.committer), (&ana, &ana));
         assert!(!changed.message.contains("main"));
+    }
+
+    #[test]
+    fn a_pull_that_resolves_a_human_change_merges_the_pulled_commit_then_the_humans() {
+        let (pulled, human) = ("c".repeat(40), "d".repeat(40));
+        let resolving = IntegrationInfo {
+            human_commit: Some(human.clone()),
+            ..integration(IntegrationKind::Pull, None, Some(&pulled))
+        };
+        let merges = merge_parents(&row(5, None, Some(resolving))).unwrap();
+        assert_eq!(
+            merges.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            [pulled.clone(), human.clone()]
+        );
+        // A record brings in the human's own commit, which is the pulled commit too.
+        let recorded = IntegrationInfo {
+            human_commit: Some(pulled.clone()),
+            ..integration(IntegrationKind::Pull, None, Some(&pulled))
+        };
+        assert_eq!(
+            merge_parents(&row(6, None, Some(recorded))).unwrap().len(),
+            1
+        );
+        let corrupt = IntegrationInfo {
+            human_commit: Some("nope".to_owned()),
+            ..integration(IntegrationKind::Pull, None, Some(&pulled))
+        };
+        assert!(merge_parents(&row(7, None, Some(corrupt))).is_err());
     }
 }
