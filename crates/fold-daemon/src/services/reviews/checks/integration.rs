@@ -1,10 +1,12 @@
 use std::collections::BTreeSet;
 
 use fold_core::object::ObjectHash;
-use fold_core::reviews::checks::{ChecksFile, Purpose, RunReason, RunState, Stage, runs_any};
+use fold_core::reviews::checks::{
+    CHECKS_FILE, ChecksFile, Outcome, Purpose, RunReason, RunState, Stage, runs_any,
+};
 use fold_core::{
-    Actor, AddressedAs, CheckRunId, FoldError, IdKind, MessageBody, NewEvent, ProposalId,
-    Recipient, RevisionId, Target, TaskId, WorkerName, codes,
+    Actor, AddressedAs, CheckRunId, EventActor, FoldError, IdKind, MessageBody, NewEvent,
+    ProposalId, Recipient, RevisionId, Target, TaskId, WorkerName, codes,
 };
 use fold_store::reviews::checks::{self, CheckRunRow, NewCheckRun};
 use fold_store::reviews::{self};
@@ -41,6 +43,8 @@ pub(crate) enum IntegrationChecks {
     Failed(CheckRunId),
     /// fold itself could not run the checks: the run stopped as `fold_failed`, and the proposal keeps its version, its approvals and its place with the reviewer.
     FoldFailed(CheckRunId),
+    /// The checks file of main itself is not valid, so the fault is not the proposal's: no run starts, nothing is sent back, and the integration waits until main's file is fixed.
+    Held,
 }
 
 /// The proposal version an attempt integrates, as the checks need it.
@@ -71,7 +75,32 @@ impl ReviewService {
             self.end_carried(carried).await?;
             return Ok(IntegrationChecks::None);
         };
-        let file = ChecksFile::parse(&text)?;
+        let file = match ChecksFile::parse(&text) {
+            Ok(file) => file,
+            Err(error) => {
+                self.end_carried(carried).await?;
+                if let Some(problem) = self.main_checks_problem(at.head_tree).await? {
+                    self.hold_for_main(at.head, &problem).await?;
+                    return Ok(IntegrationChecks::Held);
+                }
+                let run = self.start_integration_run(actor, at).await?;
+                let message = format!("{}\n", error.message()).into_bytes();
+                let invalid = CommandResult {
+                    check: Some(CHECKS_FILE.to_owned()),
+                    required: true,
+                    outcome: Outcome::Failed,
+                    exit_code: None,
+                    duration_ms: 0,
+                    log_bytes: message.len() as u64,
+                    log: message,
+                    fault: false,
+                };
+                let verdict = Verdict::failed(RunReason::ChecksFileInvalid);
+                self.send_back_for_checks(actor, at, &run, &[invalid], verdict)
+                    .await?;
+                return Ok(IntegrationChecks::Failed(run.id));
+            }
+        };
         let plan = file.plan(Stage::Integration, &input.changed);
         if !runs_any(&plan) {
             self.end_carried(carried).await?;
@@ -134,6 +163,45 @@ impl ReviewService {
         self.send_back_for_checks(actor, at, &run, &results, verdict)
             .await?;
         Ok(IntegrationChecks::Failed(run.id))
+    }
+
+    /// The problem of main's own checks file in the tree `head_tree`, as its parse states it with the file and the line; `None` when main has no checks file or a valid one.
+    async fn main_checks_problem(
+        &self,
+        head_tree: ObjectHash,
+    ) -> Result<Option<String>, ReviewError> {
+        let input = self.workspaces.checks_input(head_tree, head_tree).await?;
+        Ok(input
+            .file
+            .and_then(|text| ChecksFile::parse(&text).err())
+            .map(|error| error.message().to_owned()))
+    }
+
+    /// Records that integrations wait for main's checks file with `integration.held` on main's head `head`, once per head: the event tells the main agent and puts the problem in Needs you. Called under the integration mutex, so `head` is main's current head.
+    async fn hold_for_main(&self, head: RevisionId, problem: &str) -> Result<(), ReviewError> {
+        let now = self.clock.now();
+        let mut buffer = EventBuffer::new();
+        let held = self
+            .store
+            .write(async |tx| {
+                if checks::held_by_main(tx.conn()).await?.is_some() {
+                    return Ok(false);
+                }
+                let event = NewEvent::new(
+                    fold_core::events::types::INTEGRATION_HELD,
+                    EventActor::fold(),
+                )?
+                .revision(head)
+                .data(json!({"file": CHECKS_FILE, "problem": problem}))?;
+                buffer.append(tx, &event, now).await?;
+                Ok::<_, ReviewError>(true)
+            })
+            .await?;
+        if held {
+            self.bus.publish(buffer);
+            tracing::info!(revision = %head, "integrations wait until the checks file on main is valid");
+        }
+        Ok(())
     }
 
     /// Ends a run that fold itself could not complete as `stopped` with `fold_failed`, in a write of its own. The proposal is not flagged and nobody is sent back: the caller tells whoever asked for the integration, who asks again once the fault is fixed.
@@ -387,10 +455,10 @@ fn send_back_message(
             "a check changed tracked files of the merged tree; put what it writes in .gitignore"
                 .to_owned()
         }
-        Some(RunReason::WorkspaceChanged) => {
-            "fold could not prepare its check directory; integrate again".to_owned()
-        }
         Some(RunReason::SetupFailed) => "the setup failed, so no check ran".to_owned(),
+        Some(RunReason::ChecksFileInvalid) => {
+            "the merged tree's fold-checks.toml is not valid".to_owned()
+        }
         _ => results
             .iter()
             .filter(|result| result.blocks())
@@ -424,7 +492,6 @@ fn send_back_message(
 #[cfg(test)]
 mod tests {
     use fold_core::Timestamp;
-    use fold_core::reviews::checks::Outcome;
 
     use super::*;
 

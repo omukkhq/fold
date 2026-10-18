@@ -1,0 +1,33 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT e.created_at AS \"created_at!: i64\",\n                  json_extract(e.data, '$.problem') AS \"problem?: String\"\n           FROM events e JOIN refs r ON r.name = 'main' AND r.revision_id = e.revision_id\n           WHERE e.type = 'integration.held'\n           ORDER BY e.seq\n           LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "created_at!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "events",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "problem?: String",
+        "ordinal": 1,
+        "type_info": "Null",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "4d64b44a45e683ded4877a9166daaf0749fdfa8a3a9de9a74db29934bdcad704"
+}

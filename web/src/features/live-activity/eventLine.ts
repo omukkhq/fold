@@ -793,6 +793,13 @@ const SPECS: Record<EventType, Spec> = {
     icon: ListChecks,
     text: (e) => `took the integration of ${proposalOf(e)} out of the queue`,
   },
+  "integration.held": {
+    icon: TriangleAlert,
+    text: (e) =>
+      e.revision === null
+        ? "held the integrations: fold-checks.toml on main is not valid"
+        : `held the integrations: fold-checks.toml on ${e.revision} is not valid`,
+  },
 };
 
 /** Every stored event type this build writes a line for. */

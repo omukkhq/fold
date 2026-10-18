@@ -26,7 +26,7 @@ use fold_vcs::integrate::MergeOutcome;
 use serde_json::json;
 
 use super::checks::{
-    Integrating, IntegrationChecks, PassedRun, Verdict as RunVerdict, end_run_in_tx,
+    HeldRequest, Integrating, IntegrationChecks, PassedRun, Verdict as RunVerdict, end_run_in_tx,
     fold_failed_refusal,
 };
 use super::conflicts::FoundConflict;
@@ -126,12 +126,14 @@ pub enum DirectOutcome {
     Conflicted(Vec<Conflict>),
 }
 
-impl From<Integrated> for IntegrationOutcome {
-    fn from(done: Integrated) -> Self {
-        match done {
-            Integrated::Succeeded(revision) => IntegrationOutcome::Succeeded { revision },
-            Integrated::Conflicted(conflicts) => IntegrationOutcome::Conflicted(conflicts),
-            Integrated::ChecksFailed(run) => IntegrationOutcome::ChecksFailed { run },
+impl Integrated {
+    /// What the procedure did, for its caller; `None` for an integration that main's invalid checks file holds.
+    fn outcome(self) -> Option<IntegrationOutcome> {
+        match self {
+            Integrated::Succeeded(revision) => Some(IntegrationOutcome::Succeeded { revision }),
+            Integrated::Conflicted(conflicts) => Some(IntegrationOutcome::Conflicted(conflicts)),
+            Integrated::ChecksFailed(run) => Some(IntegrationOutcome::ChecksFailed { run }),
+            Integrated::Held => None,
         }
     }
 }
@@ -160,6 +162,8 @@ enum Integrated {
     Succeeded(RevisionId),
     Conflicted(Vec<Conflict>),
     ChecksFailed(CheckRunId),
+    /// main's own checks file is not valid, so nothing ran and nothing was published or sent back.
+    Held,
 }
 
 /// Why an attempt stopped. `Retry` rolls the transaction back and starts again from reading main.
@@ -285,7 +289,10 @@ impl ReviewService {
                 .await?;
             return Ok(IntegrationOutcome::Queued);
         }
-        Ok(self.integrate(actor, request).await?.into())
+        self.integrate(actor, request)
+            .await?
+            .outcome()
+            .ok_or_else(|| held_refusal(proposal).into())
     }
 
     /// Whether the gates admit `actor` to integrate the current version now, read without recording anything. A refusal is reported by the procedure itself.
@@ -395,6 +402,16 @@ impl ReviewService {
                 automatic: false,
             };
             let untold = match service.integrate(&actor, request).await {
+                Ok(Integrated::Held) => {
+                    service.checks.hold(HeldRequest {
+                        id,
+                        actor,
+                        proposal,
+                        version,
+                        expected_version,
+                    });
+                    return;
+                }
                 Ok(Integrated::Conflicted(conflicts)) => {
                     Some(ReviewError::from(integration_conflicted(proposal, &conflicts)))
                 }
@@ -444,17 +461,26 @@ impl ReviewService {
         Ok(queued)
     }
 
-    /// Tells the agent that queued an integration why it did not happen.
+    /// Tells the agent or the human that queued an integration why it did not happen.
     async fn tell_queued_refusal(
         &self,
         actor: &Actor,
         proposal: ProposalId,
         error: &ReviewError,
     ) -> Result<(), ReviewError> {
-        let Actor::Agent(agent) = actor else {
-            return Ok(());
+        let to = match actor {
+            Actor::Agent(agent) => Recipient {
+                target: Target::Worker(agent.worker.clone()),
+                addressed_as: AddressedAs::Worker,
+            },
+            Actor::Human { name } => Recipient {
+                target: Target::Human(name.clone()),
+                addressed_as: AddressedAs::Human,
+            },
+            Actor::System => return Ok(()),
         };
-        let ReviewError::Fold(refusal) = error else {
+        let (ReviewError::Fold(refusal) | ReviewError::Task(TaskError::Fold(refusal))) = error
+        else {
             return Ok(());
         };
         let Some(row) = reviews::get_proposal(self.store.read(), proposal).await? else {
@@ -465,10 +491,6 @@ impl ReviewService {
             refusal.message(),
             refusal.hint().unwrap_or_default()
         ))?;
-        let to = Recipient {
-            target: Target::Worker(agent.worker.clone()),
-            addressed_as: AddressedAs::Worker,
-        };
         let now = self.clock.now();
         let mut buffer = EventBuffer::new();
         self.store
@@ -502,7 +524,7 @@ impl ReviewService {
             {
                 Integrated::Succeeded(revision) => PullOutcome::Succeeded { revision },
                 Integrated::Conflicted(conflicts) => PullOutcome::Conflicted(conflicts),
-                Integrated::ChecksFailed(_) => return Err(not_a_proposal()),
+                Integrated::ChecksFailed(_) | Integrated::Held => return Err(not_a_proposal()),
             },
         )
     }
@@ -520,7 +542,7 @@ impl ReviewService {
             {
                 Integrated::Succeeded(revision) => PullOutcome::Succeeded { revision },
                 Integrated::Conflicted(conflicts) => PullOutcome::Conflicted(conflicts),
-                Integrated::ChecksFailed(_) => return Err(not_a_proposal()),
+                Integrated::ChecksFailed(_) | Integrated::Held => return Err(not_a_proposal()),
             },
         )
     }
@@ -538,7 +560,7 @@ impl ReviewService {
             {
                 Integrated::Succeeded(revision) => DirectOutcome::Succeeded { revision },
                 Integrated::Conflicted(conflicts) => DirectOutcome::Conflicted(conflicts),
-                Integrated::ChecksFailed(_) => return Err(not_a_proposal()),
+                Integrated::ChecksFailed(_) | Integrated::Held => return Err(not_a_proposal()),
             },
         )
     }
@@ -555,7 +577,11 @@ impl ReviewService {
                 automatic: true,
             };
             let outcome = match self.integrate(&Actor::System, request).await {
-                Ok(done) => done.into(),
+                Ok(done) => match done.outcome() {
+                    Some(outcome) => outcome,
+                    // main's invalid checks file holds it; main's next revision is an event that tries again.
+                    None => continue,
+                },
                 Err(error) => {
                     tracing::warn!(proposal = %proposal, code = error.code().unwrap_or(codes::INTERNAL_ERROR), "the automatic integration of a proposal failed; the next trigger tries again");
                     continue;
@@ -722,6 +748,7 @@ impl ReviewService {
                 IntegrationChecks::FoldFailed(run) => {
                     return Err(Step::Failed(fold_failed_refusal(at, run).into()));
                 }
+                IntegrationChecks::Held => return Ok(Integrated::Held),
             }
         }
         #[cfg(feature = "failpoints")]
@@ -780,6 +807,16 @@ impl ReviewService {
             self.workspaces.detach_live(workspace).await;
         }
         self.follow_main_in_check_dir(tree);
+        // main moved, so a fix of its checks file may let the held integrations go on; those it does not fix are held again.
+        for held in self.checks.take_held() {
+            self.serve_queued(
+                held.id,
+                held.actor,
+                held.proposal,
+                held.version,
+                held.expected_version,
+            );
+        }
         match &plan.subject {
             Subject::Proposal { proposal, .. } => {
                 tracing::info!(proposal = %proposal, revision = %next, integration = %integration, "proposal integrated");
@@ -1004,6 +1041,19 @@ pub(super) fn checks_failed_refusal(proposal: ProposalId, version: u32) -> FoldE
         ("version", json!(version)),
     ])
     .with_hint("the author sends a new version with update_proposal; call get_proposal to read the failed check run")
+}
+
+/// The answer to an integration that main's invalid checks file holds, when no queued request keeps it.
+fn held_refusal(proposal: ProposalId) -> FoldError {
+    FoldError::new(
+        codes::CHECKS_FILE_INVALID,
+        format!("fold-checks.toml on main is not valid, so fold did not integrate {proposal}"),
+    )
+    .with_details([
+        ("reason", json!("main")),
+        ("proposal", json!(proposal.to_string())),
+    ])
+    .with_hint("integrate again once fold-checks.toml is fixed on main; Needs you shows the file and the line")
 }
 
 /// The refusal of a second request to integrate a version whose integration waits in the queue already.

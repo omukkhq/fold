@@ -1,4 +1,5 @@
 use fold_core::requests::{RequestState, Requester};
+use fold_core::reviews::checks::CHECKS_FILE;
 use fold_core::{
     AgentName, Choice, HumanName, MessageId, PermissionQuestionId, ProposalId, RequestId, Sender,
     TaskId, Timestamp,
@@ -34,6 +35,8 @@ pub enum NeedsYouKind {
     FolderHeld,
     /// `fld unstash` wrote conflict markers into the files `paths` names and kept the stash entry, so fold does not update the project folder until the human fixes the files and records them with `fld record`.
     UnstashConflicted,
+    /// The checks file on main is not valid, so fold holds the integrations of proposals until a revision of main fixes it; `title` states the file, the line and the problem, and `paths` names the file.
+    ChecksFileInvalidOnMain,
 }
 
 /// The screen on which a human answers an item.
@@ -58,7 +61,8 @@ impl NeedsYouKind {
             NeedsYouKind::HumanChange
             | NeedsYouKind::HeadMoved
             | NeedsYouKind::FolderHeld
-            | NeedsYouKind::UnstashConflicted => Screen::Repository,
+            | NeedsYouKind::UnstashConflicted
+            | NeedsYouKind::ChecksFileInvalidOnMain => Screen::Repository,
         }
     }
 }
@@ -128,6 +132,17 @@ impl NeedsYouItem {
             commit: None,
             paths: Vec::new(),
         }
+    }
+}
+
+/// The second line of a `ChecksFileInvalidOnMain` item: the file, then the problem as the parse states it, such as `fold-checks.toml line 12: unknown field`.
+fn held_title(problem: &str) -> String {
+    match problem
+        .strip_prefix(CHECKS_FILE)
+        .and_then(|rest| rest.strip_prefix(": "))
+    {
+        Some(rest) => format!("{CHECKS_FILE} {rest}"),
+        None => problem.to_owned(),
     }
 }
 
@@ -220,6 +235,12 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
             .collect();
         items.push(item);
     }
+    if let Some((since, problem)) = reviews::checks::held_by_main(&mut *conn).await? {
+        let mut item = NeedsYouItem::new(NeedsYouKind::ChecksFileInvalidOnMain, since);
+        item.title = Some(held_title(&problem));
+        item.paths = vec![CHECKS_FILE.to_owned()];
+        items.push(item);
+    }
     let human_tasks = tasks::ready_human_tasks(&mut *conn).await?;
     let held = tasks::held_tasks(&mut *conn).await?;
     drop(conn);
@@ -292,5 +313,14 @@ mod tests {
             [NeedsYouKind::UnstashConflicted]
         );
         assert_eq!(NeedsYouKind::UnstashConflicted.screen(), Screen::Repository);
+    }
+
+    #[test]
+    fn the_held_title_puts_the_line_after_the_file() {
+        assert_eq!(
+            held_title("fold-checks.toml: line 12: unknown field `tiemout`"),
+            "fold-checks.toml line 12: unknown field `tiemout`"
+        );
+        assert_eq!(held_title("something else"), "something else");
     }
 }

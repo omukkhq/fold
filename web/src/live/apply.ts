@@ -414,9 +414,12 @@ function invalidationKeys(
         ...taskKey,
         repository,
         board,
+        // Needs you lists main's invalid checks file from the first integration it holds.
+        ...(event.type === "integration.held" ? [keys.needsYou(slug)] : []),
       ];
     case "main":
-      return [repository, board];
+      // Needs you lists main's invalid checks file only while main stays on the revision that holds the integrations.
+      return [repository, board, keys.needsYou(slug)];
     case "remote":
       return [repository, keys.git(slug)];
     case "human_change":

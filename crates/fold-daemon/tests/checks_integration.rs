@@ -526,7 +526,43 @@ async fn a_fault_of_folds_own_stops_the_run_sends_nothing_back_and_is_not_retrie
     let before = fx.count(runs).await;
     fx.reviews.integrate_ready().await.unwrap();
     fx.reviews.integrate_ready().await.unwrap();
-    assert_eq!(fx.count(runs).await, before, "fold does not retry on its own");
+    assert_eq!(
+        fx.count(runs).await,
+        before,
+        "fold does not retry on its own"
+    );
+
+    // A human who asks is told as well.
+    assert_eq!(
+        fx.reviews
+            .integrate_proposal(&human(), p(second), Some(1))
+            .await
+            .unwrap(),
+        IntegrationOutcome::Queued
+    );
+    let to_human = format!(
+        "SELECT COUNT(*) FROM messages m JOIN message_recipients r ON r.message_id = m.id
+         WHERE m.sender_kind = 'fold' AND r.human = 'tanim' AND m.body LIKE 'fold did not integrate P-{second}:%'"
+    );
+    eventually(WAIT, async || {
+        let told = fx.count(&to_human).await;
+        if told == 1 { Ok(()) } else { Err(told) }
+    })
+    .await;
+    eventually(WAIT, async || {
+        let summary = fx
+            .reviews
+            .get_proposal(p(second), None)
+            .await
+            .unwrap()
+            .summary;
+        if summary.integration_queued {
+            Err(())
+        } else {
+            Ok(())
+        }
+    })
+    .await;
 
     std::fs::remove_file(&parent).unwrap();
     assert_eq!(
@@ -554,6 +590,177 @@ async fn a_project_without_integration_checks_integrates_at_once() {
         .unwrap();
     assert!(matches!(outcome, IntegrationOutcome::Succeeded { .. }));
     assert!(!fx.project.paths().checks_dir().exists());
+}
+
+#[tokio::test]
+async fn an_invalid_checks_file_of_the_merge_sends_the_proposal_back() {
+    let fx = Fixture::new().await;
+    give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
+    let proposal = approved(&fx, 1, |dir| checks_file(dir, "true")).await;
+    // A human edit makes a version without running the proposal checks, so only the integration finds the file invalid.
+    fx.reviews
+        .edit_as_human(
+            &human(),
+            p(proposal),
+            1,
+            "fold-checks.toml",
+            "[[check]]\nname = \"e2e\"\nrun = \"true\"\nstage = \"integration\"\nretries = 2\n",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        fx.reviews
+            .integrate_proposal(&human(), p(proposal), Some(2))
+            .await
+            .unwrap(),
+        IntegrationOutcome::Queued
+    );
+    let summary = eventually(WAIT, async || {
+        let summary = fx
+            .reviews
+            .get_proposal(p(proposal), None)
+            .await
+            .unwrap()
+            .summary;
+        if summary.checks_failed {
+            Ok(summary)
+        } else {
+            Err(summary.state)
+        }
+    })
+    .await;
+    assert_eq!(summary.state, ProposalState::Open);
+    assert_eq!(
+        fx.text("SELECT reason FROM check_runs WHERE stage = 'integration'")
+            .await
+            .as_deref(),
+        Some("checks_file_invalid")
+    );
+    let body = fx
+        .text(
+            "SELECT m.body FROM messages m
+             JOIN message_recipients r ON r.message_id = m.id
+             JOIN workers w ON w.id = r.worker_id
+             WHERE m.sender_kind = 'fold' AND w.name = 'frontend'
+             ORDER BY m.number DESC LIMIT 1",
+        )
+        .await
+        .unwrap();
+    assert!(body.contains("fold-checks.toml is not valid"), "{body}");
+    assert!(body.contains("line 5"), "{body}");
+}
+
+/// The worker as the session `fld claude` starts acts: with the `main` tag.
+fn main_actor(worker: &fold_store::agents::WorkerRow) -> fold_core::Actor {
+    fold_core::Actor::Agent(fold_core::AgentActor {
+        agent: worker.name.agent(),
+        worker: worker.name.clone(),
+        tags: vec![fold_core::Tag::parse(fold_core::MAIN_TAG).unwrap()],
+    })
+}
+
+/// The main agent `actor` writes `fold-checks.toml` with `text` straight onto main, as a direct change, which runs no checks.
+async fn checks_file_on_main(fx: &Fixture, actor: &fold_core::Actor, text: &str) {
+    let opened = fx.workspaces.open_main_workspace(actor).await.unwrap();
+    let dir = fx.project.paths().root().join(&opened.workspace.path);
+    std::fs::write(dir.join("fold-checks.toml"), text).unwrap();
+    let changes = fx
+        .workspaces
+        .record_changes(actor, opened.workspace.id, "the checks")
+        .await
+        .unwrap();
+    let outcome = fx
+        .reviews
+        .integrate_direct(
+            actor,
+            fold_daemon::services::reviews::DirectChange {
+                changeset: changes.changeset,
+                message: "Change the checks".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        outcome,
+        fold_daemon::services::reviews::DirectOutcome::Succeeded { .. }
+    ));
+}
+
+async fn held_items(fx: &Fixture) -> Vec<fold_daemon::services::agents::NeedsYouItem> {
+    fold_daemon::services::agents::needs_you(fx.project.store())
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|item| {
+            item.kind == fold_daemon::services::agents::NeedsYouKind::ChecksFileInvalidOnMain
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn an_invalid_checks_file_on_main_holds_the_integrations_until_main_fixes_it() {
+    let fx = Fixture::new().await;
+    give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
+    let proposal = approved(&fx, 1, |dir| {
+        std::fs::write(dir.join("one.txt"), "1\n").unwrap();
+    })
+    .await;
+    // The file breaks on main after the proposal was made: a proposal made from a broken file is refused at its own checks.
+    let main = main_actor(&fx.backend.worker);
+    checks_file_on_main(
+        &fx,
+        &main,
+        "[[check]]\nname = \"e2e\"\nrun = \"true\"\nstage = \"integration\"\nretries = 2\n",
+    )
+    .await;
+    assert_eq!(
+        fx.reviews
+            .integrate_proposal(&human(), p(proposal), Some(1))
+            .await
+            .unwrap(),
+        IntegrationOutcome::Queued
+    );
+    let held = "SELECT COUNT(*) FROM events WHERE type = 'integration.held'";
+    eventually(WAIT, async || {
+        let count = fx.count(held).await;
+        if count == 1 { Ok(()) } else { Err(count) }
+    })
+    .await;
+    let summary = fx
+        .reviews
+        .get_proposal(p(proposal), None)
+        .await
+        .unwrap()
+        .summary;
+    assert_eq!(summary.state, ProposalState::Open);
+    assert!(
+        !summary.checks_failed,
+        "the fault is main's, not the proposal's"
+    );
+    assert!(summary.integration_queued, "the integration stays queued");
+    assert_eq!(
+        fx.count("SELECT COUNT(*) FROM check_runs WHERE stage = 'integration'")
+            .await,
+        0
+    );
+    let items = held_items(&fx).await;
+    assert_eq!(items.len(), 1);
+    let title = items[0].title.as_deref().unwrap_or_default();
+    assert!(title.starts_with("fold-checks.toml line 5: "), "{title}");
+    assert_eq!(items[0].paths, ["fold-checks.toml"]);
+
+    // The automatic integration holds it too, and the main agent hears of main's file once.
+    fx.reviews.integrate_ready().await.unwrap();
+    assert_eq!(fx.count(held).await, 1);
+
+    checks_file_on_main(
+        &fx,
+        &main,
+        "[[check]]\nname = \"e2e\"\nrun = \"true\"\nstage = \"integration\"\n",
+    )
+    .await;
+    integrated(&fx, proposal).await;
+    assert!(held_items(&fx).await.is_empty());
 }
 
 #[tokio::test]

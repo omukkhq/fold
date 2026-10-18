@@ -594,6 +594,7 @@ async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError
         || kind == fold_core::events::types::HUMAN_CHANGE_CONFLICTED
         || kind == fold_core::events::types::HUMAN_CHANGE_RESOLVED
         || kind == fold_core::events::types::HUMAN_CHANGE_WITHDRAWN
+        || kind == fold_core::events::types::INTEGRATION_HELD
     {
         ctx.main_agents = tagged(store, Tag::is_main).await?;
         return Ok(ctx);

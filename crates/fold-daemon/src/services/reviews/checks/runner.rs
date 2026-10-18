@@ -82,6 +82,17 @@ pub struct CheckRunner {
     /// Held while fold's check directory is brought to a tree and while checks run in it.
     check_dir: Arc<tokio::sync::Mutex<()>>,
     queue: Arc<Queue>,
+    held: Arc<Mutex<Vec<HeldRequest>>>,
+}
+
+/// A queued integration that waits for a valid checks file on main. Its stored request keeps no end, so a daemon start serves it again; while the daemon runs, the next revision of main does.
+#[derive(Debug, Clone)]
+pub(crate) struct HeldRequest {
+    pub id: i64,
+    pub actor: fold_core::Actor,
+    pub proposal: fold_core::ProposalId,
+    pub version: u32,
+    pub expected_version: Option<u32>,
 }
 
 /// The queued integrations of a project in the order they were asked for: each takes a ticket when it is queued and runs when the queue serves that ticket.
@@ -138,6 +149,7 @@ impl CheckRunner {
             tasks: Arc::default(),
             check_dir: Arc::default(),
             queue: Arc::default(),
+            held: Arc::default(),
         }
     }
 
@@ -181,6 +193,16 @@ impl CheckRunner {
             number,
             queue: Arc::clone(&self.queue),
         }
+    }
+
+    /// Keeps a queued integration until main's checks file is valid again.
+    pub(crate) fn hold(&self, request: HeldRequest) {
+        lock(&self.held).push(request);
+    }
+
+    /// Every held integration, in the order it was held; the list is left empty.
+    pub(crate) fn take_held(&self) -> Vec<HeldRequest> {
+        std::mem::take(&mut *lock(&self.held))
     }
 
     /// The lock of the project's check directory.

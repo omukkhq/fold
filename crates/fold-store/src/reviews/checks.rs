@@ -580,3 +580,26 @@ pub async fn owed_gate_runs(
         })
         .collect()
 }
+
+/// The first `integration.held` event on main's current head, when there is one: since when integrations wait for main's checks file, and the problem the event stored. `None` once main moved past that head.
+pub async fn held_by_main(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Option<(Timestamp, String)>, StoreError> {
+    let row = sqlx::query!(
+        r#"SELECT e.created_at AS "created_at!: i64",
+                  json_extract(e.data, '$.problem') AS "problem?: String"
+           FROM events e JOIN refs r ON r.name = 'main' AND r.revision_id = e.revision_id
+           WHERE e.type = 'integration.held'
+           ORDER BY e.seq
+           LIMIT 1"#
+    )
+    .fetch_optional(executor)
+    .await?;
+    row.map(|row| {
+        Ok((
+            time(row.created_at, "events.created_at")?,
+            row.problem.unwrap_or_default(),
+        ))
+    })
+    .transpose()
+}

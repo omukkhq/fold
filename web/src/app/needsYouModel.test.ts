@@ -241,7 +241,8 @@ describe("needsYouGroups", () => {
       person: null,
       chip: null,
       title: "README.md and 1 more",
-      text: "fold does not update the project folder until you record your changes with fld record or take them back",
+      text: "Changes were made in your project. Undo the changes or save them using fld record",
+      hint: "opens the history of main",
       href: "/p/demo/repository",
     });
   });
@@ -267,14 +268,37 @@ describe("needsYouGroups", () => {
     });
   });
 
-  it("puts an unstash conflict last of the groups", () => {
+  it("shows main's invalid checks file with its file, line and problem, opening nothing", () => {
+    const [group] = needsYouGroups("demo", [
+      needsItem({
+        kind: "checks_file_invalid_on_main",
+        screen: "repository",
+        title: "fold-checks.toml line 12: unknown field `tiemout`",
+        paths: ["fold-checks.toml"],
+      }),
+    ]);
+    expect(group?.title).toBe("Checks file");
+    expect(group?.lines[0]).toMatchObject({
+      person: null,
+      chip: null,
+      task: null,
+      title: "fold-checks.toml line 12: unknown field `tiemout`",
+      text: "Integrations wait until the checks file on main is fixed",
+      hint: null,
+      href: null,
+    });
+  });
+
+  it("puts an unstash conflict, then main's checks file, last of the groups", () => {
     const groups = needsYouGroups("demo", [
+      needsItem({ kind: "checks_file_invalid_on_main", paths: ["a.toml"] }),
       needsItem({ kind: "unstash_conflicted", paths: ["a.md"] }),
       needsItem({ kind: "blocker", task: "T-3" }),
     ]);
     expect(groups.map((group) => group.kind)).toEqual([
       "blocker",
       "unstash_conflicted",
+      "checks_file_invalid_on_main",
     ]);
   });
 

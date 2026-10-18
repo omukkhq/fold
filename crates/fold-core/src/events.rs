@@ -151,6 +151,7 @@ define_event_types! {
     CHECKS_FINISHED = "checks.finished",
     INTEGRATION_QUEUED = "integration.queued",
     INTEGRATION_UNQUEUED = "integration.unqueued",
+    INTEGRATION_HELD = "integration.held",
 }
 
 impl EventType {

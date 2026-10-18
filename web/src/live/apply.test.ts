@@ -469,6 +469,18 @@ describe("invalidation rules", () => {
     expect(hit(keys.needsYou(slug))).toBe(false);
   });
 
+  it("refreshes Needs you when an integration is held by main's checks file and when main moves, and not for other integration events", () => {
+    for (const type of ["integration.held", "main.advanced"]) {
+      invalidated = [];
+      applyEvent(client, slug, ev(type));
+      expect(hit(keys.needsYou(slug)), type).toBe(true);
+    }
+    invalidated = [];
+    applyEvent(client, slug, ev("integration.queued", { proposal: "P-3" }));
+    expect(hit(keys.needsYou(slug))).toBe(false);
+    expect(hit(keys.proposal(slug, "P-3"))).toBe(true);
+  });
+
   it("refreshes Needs you and the project for each step of a stash", () => {
     for (const type of [
       "stash.pushed",

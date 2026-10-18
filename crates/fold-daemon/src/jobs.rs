@@ -425,7 +425,7 @@ async fn integrate_project(
     handle.slug.clone()
 }
 
-/// A verdict, alone or in a batch review, a changed or cleared mark, a removed dependency, a status change, which covers a prerequisite becoming Done, and an added tag, because an approval counts by the `main` tag and the role its agent holds now.
+/// A verdict, alone or in a batch review, a changed or cleared mark, a removed dependency, a status change, which covers a prerequisite becoming Done, an added tag, because an approval counts by the `main` tag and the role its agent holds now, and a move of main, which can fix the checks file that holds the integrations or clear fold's own failure to run the checks on the earlier main.
 fn can_make_ready(event_type: EventType) -> bool {
     [
         types::REVIEW_SUBMITTED,
@@ -435,6 +435,7 @@ fn can_make_ready(event_type: EventType) -> bool {
         types::AGENT_TAG_ADDED,
         types::DEPENDENCY_REMOVED,
         types::TASK_STATUS_CHANGED,
+        types::MAIN_ADVANCED,
     ]
     .contains(&event_type)
 }
@@ -902,6 +903,13 @@ mod tests {
         Timestamp::EPOCH
             .checked_add(Duration::from_secs(hours * 60 * 60))
             .unwrap()
+    }
+
+    #[test]
+    fn a_move_of_main_runs_the_automatic_integration_and_a_check_run_does_not() {
+        assert!(can_make_ready(types::MAIN_ADVANCED));
+        assert!(!can_make_ready(types::CHECKS_FINISHED));
+        assert!(!can_make_ready(types::INTEGRATION_HELD));
     }
 
     #[test]

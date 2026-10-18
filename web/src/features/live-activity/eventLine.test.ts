@@ -544,6 +544,12 @@ describe("eventLine", () => {
     expect(eventLine(event("integration.unqueued")).text).toBe(
       "took the integration of P-4 out of the queue",
     );
+    expect(eventLine(event("integration.held", { revision: "r7" })).text).toBe(
+      "held the integrations: fold-checks.toml on r7 is not valid",
+    );
+    expect(eventLine(event("integration.held", { revision: null })).text).toBe(
+      "held the integrations: fold-checks.toml on main is not valid",
+    );
   });
 
   it("marks integrations, main moves, request approvals and recorded human changes as emphasised, review approvals by their verdict", () => {

@@ -152,4 +152,36 @@ describe("NeedsYou", () => {
     expect(within(group).queryByRole("link")).toBeNull();
     expect(within(list).getAllByRole("link")).toHaveLength(1);
   });
+
+  it("shows main's invalid checks file as a line that opens nothing and counts it", async () => {
+    await renderBadge(
+      [
+        permission,
+        needsItem({
+          kind: "checks_file_invalid_on_main",
+          screen: "repository",
+          title: "fold-checks.toml line 12: unknown field `tiemout`",
+          paths: ["fold-checks.toml"],
+        }),
+      ],
+      null,
+    );
+    const badge = await screen.findByRole("button", { name: /Needs you/ });
+    expect(badge.textContent).toBe("Needs you2");
+    await userEvent.click(badge);
+    const list = screen.getByRole("dialog", { name: "Needs you" });
+    expect(within(list).getByText("2 waiting")).toBeTruthy();
+    const group = within(list).getByRole("region", { name: "Checks file" });
+    expect(
+      within(group).getByText(
+        "Integrations wait until the checks file on main is fixed",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(group).getByText(
+        "fold-checks.toml line 12: unknown field `tiemout`",
+      ),
+    ).toBeTruthy();
+    expect(within(group).queryByRole("link")).toBeNull();
+  });
 });

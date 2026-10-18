@@ -13,7 +13,7 @@ export interface NeedsYouLine {
   chip: string | null;
   text: string;
   task: string | null;
-  /** The second line's title: the proposal title of a review, the request title of a draft, the task title of a human task, the reason of a blocker, the conflicting files of a human change or of an unstash, the files that hold the project folder back. */
+  /** The second line's title: the proposal title of a review, the request title of a draft, the task title of a human task, the reason of a blocker, the conflicting files of a human change or of an unstash, the files that hold the project folder back, the file, line and problem of main's checks file. */
   title: string | null;
   since: number;
   /** What the line opens; null for a line that opens nothing, with `href`. */
@@ -38,6 +38,7 @@ const GROUPS: readonly { kind: NeedsYouKind; title: string }[] = [
   { kind: "head_moved", title: "Git branch" },
   { kind: "folder_held", title: "Project folder" },
   { kind: "unstash_conflicted", title: "Unstash conflict" },
+  { kind: "checks_file_invalid_on_main", title: "Checks file" },
 ];
 
 /** The items for this human: an item that waits for another named human is theirs. Before a name, every item shows. */
@@ -160,7 +161,7 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         chip: null,
         task: null,
         title: pathsText(item.paths),
-        text: "fold does not update the project folder until you record your changes with fld record or take them back",
+        text: "Changes were made in your project. Undo the changes or save them using fld record",
         hint: "opens the history of main",
         href: projectPath(slug, "repository"),
       };
@@ -172,6 +173,17 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         task: null,
         title: pathsText(item.paths),
         text: "Unstash conflicts. Fix the files and run fld record",
+        hint: null,
+        href: null,
+      };
+    case "checks_file_invalid_on_main":
+      return {
+        ...base,
+        person: null,
+        chip: null,
+        task: null,
+        title: titleText(item.title),
+        text: "Integrations wait until the checks file on main is fixed",
         hint: null,
         href: null,
       };
@@ -196,7 +208,7 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
   }
 }
 
-/** The list in group order: questions, permissions, reviews, request drafts, human tasks, blockers, human changes, the Git branch, the project folder, an unstash conflict; a group without items is left out. */
+/** The list in group order: questions, permissions, reviews, request drafts, human tasks, blockers, human changes, the Git branch, the project folder, an unstash conflict, main's checks file; a group without items is left out. */
 export function needsYouGroups(
   slug: string,
   items: readonly NeedsYouItem[],

@@ -140,6 +140,8 @@ pub enum NeedsYouItemKind {
     FolderHeld,
     /// `fld unstash` wrote conflict markers into the files `paths` names and kept the stash entry, so fold does not update the project folder until the human fixes the files and records them with `fld record`; `reason` says so.
     UnstashConflicted,
+    /// The checks file on main is not valid, so fold holds the integrations of proposals until a revision of main fixes it; `title` states the file, the line and the problem, and `paths` names the file.
+    ChecksFileInvalidOnMain,
 }
 
 /// The screen that answers an item: `messages` opens the thread, `worker` the asking worker, `proposal` the proposal, `request` the request, `task` the task and `repository` the history of main.
@@ -191,7 +193,7 @@ pub struct NeedsYouEntry {
     /// The short header of a `question`, such as `Chart library`.
     #[schema(required = true, example = "Chart library")]
     pub header: Option<String>,
-    /// The second line of a `human_review` (the proposal title) and of a `request_draft` (the request title, which the claim gave it); the task title of a `human_task` or a `blocker`.
+    /// The second line of a `human_review` (the proposal title) and of a `request_draft` (the request title, which the claim gave it); the task title of a `human_task` or a `blocker`; the file, line and problem of a `checks_file_invalid_on_main`.
     #[schema(required = true, example = "Database schema for reports")]
     pub title: Option<String>,
     /// The reason of a `blocker`; the command that brings the Git branch back for `head_moved`, records the folder's changes for `folder_held`, or ends the conflict for `unstash_conflicted`.
@@ -217,6 +219,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             NeedsYouKind::HeadMoved => NeedsYouItemKind::HeadMoved,
             NeedsYouKind::FolderHeld => NeedsYouItemKind::FolderHeld,
             NeedsYouKind::UnstashConflicted => NeedsYouItemKind::UnstashConflicted,
+            NeedsYouKind::ChecksFileInvalidOnMain => NeedsYouItemKind::ChecksFileInvalidOnMain,
         };
         let screen = match item.kind.screen() {
             Screen::Messages => NeedsYouScreen::Messages,

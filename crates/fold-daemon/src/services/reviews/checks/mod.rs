@@ -25,6 +25,7 @@ mod integration;
 mod runner;
 
 pub(crate) use integration::{Integrating, IntegrationChecks, PassedRun, fold_failed_refusal};
+pub(crate) use runner::HeldRequest;
 pub use runner::{
     CheckPermits, CheckRunner, CommandResult, CommandSpec, LOG_LIMIT, RunLimits, commands,
     run_commands, run_commands_for,

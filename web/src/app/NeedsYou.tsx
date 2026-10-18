@@ -4,6 +4,7 @@ import {
   Bell,
   ChevronRight,
   FileWarning,
+  FileX,
   FolderClock,
   GitBranch,
   GitMerge,
@@ -43,6 +44,7 @@ const ICONS: Record<NeedsYouKind, LucideIcon> = {
   head_moved: GitBranch,
   folder_held: FolderClock,
   unstash_conflicted: FileWarning,
+  checks_file_invalid_on_main: FileX,
 };
 
 const MINUTE_MS = 60_000;

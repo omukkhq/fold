@@ -73,6 +73,7 @@ pub fn is_pushed(event: &Event) -> bool {
         types::HUMAN_CHANGE_RESOLVED,
         types::HUMAN_CHANGE_WITHDRAWN,
         types::PROPOSAL_REVIEWER_FIXED,
+        types::INTEGRATION_HELD,
     ]
     .contains(&event.event_type)
 }
@@ -420,6 +421,18 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
             ctx.implementation_claim.iter().cloned().collect(),
             format!("{task} was sent back"),
             "get_task",
+        ));
+    }
+    if kind == types::INTEGRATION_HELD {
+        let head = event
+            .revision
+            .map_or_else(|| "main".to_owned(), |revision| format!("main {revision}"));
+        return Some((
+            ctx.main_agents.iter().cloned().collect(),
+            format!(
+                "fold-checks.toml on {head} is not valid; fold holds the integrations of proposals until it is fixed on main"
+            ),
+            "open_main_workspace",
         ));
     }
     if kind == types::PROJECT_PAUSED {
@@ -978,6 +991,23 @@ mod tests {
             )]
         );
         assert!(notice_for(&event(types::PROJECT_PAUSED, "main"), &ctx).is_empty());
+    }
+
+    #[test]
+    fn integrations_held_by_main_tell_the_main_agent() {
+        let mut ctx = ctx();
+        ctx.main_agents = [name("main")].into_iter().collect();
+        let mut held = event(types::INTEGRATION_HELD, "fold");
+        assert!(is_pushed(&held));
+        held.revision = RevisionId::from_number(7);
+        assert_eq!(
+            sent(&notice_for(&held, &ctx)),
+            vec![row(
+                "main",
+                "fold: fold-checks.toml on main r7 is not valid; fold holds the integrations of proposals until it is fixed on main. Call open_main_workspace.",
+                "open_main_workspace"
+            )]
+        );
     }
 
     #[test]

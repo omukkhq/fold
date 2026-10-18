@@ -122,6 +122,7 @@ fn all_equals_the_plans_event_types() {
         "checks.finished",
         "integration.queued",
         "integration.unqueued",
+        "integration.held",
     ]);
     assert_eq!(declared, expected);
 }
