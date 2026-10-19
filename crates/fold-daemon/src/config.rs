@@ -37,6 +37,42 @@ pub const LOCK_FILE: &str = "daemon.lock";
 /// The default socket in the runtime directory.
 pub const SOCKET_FILE: &str = "fold.sock";
 
+/// What the daemon that holds [`LOCK_FILE`] writes into it, so `fld restart` can stop that daemon and name the version it ran. The text is true only while the lock is held: a daemon that was killed leaves its lines behind.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LockOwner {
+    pub pid: u32,
+    pub version: String,
+}
+
+impl LockOwner {
+    /// This process, running this build.
+    pub fn current() -> Self {
+        Self {
+            pid: std::process::id(),
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+        }
+    }
+
+    /// The pid and the version, one per line.
+    pub fn render(&self) -> String {
+        format!("{}\n{}\n", self.pid, self.version)
+    }
+
+    /// `None` for text that is not two such lines, which is what a daemon older than the record leaves: an empty file.
+    pub fn parse(text: &str) -> Option<Self> {
+        let mut lines = text.lines();
+        let pid = lines.next()?.trim().parse().ok()?;
+        let version = lines.next()?.trim();
+        if version.is_empty() || lines.next().is_some() {
+            return None;
+        }
+        Some(Self {
+            pid,
+            version: version.to_owned(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -61,5 +97,21 @@ mod tests {
             Path::new("/run/user/1/fold/daemon.lock")
         );
         assert_eq!(config.socket_dir(), Some(Path::new("/run/user/1/fold")));
+    }
+
+    #[test]
+    fn the_lock_owner_reads_back_what_it_writes_and_nothing_else() {
+        let owner = LockOwner {
+            pid: 4242,
+            version: "0.3.0".to_owned(),
+        };
+        assert_eq!(owner.render(), "4242\n0.3.0\n");
+        assert_eq!(LockOwner::parse(&owner.render()), Some(owner));
+        for text in ["", "4242\n", "pid\n0.3.0\n", "4242\n\n", "1\n0.3.0\nmore\n"] {
+            assert_eq!(LockOwner::parse(text), None, "{text:?}");
+        }
+        let current = LockOwner::current();
+        assert_eq!(current.pid, std::process::id());
+        assert_eq!(current.version, env!("CARGO_PKG_VERSION"));
     }
 }

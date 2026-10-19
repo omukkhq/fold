@@ -13,7 +13,7 @@ use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-use crate::config::DaemonConfig;
+use crate::config::{DaemonConfig, LockOwner};
 use crate::http::{self, assets::AssetSource};
 use crate::jobs::{self, Job};
 use crate::mcp;
@@ -308,16 +308,17 @@ impl RunningDaemon {
     }
 }
 
-/// Resolves when the process receives SIGINT or SIGTERM.
-pub async fn shutdown_signal() -> io::Result<()> {
+/// Listens for SIGINT and SIGTERM from the moment it returns, inside a tokio runtime, and the future resolves at the first one. Taken before the daemon starts, it turns a signal that arrives during the start into a clean shutdown right after it, where the default action would end the process at once.
+pub fn shutdown_signal() -> io::Result<impl Future<Output = ()>> {
     use tokio::signal::unix::{SignalKind, signal};
     let mut interrupt = signal(SignalKind::interrupt())?;
     let mut terminate = signal(SignalKind::terminate())?;
-    tokio::select! {
-        _ = interrupt.recv() => {}
-        _ = terminate.recv() => {}
-    }
-    Ok(())
+    Ok(async move {
+        tokio::select! {
+            _ = interrupt.recv() => {}
+            _ = terminate.recv() => {}
+        }
+    })
 }
 
 async fn serve_http(listener: TcpListener, router: Router, mut stopped: watch::Receiver<bool>) {
@@ -327,6 +328,14 @@ async fn serve_http(listener: TcpListener, router: Router, mut stopped: watch::R
     if let Err(error) = served.await {
         tracing::error!(%error, "HTTP listener failed");
     }
+}
+
+/// Replaces what an earlier holder left in the lock file with this daemon's [`LockOwner`].
+fn record_owner(mut lock: &File) -> io::Result<()> {
+    use std::io::Write;
+    lock.set_len(0)?;
+    lock.write_all(LockOwner::current().render().as_bytes())?;
+    lock.sync_data()
 }
 
 async fn remove_stale_socket(path: &Path) -> Result<(), DaemonError> {
@@ -360,7 +369,10 @@ fn prepare_runtime_dir(config: &DaemonConfig) -> Result<File, DaemonError> {
         .open(config.lock_path())
         .map_err(DaemonError::io("open the lock file"))?;
     match lock.try_lock() {
-        Ok(()) => Ok(lock),
+        Ok(()) => {
+            record_owner(&lock).map_err(DaemonError::io("write the lock file"))?;
+            Ok(lock)
+        }
         Err(TryLockError::WouldBlock) => Err(DaemonError::AlreadyRunning {
             path: config.lock_path(),
         }),

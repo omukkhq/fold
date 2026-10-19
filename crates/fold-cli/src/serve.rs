@@ -246,8 +246,9 @@ pub fn run(args: &ServeArgs) -> Result<(), ServeError> {
         .build()
         .map_err(ServeError::Runtime)?;
     runtime.block_on(async {
+        let signals = shutdown_signal().map_err(ServeError::Signals)?;
         let daemon = Daemon::start(config, Arc::new(SystemClock)).await?;
-        shutdown_signal().await.map_err(ServeError::Signals)?;
+        signals.await;
         tracing::info!("shutting down");
         daemon.shutdown().await;
         Ok(())

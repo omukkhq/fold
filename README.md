@@ -134,6 +134,7 @@ Run these commands inside your project:
 | `fld stash` | Put your unrecorded changes aside, so the project folder follows main. `fld stash list` shows the stash. |
 | `fld unstash` | Bring the newest stashed changes back into the project folder. If they conflict, fix the conflict markers, then run `fld record`. |
 | `fld setup` | Start the daemon at login. |
+| `fld restart` | Restart the daemon after an update, so the new version takes over. Workers continue in their sessions. |
 | `fld doctor` | Check the installation, daemon, and projects, with suggested fixes. |
 | `fld --help` | See the command reference. |
 

@@ -152,7 +152,7 @@ fn install(
     Ok(())
 }
 
-fn systemctl_user(program: &Path, args: &[&str]) -> Result<(), ServiceError> {
+pub(crate) fn systemctl_user(program: &Path, args: &[&str]) -> Result<(), ServiceError> {
     let status = Command::new(program)
         .arg("--user")
         .args(args)
@@ -255,7 +255,7 @@ fn launchctl_command(program: &Path, args: &[&str]) -> Command {
 }
 
 /// True when `launchctl` exits 0. Its error text goes nowhere: a `bootout` of an agent that is not loaded fails, and that is no error here.
-fn launchctl_succeeds(program: &Path, args: &[&str]) -> Result<bool, ServiceError> {
+pub(crate) fn launchctl_succeeds(program: &Path, args: &[&str]) -> Result<bool, ServiceError> {
     launchctl_command(program, args)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -267,7 +267,7 @@ fn launchctl_succeeds(program: &Path, args: &[&str]) -> Result<bool, ServiceErro
         })
 }
 
-fn launchctl_run(program: &Path, args: &[&str]) -> Result<(), ServiceError> {
+pub(crate) fn launchctl_run(program: &Path, args: &[&str]) -> Result<(), ServiceError> {
     let status = launchctl_command(program, args)
         .status()
         .map_err(|source| ServiceError::Spawn {

@@ -38,6 +38,7 @@ mod init;
 mod init_folder;
 mod news;
 mod remote;
+mod restart;
 #[cfg(feature = "dev-seed")]
 mod seed_dev;
 mod service_install;
