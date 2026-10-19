@@ -282,9 +282,13 @@ impl RunningDaemon {
         self.auto_integrate.stopped(DRAIN_TIMEOUT).await;
         self.worker_idle.stopped(DRAIN_TIMEOUT).await;
         let handles = self.state.projects.handles();
+        // The projects end their workers at the same time, so the stop that systemd and `fld restart` wait for does not grow with the number of projects.
+        let mut stops = tokio::task::JoinSet::new();
         for handle in &handles {
-            handle.workers.shutdown().await;
+            let handle = Arc::clone(handle);
+            stops.spawn(async move { handle.workers.shutdown().await });
         }
+        while stops.join_next().await.is_some() {}
         for handle in &handles {
             handle.bus.close();
         }

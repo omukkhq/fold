@@ -12,7 +12,7 @@ use crate::doctor::{LockState, inspect_lock};
 use crate::output;
 use crate::platform::{Host, LAUNCH_AGENT_LABEL};
 use crate::serve::{self, ServeError};
-use crate::service::{self, ServiceError};
+use crate::service::{self, Refreshed, ServiceError};
 
 #[derive(Args)]
 pub struct RestartArgs {
@@ -25,7 +25,7 @@ pub struct RestartArgs {
 }
 
 /// How long the old daemon gets to stop. Its shutdown waits for each job, the workers and the open connections in turn, each up to the daemon's drain timeout.
-const STOP_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const STOP_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long the new daemon gets to hold the lock and answer on the socket once it is started.
 const START_TIMEOUT: Duration = Duration::from_secs(15);
 const FIRST_POLL: Duration = Duration::from_millis(20);
@@ -124,6 +124,7 @@ pub(crate) trait Daemons {
 enum Manager {
     Systemd {
         systemctl: PathBuf,
+        unit: PathBuf,
     },
     Launchd {
         launchctl: PathBuf,
@@ -146,6 +147,7 @@ impl Manager {
             }
             return Some(Self::Systemd {
                 systemctl: host.systemctl()?,
+                unit,
             });
         }
         let agent = host.agent_path()?;
@@ -161,7 +163,9 @@ impl Manager {
 
     fn answers(&self) -> bool {
         match self {
-            Self::Systemd { systemctl } => succeeds(systemctl, &["--user", "cat", "fold.service"]),
+            Self::Systemd { systemctl, .. } => {
+                succeeds(systemctl, &["--user", "cat", "fold.service"])
+            }
             Self::Launchd {
                 launchctl, domain, ..
             } => succeeds(launchctl, &["print", domain]),
@@ -175,10 +179,32 @@ impl Manager {
         }
     }
 
+    /// Brings an installed unit that starts `exe` to the text `fld setup` would write for it and has systemd read it again, so a unit from an older fld gets the current lines before the daemon of the new one starts; a unit that starts another fld is kept, with a line that names `fld setup`. The launchd agent keeps its file.
+    fn refresh(&self, exe: &Path, out: &mut impl Write) -> Result<(), RestartError> {
+        let Self::Systemd { systemctl, unit } = self else {
+            return Ok(());
+        };
+        let line = match service::refresh_unit(unit, exe, systemctl)? {
+            Refreshed::Current => return Ok(()),
+            Refreshed::Wrote => format!("wrote {}", unit.display()),
+            Refreshed::Kept(Some(started)) => format!(
+                "kept {}, which starts {}: run `fld setup` to have it start this fld",
+                unit.display(),
+                started.display()
+            ),
+            Refreshed::Kept(None) => format!(
+                "kept {}, which does not start this fld: run `fld setup` to have it start this fld",
+                unit.display()
+            ),
+        };
+        output::line(out, &line)?;
+        Ok(())
+    }
+
     /// `restart` rather than `start`, and `kickstart -k`, because the manager may not have seen the old daemon's exit yet; an agent that is not loaded is bootstrapped, which starts it.
     fn start(&self) -> Result<(), ServiceError> {
         match self {
-            Self::Systemd { systemctl } => {
+            Self::Systemd { systemctl, .. } => {
                 service::systemctl_user(systemctl, &["restart", "fold.service"])
             }
             Self::Launchd {
@@ -208,7 +234,8 @@ pub fn run(args: &RestartArgs, out: &mut impl Write) -> Result<(), RestartError>
     if args.stop {
         return stop(&daemons, out);
     }
-    restart(&host, &daemons, &daemons.config.socket, out)
+    let exe = std::env::current_exe().map_err(ServiceError::Exe)?;
+    restart(&host, &exe, &daemons, &daemons.config.socket, out)
 }
 
 /// The same clean stop as a restart's, and nothing after it. A daemon under a service manager stays stopped: its SIGTERM shutdown exits 0, and neither fold's unit nor its agent restarts a daemon that exited 0.
@@ -224,14 +251,18 @@ fn stop(daemons: &impl Daemons, out: &mut impl Write) -> Result<(), RestartError
     Ok(())
 }
 
-/// The old daemon always stops through its own SIGTERM, also under a service manager: a manager's stop signals every process of the service at once, and a worker that dies before the daemon lets go of it counts as failed instead of resuming. The manager then starts the new daemon, so it keeps supervising it.
+/// The old daemon always stops through its own SIGTERM, also under a service manager: a manager's stop of an older unit signals every process of the service at once, and a worker that dies before the daemon lets go of it counts as failed instead of resuming. The manager then starts the new daemon, so it keeps supervising it; an installed unit that starts `exe`, the fld that runs the restart, is first brought to its current text.
 fn restart(
     host: &Host,
+    exe: &Path,
     daemons: &impl Daemons,
     socket: &Path,
     out: &mut impl Write,
 ) -> Result<(), RestartError> {
     let manager = Manager::of(host);
+    if let Some(manager) = &manager {
+        manager.refresh(exe, out)?;
+    }
     let old = daemons.running()?;
     if let Some(old) = &old {
         daemons.stop(old)?;
@@ -528,9 +559,22 @@ mod tests {
         std::fs::write(path, "").unwrap();
     }
 
+    /// The unit an older fld wrote for `/usr/bin/fld`, the fld that [`restarted`] runs the restart as.
+    fn older_unit(path: &Path) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let text = service::render_unit(Path::new("/usr/bin/fld")).replace("KillMode=mixed\n", "");
+        std::fs::write(path, text).unwrap();
+    }
+
     fn restarted(host: &Host, fake: &Fake) -> Result<String, RestartError> {
         let mut out = Vec::new();
-        restart(host, fake, Path::new("/run/fold/fold.sock"), &mut out)?;
+        restart(
+            host,
+            Path::new("/usr/bin/fld"),
+            fake,
+            Path::new("/run/fold/fold.sock"),
+            &mut out,
+        )?;
         Ok(String::from_utf8(out).unwrap())
     }
 
@@ -574,25 +618,95 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let log = tool(dir.path(), "systemctl", "exit 0");
         let host = host(dir.path(), true);
-        installed(&host.unit_path().unwrap());
+        older_unit(&host.unit_path().unwrap());
         let fake = Fake::new(Some("0.2.0"), "0.3.0");
         let shown = restarted(&host, &fake).unwrap();
         assert_eq!(fake.calls(), ["running", "stop", "wait"]);
         assert_eq!(
             std::fs::read_to_string(&log).unwrap(),
-            "--user cat fold.service\n--user restart fold.service\n"
+            "--user cat fold.service\n--user daemon-reload\n--user restart fold.service\n",
+            "the unit of an older fld is written again and read before the restart"
+        );
+        assert_eq!(
+            std::fs::read_to_string(host.unit_path().unwrap()).unwrap(),
+            service::render_unit(Path::new("/usr/bin/fld"))
         );
         assert_eq!(
             shown,
-            "restarted the fold daemon through fold.service: 0.2.0 -> 0.3.0, socket /run/fold/fold.sock\n"
+            format!(
+                "wrote {}\nrestarted the fold daemon through fold.service: 0.2.0 -> 0.3.0, socket /run/fold/fold.sock\n",
+                host.unit_path().unwrap().display()
+            )
         );
 
+        std::fs::remove_file(&log).unwrap();
         let fake = Fake::new(None, "0.3.0");
         let shown = restarted(&host, &fake).unwrap();
         assert_eq!(fake.calls(), ["running", "wait"]);
         assert!(
             shown.starts_with("no fold daemon was running; started 0.3.0 through fold.service")
         );
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            "--user cat fold.service\n--user daemon-reload\n--user restart fold.service\n",
+            "a current unit is left as it is and read again"
+        );
+    }
+
+    #[test]
+    fn a_unit_that_starts_another_fld_is_kept_and_the_restart_goes_on() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let log = tool(dir.path(), "systemctl", "exit 0");
+        let host = host(dir.path(), true);
+        let unit = host.unit_path().unwrap();
+        std::fs::create_dir_all(unit.parent().unwrap()).unwrap();
+        let other = service::render_unit(Path::new("/opt/fold/fld"));
+        std::fs::write(&unit, &other).unwrap();
+        let fake = Fake::new(Some("0.2.0"), "0.3.0");
+        let shown = restarted(&host, &fake).unwrap();
+        assert_eq!(fake.calls(), ["running", "stop", "wait"]);
+        assert_eq!(std::fs::read_to_string(&unit).unwrap(), other);
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            "--user cat fold.service\n--user daemon-reload\n--user restart fold.service\n"
+        );
+        assert_eq!(
+            shown,
+            format!(
+                "kept {}, which starts /opt/fold/fld: run `fld setup` to have it start this fld\nrestarted the fold daemon through fold.service: 0.2.0 -> 0.3.0, socket /run/fold/fold.sock\n",
+                unit.display()
+            )
+        );
+
+        std::fs::write(&unit, "").unwrap();
+        let shown = restarted(&host, &Fake::new(None, "0.3.0")).unwrap();
+        assert!(
+            shown.starts_with(&format!(
+                "kept {}, which does not start this fld: run `fld setup` to have it start this fld\n",
+                unit.display()
+            )),
+            "{shown}"
+        );
+        assert_eq!(std::fs::read_to_string(&unit).unwrap(), "");
+    }
+
+    #[test]
+    fn a_unit_that_systemd_cannot_read_again_stops_no_daemon() {
+        let dir = tempfile::TempDir::new().unwrap();
+        tool(
+            dir.path(),
+            "systemctl",
+            "[ \"$2\" = daemon-reload ] && exit 5\nexit 0",
+        );
+        let host = host(dir.path(), true);
+        older_unit(&host.unit_path().unwrap());
+        let fake = Fake::new(Some("0.2.0"), "0.3.0");
+        let error = restarted(&host, &fake).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "`systemctl --user daemon-reload` failed with exit status: 5"
+        );
+        assert!(fake.calls().is_empty(), "{:?}", fake.calls());
     }
 
     #[test]
@@ -601,10 +715,10 @@ mod tests {
         let log = tool(
             dir.path(),
             "systemctl",
-            "[ \"$2\" = cat ] && exit 0\nexit 4",
+            "case \"$2\" in cat | daemon-reload) exit 0 ;; esac\nexit 4",
         );
         let host = host(dir.path(), true);
-        installed(&host.unit_path().unwrap());
+        older_unit(&host.unit_path().unwrap());
         let error = restarted(&host, &Fake::new(None, "0.3.0")).unwrap_err();
         assert_eq!(error.code(), Some("service_install_failed"));
         assert_eq!(
@@ -620,8 +734,8 @@ mod tests {
         assert_eq!(fake.calls(), ["running", "stop"]);
         assert_eq!(
             std::fs::read_to_string(&log).unwrap(),
-            "--user cat fold.service\n",
-            "only the probe, and no restart after a failed stop"
+            "--user cat fold.service\n--user daemon-reload\n",
+            "only the probe and the reload, and no restart after a failed stop"
         );
     }
 
@@ -631,10 +745,10 @@ mod tests {
         tool(
             dir.path(),
             "systemctl",
-            "[ \"$2\" = cat ] && exit 0\nexit 4",
+            "case \"$2\" in cat | daemon-reload) exit 0 ;; esac\nexit 4",
         );
         let unit = host(dir.path(), true);
-        installed(&unit.unit_path().unwrap());
+        older_unit(&unit.unit_path().unwrap());
         let fake = Fake::new(Some("0.2.0"), "0.3.0");
         let error = restarted(&unit, &fake).unwrap_err();
         assert_eq!(fake.calls(), ["running", "stop"]);

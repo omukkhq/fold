@@ -153,7 +153,15 @@ async fn restart_with_an_installed_unit_stops_the_daemon_then_restarts_the_unit(
     let socket = host.default_socket();
     let unit = host.config_home().join("systemd/user/fold.service");
     std::fs::create_dir_all(unit.parent().unwrap()).unwrap();
-    std::fs::write(&unit, "").unwrap();
+    // The unit an older fld wrote for this fld, without the stop lines.
+    std::fs::write(
+        &unit,
+        format!(
+            "[Unit]\nDescription=fold daemon\nAfter=default.target\n\n[Service]\nType=simple\nExecStart={} serve\nRestart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n",
+            env!("CARGO_BIN_EXE_fld")
+        ),
+    )
+    .unwrap();
     let bin = host.dir.path().join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let log = host.dir.path().join("systemctl.log");
@@ -183,12 +191,19 @@ async fn restart_with_an_installed_unit_stops_the_daemon_then_restarts_the_unit(
     let guard = DaemonGuard(daemons(&socket));
     assert_eq!(
         std::fs::read_to_string(&log).unwrap(),
-        "--user cat fold.service\n--user restart fold.service\n"
+        "--user cat fold.service\n--user daemon-reload\n--user restart fold.service\n"
+    );
+    let rewritten = std::fs::read_to_string(&unit).unwrap();
+    assert!(
+        rewritten.contains("KillMode=mixed\n")
+            && rewritten.contains(&format!("ExecStart={} serve\n", env!("CARGO_BIN_EXE_fld"))),
+        "{rewritten}"
     );
     assert_eq!(
         stdout(&output),
         format!(
-            "restarted the fold daemon through fold.service: {VERSION} -> {VERSION}, socket {}\n",
+            "wrote {}\nrestarted the fold daemon through fold.service: {VERSION} -> {VERSION}, socket {}\n",
+            unit.display(),
             socket.display()
         )
     );

@@ -276,7 +276,8 @@ async fn doctor_with_a_running_daemon_reports_nothing_for_a_project_whose_fold_w
         assert!(output.status.success(), "{output:?}");
     }
     let gone = sandbox.path("gone");
-    std::fs::remove_dir_all(gone.join(".fold")).unwrap();
+    // The open project can write into `.fold/` while it is removed.
+    remove_dir_eventually(&gone.join(".fold"), Duration::from_secs(10)).await;
 
     let doctor = fold_blocking(
         sandbox.clone(),
