@@ -342,6 +342,7 @@ async fn the_agents_route_returns_the_overview_in_registration_order() {
                  "claims": [], "workspaces": [], "proposals": []},
             ],
             "events": [],
+            "process": null,
         })
     );
     assert_eq!(body["agents"][0]["tags"], json!(["review"]));
@@ -354,6 +355,62 @@ async fn the_agents_route_returns_the_overview_in_registration_order() {
     assert_eq!(body["agents"][1]["presence"], "offline");
     assert_eq!(body["agents"][1]["sessions"], 0);
     assert_eq!(body["agents"][1]["open_sessions"], json!([]));
+}
+
+#[tokio::test]
+async fn the_agents_route_gives_a_supervised_agent_the_state_of_its_process() {
+    use fold_core::{Role, WorkerState};
+    use fold_store::StoreError;
+    use fold_store::agents::{self, NewWorkerProcess};
+
+    let fixture = Fixture::new().await;
+    let lead = AgentName::parse("web-lead").unwrap();
+    let mut ctx = fixture.agents().start_session(3).await.unwrap();
+    fixture
+        .agents()
+        .register_agent(&mut ctx, &lead, &[])
+        .await
+        .unwrap();
+    fixture.agents().end_session(&ctx).await.unwrap();
+    let now = fixture.project.now();
+    fixture
+        .handle
+        .store
+        .write(async |tx| {
+            let agent = agents::find_agent(tx.conn(), &lead).await?.unwrap();
+            let id = agents::insert_worker_process(
+                tx,
+                &NewWorkerProcess {
+                    agent_id: agent.id,
+                    role: Role::ReviewLead,
+                    area_id: None,
+                    model: None,
+                    session_id: "00000000-0000-4000-8000-000000000003",
+                    started_by: "ana",
+                    now,
+                },
+            )
+            .await?;
+            agents::set_worker_state(tx, id, WorkerState::Idle, now).await?;
+            Ok::<_, StoreError>(())
+        })
+        .await
+        .unwrap();
+
+    let (status, body) = call(fixture.http(), Method::GET, AGENTS, &[]).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let lead = body["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|agent| agent["name"] == "web-lead")
+        .unwrap();
+    assert_eq!(lead["presence"], "offline", "no session between turns");
+    assert_eq!(
+        lead["process"],
+        json!({"state": "idle", "failed_reason": null})
+    );
+    assert_eq!(body["agents"][0]["process"], Value::Null);
 }
 
 #[tokio::test]

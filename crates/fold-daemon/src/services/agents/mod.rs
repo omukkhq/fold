@@ -38,7 +38,7 @@ pub use context::{
 pub use needs_you::{NeedsYouItem, NeedsYouKind, Screen, needs_you, with_folder_attention};
 pub use overview::{
     AgentAttention, AgentOverview, ClaimSummary, MAX_OVERVIEW_EVENTS, OverviewFilter,
-    ProposalSummary, SessionSummary, WorkerOverview, WorkspaceSummary,
+    ProcessSummary, ProposalSummary, SessionSummary, WorkerOverview, WorkspaceSummary,
 };
 pub use presence::SeenPresence;
 #[cfg(feature = "dev-launcher")]

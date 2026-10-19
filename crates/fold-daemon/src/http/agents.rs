@@ -60,6 +60,18 @@ pub struct AgentEntry {
     /// The newest events the agent's workers performed, newest first; empty unless `events` is asked for.
     #[schema(value_type = Vec<DurableEvent>)]
     pub events: Vec<Event>,
+    /// The Claude Code process that fold supervises for the agent; null for an agent fold does not run, such as the main agent. A supervised agent runs Claude Code only during a turn, so its presence is offline between turns while this process is idle.
+    #[schema(required = true)]
+    pub process: Option<AgentProcess>,
+}
+
+/// The state of an agent's supervised process.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AgentProcess {
+    pub state: workers::WorkerProcessState,
+    /// Why the process failed, such as `exited` or `mcp_unavailable` (its fold MCP server did not connect); null unless `state` is `failed`, and for a process that failed before fold stored the reason.
+    #[schema(required = true, example = "mcp_unavailable")]
+    pub failed_reason: Option<String>,
 }
 
 /// A connected session. A session has no public id; one adapter process is one session, so its pid names it.
@@ -279,6 +291,10 @@ impl From<AgentOverview> for AgentEntry {
                 .collect(),
             workers: agent.workers.into_iter().map(WorkerEntry::from).collect(),
             events: agent.events,
+            process: agent.process.map(|process| AgentProcess {
+                state: process.state.into(),
+                failed_reason: process.failed_reason,
+            }),
         }
     }
 }

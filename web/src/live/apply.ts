@@ -544,7 +544,19 @@ function applyWorkerOutput(
     ...old,
     [frame.agent]: { step: frame.step, tool: frame.tool },
   }));
+  // A turn's start and end move the worker between working and idle without a stored event, so the agents and the workers are read again then.
+  if (TURN_STEPS.has(frame.step)) {
+    void queryClient.invalidateQueries({ queryKey: keys.agents(slug) });
+    void queryClient.invalidateQueries({ queryKey: keys.workers(slug) });
+  }
 }
+
+/** The steps that start or end a worker's turn. */
+const TURN_STEPS: ReadonlySet<string> = new Set([
+  "init",
+  "result",
+  "result_error",
+]);
 
 /** A malformed patch falls through to the invalidation of its domain. */
 function applyStored(

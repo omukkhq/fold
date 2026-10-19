@@ -1979,6 +1979,28 @@ async fn a_worker_whose_fold_server_failed_ends_failed_and_asks_for_a_restart() 
     );
     let listed = harness.call(MAIN, "list_workers", json!({})).await;
     assert_eq!(listed["workers"][0]["failed_reason"], "mcp_unavailable");
+    let (status, agents) = harness
+        .http(Method::GET, "/api/v1/projects/demo/agents", None, "ana")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{agents}");
+    let process_of = |agent: &str| {
+        agents["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["name"] == agent)
+            .map(|entry| entry["process"].clone())
+            .unwrap()
+    };
+    assert_eq!(
+        process_of("web-lead"),
+        json!({"state": "failed", "failed_reason": "mcp_unavailable"})
+    );
+    assert_eq!(
+        process_of(MAIN),
+        Value::Null,
+        "fold does not run the main agent"
+    );
 }
 
 #[tokio::test]

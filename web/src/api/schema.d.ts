@@ -1311,6 +1311,7 @@ export interface components {
             /** @description The connected sessions, oldest first. */
             open_sessions: components["schemas"]["AgentSession"][];
             presence: components["schemas"]["PresenceState"];
+            process: components["schemas"]["AgentProcess"] | null;
             /**
              * Format: int64
              * @description How many of the agent's sessions are connected.
@@ -1324,6 +1325,15 @@ export interface components {
         /** @description Every agent of the project in registration order. */
         AgentList: {
             agents: components["schemas"]["AgentEntry"][];
+        };
+        /** @description The state of an agent's supervised process. */
+        AgentProcess: {
+            /**
+             * @description Why the process failed, such as `exited` or `mcp_unavailable` (its fold MCP server did not connect); null unless `state` is `failed`, and for a process that failed before fold stored the reason.
+             * @example mcp_unavailable
+             */
+            failed_reason: string | null;
+            state: components["schemas"]["WorkerProcessState"];
         };
         /** @description A connected session. A session has no public id; one adapter process is one session, so its pid names it. */
         AgentSession: {

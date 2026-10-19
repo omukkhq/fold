@@ -350,6 +350,26 @@ describe("patch rules", () => {
     expect(invalidated).toEqual([]);
   });
 
+  it("refetches the agents and the workers when a worker's turn starts or ends", () => {
+    for (const step of ["init", "result", "result_error"]) {
+      invalidated = [];
+      applyEvent(
+        client,
+        slug,
+        guarded({
+          kind: "worker_output",
+          agent: "web-lead",
+          step,
+          tool: null,
+          text_length: null,
+        }),
+      );
+      expect(hit(keys.agents(slug)), step).toBe(true);
+      expect(hit(keys.workers(slug)), step).toBe(true);
+      expect(hit(keys.activity(slug)), step).toBe(false);
+    }
+  });
+
   it("refetches an agent list that does not hold the agent and leaves other projects alone", () => {
     client.setQueryData(keys.agents(slug), [
       { name: "backend", presence: "idle" },

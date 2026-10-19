@@ -7,7 +7,9 @@ import {
   agentBoardPath,
   agentStateText,
   chipAgents,
+  chipPresence,
   chipStateText,
+  failedText,
   isPaused,
 } from "./agentChipsModel";
 
@@ -62,6 +64,97 @@ describe("agentStateText", () => {
     expect(agentStateText(agent({ working: 2, stalled: 1 }))).toBe(
       "2 working · 1 stalled",
     );
+  });
+});
+
+/** `agent` as fold supervises it, with its process in `state`. */
+const supervised = (
+  state: NonNullable<ProjectAgent["process"]>["state"],
+  options: ChipOptions = {},
+  failedReason: string | null = null,
+): ProjectAgent => ({
+  ...agent({ presence: "offline", ...options }),
+  process: { state, failed_reason: failedReason },
+});
+
+describe("agentStateText of a supervised agent", () => {
+  it("shows the process state instead of the presence it has between turns", () => {
+    expect(agentStateText(supervised("idle"))).toBe("idle");
+    expect(agentStateText(supervised("starting"))).toBe("starting");
+    expect(agentStateText(supervised("stopping"))).toBe("stopping");
+    expect(agentStateText(supervised("stopped"))).toBe("stopped");
+  });
+
+  it("counts the claims of a working one and the stalled tasks of a working or idle one", () => {
+    expect(agentStateText(supervised("working"))).toBe("working");
+    expect(agentStateText(supervised("working", { working: 2 }))).toBe(
+      "2 working",
+    );
+    expect(
+      agentStateText(supervised("working", { working: 2, stalled: 1 })),
+    ).toBe("2 working · 1 stalled");
+    expect(agentStateText(supervised("idle", { stalled: 1 }))).toBe(
+      "idle · 1 stalled",
+    );
+  });
+
+  it("names the failures a person can act on", () => {
+    expect(agentStateText(supervised("failed", {}, "mcp_unavailable"))).toBe(
+      "failed: no fold connection",
+    );
+    expect(agentStateText(supervised("failed", {}, "fld_missing"))).toBe(
+      "failed: fld not found",
+    );
+    expect(agentStateText(supervised("failed", {}, "exited"))).toBe("failed");
+    expect(failedText(null)).toBe("failed");
+  });
+
+  it("reads a live session by the presence rules once the process has ended, and the process without one", () => {
+    const session = (
+      state: "stopped" | "failed",
+      presence: ProjectAgent["presence"],
+    ): ProjectAgent => ({
+      ...supervised(state, { working: 1 }, "fld_missing"),
+      presence,
+    });
+    expect(agentStateText(session("failed", "active"))).toBe("1 working");
+    expect(chipPresence(session("failed", "active"), false)).toBe("active");
+    expect(agentStateText(session("stopped", "idle"))).toBe("1 working");
+    expect(chipPresence(session("stopped", "idle"), false)).toBe("idle");
+    expect(agentStateText(session("failed", "offline"))).toBe(
+      "failed: fld not found",
+    );
+    expect(chipPresence(session("failed", "offline"), false)).toBe("offline");
+    expect(agentStateText(session("stopped", "offline"))).toBe("stopped");
+    const running = { ...supervised("idle"), presence: "active" as const };
+    expect(agentStateText(running)).toBe("idle");
+    expect(chipPresence(running, false)).toBe("idle");
+  });
+
+  it("still reads paused while the project is paused", () => {
+    expect(
+      chipStateText(supervised("idle"), status({ state: "live" }), 0, true),
+    ).toBe("paused");
+  });
+});
+
+describe("chipPresence", () => {
+  it("draws a supervised agent's dot from its process and any other agent's from its presence", () => {
+    expect(chipPresence(agent({ presence: "idle" }), false)).toBe("idle");
+    expect(chipPresence(supervised("starting"), false)).toBe("active");
+    expect(chipPresence(supervised("working"), false)).toBe("active");
+    expect(chipPresence(supervised("idle"), false)).toBe("idle");
+    expect(chipPresence(supervised("stopping"), false)).toBe("idle");
+    expect(chipPresence(supervised("stopped"), false)).toBe("offline");
+    expect(chipPresence(supervised("failed"), false)).toBe("offline");
+  });
+
+  it("draws every agent but the main agent offline while the project is paused, whatever state its row kept", () => {
+    expect(chipPresence(supervised("working"), true)).toBe("offline");
+    expect(chipPresence(supervised("idle"), true)).toBe("offline");
+    expect(chipPresence(agent({ presence: "active" }), true)).toBe("offline");
+    const main = { ...agent({ presence: "active" }), tags: ["main"] };
+    expect(chipPresence(main, true)).toBe("active");
   });
 });
 
@@ -128,7 +221,7 @@ describe("chipAgents", () => {
       agent({ name: "zed", presence: "idle" }),
       agent({ name: "backend", presence: "active" }),
     ];
-    expect(chipAgents(input).map((a) => a.name)).toEqual([
+    expect(chipAgents(input, false).map((a) => a.name)).toEqual([
       "zed",
       "backend",
       "review",
@@ -145,9 +238,35 @@ describe("chipAgents", () => {
       agent({ name: "frontend", presence: "idle" }),
       agent({ name: "backend", presence: "active" }),
     ];
-    expect(chipAgents(after).map((a) => a.name)).toEqual(
-      chipAgents(before).map((a) => a.name),
+    expect(chipAgents(after, false).map((a) => a.name)).toEqual(
+      chipAgents(before, false).map((a) => a.name),
     );
+  });
+
+  it("puts a supervised agent with a running process among the connected ones", () => {
+    const input = [
+      { ...supervised("failed"), name: "web-lead" },
+      agent({ name: "main", presence: "offline" }),
+      { ...supervised("idle"), name: "api-lead" },
+    ];
+    expect(chipAgents(input, false).map((a) => a.name)).toEqual([
+      "api-lead",
+      "web-lead",
+      "main",
+    ]);
+  });
+
+  it("puts the paused agents after the main agent while the project is paused", () => {
+    const input = [
+      { ...supervised("working"), name: "web-lead" },
+      { ...agent({ name: "main", presence: "active" }), tags: ["main"] },
+      { ...supervised("idle"), name: "api-lead" },
+    ];
+    expect(chipAgents(input, true).map((a) => a.name)).toEqual([
+      "main",
+      "web-lead",
+      "api-lead",
+    ]);
   });
 
   it("draws at most the chips the top bar has room for, connected ones first", () => {
@@ -158,7 +277,7 @@ describe("chipAgents", () => {
       agent({ name: "d" }),
       agent({ name: "e" }),
     ];
-    const shown = chipAgents(input);
+    const shown = chipAgents(input, false);
     expect(shown).toHaveLength(MAX_CHIPS);
     expect(shown.map((a) => a.name)).toEqual(["b", "c", "d"]);
   });
