@@ -408,3 +408,84 @@ async fn the_human_edits_migration_keeps_existing_verdicts_and_shapes_kept_appro
         "a version sent for review again has no kept verdict"
     );
 }
+
+/// The scope row of review 1 with `since, suggested, rules, scope, reason`.
+#[cfg(test)]
+fn scope(values: &str) -> String {
+    format!(
+        "INSERT INTO review_scopes (review_id, since_version, suggested, rules, scope, reason) VALUES (1, {values})"
+    )
+}
+
+#[tokio::test]
+async fn a_review_scope_names_its_rules_and_an_override_has_its_reason() {
+    let (_dir, store) = seeded().await;
+    exec(&store, &review(1, "2", "NULL", "approve", "fine"))
+        .await
+        .unwrap();
+    for (values, constraint) in [
+        (
+            "1, 'full', '[]', 'full', NULL",
+            "review_scopes_full_iff_rules",
+        ),
+        (
+            "1, 'change', '[\"new_files\"]', 'change', NULL",
+            "review_scopes_full_iff_rules",
+        ),
+        (
+            "1, 'full', '[\"v3_or_later\"]', 'change', NULL",
+            "review_scopes_override_has_reason",
+        ),
+        (
+            "1, 'change', '[]', 'full', '  '",
+            "review_scopes_reason_present",
+        ),
+        (
+            "1, 'change', 'new_files', 'change', NULL",
+            "review_scopes_rules_list",
+        ),
+        (
+            "0, 'change', '[]', 'change', NULL",
+            "review_scopes_since_positive",
+        ),
+        (
+            "1, 'some', '[]', 'change', NULL",
+            "review_scopes_suggested_values",
+        ),
+    ] {
+        let refused = exec(&store, &scope(values)).await.unwrap_err();
+        assert!(
+            refused.to_string().contains(constraint),
+            "{values}: {refused}"
+        );
+    }
+    exec(
+        &store,
+        &scope("1, 'full', '[\"v3_or_later\"]', 'change', 'only strings changed'"),
+    )
+    .await
+    .unwrap();
+    assert_append_only(&store, "review_scopes").await;
+    exec(
+        &store,
+        "INSERT INTO review_scope_choices (version_id, scope, reason, chosen_by, chosen_at) VALUES (1, 'full', 'a public API', 'review', 0)",
+    )
+    .await
+    .unwrap();
+    let blank = exec(
+        &store,
+        "INSERT INTO review_scope_choices (version_id, scope, reason, chosen_by, chosen_at) VALUES (1, 'full', ' ', 'review', 0)",
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        blank
+            .to_string()
+            .contains("review_scope_choices_reason_present")
+    );
+    assert_append_only(&store, "review_scope_choices").await;
+    assert_eq!(
+        count(&store, "SELECT COUNT(*) FROM review_scope_choices").await,
+        1
+    );
+}

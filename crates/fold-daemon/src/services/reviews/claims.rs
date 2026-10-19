@@ -1,6 +1,6 @@
 use fold_core::claims::is_stale;
 use fold_core::events::types;
-use fold_core::reviews::MAX_REASON_CHARS;
+use fold_core::reviews::{MAX_REASON_CHARS, ScopeChoice};
 use fold_core::{
     Actor, EventActor, FoldError, NewEvent, ProposalId, ReviewBatchId, Timestamp, WorkerName,
     codes, policy,
@@ -12,6 +12,7 @@ use serde_json::json;
 
 use super::batches::{batch_in_tx, check_members};
 use super::proposals::{proposal_not_found, require_open};
+use super::scopes::{check_choices, choose_scope_in_tx};
 use super::{ReviewError, ReviewService};
 use crate::services::events::EventBuffer;
 use crate::services::tasks::{renew_leases, worker_row};
@@ -40,6 +41,19 @@ impl ReviewService {
         actor: &Actor,
         proposal: ProposalId,
     ) -> Result<ReviewClaimView, ReviewError> {
+        self.claim_review_with_scope(actor, proposal, None).await
+    }
+
+    /// [`ReviewService::claim_review`] with the scope the claimant chooses for its own review of the current version, stored in the same transaction with `review.scope_chosen`; without one the review follows fold's suggestion.
+    pub async fn claim_review_with_scope(
+        &self,
+        actor: &Actor,
+        proposal: ProposalId,
+        choice: Option<ScopeChoice>,
+    ) -> Result<ReviewClaimView, ReviewError> {
+        if let Some(choice) = &choice {
+            check_choices(&[proposal], std::slice::from_ref(choice))?;
+        }
         let lease_minutes = self.lease_minutes().await?;
         let now = self.clock.now();
         let mut buffer = EventBuffer::new();
@@ -57,7 +71,13 @@ impl ReviewService {
                         ])
                     })?;
                 let worker = worker_row(tx, reviewer).await?;
-                take_review_claim(tx, &mut buffer, &row, &worker, lease_minutes, now).await
+                let view =
+                    take_review_claim(tx, &mut buffer, &row, &worker, lease_minutes, now).await?;
+                if let Some(choice) = &choice {
+                    let by = EventActor::worker(&worker.name);
+                    choose_scope_in_tx(tx, &mut buffer, &by, &row, choice, now).await?;
+                }
+                Ok::<_, ReviewError>(view)
             })
             .await?;
         self.bus.publish(buffer);
@@ -114,24 +134,24 @@ impl ReviewService {
     }
 }
 
-/// Gives the new reviewer `worker` its review of `proposals` inside the caller's write, for the review lead that starts it with `start_worker`: one proposal takes its review claim as by `claim_review`, and two or more become a batch of the reviewer's, as by `create_review_batch`. The new reviewer is an agent of its own, so it is never the author's agent. Returns the batch.
+/// The review that the review lead gives a new reviewer at its start: the proposals, the scope it chose for some of them, and who it is.
+pub(crate) struct Assignment<'a> {
+    pub proposals: &'a [ProposalId],
+    pub scopes: &'a [ScopeChoice],
+    pub by: &'a EventActor,
+}
+
+/// Gives the new reviewer `worker` its review of the assigned proposals inside the caller's write, for the review lead that starts it with `start_worker`: one proposal takes its review claim as by `claim_review`, and two or more become a batch of the reviewer's, as by `create_review_batch`. Each chosen scope is stored with `review.scope_chosen` by the review lead. The new reviewer is an agent of its own, so it is never the author's agent. Returns the batch.
 pub(crate) async fn assign_reviews_in_tx(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,
     worker: &WorkerRow,
-    proposals: &[ProposalId],
+    assignment: &Assignment<'_>,
     lease_minutes: u64,
     now: Timestamp,
 ) -> Result<Option<ReviewBatchId>, ReviewError> {
-    if let [proposal] = proposals {
-        let row = require_open(
-            reviews::get_proposal(tx.conn(), *proposal).await?,
-            *proposal,
-        )?;
-        take_review_claim(tx, buffer, &row, worker, lease_minutes, now).await?;
-        return Ok(None);
-    }
-    check_members(proposals)?;
+    let proposals = assignment.proposals;
+    check_choices(proposals, assignment.scopes)?;
     let mut rows = Vec::with_capacity(proposals.len());
     for &proposal in proposals {
         rows.push(require_open(
@@ -139,9 +159,19 @@ pub(crate) async fn assign_reviews_in_tx(
             proposal,
         )?);
     }
-    Ok(Some(
-        batch_in_tx(tx, buffer, worker, rows, lease_minutes, now).await?,
-    ))
+    let batch = if let [row] = rows.as_slice() {
+        take_review_claim(tx, buffer, row, worker, lease_minutes, now).await?;
+        None
+    } else {
+        check_members(proposals)?;
+        Some(batch_in_tx(tx, buffer, worker, rows.clone(), lease_minutes, now).await?)
+    };
+    for choice in assignment.scopes {
+        if let Some(row) = rows.iter().find(|row| row.id == choice.proposal) {
+            choose_scope_in_tx(tx, buffer, assignment.by, row, choice, now).await?;
+        }
+    }
+    Ok(batch)
 }
 
 /// Takes the review claim on the open proposal `row` for `worker` inside the caller's write, by the rules of `claim_review`: the insert decides a race, a repeat by the holder renews the claim without an event, and a stale holder is taken over with `claim.taken_over` before `claim.acquired`.

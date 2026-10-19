@@ -18,6 +18,7 @@ import {
   filesText,
   listedReviews,
   reviewPill,
+  reviewScopeText,
   reviewText,
   versionAuthor,
   versionRef,
@@ -212,6 +213,96 @@ describe("names and versions", () => {
     expect(
       claimLine(proposalSummary("P-4", { review_claim: "review/quality" })),
     ).toEqual(["claimed by ", { actor: "review/quality" }]);
+  });
+});
+
+describe("review scopes", () => {
+  const scoped = (scope: NonNullable<Review["scope"]>): Review => ({
+    ...review(3, "approve"),
+    scope,
+  });
+
+  it("names the scope a review of a revised version followed, the rules behind a suggested full review and a chosen scope's reason", () => {
+    expect(reviewScopeText(review(1, "approve"))).toBeNull();
+    expect(
+      reviewScopeText(
+        scoped({
+          scope: "change",
+          since: 2,
+          suggested: "change",
+          rules: [],
+          reason: null,
+        }),
+      ),
+    ).toBe("Change review since v2");
+    expect(
+      reviewScopeText(
+        scoped({
+          scope: "full",
+          since: 1,
+          suggested: "full",
+          rules: ["new_files", "base_conflicts", "v3_or_later"],
+          reason: null,
+        }),
+      ),
+    ).toBe(
+      "Full review since v1 · suggested for new files, files merged with main by hand, v3 or later",
+    );
+    expect(
+      reviewScopeText(
+        scoped({
+          scope: "change",
+          since: 2,
+          suggested: "full",
+          rules: ["v3_or_later", "large_delta"],
+          reason: "only strings changed",
+        }),
+      ),
+    ).toBe(
+      "Change review since v2 · chosen: only strings changed · fold suggested a full review for v3 or later, a large change",
+    );
+    expect(
+      reviewScopeText(
+        scoped({
+          scope: "full",
+          since: 2,
+          suggested: "change",
+          rules: [],
+          reason: "a public API",
+        }),
+      ),
+    ).toBe(
+      "Full review since v2 · chosen: a public API · fold suggested a change review",
+    );
+    expect(
+      reviewScopeText(
+        scoped({
+          scope: "change",
+          since: 2,
+          suggested: "change",
+          rules: [],
+          reason: "confirmed",
+        }),
+      ),
+    ).toBe("Change review since v2 · confirmed");
+  });
+
+  it("gives no scope line for a human's review of a revised version", () => {
+    expect(
+      reviewScopeText(review(3, "approve", "", 0, "human:tanim")),
+    ).toBeNull();
+    expect(
+      reviewScopeText({
+        ...review(3, "approve", "", 0, "human:tanim"),
+        scope: {
+          scope: "full",
+          since: 2,
+          suggested: "full",
+          rules: ["v3_or_later"],
+          reason: null,
+        },
+      }),
+    ).toBeNull();
   });
 });
 

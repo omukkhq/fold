@@ -19,6 +19,7 @@ pub mod checks;
 mod claims;
 mod human_edits;
 mod integrations;
+mod scopes;
 mod summaries;
 
 pub use claims::{
@@ -29,6 +30,7 @@ pub use integrations::{
     IntegrationFacts, IntegrationSubject, NewIntegration, conflict_report, insert_conflicted,
     insert_refused, insert_succeeded, integration_facts, mark_checks_failed, mark_conflicted,
 };
+pub use scopes::{ScopeChoiceRow, insert_review_scope, insert_scope_choice, latest_scope_choice};
 pub use summaries::{
     IntegrationRecord, ProposalSummary, ReviewEntry, proposal_summaries, review_entries,
 };
@@ -957,6 +959,8 @@ pub struct ReviewRow {
     pub created_at: Timestamp,
     /// For an approval a human edit kept, the version whose approval it copies.
     pub kept_from: Option<u32>,
+    /// The scope of an agent's review of a revised version; `None` for a review of a version with no earlier verdict, for every review by a human, and for an approval a human edit kept.
+    pub scope: Option<fold_core::reviews::ReviewScopeRecord>,
 }
 
 /// The reviews of every version of the proposal, in the `(created_at, id)` order that `review_facts` counts in. The kept approvals of a version sent for review again are left out, as `review_facts` leaves them out.
@@ -970,11 +974,15 @@ pub async fn list_reviews(
                   r.created_at,
                   (SELECT COUNT(*) FROM review_comments c WHERE c.review_id = r.id) AS "comments!: i64",
                   (SELECT kv.version FROM reviews kept JOIN proposal_versions kv ON kv.id = kept.version_id
-                   WHERE kept.id = r.kept_from_review_id) AS "kept_from?: i64"
+                   WHERE kept.id = r.kept_from_review_id) AS "kept_from?: i64",
+                  s.since_version AS "scope_since?: i64", s.suggested AS "scope_suggested?: String",
+                  s.rules AS "scope_rules?: String", s.scope AS "scope?: String",
+                  s.reason AS "scope_reason?: String"
            FROM reviews r
            JOIN proposal_versions v ON v.id = r.version_id
            JOIN proposals p ON p.id = v.proposal_id
            LEFT JOIN workers w ON w.id = r.reviewer_worker_id
+           LEFT JOIN review_scopes s ON s.review_id = r.id
            WHERE p.number = ?
              AND (r.kept_from_review_id IS NULL
                  OR NOT EXISTS (SELECT 1 FROM review_again_requests q WHERE q.version_id = r.version_id))
@@ -1005,6 +1013,13 @@ pub async fn list_reviews(
                             .map_err(|_| StoreError::Corrupt("proposal_versions.version"))
                     })
                     .transpose()?,
+                scope: scopes::stored_scope(
+                    row.scope_since,
+                    row.scope_suggested.as_deref(),
+                    row.scope_rules.as_deref(),
+                    row.scope.as_deref(),
+                    row.scope_reason,
+                )?,
             })
         })
         .collect()

@@ -6,7 +6,7 @@ use fold_core::{
     Actor, ChangesetId, FoldError, ProposalId, TaskDescription, TaskId, TaskStatus, TaskTitle,
     codes,
 };
-use fold_store::reviews::{self, ProposalState};
+use fold_store::reviews::{self, ProposalState, ScopeChoiceRow};
 use fold_store::tasks::{self, TaskRef};
 use fold_store::{StoreError, agents};
 use fold_vcs::compare::{FileChange, Totals};
@@ -53,6 +53,8 @@ pub struct ProposalView {
     pub comments: CommentCounts,
     /// The newest version before the selected one that has a verdict, by anyone: what changed since it is what is left to review.
     pub last_reviewed: Option<u32>,
+    /// The review lead's newest choice of scope for the review of the selected version, which the review follows instead of fold's suggestion.
+    pub scope_choice: Option<ScopeChoiceRow>,
     /// In the order the integration procedure checks the gates.
     pub gates: Vec<GateState>,
     /// An agent that decides reviews, other than the author's, approved the current version and no request for changes came after it. On a task with the human review mark a human approves only then.
@@ -94,6 +96,8 @@ impl ReviewService {
             detail.selected.version,
         )
         .await?;
+        let scope_choice =
+            reviews::latest_scope_choice(&mut *read, proposal, detail.selected.version).await?;
         read.commit().await.map_err(StoreError::from)?;
         let claim = match holder {
             Some(row) => Some(ReviewClaimView {
@@ -154,6 +158,7 @@ impl ReviewService {
             reviews: rows,
             comments,
             last_reviewed,
+            scope_choice,
             gates,
             agent_approved,
             files: comparison.files,

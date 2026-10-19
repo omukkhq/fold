@@ -143,6 +143,7 @@ mod review_checkouts;
 mod review_claims;
 mod review_fixes;
 mod review_rights;
+mod review_scopes;
 mod reviews;
 mod services_agents;
 mod services_inbox;

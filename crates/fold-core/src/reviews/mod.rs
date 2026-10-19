@@ -239,6 +239,143 @@ pub fn last_verdict_version(
         .max()
 }
 
+define_names!(
+    /// How much of a revised version a review reads: only what changed since the earlier version and the code that change touches, or the whole version again.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum ReviewScope {
+        Change = "change",
+        Full = "full",
+    }
+);
+
+define_names!(
+    /// A fact fold can check that makes it suggest a full review of a revised version. A reviewer sees more, such as a change to a public API or to permission code, so the review lead may choose the other scope with a reason.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+    pub enum ScopeRule {
+        /// The change since the earlier version touches a file that the earlier version did not change.
+        NewFiles = "new_files",
+        /// The change since the earlier version has more added and removed lines than half of the earlier version's own change.
+        LargeDelta = "large_delta",
+        /// The author merged a newer main into files of the earlier version's change by hand.
+        BaseConflicts = "base_conflicts",
+        /// The version is the third or later, so the work has gone back and forth.
+        ThirdVersion = "v3_or_later",
+    }
+);
+
+/// The facts of a revised version's change since the earlier version with a verdict, which [`suggest_scope`] decides from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScopeFacts {
+    pub version: u32,
+    /// How many files the change touches that the earlier version did not change.
+    pub new_files: usize,
+    /// The added and removed lines of the change since the earlier version.
+    pub delta_lines: u64,
+    /// The added and removed lines of the earlier version's own change against its base.
+    pub earlier_lines: u64,
+    /// How many files the author merged with a newer main by hand.
+    pub base_conflicts: usize,
+}
+
+/// The scope fold suggests for a review and the rules that made it suggest a full one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopeSuggestion {
+    pub scope: ReviewScope,
+    /// In declaration order; empty for a change review.
+    pub rules: Vec<ScopeRule>,
+}
+
+/// Any rule that holds suggests a full review; with none, a review of the change is enough.
+pub fn suggest_scope(facts: &ScopeFacts) -> ScopeSuggestion {
+    let checks = [
+        (ScopeRule::NewFiles, facts.new_files > 0),
+        (
+            ScopeRule::LargeDelta,
+            facts.delta_lines.saturating_mul(2) > facts.earlier_lines,
+        ),
+        (ScopeRule::BaseConflicts, facts.base_conflicts > 0),
+        (ScopeRule::ThirdVersion, facts.version >= 3),
+    ];
+    let rules: Vec<ScopeRule> = checks
+        .into_iter()
+        .filter(|(_, holds)| *holds)
+        .map(|(rule, _)| rule)
+        .collect();
+    let scope = if rules.is_empty() {
+        ReviewScope::Change
+    } else {
+        ReviewScope::Full
+    };
+    ScopeSuggestion { scope, rules }
+}
+
+/// The review lead's choice of scope for the review of one proposal's current version, made when it assigns the review: it accepts fold's suggestion by passing none, or chooses a scope with its reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopeChoice {
+    pub proposal: crate::ids::ProposalId,
+    pub scope: ReviewScope,
+    pub reason: String,
+}
+
+impl ScopeChoice {
+    /// A choice needs a reason of visible text, at most [`MAX_REASON_CHARS`] characters, which is stored trimmed.
+    pub fn new(
+        proposal: crate::ids::ProposalId,
+        scope: ReviewScope,
+        reason: &str,
+    ) -> Result<Self, crate::FoldError> {
+        let reason = reason.trim();
+        let problem = if reason.is_empty() {
+            "a chosen review scope needs a reason".to_owned()
+        } else if reason.chars().count() > MAX_REASON_CHARS {
+            format!("the scope reason must be at most {MAX_REASON_CHARS} characters")
+        } else {
+            return Ok(ScopeChoice {
+                proposal,
+                scope,
+                reason: reason.to_owned(),
+            });
+        };
+        Err(
+            crate::FoldError::new(crate::codes::INVALID_REQUEST, problem).with_details([
+                ("field", serde_json::json!("reason")),
+                ("proposal", serde_json::json!(proposal.to_string())),
+            ])
+            .with_hint("say in one line why this scope fits, such as a public API change or a change of strings only"),
+        )
+    }
+}
+
+/// The scope a review of a revised version was made with: fold's suggestion from the change since `since`, and the scope the review followed, which is the review lead's choice when it made one, with its reason, else the suggestion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewScopeRecord {
+    pub since: u32,
+    pub suggested: ReviewScope,
+    pub rules: Vec<ScopeRule>,
+    pub scope: ReviewScope,
+    pub reason: Option<String>,
+}
+
+impl ReviewScopeRecord {
+    pub fn decide(
+        since: u32,
+        suggestion: ScopeSuggestion,
+        choice: Option<(ReviewScope, String)>,
+    ) -> Self {
+        let (scope, reason) = match choice {
+            Some((scope, reason)) => (scope, Some(reason)),
+            None => (suggestion.scope, None),
+        };
+        ReviewScopeRecord {
+            since,
+            suggested: suggestion.scope,
+            rules: suggestion.rules,
+            scope,
+            reason,
+        }
+    }
+}
+
 fn last_request_changes(reviews: &[ReviewFact]) -> Option<u64> {
     reviews
         .iter()
@@ -589,5 +726,155 @@ mod tests {
             fact(Verdict::RequestChanges, 2),
         ];
         assert!(!counted_approval(&withdrawn, &author));
+    }
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use proptest::prelude::*;
+
+    use super::*;
+
+    /// A v2 whose small delta stays in the earlier version's files.
+    const SMALL: ScopeFacts = ScopeFacts {
+        version: 2,
+        new_files: 0,
+        delta_lines: 5,
+        earlier_lines: 100,
+        base_conflicts: 0,
+    };
+
+    #[test]
+    fn no_rule_suggests_a_change_review() {
+        assert_eq!(
+            suggest_scope(&SMALL),
+            ScopeSuggestion {
+                scope: ReviewScope::Change,
+                rules: Vec::new()
+            }
+        );
+    }
+
+    #[test]
+    fn each_rule_alone_suggests_a_full_review() {
+        for (facts, rule) in [
+            (
+                ScopeFacts {
+                    new_files: 1,
+                    ..SMALL
+                },
+                ScopeRule::NewFiles,
+            ),
+            (
+                ScopeFacts {
+                    delta_lines: 51,
+                    ..SMALL
+                },
+                ScopeRule::LargeDelta,
+            ),
+            (
+                ScopeFacts {
+                    base_conflicts: 2,
+                    ..SMALL
+                },
+                ScopeRule::BaseConflicts,
+            ),
+            (
+                ScopeFacts {
+                    version: 3,
+                    ..SMALL
+                },
+                ScopeRule::ThirdVersion,
+            ),
+        ] {
+            let suggestion = suggest_scope(&facts);
+            assert_eq!(suggestion.scope, ReviewScope::Full, "{rule}");
+            assert_eq!(suggestion.rules, [rule]);
+        }
+    }
+
+    #[test]
+    fn half_the_earlier_change_is_still_a_change_review() {
+        let half = ScopeFacts {
+            delta_lines: 50,
+            ..SMALL
+        };
+        assert_eq!(suggest_scope(&half).scope, ReviewScope::Change);
+        let empty_earlier = ScopeFacts {
+            delta_lines: 1,
+            earlier_lines: 0,
+            ..SMALL
+        };
+        assert_eq!(suggest_scope(&empty_earlier).rules, [ScopeRule::LargeDelta]);
+    }
+
+    #[test]
+    fn every_rule_that_holds_is_named_in_order() {
+        let all = ScopeFacts {
+            version: 4,
+            new_files: 3,
+            delta_lines: 400,
+            earlier_lines: 10,
+            base_conflicts: 1,
+        };
+        assert_eq!(suggest_scope(&all).rules, ScopeRule::ALL);
+        assert_eq!(
+            ScopeRule::ALL.map(ScopeRule::as_str),
+            ["new_files", "large_delta", "base_conflicts", "v3_or_later"]
+        );
+    }
+
+    proptest! {
+        #[test]
+        fn a_full_review_names_its_rules_and_a_larger_delta_never_lowers_the_scope(
+            version in 2u32..6,
+            new_files in 0usize..3,
+            delta_lines in 0u64..400,
+            more in 0u64..400,
+            earlier_lines in 0u64..400,
+            base_conflicts in 0usize..3,
+        ) {
+            let facts = ScopeFacts { version, new_files, delta_lines, earlier_lines, base_conflicts };
+            let suggestion = suggest_scope(&facts);
+            prop_assert_eq!(suggestion.scope == ReviewScope::Full, !suggestion.rules.is_empty());
+            prop_assert_eq!(
+                suggestion.rules.contains(&ScopeRule::LargeDelta),
+                2 * delta_lines > earlier_lines
+            );
+            let larger = suggest_scope(&ScopeFacts { delta_lines: delta_lines + more, ..facts });
+            prop_assert!(suggestion.scope == ReviewScope::Change || larger.scope == ReviewScope::Full);
+        }
+    }
+
+    #[test]
+    fn a_choice_needs_a_reason_and_overrides_the_suggestion() {
+        let proposal = crate::ids::ProposalId::from_number(3).unwrap();
+        for blank in ["", "   "] {
+            let error = ScopeChoice::new(proposal, ReviewScope::Change, blank).unwrap_err();
+            assert_eq!(error.code(), crate::codes::INVALID_REQUEST);
+        }
+        let long = "x".repeat(MAX_REASON_CHARS + 1);
+        assert!(ScopeChoice::new(proposal, ReviewScope::Full, &long).is_err());
+        let choice =
+            ScopeChoice::new(proposal, ReviewScope::Change, "  only strings changed ").unwrap();
+        assert_eq!(choice.reason, "only strings changed");
+        let full = suggest_scope(&ScopeFacts {
+            version: 3,
+            ..SMALL
+        });
+        let chosen =
+            ReviewScopeRecord::decide(2, full.clone(), Some((choice.scope, choice.reason)));
+        assert_eq!(
+            chosen,
+            ReviewScopeRecord {
+                since: 2,
+                suggested: ReviewScope::Full,
+                rules: vec![ScopeRule::ThirdVersion],
+                scope: ReviewScope::Change,
+                reason: Some("only strings changed".to_owned()),
+            }
+        );
+        let followed = ReviewScopeRecord::decide(2, full, None);
+        assert_eq!((followed.scope, followed.reason), (ReviewScope::Full, None));
     }
 }

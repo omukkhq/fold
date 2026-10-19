@@ -5,7 +5,7 @@ use fold_core::merge::{
     ConflictReport, HunkSide, ReportEntry, ReportEntryKind, ReportFile, ReportHunk, ReportKind,
 };
 use fold_core::policy::{Gate, GateState, GateStatus};
-use fold_core::reviews::{Side, Verdict};
+use fold_core::reviews::{ReviewScope, ReviewScopeRecord, ScopeRule, Side, Verdict};
 use fold_core::{
     FoldError, HumanName, ProposalId, ReviewBatchId, RevisionId, TaskId, Timestamp, WorkspaceId,
 };
@@ -366,6 +366,81 @@ impl From<service::VersionView> for ProposalVersion {
     }
 }
 
+/// How much of a revised version a review reads: the change since the earlier version with a verdict and the code it touches, or the whole version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewScopeKind {
+    Change,
+    Full,
+}
+
+impl From<ReviewScope> for ReviewScopeKind {
+    fn from(scope: ReviewScope) -> Self {
+        match scope {
+            ReviewScope::Change => Self::Change,
+            ReviewScope::Full => Self::Full,
+        }
+    }
+}
+
+/// A fact fold checks that makes it suggest a full review of a revised version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewScopeRule {
+    /// The change touches a file that the earlier version did not change.
+    NewFiles,
+    /// The change has more added and removed lines than half of the earlier version's own change.
+    LargeDelta,
+    /// The author merged a newer main into files of the earlier version's change by hand.
+    BaseConflicts,
+    /// The version is the third or later.
+    #[serde(rename = "v3_or_later")]
+    V3OrLater,
+}
+
+impl From<ScopeRule> for ReviewScopeRule {
+    fn from(rule: ScopeRule) -> Self {
+        match rule {
+            ScopeRule::NewFiles => Self::NewFiles,
+            ScopeRule::LargeDelta => Self::LargeDelta,
+            ScopeRule::BaseConflicts => Self::BaseConflicts,
+            ScopeRule::ThirdVersion => Self::V3OrLater,
+        }
+    }
+}
+
+/// The scope a review of a revised version followed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct ProposalReviewScope {
+    /// The scope the review followed: the review lead's choice when it made one, else fold's suggestion.
+    pub scope: ReviewScopeKind,
+    /// The earlier version with a verdict that the change is read since.
+    pub since: u32,
+    /// fold's suggestion from the change since that version.
+    pub suggested: ReviewScopeKind,
+    /// The rules that made fold suggest a full review, in their declared order; empty for a change review.
+    pub rules: Vec<ReviewScopeRule>,
+    /// Why the review lead chose this scope; null when the review followed the suggestion.
+    #[schema(required = true)]
+    pub reason: Option<String>,
+}
+
+impl From<ReviewScopeRecord> for ProposalReviewScope {
+    fn from(record: ReviewScopeRecord) -> Self {
+        Self {
+            scope: record.scope.into(),
+            since: record.since,
+            suggested: record.suggested.into(),
+            rules: record
+                .rules
+                .into_iter()
+                .map(ReviewScopeRule::from)
+                .collect(),
+            reason: record.reason,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct ProposalReview {
     pub version: u32,
@@ -380,6 +455,9 @@ pub struct ProposalReview {
     /// For an approval that a human edit kept, the version whose approval it copies.
     #[schema(required = true)]
     pub kept_from: Option<u32>,
+    /// The scope of an agent's review of a revised version; null for a version reviewed whole and for a human's review.
+    #[schema(required = true)]
+    pub scope: Option<ProposalReviewScope>,
 }
 
 impl From<service::ReviewView> for ProposalReview {
@@ -392,6 +470,7 @@ impl From<service::ReviewView> for ProposalReview {
             comments: review.comments,
             created_at: review.created_at.as_millis(),
             kept_from: review.kept_from,
+            scope: review.scope.map(ProposalReviewScope::from),
         }
     }
 }

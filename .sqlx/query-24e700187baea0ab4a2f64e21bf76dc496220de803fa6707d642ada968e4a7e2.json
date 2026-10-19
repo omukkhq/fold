@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO review_scopes (review_id, since_version, suggested, rules, scope, reason)\n         VALUES (?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "24e700187baea0ab4a2f64e21bf76dc496220de803fa6707d642ada968e4a7e2"
+}

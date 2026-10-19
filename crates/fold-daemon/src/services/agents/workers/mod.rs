@@ -1,5 +1,6 @@
 use fold_core::events::types;
 use fold_core::policy::{self, Starter};
+use fold_core::reviews::ScopeChoice;
 use fold_core::roles::{
     AreaProfile, AreaProfileChange, StartFacts, check_model, default_worker_name, first_turn,
     outside_area, session_uuid,
@@ -16,7 +17,7 @@ use serde_json::json;
 use super::{AgentError, AgentService, main_actor};
 use crate::services::events::EventBuffer;
 use crate::services::projects::load_config;
-use crate::services::reviews::assign_reviews_in_tx;
+use crate::services::reviews::{Assignment, assign_reviews_in_tx};
 use crate::services::tasks::assign_in_tx;
 use tokio::sync::OwnedMutexGuard;
 
@@ -41,6 +42,8 @@ pub struct StartWorker {
     pub area: Option<AreaName>,
     pub tasks: Vec<TaskId>,
     pub proposals: Vec<ProposalId>,
+    /// The scopes the review lead chooses for the reviews of some of a reviewer's proposals; the others follow fold's suggestion.
+    pub scopes: Vec<ScopeChoice>,
     pub model: Option<String>,
     /// Content from the starter for the worker's first turn; it is never stored or logged.
     pub instructions: Option<String>,
@@ -513,11 +516,16 @@ impl AgentService {
                 )
                 .await?;
                 if !request.proposals.is_empty() {
+                    let assignment = Assignment {
+                        proposals: &request.proposals,
+                        scopes: &request.scopes,
+                        by: &by,
+                    };
                     assigned.batch = assign_reviews_in_tx(
                         tx,
                         &mut buffer,
                         &worker,
-                        &request.proposals,
+                        &assignment,
                         lease_minutes,
                         now,
                     )
@@ -624,6 +632,12 @@ fn binding_area(
 ) -> Result<Option<AreaName>, AgentError> {
     let no_tasks = request.tasks.is_empty();
     let no_proposals = request.proposals.is_empty();
+    if role != Role::Reviewer && !request.scopes.is_empty() {
+        return Err(invalid(
+            "only a reviewer's start takes review scopes",
+            "leave scopes out",
+        ));
+    }
     match role {
         Role::AreaLead => {
             if !no_tasks || !no_proposals {

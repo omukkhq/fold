@@ -13,6 +13,7 @@ export type HumanReviewMark = Schemas["HumanReviewMark"];
 export type ProposalSummary = Schemas["ProposalSummary"];
 export type ProposalVersion = Schemas["ProposalVersion"];
 export type Review = Schemas["ProposalReview"];
+export type ReviewScopeRule = Schemas["ReviewScopeRule"];
 export type ProposalTask = Schemas["ProposalTask"];
 export type CommentSide = Schemas["CommentSide"];
 export type ReviewComment = Schemas["ReviewComment"];

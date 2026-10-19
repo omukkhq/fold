@@ -619,18 +619,29 @@ mod tests {
             assert!(prompt.contains("still waits for the human after your approval"));
             assert!(prompt.contains("stale_version"));
             assert!(prompt.contains("left_out"));
-            assert!(prompt.contains("`Change review: the fixes and the code they touch`"));
-            assert!(prompt.contains("`Full review: <reason>`"));
-            assert!(prompt.contains("`Change review: my fixes and the code they touch`"));
+            assert!(prompt.contains("`suggested_scope`"));
             assert!(prompt.contains("`base_conflicts`"));
             assert!(prompt.contains("do not run the same checks again"));
             assert!(prompt.contains("`get_check_run`"));
+            assert!(
+                prompt
+                    .contains("public API, a schema, a migration, or security or permission code")
+            );
+            assert!(!prompt.contains("Change review:"), "{role:?}");
+            assert!(!prompt.contains("Full review:"), "{role:?}");
         }
         let worker = Role::TaskWorker.prompt();
         assert!(worker.contains("call `run_checks` for the task before `create_proposal`"));
         assert!(worker.contains("Wait for `checks.finished` with `wait_for_events`"));
         let lead = Role::ReviewLead.prompt();
         assert!(lead.contains("before taking claims or creating a batch"));
+        assert!(lead.contains("You decide the scope when you assign the review"));
+        assert!(lead.contains("`set_review_scope`"));
+        assert!(
+            Role::Reviewer
+                .prompt()
+                .contains("Follow the scope you get.")
+        );
         assert!(lead.contains("makes a batch of the group for it, in the same step"));
     }
 

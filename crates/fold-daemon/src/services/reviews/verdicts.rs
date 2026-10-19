@@ -12,6 +12,7 @@ use serde_json::json;
 use super::comments::{CommentInput, MAX_BODY_CHARS, check_ranges, check_shape};
 use super::integrate::checks_failed_refusal;
 use super::proposals::{ProposalSummary, Retirement, require_open, retire_proposal};
+use super::scopes::{SuggestedScope, scope_record_in_tx};
 use super::{ReviewError, ReviewService};
 use crate::services::events::EventBuffer;
 use crate::services::tasks::{recompute, worker_row};
@@ -51,6 +52,10 @@ impl ReviewService {
             .ok_or(StoreError::Corrupt("proposal_versions.version"))?;
         require_version(proposal, version, target.version)?;
         check_ranges(&self.workspaces, &target, &comments).await?;
+        let scope = match actor {
+            Actor::Agent(_) => self.suggested_scope(proposal, target.version).await?,
+            Actor::Human { .. } | Actor::System => None,
+        };
         #[cfg(feature = "failpoints")]
         fail::fail_point!("review_after_range_check");
         let now = self.clock.now();
@@ -73,6 +78,7 @@ impl ReviewService {
                     comments: &comments,
                     batch: None,
                     batch_comments: &[],
+                    scope: scope.as_ref(),
                 };
                 let ids = record_review(tx, &mut buffer, actor, &record, now).await?;
                 buffer.extend(recompute(tx, &[row.task], now).await?.events);
@@ -107,6 +113,8 @@ pub(super) struct ReviewRecord<'a> {
     pub comments: &'a [CommentInput],
     pub batch: Option<ReviewBatchId>,
     pub batch_comments: &'a [BatchCommentLink],
+    /// fold's suggestion for an agent's review of a revised version, read before the command's transaction; `None` for a version reviewed whole. A human's review ignores it.
+    pub scope: Option<&'a SuggestedScope>,
 }
 
 /// A comment of a review batch about members together: its row id and its number in the batch.
@@ -116,7 +124,7 @@ pub(super) struct BatchCommentLink {
     pub number: u32,
 }
 
-/// Writes the review, its comments and their events inside the caller's write, and closes the proposal on a reject. The caller checks the body and the comments first, and runs `recompute` for the task before it commits.
+/// Writes the review, its scope, its comments and their events inside the caller's write, and closes the proposal on a reject. The scope of an agent's review of a revised version follows the review lead's choice for that version when it made one, else fold's suggestion; a human's review has no scope, since the review lead assigns only agents' reviews. The caller checks the body and the comments first, and runs `recompute` for the task before it commits.
 pub(super) async fn record_review(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,
@@ -128,13 +136,16 @@ pub(super) async fn record_review(
     let proposal = row.id;
     let reviewer = actor.event_actor();
     let standing = agents::standing_of(tx.conn(), actor).await?;
-    let by = match verdict_gate(actor, standing, verdict, row)? {
-        Reviewer::Agent(agent) => ReviewerRef::Worker(worker_row(tx, agent).await?.id),
+    let (by, suggested) = match verdict_gate(actor, standing, verdict, row)? {
+        Reviewer::Agent(agent) => (
+            ReviewerRef::Worker(worker_row(tx, agent).await?.id),
+            record.scope,
+        ),
         Reviewer::Human(name) => {
             if verdict == Verdict::Approve {
                 human_approval_gate(tx, proposal, version).await?;
             }
-            ReviewerRef::Human(name)
+            (ReviewerRef::Human(name), None)
         }
     };
     let review_id = match record.batch {
@@ -154,6 +165,10 @@ pub(super) async fn record_review(
             .await?
         }
     };
+    let scope = scope_record_in_tx(tx, proposal, version, suggested).await?;
+    if let Some(scope) = &scope {
+        reviews::insert_review_scope(tx, review_id, scope).await?;
+    }
     let mut ids = insert_comments(tx, proposal, review_id, by, record.comments, now).await?;
     let mut linked = Vec::with_capacity(record.batch_comments.len());
     for link in record.batch_comments {
@@ -169,6 +184,9 @@ pub(super) async fn record_review(
     });
     if let Some(batch) = record.batch {
         data["batch"] = json!(batch.to_string());
+    }
+    if let Some(scope) = &scope {
+        data["scope"] = json!(scope.scope.as_str());
     }
     let submitted = NewEvent::new(types::REVIEW_SUBMITTED, reviewer.clone())?
         .task(row.task)

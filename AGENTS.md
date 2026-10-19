@@ -60,7 +60,7 @@ To run the tests of one file in `crates/<crate>/tests/`, select its module: `car
 
 1. **One SQLite file per project, WAL, `synchronous=FULL`, `foreign_keys=ON`.** All writes go through the project's single writer (`Store::write`); reads use the read pool.
 2. **Migrations are forward-only.** Never edit a migration that has been applied anywhere; add a new one.
-3. **Append-only tables get triggers that refuse `UPDATE` and `DELETE`** in the migration that creates them: events, revisions, changesets, proposal versions, reviews, review comments, integrations, completions, messages, check results.
+3. **Append-only tables get triggers that refuse `UPDATE` and `DELETE`** in the migration that creates them: events, revisions, changesets, proposal versions, reviews, review comments, integrations, completions, messages, check results, review scope choices, review scopes.
 4. **Let the database hold the invariants it can.** One unreleased implementation claim per task, one unreleased review claim per proposal, one active task workspace per task, one open proposal per task, unique `(proposal, version)` versions, no self-dependency, one id number per kind per project: each is a constraint, not only a service check.
 5. **A column used to filter, join, constrain or decide is a real column,** never a key inside a JSON column.
 6. **`tasks.status` and `tasks.blocked` are caches.** Only `recompute` writes them, inside the transaction that changed their inputs.

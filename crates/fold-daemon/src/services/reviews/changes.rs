@@ -31,7 +31,7 @@ pub struct ProposalChange<T> {
     pub change: T,
 }
 
-/// The earlier version's own change and how the base moved under the later one: what a reviewer needs to choose between a review of the change since that version and a full review.
+/// The earlier version's own change and how the base moved under the later one: the facts from which fold suggests a review of the change since that version or a full review.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SinceChange {
     /// What the version changed after the earlier one, with the earlier version carried onto the version's base when the base moved, so main's own changes stay out of it.

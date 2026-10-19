@@ -106,6 +106,9 @@ pub struct StartWorkerInput {
     /// The proposals a reviewer reviews, such as P-3: one proposal, or two or more related proposals, which fold makes into a review batch of the reviewer's.
     #[serde(default)]
     pub proposals: Vec<String>,
+    /// For a reviewer's revised proposals: the scope of the review you choose for some of them, each with its reason, when fold's suggested_scope from get_proposal_diff does not fit. The other proposals follow the suggestion, and the reviewer follows the scope it gets.
+    #[serde(default)]
+    pub scopes: Vec<super::reviews::ScopeChoiceInput>,
     /// The Claude Code model, such as sonnet. Leave it out for the area's model, else the role's model from .fold/config.toml.
     #[serde(default)]
     pub model: Option<String>,
@@ -342,6 +345,7 @@ pub async fn start_worker(
         area: input.area.as_deref().map(AreaName::parse).transpose()?,
         tasks: ids::<TaskId>(&input.tasks, "task")?,
         proposals: ids::<ProposalId>(&input.proposals, "proposal")?,
+        scopes: super::reviews::scope_choices(&input.scopes)?,
         model: input.model,
         instructions: input.instructions,
     };

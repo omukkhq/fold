@@ -132,6 +132,8 @@ async fn baseline_creates_every_table_of_the_data_model() {
         "review_again_requests",
         "review_batches",
         "review_comments",
+        "review_scope_choices",
+        "review_scopes",
         "reviews",
         "revision_commits",
         "revisions",

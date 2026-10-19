@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 const SKILL: &str = include_str!("../templates/SKILL.md");
 const AGENTS_SECTION: &str = include_str!("../templates/agents_section.md");
 
-const FOLD_TOOLS: [&str; 89] = [
+const FOLD_TOOLS: [&str; 90] = [
     "register_agent",
     "register_worker",
     "list_agents",
@@ -93,6 +93,7 @@ const FOLD_TOOLS: [&str; 89] = [
     "submit_review_fix",
     "run_checks",
     "get_check_run",
+    "set_review_scope",
 ];
 
 /// The tools of `FOLD_TOOLS` that the MCP server lists and the skill does not teach yet. A tool leaves this list in the change that teaches it.
@@ -278,7 +279,7 @@ const INVALID_REQUEST_REASONS: [&str; 12] = [
     "integration_queued",
 ];
 
-const NON_TOOL_NAMES: [&str; 31] = [
+const NON_TOOL_NAMES: [&str; 36] = [
     "human_review",
     "fold_failed",
     "left_out",
@@ -310,6 +311,11 @@ const NON_TOOL_NAMES: [&str; 31] = [
     "new_files",
     "base_moved",
     "base_conflicts",
+    "suggested_scope",
+    "scope_rules",
+    "large_delta",
+    "v3_or_later",
+    "review_scope",
 ];
 
 const SECTIONS: [&str; 14] = [

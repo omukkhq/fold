@@ -1,7 +1,9 @@
 use std::str::FromStr;
 
 use fold_core::policy::{Gate, GateState, GateStatus};
-use fold_core::reviews::{HumanReviewMark, Side, Verdict};
+use fold_core::reviews::{
+    HumanReviewMark, ReviewScope, ReviewScopeRecord, ScopeChoice, Side, Verdict,
+};
 use fold_core::{
     Actor, ChangesetId, CommentId, FoldError, HumanName, IdParseError, ProposalId, TaskId,
     WorkerName, codes,
@@ -22,6 +24,7 @@ use crate::services::reviews::{
     ChangeRange, CommentInput, CommentLocation, CommentView, DEFAULT_PROPOSAL_LIST, DirectChange,
     DirectOutcome, FixOutcome, IntegrationOutcome, ProposalDetail, ProposalFilter, ProposalSummary,
     ProposalView, Proposed, ReviewFix, ReviewService, direct_conflicted, integration_conflicted,
+    scope_suggestion,
 };
 use crate::services::workspaces::StateComparison;
 
@@ -43,6 +46,7 @@ pub const INTEGRATE_PROPOSAL: &str = "integrate_proposal";
 pub const REQUIRE_HUMAN_REVIEW: &str = "require_human_review";
 pub const SUBMIT_MAIN_CHANGE: &str = "submit_main_change";
 pub const SUBMIT_REVIEW_FIX: &str = "submit_review_fix";
+pub const SET_REVIEW_SCOPE: &str = "set_review_scope";
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -139,6 +143,73 @@ pub struct ProposalIdInput {
     /// The proposal, such as P-3.
     pub id: String,
     /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
+    #[serde(rename = "as", default)]
+    pub as_worker: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct ClaimReviewInput {
+    /// The proposal, such as P-3.
+    pub id: String,
+    /// For a revised version: the scope of your review, change or full, when you do not follow fold's suggested_scope from get_proposal_diff. Pass reason with it. Leave it out to follow the suggestion.
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// Why the chosen scope fits, in one line, such as "the change renames a public API" or "only strings changed". Needed with scope.
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
+    #[serde(rename = "as", default)]
+    pub as_worker: Option<String>,
+}
+
+/// One review scope that the review lead chooses when it assigns a review.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct ScopeChoiceInput {
+    /// The proposal, such as P-3; one of the proposals of the call.
+    pub proposal: String,
+    /// change or full: the scope of the review of the proposal's current version, instead of fold's suggested_scope.
+    pub scope: String,
+    /// Why this scope fits, in one line, such as "the change renames a public API" or "only strings changed".
+    pub reason: String,
+}
+
+/// The review scope `scope` of `proposal` with its reason, as the tools take it.
+pub(crate) fn scope_choice(
+    proposal: &str,
+    scope: &str,
+    reason: &str,
+) -> Result<ScopeChoice, FoldError> {
+    let proposal = proposal_id(proposal)?;
+    let scope = ReviewScope::parse(scope).ok_or_else(|| {
+        FoldError::new(codes::INVALID_REQUEST, "scope is change or full")
+            .with_details([("field", json!("scope"))])
+            .with_hint("pass change or full")
+    })?;
+    ScopeChoice::new(proposal, scope, reason)
+}
+
+/// The scope choices of a call's `scopes` list.
+pub(crate) fn scope_choices(inputs: &[ScopeChoiceInput]) -> Result<Vec<ScopeChoice>, FoldError> {
+    inputs
+        .iter()
+        .map(|input| scope_choice(&input.proposal, &input.scope, &input.reason))
+        .collect()
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct SetReviewScopeInput {
+    /// The proposal, such as P-3.
+    pub id: String,
+    /// The version whose review scope you choose, such as 3: one that came after you assigned the review, such as a reviewer's own fix version, or one whose scope you choose again.
+    pub version: u32,
+    /// change or full: the scope of the review of that version, instead of fold's suggested_scope.
+    pub scope: String,
+    /// Why this scope fits, in one line, such as "the fix only adds a test".
+    pub reason: String,
+    /// The worker that makes this call, such as review/scope. Leave it out to act as the main worker.
     #[serde(rename = "as", default)]
     pub as_worker: Option<String>,
 }
@@ -276,12 +347,12 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             GET_PROPOSAL,
-            "Read one proposal: versions, evidence, the task and its prerequisites, the review claim, reviews, comment counts, last_reviewed (the newest earlier version that has a verdict, by any reviewer), the gate report for integrating, the human review mark, the conflict report, the check runs of the version (read their results instead of running the same checks again) and the changed files.",
+            "Read one proposal: versions, evidence, the task and its prerequisites, the review claim, reviews with the scope of each review of a revised version (the scope followed, fold's suggestion, its rules and the reason of a choice), comment counts, last_reviewed (the newest earlier version that has a verdict, by any reviewer), review_scope (that since version and the review lead's newest chosen scope for the version, which the review follows instead of fold's suggestion), the gate report for integrating, the human review mark, the conflict report, the check runs of the version (read their results instead of running the same checks again) and the changed files.",
             schema_for_type::<ProposalVersionInput>(),
         ),
         Tool::new(
             GET_PROPOSAL_DIFF,
-            "Read the change of a proposal version: against its base, or with since only what changed after an earlier version, such as last_reviewed, the newest earlier version that has a verdict. Lists the changed files with line counts, or one file's hunks when you pass path. A since change leaves out what main gained when the worker synced, and its file list adds earlier (the earlier version's own change size), new_files (files the earlier version did not change), base_moved and base_conflicts (files where the worker merged main by hand). On a since change, comment with side new and the new line numbers: they are the version's own lines.",
+            "Read the change of a proposal version: against its base, or with since only what changed after an earlier version, such as last_reviewed, the newest earlier version that has a verdict. Lists the changed files with line counts, or one file's hunks when you pass path. A since change leaves out what main gained when the worker synced, and its file list adds earlier (the earlier version's own change size), new_files (files the earlier version did not change), base_moved and base_conflicts (files where the worker merged main by hand), with fold's suggested_scope, change or full, and scope_rules, the rules behind a suggested full review: new_files, large_delta, base_conflicts or v3_or_later. On a since change, comment with side new and the new line numbers: they are the version's own lines.",
             schema_for_type::<GetProposalDiffInput>(),
         ),
         Tool::new(
@@ -297,7 +368,7 @@ pub fn tools() -> Vec<Tool> {
         Tool::new(
             CLAIM_REVIEW,
             "For a review of your own: the main agent and the review lead claim the review of an open proposal before they review it. A reviewer gets its claims from the review lead's start_worker and gets worker_claim_denied here; any other agent gets integrator_required and messages the review lead. The author's agent cannot claim it. A repeat call renews the claim.",
-            schema_for_type::<ProposalIdInput>(),
+            schema_for_type::<ClaimReviewInput>(),
         ),
         Tool::new(
             RELEASE_REVIEW,
@@ -342,6 +413,11 @@ pub fn tools() -> Vec<Tool> {
         schema_for_type::<SubmitReviewFixInput>(),
     ));
     tools.extend(checks::tools());
+    tools.push(Tool::new(
+        SET_REVIEW_SCOPE,
+        "Review lead or main agent only: choose the review scope, change or full, of a version of an open proposal, with a reason, when fold's suggested_scope does not fit and you did not choose it when you assigned the review, for example a reviewer's own fix version. The newest choice for a version applies, and the reviewer follows it. A version with no earlier version that has a verdict is reviewed whole and is refused with invalid_request; another agent gets integrator_required.",
+        schema_for_type::<SetReviewScopeInput>(),
+    ));
     tools
 }
 
@@ -363,6 +439,7 @@ pub async fn call(
         GET_PROPOSAL_DIFF => get_proposal_diff(reviews, arguments).await?,
         UPDATE_PROPOSAL => update_proposal(reviews, &actor, arguments).await?,
         CLOSE_PROPOSAL => close_proposal(reviews, &actor, arguments).await?,
+        SET_REVIEW_SCOPE => set_review_scope(reviews, &actor, arguments).await?,
         CLAIM_REVIEW => claim_review(reviews, &actor, arguments).await?,
         RELEASE_REVIEW => release_review(reviews, &actor, arguments).await?,
         CREATE_REVIEW_CHECKOUT => create_review_checkout(reviews, &actor, arguments).await?,
@@ -482,6 +559,17 @@ fn gate_json(state: &GateState) -> Value {
     }
 }
 
+/// The scope a review followed, with fold's suggestion and the rules behind it.
+fn scope_record_json(scope: &ReviewScopeRecord) -> Value {
+    json!({
+        "scope": scope.scope.as_str(),
+        "since": version(scope.since),
+        "suggested": scope.suggested.as_str(),
+        "rules": scope.rules.iter().map(|rule| rule.as_str()).collect::<Vec<_>>(),
+        "reason": scope.reason,
+    })
+}
+
 fn view_json(view: &ProposalView) -> Value {
     let detail = &view.detail;
     let summary = &detail.summary;
@@ -518,6 +606,9 @@ fn view_json(view: &ProposalView) -> Value {
             // A human edit keeps the agent approvals of the version it was made from.
             if let Some(kept) = review.kept_from {
                 line["kept_from"] = json!(version(kept));
+            }
+            if let Some(scope) = &review.scope {
+                line["scope"] = scope_record_json(scope);
             }
             line
         })
@@ -558,6 +649,14 @@ fn view_json(view: &ProposalView) -> Value {
             "outdated": view.comments.outdated,
         },
         "last_reviewed": view.last_reviewed.map(version),
+        "review_scope": view.last_reviewed.map(|since| json!({
+            "since": version(since),
+            "chosen": view.scope_choice.as_ref().map(|choice| json!({
+                "scope": choice.scope.as_str(),
+                "reason": choice.reason,
+                "by": choice.chosen_by,
+            })),
+        })),
         "gates": view.gates.iter().map(gate_json).collect::<Vec<_>>(),
         "human_review": mark_json(summary.human_review.as_ref()),
         "conflict": detail.conflict,
@@ -722,6 +821,15 @@ async fn get_proposal_diff(
                 value["new_files"] = json!(facts.new_files);
                 value["base_moved"] = json!(facts.base_moved);
                 value["base_conflicts"] = json!(facts.base_conflicts);
+                let suggestion = scope_suggestion(changes.version, facts);
+                value["suggested_scope"] = json!(suggestion.scope.as_str());
+                value["scope_rules"] = json!(
+                    suggestion
+                        .rules
+                        .iter()
+                        .map(|rule| rule.as_str())
+                        .collect::<Vec<_>>()
+                );
                 (changes.version, changes.since, value)
             }
             None => {
@@ -793,9 +901,24 @@ async fn claim_review(
     actor: &Actor,
     arguments: &JsonObject,
 ) -> Result<Value, FoldError> {
-    let input: ProposalIdInput = parse(arguments)?;
+    let input: ClaimReviewInput = parse(arguments)?;
+    let choice = match (&input.scope, &input.reason) {
+        (Some(scope), reason) => Some(scope_choice(
+            &input.id,
+            scope,
+            reason.as_deref().unwrap_or_default(),
+        )?),
+        (None, Some(_)) => {
+            return Err(
+                FoldError::new(codes::INVALID_REQUEST, "a reason goes with a scope")
+                    .with_details([("field", json!("reason"))])
+                    .with_hint("pass scope with the reason, or leave both out"),
+            );
+        }
+        (None, None) => None,
+    };
     let claim = reviews
-        .claim_review(actor, proposal_id(&input.id)?)
+        .claim_review_with_scope(actor, proposal_id(&input.id)?, choice)
         .await
         .map_err(from_review)?;
     Ok(json!({
@@ -804,6 +927,26 @@ async fn claim_review(
         "acquired_at": claim.acquired_at.as_millis(),
         "renewed_at": claim.renewed_at.as_millis(),
         "stale": claim.stale,
+    }))
+}
+
+async fn set_review_scope(
+    reviews: &ReviewService,
+    actor: &Actor,
+    arguments: &JsonObject,
+) -> Result<Value, FoldError> {
+    let input: SetReviewScopeInput = parse(arguments)?;
+    let choice = scope_choice(&input.id, &input.scope, &input.reason)?;
+    let proposal = choice.proposal;
+    let scope = choice.scope;
+    reviews
+        .set_review_scope(actor, input.version, choice)
+        .await
+        .map_err(from_review)?;
+    Ok(json!({
+        "id": proposal,
+        "version": version(input.version),
+        "scope": scope.as_str(),
     }))
 }
 

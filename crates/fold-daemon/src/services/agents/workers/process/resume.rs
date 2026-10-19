@@ -968,6 +968,7 @@ mod tests {
                     comments: 2,
                     created_at: at,
                     kept_from: None,
+                    scope: None,
                 }],
                 comments: vec![
                     CommentRow {

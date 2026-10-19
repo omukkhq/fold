@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use fold_core::dag::Dag;
 use fold_core::events::types;
-use fold_core::reviews::{Side, Verdict, last_verdict_version};
+use fold_core::reviews::{ScopeChoice, Side, Verdict, last_verdict_version};
 use fold_core::{
     Actor, AgentActor, CommentId, EventActor, FoldError, IdKind, NewEvent, ProposalId,
     ReviewBatchId, TaskId, Timestamp, WorkerName, WorkspaceId, codes, policy,
@@ -23,6 +23,7 @@ use super::checkouts::remove_unnamed_dir;
 use super::claims::{TAKEN_OVER, already_claimed, take_review_claim};
 use super::comments::{CommentInput, CommentLocation, MAX_BODY_CHARS, check_ranges, check_shape};
 use super::proposals::require_open;
+use super::scopes::{SuggestedScope, check_choices, choose_scope_in_tx};
 use super::verdicts::{BatchCommentLink, ReviewRecord, record_review, verdict_gate};
 use super::{ReviewError, ReviewService};
 use crate::services::events::EventBuffer;
@@ -391,7 +392,19 @@ impl ReviewService {
         actor: &Actor,
         proposals: Vec<ProposalId>,
     ) -> Result<ReviewBatchView, ReviewError> {
+        self.create_review_batch_with_scopes(actor, proposals, Vec::new())
+            .await
+    }
+
+    /// [`ReviewService::create_review_batch`] with the scopes the claimant chooses for its own review of some members' current versions, stored in the same transaction with `review.scope_chosen`; the other members follow fold's suggestion.
+    pub async fn create_review_batch_with_scopes(
+        &self,
+        actor: &Actor,
+        proposals: Vec<ProposalId>,
+        scopes: Vec<ScopeChoice>,
+    ) -> Result<ReviewBatchView, ReviewError> {
         check_members(&proposals)?;
+        check_choices(&proposals, &scopes)?;
         let lease_minutes = self.lease_minutes().await?;
         let now = self.clock.now();
         let mut buffer = EventBuffer::new();
@@ -417,7 +430,14 @@ impl ReviewService {
                 }
                 let reviewer = reviewer.ok_or(StoreError::Invalid("a batch has members"))?;
                 let worker = worker_row(tx, reviewer).await?;
-                let batch = batch_in_tx(tx, &mut buffer, &worker, rows, lease_minutes, now).await?;
+                let batch =
+                    batch_in_tx(tx, &mut buffer, &worker, rows.clone(), lease_minutes, now).await?;
+                let by = EventActor::worker(&worker.name);
+                for choice in &scopes {
+                    if let Some(row) = rows.iter().find(|row| row.id == choice.proposal) {
+                        choose_scope_in_tx(tx, &mut buffer, &by, row, choice, now).await?;
+                    }
+                }
                 Ok::<_, ReviewError>(batch)
             })
             .await?;
@@ -674,6 +694,16 @@ impl ReviewService {
                 check_ranges(&self.workspaces, &target, inputs).await?;
             }
         }
+        let mut scopes: BTreeMap<ProposalId, SuggestedScope> = BTreeMap::new();
+        for member in &members {
+            if verdicts.iter().any(|v| v.proposal == member.proposal)
+                && let Some(scope) = self
+                    .suggested_scope(member.proposal, member.version)
+                    .await?
+            {
+                scopes.insert(member.proposal, scope);
+            }
+        }
         for verdict in &verdicts {
             let lines = by_member.get(&verdict.proposal).map_or(0, Vec::len);
             let named = notes
@@ -756,6 +786,7 @@ impl ReviewService {
                         comments,
                         batch: Some(batch),
                         batch_comments: links.get(&member.proposal).unwrap_or(&no_links),
+                        scope: scopes.get(&member.proposal),
                     };
                     let ids = record_review(tx, &mut buffer, actor, &record, now).await?;
                     seeds.push(member.task);

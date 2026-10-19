@@ -75,6 +75,7 @@ export function review(
     comments: 0,
     created_at: T0 + version * 60_000 + 30_000,
     kept_from: null,
+    scope: null,
     ...fields,
   };
 }

@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 /// The fixed count always puts the unread part on the footer line; real counts can add to it.
 const FOOTER: &str = "fold: ";
 
-const REVIEW_TOOLS: [&str; 17] = [
+const REVIEW_TOOLS: [&str; 18] = [
     "create_proposal",
     "list_proposals",
     "get_proposal",
@@ -37,6 +37,7 @@ const REVIEW_TOOLS: [&str; 17] = [
     "submit_review_fix",
     "run_checks",
     "get_check_run",
+    "set_review_scope",
 ];
 
 #[cfg(test)]
@@ -346,9 +347,12 @@ async fn a_reviewer_reads_only_the_change_since_the_last_verdict() {
     assert_eq!(since["new_files"], json!([]));
     assert_eq!(since["base_moved"], false);
     assert_eq!(since["base_conflicts"], json!([]));
+    assert_eq!(since["suggested_scope"], "change", "one line of four");
+    assert_eq!(since["scope_rules"], json!([]));
     let full = ok(&review, "get_proposal_diff", json!({"id": "P-1"})).await;
     assert_eq!(full["since"], Value::Null);
     assert_eq!(full.get("earlier"), None);
+    assert_eq!(full.get("suggested_scope"), None);
     assert_eq!(full["from"], "r1");
     assert_eq!(
         full["totals"],
@@ -519,6 +523,8 @@ async fn a_change_since_an_earlier_version_leaves_out_what_main_gained() {
     assert_eq!(since["new_files"], json!(["src/extra.rs"]));
     assert_eq!(since["base_moved"], true);
     assert_eq!(since["base_conflicts"], json!([]));
+    assert_eq!(since["suggested_scope"], "full");
+    assert_eq!(since["scope_rules"], json!(["new_files", "large_delta"]));
     let hunks = ok(
         &review,
         "get_proposal_diff",
@@ -592,6 +598,8 @@ async fn a_change_since_an_earlier_version_names_the_files_merged_by_hand() {
     assert_eq!(since["new_files"], json!([]));
     assert_eq!(since["base_moved"], true);
     assert_eq!(since["base_conflicts"], json!(["src/lib.rs"]));
+    assert_eq!(since["suggested_scope"], "full");
+    assert_eq!(since["scope_rules"], json!(["base_conflicts"]));
 }
 
 #[tokio::test]
@@ -964,6 +972,9 @@ async fn every_result_ends_with_the_footer() {
                 "fixes": [{"path": "src/lib.rs", "reason": "r"}],
                 "checks": "ok",
             }),
+            "set_review_scope" => {
+                json!({"id": "P-1", "version": 1, "scope": "full", "reason": "r"})
+            }
             _ => json!({"id": "P-1"}),
         };
         let result = call_raw(&frontend, tool, arguments).await;

@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use super::super::error::from_review;
 use super::super::parse;
-use super::{id, proposal_id, version};
+use super::{ScopeChoiceInput, id, proposal_id, scope_choices, version};
 use crate::services::reviews::{
     BatchComment, BatchLines, BatchVerdict, ReviewBatchView, ReviewService,
 };
@@ -25,6 +25,9 @@ pub const SUBMIT_BATCH_REVIEW: &str = "submit_batch_review";
 pub struct CreateReviewBatchInput {
     /// The open proposals to review together, such as ["P-3", "P-4"]: 2 to 20, none written by your agent. fold takes the review claim of each for you.
     pub proposals: Vec<String>,
+    /// For revised versions: the scope of your review of some proposals, each with its reason, when you do not follow fold's suggested_scope from get_proposal_diff. The other proposals follow the suggestion.
+    #[serde(default)]
+    pub scopes: Vec<ScopeChoiceInput>,
     /// The worker that makes this call, such as review/batch. Leave it out to act as the main worker.
     #[serde(rename = "as", default)]
     pub as_worker: Option<String>,
@@ -234,8 +237,9 @@ async fn create_review_batch(
         .iter()
         .map(|text| proposal_id(text))
         .collect::<Result<Vec<_>, _>>()?;
+    let scopes = scope_choices(&input.scopes)?;
     let batch = reviews
-        .create_review_batch(actor, proposals)
+        .create_review_batch_with_scopes(actor, proposals, scopes)
         .await
         .map_err(from_review)?;
     Ok(batch_json(&batch))

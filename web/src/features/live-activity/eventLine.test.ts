@@ -194,6 +194,10 @@ describe("eventLine", () => {
       "fixed P-4 in review as v3",
     );
     expect(line("proposal.reviewer_fixed")).toBe("fixed P-4 in review");
+    expect(
+      line("review.scope_chosen", { scope: "full", version: 3, reason: "API" }),
+    ).toBe("chose a full review of P-4 v3");
+    expect(line("review.scope_chosen")).toBe("chose the review scope of P-4");
     expect(line("proposal.review_again_requested", { version: 3 })).toBe(
       "sent v3 of P-4 for review again",
     );

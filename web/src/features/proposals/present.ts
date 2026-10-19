@@ -4,9 +4,10 @@ import type {
   ProposalSummary,
   ProposalVersion,
   Review,
+  ReviewScopeRule,
   Verdict,
 } from "@/api/proposals";
-import { bareName, reviewerActor } from "@/people/names";
+import { bareName, isHumanName, reviewerActor } from "@/people/names";
 import {
   actorSegment,
   reviewerSegment,
@@ -187,6 +188,41 @@ export function reviewText(review: Review): string {
       : `${REVIEW_HEADS[review.verdict]} (kept from v${String(review.kept_from)})`;
   const body = review.body.trim();
   return body ? `${head}: ${body}` : head;
+}
+
+const RULE_WORDS: Record<ReviewScopeRule, string> = {
+  new_files: "new files",
+  large_delta: "a large change",
+  base_conflicts: "files merged with main by hand",
+  v3_or_later: "v3 or later",
+};
+
+function scopeWord(scope: "change" | "full"): string {
+  return scope === "full" ? "Full review" : "Change review";
+}
+
+/**
+ * The scope line of a review of a revised version, such as `Full review since v1 · suggested for new files`; null for a review of a whole first version and for a human's review. A scope the review lead chose names its reason and what fold suggested.
+ */
+export function reviewScopeText(review: Review): string | null {
+  const scope = review.scope;
+  if (scope === null || isHumanName(review.reviewer)) {
+    return null;
+  }
+  const head = `${scopeWord(scope.scope)} since v${String(scope.since)}`;
+  const rules = scope.rules.map((rule) => RULE_WORDS[rule]).join(", ");
+  const suggested =
+    scope.suggested === "full"
+      ? `fold suggested a full review for ${rules}`
+      : "fold suggested a change review";
+  if (scope.reason === null) {
+    return scope.suggested === "full"
+      ? `${head} · suggested for ${rules}`
+      : head;
+  }
+  return scope.suggested === scope.scope
+    ? `${head} · ${scope.reason}`
+    : `${head} · chosen: ${scope.reason} · ${suggested}`;
 }
 
 /**

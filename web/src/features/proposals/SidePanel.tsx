@@ -51,6 +51,7 @@ import {
   evidenceLines,
   evidenceSource,
   listedReviews,
+  reviewScopeText,
   reviewText,
   versionAuthor,
   versionRef,
@@ -556,6 +557,7 @@ export function SidePanel({
             {reviews.map((review, index) => {
               const spec = VERDICT_ICONS[review.verdict];
               const Icon = spec.icon;
+              const scopeLine = reviewScopeText(review);
               const earlier =
                 review.verdict === "approve" &&
                 review.version !== proposal.summary.current_version;
@@ -576,6 +578,11 @@ export function SidePanel({
                       slug={slug}
                       className="text-bar leading-snug"
                     />
+                    {scopeLine === null ? null : (
+                      <p className="text-caption text-text-muted">
+                        {scopeLine}
+                      </p>
+                    )}
                     <p className="font-mono text-caption text-text-muted">
                       <PersonName name={review.reviewer} /> · v{review.version}
                       {earlier ? " · earlier version" : ""} ·{" "}

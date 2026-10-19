@@ -535,6 +535,20 @@ const SPECS: Record<EventType, Spec> = {
     text: (e) => `commented on ${proposalOf(e)}`,
   },
   "review.batch_created": { icon: ListChecks, text: batchCreatedText },
+  "review.scope_chosen": {
+    icon: ListChecks,
+    text: (e) => {
+      const scope = text(e.data.scope);
+      const version = count(e.data.version);
+      const of =
+        version === null
+          ? proposalOf(e)
+          : `${proposalOf(e)} v${String(version)}`;
+      return scope === null
+        ? `chose the review scope of ${of}`
+        : `chose a ${scope} review of ${of}`;
+    },
+  },
   "review.batch_submitted": {
     icon: Check,
     text: (e) => `reviewed ${batchOf(e)}`,

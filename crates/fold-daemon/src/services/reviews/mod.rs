@@ -24,6 +24,7 @@ mod integrate;
 mod notify;
 mod proposals;
 mod review_fixes;
+mod scopes;
 mod verdicts;
 mod views;
 
@@ -36,7 +37,7 @@ pub(crate) use batches::{close_batches_of, free_reviews_for_start};
 pub use changes::{ChangeRange, ProposalChange, SinceChange};
 pub use checkouts::{CheckoutTarget, ListedCheckout, ReviewCheckout};
 pub use claims::ReviewClaimView;
-pub(crate) use claims::assign_reviews_in_tx;
+pub(crate) use claims::{Assignment, assign_reviews_in_tx};
 pub use comments::{CommentInput, CommentLocation, CommentView};
 pub use human_edits::HumanEdit;
 pub use human_review::{AwaitingHumanReview, awaiting_human_review, awaiting_human_review_in};
@@ -50,6 +51,7 @@ pub use proposals::{
     Proposed, Retirement, Turn, VersionView, retire_proposal,
 };
 pub use review_fixes::{FixOutcome, FixedVersion, MAX_CHECKS_CHARS, MAX_FIXES, ReviewFix};
+pub use scopes::{SuggestedScope, scope_suggestion};
 pub use verdicts::SubmittedReview;
 pub use views::{
     CommentCounts, ProposalView, ReviewView, TaskRequirements, direct_conflicted,

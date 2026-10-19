@@ -392,6 +392,20 @@ pub fn can_claim_review<'a>(
     }
 }
 
+/// The review lead decides how much of a revised version a review reads, so it and the main agent, which keeps the user's rights, choose a review scope, through any of their workers; a reviewer follows the scope it gets, and a human or the system chooses none. `standing` is the acting agent's.
+pub fn can_choose_review_scope(actor: &Actor, standing: AgentStanding) -> Result<(), PolicyDenied> {
+    match actor {
+        Actor::Agent(_) if standing.is_main_agent() || standing.role == Some(Role::ReviewLead) => {
+            Ok(())
+        }
+        Actor::Agent(_) | Actor::Human { .. } | Actor::System => Err(PolicyDenied {
+            code: codes::INTEGRATOR_REQUIRED,
+            message: "only the review lead or the main agent chooses a review scope",
+            hint: "follow the scope you got, and send_message to the review lead when it does not fit",
+        }),
+    }
+}
+
 /// A review claim is the reviewing agent's, so any worker of the holder's agent gives it up; a human, the system and every other agent are refused. `holder` is the claim's worker.
 pub fn can_release_review<'a>(
     actor: &'a Actor,
@@ -818,6 +832,27 @@ mod tests {
         for actor in [human(), Actor::System] {
             let result = can_claim_task(&actor, AgentStanding::NO_RIGHTS, None, &web);
             assert_eq!(outcome(result), Some(codes::ACTOR_CANNOT_CLAIM));
+        }
+    }
+
+    #[test]
+    fn only_the_review_lead_or_the_main_agent_chooses_a_review_scope() {
+        let lead = agent("review", &[]);
+        for (actor, standing, allowed) in [
+            (&lead, supervised(Role::ReviewLead), true),
+            (&lead, MAIN, true),
+            (&lead, supervised(Role::Reviewer), false),
+            (&lead, supervised(Role::AreaLead), false),
+            (&lead, supervised(Role::TaskWorker), false),
+            (&lead, UNSUPERVISED, false),
+            (&human(), AgentStanding::NO_RIGHTS, false),
+            (&Actor::System, AgentStanding::NO_RIGHTS, false),
+        ] {
+            let result = can_choose_review_scope(actor, standing);
+            assert_eq!(result.is_ok(), allowed, "{standing:?}");
+            if let Err(denied) = result {
+                assert_eq!(denied.code(), codes::INTEGRATOR_REQUIRED);
+            }
         }
     }
 

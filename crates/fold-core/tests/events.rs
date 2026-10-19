@@ -123,6 +123,7 @@ fn all_equals_the_plans_event_types() {
         "integration.queued",
         "integration.unqueued",
         "integration.held",
+        "review.scope_chosen",
     ]);
     assert_eq!(declared, expected);
 }
