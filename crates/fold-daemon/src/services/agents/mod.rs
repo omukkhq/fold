@@ -41,6 +41,8 @@ pub use overview::{
     ProposalSummary, SessionSummary, WorkerOverview, WorkspaceSummary,
 };
 pub use presence::SeenPresence;
+#[cfg(feature = "dev-launcher")]
+pub use workers::{DEV_STUB_COMMAND, DEV_STUB_DIR};
 pub use workers::{
     Launcher, PAUSE_TURN, PauseState, RESTART_TURN, StartWorker, StopTimeouts, Supervisor,
     WorkerLimitsChanged, new_session_id,

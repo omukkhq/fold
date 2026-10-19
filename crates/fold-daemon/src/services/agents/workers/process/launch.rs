@@ -67,7 +67,13 @@ impl Supervisor {
             area_instructions,
         )
         .await;
-        let (mcp, own_settings, prompt) = match files {
+        let WorkerFiles {
+            mcp,
+            settings: own_settings,
+            prompt,
+            program,
+            program_args,
+        } = match files {
             Ok(files) => files,
             Err(_) => {
                 tracing::warn!(agent = %row.agent, "could not write the worker's files");
@@ -75,8 +81,8 @@ impl Supervisor {
                 return Ok(None);
             }
         };
-        let mut command = Command::new(&launcher.claude);
-        command.args([
+        let mut command = Command::new(&program);
+        command.args(program_args).args([
             "-p",
             "--input-format",
             "stream-json",
@@ -315,14 +321,24 @@ async fn drain(mut stderr: ChildStderr) {
     }
 }
 
-/// Writes the worker's MCP configuration, its settings and its prompt under the worker's folder. The settings allow the fold tools and run fold's hooks, so a worker never depends on the user's own Claude Code settings. The prompt is the role's text, shipped or the project's override, then the shared rules, then the area's instructions when there are any; the override file itself is never passed, because it lacks the shared rules. Returns the three paths Claude Code reads.
+/// The files a worker process reads and the program that reads them.
+struct WorkerFiles {
+    mcp: PathBuf,
+    settings: PathBuf,
+    prompt: PathBuf,
+    program: PathBuf,
+    /// The arguments before Claude Code's own: the subcommand of fld's stand-in, else none.
+    program_args: &'static [&'static str],
+}
+
+/// Writes the worker's MCP configuration, its settings and its prompt under the worker's folder. The settings allow the fold tools and run fold's hooks, so a worker never depends on the user's own Claude Code settings. The prompt is the role's text, shipped or the project's override, then the shared rules, then the area's instructions when there are any; the override file itself is never passed, because it lacks the shared rules. Returns the three paths Claude Code reads, with the program to run.
 async fn write_files(
     paths: &ProjectPaths,
     launcher: &Launcher,
     row: &WorkerProcessRow,
     settings: &RoleSettings,
     area_instructions: Option<(AreaName, String)>,
-) -> std::io::Result<(PathBuf, PathBuf, PathBuf)> {
+) -> std::io::Result<WorkerFiles> {
     let dir = paths.worker_dir(&row.agent);
     let fold_dir = paths.fold_dir();
     let override_prompt = paths.role_prompt(row.role);
@@ -334,7 +350,9 @@ async fn write_files(
     let agent = row.agent.clone();
     let prompt_text = row.role.prompt();
     let limit = settings.mcp.clone();
+    let claude = launcher.claude.clone();
     tokio::task::spawn_blocking(move || {
+        let (program, program_args) = worker_program(&fold_dir, claude, &fold);
         fold_vcs::platform::create_dir_below(&fold_dir, &dir)?;
         let config = mcp_config(&fold, &agent, limit.as_deref(), &project_mcp);
         let mcp = dir.join("mcp.json");
@@ -358,10 +376,40 @@ async fn write_files(
                 prompt
             }
         };
-        Ok((mcp, own_settings, prompt))
+        Ok(WorkerFiles {
+            mcp,
+            settings: own_settings,
+            prompt,
+            program,
+            program_args,
+        })
     })
     .await
     .map_err(std::io::Error::other)?
+}
+
+/// Claude Code, or, in a build for development whose project holds [`super::DEV_STUB_DIR`] as a real folder, never a symlink, the fld binary of the worker's MCP server as `fld dev stub`, which runs the agent's script from that folder through the same tools. Blocking.
+#[cfg(feature = "dev-launcher")]
+fn worker_program(
+    fold_dir: &Path,
+    claude: PathBuf,
+    fold: &Path,
+) -> (PathBuf, &'static [&'static str]) {
+    let stub_dir = std::fs::symlink_metadata(fold_dir.join(super::DEV_STUB_DIR));
+    if stub_dir.is_ok_and(|meta| meta.is_dir()) {
+        (fold.to_owned(), &super::DEV_STUB_COMMAND)
+    } else {
+        (claude, &[])
+    }
+}
+
+#[cfg(not(feature = "dev-launcher"))]
+fn worker_program(
+    _fold_dir: &Path,
+    claude: PathBuf,
+    _fold: &Path,
+) -> (PathBuf, &'static [&'static str]) {
+    (claude, &[])
 }
 
 /// The `fold` server with the worker's agent name, plus, when the role limits its servers, each named server of the project's `.mcp.json`. Servers of the user's own configuration are never copied, because their entries can hold credentials; without a limit Claude Code loads them itself.
@@ -451,6 +499,34 @@ async fn give_back_claims(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "dev-launcher")]
+    #[test]
+    fn a_project_with_the_stub_folder_runs_the_stub_of_its_fld() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let fold_dir = temp.path().join(".fold");
+        std::fs::create_dir(&fold_dir).unwrap();
+        let fold = Path::new("/bin/fld");
+        let claude = PathBuf::from("claude");
+        assert_eq!(
+            worker_program(&fold_dir, claude.clone(), fold),
+            (claude.clone(), &[][..])
+        );
+        let elsewhere = temp.path().join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        let stub_dir = fold_dir.join(super::super::DEV_STUB_DIR);
+        std::os::unix::fs::symlink(&elsewhere, &stub_dir).unwrap();
+        assert_eq!(
+            worker_program(&fold_dir, claude.clone(), fold),
+            (claude.clone(), &[][..])
+        );
+        std::fs::remove_file(&stub_dir).unwrap();
+        std::fs::create_dir(&stub_dir).unwrap();
+        assert_eq!(
+            worker_program(&fold_dir, claude, fold),
+            (PathBuf::from("/bin/fld"), &["dev", "stub"][..])
+        );
+    }
 
     #[test]
     fn a_limited_config_copies_only_named_project_servers() {

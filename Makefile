@@ -31,11 +31,11 @@ DEV_DIR := $(CURDIR)/target/dev
 dev: ## Run the daemon on :7420 and the Vite dev server on :5173; Ctrl-C stops both
 	$(MAKE) -j2 dev-daemon dev-web
 
-dev-daemon: ## Run the daemon on 127.0.0.1:7420, rebuilt on every change; its data lives under target/dev/
+dev-daemon: ## Run the daemon on 127.0.0.1:7420, rebuilt on every change; its data lives under target/dev/, and the workers of a seeded project run the scripted stub
 	mkdir -p $(DEV_DIR)/data $(DEV_DIR)/config $(DEV_DIR)/runtime
 	chmod 700 $(DEV_DIR)/runtime
 	XDG_DATA_HOME=$(DEV_DIR)/data XDG_CONFIG_HOME=$(DEV_DIR)/config XDG_RUNTIME_DIR=$(DEV_DIR)/runtime \
-		cargo watch -w crates -w Cargo.toml -w Cargo.lock -x 'run -p fold-cli -- serve --listen 127.0.0.1:7420'
+		cargo watch -w crates -w Cargo.toml -w Cargo.lock -x 'run -p fold-cli --features dev-seed -- serve --listen 127.0.0.1:7420'
 
 # The seed registers its project in the dev daemon's registry and acts on the dev daemon's socket, so it takes the same directories as dev-daemon.
 seed-dev: ## Development only: build a throwaway demo project in .dev/projects/demo through the running dev daemon

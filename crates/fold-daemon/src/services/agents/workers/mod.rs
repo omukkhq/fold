@@ -29,6 +29,8 @@ mod process;
 
 pub use limits::WorkerLimitsChanged;
 pub use pause::PauseState;
+#[cfg(feature = "dev-launcher")]
+pub use process::{DEV_STUB_COMMAND, DEV_STUB_DIR};
 pub use process::{Launcher, PAUSE_TURN, RESTART_TURN, StopTimeouts, Supervisor};
 
 /// The most default names tried for one start before the start gives up.

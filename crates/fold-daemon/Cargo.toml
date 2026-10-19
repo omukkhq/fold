@@ -51,6 +51,8 @@ tracing-subscriber = "0.3.23"
 [features]
 # Compiles the failpoints that crash-safety tests fire; release builds leave it off.
 failpoints = ["dep:fail", "fail/failpoints", "fold-vcs/failpoints"]
+# Lets a project with a `.fold/dev-stub/` folder run fld's scripted stand-in for Claude Code instead of `claude`, for the development seed; release builds leave it off.
+dev-launcher = []
 
 [[test]]
 name = "integration"

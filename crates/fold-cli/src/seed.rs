@@ -1,5 +1,6 @@
 mod agent;
 mod sample;
+mod stub;
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -29,6 +30,8 @@ pub struct DevArgs {
 enum DevCommand {
     /// Build a throwaway demo project through the tools and routes a real client uses
     Seed(SeedArgs),
+    /// Stand in for Claude Code as a worker of a project with a .fold/dev-stub folder: run the agent's script from it through the fold MCP tools
+    Stub(stub::StubArgs),
 }
 
 #[derive(Args, Debug)]
@@ -77,6 +80,8 @@ pub enum SeedError {
     },
     #[error("cannot write the output: {0}")]
     Write(io::Error),
+    #[error(transparent)]
+    Stub(#[from] stub::StubError),
 }
 
 impl From<HandshakeError> for SeedError {
@@ -114,6 +119,7 @@ impl SeedError {
 pub fn run(args: &DevArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), SeedError> {
     match &args.command {
         DevCommand::Seed(args) => seed(args, dirs, out),
+        DevCommand::Stub(args) => Ok(stub::run(args)?),
     }
 }
 
