@@ -34,7 +34,7 @@ Install fold on **Linux AMD64 (x86_64)**, **Linux ARM64 (aarch64)**, or **macOS 
 curl -fsSL https://omukk.dev/fold/install.sh | sh
 ```
 
-The script installs `fld` into `~/.local/bin`. Run it again to update fold, then run `fld restart` so a running daemon uses the new version. To choose another folder or a specific release, set `FOLD_INSTALL_DIR` or `FOLD_VERSION`, for example `FOLD_VERSION=v0.1.0`.
+The script installs `fld` into `~/.local/bin`. Run it again to update fold, then run `fld restart` so a running daemon uses the new version. To choose another folder or a specific release, set `FOLD_INSTALL_DIR` or `FOLD_VERSION`, for example `FOLD_VERSION=v0.2.1`.
 
 To uninstall fold, run:
 
@@ -144,6 +144,8 @@ Run these commands inside your project:
 | `fld setup` | Start the daemon at login. |
 | `fld restart` | Restart the daemon after an update, so the new version takes over. Workers continue in their sessions. |
 | `fld doctor` | Check the installation, daemon, and projects, with suggested fixes. |
+| `fld gc` | Delete objects that nothing refers to, prune old automatic checkpoints, and remove the folders of workspaces closed for longer than `closed_workspace_days` (14 days by default). The daemon also runs it every day; `fld gc` needs a running daemon. `fld gc --dry-run` counts what a run would remove and changes nothing. |
+| `fld token` | Manage the tokens that sign a person in to the web interface off localhost: `fld token create`, `fld token list`, and `fld token revoke`. |
 | `fld --help` | See the command reference. |
 
 A project pause stops workers; approved proposals can still integrate.
