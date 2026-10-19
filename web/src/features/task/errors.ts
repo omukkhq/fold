@@ -27,6 +27,8 @@ const INVALID_REQUEST: Record<string, string> = {
     "fold ticks a linked item when its task is Done. Change the linked task instead.",
   proposal_open:
     "A proposal is open for this task. Close it before you archive the task.",
+  two_areas:
+    "A task can have only one area label. Keep one area, or let the main agent choose it.",
 };
 
 const TASK_CLOSED: Record<string, string> = {

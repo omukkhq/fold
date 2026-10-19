@@ -32,6 +32,9 @@ export const newTaskSchema = z.object({
   title: titleSchema.shape.title,
   description: z.string().refine(...textLimit("description")),
   kind: z.enum(["proposal", "no_proposal", "human"]),
+  /** An area name, or empty to let the main agent choose. */
+  area: z.string(),
+  labels: z.array(z.string()),
 });
 export type NewTaskForm = z.infer<typeof newTaskSchema>;
 

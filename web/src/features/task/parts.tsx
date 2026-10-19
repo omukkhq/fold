@@ -46,16 +46,29 @@ export function SectionHead({
 /** A side-column group with its tracked overline title. */
 export function SideGroup({
   title,
+  action,
   children,
 }: {
   title: string;
+  /** A control at the end of the title row. */
+  action?: ReactNode;
   children: ReactNode;
 }) {
+  const heading = (
+    <h3 className="text-overline leading-snug font-semibold text-primary-text uppercase">
+      {title}
+    </h3>
+  );
   return (
     <section aria-label={title} className="flex flex-col gap-8">
-      <h3 className="text-overline leading-snug font-semibold text-primary-text uppercase">
-        {title}
-      </h3>
+      {action ? (
+        <div className="flex items-center justify-between gap-8">
+          {heading}
+          {action}
+        </div>
+      ) : (
+        heading
+      )}
       {children}
     </section>
   );
@@ -114,7 +127,7 @@ export function LinkButton({
   );
 }
 
-/** A small ghost action, the `+ Label` and `Edit`. */
+/** A small ghost action, such as `Change` and `Edit`. */
 export function SmallAction({
   icon: Icon,
   children,

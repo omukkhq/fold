@@ -31,6 +31,8 @@ import type { TaskDetail } from "@/api/tasks";
 import { applyEvent } from "@/live/apply";
 import { liveStatusStore } from "@/live/status";
 import { agent, worker } from "@/test/agents";
+import { requestDetail, requestSummary } from "@/test/requests";
+import { areaEntry, workerList } from "@/test/workers";
 import { daemon, noContent, ok, refuse, type Call } from "@/test/daemon";
 import { expectMentionPopover } from "@/test/mentionBox";
 import { mentionRoutes } from "@/test/mentionRoutes";
@@ -93,6 +95,12 @@ beforeAll(() => {
 
 const ui = { name: "ui", color: "sage" };
 const auth = { name: "auth", color: "slate" };
+const server = { name: "server", color: "gold" };
+/** `ui` and `server` are area labels; `auth` is a plain label. */
+const AREAS = [
+  areaEntry("api", "server"),
+  areaEntry("web", "ui", { lead: "web-lead" }),
+];
 const STEP = "Map invalid_credentials and rate_limited to messages";
 const DESIGN = "Update the board screens in Pencil";
 const REPORT = "Drew the five board screens.";
@@ -108,7 +116,7 @@ let linked: MessageView[];
 function seed(): void {
   nextTask = 17;
   linked = [];
-  labels = [ui, auth];
+  labels = [auth, server, ui];
   tasks = new Map([
     [
       "T-2",
@@ -283,11 +291,19 @@ function registerDaemon(): void {
     known(call) ? ok(view(call.params.id ?? "")) : missing,
   );
   daemon.on(`POST ${P}/:slug/tasks`, (call) => {
-    const body = call.body as { title: string; description?: string };
+    const body = call.body as {
+      title: string;
+      description?: string;
+      labels?: string[];
+    };
     const id = `T-${String(nextTask++)}`;
     tasks.set(
       id,
-      taskView(id, { title: body.title, description: body.description ?? "" }),
+      taskView(id, {
+        title: body.title,
+        description: body.description ?? "",
+        labels: labels.filter((l) => body.labels?.includes(l.name)),
+      }),
     );
     return ok(view(id), 201);
   });
@@ -331,6 +347,7 @@ function registerDaemon(): void {
     );
   });
   daemon.on(`GET ${P}/:slug/labels`, () => ok({ labels }));
+  daemon.on(`GET ${P}/:slug/workers`, () => ok(workerList({ areas: AREAS })));
   daemon.on(`POST ${P}/:slug/labels`, (call) => {
     const body = call.body as { name: string; color: string };
     if (labels.some((l) => l.name === body.name)) {
@@ -510,6 +527,13 @@ async function openTask(task = "T-2", title = TITLE) {
 
 const region = (dialog: HTMLElement, name: string) =>
   within(dialog).getByRole("region", { name });
+
+/** Opens the task once the side column has read the areas, which decide its Area and Labels groups. */
+async function openLabels(task = "T-2", title = TITLE) {
+  const opened = await openTask(task, title);
+  await within(opened.dialog).findByRole("region", { name: "Labels" }, WAIT);
+  return opened;
+}
 
 describe("the task dialog route", () => {
   it("opens from a board card with the board's filters and shows the sections the task payload has data for", async () => {
@@ -930,6 +954,108 @@ describe("creating a task", () => {
     ).toBeTruthy();
   }, 15_000);
 
+  it("creates a task with one area and other labels", async () => {
+    setup("/p/demo/t/new");
+    const dialog = await screen.findByRole("dialog", {}, WAIT);
+    expect(
+      within(dialog).getByText(
+        "fold calculates its status. Add checklists and dependencies once it exists.",
+      ),
+    ).toBeTruthy();
+    await userEvent.type(
+      within(dialog).getByRole("textbox", { name: "Title" }),
+      "Show the export date",
+    );
+    const area = await within(dialog).findByRole(
+      "button",
+      { name: "Area Let the main agent decide" },
+      WAIT,
+    );
+    await waitFor(() => {
+      expect(area.hasAttribute("disabled")).toBe(false);
+    }, WAIT);
+    await userEvent.click(area);
+    await userEvent.click(
+      await screen.findByRole("menuitemradio", { name: /web-lead/ }, WAIT),
+    );
+    expect(
+      within(dialog).getByRole("button", { name: /^Area ui/ }),
+    ).toBeTruthy();
+
+    const box = within(dialog).getByRole("combobox", { name: "Labels" });
+    await userEvent.click(box);
+    const list = await screen.findByRole("listbox", { name: "Labels" }, WAIT);
+    // Only labels that are no area's label are offered.
+    expect(
+      within(list)
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toEqual(["auth"]);
+    await userEvent.type(box, "zz");
+    expect(await screen.findByText("No label matches.", {}, WAIT)).toBeTruthy();
+    await userEvent.clear(box);
+    await userEvent.type(box, "AU{ArrowDown}{Enter}");
+    expect(
+      within(dialog).getByRole("button", { name: "Remove auth" }),
+    ).toBeTruthy();
+    expect(
+      await screen.findByText("No more labels that are not areas.", {}, WAIT),
+    ).toBeTruthy();
+    await userEvent.type(box, "{Backspace}");
+    expect(
+      within(dialog).queryByRole("button", { name: "Remove auth" }),
+    ).toBeNull();
+    await userEvent.click(
+      within(
+        await screen.findByRole("listbox", { name: "Labels" }, WAIT),
+      ).getByRole("option", { name: "auth" }),
+    );
+
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Create task" }),
+    );
+    await screen.findByRole("heading", { name: "Show the export date" }, WAIT);
+    expect(daemon.made(`POST ${P}/demo/tasks`)[0]?.body).toEqual({
+      title: "Show the export date",
+      description: "",
+      labels: ["ui", "auth"],
+    });
+  }, 20_000);
+
+  it("points to a request and opens the request it makes", async () => {
+    // jsdom's FormData does not reach the runtime's multipart encoder, so the request uses the runtime's own class.
+    const probe = await new Response(new URLSearchParams("a=b")).formData();
+    vi.stubGlobal("FormData", probe.constructor);
+    daemon.on(`POST ${P}/:slug/requests`, () =>
+      ok(requestDetail(requestSummary("RQ-8")), 201),
+    );
+    const { router } = setup("/p/demo/t/new");
+    const dialog = await screen.findByRole("dialog", {}, WAIT);
+    expect(
+      within(dialog).getByText("Usually a request works better"),
+    ).toBeTruthy();
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "New request" }),
+    );
+    const request = await screen.findByRole(
+      "dialog",
+      { name: "New request" },
+      WAIT,
+    );
+    await userEvent.type(
+      within(request).getByLabelText("What do you need?"),
+      "Export the weekly report",
+    );
+    await userEvent.click(
+      within(request).getByRole("button", { name: "Create request" }),
+    );
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/p/demo/requests/RQ-8");
+    }, WAIT);
+    expect(daemon.made(`POST ${P}/demo/tasks`)).toHaveLength(0);
+    vi.unstubAllGlobals();
+  }, 15_000);
+
   it("closes the create form back to the board", async () => {
     const { router } = setup("/p/demo/t/new?blocked=true");
     const dialog = await screen.findByRole("dialog", {}, WAIT);
@@ -1042,68 +1168,290 @@ describe("the human edits", () => {
     ).toBe("/p/demo/repository?path=web%2Freport.tsx");
   }, 15_000);
 
-  it("puts an existing label on the task, takes it off, and creates a new one", async () => {
-    const { dialog } = await openTask();
+  it("shows the area with its lead and changes it in one write with a pending state", async () => {
+    const { dialog } = await openLabels();
+    const area = region(dialog, "Area");
+    expect(within(area).getByText("ui")).toBeTruthy();
+    expect(within(area).getByText("lead: web-lead")).toBeTruthy();
+    expect(within(region(dialog, "Labels")).queryByText("ui")).toBeNull();
+    await userEvent.click(within(area).getByRole("button", { name: "Change" }));
+    const menu = await screen.findByRole("menu", {}, WAIT);
+    expect(
+      within(menu)
+        .getAllByRole("menuitemradio")
+        .map((item) => item.textContent),
+    ).toEqual(["Let the main agent decide", "serverno lead yet", "uiweb-lead"]);
+    expect(
+      within(menu)
+        .getByRole("menuitemradio", { name: /web-lead/ })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
     await userEvent.click(
-      within(dialog).getByRole("button", { name: "Label" }),
+      within(menu).getByRole("menuitemradio", { name: /server/ }),
+    );
+    expect(
+      within(area)
+        .getByRole("button", { name: "Changing area…" })
+        .getAttribute("aria-busy"),
+    ).toBe("true");
+    expect(
+      await within(area).findByText("lead: no lead yet", {}, WAIT),
+    ).toBeTruthy();
+    expect(daemon.made(`PATCH ${P}/demo/tasks/T-2`)[0]?.body).toEqual({
+      labels: ["server"],
+    });
+  }, 15_000);
+
+  it("says a task without an area waits for the main agent, and gives it one", async () => {
+    const { dialog } = await openLabels("T-1", "Session cookie");
+    const area = region(dialog, "Area");
+    expect(
+      within(area).getByText(
+        "No area yet: the main agent chooses one. Pick an area to give it to that lead at once.",
+      ),
+    ).toBeTruthy();
+    await userEvent.click(within(area).getByRole("button", { name: "Change" }));
+    const menu = await screen.findByRole("menu", {}, WAIT);
+    // The marked choice changes nothing, so it sends no write.
+    await userEvent.click(
+      within(menu).getByRole("menuitemradio", {
+        name: "Let the main agent decide",
+      }),
+    );
+    expect(daemon.made(`PATCH ${P}/demo/tasks/T-1`)).toHaveLength(0);
+    await userEvent.click(within(area).getByRole("button", { name: "Change" }));
+    await userEvent.click(
+      await screen.findByRole("menuitemradio", { name: /web-lead/ }, WAIT),
+    );
+    expect(
+      await within(area).findByText("lead: web-lead", {}, WAIT),
+    ).toBeTruthy();
+    expect(daemon.made(`PATCH ${P}/demo/tasks/T-1`)[0]?.body).toEqual({
+      labels: ["ui"],
+    });
+  }, 15_000);
+
+  it("warns about a task with two areas and keeps the one the human picks", async () => {
+    tasks.set(
+      "T-3",
+      taskView("T-3", {
+        title: "Shared login copy",
+        labels: [auth, server, ui],
+        areas_conflict: true,
+      }),
+    );
+    const { dialog } = await openLabels("T-3", "Shared login copy");
+    const area = region(dialog, "Area");
+    expect(within(area).getByRole("note").textContent).toBe(
+      "This task has the labels of two areas, but a task belongs to one. Use Change to keep one area; fold refuses other label changes until then.",
+    );
+    expect(within(area).getByText("lead: no lead yet")).toBeTruthy();
+    expect(within(area).getByText("lead: web-lead")).toBeTruthy();
+    // The daemon refuses every other label change until one area is left.
+    const group = region(dialog, "Labels");
+    const labelButtons = () =>
+      ["Remove auth", "Add label"].map(
+        (name) =>
+          within(group).getByRole<HTMLButtonElement>("button", { name })
+            .disabled,
+      );
+    expect(labelButtons()).toEqual([true, true]);
+    await userEvent.click(within(area).getByRole("button", { name: "Change" }));
+    const menu = await screen.findByRole("menu", {}, WAIT);
+    // A task with two areas marks neither, so either pick writes.
+    expect(
+      within(menu)
+        .getAllByRole("menuitemradio")
+        .map((item) => item.getAttribute("aria-checked")),
+    ).toEqual(["false", "false", "false"]);
+    daemon.on(`PATCH ${P}/:slug/tasks/:id`, (call) => {
+      const body = call.body as { labels: string[] };
+      return ok(
+        patch("T-3", {
+          labels: labels.filter((l) => body.labels.includes(l.name)),
+          areas_conflict: false,
+        }),
+      );
+    });
+    await userEvent.click(
+      within(menu).getByRole("menuitemradio", { name: /web-lead/ }),
+    );
+    await waitFor(() => {
+      expect(within(area).queryByRole("note")).toBeNull();
+    }, WAIT);
+    expect(daemon.made(`PATCH ${P}/demo/tasks/T-3`)[0]?.body).toEqual({
+      labels: ["auth", "ui"],
+    });
+    expect(within(area).queryByText("lead: no lead yet")).toBeNull();
+    expect(labelButtons()).toEqual([false, false]);
+  }, 15_000);
+
+  it("holds the label controls while the area write runs, so it never undoes a label change", async () => {
+    tasks.set(
+      "T-3",
+      taskView("T-3", { title: "Shared login copy", labels: [auth, ui] }),
+    );
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    daemon.on(`PATCH ${P}/:slug/tasks/:id`, async (call) => {
+      await held;
+      const body = call.body as { labels: string[] };
+      return ok(
+        patch("T-3", {
+          labels: labels.filter((l) => body.labels.includes(l.name)),
+        }),
+      );
+    });
+    const { dialog } = await openLabels("T-3", "Shared login copy");
+    const area = region(dialog, "Area");
+    const group = region(dialog, "Labels");
+    const remove = () =>
+      within(group).getByRole<HTMLButtonElement>("button", {
+        name: "Remove auth",
+      });
+    const add = () =>
+      within(group).getByRole<HTMLButtonElement>("button", {
+        name: "Add label",
+      });
+    await userEvent.click(within(area).getByRole("button", { name: "Change" }));
+    await userEvent.click(
+      await screen.findByRole("menuitemradio", { name: /server/ }, WAIT),
+    );
+    expect(
+      within(area)
+        .getByRole("button", { name: "Changing area…" })
+        .getAttribute("aria-busy"),
+    ).toBe("true");
+    expect([remove().disabled, add().disabled]).toEqual([true, true]);
+    release();
+    expect(
+      await within(area).findByText("lead: no lead yet", {}, WAIT),
+    ).toBeTruthy();
+    await waitFor(() => {
+      expect([remove().disabled, add().disabled]).toEqual([false, false]);
+    }, WAIT);
+    expect(daemon.made(`PATCH ${P}/demo/tasks/T-3`)[0]?.body).toEqual({
+      labels: ["auth", "server"],
+    });
+  }, 15_000);
+
+  it("says when the areas could not load, and reads them again on Retry", async () => {
+    daemon.on(`GET ${P}/:slug/workers`, refuse(500, "internal"));
+    const { dialog } = await openTask();
+    const area = await within(dialog).findByRole(
+      "region",
+      { name: "Area" },
+      WAIT,
+    );
+    expect(
+      (await within(area).findByRole("alert", {}, WAIT)).textContent,
+    ).toContain("The areas could not load.");
+    // Without the area list no label is known to be an area, so the Labels group waits.
+    expect(within(dialog).queryByRole("region", { name: "Labels" })).toBeNull();
+    daemon.on(`GET ${P}/:slug/workers`, () => ok(workerList({ areas: AREAS })));
+    await userEvent.click(within(area).getByRole("button", { name: "Retry" }));
+    expect(
+      await within(dialog).findByText("lead: web-lead", {}, WAIT),
+    ).toBeTruthy();
+    expect(region(dialog, "Labels")).toBeTruthy();
+  }, 15_000);
+
+  it("names the one-area rule when the daemon refuses a second area", async () => {
+    daemon.on(
+      `PATCH ${P}/:slug/tasks/:id`,
+      refuse(400, "invalid_request", {
+        reason: "two_areas",
+        areas: ["api", "web"],
+      }),
+    );
+    const { dialog } = await openLabels();
+    const area = region(dialog, "Area");
+    await userEvent.click(within(area).getByRole("button", { name: "Change" }));
+    await userEvent.click(
+      await screen.findByRole("menuitemradio", { name: /server/ }, WAIT),
+    );
+    expect(
+      await within(area).findByText(
+        "A task can have only one area label. Keep one area, or let the main agent choose it.",
+        {},
+        WAIT,
+      ),
+    ).toBeTruthy();
+    expect(within(area).getByText("lead: web-lead")).toBeTruthy();
+  }, 15_000);
+
+  it("puts a label on the task, takes it off, and creates a new one", async () => {
+    const { dialog } = await openLabels();
+    const group = region(dialog, "Labels");
+    await userEvent.click(
+      within(group).getByRole("button", { name: "Add label" }),
     );
     await waitFor(() => {
       expect(screen.getAllByRole("dialog")).toHaveLength(2);
     });
     const popover = screen.getAllByRole("dialog")[1] as HTMLElement;
-    await userEvent.click(
-      await within(popover).findByRole(
-        "button",
-        { name: "Add label auth" },
-        WAIT,
-      ),
-    );
+    // Area labels change only through the area.
     expect(
-      await within(popover).findByRole(
-        "button",
-        { name: "Remove label auth" },
-        WAIT,
-      ),
-    ).toBeTruthy();
+      within(popover)
+        .getAllByRole("button", { name: /^Add label/ })
+        .map((b) => b.getAttribute("aria-label")),
+    ).toEqual(["Add label auth"]);
     await userEvent.click(
-      within(popover).getByRole("button", { name: "Remove label auth" }),
+      within(popover).getByRole("button", { name: "Add label auth" }),
     );
+    const remove = await within(group).findByRole(
+      "button",
+      { name: "Remove auth" },
+      WAIT,
+    );
+    await userEvent.click(remove);
+    expect(
+      within(group)
+        .getByRole("button", { name: "Removing auth…" })
+        .getAttribute("aria-busy"),
+    ).toBe("true");
     await waitFor(() => {
-      expect(
-        within(popover).queryByRole("button", { name: "Remove label auth" }),
-      ).toBeNull();
+      expect(within(group).queryByRole("button", { name: /auth/ })).toBeNull();
     }, WAIT);
 
+    // The remove click outside closed the picker.
+    await userEvent.click(
+      within(group).getByRole("button", { name: "Add label" }),
+    );
+    await waitFor(() => {
+      expect(screen.getAllByRole("dialog")).toHaveLength(2);
+    });
+    const picker = screen.getAllByRole("dialog")[1] as HTMLElement;
     await userEvent.type(
-      within(popover).getByRole("textbox", { name: "New label name" }),
+      within(picker).getByRole("textbox", { name: "New label name" }),
       "copy",
     );
     await userEvent.selectOptions(
-      within(popover).getByRole("combobox", { name: "Colour" }),
+      within(picker).getByRole("combobox", { name: "Colour" }),
       "gold",
     );
     await userEvent.click(
-      within(popover).getByRole("button", { name: "Create label" }),
+      within(picker).getByRole("button", { name: "Create label" }),
     );
     expect(
-      within(popover)
+      within(picker)
         .getByRole("button", { name: "Creating label…" })
         .getAttribute("aria-busy"),
     ).toBe("true");
     expect(
-      await within(popover).findByRole(
-        "button",
-        { name: "Remove label copy" },
-        WAIT,
-      ),
+      await within(group).findByRole("button", { name: "Remove copy" }, WAIT),
     ).toBeTruthy();
     expect(labels.map((l) => l.name)).toContain("copy");
   }, 20_000);
 
   it("shows an existing label name on the name field", async () => {
-    const { dialog } = await openTask();
+    const { dialog } = await openLabels();
     await userEvent.click(
-      within(dialog).getByRole("button", { name: "Label" }),
+      within(region(dialog, "Labels")).getByRole("button", {
+        name: "Add label",
+      }),
     );
     await waitFor(() => {
       expect(screen.getAllByRole("dialog")).toHaveLength(2);

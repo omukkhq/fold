@@ -27,6 +27,8 @@ interface NewRequestDialogProps {
   human: string | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Called with the new request's id once the daemon has made it. */
+  onCreated?: (request: string) => void;
 }
 
 function FileRow({
@@ -76,6 +78,7 @@ export function NewRequestDialog({
   human,
   open,
   onOpenChange,
+  onCreated,
 }: NewRequestDialogProps) {
   const queryClient = useQueryClient();
   const [files, setFiles] = useState<File[]>([]);
@@ -117,6 +120,7 @@ export function NewRequestDialog({
       queryClient.setQueryData(keys.request(slug, detail.request.id), detail);
       await queryClient.invalidateQueries({ queryKey: keys.requests(slug) });
       close();
+      onCreated?.(detail.request.id);
     } catch (error) {
       setFailure(describeFailure(error));
     }
@@ -130,8 +134,9 @@ export function NewRequestDialog({
       }}
     >
       <RadixDialog.Portal>
-        <RadixDialog.Overlay className="fixed inset-0 bg-scrim" />
-        <RadixDialog.Content className="fixed top-1/2 left-1/2 flex max-h-full w-request-dialog max-w-full -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto rounded-l bg-raised shadow-dialog inset-ring inset-ring-border outline-none">
+        {/* z-10 matches the task dialog, so the request dialog opened from New task draws over it. */}
+        <RadixDialog.Overlay className="fixed inset-0 z-10 bg-scrim" />
+        <RadixDialog.Content className="fixed top-1/2 z-10 left-1/2 flex max-h-full w-request-dialog max-w-full -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto rounded-l bg-raised shadow-dialog inset-ring inset-ring-border outline-none">
           <div className="flex items-center justify-between border-b border-border-subtle px-24 py-16">
             <RadixDialog.Title className="text-section leading-snug font-semibold text-text">
               New request

@@ -91,11 +91,21 @@ export async function getMessageTargets(slug: string): Promise<MessageTargets> {
 /** Answers the new task's public id. The kind is sent only when it is not `proposal`, the daemon's default. */
 export async function createTask(
   slug: string,
-  input: { title: string; description: string; kind?: TaskKind },
+  input: {
+    title: string;
+    description: string;
+    kind?: TaskKind;
+    labels?: readonly string[];
+  },
 ): Promise<string> {
-  const { kind, ...fields } = input;
-  const body: Schemas["CreateTaskBody"] =
-    kind === undefined || kind === "proposal" ? fields : { ...fields, kind };
+  const { kind, labels, ...fields } = input;
+  const body: Schemas["CreateTaskBody"] = {
+    ...fields,
+    ...(kind === undefined || kind === "proposal" ? {} : { kind }),
+    ...(labels === undefined || labels.length === 0
+      ? {}
+      : { labels: [...labels] }),
+  };
   const created = await unwrap(
     api.POST("/api/v1/projects/{slug}/tasks", {
       params: { path: { slug } },
@@ -173,6 +183,11 @@ export function setDescription(
   description: string,
 ) {
   return update(slug, task, { description });
+}
+
+/** Replaces the task's whole label set in one write, so an area changes without a moment with two areas or none. */
+export function setLabels(slug: string, task: string, labels: string[]) {
+  return update(slug, task, { labels });
 }
 
 export async function listLabels(slug: string): Promise<BoardLabel[]> {

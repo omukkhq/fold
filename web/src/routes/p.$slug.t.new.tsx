@@ -39,6 +39,13 @@ function NewTaskRoute() {
             replace: true,
           });
         }}
+        onRequestCreated={(id) => {
+          void navigate({
+            to: "/p/$slug/requests/$id",
+            params: { slug, id },
+            replace: true,
+          });
+        }}
       />
     </>
   );
