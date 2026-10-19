@@ -31,11 +31,11 @@ pub struct PushContext {
     pub drafter: Option<AgentName>,
     /// For a task that turned ready, the leads of the areas whose label it carries; for a new request, the lead of every area.
     pub area_leads: BTreeSet<AgentName>,
-    /// For a task that turned ready, the areas whose label it carries, led or not.
+    /// For a task that turned ready, the areas whose label it carries, led or not; for `task.updated`, only the areas of the labels the edit added.
     pub areas: BTreeSet<AreaName>,
     /// Every agent tagged `main`.
     pub main_agents: BTreeSet<AgentName>,
-    /// No agent can take the event's task now: it is a human task or on hold, or, for `task.hold_cleared`, it is not an unclaimed Todo task.
+    /// No agent can take the event's task now: it is a human task or on hold, or, for `task.hold_cleared` and `task.updated`, it is not an unclaimed Todo task.
     pub held_from_agents: bool,
 }
 
@@ -54,6 +54,7 @@ pub fn is_pushed(event: &Event) -> bool {
         types::REVIEW_SUBMITTED,
         types::INTEGRATION_CONFLICTED,
         types::TASK_STATUS_CHANGED,
+        types::TASK_UPDATED,
         types::MESSAGE_SENT,
         types::PROPOSAL_VERSION_ADDED,
         types::INTEGRATION_SUCCEEDED,
@@ -392,6 +393,19 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
                 format!("{task} is ready"),
                 "create_workspace",
             ));
+        }
+        return Some(ready_route(task, ctx));
+    }
+    if kind == types::TASK_UPDATED {
+        let task = event.task?;
+        // Only a label that joins a ready task to an area is news; any other edit sends nothing.
+        let added = event
+            .data
+            .get("labels_added")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|labels| !labels.is_empty());
+        if !added || ctx.held_from_agents || ctx.areas.is_empty() {
+            return None;
         }
         return Some(ready_route(task, ctx));
     }
@@ -884,6 +898,64 @@ mod tests {
             ..ready(None, &[], &[])
         };
         assert!(notice_for(&event, &no_main).is_empty());
+    }
+
+    fn label_added(labels: &[&str]) -> Event {
+        with_data(
+            event(types::TASK_UPDATED, "frontend"),
+            json!({"fields": ["labels"], "labels_added": labels}),
+        )
+    }
+
+    #[test]
+    fn an_area_label_added_to_a_ready_task_goes_to_the_lead_of_that_area() {
+        assert!(is_pushed(&label_added(&["ui"])));
+        assert_eq!(
+            sent(&notice_for(
+                &label_added(&["ui"]),
+                &ready(None, &["web-lead"], &["web"])
+            )),
+            vec![row(
+                "web-lead",
+                "fold: T-12 is ready in your area. Call start_worker.",
+                "start_worker"
+            )]
+        );
+    }
+
+    #[test]
+    fn an_added_label_of_an_area_without_a_lead_goes_to_the_main_agent() {
+        assert_eq!(
+            sent(&notice_for(
+                &label_added(&["ui"]),
+                &ready(None, &[], &["web"])
+            )),
+            vec![row(
+                "lead",
+                "fold: T-12 is ready in area web, which has no lead. Call start_worker.",
+                "start_worker"
+            )]
+        );
+    }
+
+    #[test]
+    fn an_added_label_on_a_task_no_agent_can_take_sends_nothing() {
+        let held = PushContext {
+            held_from_agents: true,
+            ..ready(None, &["web-lead"], &["web"])
+        };
+        assert!(notice_for(&label_added(&["ui"]), &held).is_empty());
+    }
+
+    #[test]
+    fn an_edit_that_adds_no_area_label_sends_nothing() {
+        let plain = with_data(
+            event(types::TASK_UPDATED, "frontend"),
+            json!({"fields": ["title"], "labels_added": []}),
+        );
+        assert!(notice_for(&plain, &ready(None, &["web-lead"], &["web"])).is_empty());
+        let no_area = ready(None, &[], &[]);
+        assert!(notice_for(&label_added(&["chore"]), &no_area).is_empty());
     }
 
     #[test]

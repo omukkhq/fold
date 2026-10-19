@@ -209,7 +209,7 @@ async fn update_changes_fields_and_names_them_in_one_event() {
     assert_eq!(last.task, Some(task.id));
     assert_eq!(
         last.data,
-        serde_json::json!({"fields": ["title", "labels"]})
+        serde_json::json!({"fields": ["title", "labels"], "labels_added": ["b"]})
     );
 
     let described = service
@@ -228,7 +228,7 @@ async fn update_changes_fields_and_names_them_in_one_event() {
     let events = stored(&project).await;
     assert_eq!(
         events.last().unwrap().data,
-        serde_json::json!({"fields": ["description"]})
+        serde_json::json!({"fields": ["description"], "labels_added": []})
     );
 
     project.clock().advance(Duration::from_secs(60)).unwrap();
@@ -245,6 +245,28 @@ async fn update_changes_fields_and_names_them_in_one_event() {
         .unwrap();
     assert!(relabelled.labels.is_empty());
     assert_eq!(relabelled.updated_at, project.now());
+    let events = stored(&project).await;
+    assert_eq!(
+        events.last().unwrap().data,
+        serde_json::json!({"fields": ["labels"], "labels_added": []})
+    );
+
+    service
+        .update_task(
+            &actor(),
+            task.id,
+            TaskPatch {
+                title: Some(TaskTitle::parse("Newer").unwrap()),
+                ..TaskPatch::default()
+            },
+        )
+        .await
+        .unwrap();
+    let events = stored(&project).await;
+    assert_eq!(
+        events.last().unwrap().data,
+        serde_json::json!({"fields": ["title"], "labels_added": []})
+    );
 }
 
 #[tokio::test]

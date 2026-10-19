@@ -540,6 +540,7 @@ async fn update_in_tx(
         .description
         .as_ref()
         .filter(|description| **description != row.description);
+    let mut labels_added: Vec<&str> = Vec::new();
     let new_labels = match &patch.labels {
         Some(names) => {
             let current: BTreeSet<LabelName> = tasks::labels_for_conn(tx.conn(), id)
@@ -548,6 +549,13 @@ async fn update_in_tx(
                 .map(|label| label.name)
                 .collect();
             let wanted: BTreeSet<LabelName> = names.iter().cloned().collect();
+            labels_added = names
+                .iter()
+                .filter(|name| !current.contains(*name))
+                .map(LabelName::as_str)
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
             (wanted != current).then_some(names)
         }
         None => None,
@@ -582,7 +590,7 @@ async fn update_in_tx(
     }
     let event = NewEvent::new(types::TASK_UPDATED, actor.event_actor())?
         .task(id)
-        .data(json!({"fields": fields}))?;
+        .data(json!({"fields": fields, "labels_added": labels_added}))?;
     buffer.append(tx, &event, now).await?;
     Ok(())
 }

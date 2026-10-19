@@ -601,7 +601,7 @@ async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError
     }
     if kind == fold_core::events::types::TASK_REPORTED {
         if let Some(task) = event.task {
-            route(store, task, &mut ctx).await?;
+            route(store, task, None, &mut ctx).await?;
         }
         return Ok(ctx);
     }
@@ -624,28 +624,39 @@ async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError
                     .await?
                     .is_some_and(|row| row.kind == TaskKind::Human || row.hold.is_some());
                 if ctx.implementation_claim.is_none() && !ctx.held_from_agents {
-                    route(store, task, &mut ctx).await?;
+                    route(store, task, None, &mut ctx).await?;
                 }
+            }
+        }
+        return Ok(ctx);
+    }
+    if kind == fold_core::events::types::TASK_UPDATED {
+        let added: Vec<&str> = event
+            .data
+            .get("labels_added")
+            .and_then(serde_json::Value::as_array)
+            .map(|labels| {
+                labels
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Some(task) = event.task
+            && !added.is_empty()
+        {
+            ctx.held_from_agents = !open_to_agents(store, task).await?;
+            if !ctx.held_from_agents {
+                route(store, task, Some(&added), &mut ctx).await?;
             }
         }
         return Ok(ctx);
     }
     if kind == fold_core::events::types::TASK_HOLD_CLEARED {
         if let Some(task) = event.task {
-            let claimed = claims::unreleased_for_task(store.read(), task)
-                .await?
-                .is_some();
-            let open = tasks::get_by_number(store.read(), task)
-                .await?
-                .is_some_and(|row| {
-                    row.status == TaskStatus::Todo
-                        && row.kind != TaskKind::Human
-                        && row.hold.is_none()
-                        && row.archived_at.is_none()
-                });
-            ctx.held_from_agents = claimed || !open;
+            ctx.held_from_agents = !open_to_agents(store, task).await?;
             if !ctx.held_from_agents {
-                route(store, task, &mut ctx).await?;
+                route(store, task, None, &mut ctx).await?;
             }
         }
         return Ok(ctx);
@@ -668,11 +679,36 @@ async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError
     Ok(ctx)
 }
 
-/// The areas whose label the task carries, their leads and the main agents, which take a ready or reported task when no lead does.
-async fn route(store: &Store, task: TaskId, ctx: &mut PushContext) -> Result<(), StoreError> {
+/// An agent can take the task now: an unclaimed agent task in Todo that is neither on hold nor archived.
+async fn open_to_agents(store: &Store, task: TaskId) -> Result<bool, StoreError> {
+    if claims::unreleased_for_task(store.read(), task)
+        .await?
+        .is_some()
+    {
+        return Ok(false);
+    }
+    Ok(tasks::get_by_number(store.read(), task)
+        .await?
+        .is_some_and(|row| {
+            row.status == TaskStatus::Todo
+                && row.kind != TaskKind::Human
+                && row.hold.is_none()
+                && row.archived_at.is_none()
+        }))
+}
+
+/// The areas whose label the task carries (only those among `only`, when given), their leads and the main agents, which take a ready or reported task when no lead does.
+async fn route(
+    store: &Store,
+    task: TaskId,
+    only: Option<&[&str]>,
+    ctx: &mut PushContext,
+) -> Result<(), StoreError> {
     let labels = tasks::labels_for(store.read(), task).await?;
     for area in agents::list_areas(store.read()).await? {
-        if labels.iter().any(|label| label.name == area.label) {
+        if labels.iter().any(|label| label.name == area.label)
+            && only.is_none_or(|only| only.contains(&area.label.as_str()))
+        {
             ctx.area_leads.extend(area.lead);
             ctx.areas.insert(area.name);
         }
