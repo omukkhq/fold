@@ -77,7 +77,8 @@ impl Fixture {
             state,
             handle,
         } = fixture;
-        for title in ["report", "export"] {
+        // A task has at most one area: `frontend` leads the area of `T-1` and `backend` the area of `T-2`.
+        for (title, lead) in [("report", "frontend"), ("export", "backend")] {
             handle
                 .tasks
                 .create_task(
@@ -85,7 +86,7 @@ impl Fixture {
                     CreateTask {
                         title: TaskTitle::parse(title).unwrap(),
                         description: TaskDescription::new("what to build"),
-                        labels: crate::common::roles::work_labels(),
+                        labels: crate::common::roles::work_labels_of(lead),
                     },
                 )
                 .await

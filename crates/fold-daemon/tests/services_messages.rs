@@ -507,6 +507,8 @@ async fn the_system_sends_as_fold() {
 #[tokio::test]
 async fn feedback_goes_to_the_claim_holder_by_default() {
     let fixture = Fixture::new().await;
+    // `T-1` is in the area that `frontend` leads, so `backend` claims it as the main agent.
+    crate::common::roles::give_main_tag(fixture.project.store(), "backend").await;
     let ui = agent("frontend/ui");
     fixture.tasks.claim_task(&ui, t(1)).await.unwrap();
     let view = fixture
@@ -763,6 +765,8 @@ async fn a_message_to_an_offline_agent_waits_undelivered() {
 #[tokio::test]
 async fn messages_change_no_task_claim_or_status() {
     let fixture = Fixture::new().await;
+    // `T-1` is in the area that `frontend` leads, so `backend` claims it as the main agent.
+    crate::common::roles::give_main_tag(fixture.project.store(), "backend").await;
     fixture
         .tasks
         .claim_task(&agent("backend"), t(1))

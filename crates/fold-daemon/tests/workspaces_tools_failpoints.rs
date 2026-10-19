@@ -545,7 +545,7 @@ async fn garbage_collection_waits_for_a_record_to_commit() {
     scenario.teardown();
 }
 
-/// Registers the agent `backend` and returns its actor.
+/// Registers `backend` as the main agent and returns its actor: the seeded task is in the area that `frontend` leads, so the next agent to take it is the main agent.
 #[cfg(test)]
 async fn second_agent(fixture: &Project) -> Actor {
     let mut session = fixture.agents.start_session(2).await.unwrap();
@@ -554,6 +554,7 @@ async fn second_agent(fixture: &Project) -> Actor {
         .register_agent(&mut session, &AgentName::parse("backend").unwrap(), &[])
         .await
         .unwrap();
+    crate::common::roles::give_main_tag(&fixture.store, "backend").await;
     fixture.agents.actor(&session, None).await.unwrap()
 }
 

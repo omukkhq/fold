@@ -24,7 +24,7 @@ async fn succeeded(fx: &Fixture) -> i64 {
 async fn stopped_inside(failpoint: &str, kept: bool) {
     let scenario = fail::FailScenario::setup();
     let mut fx = Fixture::new().await;
-    let author = fx.agent("backend").await;
+    let author = fx.agent("frontend").await;
     let review = review_lead(&fx, "review").await;
     fx.proposal(&author, 1, "pub fn y() {}\n").await;
     let job = Running::start(&fx.state);

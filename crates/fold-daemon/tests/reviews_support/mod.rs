@@ -155,17 +155,15 @@ impl Fixture {
             .await;
         }
         let creator = agent("frontend");
-        for _ in 0..2 {
+        // A task has at most one area: `T-1` is in the first lead's area and `T-2` in the last one's.
+        for (_, label) in [leads[0], leads[leads.len() - 1]] {
             tasks
                 .create_task(
                     &creator,
                     CreateTask {
                         title: TaskTitle::parse("task").unwrap(),
                         description: TaskDescription::new("body"),
-                        labels: leads
-                            .iter()
-                            .map(|(_, label)| fold_core::LabelName::parse(label).unwrap())
-                            .collect(),
+                        labels: vec![fold_core::LabelName::parse(label).unwrap()],
                     },
                 )
                 .await

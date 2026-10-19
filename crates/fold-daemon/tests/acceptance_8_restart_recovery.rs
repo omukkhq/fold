@@ -51,16 +51,16 @@ impl Scene {
         )
         .unwrap();
         let mut tasks = Vec::new();
-        for title in [
-            "Build the login screen",
-            "Add the login endpoint",
-            "Ship the login",
+        for (title, lead) in [
+            ("Build the login screen", "frontend"),
+            ("Add the login endpoint", "backend"),
+            ("Ship the login", "frontend"),
         ] {
             let created = harness
                 .call(
                     "review",
                     "create_task",
-                    json!({"title": title, "labels": Harness::work_labels()}),
+                    json!({"title": title, "labels": Harness::work_labels_of(lead)}),
                 )
                 .await;
             tasks.push(created["id"].as_str().unwrap().to_owned());

@@ -466,7 +466,7 @@ pub async fn stop_worker(
     request_body = DefineAreaBody,
     responses(
         (status = 201, description = "The new area", body = AreaEntry),
-        (status = 400, description = "`invalid_request`, `invalid_name` or `invalid_label_name`", body = ErrorEnvelope),
+        (status = 400, description = "`invalid_request` (also with `details.reason` `two_areas` when the label shares a task with another area's label, named in `details.tasks`), `invalid_name` or `invalid_label_name`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 404, description = "`label_not_found` or `project_not_found`", body = ErrorEnvelope),
         (status = 409, description = "`area_exists`", body = ErrorEnvelope),

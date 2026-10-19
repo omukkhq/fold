@@ -270,7 +270,7 @@ async fn a_daemon_restart_while_paused_stays_paused_and_resumes_no_worker() {
 #[tokio::test]
 async fn approved_proposals_still_integrate_while_paused() {
     let fx = Fixture::new().await;
-    let author = fx.agent("backend").await;
+    let author = fx.agent("frontend").await;
     let review = review_lead(&fx, "review").await;
     fx.workspaces()
         .create_workspace(&author, t(1))

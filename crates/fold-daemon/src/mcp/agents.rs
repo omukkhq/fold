@@ -45,7 +45,7 @@ pub struct PauseProjectInput {
 pub struct DefineAreaInput {
     /// The area's name, such as web: 1 to 32 characters of a-z, 0-9, - and _. It becomes part of its workers' names.
     pub name: String,
-    /// The task label whose tasks the area owns, such as frontend. Create it with create_label first.
+    /// The task label whose tasks the area owns, such as frontend. Create it with create_label first. A task has at most one area, so a label that shares a task with another area's label is refused (two_areas).
     pub label: String,
     /// What every worker of the area must know about its kind of work, such as "draw screens in Pencil", at most 8000 characters. fold adds it to the system prompt of the area lead and the task workers. Leave it out for none.
     #[serde(default)]

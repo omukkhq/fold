@@ -73,7 +73,7 @@ pub struct Harness {
     pub handle: Arc<ProjectHandle>,
     sessions: BTreeMap<String, Session>,
     next_pid: u32,
-    /// The labels [`Harness::create_task`] gives each task: those of the areas of [`WORK`] that have their lead.
+    /// The labels of the areas of [`WORK`] that have their lead; [`Harness::create_task`] gives a task one of them.
     work_labels: Vec<&'static str>,
     /// The programs the project's worker processes run, kept for [`Harness::start_again`].
     launcher: Launcher,
@@ -232,9 +232,19 @@ impl Harness {
         self.work_labels.push(area);
     }
 
-    /// The labels [`Harness::create_task`] gives a task, for a test that creates one with its own arguments.
+    /// The label of `frontend`'s area of [`WORK`], for a test that creates a task with its own arguments: a task has at most one area, so only that lead claims it.
     pub fn work_labels() -> Value {
-        json!(WORK.map(|(_, label)| label))
+        Self::work_labels_of("frontend")
+    }
+
+    /// The label of the area of [`WORK`] that `agent` leads, for a task that `agent` claims.
+    pub fn work_labels_of(agent: &str) -> Value {
+        json!(
+            crate::common::roles::work_labels_of(agent)
+                .iter()
+                .map(|label| label.as_str().to_owned())
+                .collect::<Vec<_>>()
+        )
     }
 
     /// The canonical project root: the `cwd` of every session and hook.
@@ -604,13 +614,23 @@ impl Harness {
         .unwrap()
     }
 
-    /// `create_task` by `agent`; returns the new task id.
+    /// `create_task` by `agent`; returns the new task id. The task gets the label of `agent`'s area of [`WORK`] when `agent` leads one, else the label of the first led area, so the lead of that one area claims it.
     pub async fn create_task(&self, agent: &str, title: &str) -> String {
-        let arguments = if self.work_labels.is_empty() {
-            json!({"title": title})
-        } else {
-            json!({"title": title, "labels": self.work_labels})
+        let own = WORK
+            .into_iter()
+            .find(|(name, label)| *name == agent && self.work_labels.contains(label))
+            .map(|(_, label)| label);
+        let arguments = match own.or_else(|| self.work_labels.first().copied()) {
+            Some(label) => json!({"title": title, "labels": [label]}),
+            None => json!({"title": title}),
         };
+        let created = self.call(agent, "create_task", arguments).await;
+        created["id"].as_str().unwrap().to_owned()
+    }
+
+    /// `create_task` by `agent` for a task in the area of [`WORK`] that `lead` leads; returns the new task id.
+    pub async fn create_task_for(&self, agent: &str, lead: &str, title: &str) -> String {
+        let arguments = json!({"title": title, "labels": Self::work_labels_of(lead)});
         let created = self.call(agent, "create_task", arguments).await;
         created["id"].as_str().unwrap().to_owned()
     }

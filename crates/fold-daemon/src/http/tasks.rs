@@ -230,6 +230,8 @@ pub struct BoardCard {
     #[schema(required = true)]
     pub report: Option<String>,
     pub labels: Vec<Label>,
+    /// True when the task carries the labels of two or more areas. Every write refuses such a label set, but the database can hold one; such a task's title and description change freely, and each change of its labels must leave at most one area label.
+    pub areas_conflict: bool,
     pub checklist: ChecklistCounts,
     /// Every direct prerequisite, as public task ids.
     pub needs: Vec<String>,
@@ -335,6 +337,7 @@ impl From<service::BoardCard> for BoardCard {
             kind: card.kind.into(),
             report: card.report,
             labels: labels(card.labels),
+            areas_conflict: card.areas_conflict,
             checklist: card.checklist.into(),
             needs: ids(&card.needs),
             blocked_by: ids(&card.blocked_by),
@@ -375,6 +378,8 @@ pub struct TaskSummary {
     pub status: TaskStatus,
     pub blocked: bool,
     pub labels: Vec<Label>,
+    /// True when the task carries the labels of two or more areas. Every write refuses such a label set, but the database can hold one; such a task's title and description change freely, and each change of its labels must leave at most one area label.
+    pub areas_conflict: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
@@ -477,6 +482,8 @@ pub struct TaskView {
     /// UTC milliseconds.
     pub updated_at: i64,
     pub labels: Vec<Label>,
+    /// True when the task carries the labels of two or more areas. Every write refuses such a label set, but the database can hold one; such a task's title and description change freely, and each change of its labels must leave at most one area label.
+    pub areas_conflict: bool,
     /// The first checklist is `Subtasks` when the task was split.
     pub checklists: Vec<Checklist>,
     pub progress: ChecklistCounts,
@@ -719,6 +726,7 @@ impl From<service::TaskDetail> for TaskView {
             created_by: task.created_by,
             created_at: task.created_at.as_millis(),
             updated_at: task.updated_at.as_millis(),
+            areas_conflict: task.areas_conflict,
             labels: labels(task.labels),
             checklists: detail
                 .checklists
@@ -851,7 +859,7 @@ pub struct CreateTaskBody {
     /// Markdown; empty when left out.
     #[serde(default)]
     pub description: Option<String>,
-    /// Names of existing labels.
+    /// Names of existing labels; at most one of them is the label of an area.
     #[serde(default)]
     pub labels: Vec<String>,
     /// Tasks the new task needs; each adds one direct edge.
@@ -886,7 +894,7 @@ pub struct UpdateTaskBody {
     pub title: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
-    /// The whole new label set, by name.
+    /// The whole new label set, by name; at most one of them is the label of an area.
     #[serde(default)]
     pub labels: Option<Vec<String>>,
 }
@@ -1011,6 +1019,7 @@ pub async fn list_tasks(project: Project) -> Result<Json<TaskList>, ApiError> {
             title: task.title.to_string(),
             status: task.status.into(),
             blocked: task.blocked,
+            areas_conflict: task.areas_conflict,
             labels: labels(task.labels),
         })
         .collect();
@@ -1026,7 +1035,7 @@ pub async fn list_tasks(project: Project) -> Result<Json<TaskList>, ApiError> {
     request_body = CreateTaskBody,
     responses(
         (status = 201, description = "The created task", body = TaskView),
-        (status = 400, description = "`invalid_request`, `invalid_id`, `invalid_name`, `invalid_task_title` or `invalid_label_name`", body = ErrorEnvelope),
+        (status = 400, description = "`invalid_request` (also with `details.reason` `two_areas`), `invalid_id`, `invalid_name`, `invalid_task_title` or `invalid_label_name`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 404, description = "`task_not_found`, `label_not_found` or `project_not_found`", body = ErrorEnvelope),
         (status = 409, description = "`dependency_cycle` or `task_closed`", body = ErrorEnvelope),
@@ -1098,7 +1107,7 @@ pub async fn get_task(
     request_body = UpdateTaskBody,
     responses(
         (status = 200, description = "The updated task", body = TaskView),
-        (status = 400, description = "`invalid_request`, `invalid_id`, `invalid_name`, `invalid_task_title` or `invalid_label_name`", body = ErrorEnvelope),
+        (status = 400, description = "`invalid_request` (also with `details.reason` `two_areas`), `invalid_id`, `invalid_name`, `invalid_task_title` or `invalid_label_name`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 404, description = "`task_not_found`, `label_not_found` or `project_not_found`", body = ErrorEnvelope),
         (status = 409, description = "`task_closed`: the task is archived", body = ErrorEnvelope),
@@ -1135,7 +1144,7 @@ pub async fn update_task(
     ),
     responses(
         (status = 200, description = "The task with its labels", body = TaskView),
-        (status = 400, description = "`invalid_id`, `invalid_name` or `invalid_label_name`", body = ErrorEnvelope),
+        (status = 400, description = "`invalid_request` with `details.reason` `two_areas`, `invalid_id`, `invalid_name` or `invalid_label_name`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 404, description = "`task_not_found`, `label_not_found` or `project_not_found`", body = ErrorEnvelope),
         (status = 409, description = "`task_closed`: the task is archived", body = ErrorEnvelope),
@@ -1163,7 +1172,7 @@ pub async fn attach_label(
     ),
     responses(
         (status = 200, description = "The task with its labels", body = TaskView),
-        (status = 400, description = "`invalid_id`, `invalid_name` or `invalid_label_name`", body = ErrorEnvelope),
+        (status = 400, description = "`invalid_request` with `details.reason` `two_areas`, `invalid_id`, `invalid_name` or `invalid_label_name`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 404, description = "`task_not_found` or `project_not_found`", body = ErrorEnvelope),
         (status = 409, description = "`task_closed`: the task is archived", body = ErrorEnvelope),

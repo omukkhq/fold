@@ -118,6 +118,7 @@ mod mcp_workspace_tools;
 mod mcp_workspaces;
 mod no_proposal_tasks;
 mod notifications;
+mod one_area;
 mod openapi;
 mod presence_events;
 mod project_folder;

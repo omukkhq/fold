@@ -111,7 +111,7 @@ pub struct Fixture {
 }
 
 impl Fixture {
-    /// `r1` holds `src/lib.rs` and `README.md`. Three tasks, the agents `frontend` and `backend`, and a lease of [`LEASE_MINUTES`].
+    /// `r1` holds `src/lib.rs` and `README.md`. Three tasks in the area that `frontend` leads, `backend` as the main agent, and a lease of [`LEASE_MINUTES`].
     pub async fn new() -> Self {
         let project = TestProject::new().await;
         let bus = EventBus::new();
@@ -140,10 +140,11 @@ impl Fixture {
             LEASE_MINUTES,
         )
         .with_locks(Arc::new(tokio::sync::RwLock::new(())), ops.clone());
-        let frontend = register(&agents, "frontend").await;
-        let backend = register(&agents, "backend").await;
+        let frontend = register(&agents, "frontend", &[]).await;
+        // A task has one area, so the second claimant of a task of `frontend`'s area is the main agent, which claims any task.
+        let backend = register(&agents, "backend", &["main"]).await;
+        crate::common::roles::lead_frontend_area(project.store()).await;
         for _ in 0..3 {
-            crate::common::roles::lead_work_areas(project.store()).await;
             tasks
                 .create_task(
                     &by(&frontend),
@@ -266,10 +267,14 @@ impl Fixture {
     }
 }
 
-async fn register(agents: &AgentService, name: &str) -> WorkerRow {
+async fn register(agents: &AgentService, name: &str, tags: &[&str]) -> WorkerRow {
     let mut ctx = agents.start_session(1).await.unwrap();
+    let tags: Vec<fold_core::Tag> = tags
+        .iter()
+        .map(|tag| fold_core::Tag::parse(tag).unwrap())
+        .collect();
     agents
-        .register_agent(&mut ctx, &AgentName::parse(name).unwrap(), &[])
+        .register_agent(&mut ctx, &AgentName::parse(name).unwrap(), &tags)
         .await
         .unwrap();
     agents.resolve_worker(&ctx, None).await.unwrap()

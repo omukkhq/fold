@@ -8,6 +8,7 @@ use crate::events::EventActor;
 use crate::text::one_line;
 use crate::time::Timestamp;
 
+pub mod areas;
 pub mod claims;
 pub mod container;
 pub mod dag;

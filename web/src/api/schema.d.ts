@@ -1435,6 +1435,8 @@ export interface components {
         };
         BoardCard: {
             activity: components["schemas"]["BoardActivity"] | null;
+            /** @description True when the task carries the labels of two or more areas. Every write refuses such a label set, but the database can hold one; such a task's title and description change freely, and each change of its labels must leave at most one area label. */
+            areas_conflict: boolean;
             attention: components["schemas"]["AttentionItem"][];
             blocked: boolean;
             /** @description The direct prerequisites that are not Done. */
@@ -1875,7 +1877,7 @@ export interface components {
             /** @description Markdown; empty when left out. */
             description?: string | null;
             kind?: components["schemas"]["TaskKind"] | null;
-            /** @description Names of existing labels. */
+            /** @description Names of existing labels; at most one of them is the label of an area. */
             labels?: string[];
             /** @description Tasks the new task needs; each adds one direct edge. */
             needs?: string[];
@@ -3649,6 +3651,8 @@ export interface components {
          */
         TaskStatus: "backlog" | "todo" | "in_progress" | "review" | "done";
         TaskSummary: {
+            /** @description True when the task carries the labels of two or more areas. Every write refuses such a label set, but the database can hold one; such a task's title and description change freely, and each change of its labels must leave at most one area label. */
+            areas_conflict: boolean;
             blocked: boolean;
             labels: components["schemas"]["Label"][];
             status: components["schemas"]["TaskStatus"];
@@ -3663,6 +3667,8 @@ export interface components {
              * @description UTC milliseconds; null while the task is on the board.
              */
             archived_at: number | null;
+            /** @description True when the task carries the labels of two or more areas. Every write refuses such a label set, but the database can hold one; such a task's title and description change freely, and each change of its labels must leave at most one area label. */
+            areas_conflict: boolean;
             attention: components["schemas"]["AttentionItem"][];
             blocked: boolean;
             blocker: components["schemas"]["BlockerMark"] | null;
@@ -3865,7 +3871,7 @@ export interface components {
         /** @description Fields left out stay as they are. */
         UpdateTaskBody: {
             description?: string | null;
-            /** @description The whole new label set, by name. */
+            /** @description The whole new label set, by name; at most one of them is the label of an area. */
             labels?: string[] | null;
             title?: string | null;
         };
@@ -4736,7 +4742,7 @@ export interface operations {
                     "application/json": components["schemas"]["AreaEntry"];
                 };
             };
-            /** @description `invalid_request`, `invalid_name` or `invalid_label_name` */
+            /** @description `invalid_request` (also with `details.reason` `two_areas` when the label shares a task with another area's label, named in `details.tasks`), `invalid_name` or `invalid_label_name` */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -9024,7 +9030,7 @@ export interface operations {
                     "application/json": components["schemas"]["TaskView"];
                 };
             };
-            /** @description `invalid_request`, `invalid_id`, `invalid_name`, `invalid_task_title` or `invalid_label_name` */
+            /** @description `invalid_request` (also with `details.reason` `two_areas`), `invalid_id`, `invalid_name`, `invalid_task_title` or `invalid_label_name` */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -9281,7 +9287,7 @@ export interface operations {
                     "application/json": components["schemas"]["TaskView"];
                 };
             };
-            /** @description `invalid_request`, `invalid_id`, `invalid_name`, `invalid_task_title` or `invalid_label_name` */
+            /** @description `invalid_request` (also with `details.reason` `two_areas`), `invalid_id`, `invalid_name`, `invalid_task_title` or `invalid_label_name` */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -10166,7 +10172,7 @@ export interface operations {
                     "application/json": components["schemas"]["TaskView"];
                 };
             };
-            /** @description `invalid_id`, `invalid_name` or `invalid_label_name` */
+            /** @description `invalid_request` with `details.reason` `two_areas`, `invalid_id`, `invalid_name` or `invalid_label_name` */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -10256,7 +10262,7 @@ export interface operations {
                     "application/json": components["schemas"]["TaskView"];
                 };
             };
-            /** @description `invalid_id`, `invalid_name` or `invalid_label_name` */
+            /** @description `invalid_request` with `details.reason` `two_areas`, `invalid_id`, `invalid_name` or `invalid_label_name` */
             400: {
                 headers: {
                     [name: string]: unknown;

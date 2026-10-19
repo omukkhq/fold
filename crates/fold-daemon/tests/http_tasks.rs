@@ -252,6 +252,7 @@ async fn the_board_returns_five_columns_in_order_with_blocked_blocks_and_attenti
             "kind": "proposal",
             "report": null,
             "labels": [],
+            "areas_conflict": false,
             "checklist": {"steps_done": 0, "steps_total": 0, "linked_done": 0, "linked_total": 0},
             "needs": ["T-1"],
             "blocked_by": ["T-1"],
@@ -323,6 +324,7 @@ async fn the_task_list_leaves_archived_tasks_out() {
             "status": "todo",
             "blocked": false,
             "labels": [{"name": "api", "color": "teal"}],
+            "areas_conflict": false,
         }]})
     );
     let archived = fx.ok(Method::GET, "/tasks/T-2", None).await;
@@ -879,7 +881,8 @@ async fn the_project_handle_applies_the_configured_lease() {
         .unwrap();
     let actor = backend(&fx).await;
     crate::common::roles::lead_work_areas(&fx.handle.store).await;
-    let labels = crate::common::roles::WORK_AREAS.map(|(_, label)| label);
+    // `backend` claims the task as the lead of its one area.
+    let labels = [crate::common::roles::WORK_AREAS[1].1];
     fx.ok(
         Method::POST,
         "/tasks",
@@ -908,7 +911,8 @@ async fn an_invalid_configuration_fails_only_what_needs_the_lease() {
         .unwrap();
     let actor = backend(&fx).await;
     crate::common::roles::lead_work_areas(&fx.handle.store).await;
-    let labels = crate::common::roles::WORK_AREAS.map(|(_, label)| label);
+    // `backend` claims the task as the lead of its one area.
+    let labels = [crate::common::roles::WORK_AREAS[1].1];
     fx.ok(
         Method::POST,
         "/tasks",

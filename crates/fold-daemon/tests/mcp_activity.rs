@@ -113,15 +113,16 @@ impl Fixture {
             project.paths().clone(),
             LEASE_MINUTES,
         );
-        for _ in 0..3 {
-            crate::common::roles::lead_work_areas(project.store()).await;
+        crate::common::roles::lead_work_areas(project.store()).await;
+        // A task has one area: `backend` leads the area of `T-2`, `frontend` the area of the others.
+        for lead in ["frontend", "backend", "frontend"] {
             tasks
                 .create_task(
                     &actor("planner"),
                     CreateTask {
                         title: TaskTitle::parse("task").unwrap(),
                         description: TaskDescription::new("body"),
-                        labels: crate::common::roles::work_labels(),
+                        labels: crate::common::roles::work_labels_of(lead),
                     },
                 )
                 .await

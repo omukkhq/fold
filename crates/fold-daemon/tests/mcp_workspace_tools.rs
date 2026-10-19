@@ -560,6 +560,8 @@ fn every_workspace_tool_field_has_a_description() {
 #[tokio::test]
 async fn a_stale_claim_and_a_released_workspace_move_to_the_next_agent() {
     let fx = Fixture::new().await;
+    // The tasks are in the area that `frontend` leads, so the next agent to claim them is the main agent.
+    crate::common::roles::give_main_tag(fx.project.store(), "backend").await;
     let frontend = fx.connect("frontend").await;
     let backend = fx.connect("backend").await;
 
